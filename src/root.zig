@@ -337,7 +337,8 @@ pub const Lookout = struct {
 
     fn applyZoomAndView(self: *Lookout) void {
         const v = self.fitChart();
-        self.cam = viewToCamera(v, self.g.width, self.g.height);
+        const lw, const lh = self.logicalSize();
+        self.cam = viewToCamera(v, lw, lh);
         self.updateZoomLimits();
         self.deriveLive();
     }
@@ -375,9 +376,9 @@ pub const Lookout = struct {
     }
 
     // ---- view ---------------------------------------------------------------
-    fn viewToCamera(v: View, w: u32, h: u32) camera.Camera {
+    fn viewToCamera(v: View, w: f32, h: f32) camera.Camera {
         const o = camera.lonLatToWorld(v.lon, v.lat);
-        return .{ .origin = o, .center = o, .zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = @floatFromInt(w), .vh = @floatFromInt(h) };
+        return .{ .origin = o, .center = o, .zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = w, .vh = h };
     }
 
     /// A BOUNDED opening view. Deliberately the first cell's own bounds, NOT the
@@ -409,8 +410,9 @@ pub const Lookout = struct {
         if (!has_bounds) return .{ .lon = 0, .lat = 0, .zoom = 2 };
         const wl = camera.lonLatToWorld(west, north);
         const wr = camera.lonLatToWorld(east, south);
-        const vw: f64 = @floatFromInt(self.g.width);
-        const vh: f64 = @floatFromInt(self.g.height);
+        const lw, const lh = self.logicalSize();
+        const vw: f64 = lw;
+        const vh: f64 = lh;
         const zx = std.math.log2(vw / (256.0 * @max(@abs(wr.x - wl.x), 1e-12)));
         const zy = std.math.log2(vh / (256.0 * @max(@abs(wr.y - wl.y), 1e-12)));
         var z = @min(zx, zy) - 0.15;
@@ -434,9 +436,20 @@ pub const Lookout = struct {
     /// Resize the render surface (points; HiDPI density is applied internally).
     pub fn resize(self: *Lookout, width: u32, height: u32) !void {
         try self.g.resize(width, height);
-        self.cam.vw = @floatFromInt(self.g.width);
-        self.cam.vh = @floatFromInt(self.g.height);
+        const lw, const lh = self.logicalSize();
+        self.cam.vw = lw;
+        self.cam.vh = lh;
         self.markDirty();
+    }
+
+    /// The viewport in LOGICAL (device-independent) px — the single unit the
+    /// camera, the portrayal and every mark size are expressed in. The
+    /// framebuffer may be 2x that on a HiDPI display; pxToClip maps logical px
+    /// across the whole framebuffer, so density is handled ONCE, in the
+    /// projection, and never multiplied into a size again.
+    fn logicalSize(self: *const Lookout) struct { f32, f32 } {
+        const d = if (self.g.pixel_density > 0) self.g.pixel_density else 1.0;
+        return .{ @as(f32, @floatFromInt(self.g.width)) / d, @as(f32, @floatFromInt(self.g.height)) / d };
     }
     pub fn pixelDensity(self: *Lookout) f32 {
         return self.g.pixel_density;
@@ -459,14 +472,14 @@ pub const Lookout = struct {
         const s = self.cam.worldToScreen(camera.lonLatToWorld(lon, lat));
         return .{ @floatCast(s.x), @floatCast(s.y) };
     }
-    // Mouse coords from a HiDPI window arrive in logical points; scale to pixels.
+    // Mouse coords from a HiDPI window arrive in logical points — which is the
+    // camera's own unit now, so they pass straight through.
     pub fn panLogical(self: *Lookout, dx_pt: f32, dy_pt: f32) void {
-        self.cam.panPx(dx_pt * self.g.pixel_density, dy_pt * self.g.pixel_density);
+        self.cam.panPx(dx_pt, dy_pt);
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        const d = self.g.pixel_density;
-        self.cam.zoomAbout(dzoom, x_pt * d, y_pt * d);
+        self.cam.zoomAbout(dzoom, x_pt, y_pt);
         self.markDirty();
     }
 
@@ -695,9 +708,11 @@ pub const Lookout = struct {
         return .{
             .mvp = self.cam.mvpOrigin(origin),
             .px_to_clip = self.cam.pxToClip(),
-            // reference px are logical; scale by HiDPI density so marks are the
-            // right PHYSICAL size on a Retina 2x framebuffer.
-            .size_scale = self.render_size_scale * self.g.pixel_density,
+            // NO density factor: the camera is in logical px and pxToClip spreads
+            // those across the full framebuffer, so a 10 logical-px mark already
+            // lands on 20 physical px at 2x. Multiplying here too would double it
+            // and leave marks oversized against the chart they sit on.
+            .size_scale = self.render_size_scale,
             .current_scale = self.cam.displayScale(),
             .cat_mask = self.cat_mask,
             .kind_mask = self.kind_mask,
@@ -862,6 +877,9 @@ pub const Lookout = struct {
         // every label the catalogue has, which is most of what makes a wide view
         // unreadable. size_scale stays 1.0 -- the runtime size lives in the
         // shader uniform, and letting the engine scale too would double it.
+        const lw, const lh = self.logicalSize();
+        const vw: u32 = @intFromFloat(@max(1.0, lw));
+        const vh: u32 = @intFromFloat(@max(1.0, lh));
         var m0 = self.mariner;
         // Declutter at the size the labels are ACTUALLY DRAWN. The engine sizes a
         // label and its collision box from size_scale (vector.zig textDev), so on
@@ -869,13 +887,13 @@ pub const Lookout = struct {
         // pool's spacing away -- every label comes out twice the size of the room
         // reserved for it, and a correctly decluttered view still reads as a mess.
         // The text pass then draws these 1:1 (see labelUniform).
-        m0.size_scale = self.render_size_scale * self.g.pixel_density;
+        m0.size_scale = self.render_size_scale;
         const tbl = scene.labelTable(&s);
         var err: cc.tile57_error = undefined;
         const st = if (self.compose) |c|
-            cc.tile57_compose_labels(c, ll.x, ll.y, z, self.cam.rotation, self.g.width, self.g.height, &m0, &tbl, &err)
+            cc.tile57_compose_labels(c, ll.x, ll.y, z, self.cam.rotation, vw, vh, &m0, &tbl, &err)
         else if (self.charts.items.len > 0)
-            cc.tile57_chart_labels(self.charts.items[0], ll.x, ll.y, z, self.cam.rotation, self.g.width, self.g.height, &m0, &tbl, &err)
+            cc.tile57_chart_labels(self.charts.items[0], ll.x, ll.y, z, self.cam.rotation, vw, vh, &m0, &tbl, &err)
         else
             cc.TILE57_OK;
         if (st != cc.TILE57_OK) return; // keep the previous labels rather than blank out
