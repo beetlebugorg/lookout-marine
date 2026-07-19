@@ -72,6 +72,18 @@ The chart argument is a **baked tile57 PMTiles archive** (what `tile57 bake` /
 your own as the first argument; there is a built-in default path used only as a
 fallback if it exists on the machine. `-h` prints full usage.
 
+Pass a **directory** of baked archives instead of a file to compose a whole
+library / ENC_ROOT cache:
+
+```sh
+./zig-out/bin/lookout /path/to/charts/   # composes every *.pmtiles within
+```
+
+Each cell is `tile57_chart_open`'d (mmap'd — the set is never fully resident) and
+stitched through tile57's ownership partition (`tile57_compose_open` /
+`tile57_compose_surface`). The widget doesn't bake or manage the library: bake a
+raw ENC_ROOT with tile57's `bake_tree` first, then point lookout at the cache.
+
 Windowed (needs a display; on a headless box use `xvfb-run`):
 
 ```sh

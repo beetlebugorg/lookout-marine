@@ -31,6 +31,21 @@ export fn lookout_open(chart_path: [*:0]const u8, width: u32, height: u32, want_
     }) catch return null;
     return @ptrCast(l);
 }
+/// Open MANY baked charts and compose them (a chart library / ENC_ROOT cache).
+/// Each path is mmap'd by tile57 — the set is never fully resident. Enumerate
+/// the directory host-side and pass the paths.
+export fn lookout_open_charts(paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_window: c_int, want_msaa: c_int) ?*lookout {
+    const list = gpa.alloc([:0]const u8, n) catch return null;
+    defer gpa.free(list);
+    for (0..n) |i| list[i] = std.mem.span(paths[i]);
+    const l = lk.Lookout.openCharts(gpa, list, .{
+        .width = width,
+        .height = height,
+        .want_window = want_window != 0,
+        .want_msaa = want_msaa != 0,
+    }) catch return null;
+    return @ptrCast(l);
+}
 export fn lookout_close(h: ?*lookout) void {
     if (h) |x| cast(x).close();
 }

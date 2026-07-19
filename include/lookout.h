@@ -27,6 +27,12 @@ typedef struct { double lon, lat, zoom, rotation_deg; } lookout_view;
  * a window (needs a display); else rendering is offscreen. NULL on error. */
 lookout *lookout_open(const char *chart_path, uint32_t width, uint32_t height,
                       int want_window, int want_msaa);
+/* Open MANY baked charts and compose them (a chart library / ENC_ROOT cache).
+ * tile57 mmaps each path — the set is never fully resident. Enumerate the
+ * directory host-side and pass the paths. */
+lookout *lookout_open_charts(const char *const *paths, size_t n,
+                             uint32_t width, uint32_t height,
+                             int want_window, int want_msaa);
 void lookout_close(lookout *h);
 
 /* ---- view -------------------------------------------------------------- */

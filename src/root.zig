@@ -34,11 +34,15 @@ pub const OpenOptions = struct {
     /// palettes captured at build so scheme changes are instant. All three by
     /// default (day/dusk/night); index order defines the scheme<->buffer map.
     schemes: []const Scheme = &.{ cc.TILE57_SCHEME_DAY, cc.TILE57_SCHEME_DUSK, cc.TILE57_SCHEME_NIGHT },
+    /// optional ownership-partition sidecar to skip the compositor's partition
+    /// build (from tile57_compose_save_partition / the `tile57 bake` CLI).
+    partition_path: ?[:0]const u8 = null,
 };
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
-    chart: *cc.tile57_chart,
+    charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
+    compose: ?*cc.tile57_compose = null, // set when >1 chart (ENC_ROOT / library)
     g: gpu.Gpu,
     sc: ?scene.Scene = null,
     cam: camera.Camera,
@@ -48,6 +52,7 @@ pub const Lookout = struct {
     /// The authoritative S-52 display state. Edit via get/setMariner.
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
+    partition_path: ?[:0]const u8 = null,
 
     // derived live (uniform-only) state
     active_scheme: usize = 0,
@@ -56,18 +61,26 @@ pub const Lookout = struct {
     render_size_scale: f32 = 1.0,
 
     // ---- lifecycle ----------------------------------------------------------
+    /// Open ONE baked chart (.pmtiles).
     pub fn open(alloc: std.mem.Allocator, chart_path: [:0]const u8, opts: OpenOptions) !*Lookout {
+        return openCharts(alloc, &.{chart_path}, opts);
+    }
+
+    /// Open MANY baked charts and compose them (a chart library). Bad charts are
+    /// skipped; composing kicks in automatically when more than one loads.
+    pub fn openCharts(alloc: std.mem.Allocator, paths: []const [:0]const u8, opts: OpenOptions) !*Lookout {
+        const self = try create(alloc, opts);
+        errdefer self.close();
+        for (paths) |p| self.addChartPath(p);
+        try self.finishOpen();
+        return self;
+    }
+
+    fn create(alloc: std.mem.Allocator, opts: OpenOptions) !*Lookout {
         cc.tile57_warmup();
-        var err: cc.tile57_error = undefined;
-        var chart: ?*cc.tile57_chart = null;
-        if (cc.tile57_chart_open(chart_path.ptr, &chart, &err) != cc.TILE57_OK or chart == null) {
-            std.debug.print("tile57_chart_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
-            return error.ChartOpenFailed;
-        }
         const self = try alloc.create(Lookout);
         self.* = .{
             .alloc = alloc,
-            .chart = chart.?,
             .g = try gpu.Gpu.init(.{
                 .width = opts.width,
                 .height = opts.height,
@@ -78,18 +91,52 @@ pub const Lookout = struct {
         };
         self.n_schemes = @min(opts.schemes.len, scene.MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
+        self.partition_path = opts.partition_path;
         cc.tile57_mariner_defaults(&self.mariner);
+        return self;
+    }
+
+    fn addChartPath(self: *Lookout, path: [:0]const u8) void {
+        var err: cc.tile57_error = undefined;
+        var chart: ?*cc.tile57_chart = null;
+        if (cc.tile57_chart_open(path.ptr, &chart, &err) != cc.TILE57_OK or chart == null) {
+            std.debug.print("skip '{s}': {s}\n", .{ path, @as([*:0]const u8, @ptrCast(&err.message)) });
+            return;
+        }
+        self.charts.append(self.alloc, chart.?) catch {};
+    }
+    fn finishOpen(self: *Lookout) !void {
+        if (self.charts.items.len == 0) return error.NoCharts;
+        if (self.charts.items.len > 1) {
+            var err: cc.tile57_error = undefined;
+            var c: ?*cc.tile57_compose = null;
+            const part: [*c]const u8 = if (self.partition_path) |p| p.ptr else null;
+            if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, part, &c, &err) != cc.TILE57_OK or c == null) {
+                std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
+                return error.ComposeFailed;
+            }
+            self.compose = c;
+            std.debug.print("composed {d} charts\n", .{self.charts.items.len});
+        }
         const v = self.fitChart();
         self.cam = viewToCamera(v, self.g.width, self.g.height);
         self.deriveLive();
-        return self;
     }
 
     pub fn close(self: *Lookout) void {
         if (self.sc) |*s| s.deinit();
         self.g.deinit();
-        cc.tile57_chart_close(self.chart);
+        if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
+        for (self.charts.items) |ch| cc.tile57_chart_close(ch);
+        self.charts.deinit(self.alloc);
         self.alloc.destroy(self);
+    }
+
+    // A dispatch over the active surface source (single chart or compositor).
+    fn callSurface(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_surface_cb, m: *cc.tile57_mariner, err: *cc.tile57_error) cc.tile57_status {
+        if (self.compose) |c|
+            return cc.tile57_compose_surface(c, lon, lat, self.cam.zoom, 0.0, self.g.width, self.g.height, m, cb, err);
+        return cc.tile57_chart_surface(self.charts.items[0], lon, lat, self.cam.zoom, 0.0, self.g.width, self.g.height, m, cb, err);
     }
 
     // ---- view ---------------------------------------------------------------
@@ -98,23 +145,50 @@ pub const Lookout = struct {
         return .{ .origin = o, .center = o, .zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = @floatFromInt(w), .vh = @floatFromInt(h) };
     }
 
-    /// Center + fit-zoom for the whole chart, from its embedded metadata.
+    /// Center + fit-zoom for the whole chart (or composed set), from metadata.
     pub fn fitChart(self: *Lookout) View {
-        var info: cc.tile57_info = undefined;
-        cc.tile57_chart_get_info(self.chart, &info);
-        if (info.has_bounds) {
-            const wl = camera.lonLatToWorld(info.west, info.north);
-            const wr = camera.lonLatToWorld(info.east, info.south);
-            const vw: f64 = @floatFromInt(self.g.width);
-            const vh: f64 = @floatFromInt(self.g.height);
-            const zx = std.math.log2(vw / (256.0 * @max(@abs(wr.x - wl.x), 1e-12)));
-            const zy = std.math.log2(vh / (256.0 * @max(@abs(wr.y - wl.y), 1e-12)));
-            var z = @min(zx, zy) - 0.15;
-            z = std.math.clamp(z, @as(f64, @floatFromInt(info.min_zoom)), @as(f64, @floatFromInt(info.max_zoom)) + 1.0);
-            return .{ .lon = (info.west + info.east) * 0.5, .lat = (info.south + info.north) * 0.5, .zoom = z };
+        var west: f64 = 0;
+        var south: f64 = 0;
+        var east: f64 = 0;
+        var north: f64 = 0;
+        var has_bounds = false;
+        var min_zoom: u8 = 0;
+        var max_zoom: u8 = 22;
+        if (self.compose) |c| {
+            var meta: cc.tile57_compose_meta = undefined;
+            cc.tile57_compose_get_meta(c, &meta);
+            west = meta.west;
+            south = meta.south;
+            east = meta.east;
+            north = meta.north;
+            min_zoom = meta.min_zoom;
+            max_zoom = meta.max_zoom;
+            has_bounds = true;
+        } else {
+            var info: cc.tile57_info = undefined;
+            cc.tile57_chart_get_info(self.charts.items[0], &info);
+            if (info.has_bounds) {
+                west = info.west;
+                south = info.south;
+                east = info.east;
+                north = info.north;
+                min_zoom = info.min_zoom;
+                max_zoom = info.max_zoom;
+                has_bounds = true;
+            } else if (info.has_anchor) {
+                return .{ .lon = info.anchor_lon, .lat = info.anchor_lat, .zoom = info.anchor_zoom };
+            }
         }
-        if (info.has_anchor) return .{ .lon = info.anchor_lon, .lat = info.anchor_lat, .zoom = info.anchor_zoom };
-        return .{ .lon = 0, .lat = 0, .zoom = 2 };
+        if (!has_bounds) return .{ .lon = 0, .lat = 0, .zoom = 2 };
+        const wl = camera.lonLatToWorld(west, north);
+        const wr = camera.lonLatToWorld(east, south);
+        const vw: f64 = @floatFromInt(self.g.width);
+        const vh: f64 = @floatFromInt(self.g.height);
+        const zx = std.math.log2(vw / (256.0 * @max(@abs(wr.x - wl.x), 1e-12)));
+        const zy = std.math.log2(vh / (256.0 * @max(@abs(wr.y - wl.y), 1e-12)));
+        var z = @min(zx, zy) - 0.15;
+        z = std.math.clamp(z, @as(f64, @floatFromInt(min_zoom)), @as(f64, @floatFromInt(max_zoom)) + 1.0);
+        return .{ .lon = (west + east) * 0.5, .lat = (south + north) * 0.5, .zoom = z };
     }
 
     /// Move the camera. Pan/zoom/rotate never re-tessellate; a big jump to new
@@ -215,7 +289,7 @@ pub const Lookout = struct {
         const full = scene.fullTable(s);
         // north-up build (rotation is applied per-frame in the MVP), so a
         // course-up spin never re-tessellates.
-        if (cc.tile57_chart_surface(self.chart, lon, lat, self.cam.zoom, 0.0, self.g.width, self.g.height, &m0, &full, &err) != cc.TILE57_OK) {
+        if (self.callSurface(lon, lat, &full, &m0, &err) != cc.TILE57_OK) {
             std.debug.print("surface failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
             return error.SurfaceFailed;
         }
@@ -224,7 +298,7 @@ pub const Lookout = struct {
             s.color_counter = 0;
             var mk = self.buildMariner(self.schemes[k]);
             const ct = scene.colorTable(s);
-            _ = cc.tile57_chart_surface(self.chart, lon, lat, self.cam.zoom, 0.0, self.g.width, self.g.height, &mk, &ct, &err);
+            _ = self.callSurface(lon, lat, &ct, &mk, &err);
             if (s.color_counter != s.items.items.len) {
                 for (s.items.items) |*it| it.colors[k] = it.colors[0];
             }
@@ -294,7 +368,11 @@ pub const Lookout = struct {
     /// feature under it (class acronym + full S-57 attribute JSON + source cell).
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
         var err: cc.tile57_error = undefined;
-        _ = cc.tile57_chart_query(self.chart, lon, lat, self.cam.zoom, cb, &err);
+        if (self.compose) |c| {
+            _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);
+        } else {
+            _ = cc.tile57_chart_query(self.charts.items[0], lon, lat, self.cam.zoom, cb, &err);
+        }
     }
 
     // ---- convenience live toggles (mutate mariner, apply live) --------------

@@ -36,6 +36,48 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
+fn isDir(path: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var d = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
+    d.close(io);
+    return true;
+}
+
+// Enumerate baked archives under a directory (host glue — tile57 composes the
+// paths we hand it; it does the mmap + ownership partition).
+fn scanPmtiles(alloc: std.mem.Allocator, dir: []const u8) ![][:0]const u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var d = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
+    defer d.close(io);
+    var w = try d.walk(alloc);
+    defer w.deinit();
+    var list: std.ArrayList([:0]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| alloc.free(p);
+        list.deinit(alloc);
+    }
+    while (try w.next(io)) |e| {
+        if (e.kind == .directory or !std.mem.endsWith(u8, e.basename, ".pmtiles")) continue;
+        try list.append(alloc, try std.fs.path.joinZ(alloc, &.{ dir, e.path }));
+    }
+    return list.toOwnedSlice(alloc);
+}
+
+// Open a single baked chart, or compose a directory of them.
+fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts: lk.OpenOptions) !*lk.Lookout {
+    if (isDir(path)) {
+        const paths = try scanPmtiles(alloc, path);
+        defer {
+            for (paths) |p| alloc.free(p);
+            alloc.free(paths);
+        }
+        if (paths.len == 0) return error.NoBakedCharts;
+        std.debug.print("composing {d} charts from {s}\n", .{ paths.len, path });
+        return lk.Lookout.openCharts(alloc, paths, opts);
+    }
+    return lk.Lookout.open(alloc, path, opts);
+}
+
 pub fn main(init: std.process.Init) !void {
     const alloc = std.heap.c_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -97,8 +139,8 @@ pub fn main(init: std.process.Init) !void {
         _ = cc.SDL_SetHint(cc.SDL_HINT_VIDEO_DRIVER, "offscreen");
     }
 
-    const l = lk.Lookout.open(alloc, chart, .{ .want_window = want_window, .width = width, .height = height }) catch {
-        std.debug.print("error: could not open chart '{s}'.\n", .{chart});
+    const l = openTarget(alloc, chart, .{ .want_window = want_window, .width = width, .height = height }) catch {
+        std.debug.print("error: could not open chart(s) '{s}'.\n", .{chart});
         return error.ChartOpenFailed;
     };
     defer l.close();
