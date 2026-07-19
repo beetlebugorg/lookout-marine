@@ -894,6 +894,11 @@ pub const Lookout = struct {
         // reserved for it, and a correctly decluttered view still reads as a mess.
         // The text pass then draws these 1:1 (see labelUniform).
         m0.size_scale = self.render_size_scale;
+        // State the framebuffer density ONCE, explicitly. The engine folds it
+        // into refDev, so label sizing and the collision boxes that space them
+        // move together — folding it into size_scale by hand is what made a 2x
+        // display reserve 10px of room for 20px text.
+        m0.device_scale = self.g.pixel_density;
         const tbl = scene.labelTable(&s);
         var err: cc.tile57_error = undefined;
         const st = if (self.compose) |c|
