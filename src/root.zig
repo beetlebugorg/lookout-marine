@@ -777,7 +777,12 @@ pub const Lookout = struct {
         // than capturing all three palettes up front.
         s.scheme_k = 0;
         var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
-        // geometry + symbols only; labels come from the view-level pass
+        // Tiles carry NO text (it comes from the view-level pass), so tell the
+        // engine that: otherwise it shapes and declutters hundreds of labels per
+        // tile that we then drop on the floor.
+        m0.text_names = false;
+        m0.show_light_descriptions = false;
+        m0.text_other = false;
         const tbl = scene.tileTable(&s);
         self.tileSurface(z, x, y, &tbl, &m0, &err);
         s.finish(1) catch {};
@@ -863,7 +868,18 @@ pub const Lookout = struct {
         self.label_origin = self.cam.center;
         self.label_zoom = self.cam.zoom;
         const ms = @as(f64, @floatFromInt(cc.SDL_GetPerformanceCounter() - t0)) * 1000.0 / @as(f64, @floatFromInt(cc.SDL_GetPerformanceFrequency()));
-        std.debug.print("labels z{d:.1}: {d} glyph quads in {d:.0} ms\n", .{ z, s.text_quads.items.len / 6, ms });
+        // The trailing args reproduce this exact view on the demo CLI — paste
+        // them straight back when a view looks wrong.
+        std.debug.print("labels: {d} glyph quads in {d:.0} ms  [--lon {d:.5} --lat {d:.5} --zoom {d:.2} --width {d} --height {d}{s}]\n", .{
+            s.text_quads.items.len / 6,
+            ms,
+            ll.x,
+            ll.y,
+            z,
+            self.g.width,
+            self.g.height,
+            if (self.cam.rotation != 0) " (rotated)" else "",
+        });
     }
 
     // The uniform the label buffer was built against (its own origin, current camera).
