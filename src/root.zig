@@ -103,7 +103,13 @@ pub const Lookout = struct {
     pending: ?scene.Scene = null,
     pending_origin: camera.Vec2 = .{ .x = 0, .y = 0 },
     job: BuildJob = undefined,
-    build_zoom: f64 = 0, // zoom the current scene was tessellated at (for LoD)
+    // coverage of the currently-built (overscanned) scene: rebuild only when the
+    // view pans/zooms out of this, so panning within the margin never re-tessellates.
+    cov_origin: camera.Vec2 = .{ .x = 0, .y = 0 },
+    cov_zoom: f64 = 0,
+    cov_hw: f64 = 0, // half-width / half-height of coverage, world units
+    cov_hh: f64 = 0,
+    view_dirty: bool = true, // camera/state changed since the last render (on-demand)
     cam: camera.Camera,
     schemes: [scene.MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
@@ -292,6 +298,7 @@ pub const Lookout = struct {
         self.cam.center = camera.lonLatToWorld(v.lon, v.lat);
         self.cam.zoom = v.zoom;
         self.cam.rotation = v.rotation_deg * std.math.pi / 180.0;
+        self.view_dirty = true;
     }
     pub fn view(self: *Lookout) View {
         const ll = camera.worldToLonLat(self.cam.center);
@@ -303,6 +310,7 @@ pub const Lookout = struct {
         try self.g.resize(width, height);
         self.cam.vw = @floatFromInt(self.g.width);
         self.cam.vh = @floatFromInt(self.g.height);
+        self.view_dirty = true;
     }
     pub fn pixelDensity(self: *Lookout) f32 {
         return self.g.pixel_density;
@@ -311,9 +319,11 @@ pub const Lookout = struct {
     // ---- interaction --------------------------------------------------------
     pub fn panPixels(self: *Lookout, dx: f32, dy: f32) void {
         self.cam.panPx(dx, dy);
+        self.view_dirty = true;
     }
     pub fn zoomAt(self: *Lookout, dzoom: f64, x_px: f32, y_px: f32) void {
         self.cam.zoomAbout(dzoom, x_px, y_px);
+        self.view_dirty = true;
     }
     pub fn screenToGeo(self: *Lookout, x_px: f32, y_px: f32) View {
         const ll = camera.worldToLonLat(self.cam.screenToWorld(x_px, y_px));
@@ -326,10 +336,12 @@ pub const Lookout = struct {
     // Mouse coords from a HiDPI window arrive in logical points; scale to pixels.
     pub fn panLogical(self: *Lookout, dx_pt: f32, dy_pt: f32) void {
         self.cam.panPx(dx_pt * self.g.pixel_density, dy_pt * self.g.pixel_density);
+        self.view_dirty = true;
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
         const d = self.g.pixel_density;
         self.cam.zoomAbout(dzoom, x_pt * d, y_pt * d);
+        self.view_dirty = true;
     }
 
     // ---- mariner (ALL S-52 settings) ---------------------------------------
@@ -342,7 +354,7 @@ pub const Lookout = struct {
     /// style, overscale, extra size scales…) marks the scene for a rebuild, done
     /// lazily on the next render.
     pub fn setMariner(self: *Lookout, m: Mariner) void {
-        if (needsRebuild(self.mariner, m)) self.dirty = true;
+        if (marinerNeedsRebuild(self.mariner, m)) self.dirty = true;
         self.mariner = m;
         self.deriveLive();
     }
@@ -365,17 +377,22 @@ pub const Lookout = struct {
             (@as(u32, @intFromBool(sound_on)) << KIND_SOUNDING);
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
         self.g.clear = self.nodata[self.active_scheme]; // background follows the palette
+        self.view_dirty = true;
     }
 
     // ---- build + render -----------------------------------------------------
-    const ZOOM_REBUILD = 1.25; // zoom drift (levels) that triggers a fresh LoD build
+    // Mirror chartplotter-fyne's model: tessellate a scene that OVERSCANS the
+    // viewport, then only re-tessellate when the view pans/zooms out of that
+    // coverage. Panning within the margin re-transforms the same buffers.
+    const OVERSCAN = 1.5; // scene covers 1.5x the viewport each dimension
+    const ZOOM_REBUILD = 0.75; // zoom drift that forces a fresh build
 
     // The immutable inputs a build needs — captured at spawn so the worker never
     // races the main thread's live camera / mariner edits.
     pub const BuildJob = struct {
         origin: camera.Vec2 = .{ .x = 0, .y = 0 },
         zoom: f64 = 0,
-        width: u32 = 0,
+        width: u32 = 0, // OVERSCANNED pixel size the surface is emitted for
         height: u32 = 0,
         base: Mariner = undefined,
     };
@@ -405,7 +422,28 @@ pub const Lookout = struct {
     }
 
     fn jobFromCurrent(self: *Lookout) BuildJob {
-        return .{ .origin = self.cam.center, .zoom = self.cam.zoom, .width = self.g.width, .height = self.g.height, .base = self.mariner };
+        const ow: u32 = @intFromFloat(@as(f64, @floatFromInt(self.g.width)) * OVERSCAN);
+        const oh: u32 = @intFromFloat(@as(f64, @floatFromInt(self.g.height)) * OVERSCAN);
+        return .{ .origin = self.cam.center, .zoom = self.cam.zoom, .width = ow, .height = oh, .base = self.mariner };
+    }
+
+    // Record the coverage of the scene just built, so needsRebuild can tell when
+    // the view has left it.
+    fn recordCoverage(self: *Lookout, job: BuildJob) void {
+        const wp = camera.Camera.worldToPx(.{ .origin = job.origin, .center = job.origin, .zoom = job.zoom, .vw = 1, .vh = 1 });
+        self.cov_origin = job.origin;
+        self.cov_zoom = job.zoom;
+        self.cov_hw = @as(f64, @floatFromInt(job.width)) * 0.5 / wp;
+        self.cov_hh = @as(f64, @floatFromInt(job.height)) * 0.5 / wp;
+    }
+
+    // True when the current view has panned/zoomed out of the built coverage.
+    fn needsRebuild(self: *Lookout) bool {
+        if (!self.built) return true;
+        if (@abs(self.cam.zoom - self.cov_zoom) > ZOOM_REBUILD) return true;
+        const he = self.cam.halfExtents();
+        return @abs(self.cam.center.x - self.cov_origin.x) + he.x > self.cov_hw or
+            @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
     }
 
     /// Force a SYNCHRONOUS (re)tessellation of the current view. Used by snapshot
@@ -421,7 +459,7 @@ pub const Lookout = struct {
         try self.g.uploadScene(&s);
         self.built = true;
         self.dirty = false;
-        self.build_zoom = job.zoom;
+        self.recordCoverage(job);
     }
 
     fn buildWorker(self: *Lookout) void {
@@ -480,19 +518,17 @@ pub const Lookout = struct {
                 self.pending = null;
                 self.built = true;
                 self.dirty = false;
-                self.build_zoom = self.job.zoom;
+                self.recordCoverage(self.job);
             }
             return;
         }
-        // start a build when nothing is shown, on an explicit dirty, or when the
-        // view has drifted far enough in zoom to warrant a new level of detail.
-        const drift = self.built and @abs(self.cam.zoom - self.build_zoom) >= ZOOM_REBUILD;
-        if (!self.built or self.dirty or drift) self.spawnBuild();
+        // start a build when nothing is shown, on an explicit dirty (mariner
+        // change), or when the view has left the built coverage (pan/zoom).
+        if (!self.built or self.dirty or self.needsRebuild()) self.spawnBuild();
     }
 
     fn ensureBuilt(self: *Lookout) !void {
-        const drift = self.built and @abs(self.cam.zoom - self.build_zoom) >= ZOOM_REBUILD;
-        if (self.dirty or !self.built or drift) try self.build();
+        if (self.dirty or self.needsRebuild()) try self.build();
     }
 
     fn uniforms(self: *Lookout) gpu.Uniforms {
@@ -515,7 +551,15 @@ pub const Lookout = struct {
     /// scene keeps rendering (no flicker). LoD rebuilds fire on zoom drift.
     pub fn render(self: *Lookout) !bool {
         self.tick();
-        return self.g.renderWindow(self.uniforms(), self.active_scheme);
+        const ok = try self.g.renderWindow(self.uniforms(), self.active_scheme);
+        self.view_dirty = false;
+        return ok;
+    }
+    /// Whether a frame needs (re)drawing: the view/state changed, a build is in
+    /// flight (progressive fill), or the view has left coverage. When false the
+    /// chart is static — the host can block on events and burn no CPU.
+    pub fn needsRedraw(self: *Lookout) bool {
+        return self.view_dirty or self.dirty or self.building or !self.built or self.needsRebuild();
     }
     /// True while a background (re)build is in flight — for a host "loading" hint.
     pub fn isBuilding(self: *Lookout) bool {
@@ -575,13 +619,14 @@ pub const Lookout = struct {
     }
     pub fn adjustSize(self: *Lookout, factor: f32) void {
         self.render_size_scale *= factor;
+        self.view_dirty = true;
     }
 };
 
 /// True if changing from `a` to `b` alters what the engine emits (needs a
 /// rebuild). Visibility-only fields (scheme, categories, text, soundings, size)
 /// are excluded — those apply live.
-fn needsRebuild(a: Mariner, b: Mariner) bool {
+fn marinerNeedsRebuild(a: Mariner, b: Mariner) bool {
     return a.shallow_contour != b.shallow_contour or a.safety_contour != b.safety_contour or
         a.deep_contour != b.deep_contour or a.safety_depth != b.safety_depth or
         a.four_shade_water != b.four_shade_water or a.depth_unit != b.depth_unit or

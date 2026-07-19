@@ -176,45 +176,52 @@ pub fn main(init: std.process.Init) !void {
     try runWindow(l, max_frames);
 }
 
+fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *bool) void {
+    switch (ev.type) {
+        cc.SDL_EVENT_QUIT => running.* = false,
+        cc.SDL_EVENT_MOUSE_BUTTON_DOWN => dragging.* = true,
+        cc.SDL_EVENT_MOUSE_BUTTON_UP => dragging.* = false,
+        cc.SDL_EVENT_MOUSE_MOTION => {
+            if (dragging.*) l.panLogical(ev.motion.xrel, ev.motion.yrel);
+        },
+        cc.SDL_EVENT_MOUSE_WHEEL => l.zoomAtLogical(@as(f64, ev.wheel.y) * 0.25, ev.wheel.mouse_x, ev.wheel.mouse_y),
+        cc.SDL_EVENT_WINDOW_RESIZED => l.resize(@intCast(ev.window.data1), @intCast(ev.window.data2)) catch {},
+        cc.SDL_EVENT_KEY_DOWN => switch (ev.key.key) {
+            cc.SDLK_N => l.cycleScheme(),
+            cc.SDLK_T => l.toggleText(),
+            cc.SDLK_D => l.toggleOtherCategory(),
+            cc.SDLK_S => l.toggleSoundings(),
+            cc.SDLK_LEFTBRACKET => l.nudgeSafetyContour(-2),
+            cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2),
+            cc.SDLK_EQUALS => l.adjustSize(1.1),
+            cc.SDLK_MINUS => l.adjustSize(1.0 / 1.1),
+            cc.SDLK_ESCAPE => running.* = false,
+            else => {},
+        },
+        else => {},
+    }
+}
+
 fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
     var dragging = false;
     var running = true;
     var frame: u64 = 0;
+    const test_mode = max_frames != null; // render every iteration for --frames
     while (running) {
         if (max_frames) |mf| {
             if (frame >= mf) break;
         }
-        frame += 1;
         var ev: cc.SDL_Event = undefined;
-        while (cc.SDL_PollEvent(&ev)) {
-            switch (ev.type) {
-                cc.SDL_EVENT_QUIT => running = false,
-                cc.SDL_EVENT_MOUSE_BUTTON_DOWN => dragging = true,
-                cc.SDL_EVENT_MOUSE_BUTTON_UP => dragging = false,
-                cc.SDL_EVENT_MOUSE_MOTION => {
-                    // xrel/yrel are logical points; panLogical scales by density.
-                    if (dragging) l.panLogical(ev.motion.xrel, ev.motion.yrel);
-                },
-                cc.SDL_EVENT_MOUSE_WHEEL => {
-                    // wheel.mouse_x/y are the cursor in logical points at the event.
-                    l.zoomAtLogical(@as(f64, ev.wheel.y) * 0.25, ev.wheel.mouse_x, ev.wheel.mouse_y);
-                },
-                cc.SDL_EVENT_WINDOW_RESIZED => l.resize(@intCast(ev.window.data1), @intCast(ev.window.data2)) catch {},
-                cc.SDL_EVENT_KEY_DOWN => switch (ev.key.key) {
-                    cc.SDLK_N => l.cycleScheme(),
-                    cc.SDLK_T => l.toggleText(),
-                    cc.SDLK_D => l.toggleOtherCategory(),
-                    cc.SDLK_S => l.toggleSoundings(),
-                    cc.SDLK_LEFTBRACKET => l.nudgeSafetyContour(-2),
-                    cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2),
-                    cc.SDLK_EQUALS => l.adjustSize(1.1),
-                    cc.SDLK_MINUS => l.adjustSize(1.0 / 1.1),
-                    cc.SDLK_ESCAPE => running = false,
-                    else => {},
-                },
-                else => {},
-            }
+        // On-demand: when the chart is static, block on events (0% CPU idle).
+        // A short timeout keeps a background build filling in progressively.
+        if (!test_mode and !l.needsRedraw()) {
+            const timeout: i32 = if (l.isBuilding()) 16 else 250;
+            if (cc.SDL_WaitEventTimeout(&ev, timeout)) handleEvent(l, &ev, &dragging, &running);
         }
-        _ = try l.render();
+        while (cc.SDL_PollEvent(&ev)) handleEvent(l, &ev, &dragging, &running);
+        if (test_mode or l.needsRedraw()) {
+            _ = try l.render();
+            frame += 1;
+        }
     }
 }

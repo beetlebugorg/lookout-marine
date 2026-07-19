@@ -40,13 +40,20 @@ pub const Camera = struct {
     /// to Vulkan clip space: translate to center, rotate (course-up), scale to
     /// clip, flip y. Small (world-origin) values keep f32 exact.
     pub fn mvp(self: Camera) [16]f32 {
+        return self.mvpOrigin(self.origin);
+    }
+
+    /// Like mvp() but for geometry stored relative to an arbitrary `origin`
+    /// (each cached tile stores its verts relative to its own NW corner, so f32
+    /// stays exact anywhere on earth).
+    pub fn mvpOrigin(self: Camera, origin: Vec2) [16]f32 {
         const s = self.worldToPx();
         const a: f64 = 2.0 * s / @as(f64, self.vw);
         const b: f64 = 2.0 * s / @as(f64, self.vh);
         const c = std.math.cos(self.rotation);
         const sn = std.math.sin(self.rotation);
-        const dx = self.origin.x - self.center.x; // added before rotate/scale
-        const dy = self.origin.y - self.center.y;
+        const dx = origin.x - self.center.x; // added before rotate/scale
+        const dy = origin.y - self.center.y;
         var m = [_]f32{0} ** 16;
         m[0] = @floatCast(a * c);
         m[1] = @floatCast(-b * sn);
@@ -112,6 +119,12 @@ pub const Camera = struct {
         // move the world opposite the drag, un-rotating the screen delta
         self.center.x -= (c * @as(f64, dx) + sn * @as(f64, dy)) / s;
         self.center.y -= (-sn * @as(f64, dx) + c * @as(f64, dy)) / s;
+    }
+
+    /// Viewport half-extents in world units at the current zoom.
+    pub fn halfExtents(self: Camera) Vec2 {
+        const wp = self.worldToPx();
+        return .{ .x = @as(f64, self.vw) * 0.5 / wp, .y = @as(f64, self.vh) * 0.5 / wp };
     }
 
     /// The S-52 display-scale denominator (1:N) for the current view — used to

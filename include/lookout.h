@@ -82,6 +82,10 @@ void lookout_set_mariner(lookout *h, const tile57_mariner *m);
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */
 int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=headless) */
+/* 1 if a redraw is needed (view/state changed, a build is filling in, or the
+ * view left coverage). When 0 the chart is static — block on events, no CPU.
+ * Render on demand: call lookout_render only when this returns 1. */
+int lookout_needs_redraw(lookout *h);
 int lookout_snapshot_png(lookout *h, const char *path);
 int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
 

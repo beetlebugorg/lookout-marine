@@ -132,6 +132,12 @@ export fn lookout_render(h: ?*lookout) c_int {
     const ok = cast(h).render() catch return -1;
     return if (ok) 1 else 0;
 }
+/// 1 if a redraw is needed (view/state changed, a build is filling in, or the
+/// view left coverage). When 0 the chart is static — your loop can block on
+/// events and use no CPU. Call lookout_render only when this is 1.
+export fn lookout_needs_redraw(h: ?*lookout) c_int {
+    return if (cast(h).needsRedraw()) 1 else 0;
+}
 export fn lookout_snapshot_png(h: ?*lookout, path: [*:0]const u8) c_int {
     cast(h).snapshotPng(std.mem.span(path)) catch return -1;
     return 0;
