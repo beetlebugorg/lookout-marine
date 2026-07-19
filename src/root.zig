@@ -397,6 +397,7 @@ pub const Lookout = struct {
     // Pure-CPU tessellation into `s` for the given job — no GPU, no cam/g reads,
     // so it is safe to run on a worker thread.
     fn tessellateInto(self: *Lookout, s: *scene.Scene, job: BuildJob) !void {
+        const t_start = cc.SDL_GetPerformanceCounter();
         const lon = camera.worldToLonLat(job.origin).x;
         const lat = camera.worldToLonLat(job.origin).y;
         // Only tessellate features that SCAMIN-show at this zoom — a zoomed-out
@@ -419,6 +420,11 @@ pub const Lookout = struct {
             }
         }
         try s.finish(self.n_schemes);
+        const total = cc.SDL_GetPerformanceCounter() - t_start;
+        const freq: f64 = @floatFromInt(cc.SDL_GetPerformanceFrequency());
+        const total_ms = @as(f64, @floatFromInt(total)) * 1000.0 / freq;
+        const tess_ms = @as(f64, @floatFromInt(s.tess_ns)) * 1000.0 / freq;
+        std.debug.print("build z{d:.1}: {d} tris, {d:.0} ms total ({d:.0} ms libtess2 / {d:.0} ms engine+other)\n", .{ job.zoom, s.triangleCount(), total_ms, tess_ms, total_ms - tess_ms });
     }
 
     fn jobFromCurrent(self: *Lookout) BuildJob {

@@ -69,6 +69,7 @@ pub const Scene = struct {
     /// this zoom). 0 = tessellate everything. This is what keeps a zoomed-out
     /// view from tessellating the whole library's fine detail.
     cull_scale: f32 = 0,
+    tess_ns: u64 = 0, // time spent in libtess2 (to profile tessellation vs engine)
 
     // built outputs (after finish)
     indices: []u32 = &.{}, // final paint-ordered index buffer
@@ -113,6 +114,8 @@ pub const Scene = struct {
     const TessOut = struct { verts: [*c]const f32, nverts: usize, elems: [*c]const c_int, nelems: usize };
     fn tessContours(self: *Scene, pts: []const f32, ring_starts: []const u32, ring_count: u32, even_odd: bool) ?TessOut {
         const t = self.tess orelse return null;
+        const t0 = cc.SDL_GetPerformanceCounter();
+        defer self.tess_ns += cc.SDL_GetPerformanceCounter() - t0;
         var r: u32 = 0;
         while (r < ring_count) : (r += 1) {
             const start = ring_starts[r];
