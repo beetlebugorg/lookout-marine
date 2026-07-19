@@ -14,7 +14,8 @@ const USAGE =
     \\usage: lookout <chart.pmtiles> [options]
     \\
     \\  <chart.pmtiles>   a baked tile57 PMTiles archive (required)
-    \\  --window          open an interactive window (needs a display)
+    \\  --window          open an interactive window (needs a display; HiDPI-aware)
+    \\  --width W --height H   render size in pixels (default 1600x1200)
     \\  --frames N        window mode: exit after N frames (testing)
     \\  --png OUT         headless day PNG output path (default lookout.png)
     \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
@@ -46,6 +47,8 @@ pub fn main(init: std.process.Init) !void {
     var lat: ?f64 = null;
     var zoom: ?f64 = null;
     var max_frames: ?u64 = null; // window mode: exit after N frames (for testing)
+    var width: u32 = 1600;
+    var height: u32 = 1200;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -69,6 +72,12 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--frames") and i + 1 < args.len) {
             i += 1;
             max_frames = try std.fmt.parseInt(u64, args[i], 10);
+        } else if (std.mem.eql(u8, a, "--width") and i + 1 < args.len) {
+            i += 1;
+            width = try std.fmt.parseInt(u32, args[i], 10);
+        } else if (std.mem.eql(u8, a, "--height") and i + 1 < args.len) {
+            i += 1;
+            height = try std.fmt.parseInt(u32, args[i], 10);
         } else if (a[0] != '-') {
             chart_path = args[i][0.. :0];
         }
@@ -88,7 +97,7 @@ pub fn main(init: std.process.Init) !void {
         _ = cc.SDL_SetHint(cc.SDL_HINT_VIDEO_DRIVER, "offscreen");
     }
 
-    const l = lk.Lookout.open(alloc, chart, .{ .want_window = want_window }) catch {
+    const l = lk.Lookout.open(alloc, chart, .{ .want_window = want_window, .width = width, .height = height }) catch {
         std.debug.print("error: could not open chart '{s}'.\n", .{chart});
         return error.ChartOpenFailed;
     };

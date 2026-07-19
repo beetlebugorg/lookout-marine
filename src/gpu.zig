@@ -68,11 +68,25 @@ pub const Gpu = struct {
 
         var window: ?*cc.SDL_Window = null;
         var color_format: cc.SDL_GPUTextureFormat = cc.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        var width = opts.width;
+        var height = opts.height;
         if (opts.want_window) {
-            window = cc.SDL_CreateWindow("lookout — tile57 SDL_GPU", @intCast(opts.width), @intCast(opts.height), 0);
+            // HIGH_PIXEL_DENSITY: on a Retina/HiDPI display, render at the true
+            // pixel size instead of 1x logical points (which the OS upscales ->
+            // pixelated). We fix the size (no RESIZABLE) so the render targets and
+            // viewport stay matched to the swapchain for the prototype.
+            const flags: cc.SDL_WindowFlags = cc.SDL_WINDOW_HIGH_PIXEL_DENSITY;
+            window = cc.SDL_CreateWindow("lookout — tile57 SDL_GPU", @intCast(opts.width), @intCast(opts.height), flags);
             if (window != null) {
                 try check(cc.SDL_ClaimWindowForGPUDevice(device, window), "ClaimWindow");
                 color_format = cc.SDL_GetGPUSwapchainTextureFormat(device, window);
+                var pw: c_int = 0;
+                var ph: c_int = 0;
+                if (cc.SDL_GetWindowSizeInPixels(window, &pw, &ph) and pw > 0 and ph > 0) {
+                    width = @intCast(pw);
+                    height = @intCast(ph);
+                    std.debug.print("window: {d}x{d} logical -> {d}x{d} pixels\n", .{ opts.width, opts.height, pw, ph });
+                }
             } else {
                 std.debug.print("no window ({s}); falling back to offscreen\n", .{cc.SDL_GetError()});
             }
@@ -95,8 +109,8 @@ pub const Gpu = struct {
             .color_format = color_format,
             .sample_count = sample_count,
             .msaa_used = msaa_used,
-            .width = opts.width,
-            .height = opts.height,
+            .width = width,
+            .height = height,
         };
 
         // offscreen targets when there is no window (headless), or always for PNG dumps
