@@ -89,8 +89,11 @@ pub const Gpu = struct {
     sampler: ?*cc.SDL_GPUSampler = null,
     qbuf: ?*cc.SDL_GPUBuffer = null,
     quad_count: u32 = 0,
+    // SDF text: its own pipeline (sprite.vert + sdf.frag) + glyph atlas texture
+    sdf_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
+    glyph_tex: ?*cc.SDL_GPUTexture = null,
 
-    pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8) !Gpu {
+    pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
         try check(cc.SDL_Init(cc.SDL_INIT_VIDEO), "SDL_Init");
         const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, true, null), "CreateGPUDevice");
@@ -133,10 +136,12 @@ pub const Gpu = struct {
 
         const pipeline = try buildPipeline(device, color_format, sample_count, vert_spv, frag_spv);
         const sprite_pipeline = try buildSpritePipeline(device, color_format, sample_count, sprite_vert_spv, sprite_frag_spv);
+        const sdf_pipeline = try buildSpritePipeline(device, color_format, sample_count, sprite_vert_spv, sdf_frag_spv);
         const sampler = try makeSampler(device);
 
         var g = Gpu{
             .sprite_pipeline = sprite_pipeline,
+            .sdf_pipeline = sdf_pipeline,
             .sampler = sampler,
             .device = device,
             .window = window,
@@ -378,8 +383,14 @@ pub const Gpu = struct {
         return try checkPtr(cc.SDL_CreateGPUSampler(device, &si), "CreateSampler");
     }
 
-    /// Upload an RGBA8 atlas as the shared sprite texture (once per open).
     pub fn uploadSpriteAtlas(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.sprite_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    pub fn uploadGlyphAtlas(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.glyph_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    /// Upload an RGBA8 atlas to a fresh sampler texture.
+    fn makeAtlasTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !*cc.SDL_GPUTexture {
         var info = std.mem.zeroes(cc.SDL_GPUTextureCreateInfo);
         info.type = cc.SDL_GPU_TEXTURETYPE_2D;
         info.format = cc.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -413,7 +424,7 @@ pub const Gpu = struct {
         cc.SDL_UploadToGPUTexture(cp, &src, &dst, false);
         cc.SDL_EndGPUCopyPass(cp);
         try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit atlas upload");
-        self.sprite_tex = tex;
+        return tex;
     }
 
     pub fn uploadQuads(self: *Gpu, quads: []const scene.QuadVertex) !void {
@@ -462,6 +473,8 @@ pub const Gpu = struct {
         index_count: u32 = 0,
         qbuf: ?*cc.SDL_GPUBuffer = null,
         quad_count: u32 = 0,
+        tbuf: ?*cc.SDL_GPUBuffer = null, // SDF text quads
+        text_count: u32 = 0,
     };
 
     /// Upload one tile's tessellation to its own GPU buffers.
@@ -469,6 +482,8 @@ pub const Gpu = struct {
         var tb = TileBuffers{};
         if (s.quads.items.len > 0) tb.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads.items));
         tb.quad_count = @intCast(s.quads.items.len);
+        if (s.text_quads.items.len > 0) tb.tbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.text_quads.items));
+        tb.text_count = @intCast(s.text_quads.items.len);
         if (s.verts.items.len != 0 and s.indices.len != 0) {
             tb.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.verts.items));
             tb.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(s.indices));
@@ -486,13 +501,14 @@ pub const Gpu = struct {
         if (tb.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         for (tb.cbuf) |c| if (c) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (tb.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        if (tb.tbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         tb.* = .{};
     }
 
     /// One tile to draw: its buffers + the per-tile uniform (mvp folds the tile origin).
     pub const TileDraw = struct { bufs: *const TileBuffers, uniform: Uniforms };
 
-    fn recordTiles(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, tiles: []const TileDraw, scheme_k: usize) void {
+    fn recordTiles(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, tiles: []const TileDraw, scheme_k: usize, text_on: bool) void {
         var cti = std.mem.zeroes(cc.SDL_GPUColorTargetInfo);
         cti.texture = target;
         cti.clear_color = self.clear;
@@ -531,10 +547,25 @@ pub const Gpu = struct {
                 cc.SDL_DrawGPUPrimitives(pass, t.bufs.quad_count, 1, 0, 0);
             }
         }
+        // SDF text on top (own pipeline + glyph atlas), gated by the text toggle
+        if (text_on and self.glyph_tex != null and self.sdf_pipeline != null) {
+            cc.SDL_BindGPUGraphicsPipeline(pass, self.sdf_pipeline);
+            cc.SDL_SetGPUViewport(pass, &vp);
+            const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.glyph_tex, .sampler = self.sampler }};
+            cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
+            for (tiles) |t| {
+                if (t.bufs.text_count == 0) continue;
+                const tbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.tbuf, .offset = 0 }};
+                cc.SDL_BindGPUVertexBuffers(pass, 0, &tbind, 1);
+                var uu = t.uniform;
+                cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+                cc.SDL_DrawGPUPrimitives(pass, t.bufs.text_count, 1, 0, 0);
+            }
+        }
         cc.SDL_EndGPURenderPass(pass);
     }
 
-    pub fn renderWindowTiles(self: *Gpu, tiles: []const TileDraw, scheme_k: usize) !bool {
+    pub fn renderWindowTiles(self: *Gpu, tiles: []const TileDraw, scheme_k: usize, text_on: bool) !bool {
         const window = self.window orelse return false;
         const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
         var swap: ?*cc.SDL_GPUTexture = null;
@@ -545,16 +576,16 @@ pub const Gpu = struct {
             _ = cc.SDL_SubmitGPUCommandBuffer(cmd);
             return true;
         }
-        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, swap, tiles, scheme_k) else self.recordTiles(cmd, swap.?, null, tiles, scheme_k);
+        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, swap, tiles, scheme_k, text_on) else self.recordTiles(cmd, swap.?, null, tiles, scheme_k, text_on);
         try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit frame");
         return true;
     }
 
-    pub fn renderOffscreenTiles(self: *Gpu, alloc: std.mem.Allocator, tiles: []const TileDraw, scheme_k: usize) ![]u8 {
+    pub fn renderOffscreenTiles(self: *Gpu, alloc: std.mem.Allocator, tiles: []const TileDraw, scheme_k: usize, text_on: bool) ![]u8 {
         try self.ensureOffscreenTargets();
         const resolve = self.resolve_tex.?;
         const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
-        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, resolve, tiles, scheme_k) else self.recordTiles(cmd, resolve, null, tiles, scheme_k);
+        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, resolve, tiles, scheme_k, text_on) else self.recordTiles(cmd, resolve, null, tiles, scheme_k, text_on);
         const cp = cc.SDL_BeginGPUCopyPass(cmd);
         var region = std.mem.zeroes(cc.SDL_GPUTextureRegion);
         region.texture = resolve;
@@ -714,6 +745,8 @@ pub const Gpu = struct {
         cc.SDL_ReleaseGPUGraphicsPipeline(d, self.pipeline);
         if (self.sprite_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sprite_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
+        if (self.glyph_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
+        if (self.sdf_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sampler) |sm| cc.SDL_ReleaseGPUSampler(d, sm);
         if (self.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (self.window) |w| {

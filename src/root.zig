@@ -22,6 +22,7 @@ const vert_spv = @embedFile("chart_vert_spv");
 const frag_spv = @embedFile("chart_frag_spv");
 const sprite_vert_spv = @embedFile("sprite_vert_spv");
 const sprite_frag_spv = @embedFile("sprite_frag_spv");
+const sdf_frag_spv = @embedFile("sdf_frag_spv");
 
 // shader-kind bits (match chart.vert / scene.zig class numbering)
 const KIND_SOUNDING: u5 = 3;
@@ -136,6 +137,7 @@ pub const Lookout = struct {
     dirty: bool = true, // scene needs a (re)build before the next render
     partition_path: ?[:0]const u8 = null,
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
+    glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
 
@@ -184,7 +186,7 @@ pub const Lookout = struct {
                 .want_msaa = opts.want_msaa,
                 .native_handle = opts.native_handle,
                 .native_kind = opts.native_kind,
-            }, vert_spv, frag_spv, sprite_vert_spv, sprite_frag_spv),
+            }, vert_spv, frag_spv, sprite_vert_spv, sprite_frag_spv, sdf_frag_spv),
             .cam = undefined,
         };
         self.n_schemes = @min(opts.schemes.len, scene.MAX_SCHEMES);
@@ -193,7 +195,26 @@ pub const Lookout = struct {
         cc.tile57_mariner_defaults(&self.mariner);
         self.loadNodataColors();
         self.loadSpriteAtlas();
+        self.loadGlyphAtlas();
         return self;
+    }
+
+    // Bake the SDF label-glyph atlas, decode, upload once. Text then draws as SDF
+    // quads (crisp at any zoom) instead of tessellated glyph outlines.
+    fn loadGlyphAtlas(self: *Lookout) void {
+        var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_bake_glyph_sdf(&assets, &err) != cc.TILE57_OK) return;
+        defer cc.tile57_assets_free(&assets);
+        if (assets.sprite_png == null or assets.sprite_json == null) return;
+        const a = atlas.loadGlyph(self.alloc, assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len]) catch return;
+        self.glyph_atlas = a;
+        self.g.uploadGlyphAtlas(a.rgba(), a.width, a.height) catch {
+            self.glyph_atlas.?.deinit();
+            self.glyph_atlas = null;
+            return;
+        };
+        std.debug.print("glyph atlas: {d}x{d}, {d} glyphs, em {d:.0}\n", .{ a.width, a.height, a.glyphs.count(), a.em_px });
     }
 
     // Bake the S-52 sprite-symbol atlas (from the embedded catalogue), decode it,
@@ -334,6 +355,7 @@ pub const Lookout = struct {
         self.dropTiles();
         self.tiles.deinit(self.alloc);
         if (self.sprite_atlas) |*sa| sa.deinit();
+        if (self.glyph_atlas) |*ga| ga.deinit();
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
@@ -743,6 +765,7 @@ pub const Lookout = struct {
         const half = 0.5 / std.math.pow(f64, 2.0, @floatFromInt(z));
         s.cull_scale = camera.displayScaleAt(@floatFromInt(z), camera.worldToLonLat(.{ .x = origin.x + half, .y = origin.y + half }).y);
         s.sprite_atlas = if (self.sprite_atlas) |*sa| sa else null;
+        s.glyph_atlas = if (self.glyph_atlas) |*ga| ga else null;
         var err: cc.tile57_error = undefined;
         // Portray ONCE, in the ACTIVE palette (colors captured at index 0). A
         // day/night change drops the cache and rebuilds — 3x cheaper per tile
@@ -831,14 +854,14 @@ pub const Lookout = struct {
                 const ph = @as(f32, @floatFromInt(cc.SDL_GetTicks() % 1600)) / 1600.0;
                 const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
                 self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
-                return self.g.renderWindowTiles(&.{}, self.active_scheme);
+                return self.g.renderWindowTiles(&.{}, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
             }
         }
         _ = self.ensureTiles(TILE_BUDGET);
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
-        const ok = try self.g.renderWindowTiles(list.items, self.active_scheme);
+        const ok = try self.g.renderWindowTiles(list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
         self.view_dirty = false;
         return ok;
     }
@@ -864,7 +887,7 @@ pub const Lookout = struct {
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
-        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme);
+        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.g.width, self.g.height);
     }
@@ -875,7 +898,7 @@ pub const Lookout = struct {
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
-        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme);
+        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;
         @memcpy(dst[0..px.len], px);

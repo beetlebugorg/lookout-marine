@@ -89,6 +89,9 @@ pub const Scene = struct {
     // sprite symbols: textured quads (no tessellation), one shared atlas
     quads: std.ArrayList(QuadVertex) = .empty,
     sprite_atlas: ?*const atlas.SpriteAtlas = null,
+    // SDF text: textured quads sampling the glyph atlas
+    text_quads: std.ArrayList(QuadVertex) = .empty,
+    glyph_atlas: ?*const atlas.GlyphAtlas = null,
 
     // built outputs (after finish)
     indices: []u32 = &.{}, // final paint-ordered index buffer
@@ -116,6 +119,7 @@ pub const Scene = struct {
         self.items.deinit(self.a);
         self.scratch.deinit(self.a);
         self.quads.deinit(self.a);
+        self.text_quads.deinit(self.a);
         if (self.tess) |t| cc.tessDeleteTess(t);
         if (self.indices.len != 0) self.a.free(self.indices);
         for (0..MAX_SCHEMES) |k| if (self.scheme_colors[k].len != 0) self.a.free(self.scheme_colors[k]);
@@ -440,6 +444,42 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
     for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |idx| s.quads.append(s.a, q[idx]) catch return;
 }
 
+// SDF text: lay the UTF-8 run out from glyph metrics into textured quads
+// sampling the glyph atlas. Anchor is world; (ox,oy) is the baseline-left origin
+// in reference px (alignment already applied); metrics are EM units × size_px.
+fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_rgba, halo: cc.tile57_rgba) callconv(.c) void {
+    _ = align_;
+    _ = halo;
+    const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
+    const ga = s.glyph_atlas orelse return;
+    if (text == null or text_len == 0) return;
+    const wx = s.relX(anchor.x);
+    const wy = s.relY(anchor.y);
+    const rad = rot_deg * std.math.pi / 180.0;
+    const cs = std.math.cos(rad);
+    const sn = std.math.sin(rad);
+    var pen: f32 = ox_px;
+    var it = std.unicode.Utf8Iterator{ .bytes = text[0..text_len], .i = 0 };
+    while (it.nextCodepoint()) |cp| {
+        const gi = ga.lookup(@intCast(cp)) orelse {
+            continue;
+        };
+        const gx = pen + gi.off_x * size_px;
+        const gy = oy_px + gi.off_y * size_px;
+        const gw = gi.w * size_px;
+        const gh = gi.h * size_px;
+        const local = [4][2]f32{ .{ gx, gy }, .{ gx + gw, gy }, .{ gx + gw, gy + gh }, .{ gx, gy + gh } };
+        const uvs = [4][2]f32{ .{ gi.u0, gi.v0 }, .{ gi.u1, gi.v0 }, .{ gi.u1, gi.v1 }, .{ gi.u0, gi.v1 } };
+        var q: [4]QuadVertex = undefined;
+        for (0..4) |i| {
+            q[i] = .{ .wx = wx, .wy = wy, .lx = local[i][0] * cs - local[i][1] * sn, .ly = local[i][0] * sn + local[i][1] * cs, .u = uvs[i][0], .v = uvs[i][1], .r = color.r, .g = color.g, .b = color.b, .a = color.a };
+        }
+        for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |k| s.text_quads.append(s.a, q[k]) catch return;
+        pen += gi.advance * size_px;
+    }
+}
+
 // Color-only table (pass k>0): geometry already captured; just record this
 // scheme's per-draw-call color into the matching DrawItem, in emission order.
 // draw_sprite is a no-op here (sprites captured once, no per-scheme color) — but
@@ -478,7 +518,7 @@ pub fn fullTable(scene: *Scene) cc.tile57_surface_cb {
         .draw_text = fDrawText,
         .draw_sprite = fDrawSprite, // atlas symbols/soundings -> textured quads
         .draw_pattern = null, // -> pattern fills arrive as flat fill_area
-        .draw_text_str = null, // -> text tessellates via draw_text (SDF is next)
+        .draw_text_str = fDrawTextStr, // -> SDF text quads (draw_text stays a fallback)
     };
 }
 pub fn colorTable(scene: *Scene) cc.tile57_surface_cb {
