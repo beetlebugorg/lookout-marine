@@ -455,11 +455,14 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads
 // sampling the glyph atlas. Anchor is world; (ox,oy) is the baseline-left origin
 // in reference px (alignment already applied); metrics are EM units × size_px.
-fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_color, halo: cc.tile57_color) callconv(.c) void {
+fn fDrawTextStr(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_color, halo: cc.tile57_color) callconv(.c) void {
     _ = align_;
     _ = halo;
     const s = asScene(ctx);
-    if (scaminCulled(s, f)) return;
+    // NO SCAMIN cull here. Labels arrive already decluttered and already
+    // SCAMIN-gated by the engine, which reserved screen space on the
+    // assumption each survivor draws — dropping one here would leave a hole
+    // the pool had allocated to it.
     const ga = s.glyph_atlas orelse return;
     if (text == null or text_len == 0) return;
     const wx = s.relX(anchor.x);
