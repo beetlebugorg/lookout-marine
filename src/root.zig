@@ -97,6 +97,13 @@ pub const Lookout = struct {
     g: gpu.Gpu,
     built: bool = false, // GPU buffers hold a current scene (CPU geometry freed)
 
+    // The ownership-partition build (compose_open over the whole library) is slow
+    // — run it on a worker thread and show a loader so the window isn't frozen.
+    loading: bool = false,
+    compose_thread: ?std.Thread = null,
+    compose_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    compose_result: ?*cc.tile57_compose = null,
+
     // async build: tessellation (CPU) runs on a worker thread so the window
     // stays responsive; the main thread uploads the result. The OLD scene keeps
     // rendering until the new one is ready (only the first build shows blank).
@@ -123,6 +130,8 @@ pub const Lookout = struct {
     dirty: bool = true, // scene needs a (re)build before the next render
     partition_path: ?[:0]const u8 = null,
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
+    engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
+    //                            it we overscale (build stays here, camera scales up)
 
     // derived live (uniform-only) state
     active_scheme: usize = 0,
@@ -142,8 +151,13 @@ pub const Lookout = struct {
     pub fn openCharts(alloc: std.mem.Allocator, paths: []const [:0]const u8, opts: OpenOptions) !*Lookout {
         const self = try create(alloc, opts);
         errdefer self.close();
+        const t0 = cc.SDL_GetPerformanceCounter();
         for (paths) |p| self.addChartPath(p);
+        const t1 = cc.SDL_GetPerformanceCounter();
         try self.finishOpen();
+        const t2 = cc.SDL_GetPerformanceCounter();
+        const f: f64 = @floatFromInt(cc.SDL_GetPerformanceFrequency());
+        std.debug.print("open: {d} charts opened in {d:.0} ms, compose+partition in {d:.0} ms\n", .{ self.charts.items.len, @as(f64, @floatFromInt(t1 - t0)) * 1000 / f, @as(f64, @floatFromInt(t2 - t1)) * 1000 / f });
         return self;
     }
 
@@ -228,28 +242,84 @@ pub const Lookout = struct {
     }
     fn finishOpen(self: *Lookout) !void {
         if (self.charts.items.len == 0) return error.NoCharts;
+        // Set an immediate view + zoom clamps from the FIRST cell — no compositor
+        // needed — so the window can render right away.
+        self.applyZoomAndView();
+        // Compose over the whole library (the slow ownership-partition build) on a
+        // worker thread; the window shows a loader until it lands (see tick).
         if (self.charts.items.len > 1) {
-            var err: cc.tile57_error = undefined;
-            var c: ?*cc.tile57_compose = null;
-            const had_partition = if (self.partition_path) |p| fileExists(p) else false;
-            const part: [*c]const u8 = if (self.partition_path) |p| p.ptr else null;
-            if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, part, &c, &err) != cc.TILE57_OK or c == null) {
-                std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
-                return error.ComposeFailed;
-            }
-            self.compose = c;
-            // Persist the ownership partition so the NEXT open skips the build.
+            self.loading = true;
+            self.compose_done.store(false, .release);
+            self.compose_thread = std.Thread.spawn(.{}, composeWorker, .{self}) catch blk: {
+                self.composeWorker(); // fallback: synchronous
+                break :blk null;
+            };
+            self.pollCompose(self.compose_thread == null); // apply immediately if it ran sync
+        }
+    }
+
+    fn composeWorker(self: *Lookout) void {
+        var err: cc.tile57_error = undefined;
+        var c: ?*cc.tile57_compose = null;
+        const had_partition = if (self.partition_path) |p| fileExists(p) else false;
+        const part: [*c]const u8 = if (self.partition_path) |p| p.ptr else null;
+        if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, part, &c, &err) == cc.TILE57_OK and c != null) {
+            self.compose_result = c;
             if (self.partition_path) |p| {
                 if (!had_partition) _ = cc.tile57_compose_save_partition(c.?, p.ptr, &err);
             }
+        } else {
+            std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
+        }
+        self.compose_done.store(true, .release);
+    }
+
+    // Adopt the composed set once its partition build finishes. `block` waits.
+    fn pollCompose(self: *Lookout, block: bool) void {
+        if (!self.loading) return;
+        if (!block and !self.compose_done.load(.acquire)) return;
+        if (self.compose_thread) |t| {
+            t.join();
+            self.compose_thread = null;
+        }
+        self.loading = false;
+        if (self.compose_result) |c| {
+            self.compose = c;
+            self.updateZoomLimits(); // refresh the zoom band; DON'T touch the view
             std.debug.print("composed {d} charts\n", .{self.charts.items.len});
         }
+    }
+
+    // No zooming out below the coarsest band (bounds tessellation); allow zoom-in
+    // past the deepest band as overscale.
+    fn updateZoomLimits(self: *Lookout) void {
+        const OVERSCALE_LEVELS = 4.0;
+        const zr = self.zoomRange();
+        self.engine_max_zoom = zr[1];
+        self.cam.min_zoom = zr[0];
+        self.cam.max_zoom = zr[1] + OVERSCALE_LEVELS;
+    }
+
+    fn applyZoomAndView(self: *Lookout) void {
         const v = self.fitChart();
         self.cam = viewToCamera(v, self.g.width, self.g.height);
+        self.updateZoomLimits();
         self.deriveLive();
     }
 
+    fn zoomRange(self: *Lookout) [2]f64 {
+        if (self.compose) |c| {
+            var m: cc.tile57_compose_meta = undefined;
+            cc.tile57_compose_get_meta(c, &m);
+            return .{ @floatFromInt(m.min_zoom), @floatFromInt(m.max_zoom) };
+        }
+        var info: cc.tile57_info = undefined;
+        cc.tile57_chart_get_info(self.charts.items[0], &info);
+        return .{ @floatFromInt(info.min_zoom), @floatFromInt(info.max_zoom) };
+    }
+
     pub fn close(self: *Lookout) void {
+        self.pollCompose(true); // finish any in-flight partition build first
         self.joinBuild(); // stop the worker before tearing down handles it reads
         if (self.sprite_atlas) |*sa| sa.deinit();
         self.g.deinit();
@@ -406,9 +476,9 @@ pub const Lookout = struct {
     // Overscan must exceed 2^ZOOM_REBUILD (a zoom-out of ZOOM_REBUILD grows the
     // view by that factor) so the margin still covers the view when the rebuild
     // is due — otherwise the edges go NODATA before it lands.
-    const OVERSCAN = 1.35; // scene covers 1.35x the viewport each dimension
-    const ZOOM_REBUILD = 0.4; // zoom drift that forces a fresh build (2^0.4 < OVERSCAN)
-    const SETTLE_MS = 120; // debounce: rebuild only after the view stops moving
+    const OVERSCAN = 2.0; // scene covers 2.0x the viewport each dimension (pan margin)
+    const ZOOM_REBUILD = 0.6; // zoom drift that forces a fresh build (2^0.6 < OVERSCAN)
+    const SETTLE_MS = 120; // debounce ZOOM rebuilds (pan rebuilds are prompt)
 
     // The immutable inputs a build needs — captured at spawn so the worker never
     // races the main thread's live camera / mariner edits.
@@ -454,10 +524,18 @@ pub const Lookout = struct {
         std.debug.print("build z{d:.1}: {d} tris, {d:.0} ms total ({d:.0} ms libtess2 / {d:.0} ms engine+other)\n", .{ job.zoom, s.triangleCount(), total_ms, tess_ms, total_ms - tess_ms });
     }
 
+    // The zoom to BUILD at — the camera zoom, clamped to the deepest band the
+    // engine serves. Zooming in past that keeps this fixed (overscale): the
+    // camera scales the deepest-band geometry up, and the engine's overscale
+    // hatch (mariner.show_overscale) shows.
+    fn buildZoom(self: *Lookout) f64 {
+        return @min(self.cam.zoom, self.engine_max_zoom);
+    }
+
     fn jobFromCurrent(self: *Lookout) BuildJob {
         const ow: u32 = @intFromFloat(@as(f64, @floatFromInt(self.g.width)) * OVERSCAN);
         const oh: u32 = @intFromFloat(@as(f64, @floatFromInt(self.g.height)) * OVERSCAN);
-        return .{ .origin = self.cam.center, .zoom = self.cam.zoom, .width = ow, .height = oh, .base = self.mariner };
+        return .{ .origin = self.cam.center, .zoom = self.buildZoom(), .width = ow, .height = oh, .base = self.mariner };
     }
 
     // Record the coverage of the scene just built, so needsRebuild can tell when
@@ -480,7 +558,9 @@ pub const Lookout = struct {
     // True when the current view has panned/zoomed out of the built coverage.
     fn needsRebuild(self: *Lookout) bool {
         if (!self.built) return true;
-        if (@abs(self.cam.zoom - self.cov_zoom) > ZOOM_REBUILD) return true;
+        // compare the BUILD zoom (clamped for overscale) so overzooming past the
+        // deepest band doesn't churn rebuilds.
+        if (@abs(self.buildZoom() - self.cov_zoom) > ZOOM_REBUILD) return true;
         const he = self.cam.halfExtents();
         return @abs(self.cam.center.x - self.cov_origin.x) + he.x > self.cov_hw or
             @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
@@ -489,6 +569,7 @@ pub const Lookout = struct {
     /// Force a SYNCHRONOUS (re)tessellation of the current view. Used by snapshot
     /// (no frame loop) and available to force fresh detail.
     pub fn build(self: *Lookout) !void {
+        self.pollCompose(true); // a snapshot has no frame loop — wait for the compositor
         self.joinBuild(); // don't race an in-flight async build
         const job = self.jobFromCurrent();
         var s = try scene.Scene.init(self.alloc, job.origin);
@@ -543,6 +624,10 @@ pub const Lookout = struct {
 
     // Advance the async build (call once per frame). Non-blocking.
     fn tick(self: *Lookout) void {
+        if (self.loading) {
+            self.pollCompose(false);
+            if (self.loading) return; // still building the partition — show loader
+        }
         if (self.building) {
             if (!self.build_done.load(.acquire)) return; // still tessellating
             if (self.build_thread) |t| {
@@ -562,12 +647,10 @@ pub const Lookout = struct {
             }
             return;
         }
-        // start a build when nothing is shown, on an explicit dirty (mariner
-        // change), or when the view has left coverage AND the gesture has settled
-        // (debounced — during a continuous pan/zoom the old scene stretches, so we
-        // don't re-tessellate on every wheel step).
-        const settled = (@as(i64, @intCast(cc.SDL_GetTicks())) - self.last_change_ms) >= SETTLE_MS;
-        if (!self.built or self.dirty or (self.needsRebuild() and settled)) self.spawnBuild();
+        // Rebuild promptly whenever the view leaves coverage (pan OR zoom) — the
+        // old scene keeps rendering (stretched) until the async build lands, so
+        // there's no freeze, and the blank leading edge fills as fast as a build.
+        if (!self.built or self.dirty or self.needsRebuild()) self.spawnBuild();
     }
 
     fn ensureBuilt(self: *Lookout) !void {
@@ -579,7 +662,9 @@ pub const Lookout = struct {
         return .{
             .mvp = self.cam.mvp(),
             .px_to_clip = self.cam.pxToClip(),
-            .size_scale = self.render_size_scale,
+            // reference px are logical; scale by HiDPI density so symbols / text /
+            // line widths are the right PHYSICAL size on a Retina 2x framebuffer.
+            .size_scale = self.render_size_scale * self.g.pixel_density,
             .current_scale = self.cam.displayScale(),
             .cat_mask = self.cat_mask,
             .kind_mask = self.kind_mask,
@@ -594,6 +679,13 @@ pub const Lookout = struct {
     /// scene keeps rendering (no flicker). LoD rebuilds fire on zoom drift.
     pub fn render(self: *Lookout) !bool {
         self.tick();
+        if (self.loading) {
+            // pulsing background so the window is visibly alive while the
+            // ownership partition builds (nothing to draw yet).
+            const ph = @as(f32, @floatFromInt(cc.SDL_GetTicks() % 1600)) / 1600.0;
+            const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph); // triangle wave
+            self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
+        }
         const ok = try self.g.renderWindow(self.uniforms(), self.active_scheme);
         self.view_dirty = false;
         return ok;
@@ -602,6 +694,7 @@ pub const Lookout = struct {
     /// flight (progressive fill), or the view has left coverage. When false the
     /// chart is static — the host can block on events and burn no CPU.
     pub fn needsRedraw(self: *Lookout) bool {
+        if (self.loading) return true; // keep animating the loader + polling
         return self.view_dirty or self.dirty or self.building or !self.built or self.needsRebuild();
     }
     /// True while a background (re)build is in flight — for a host "loading" hint.

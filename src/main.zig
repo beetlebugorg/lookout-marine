@@ -72,8 +72,12 @@ fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts: lk.OpenOptions
             alloc.free(paths);
         }
         if (paths.len == 0) return error.NoBakedCharts;
+        // Cache the ownership partition next to the library: the first open builds
+        // it (slow, O(charts)); every open after loads it in a blink.
+        var o = opts;
+        o.partition_path = std.fs.path.joinZ(alloc, &.{ path, "lookout.tpart" }) catch null; // leaked: lives for the process
         std.debug.print("composing {d} charts from {s}\n", .{ paths.len, path });
-        return lk.Lookout.openCharts(alloc, paths, opts);
+        return lk.Lookout.openCharts(alloc, paths, o);
     }
     return lk.Lookout.open(alloc, path, opts);
 }

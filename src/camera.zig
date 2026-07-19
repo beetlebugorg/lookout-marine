@@ -30,6 +30,8 @@ pub const Camera = struct {
     rotation: f64 = 0, // view rotation, radians CW (course-up); 0 = north-up
     vw: f32, // viewport width px
     vh: f32, // viewport height px
+    min_zoom: f64 = 0, // clamp range (the chart's own zoom band)
+    max_zoom: f64 = 24,
 
     /// px-per-world-unit at the current zoom (256 px per tile).
     pub fn worldToPx(self: Camera) f64 {
@@ -105,7 +107,7 @@ pub const Camera = struct {
     /// Zoom by dz keeping the world point under (px,py) fixed on screen.
     pub fn zoomAbout(self: *Camera, dz: f64, px: f32, py: f32) void {
         const before = self.screenToWorld(px, py);
-        self.zoom = std.math.clamp(self.zoom + dz, 0.0, 24.0);
+        self.zoom = std.math.clamp(self.zoom + dz, self.min_zoom, self.max_zoom);
         const after = self.screenToWorld(px, py);
         self.center.x += before.x - after.x;
         self.center.y += before.y - after.y;
