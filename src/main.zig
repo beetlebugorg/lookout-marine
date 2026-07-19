@@ -104,30 +104,27 @@ pub fn main(init: std.process.Init) !void {
     defer l.close();
 
     const v = if (lon != null and lat != null and zoom != null)
-        lk.Lookout.View{ .lon = lon.?, .lat = lat.?, .zoom = zoom.? }
+        lk.View{ .lon = lon.?, .lat = lat.?, .zoom = zoom.? }
     else
-        l.recommendedView();
+        l.fitChart();
     std.debug.print("view: lon={d:.5} lat={d:.5} zoom={d:.2}\n", .{ v.lon, v.lat, v.zoom });
-    try l.buildView(v.lon, v.lat, v.zoom);
+    l.setView(v);
 
     if (!want_window) {
-        // day
-        l.setScheme(0);
-        try l.savePng(png_out);
+        // day (first render lazily builds the scene)
+        try l.snapshotPng(png_out);
         std.debug.print("wrote {s} (day)\n", .{png_out});
-        // night — palette swap ONLY (no buildView call): proves acceptance #3
-        if (l.n_schemes > 1) {
-            l.setScheme(1);
-            const night = try std.fmt.allocPrint(alloc, "{s}", .{"lookout-night.png"});
-            defer alloc.free(night);
-            try l.savePng(night);
-            std.debug.print("wrote {s} (night, no re-tessellation)\n", .{night});
-        }
-        // camera demo: zoom 2 levels about the view center and re-render WITHOUT
-        // rebuilding — proves pan/zoom is a per-frame transform (acceptance #2).
-        l.setScheme(0);
-        l.cam.zoomAbout(2.0, @as(f32, @floatFromInt(l.g.width)) * 0.5, @as(f32, @floatFromInt(l.g.height)) * 0.5);
-        try l.savePng("lookout-zoom.png");
+        // night — set the mariner scheme; a palette swap only, NO re-tessellation
+        var m = l.getMariner();
+        m.scheme = cc.TILE57_SCHEME_NIGHT;
+        l.setMariner(m);
+        try l.snapshotPng("lookout-night.png");
+        std.debug.print("wrote lookout-night.png (night, no re-tessellation)\n", .{});
+        // camera demo: zoom 2 levels via the MVP only, no rebuild
+        m.scheme = cc.TILE57_SCHEME_DAY;
+        l.setMariner(m);
+        l.zoomAt(2.0, @as(f32, @floatFromInt(l.g.width)) * 0.5, @as(f32, @floatFromInt(l.g.height)) * 0.5);
+        try l.snapshotPng("lookout-zoom.png");
         std.debug.print("wrote lookout-zoom.png (zoomed via MVP only, no re-tessellation)\n", .{});
         std.debug.print("MSAA: {s}\n", .{if (l.g.msaa_used) "4x" else "off (unsupported)"});
         return;
@@ -153,29 +150,29 @@ fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
                 cc.SDL_EVENT_MOUSE_BUTTON_DOWN => dragging = true,
                 cc.SDL_EVENT_MOUSE_BUTTON_UP => dragging = false,
                 cc.SDL_EVENT_MOUSE_MOTION => {
-                    if (dragging) l.cam.panPx(ev.motion.xrel, ev.motion.yrel);
+                    // xrel/yrel are logical points; panLogical scales by density.
+                    if (dragging) l.panLogical(ev.motion.xrel, ev.motion.yrel);
                 },
                 cc.SDL_EVENT_MOUSE_WHEEL => {
-                    var mx: f32 = 0;
-                    var my: f32 = 0;
-                    _ = cc.SDL_GetMouseState(&mx, &my);
-                    l.cam.zoomAbout(@as(f64, ev.wheel.y) * 0.25, mx, my);
+                    // wheel.mouse_x/y are the cursor in logical points at the event.
+                    l.zoomAtLogical(@as(f64, ev.wheel.y) * 0.25, ev.wheel.mouse_x, ev.wheel.mouse_y);
                 },
+                cc.SDL_EVENT_WINDOW_RESIZED => l.resize(@intCast(ev.window.data1), @intCast(ev.window.data2)) catch {},
                 cc.SDL_EVENT_KEY_DOWN => switch (ev.key.key) {
-                    cc.SDLK_N => l.toggleScheme(),
+                    cc.SDLK_N => l.cycleScheme(),
                     cc.SDLK_T => l.toggleText(),
                     cc.SDLK_D => l.toggleOtherCategory(),
                     cc.SDLK_S => l.toggleSoundings(),
-                    cc.SDLK_LEFTBRACKET => l.nudgeSafetyContour(-2) catch {},
-                    cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2) catch {},
-                    cc.SDLK_EQUALS => l.render_size_scale *= 1.1,
-                    cc.SDLK_MINUS => l.render_size_scale /= 1.1,
+                    cc.SDLK_LEFTBRACKET => l.nudgeSafetyContour(-2),
+                    cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2),
+                    cc.SDLK_EQUALS => l.adjustSize(1.1),
+                    cc.SDLK_MINUS => l.adjustSize(1.0 / 1.1),
                     cc.SDLK_ESCAPE => running = false,
                     else => {},
                 },
                 else => {},
             }
         }
-        _ = try l.renderWindowFrame();
+        _ = try l.render();
     }
 }

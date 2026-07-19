@@ -1,6 +1,5 @@
-//! C ABI for lookout-core, so a C/C++ host can embed the renderer. Mirrors the
-//! Zig `Lookout` API. See include/lookout.h. This file is the static library's
-//! root; it pulls in the whole renderer.
+//! C ABI for lookout-core (see include/lookout.h). A thin, 1:1 wrapper over the
+//! Zig `Lookout` widget. Uses the C allocator so C hosts need no allocator.
 const std = @import("std");
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
@@ -8,15 +7,21 @@ const cc = @import("c.zig").c;
 const gpa = std.heap.c_allocator;
 
 pub const lookout = opaque {};
+pub const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 };
 
 fn cast(h: ?*lookout) *lk.Lookout {
     return @ptrCast(@alignCast(h.?));
 }
+fn toView(v: lookout_view) lk.View {
+    return .{ .lon = v.lon, .lat = v.lat, .zoom = v.zoom, .rotation_deg = v.rotation_deg };
+}
+fn fromView(v: lk.View) lookout_view {
+    return .{ .lon = v.lon, .lat = v.lat, .zoom = v.zoom, .rotation_deg = v.rotation_deg };
+}
 
-/// Open a baked chart and create the GPU device (+ window if want_window != 0).
+// ---- lifecycle -------------------------------------------------------------
 export fn lookout_open(chart_path: [*:0]const u8, width: u32, height: u32, want_window: c_int, want_msaa: c_int) ?*lookout {
-    const path = std.mem.span(chart_path);
-    const path_z = gpa.dupeZ(u8, path) catch return null;
+    const path_z = gpa.dupeZ(u8, std.mem.span(chart_path)) catch return null;
     defer gpa.free(path_z);
     const l = lk.Lookout.open(gpa, path_z, .{
         .width = width,
@@ -26,39 +31,89 @@ export fn lookout_open(chart_path: [*:0]const u8, width: u32, height: u32, want_
     }) catch return null;
     return @ptrCast(l);
 }
-
-/// Fill *lon/*lat/*zoom with a center + fit-zoom for the whole chart.
-export fn lookout_recommended_view(h: ?*lookout, lon: *f64, lat: *f64, zoom: *f64) void {
-    const v = cast(h).recommendedView();
-    lon.* = v.lon;
-    lat.* = v.lat;
-    zoom.* = v.zoom;
+export fn lookout_close(h: ?*lookout) void {
+    if (h) |x| cast(x).close();
 }
 
-/// Build phase: tessellate the view once and upload GPU buffers.
-export fn lookout_build_view(h: ?*lookout, lon: f64, lat: f64, zoom: f64) c_int {
-    cast(h).buildView(lon, lat, zoom) catch return -1;
+// ---- view ------------------------------------------------------------------
+export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
+    out.* = fromView(cast(h).fitChart());
+}
+export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
+    cast(h).setView(toView(v.*));
+}
+export fn lookout_get_view(h: ?*lookout, out: *lookout_view) void {
+    out.* = fromView(cast(h).view());
+}
+export fn lookout_resize(h: ?*lookout, width: u32, height: u32) c_int {
+    cast(h).resize(width, height) catch return -1;
     return 0;
 }
+export fn lookout_pixel_density(h: ?*lookout) f32 {
+    return cast(h).pixelDensity();
+}
 
-/// Render one frame to the window and present. Returns 1 if a window exists.
-export fn lookout_render_window_frame(h: ?*lookout) c_int {
-    const ok = cast(h).renderWindowFrame() catch return -1;
+// ---- interaction (pixel coords; *_logical scale by HiDPI density) ----------
+export fn lookout_pan(h: ?*lookout, dx: f32, dy: f32) void {
+    cast(h).panPixels(dx, dy);
+}
+export fn lookout_zoom_at(h: ?*lookout, dzoom: f64, x_px: f32, y_px: f32) void {
+    cast(h).zoomAt(dzoom, x_px, y_px);
+}
+export fn lookout_pan_logical(h: ?*lookout, dx_pt: f32, dy_pt: f32) void {
+    cast(h).panLogical(dx_pt, dy_pt);
+}
+export fn lookout_zoom_at_logical(h: ?*lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
+    cast(h).zoomAtLogical(dzoom, x_pt, y_pt);
+}
+export fn lookout_screen_to_geo(h: ?*lookout, x_px: f32, y_px: f32, lon: *f64, lat: *f64) void {
+    const g = cast(h).screenToGeo(x_px, y_px);
+    lon.* = g.lon;
+    lat.* = g.lat;
+}
+export fn lookout_geo_to_screen(h: ?*lookout, lon: f64, lat: f64, x_px: *f32, y_px: *f32) void {
+    const s = cast(h).geoToScreen(lon, lat);
+    x_px.* = s[0];
+    y_px.* = s[1];
+}
+
+// ---- mariner (ALL S-52 settings) -------------------------------------------
+export fn lookout_mariner_defaults(m: *cc.tile57_mariner) void {
+    cc.tile57_mariner_defaults(m);
+}
+export fn lookout_get_mariner(h: ?*lookout, out: *cc.tile57_mariner) void {
+    out.* = cast(h).getMariner();
+}
+export fn lookout_set_mariner(h: ?*lookout, m: *const cc.tile57_mariner) void {
+    cast(h).setMariner(m.*);
+}
+
+// ---- build + render --------------------------------------------------------
+export fn lookout_build(h: ?*lookout) c_int {
+    cast(h).build() catch return -1;
+    return 0;
+}
+export fn lookout_render(h: ?*lookout) c_int {
+    const ok = cast(h).render() catch return -1;
     return if (ok) 1 else 0;
 }
-
-/// Render offscreen and write a PNG. Returns 0 on success.
-export fn lookout_save_png(h: ?*lookout, path: [*:0]const u8) c_int {
-    cast(h).savePng(std.mem.span(path)) catch return -1;
+export fn lookout_snapshot_png(h: ?*lookout, path: [*:0]const u8) c_int {
+    cast(h).snapshotPng(std.mem.span(path)) catch return -1;
+    return 0;
+}
+export fn lookout_snapshot_rgba(h: ?*lookout, dst: [*]u8, dst_len: usize) c_int {
+    cast(h).snapshotRgba(dst[0..dst_len]) catch return -1;
     return 0;
 }
 
-// live, uniform-only toggles (no re-tessellation)
-export fn lookout_set_scheme(h: ?*lookout, k: usize) void {
-    cast(h).setScheme(k);
+// ---- pick (tap-to-identify) ------------------------------------------------
+export fn lookout_pick(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+    cast(h).pick(lon, lat, cb);
 }
-export fn lookout_toggle_scheme(h: ?*lookout) void {
-    cast(h).toggleScheme();
+
+// ---- convenience live toggles ----------------------------------------------
+export fn lookout_cycle_scheme(h: ?*lookout) void {
+    cast(h).cycleScheme();
 }
 export fn lookout_toggle_text(h: ?*lookout) void {
     cast(h).toggleText();
@@ -69,24 +124,13 @@ export fn lookout_toggle_soundings(h: ?*lookout) void {
 export fn lookout_toggle_other_category(h: ?*lookout) void {
     cast(h).toggleOtherCategory();
 }
-export fn lookout_pan_px(h: ?*lookout, dx: f32, dy: f32) void {
-    cast(h).cam.panPx(dx, dy);
+export fn lookout_nudge_safety_contour(h: ?*lookout, delta: f64) void {
+    cast(h).nudgeSafetyContour(delta);
 }
-export fn lookout_zoom_about(h: ?*lookout, dz: f64, px: f32, py: f32) void {
-    cast(h).cam.zoomAbout(dz, px, py);
-}
-
-// rebuilds (geometry changes)
-export fn lookout_nudge_safety_contour(h: ?*lookout, delta: f64) c_int {
-    cast(h).nudgeSafetyContour(delta) catch return -1;
-    return 0;
+export fn lookout_adjust_size(h: ?*lookout, factor: f32) void {
+    cast(h).adjustSize(factor);
 }
 
-export fn lookout_close(h: ?*lookout) void {
-    if (h) |x| cast(x).close();
-}
-
-// keep the C ABI symbols alive in the archive
 comptime {
     _ = lookout_open;
 }

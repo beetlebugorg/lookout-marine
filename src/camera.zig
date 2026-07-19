@@ -27,6 +27,7 @@ pub const Camera = struct {
     origin: Vec2, // fixed reference point (build view center) in world [0,1]
     center: Vec2, // current view center in world [0,1]
     zoom: f64, // fractional web-mercator zoom
+    rotation: f64 = 0, // view rotation, radians CW (course-up); 0 = north-up
     vw: f32, // viewport width px
     vh: f32, // viewport height px
 
@@ -36,20 +37,25 @@ pub const Camera = struct {
     }
 
     /// Column-major mat4 mapping camera-relative world (world - origin, as f32)
-    /// to Vulkan clip space. Small (world-origin) values keep f32 exact.
+    /// to Vulkan clip space: translate to center, rotate (course-up), scale to
+    /// clip, flip y. Small (world-origin) values keep f32 exact.
     pub fn mvp(self: Camera) [16]f32 {
         const s = self.worldToPx();
-        const sx: f64 = 2.0 * s / @as(f64, self.vw);
-        const sy: f64 = -2.0 * s / @as(f64, self.vh); // world y down -> clip y up
-        const dx = self.origin.x - self.center.x; // add before scale
+        const a: f64 = 2.0 * s / @as(f64, self.vw);
+        const b: f64 = 2.0 * s / @as(f64, self.vh);
+        const c = std.math.cos(self.rotation);
+        const sn = std.math.sin(self.rotation);
+        const dx = self.origin.x - self.center.x; // added before rotate/scale
         const dy = self.origin.y - self.center.y;
         var m = [_]f32{0} ** 16;
-        m[0] = @floatCast(sx);
-        m[5] = @floatCast(sy);
-        m[10] = 0.0; // z constant
-        m[12] = @floatCast(dx * sx);
-        m[13] = @floatCast(dy * sy);
-        m[14] = 0.5; // put every vertex at clip z = 0.5 (inside Vulkan [0,1])
+        m[0] = @floatCast(a * c);
+        m[1] = @floatCast(-b * sn);
+        m[4] = @floatCast(-a * sn);
+        m[5] = @floatCast(-b * c);
+        m[10] = 0.0;
+        m[12] = @floatCast(a * (c * dx - sn * dy));
+        m[13] = @floatCast(-b * (sn * dx + c * dy));
+        m[14] = 0.5; // clip z = 0.5 (inside Vulkan [0,1])
         m[15] = 1.0;
         return m;
     }
@@ -58,22 +64,34 @@ pub const Camera = struct {
     pub fn pxToClip(self: Camera) [2]f32 {
         return .{ 2.0 / self.vw, -2.0 / self.vh };
     }
-
-    /// screen px (y down, origin top-left) -> world [0,1].
-    pub fn screenToWorld(self: Camera, px: f32, py: f32) Vec2 {
-        const s = self.worldToPx();
-        return .{
-            .x = self.center.x + (@as(f64, px) - @as(f64, self.vw) * 0.5) / s,
-            .y = self.center.y + (@as(f64, py) - @as(f64, self.vh) * 0.5) / s,
-        };
+    /// (sin, cos) of the view rotation, for MAP-aligned marks in the shader.
+    pub fn rotSinCos(self: Camera) [2]f32 {
+        return .{ @floatCast(std.math.sin(self.rotation)), @floatCast(std.math.cos(self.rotation)) };
     }
 
-    /// world [0,1] -> screen px.
+    /// screen px (y down, origin top-left) -> world [0,1] (rotation-aware).
+    pub fn screenToWorld(self: Camera, px: f32, py: f32) Vec2 {
+        const s = self.worldToPx();
+        const c = std.math.cos(self.rotation);
+        const sn = std.math.sin(self.rotation);
+        const ex = (@as(f64, px) - @as(f64, self.vw) * 0.5);
+        const ey = (@as(f64, py) - @as(f64, self.vh) * 0.5);
+        // inverse rotation R(-theta)
+        const wx = (c * ex + sn * ey) / s;
+        const wy = (-sn * ex + c * ey) / s;
+        return .{ .x = self.center.x + wx, .y = self.center.y + wy };
+    }
+
+    /// world [0,1] -> screen px (rotation-aware).
     pub fn worldToScreen(self: Camera, w: Vec2) Vec2 {
         const s = self.worldToPx();
+        const c = std.math.cos(self.rotation);
+        const sn = std.math.sin(self.rotation);
+        const rx = (w.x - self.center.x) * s;
+        const ry = (w.y - self.center.y) * s;
         return .{
-            .x = (w.x - self.center.x) * s + @as(f64, self.vw) * 0.5,
-            .y = (w.y - self.center.y) * s + @as(f64, self.vh) * 0.5,
+            .x = (c * rx - sn * ry) + @as(f64, self.vw) * 0.5,
+            .y = (sn * rx + c * ry) + @as(f64, self.vh) * 0.5,
         };
     }
 
@@ -86,11 +104,14 @@ pub const Camera = struct {
         self.center.y += before.y - after.y;
     }
 
-    /// Pan by a screen-px delta.
+    /// Pan by a screen-px delta (rotation-aware).
     pub fn panPx(self: *Camera, dx: f32, dy: f32) void {
         const s = self.worldToPx();
-        self.center.x -= @as(f64, dx) / s;
-        self.center.y -= @as(f64, dy) / s;
+        const c = std.math.cos(self.rotation);
+        const sn = std.math.sin(self.rotation);
+        // move the world opposite the drag, un-rotating the screen delta
+        self.center.x -= (c * @as(f64, dx) + sn * @as(f64, dy)) / s;
+        self.center.y -= (-sn * @as(f64, dx) + c * @as(f64, dy)) / s;
     }
 
     /// The S-52 display-scale denominator (1:N) for the current view — used to

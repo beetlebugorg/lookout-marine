@@ -49,6 +49,9 @@ pub const Gpu = struct {
     msaa_used: bool,
     width: u32,
     height: u32,
+    /// pixels per logical point (Retina/HiDPI = 2.0). SDL mouse events are in
+    /// logical points; multiply by this to reach the pixel-space viewport.
+    pixel_density: f32 = 1.0,
 
     // offscreen targets (headless path)
     msaa_tex: ?*cc.SDL_GPUTexture = null, // multisample color (if MSAA)
@@ -70,12 +73,13 @@ pub const Gpu = struct {
         var color_format: cc.SDL_GPUTextureFormat = cc.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
         var width = opts.width;
         var height = opts.height;
+        var pixel_density: f32 = 1.0;
         if (opts.want_window) {
             // HIGH_PIXEL_DENSITY: on a Retina/HiDPI display, render at the true
             // pixel size instead of 1x logical points (which the OS upscales ->
             // pixelated). We fix the size (no RESIZABLE) so the render targets and
             // viewport stay matched to the swapchain for the prototype.
-            const flags: cc.SDL_WindowFlags = cc.SDL_WINDOW_HIGH_PIXEL_DENSITY;
+            const flags: cc.SDL_WindowFlags = cc.SDL_WINDOW_HIGH_PIXEL_DENSITY | cc.SDL_WINDOW_RESIZABLE;
             window = cc.SDL_CreateWindow("lookout — tile57 SDL_GPU", @intCast(opts.width), @intCast(opts.height), flags);
             if (window != null) {
                 try check(cc.SDL_ClaimWindowForGPUDevice(device, window), "ClaimWindow");
@@ -85,7 +89,9 @@ pub const Gpu = struct {
                 if (cc.SDL_GetWindowSizeInPixels(window, &pw, &ph) and pw > 0 and ph > 0) {
                     width = @intCast(pw);
                     height = @intCast(ph);
-                    std.debug.print("window: {d}x{d} logical -> {d}x{d} pixels\n", .{ opts.width, opts.height, pw, ph });
+                    const d = cc.SDL_GetWindowPixelDensity(window);
+                    if (d > 0) pixel_density = d;
+                    std.debug.print("window: {d}x{d} logical -> {d}x{d} pixels (density {d:.2})\n", .{ opts.width, opts.height, pw, ph, pixel_density });
                 }
             } else {
                 std.debug.print("no window ({s}); falling back to offscreen\n", .{cc.SDL_GetError()});
@@ -111,6 +117,7 @@ pub const Gpu = struct {
             .msaa_used = msaa_used,
             .width = width,
             .height = height,
+            .pixel_density = pixel_density,
         };
 
         // offscreen targets when there is no window (headless), or always for PNG dumps
@@ -140,6 +147,42 @@ pub const Gpu = struct {
         tb.usage = cc.SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
         tb.size = self.width * self.height * 4;
         self.download_tb = try checkPtr(cc.SDL_CreateGPUTransferBuffer(self.device, &tb), "CreateDownloadTB");
+    }
+
+    /// Resize the render surface. width/height are in logical points; the pixel
+    /// size (HiDPI) is derived. Recreates the offscreen/MSAA targets.
+    pub fn resize(self: *Gpu, width_pts: u32, height_pts: u32) !void {
+        var pw = width_pts;
+        var ph = height_pts;
+        if (self.window) |w| {
+            _ = cc.SDL_SetWindowSize(w, @intCast(width_pts), @intCast(height_pts));
+            var qw: c_int = 0;
+            var qh: c_int = 0;
+            if (cc.SDL_GetWindowSizeInPixels(w, &qw, &qh) and qw > 0 and qh > 0) {
+                pw = @intCast(qw);
+                ph = @intCast(qh);
+            }
+        }
+        if (pw == self.width and ph == self.height) return;
+        self.width = pw;
+        self.height = ph;
+        if (self.msaa_tex) |t| {
+            cc.SDL_ReleaseGPUTexture(self.device, t);
+            self.msaa_tex = null;
+        }
+        if (self.resolve_tex) |t| {
+            cc.SDL_ReleaseGPUTexture(self.device, t);
+            self.resolve_tex = null;
+        }
+        if (self.download_tb) |t| {
+            cc.SDL_ReleaseGPUTransferBuffer(self.device, t);
+            self.download_tb = null;
+        }
+        if (self.window == null) {
+            try self.ensureOffscreenTargets();
+        } else if (self.msaa_used) {
+            self.msaa_tex = try self.makeColorTex(self.sample_count, false);
+        }
     }
 
     fn buildPipeline(device: *cc.SDL_GPUDevice, color_format: cc.SDL_GPUTextureFormat, sc: cc.SDL_GPUSampleCount, vert_spv: []const u8, frag_spv: []const u8) !*cc.SDL_GPUGraphicsPipeline {

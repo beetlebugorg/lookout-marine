@@ -85,7 +85,7 @@ xvfb-run -a ./zig-out/bin/lookout --window --frames 3   # automated smoke test
 |---|---|
 | drag | pan |
 | wheel | cursor-anchored zoom |
-| `n` | cycle day / night palette (uniform only) |
+| `n` | cycle day / dusk / night palette (uniform only) |
 | `t` | toggle text |
 | `s` | toggle soundings |
 | `d` | toggle the OTHER display category |
