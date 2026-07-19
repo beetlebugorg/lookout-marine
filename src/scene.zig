@@ -64,6 +64,11 @@ pub const Scene = struct {
     mode_full: bool,
     scheme_k: usize,
     color_counter: usize,
+    /// SCAMIN cull: features whose 1:N min-display-scale denominator is finer
+    /// than this view's display scale are NOT tessellated (they wouldn't show at
+    /// this zoom). 0 = tessellate everything. This is what keeps a zoomed-out
+    /// view from tessellating the whole library's fine detail.
+    cull_scale: f32 = 0,
 
     // built outputs (after finish)
     indices: []u32 = &.{}, // final paint-ordered index buffer
@@ -301,9 +306,19 @@ fn clsIs(f: [*c]const cc.tile57_feature, name: []const u8) bool {
     if (p == null) return false;
     return std.mem.eql(u8, std.mem.span(p), name);
 }
+// Skip features that SCAMIN-out at this view's zoom, so a zoomed-out build never
+// tessellates fine detail. Deterministic, so the full and color passes agree.
+fn scaminCulled(s: *Scene, f: [*c]const cc.tile57_feature) bool {
+    if (s.cull_scale <= 0) return false;
+    const sc = f.*.scamin;
+    if (sc <= 0) return false;
+    if (@as(u32, @intCast(f.*.disp_cat)) == 0) return false; // BASE is never SCAMIN-culled
+    return s.cull_scale > @as(f32, @floatFromInt(sc));
+}
 
 fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_rgba, even_odd: c_int) callconv(.c) void {
     const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
     const item = s.newItem(CLASS_AREA, f.*.plane, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.disp_cat);
     const flags = packFlags(dc, CLASS_AREA, false);
@@ -317,6 +332,7 @@ fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]cons
     _ = dash_on;
     _ = dash_off;
     const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
     const item = s.newItem(CLASS_LINE, f.*.plane, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.disp_cat);
     const flags = packFlags(dc, CLASS_LINE, false);
@@ -327,6 +343,7 @@ fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]cons
 
 fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, rings: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, even_odd: c_int, stroke_w: f32, align_: cc.tile57_rot_align) callconv(.c) void {
     const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
     const sounding = clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS");
     const class: u8 = if (sounding) CLASS_SOUNDING else CLASS_SYMBOL;
     const kind: u8 = class;
@@ -347,6 +364,7 @@ fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57
     _ = halo;
     _ = halo_px;
     const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
     const item = s.newItem(CLASS_TEXT, f.*.plane, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.disp_cat);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
@@ -367,16 +385,20 @@ fn recordColor(ctx: ?*anyopaque, color: cc.tile57_rgba) void {
     }
     s.color_counter += 1;
 }
-fn cFillArea(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, color: cc.tile57_rgba, _: c_int) callconv(.c) void {
+fn cFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, color: cc.tile57_rgba, _: c_int) callconv(.c) void {
+    if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cStrokeLine(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, color: cc.tile57_rgba) callconv(.c) void {
+fn cStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, color: cc.tile57_rgba) callconv(.c) void {
+    if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cDrawSymbol(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+fn cDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+    if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cDrawText(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, _: cc.tile57_rgba, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, _: cc.tile57_rgba, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+    if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
 

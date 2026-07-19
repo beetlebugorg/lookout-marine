@@ -131,9 +131,12 @@ pub const Camera = struct {
     /// gate SCAMIN per frame. Standard web-mercator scale at 96dpi, latitude
     /// adjusted. Not exact vs the engine's cutoff (prototype); tune C if needed.
     pub fn displayScale(self: Camera) f32 {
-        const lat = worldToLonLat(self.center).y;
-        const C: f64 = 559082264.029; // OSM scale denom at z0, equator, 96dpi
-        const denom = C * std.math.cos(lat * std.math.pi / 180.0) / std.math.pow(f64, 2.0, self.zoom);
-        return @floatCast(denom);
+        return displayScaleAt(self.zoom, worldToLonLat(self.center).y);
     }
 };
+
+/// S-52 display-scale denominator (1:N) for a zoom + latitude (degrees).
+pub fn displayScaleAt(zoom: f64, lat_deg: f64) f32 {
+    const C: f64 = 559082264.029; // OSM scale denom at z0, equator, 96dpi
+    return @floatCast(C * std.math.cos(lat_deg * std.math.pi / 180.0) / std.math.pow(f64, 2.0, zoom));
+}

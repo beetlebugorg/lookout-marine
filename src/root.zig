@@ -247,7 +247,9 @@ pub const Lookout = struct {
         return .{ .origin = o, .center = o, .zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = @floatFromInt(w), .vh = @floatFromInt(h) };
     }
 
-    /// Center + fit-zoom for the whole chart (or composed set), from metadata.
+    /// A BOUNDED opening view. Deliberately the first cell's own bounds, NOT the
+    /// union of a whole library — fitting a big composite would tessellate the
+    /// entire library into one gigantic scene. Pan/zoom reaches the rest.
     pub fn fitChart(self: *Lookout) View {
         var west: f64 = 0;
         var south: f64 = 0;
@@ -256,17 +258,7 @@ pub const Lookout = struct {
         var has_bounds = false;
         var min_zoom: u8 = 0;
         var max_zoom: u8 = 22;
-        if (self.compose) |c| {
-            var meta: cc.tile57_compose_meta = undefined;
-            cc.tile57_compose_get_meta(c, &meta);
-            west = meta.west;
-            south = meta.south;
-            east = meta.east;
-            north = meta.north;
-            min_zoom = meta.min_zoom;
-            max_zoom = meta.max_zoom;
-            has_bounds = true;
-        } else {
+        {
             var info: cc.tile57_info = undefined;
             cc.tile57_chart_get_info(self.charts.items[0], &info);
             if (info.has_bounds) {
@@ -388,8 +380,8 @@ pub const Lookout = struct {
     // Overscan must exceed 2^ZOOM_REBUILD (a zoom-out of ZOOM_REBUILD grows the
     // view by that factor) so the margin still covers the view when the rebuild
     // is due — otherwise the edges go NODATA before it lands.
-    const OVERSCAN = 2.0; // scene covers 2.0x the viewport each dimension
-    const ZOOM_REBUILD = 0.75; // zoom drift that forces a fresh build
+    const OVERSCAN = 1.35; // scene covers 1.35x the viewport each dimension
+    const ZOOM_REBUILD = 0.4; // zoom drift that forces a fresh build (2^0.4 < OVERSCAN)
     const SETTLE_MS = 120; // debounce: rebuild only after the view stops moving
 
     // The immutable inputs a build needs — captured at spawn so the worker never
@@ -407,6 +399,9 @@ pub const Lookout = struct {
     fn tessellateInto(self: *Lookout, s: *scene.Scene, job: BuildJob) !void {
         const lon = camera.worldToLonLat(job.origin).x;
         const lat = camera.worldToLonLat(job.origin).y;
+        // Only tessellate features that SCAMIN-show at this zoom — a zoomed-out
+        // build then tessellates coarse features, not the whole library's detail.
+        s.cull_scale = camera.displayScaleAt(job.zoom, lat);
         var err: cc.tile57_error = undefined;
         s.scheme_k = 0;
         var m0 = buildMarinerFrom(job.base, self.schemes[0]);
