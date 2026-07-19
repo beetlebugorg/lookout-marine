@@ -13,15 +13,47 @@ This is a prototype/proof-of-concept — not for navigation, not S-52 pixel-perf
 
 ## What it is
 
-- **`liblookout.a`** — the core, a static library with a C ABI (`include/lookout.h`)
-  a C/C++ host can embed. It opens a chart, creates a GPU device (and a window if
-  asked), builds the scene, and renders (to a window, or offscreen → PNG).
-- **`lookout`** — a demo executable driving the library.
+- **`liblookout.a`** — the core, a static library with a small C ABI
+  (`include/lookout.h`) meant to be embedded as a chart widget in an existing
+  app. It opens a chart (or composes a whole library), owns all the
+  SDL/GPU/tessellation internally, and renders into **your app's native window**
+  (NSWindow / NSView / HWND / X11) or into a pixel buffer you upload yourself.
+- **`lookout`** — a demo executable driving the library (window or headless PNG).
 
-Written in **Zig** (0.16). SDL is the window + GPU transport only; all vector work
+Written in **Zig** (0.16). **The host never sees or links SDL** — SDL is an
+internal implementation detail (window transport + `SDL_GPU`). All vector work
 (polygon tessellation, line stroking, glyph/symbol tessellation, paint ordering,
-per-frame gating) is ours — see `NOTES.md` for the design and the ABI deviations
-that shaped it.
+per-frame gating, camera, level-of-detail) is ours — see `NOTES.md`.
+
+## Embedding in your app
+
+You write your shell in whatever you like — Swift/Cocoa on macOS, Win32, GTK on
+Linux — create a native window, and hand its handle to lookout:
+
+```c
+#include "lookout.h"
+lookout *lk = lookout_open_in_window(LOOKOUT_NATIVE_COCOA_WINDOW, nsWindow,
+                                     "chart.pmtiles", 1280, 960, /*msaa*/1);
+// your own run loop:
+lookout_render(lk);                       // draws + presents into your window
+lookout_pan(lk, dx, dy);                  // feed your input events
+lookout_zoom_at(lk, dz, mx, my);
+lookout_resize(lk, w, h);                 // on native resize
+// tap-to-identify, place a boat marker, etc.:
+double lon, lat; lookout_screen_to_geo(lk, mx, my, &lon, &lat);
+float x, y;      lookout_geo_to_screen(lk, boat_lon, boat_lat, &x, &y);
+lookout_close(lk);
+```
+
+Prefer pixels (Qt canvas, an existing GL/Metal texture, a server)? Skip the
+window handle and pull frames: `lookout_snapshot_rgba(lk, dst, w*h*4)`.
+
+Full S-52 control is `lookout_get_mariner` / `lookout_set_mariner` (the whole
+`tile57_mariner`): visibility toggles (scheme, categories, text, soundings, size)
+apply live; portrayal/geometry changes (contours, units, dates, groups) rebuild
+in the background. Tessellation runs on a worker thread, so opening a large
+library never freezes the window, and zooming across bands re-tessellates for
+fresh level-of-detail without blocking.
 
 ## Architecture in one paragraph
 
