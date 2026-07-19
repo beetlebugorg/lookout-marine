@@ -784,6 +784,9 @@ pub const Lookout = struct {
         defer s.deinit();
         const half = 0.5 / std.math.pow(f64, 2.0, @floatFromInt(z));
         s.cull_scale = camera.displayScaleAt(@floatFromInt(z), camera.worldToLonLat(.{ .x = origin.x + half, .y = origin.y + half }).y);
+        // Dash patterns arrive in screen px; this is what converts them to the
+        // world units the tile's geometry is built in.
+        s.px_per_world = 256.0 * std.math.pow(f32, 2.0, @floatFromInt(z));
         s.sprite_atlas = if (self.sprite_atlas) |*sa| sa else null;
         s.glyph_atlas = if (self.glyph_atlas) |*ga| ga else null;
         var err: cc.tile57_error = undefined;

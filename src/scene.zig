@@ -84,6 +84,10 @@ pub const Scene = struct {
     /// this zoom). 0 = tessellate everything. This is what keeps a zoomed-out
     /// view from tessellating the whole library's fine detail.
     cull_scale: f32 = 0,
+    /// Reference px per world unit at the scale this scene is built for
+    /// (256 * 2^z). Dash patterns arrive in screen px but the geometry is
+    /// world-space, so this is what converts between them.
+    px_per_world: f32 = 256.0,
     tess_ns: u64 = 0, // time spent in libtess2 (to profile tessellation vs engine)
 
     // sprite symbols: textured quads (no tessellation), one shared atlas
@@ -197,11 +201,26 @@ pub const Scene = struct {
     // (isotropic-scale approximation — see NOTES.md §4). One quad per segment
     // with a simple miter join.
     fn strokePolyline(self: *Scene, pts: []const f32, ring_starts: []const u32, ring_count: u32, half_px: f32, scamin: f32, flags: u32, anchored: bool, wrel: [2]f32, item: *DrawItem) !void {
+        return self.strokePolylineDashed(pts, ring_starts, ring_count, half_px, 0, 0, scamin, flags, anchored, wrel, item);
+    }
+
+    /// Stroke a polyline, honouring an S-52 dash pattern. `dash_on`/`dash_off`
+    /// are SCREEN px (0 off = solid); the run is walked in world units via
+    /// px_per_world so the pattern keeps its screen length at the scale this
+    /// scene is built for. The phase carries across segments so a dash spans a
+    /// corner instead of restarting at every vertex.
+    fn strokePolylineDashed(self: *Scene, pts: []const f32, ring_starts: []const u32, ring_count: u32, half_px: f32, dash_on: f32, dash_off: f32, scamin: f32, flags: u32, anchored: bool, wrel: [2]f32, item: *DrawItem) !void {
+        const ppw = if (self.px_per_world > 0) self.px_per_world else 256.0;
+        const on_w = dash_on / ppw;
+        const off_w = dash_off / ppw;
+        const period = on_w + off_w;
+        const dashed = dash_off > 0 and dash_on > 0 and period > 0;
         var r: u32 = 0;
         while (r < ring_count) : (r += 1) {
             const start = ring_starts[r];
             const end = if (r + 1 < ring_count) ring_starts[r + 1] else @as(u32, @intCast(pts.len / 2));
             if (end - start < 2) continue;
+            var phase: f32 = 0;
             var i: u32 = start;
             while (i + 1 < end) : (i += 1) {
                 const ax = pts[i * 2];
@@ -216,18 +235,41 @@ pub const Scene = struct {
                 dy /= len;
                 const nx = -dy * half_px; // normal * half width (px)
                 const ny = dx * half_px;
-                // 4 corners: a+n, b+n, b-n, a-n
-                const base: u32 = @intCast(self.verts.items.len);
-                try self.pushLineVtx(anchored, wrel, ax, ay, nx, ny, scamin, flags);
-                try self.pushLineVtx(anchored, wrel, bx, by, nx, ny, scamin, flags);
-                try self.pushLineVtx(anchored, wrel, bx, by, -nx, -ny, scamin, flags);
-                try self.pushLineVtx(anchored, wrel, ax, ay, -nx, -ny, scamin, flags);
-                for ([_]u32{ 0, 1, 2, 0, 2, 3 }) |o| try self.idx_tmp.append(self.a, base + o);
+                if (!dashed) {
+                    try self.emitSegQuad(anchored, wrel, ax, ay, bx, by, nx, ny, scamin, flags);
+                    continue;
+                }
+                var t: f32 = 0;
+                while (t < len) {
+                    const in_period = @mod(phase, period);
+                    const is_on = in_period < on_w;
+                    const left = if (is_on) on_w - in_period else period - in_period;
+                    const step = @min(@max(left, 1e-9), len - t);
+                    if (is_on) {
+                        const sx = ax + dx * t;
+                        const sy = ay + dy * t;
+                        const ex = ax + dx * (t + step);
+                        const ey = ay + dy * (t + step);
+                        try self.emitSegQuad(anchored, wrel, sx, sy, ex, ey, nx, ny, scamin, flags);
+                    }
+                    t += step;
+                    phase += step;
+                }
             }
         }
         item.vtx_count = @as(u32, @intCast(self.verts.items.len)) - item.vtx_first;
         item.idx_count = @as(u32, @intCast(self.idx_tmp.items.len)) - item.idx_first;
     }
+    fn emitSegQuad(self: *Scene, anchored: bool, wrel: [2]f32, ax: f32, ay: f32, bx: f32, by: f32, nx: f32, ny: f32, scamin: f32, flags: u32) !void {
+        // 4 corners: a+n, b+n, b-n, a-n
+        const base: u32 = @intCast(self.verts.items.len);
+        try self.pushLineVtx(anchored, wrel, ax, ay, nx, ny, scamin, flags);
+        try self.pushLineVtx(anchored, wrel, bx, by, nx, ny, scamin, flags);
+        try self.pushLineVtx(anchored, wrel, bx, by, -nx, -ny, scamin, flags);
+        try self.pushLineVtx(anchored, wrel, ax, ay, -nx, -ny, scamin, flags);
+        for ([_]u32{ 0, 1, 2, 0, 2, 3 }) |o| try self.idx_tmp.append(self.a, base + o);
+    }
+
     fn pushLineVtx(self: *Scene, anchored: bool, wrel: [2]f32, cx: f32, cy: f32, nx: f32, ny: f32, scamin: f32, flags: u32) !void {
         // world = centerline point; local = normal px offset. For anchored
         // (symbol-stroke) both the base point and offset are px in local.
@@ -364,8 +406,6 @@ fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const 
 }
 
 fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
-    _ = dash_on;
-    _ = dash_off;
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
     const item = s.newItem(CLASS_LINE, f.*.plane, Scene.rgba(color)) catch return;
@@ -373,7 +413,7 @@ fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]cons
     const flags = packFlags(dc, CLASS_LINE, false);
     s.worldToScratch(lines) catch return;
     const hw = @max(width_px, 1.0) * 0.5;
-    s.strokePolyline(s.scratch.items, Scene.ringStartsSlice(lines.*.ring_starts, lines.*.ring_count), lines.*.ring_count, hw, Scene.scaminF(f.*.scamin), flags, false, .{ 0, 0 }, item) catch return;
+    s.strokePolylineDashed(s.scratch.items, Scene.ringStartsSlice(lines.*.ring_starts, lines.*.ring_count), lines.*.ring_count, hw, dash_on, dash_off, Scene.scaminF(f.*.scamin), flags, false, .{ 0, 0 }, item) catch return;
 }
 
 fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, rings: [*c]const cc.tile57_local_rings, color: cc.tile57_color, even_odd: c_int, stroke_w: f32, align_: cc.tile57_rot_align) callconv(.c) void {
