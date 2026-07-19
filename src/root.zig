@@ -476,8 +476,8 @@ pub const Lookout = struct {
     // Overscan must exceed 2^ZOOM_REBUILD (a zoom-out of ZOOM_REBUILD grows the
     // view by that factor) so the margin still covers the view when the rebuild
     // is due — otherwise the edges go NODATA before it lands.
-    const OVERSCAN = 2.0; // scene covers 2.0x the viewport each dimension (pan margin)
-    const ZOOM_REBUILD = 0.6; // zoom drift that forces a fresh build (2^0.6 < OVERSCAN)
+    const OVERSCAN = 1.25; // scene covers 1.25x the viewport (interim; tile cache supersedes)
+    const ZOOM_REBUILD = 0.3; // zoom drift that forces a fresh build (2^0.3 < OVERSCAN)
     const SETTLE_MS = 120; // debounce ZOOM rebuilds (pan rebuilds are prompt)
 
     // The immutable inputs a build needs — captured at spawn so the worker never
