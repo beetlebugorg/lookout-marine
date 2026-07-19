@@ -115,7 +115,7 @@ pub const Scene = struct {
     // SDF text: textured quads sampling the glyph atlas
     text_quads: std.ArrayList(QuadVertex) = .empty,
     pattern_verts: std.ArrayList(PatternVertex) = .empty,
-    /// One entry per SPRITE QUAD (6 verts): the feature's S-52 draw priority.
+    /// One entry per SPRITE QUAD (6 verts): layer*1000 + S-52 draw priority.
     /// tile57 streams features in walk order and tags each with `plane`; a host
     /// that re-buckets them into its own batches has to restore paint order
     /// itself, which is what finish() does with this.
@@ -594,7 +594,13 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
         };
     }
     for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |idx| s.quads.append(s.a, q[idx]) catch return;
-    s.quad_planes.append(s.a, f.*.plane) catch return;
+    // Key on (layer, plane) exactly like tile57 does. The engine sorts by
+    // OpLayer first — symbol(3) before sounding(4) — and by draw_prio only
+    // within a layer, so a beacon at prio 24 legitimately precedes a SOUNDG at
+    // prio 18. lookout merges both layers into this one quad buffer, so sorting
+    // on plane alone would flatten them and undo the engine's order.
+    const layer: i32 = if (clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS")) 4 else 3;
+    s.quad_planes.append(s.a, layer * 1000 + f.*.plane) catch return;
 }
 
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads
