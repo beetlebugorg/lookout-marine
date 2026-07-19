@@ -46,6 +46,26 @@ export fn lookout_open_charts(paths: [*]const [*:0]const u8, n: usize, width: u3
     }) catch return null;
     return @ptrCast(l);
 }
+/// EMBED into your app's native window. `kind` is a lookout_native_kind:
+///   1 NSWindow*  2 NSView*  3 HWND  4 X11 Window (XID cast to a pointer).
+/// lookout wraps it with SDL internally and renders/presents into it — your app
+/// keeps its own toolkit + event loop and never links SDL. Then call
+/// lookout_render() each frame and feed input via lookout_pan/zoom/set_view/
+/// resize. NULL on error.
+export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*lookout {
+    const path_z = gpa.dupeZ(u8, std.mem.span(chart_path)) catch return null;
+    defer gpa.free(path_z);
+    const l = lk.Lookout.open(gpa, path_z, .{
+        .width = width,
+        .height = height,
+        .want_window = false,
+        .want_msaa = want_msaa != 0,
+        .native_handle = native_handle,
+        .native_kind = @enumFromInt(kind),
+    }) catch return null;
+    return @ptrCast(l);
+}
+
 export fn lookout_close(h: ?*lookout) void {
     if (h) |x| cast(x).close();
 }

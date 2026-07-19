@@ -33,11 +33,27 @@ fn checkPtr(p: anytype, comptime what: []const u8) !@typeInfo(@TypeOf(p)).option
     return p.?;
 }
 
+/// How to interpret Options.native_handle — the host's own window/view handle.
+/// SDL is wrapped internally; the host never sees or links SDL.
+pub const NativeKind = enum(c_int) {
+    none = 0,
+    cocoa_window = 1, // NSWindow*  (macOS)
+    cocoa_view = 2, // NSView*    (macOS, embed in a view hierarchy)
+    win32_hwnd = 3, // HWND       (Windows)
+    x11_window = 4, // X11 Window (XID, passed as the pointer's integer value)
+};
+
 pub const Options = struct {
     width: u32,
     height: u32,
     want_window: bool,
     want_msaa: bool,
+    /// Embed into the HOST's existing native window (NSWindow / HWND / X11 …).
+    /// lookout wraps it with SDL internally and renders/presents into it — the
+    /// host keeps its own toolkit and event loop and never touches SDL. null =>
+    /// lookout owns its own SDL window (want_window) or renders offscreen.
+    native_handle: ?*anyopaque = null,
+    native_kind: NativeKind = .none,
 };
 
 pub const Gpu = struct {
@@ -66,6 +82,7 @@ pub const Gpu = struct {
     n_schemes: usize = 0,
 
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8) !Gpu {
+        // lookout always owns SDL + the GPU device; the host never sees them.
         try check(cc.SDL_Init(cc.SDL_INIT_VIDEO), "SDL_Init");
         const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, true, null), "CreateGPUDevice");
 
@@ -74,27 +91,26 @@ pub const Gpu = struct {
         var width = opts.width;
         var height = opts.height;
         var pixel_density: f32 = 1.0;
-        if (opts.want_window) {
-            // HIGH_PIXEL_DENSITY: on a Retina/HiDPI display, render at the true
-            // pixel size instead of 1x logical points (which the OS upscales ->
-            // pixelated). We fix the size (no RESIZABLE) so the render targets and
-            // viewport stay matched to the swapchain for the prototype.
+        if (opts.native_kind != .none) {
+            window = createNativeWindow(opts.native_handle, opts.native_kind, opts.width, opts.height);
+            if (window == null) std.debug.print("wrap native window failed: {s}\n", .{cc.SDL_GetError()});
+        } else if (opts.want_window) {
+            // HIGH_PIXEL_DENSITY: render at true pixels on Retina/HiDPI.
             const flags: cc.SDL_WindowFlags = cc.SDL_WINDOW_HIGH_PIXEL_DENSITY | cc.SDL_WINDOW_RESIZABLE;
             window = cc.SDL_CreateWindow("lookout — tile57 SDL_GPU", @intCast(opts.width), @intCast(opts.height), flags);
-            if (window != null) {
-                try check(cc.SDL_ClaimWindowForGPUDevice(device, window), "ClaimWindow");
-                color_format = cc.SDL_GetGPUSwapchainTextureFormat(device, window);
-                var pw: c_int = 0;
-                var ph: c_int = 0;
-                if (cc.SDL_GetWindowSizeInPixels(window, &pw, &ph) and pw > 0 and ph > 0) {
-                    width = @intCast(pw);
-                    height = @intCast(ph);
-                    const d = cc.SDL_GetWindowPixelDensity(window);
-                    if (d > 0) pixel_density = d;
-                    std.debug.print("window: {d}x{d} logical -> {d}x{d} pixels (density {d:.2})\n", .{ opts.width, opts.height, pw, ph, pixel_density });
-                }
-            } else {
-                std.debug.print("no window ({s}); falling back to offscreen\n", .{cc.SDL_GetError()});
+            if (window == null) std.debug.print("no window ({s}); falling back to offscreen\n", .{cc.SDL_GetError()});
+        }
+        if (window != null) {
+            try check(cc.SDL_ClaimWindowForGPUDevice(device, window), "ClaimWindow");
+            color_format = cc.SDL_GetGPUSwapchainTextureFormat(device, window);
+            var pw: c_int = 0;
+            var ph: c_int = 0;
+            if (cc.SDL_GetWindowSizeInPixels(window, &pw, &ph) and pw > 0 and ph > 0) {
+                width = @intCast(pw);
+                height = @intCast(ph);
+                const d = cc.SDL_GetWindowPixelDensity(window);
+                if (d > 0) pixel_density = d;
+                std.debug.print("window: {d}x{d} logical -> {d}x{d} pixels (density {d:.2})\n", .{ opts.width, opts.height, pw, ph, pixel_density });
             }
         }
 
@@ -120,11 +136,31 @@ pub const Gpu = struct {
             .pixel_density = pixel_density,
         };
 
-        // offscreen targets when there is no window (headless), or always for PNG dumps
-        if (window == null) try g.ensureOffscreenTargets();
-        // an MSAA window still needs an intermediate multisample texture
-        if (window != null and msaa_used) g.msaa_tex = try g.makeColorTex(sample_count, false);
+        if (window == null) {
+            try g.ensureOffscreenTargets(); // headless: full readback (+snapshot)
+        } else {
+            try g.ensureMsaa(); // windowed MSAA needs the multisample intermediate
+        }
         return g;
+    }
+
+    // Wrap the host's native window handle (NSWindow / HWND / X11 …) with SDL so
+    // we can render into it. The host never links or sees SDL.
+    fn createNativeWindow(handle: ?*anyopaque, kind: NativeKind, w: u32, h: u32) ?*cc.SDL_Window {
+        const props = cc.SDL_CreateProperties();
+        if (props == 0) return null;
+        defer cc.SDL_DestroyProperties(props);
+        switch (kind) {
+            .cocoa_window => _ = cc.SDL_SetPointerProperty(props, cc.SDL_PROP_WINDOW_CREATE_COCOA_WINDOW_POINTER, handle),
+            .cocoa_view => _ = cc.SDL_SetPointerProperty(props, cc.SDL_PROP_WINDOW_CREATE_COCOA_VIEW_POINTER, handle),
+            .win32_hwnd => _ = cc.SDL_SetPointerProperty(props, cc.SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, handle),
+            .x11_window => _ = cc.SDL_SetNumberProperty(props, cc.SDL_PROP_WINDOW_CREATE_X11_WINDOW_NUMBER, @intCast(@intFromPtr(handle))),
+            .none => return null,
+        }
+        _ = cc.SDL_SetNumberProperty(props, cc.SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, @intCast(w));
+        _ = cc.SDL_SetNumberProperty(props, cc.SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, @intCast(h));
+        _ = cc.SDL_SetBooleanProperty(props, cc.SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+        return cc.SDL_CreateWindowWithProperties(props);
     }
 
     fn makeColorTex(self: *Gpu, sc: cc.SDL_GPUSampleCount, sampler_readable: bool) !*cc.SDL_GPUTexture {
@@ -140,13 +176,21 @@ pub const Gpu = struct {
         return try checkPtr(cc.SDL_CreateGPUTexture(self.device, &info), "CreateGPUTexture");
     }
 
+    // Idempotent: the single-sample resolve/readback target + download buffer for
+    // offscreen snapshots. Created lazily (embed mode makes them only if snapshot
+    // is used). ensureMsaa covers the multisample intermediate separately.
     fn ensureOffscreenTargets(self: *Gpu) !void {
-        if (self.msaa_used) self.msaa_tex = try self.makeColorTex(self.sample_count, false);
-        self.resolve_tex = try self.makeColorTex(cc.SDL_GPU_SAMPLECOUNT_1, false);
-        var tb = std.mem.zeroes(cc.SDL_GPUTransferBufferCreateInfo);
-        tb.usage = cc.SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-        tb.size = self.width * self.height * 4;
-        self.download_tb = try checkPtr(cc.SDL_CreateGPUTransferBuffer(self.device, &tb), "CreateDownloadTB");
+        try self.ensureMsaa();
+        if (self.resolve_tex == null) self.resolve_tex = try self.makeColorTex(cc.SDL_GPU_SAMPLECOUNT_1, false);
+        if (self.download_tb == null) {
+            var tb = std.mem.zeroes(cc.SDL_GPUTransferBufferCreateInfo);
+            tb.usage = cc.SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+            tb.size = self.width * self.height * 4;
+            self.download_tb = try checkPtr(cc.SDL_CreateGPUTransferBuffer(self.device, &tb), "CreateDownloadTB");
+        }
+    }
+    fn ensureMsaa(self: *Gpu) !void {
+        if (self.msaa_used and self.msaa_tex == null) self.msaa_tex = try self.makeColorTex(self.sample_count, false);
     }
 
     /// Resize the render surface. width/height are in logical points; the pixel
@@ -344,6 +388,7 @@ pub const Gpu = struct {
 
     /// Render one frame offscreen and read the pixels back (RGBA8, top-down).
     pub fn renderOffscreen(self: *Gpu, alloc: std.mem.Allocator, u: Uniforms, scheme_k: usize) ![]u8 {
+        try self.ensureOffscreenTargets(); // lazy (embed mode makes these on first snapshot)
         const resolve = self.resolve_tex orelse return error.NoOffscreenTarget;
         const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
         if (self.msaa_used) {
@@ -398,5 +443,19 @@ pub const Gpu = struct {
             cc.SDL_DestroyWindow(w);
         }
         cc.SDL_DestroyGPUDevice(d);
+    }
+
+    /// Release just the scene GPU buffers (before uploading a rebuilt scene).
+    pub fn releaseSceneBuffers(self: *Gpu) void {
+        const d = self.device;
+        if (self.vbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        if (self.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        for (&self.color_bufs) |*cb| if (cb.*) |b| {
+            cc.SDL_ReleaseGPUBuffer(d, b);
+            cb.* = null;
+        };
+        self.vbuf = null;
+        self.ibuf = null;
+        self.index_count = 0;
     }
 };

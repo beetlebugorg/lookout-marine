@@ -26,6 +26,12 @@ const KIND_TEXT: u5 = 4;
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
 
+fn fileExists(path: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
 pub const OpenOptions = struct {
     width: u32 = 1280,
     height: u32 = 960,
@@ -34,17 +40,26 @@ pub const OpenOptions = struct {
     /// palettes captured at build so scheme changes are instant. All three by
     /// default (day/dusk/night); index order defines the scheme<->buffer map.
     schemes: []const Scheme = &.{ cc.TILE57_SCHEME_DAY, cc.TILE57_SCHEME_DUSK, cc.TILE57_SCHEME_NIGHT },
-    /// optional ownership-partition sidecar to skip the compositor's partition
-    /// build (from tile57_compose_save_partition / the `tile57 bake` CLI).
+    /// optional ownership-partition sidecar. If it exists, compose loads it
+    /// (skips the O(charts) partition build); if not, lookout builds and SAVES it
+    /// here for next time. Point this somewhere per chart-library.
     partition_path: ?[:0]const u8 = null,
+    /// EMBED into a host's native window (NSWindow / HWND / X11 …). lookout
+    /// wraps it with SDL internally and renders/presents into it — the host uses
+    /// its own toolkit (Swift/Cocoa, Win32, GTK) and never links SDL. Then just
+    /// call render() each frame and feed input via pan/zoom/setView/resize.
+    native_handle: ?*anyopaque = null,
+    native_kind: gpu.NativeKind = .none,
 };
+
+pub const NativeKind = gpu.NativeKind;
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
     compose: ?*cc.tile57_compose = null, // set when >1 chart (ENC_ROOT / library)
     g: gpu.Gpu,
-    sc: ?scene.Scene = null,
+    built: bool = false, // GPU buffers hold a current scene (CPU geometry freed)
     cam: camera.Camera,
     schemes: [scene.MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
@@ -86,6 +101,8 @@ pub const Lookout = struct {
                 .height = opts.height,
                 .want_window = opts.want_window,
                 .want_msaa = opts.want_msaa,
+                .native_handle = opts.native_handle,
+                .native_kind = opts.native_kind,
             }, vert_spv, frag_spv),
             .cam = undefined,
         };
@@ -110,12 +127,17 @@ pub const Lookout = struct {
         if (self.charts.items.len > 1) {
             var err: cc.tile57_error = undefined;
             var c: ?*cc.tile57_compose = null;
+            const had_partition = if (self.partition_path) |p| fileExists(p) else false;
             const part: [*c]const u8 = if (self.partition_path) |p| p.ptr else null;
             if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, part, &c, &err) != cc.TILE57_OK or c == null) {
                 std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
                 return error.ComposeFailed;
             }
             self.compose = c;
+            // Persist the ownership partition so the NEXT open skips the build.
+            if (self.partition_path) |p| {
+                if (!had_partition) _ = cc.tile57_compose_save_partition(c.?, p.ptr, &err);
+            }
             std.debug.print("composed {d} charts\n", .{self.charts.items.len});
         }
         const v = self.fitChart();
@@ -124,7 +146,6 @@ pub const Lookout = struct {
     }
 
     pub fn close(self: *Lookout) void {
-        if (self.sc) |*s| s.deinit();
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
@@ -277,16 +298,17 @@ pub const Lookout = struct {
     pub fn build(self: *Lookout) !void {
         const origin = self.cam.center;
         self.cam.origin = origin;
-        if (self.sc) |*old| old.deinit();
-        self.sc = try scene.Scene.init(self.alloc, origin);
-        const s = &self.sc.?;
+        // Build into a LOCAL scene and free its CPU geometry once uploaded — we
+        // never keep the tessellation resident alongside the GPU copy.
+        var s = try scene.Scene.init(self.alloc, origin);
+        defer s.deinit();
         const lon = camera.worldToLonLat(origin).x;
         const lat = camera.worldToLonLat(origin).y;
 
         var err: cc.tile57_error = undefined;
         s.scheme_k = 0;
         var m0 = self.buildMariner(self.schemes[0]);
-        const full = scene.fullTable(s);
+        const full = scene.fullTable(&s);
         // north-up build (rotation is applied per-frame in the MVP), so a
         // course-up spin never re-tessellates.
         if (self.callSurface(lon, lat, &full, &m0, &err) != cc.TILE57_OK) {
@@ -297,19 +319,21 @@ pub const Lookout = struct {
             s.scheme_k = k;
             s.color_counter = 0;
             var mk = self.buildMariner(self.schemes[k]);
-            const ct = scene.colorTable(s);
+            const ct = scene.colorTable(&s);
             _ = self.callSurface(lon, lat, &ct, &mk, &err);
             if (s.color_counter != s.items.items.len) {
                 for (s.items.items) |*it| it.colors[k] = it.colors[0];
             }
         }
         try s.finish(self.n_schemes);
-        try self.g.uploadScene(s);
+        self.g.releaseSceneBuffers(); // drop the old GPU scene before re-upload
+        try self.g.uploadScene(&s);
+        self.built = true;
         self.dirty = false;
     }
 
     fn ensureBuilt(self: *Lookout) !void {
-        if (self.dirty or self.sc == null) try self.build();
+        if (self.dirty or !self.built) try self.build();
     }
 
     /// Base mariner for the build: the user's state, but with the live-gated

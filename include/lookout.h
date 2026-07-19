@@ -22,6 +22,15 @@ typedef struct lookout lookout;
 /* A camera pose. rotation_deg is course-up rotation (0 = north-up). */
 typedef struct { double lon, lat, zoom, rotation_deg; } lookout_view;
 
+/* Native window handle kinds for lookout_open_in_window. */
+typedef enum {
+    LOOKOUT_NATIVE_NONE = 0,
+    LOOKOUT_NATIVE_COCOA_WINDOW = 1, /* NSWindow*  (macOS) */
+    LOOKOUT_NATIVE_COCOA_VIEW   = 2, /* NSView*    (macOS) */
+    LOOKOUT_NATIVE_WIN32_HWND   = 3, /* HWND       (Windows) */
+    LOOKOUT_NATIVE_X11_WINDOW   = 4  /* X11 Window XID cast to a void* */
+} lookout_native_kind;
+
 /* ---- lifecycle --------------------------------------------------------- */
 /* Open a baked chart (.pmtiles) and create the GPU device. want_window!=0 opens
  * a window (needs a display); else rendering is offscreen. NULL on error. */
@@ -33,6 +42,16 @@ lookout *lookout_open(const char *chart_path, uint32_t width, uint32_t height,
 lookout *lookout_open_charts(const char *const *paths, size_t n,
                              uint32_t width, uint32_t height,
                              int want_window, int want_msaa);
+
+/* Embed into your app's native window (NSWindow / NSView / HWND / X11). lookout
+ * wraps it with SDL internally and renders/presents into it — your app keeps its
+ * own toolkit (Swift/Cocoa, Win32, GTK) and its own event loop, and never links
+ * SDL. Drive it with lookout_render() each frame; forward input via lookout_pan/
+ * zoom/set_view and lookout_resize on native resize. (For hosts that only want
+ * pixels, use lookout_snapshot_rgba instead — no window handle needed.) */
+lookout *lookout_open_in_window(lookout_native_kind kind, void *native_handle,
+                                const char *chart_path,
+                                uint32_t width, uint32_t height, int want_msaa);
 void lookout_close(lookout *h);
 
 /* ---- view -------------------------------------------------------------- */
