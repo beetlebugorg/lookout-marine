@@ -1,0 +1,131 @@
+//! lookout demo: open a baked tile57 chart and render it on SDL_GPU.
+//!   lookout <chart.pmtiles> [--window] [--png OUT] [--lon L --lat L --zoom Z]
+//! Headless default: render day + night PNGs (night proves palette swap needs
+//! no re-tessellation) and exit. --window: interactive pan/zoom + live toggles.
+const std = @import("std");
+const cc = @import("c.zig").c;
+const lk = @import("root.zig");
+
+const DEFAULT_CHART = "/home/claude/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles";
+
+pub fn main(init: std.process.Init) !void {
+    const alloc = std.heap.c_allocator;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+
+    var chart_path: [:0]const u8 = DEFAULT_CHART;
+    var want_window = false;
+    var png_out: []const u8 = "lookout.png";
+    var lon: ?f64 = null;
+    var lat: ?f64 = null;
+    var zoom: ?f64 = null;
+    var max_frames: ?u64 = null; // window mode: exit after N frames (for testing)
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--window")) {
+            want_window = true;
+        } else if (std.mem.eql(u8, a, "--png") and i + 1 < args.len) {
+            i += 1;
+            png_out = args[i];
+        } else if (std.mem.eql(u8, a, "--lon") and i + 1 < args.len) {
+            i += 1;
+            lon = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, a, "--lat") and i + 1 < args.len) {
+            i += 1;
+            lat = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, a, "--zoom") and i + 1 < args.len) {
+            i += 1;
+            zoom = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, a, "--frames") and i + 1 < args.len) {
+            i += 1;
+            max_frames = try std.fmt.parseInt(u64, args[i], 10);
+        } else if (a[0] != '-') {
+            chart_path = args[i][0.. :0];
+        }
+    }
+
+    // headless default: force SDL's offscreen video driver. --window keeps the
+    // platform driver (Lookout.open falls back to offscreen if it can't open one).
+    if (!want_window) {
+        _ = cc.SDL_SetHint(cc.SDL_HINT_VIDEO_DRIVER, "offscreen");
+    }
+
+    const l = try lk.Lookout.open(alloc, chart_path, .{ .want_window = want_window });
+    defer l.close();
+
+    const v = if (lon != null and lat != null and zoom != null)
+        lk.Lookout.View{ .lon = lon.?, .lat = lat.?, .zoom = zoom.? }
+    else
+        l.recommendedView();
+    std.debug.print("view: lon={d:.5} lat={d:.5} zoom={d:.2}\n", .{ v.lon, v.lat, v.zoom });
+    try l.buildView(v.lon, v.lat, v.zoom);
+
+    if (!want_window) {
+        // day
+        l.setScheme(0);
+        try l.savePng(png_out);
+        std.debug.print("wrote {s} (day)\n", .{png_out});
+        // night — palette swap ONLY (no buildView call): proves acceptance #3
+        if (l.n_schemes > 1) {
+            l.setScheme(1);
+            const night = try std.fmt.allocPrint(alloc, "{s}", .{"lookout-night.png"});
+            defer alloc.free(night);
+            try l.savePng(night);
+            std.debug.print("wrote {s} (night, no re-tessellation)\n", .{night});
+        }
+        // camera demo: zoom 2 levels about the view center and re-render WITHOUT
+        // rebuilding — proves pan/zoom is a per-frame transform (acceptance #2).
+        l.setScheme(0);
+        l.cam.zoomAbout(2.0, @as(f32, @floatFromInt(l.g.width)) * 0.5, @as(f32, @floatFromInt(l.g.height)) * 0.5);
+        try l.savePng("lookout-zoom.png");
+        std.debug.print("wrote lookout-zoom.png (zoomed via MVP only, no re-tessellation)\n", .{});
+        std.debug.print("MSAA: {s}\n", .{if (l.g.msaa_used) "4x" else "off (unsupported)"});
+        return;
+    }
+
+    // interactive
+    try runWindow(l, max_frames);
+}
+
+fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
+    var dragging = false;
+    var running = true;
+    var frame: u64 = 0;
+    while (running) {
+        if (max_frames) |mf| {
+            if (frame >= mf) break;
+        }
+        frame += 1;
+        var ev: cc.SDL_Event = undefined;
+        while (cc.SDL_PollEvent(&ev)) {
+            switch (ev.type) {
+                cc.SDL_EVENT_QUIT => running = false,
+                cc.SDL_EVENT_MOUSE_BUTTON_DOWN => dragging = true,
+                cc.SDL_EVENT_MOUSE_BUTTON_UP => dragging = false,
+                cc.SDL_EVENT_MOUSE_MOTION => {
+                    if (dragging) l.cam.panPx(ev.motion.xrel, ev.motion.yrel);
+                },
+                cc.SDL_EVENT_MOUSE_WHEEL => {
+                    var mx: f32 = 0;
+                    var my: f32 = 0;
+                    _ = cc.SDL_GetMouseState(&mx, &my);
+                    l.cam.zoomAbout(@as(f64, ev.wheel.y) * 0.25, mx, my);
+                },
+                cc.SDL_EVENT_KEY_DOWN => switch (ev.key.key) {
+                    cc.SDLK_N => l.toggleScheme(),
+                    cc.SDLK_T => l.toggleText(),
+                    cc.SDLK_D => l.toggleOtherCategory(),
+                    cc.SDLK_S => l.toggleSoundings(),
+                    cc.SDLK_LEFTBRACKET => l.nudgeSafetyContour(-2) catch {},
+                    cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2) catch {},
+                    cc.SDLK_EQUALS => l.render_size_scale *= 1.1,
+                    cc.SDLK_MINUS => l.render_size_scale /= 1.1,
+                    cc.SDLK_ESCAPE => running = false,
+                    else => {},
+                },
+                else => {},
+            }
+        }
+        _ = try l.renderWindowFrame();
+    }
+}
