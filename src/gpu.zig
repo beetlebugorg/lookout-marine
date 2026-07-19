@@ -326,12 +326,17 @@ pub const Gpu = struct {
     }
 
     pub fn uploadScene(self: *Gpu, s: *scene.Scene) !void {
-        const vbytes = std.mem.sliceAsBytes(s.verts.items);
-        self.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, vbytes);
+        // An empty view (open ocean / no coverage / a zoom that composes nothing)
+        // yields zero geometry — leave the buffers null and render only the
+        // NODATA clear. (SDL_GPU rejects a 0-byte buffer.)
+        self.index_count = 0;
+        self.n_schemes = s.n_schemes;
+        if (s.verts.items.len == 0 or s.indices.len == 0) return;
+        self.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.verts.items));
         self.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(s.indices));
         self.index_count = @intCast(s.indices.len);
-        self.n_schemes = s.n_schemes;
         for (0..s.n_schemes) |k| {
+            if (s.scheme_colors[k].len == 0) continue;
             self.color_bufs[k] = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.scheme_colors[k]));
         }
     }
