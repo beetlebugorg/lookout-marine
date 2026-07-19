@@ -110,6 +110,7 @@ pub const Lookout = struct {
     cov_hw: f64 = 0, // half-width / half-height of coverage, world units
     cov_hh: f64 = 0,
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
+    last_change_ms: i64 = 0, // when the view last moved (debounce rebuilds during a gesture)
     cam: camera.Camera,
     schemes: [scene.MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
@@ -298,7 +299,7 @@ pub const Lookout = struct {
         self.cam.center = camera.lonLatToWorld(v.lon, v.lat);
         self.cam.zoom = v.zoom;
         self.cam.rotation = v.rotation_deg * std.math.pi / 180.0;
-        self.view_dirty = true;
+        self.markDirty();
     }
     pub fn view(self: *Lookout) View {
         const ll = camera.worldToLonLat(self.cam.center);
@@ -310,7 +311,7 @@ pub const Lookout = struct {
         try self.g.resize(width, height);
         self.cam.vw = @floatFromInt(self.g.width);
         self.cam.vh = @floatFromInt(self.g.height);
-        self.view_dirty = true;
+        self.markDirty();
     }
     pub fn pixelDensity(self: *Lookout) f32 {
         return self.g.pixel_density;
@@ -319,11 +320,11 @@ pub const Lookout = struct {
     // ---- interaction --------------------------------------------------------
     pub fn panPixels(self: *Lookout, dx: f32, dy: f32) void {
         self.cam.panPx(dx, dy);
-        self.view_dirty = true;
+        self.markDirty();
     }
     pub fn zoomAt(self: *Lookout, dzoom: f64, x_px: f32, y_px: f32) void {
         self.cam.zoomAbout(dzoom, x_px, y_px);
-        self.view_dirty = true;
+        self.markDirty();
     }
     pub fn screenToGeo(self: *Lookout, x_px: f32, y_px: f32) View {
         const ll = camera.worldToLonLat(self.cam.screenToWorld(x_px, y_px));
@@ -336,12 +337,12 @@ pub const Lookout = struct {
     // Mouse coords from a HiDPI window arrive in logical points; scale to pixels.
     pub fn panLogical(self: *Lookout, dx_pt: f32, dy_pt: f32) void {
         self.cam.panPx(dx_pt * self.g.pixel_density, dy_pt * self.g.pixel_density);
-        self.view_dirty = true;
+        self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
         const d = self.g.pixel_density;
         self.cam.zoomAbout(dzoom, x_pt * d, y_pt * d);
-        self.view_dirty = true;
+        self.markDirty();
     }
 
     // ---- mariner (ALL S-52 settings) ---------------------------------------
@@ -377,15 +378,19 @@ pub const Lookout = struct {
             (@as(u32, @intFromBool(sound_on)) << KIND_SOUNDING);
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
         self.g.clear = self.nodata[self.active_scheme]; // background follows the palette
-        self.view_dirty = true;
+        self.markDirty();
     }
 
     // ---- build + render -----------------------------------------------------
     // Mirror chartplotter-fyne's model: tessellate a scene that OVERSCANS the
     // viewport, then only re-tessellate when the view pans/zooms out of that
     // coverage. Panning within the margin re-transforms the same buffers.
-    const OVERSCAN = 1.5; // scene covers 1.5x the viewport each dimension
+    // Overscan must exceed 2^ZOOM_REBUILD (a zoom-out of ZOOM_REBUILD grows the
+    // view by that factor) so the margin still covers the view when the rebuild
+    // is due — otherwise the edges go NODATA before it lands.
+    const OVERSCAN = 2.0; // scene covers 2.0x the viewport each dimension
     const ZOOM_REBUILD = 0.75; // zoom drift that forces a fresh build
+    const SETTLE_MS = 120; // debounce: rebuild only after the view stops moving
 
     // The immutable inputs a build needs — captured at spawn so the worker never
     // races the main thread's live camera / mariner edits.
@@ -435,6 +440,13 @@ pub const Lookout = struct {
         self.cov_zoom = job.zoom;
         self.cov_hw = @as(f64, @floatFromInt(job.width)) * 0.5 / wp;
         self.cov_hh = @as(f64, @floatFromInt(job.height)) * 0.5 / wp;
+    }
+
+    // Mark the view/state changed (for on-demand rendering) and stamp the time so
+    // rebuilds debounce until the gesture stops.
+    fn markDirty(self: *Lookout) void {
+        self.view_dirty = true;
+        self.last_change_ms = @as(i64, @intCast(cc.SDL_GetTicks()));
     }
 
     // True when the current view has panned/zoomed out of the built coverage.
@@ -523,8 +535,11 @@ pub const Lookout = struct {
             return;
         }
         // start a build when nothing is shown, on an explicit dirty (mariner
-        // change), or when the view has left the built coverage (pan/zoom).
-        if (!self.built or self.dirty or self.needsRebuild()) self.spawnBuild();
+        // change), or when the view has left coverage AND the gesture has settled
+        // (debounced — during a continuous pan/zoom the old scene stretches, so we
+        // don't re-tessellate on every wheel step).
+        const settled = (@as(i64, @intCast(cc.SDL_GetTicks())) - self.last_change_ms) >= SETTLE_MS;
+        if (!self.built or self.dirty or (self.needsRebuild() and settled)) self.spawnBuild();
     }
 
     fn ensureBuilt(self: *Lookout) !void {
@@ -619,7 +634,7 @@ pub const Lookout = struct {
     }
     pub fn adjustSize(self: *Lookout, factor: f32) void {
         self.render_size_scale *= factor;
-        self.view_dirty = true;
+        self.markDirty();
     }
 };
 
