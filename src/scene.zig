@@ -63,24 +63,6 @@ pub const Vertex = extern struct {
 pub const Color = extern struct { r: u8, g: u8, b: u8, a: u8 };
 
 // paint-order class == shader kind (they share the numbering, conveniently)
-// S-52 §14.5 text groups. The group is assigned by the S-101 portrayal
-// catalogue (the `tgrp` property tile57 bakes per text layer), not by an S-57
-// attribute — so it is a PORTRAYAL classification, not something in the cell.
-// 21/26/29 are the NAME groups (the set the mariner's text_names switch gates,
-// see tile57 style/mariner.zig textGroupFilter): place, area and feature names.
-// 11 is "important text" (soundings, clearances) and 23 is light descriptions —
-// deliberately NOT emboldened, they are values rather than names.
-const NAME_TEXT_GROUPS = [_]i32{ 21, 26, 29 };
-const NAME_TEXT_SCALE: f32 = 1.15;
-const NAME_TEXT_WEIGHT: f32 = 0.10;
-
-fn isNameGroup(g: i32) bool {
-    for (NAME_TEXT_GROUPS) |n| {
-        if (g == n) return true;
-    }
-    return false;
-}
-
 const CLASS_AREA: u8 = 0;
 const CLASS_LINE: u8 = 1;
 const CLASS_SYMBOL: u8 = 2;
@@ -595,11 +577,12 @@ fn fDrawTextStr(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, anchor: cc.til
     const wx = s.relX(anchor.x);
     const wy = s.relY(anchor.y);
     const col = Scene.rgba(color);
-    // Place/area names get a little more size and stroke weight so they read as
-    // labels for a THING rather than as chart values.
-    const is_name = isNameGroup(text_group);
-    const size_px_eff = if (is_name) size_px * NAME_TEXT_SCALE else size_px;
-    const weight: f32 = if (is_name) NAME_TEXT_WEIGHT else 0;
+    // No per-group emphasis: enlarging and emboldening names did not make them
+    // more legible, it just made a dense view heavier. text_group stays plumbed
+    // through (tile57 reports it) for whatever styling does work later.
+    _ = text_group;
+    const size_px_eff = size_px;
+    const weight: f32 = 0;
     const rad = rot_deg * std.math.pi / 180.0;
     const cs = std.math.cos(rad);
     const sn = std.math.sin(rad);
