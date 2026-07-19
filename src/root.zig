@@ -13,6 +13,7 @@ const scene = @import("scene.zig");
 const gpu = @import("gpu.zig");
 const camera = @import("camera.zig");
 const atlas = @import("atlas.zig");
+const png = @import("png.zig");
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
@@ -28,6 +29,11 @@ const KIND_TEXT: u5 = 4;
 
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
+
+const TileEntry = struct { bufs: gpu.Gpu.TileBuffers, origin: camera.Vec2, last_used: u64 };
+const TILE_CAP = 512; // resident tile ceiling (LRU-evicted)
+const TILE_BUDGET = 6; // new tiles tessellated per frame (progressive fill)
+const MAX_TILE_SPAN = 40; // clamp visible grid so an extreme zoom-out can't explode
 
 /// Base mariner for a build: the user's state, but with the live-gated axes
 /// forced permissive so EVERY feature reaches the surface tagged, then gated
@@ -133,6 +139,11 @@ pub const Lookout = struct {
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
 
+    // Tile cache: each (z,x,y) tile is composed + tessellated ONCE and cached, so
+    // pan/zoom only builds newly-exposed tiles (tile57 memoizes the compose).
+    tiles: std.AutoHashMapUnmanaged(u64, TileEntry) = .empty,
+    frame_ctr: u64 = 0,
+
     // derived live (uniform-only) state
     active_scheme: usize = 0,
     cat_mask: u32 = 0b111,
@@ -193,9 +204,9 @@ pub const Lookout = struct {
         if (cc.tile57_bake_sprite_mln(null, &assets, &err) != cc.TILE57_OK) return;
         defer cc.tile57_assets_free(&assets);
         if (assets.sprite_png == null or assets.sprite_json == null) return;
-        const png = assets.sprite_png[0..assets.sprite_png_len];
+        const png_bytes = assets.sprite_png[0..assets.sprite_png_len];
         const json = assets.sprite_json[0..assets.sprite_json_len];
-        const a = atlas.loadSprite(self.alloc, png, json) catch return;
+        const a = atlas.loadSprite(self.alloc, png_bytes, json) catch return;
         self.sprite_atlas = a;
         self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
             self.sprite_atlas.?.deinit();
@@ -320,7 +331,8 @@ pub const Lookout = struct {
 
     pub fn close(self: *Lookout) void {
         self.pollCompose(true); // finish any in-flight partition build first
-        self.joinBuild(); // stop the worker before tearing down handles it reads
+        self.dropTiles();
+        self.tiles.deinit(self.alloc);
         if (self.sprite_atlas) |*sa| sa.deinit();
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
@@ -443,7 +455,7 @@ pub const Lookout = struct {
     /// style, overscale, extra size scales…) marks the scene for a rebuild, done
     /// lazily on the next render.
     pub fn setMariner(self: *Lookout, m: Mariner) void {
-        if (marinerNeedsRebuild(self.mariner, m)) self.dirty = true;
+        if (marinerNeedsRebuild(self.mariner, m)) self.dropTiles(); // geometry changed
         self.mariner = m;
         self.deriveLive();
     }
@@ -566,21 +578,16 @@ pub const Lookout = struct {
             @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
     }
 
-    /// Force a SYNCHRONOUS (re)tessellation of the current view. Used by snapshot
-    /// (no frame loop) and available to force fresh detail.
+    /// Force all currently-visible tiles to be built now (synchronous).
     pub fn build(self: *Lookout) !void {
-        self.pollCompose(true); // a snapshot has no frame loop — wait for the compositor
-        self.joinBuild(); // don't race an in-flight async build
-        const job = self.jobFromCurrent();
-        var s = try scene.Scene.init(self.alloc, job.origin);
-        defer s.deinit();
-        try self.tessellateInto(&s, job);
-        self.cam.origin = job.origin;
-        self.g.releaseSceneBuffers();
-        try self.g.uploadScene(&s);
-        self.built = true;
-        self.dirty = false;
-        self.recordCoverage(job);
+        self.pollCompose(true);
+        self.buildAllVisible();
+    }
+    /// Drop all cached tiles (e.g. after a mariner change that alters geometry).
+    fn dropTiles(self: *Lookout) void {
+        var it = self.tiles.iterator();
+        while (it.next()) |e| self.g.freeTileBuffers(&e.value_ptr.bufs);
+        self.tiles.clearRetainingCapacity();
     }
 
     fn buildWorker(self: *Lookout) void {
@@ -657,13 +664,13 @@ pub const Lookout = struct {
         if (self.dirty or self.needsRebuild()) try self.build();
     }
 
-    fn uniforms(self: *Lookout) gpu.Uniforms {
+    fn uniformsForOrigin(self: *Lookout, origin: camera.Vec2) gpu.Uniforms {
         const rsc = self.cam.rotSinCos();
         return .{
-            .mvp = self.cam.mvp(),
+            .mvp = self.cam.mvpOrigin(origin),
             .px_to_clip = self.cam.pxToClip(),
-            // reference px are logical; scale by HiDPI density so symbols / text /
-            // line widths are the right PHYSICAL size on a Retina 2x framebuffer.
+            // reference px are logical; scale by HiDPI density so marks are the
+            // right PHYSICAL size on a Retina 2x framebuffer.
             .size_scale = self.render_size_scale * self.g.pixel_density,
             .current_scale = self.cam.displayScale(),
             .cat_mask = self.cat_mask,
@@ -673,43 +680,210 @@ pub const Lookout = struct {
         };
     }
 
-    /// Render one frame to the window and present. false if there is no window.
-    /// Non-blocking: tessellation runs on a worker thread; until the first build
-    /// lands the window shows the clear color, and during a rebuild the previous
-    /// scene keeps rendering (no flicker). LoD rebuilds fire on zoom drift.
-    pub fn render(self: *Lookout) !bool {
-        self.tick();
-        if (self.loading) {
-            // pulsing background so the window is visibly alive while the
-            // ownership partition builds (nothing to draw yet).
-            const ph = @as(f32, @floatFromInt(cc.SDL_GetTicks() % 1600)) / 1600.0;
-            const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph); // triangle wave
-            self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
+    // ---- tile cache ---------------------------------------------------------
+    const TileRange = struct { z: u8, x0: i64, y0: i64, x1: i64, y1: i64 };
+
+    fn tileZoomInt(self: *Lookout) u8 {
+        const z = @round(@min(self.cam.zoom, self.engine_max_zoom));
+        return @intFromFloat(std.math.clamp(z, self.cam.min_zoom, self.engine_max_zoom));
+    }
+    fn visibleRange(self: *Lookout) TileRange {
+        const z = self.tileZoomInt();
+        const n: f64 = std.math.pow(f64, 2.0, @floatFromInt(z));
+        const c = [_]camera.Vec2{ self.cam.screenToWorld(0, 0), self.cam.screenToWorld(self.cam.vw, 0), self.cam.screenToWorld(0, self.cam.vh), self.cam.screenToWorld(self.cam.vw, self.cam.vh) };
+        var minx = c[0].x;
+        var maxx = c[0].x;
+        var miny = c[0].y;
+        var maxy = c[0].y;
+        for (c[1..]) |p| {
+            minx = @min(minx, p.x);
+            maxx = @max(maxx, p.x);
+            miny = @min(miny, p.y);
+            maxy = @max(maxy, p.y);
         }
-        const ok = try self.g.renderWindow(self.uniforms(), self.active_scheme);
+        const lim = n - 1;
+        var r = TileRange{
+            .z = z,
+            .x0 = @intFromFloat(std.math.clamp(@floor(minx * n), 0, lim)),
+            .y0 = @intFromFloat(std.math.clamp(@floor(miny * n), 0, lim)),
+            .x1 = @intFromFloat(std.math.clamp(@floor(maxx * n), 0, lim)),
+            .y1 = @intFromFloat(std.math.clamp(@floor(maxy * n), 0, lim)),
+        };
+        if (r.x1 - r.x0 + 1 > MAX_TILE_SPAN) r.x1 = r.x0 + MAX_TILE_SPAN - 1;
+        if (r.y1 - r.y0 + 1 > MAX_TILE_SPAN) r.y1 = r.y0 + MAX_TILE_SPAN - 1;
+        return r;
+    }
+    fn keyFor(z: u8, x: i64, y: i64) u64 {
+        return (@as(u64, z) << 48) | (@as(u64, @intCast(x)) << 24) | @as(u64, @intCast(y));
+    }
+    fn tileOriginOf(z: u8, x: i64, y: i64) camera.Vec2 {
+        const n = std.math.pow(f64, 2.0, @floatFromInt(z));
+        return .{ .x = @as(f64, @floatFromInt(x)) / n, .y = @as(f64, @floatFromInt(y)) / n };
+    }
+
+    // Portray ONE tile through the surface callbacks (compose_tile -> render_mlt,
+    // or chart_tile_surface). tile57 memoizes the composed/decoded tile.
+    fn tileSurface(self: *Lookout, z: u8, x: i64, y: i64, cb: *const cc.tile57_surface_cb, m: *cc.tile57_mariner, err: *cc.tile57_error) void {
+        if (self.compose) |c| {
+            var mlt: [*c]u8 = null;
+            var len: usize = 0;
+            var owned = false;
+            if (cc.tile57_compose_tile(c, z, @intCast(x), @intCast(y), &mlt, &len, &owned, err) == cc.TILE57_OK and mlt != null and len > 0) {
+                _ = cc.tile57_render_mlt_tile(mlt, len, z, @intCast(x), @intCast(y), m, cb, err);
+                cc.tile57_free(mlt);
+            }
+        } else {
+            _ = cc.tile57_chart_tile_surface(self.charts.items[0], z, @intCast(x), @intCast(y), m, cb, err);
+        }
+    }
+
+    fn buildTile(self: *Lookout, z: u8, x: i64, y: i64) TileEntry {
+        const origin = tileOriginOf(z, x, y);
+        var s = scene.Scene.init(self.alloc, origin) catch return .{ .bufs = .{}, .origin = origin, .last_used = self.frame_ctr };
+        defer s.deinit();
+        const half = 0.5 / std.math.pow(f64, 2.0, @floatFromInt(z));
+        s.cull_scale = camera.displayScaleAt(@floatFromInt(z), camera.worldToLonLat(.{ .x = origin.x + half, .y = origin.y + half }).y);
+        s.sprite_atlas = if (self.sprite_atlas) |*sa| sa else null;
+        var err: cc.tile57_error = undefined;
+        s.scheme_k = 0;
+        var m0 = buildMarinerFrom(self.mariner, self.schemes[0]);
+        const full = scene.fullTable(&s);
+        self.tileSurface(z, x, y, &full, &m0, &err);
+        for (1..self.n_schemes) |k| {
+            s.scheme_k = k;
+            s.color_counter = 0;
+            var mk = buildMarinerFrom(self.mariner, self.schemes[k]);
+            const ct = scene.colorTable(&s);
+            self.tileSurface(z, x, y, &ct, &mk, &err);
+            if (s.color_counter != s.items.items.len) {
+                for (s.items.items) |*it| it.colors[k] = it.colors[0];
+            }
+        }
+        s.finish(self.n_schemes) catch {};
+        const bufs = self.g.uploadTileScene(&s) catch gpu.Gpu.TileBuffers{};
+        return .{ .bufs = bufs, .origin = origin, .last_used = self.frame_ctr };
+    }
+
+    // Build up to `budget` missing visible tiles; returns how many are still missing.
+    fn ensureTiles(self: *Lookout, budget: usize) usize {
+        self.frame_ctr += 1;
+        const r = self.visibleRange();
+        var built: usize = 0;
+        var missing: usize = 0;
+        var y = r.y0;
+        while (y <= r.y1) : (y += 1) {
+            var x = r.x0;
+            while (x <= r.x1) : (x += 1) {
+                const k = keyFor(r.z, x, y);
+                if (self.tiles.getPtr(k)) |e| {
+                    e.last_used = self.frame_ctr;
+                } else if (built < budget) {
+                    const e = self.buildTile(r.z, x, y);
+                    self.tiles.put(self.alloc, k, e) catch continue;
+                    built += 1;
+                } else missing += 1;
+            }
+        }
+        self.evictTiles();
+        return missing;
+    }
+
+    fn evictTiles(self: *Lookout) void {
+        while (self.tiles.count() > TILE_CAP) {
+            var oldest: u64 = std.math.maxInt(u64);
+            var oldest_key: ?u64 = null;
+            var it = self.tiles.iterator();
+            while (it.next()) |e| {
+                if (e.value_ptr.last_used < oldest and e.value_ptr.last_used != self.frame_ctr) {
+                    oldest = e.value_ptr.last_used;
+                    oldest_key = e.key_ptr.*;
+                }
+            }
+            const k = oldest_key orelse break;
+            if (self.tiles.getPtr(k)) |e| self.g.freeTileBuffers(&e.bufs);
+            _ = self.tiles.remove(k);
+        }
+    }
+
+    fn collectDraws(self: *Lookout, list: *std.ArrayList(gpu.Gpu.TileDraw)) void {
+        list.clearRetainingCapacity();
+        const r = self.visibleRange();
+        var y = r.y0;
+        while (y <= r.y1) : (y += 1) {
+            var x = r.x0;
+            while (x <= r.x1) : (x += 1) {
+                if (self.tiles.getPtr(keyFor(r.z, x, y))) |e| {
+                    if (e.bufs.index_count == 0 and e.bufs.quad_count == 0) continue;
+                    list.append(self.alloc, .{ .bufs = &e.bufs, .uniform = self.uniformsForOrigin(e.origin) }) catch {};
+                }
+            }
+        }
+    }
+
+    fn anyVisibleMissing(self: *Lookout) bool {
+        const r = self.visibleRange();
+        var y = r.y0;
+        while (y <= r.y1) : (y += 1) {
+            var x = r.x0;
+            while (x <= r.x1) : (x += 1) if (!self.tiles.contains(keyFor(r.z, x, y))) return true;
+        }
+        return false;
+    }
+
+    /// Render one frame to the window. Non-blocking: only newly-exposed tiles are
+    /// tessellated (a few per frame); cached tiles just re-transform.
+    pub fn render(self: *Lookout) !bool {
+        if (self.loading) {
+            self.pollCompose(false);
+            if (self.loading) {
+                const ph = @as(f32, @floatFromInt(cc.SDL_GetTicks() % 1600)) / 1600.0;
+                const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
+                self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
+                return self.g.renderWindowTiles(&.{}, self.active_scheme);
+            }
+        }
+        _ = self.ensureTiles(TILE_BUDGET);
+        var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
+        defer list.deinit(self.alloc);
+        self.collectDraws(&list);
+        const ok = try self.g.renderWindowTiles(list.items, self.active_scheme);
         self.view_dirty = false;
         return ok;
     }
-    /// Whether a frame needs (re)drawing: the view/state changed, a build is in
-    /// flight (progressive fill), or the view has left coverage. When false the
-    /// chart is static — the host can block on events and burn no CPU.
+
+    /// True while the view still has tiles to fill in, or state changed — the host
+    /// renders while this is true and blocks on events (idle CPU) when it's false.
     pub fn needsRedraw(self: *Lookout) bool {
-        if (self.loading) return true; // keep animating the loader + polling
-        return self.view_dirty or self.dirty or self.building or !self.built or self.needsRebuild();
+        return self.loading or self.view_dirty or self.anyVisibleMissing();
     }
-    /// True while a background (re)build is in flight — for a host "loading" hint.
     pub fn isBuilding(self: *Lookout) bool {
-        return self.building;
+        return self.needsRedraw();
+    }
+
+    // Build every visible tile at once (snapshots have no frame loop).
+    fn buildAllVisible(self: *Lookout) void {
+        var guard: usize = 0;
+        while (self.anyVisibleMissing() and guard < 128) : (guard += 1) _ = self.ensureTiles(9999);
     }
     /// Render offscreen and write a PNG.
     pub fn snapshotPng(self: *Lookout, path: []const u8) !void {
-        try self.ensureBuilt();
-        try self.g.savePng(self.alloc, path, self.uniforms(), self.active_scheme);
+        self.pollCompose(true);
+        self.buildAllVisible();
+        var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
+        defer list.deinit(self.alloc);
+        self.collectDraws(&list);
+        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme);
+        defer self.alloc.free(px);
+        try png.write(self.alloc, path, px, self.g.width, self.g.height);
     }
     /// Render offscreen into a caller RGBA8 buffer (len must be width*height*4).
     pub fn snapshotRgba(self: *Lookout, dst: []u8) !void {
-        try self.ensureBuilt();
-        const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.active_scheme);
+        self.pollCompose(true);
+        self.buildAllVisible();
+        var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
+        defer list.deinit(self.alloc);
+        self.collectDraws(&list);
+        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme);
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;
         @memcpy(dst[0..px.len], px);
@@ -751,7 +925,8 @@ pub const Lookout = struct {
     }
     pub fn nudgeSafetyContour(self: *Lookout, delta: f64) void {
         self.mariner.safety_contour = std.math.clamp(self.mariner.safety_contour + delta, 0, 200);
-        self.dirty = true; // geometry-affecting -> lazy rebuild
+        self.dropTiles(); // geometry-affecting -> rebuild visible tiles
+        self.markDirty();
     }
     pub fn adjustSize(self: *Lookout, factor: f32) void {
         self.render_size_scale *= factor;

@@ -454,6 +454,131 @@ pub const Gpu = struct {
         return buf;
     }
 
+    // ---- per-tile buffers (the tile cache) ---------------------------------
+    pub const TileBuffers = struct {
+        vbuf: ?*cc.SDL_GPUBuffer = null,
+        ibuf: ?*cc.SDL_GPUBuffer = null,
+        cbuf: [scene.MAX_SCHEMES]?*cc.SDL_GPUBuffer = .{ null, null, null },
+        index_count: u32 = 0,
+        qbuf: ?*cc.SDL_GPUBuffer = null,
+        quad_count: u32 = 0,
+    };
+
+    /// Upload one tile's tessellation to its own GPU buffers.
+    pub fn uploadTileScene(self: *Gpu, s: *scene.Scene) !TileBuffers {
+        var tb = TileBuffers{};
+        if (s.quads.items.len > 0) tb.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads.items));
+        tb.quad_count = @intCast(s.quads.items.len);
+        if (s.verts.items.len != 0 and s.indices.len != 0) {
+            tb.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.verts.items));
+            tb.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(s.indices));
+            tb.index_count = @intCast(s.indices.len);
+            for (0..s.n_schemes) |k| {
+                if (s.scheme_colors[k].len == 0) continue;
+                tb.cbuf[k] = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.scheme_colors[k]));
+            }
+        }
+        return tb;
+    }
+    pub fn freeTileBuffers(self: *Gpu, tb: *TileBuffers) void {
+        const d = self.device;
+        if (tb.vbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        if (tb.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        for (tb.cbuf) |c| if (c) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        if (tb.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        tb.* = .{};
+    }
+
+    /// One tile to draw: its buffers + the per-tile uniform (mvp folds the tile origin).
+    pub const TileDraw = struct { bufs: *const TileBuffers, uniform: Uniforms };
+
+    fn recordTiles(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, tiles: []const TileDraw, scheme_k: usize) void {
+        var cti = std.mem.zeroes(cc.SDL_GPUColorTargetInfo);
+        cti.texture = target;
+        cti.clear_color = self.clear;
+        cti.load_op = cc.SDL_GPU_LOADOP_CLEAR;
+        if (resolve) |rt| {
+            cti.store_op = cc.SDL_GPU_STOREOP_RESOLVE;
+            cti.resolve_texture = rt;
+        } else cti.store_op = cc.SDL_GPU_STOREOP_STORE;
+        const pass = cc.SDL_BeginGPURenderPass(cmd, &cti, 1, null);
+        const vp = cc.SDL_GPUViewport{ .x = 0, .y = 0, .w = @floatFromInt(self.width), .h = @floatFromInt(self.height), .min_depth = 0, .max_depth = 1 };
+        // flat geometry (areas + lines), per tile
+        cc.SDL_BindGPUGraphicsPipeline(pass, self.pipeline);
+        cc.SDL_SetGPUViewport(pass, &vp);
+        for (tiles) |t| {
+            if (t.bufs.index_count == 0 or t.bufs.cbuf[scheme_k] == null) continue;
+            const binds = [_]cc.SDL_GPUBufferBinding{ .{ .buffer = t.bufs.vbuf, .offset = 0 }, .{ .buffer = t.bufs.cbuf[scheme_k], .offset = 0 } };
+            cc.SDL_BindGPUVertexBuffers(pass, 0, &binds, 2);
+            const ib = cc.SDL_GPUBufferBinding{ .buffer = t.bufs.ibuf, .offset = 0 };
+            cc.SDL_BindGPUIndexBuffer(pass, &ib, cc.SDL_GPU_INDEXELEMENTSIZE_32BIT);
+            var uu = t.uniform;
+            cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+            cc.SDL_DrawGPUIndexedPrimitives(pass, t.bufs.index_count, 1, 0, 0, 0);
+        }
+        // sprite symbols, per tile
+        if (self.sprite_tex != null and self.sprite_pipeline != null) {
+            cc.SDL_BindGPUGraphicsPipeline(pass, self.sprite_pipeline);
+            cc.SDL_SetGPUViewport(pass, &vp);
+            const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
+            cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
+            for (tiles) |t| {
+                if (t.bufs.quad_count == 0) continue;
+                const qb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.qbuf, .offset = 0 }};
+                cc.SDL_BindGPUVertexBuffers(pass, 0, &qb, 1);
+                var uu = t.uniform;
+                cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+                cc.SDL_DrawGPUPrimitives(pass, t.bufs.quad_count, 1, 0, 0);
+            }
+        }
+        cc.SDL_EndGPURenderPass(pass);
+    }
+
+    pub fn renderWindowTiles(self: *Gpu, tiles: []const TileDraw, scheme_k: usize) !bool {
+        const window = self.window orelse return false;
+        const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
+        var swap: ?*cc.SDL_GPUTexture = null;
+        var w: u32 = 0;
+        var h: u32 = 0;
+        try check(cc.SDL_WaitAndAcquireGPUSwapchainTexture(cmd, window, &swap, &w, &h), "AcquireSwapchain");
+        if (swap == null) {
+            _ = cc.SDL_SubmitGPUCommandBuffer(cmd);
+            return true;
+        }
+        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, swap, tiles, scheme_k) else self.recordTiles(cmd, swap.?, null, tiles, scheme_k);
+        try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit frame");
+        return true;
+    }
+
+    pub fn renderOffscreenTiles(self: *Gpu, alloc: std.mem.Allocator, tiles: []const TileDraw, scheme_k: usize) ![]u8 {
+        try self.ensureOffscreenTargets();
+        const resolve = self.resolve_tex.?;
+        const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
+        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, resolve, tiles, scheme_k) else self.recordTiles(cmd, resolve, null, tiles, scheme_k);
+        const cp = cc.SDL_BeginGPUCopyPass(cmd);
+        var region = std.mem.zeroes(cc.SDL_GPUTextureRegion);
+        region.texture = resolve;
+        region.w = self.width;
+        region.h = self.height;
+        region.d = 1;
+        var dst = std.mem.zeroes(cc.SDL_GPUTextureTransferInfo);
+        dst.transfer_buffer = self.download_tb.?;
+        dst.pixels_per_row = self.width;
+        dst.rows_per_layer = self.height;
+        cc.SDL_DownloadFromGPUTexture(cp, &region, &dst);
+        cc.SDL_EndGPUCopyPass(cp);
+        const fence = cc.SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+        if (fence != null) {
+            _ = cc.SDL_WaitForGPUFences(self.device, true, @ptrCast(&fence), 1);
+            cc.SDL_ReleaseGPUFence(self.device, fence);
+        }
+        const map = cc.SDL_MapGPUTransferBuffer(self.device, self.download_tb.?, false);
+        const n = self.width * self.height * 4;
+        const pixels = try alloc.dupe(u8, @as([*]const u8, @ptrCast(map))[0..n]);
+        cc.SDL_UnmapGPUTransferBuffer(self.device, self.download_tb.?);
+        return pixels;
+    }
+
     pub fn uploadScene(self: *Gpu, s: *scene.Scene) !void {
         // An empty view (open ocean / no coverage / a zoom that composes nothing)
         // yields zero geometry — leave the buffers null and render only the
