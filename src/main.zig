@@ -8,11 +8,38 @@ const lk = @import("root.zig");
 
 const DEFAULT_CHART = "/home/claude/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles";
 
+const USAGE =
+    \\lookout — render a baked tile57 chart on SDL_GPU
+    \\
+    \\usage: lookout <chart.pmtiles> [options]
+    \\
+    \\  <chart.pmtiles>   a baked tile57 PMTiles archive (required)
+    \\  --window          open an interactive window (needs a display)
+    \\  --frames N        window mode: exit after N frames (testing)
+    \\  --png OUT         headless day PNG output path (default lookout.png)
+    \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
+    \\  -h, --help        this help
+    \\
+    \\Headless (no --window) writes lookout.png (day), lookout-night.png
+    \\(palette swap, no re-tessellation) and lookout-zoom.png (MVP zoom, no
+    \\re-tessellation), then exits.
+    \\
+    \\Window controls: drag=pan, wheel=zoom, n=day/night, t=text, s=soundings,
+    \\d=OTHER category, [/]=safety contour (rebuilds), -/=+ size, Esc=quit.
+    \\
+;
+
+fn fileExists(path: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
 pub fn main(init: std.process.Init) !void {
     const alloc = std.heap.c_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    var chart_path: [:0]const u8 = DEFAULT_CHART;
+    var chart_path: ?[:0]const u8 = null;
     var want_window = false;
     var png_out: []const u8 = "lookout.png";
     var lon: ?f64 = null;
@@ -22,7 +49,10 @@ pub fn main(init: std.process.Init) !void {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
-        if (std.mem.eql(u8, a, "--window")) {
+        if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
+            std.debug.print("{s}", .{USAGE});
+            return;
+        } else if (std.mem.eql(u8, a, "--window")) {
             want_window = true;
         } else if (std.mem.eql(u8, a, "--png") and i + 1 < args.len) {
             i += 1;
@@ -44,13 +74,24 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // Resolve the chart: the positional arg, else the built-in default if it
+    // happens to exist on this machine.
+    const chart = chart_path orelse blk: {
+        if (fileExists(DEFAULT_CHART)) break :blk @as([:0]const u8, DEFAULT_CHART);
+        std.debug.print("error: no chart given.\n\n{s}", .{USAGE});
+        return error.NoChart;
+    };
+
     // headless default: force SDL's offscreen video driver. --window keeps the
     // platform driver (Lookout.open falls back to offscreen if it can't open one).
     if (!want_window) {
         _ = cc.SDL_SetHint(cc.SDL_HINT_VIDEO_DRIVER, "offscreen");
     }
 
-    const l = try lk.Lookout.open(alloc, chart_path, .{ .want_window = want_window });
+    const l = lk.Lookout.open(alloc, chart, .{ .want_window = want_window }) catch {
+        std.debug.print("error: could not open chart '{s}'.\n", .{chart});
+        return error.ChartOpenFailed;
+    };
     defer l.close();
 
     const v = if (lon != null and lat != null and zoom != null)

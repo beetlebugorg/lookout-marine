@@ -65,7 +65,12 @@ Headless (default): renders the whole cell to PNGs and exits.
 
 Writes `lookout.png` (day), `lookout-night.png` (palette swap only, **no
 re-tessellation**), and `lookout-zoom.png` (zoomed via the MVP only, **no
-re-tessellation**). Default chart is Annapolis `US5MD1MC`.
+re-tessellation**).
+
+The chart argument is a **baked tile57 PMTiles archive** (what `tile57 bake` /
+`tile57_bake_chart_bytes` produce from an S-57 `.000` — not the raw `.000`). Pass
+your own as the first argument; there is a built-in default path used only as a
+fallback if it exists on the machine. `-h` prints full usage.
 
 Windowed (needs a display; on a headless box use `xvfb-run`):
 
