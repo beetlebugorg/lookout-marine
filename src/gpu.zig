@@ -91,13 +91,14 @@ pub const Gpu = struct {
     quad_count: u32 = 0,
     // SDF text: its own pipeline (sprite.vert + sdf.frag) + glyph atlas texture
     sdf_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
+    pattern_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
     glyph_tex: ?*cc.SDL_GPUTexture = null,
     // Labels are NOT per-tile: one decluttered set for the whole view, in one
     // buffer, drawn last (see scene.labelTable).
     label_buf: ?*cc.SDL_GPUBuffer = null,
     label_count: u32 = 0,
 
-    pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8) !Gpu {
+    pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8, pattern_vert_spv: []const u8, pattern_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
         try check(cc.SDL_Init(cc.SDL_INIT_VIDEO), "SDL_Init");
         const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, true, null), "CreateGPUDevice");
@@ -141,11 +142,13 @@ pub const Gpu = struct {
         const pipeline = try buildPipeline(device, color_format, sample_count, vert_spv, frag_spv);
         const sprite_pipeline = try buildSpritePipeline(device, color_format, sample_count, sprite_vert_spv, sprite_frag_spv);
         const sdf_pipeline = try buildSpritePipeline(device, color_format, sample_count, sprite_vert_spv, sdf_frag_spv);
+        const pattern_pipeline = try buildPatternPipeline(device, color_format, sample_count, pattern_vert_spv, pattern_frag_spv);
         const sampler = try makeSampler(device);
 
         var g = Gpu{
             .sprite_pipeline = sprite_pipeline,
             .sdf_pipeline = sdf_pipeline,
+            .pattern_pipeline = pattern_pipeline,
             .sampler = sampler,
             .device = device,
             .window = window,
@@ -319,6 +322,65 @@ pub const Gpu = struct {
 
     // Textured-quad pipeline for sprite symbols (and SDF text). QuadVertex layout;
     // one fragment sampler (the atlas).
+    /// Pipeline for area fill patterns: polygon geometry in world space, with
+    /// the atlas cell and its screen size carried per vertex so one draw can
+    /// cover many different patterns without a uniform change per polygon.
+    fn buildPatternPipeline(device: *cc.SDL_GPUDevice, color_format: cc.SDL_GPUTextureFormat, sc: cc.SDL_GPUSampleCount, vspv: []const u8, fspv: []const u8) !*cc.SDL_GPUGraphicsPipeline {
+        var vinfo = std.mem.zeroes(cc.SDL_GPUShaderCreateInfo);
+        vinfo.code = vspv.ptr;
+        vinfo.code_size = vspv.len;
+        vinfo.entrypoint = "main";
+        vinfo.format = cc.SDL_GPU_SHADERFORMAT_SPIRV;
+        vinfo.stage = cc.SDL_GPU_SHADERSTAGE_VERTEX;
+        vinfo.num_uniform_buffers = 1;
+        const vshader = try checkPtr(cc.SDL_CreateGPUShader(device, &vinfo), "pattern vertex shader");
+        defer cc.SDL_ReleaseGPUShader(device, vshader);
+
+        var finfo = std.mem.zeroes(cc.SDL_GPUShaderCreateInfo);
+        finfo.code = fspv.ptr;
+        finfo.code_size = fspv.len;
+        finfo.entrypoint = "main";
+        finfo.format = cc.SDL_GPU_SHADERFORMAT_SPIRV;
+        finfo.stage = cc.SDL_GPU_SHADERSTAGE_FRAGMENT;
+        finfo.num_samplers = 1;
+        const fshader = try checkPtr(cc.SDL_CreateGPUShader(device, &finfo), "pattern fragment shader");
+        defer cc.SDL_ReleaseGPUShader(device, fshader);
+
+        const vbufs = [_]cc.SDL_GPUVertexBufferDescription{
+            .{ .slot = 0, .pitch = @sizeOf(scene.PatternVertex), .input_rate = cc.SDL_GPU_VERTEXINPUTRATE_VERTEX, .instance_step_rate = 0 },
+        };
+        const vattrs = [_]cc.SDL_GPUVertexAttribute{
+            .{ .location = 0, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 0 }, // world
+            .{ .location = 1, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, .offset = 8 }, // cell rect
+            .{ .location = 2, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 24 }, // cell px
+        };
+        var blend = std.mem.zeroes(cc.SDL_GPUColorTargetBlendState);
+        blend.enable_blend = true;
+        blend.src_color_blendfactor = cc.SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+        blend.dst_color_blendfactor = cc.SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        blend.color_blend_op = cc.SDL_GPU_BLENDOP_ADD;
+        blend.src_alpha_blendfactor = cc.SDL_GPU_BLENDFACTOR_ONE;
+        blend.dst_alpha_blendfactor = cc.SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        blend.alpha_blend_op = cc.SDL_GPU_BLENDOP_ADD;
+        const color_targets = [_]cc.SDL_GPUColorTargetDescription{.{ .format = color_format, .blend_state = blend }};
+
+        var p = std.mem.zeroes(cc.SDL_GPUGraphicsPipelineCreateInfo);
+        p.vertex_shader = vshader;
+        p.fragment_shader = fshader;
+        p.vertex_input_state = .{
+            .vertex_buffer_descriptions = &vbufs,
+            .num_vertex_buffers = 1,
+            .vertex_attributes = &vattrs,
+            .num_vertex_attributes = 3,
+        };
+        p.primitive_type = cc.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        p.rasterizer_state.fill_mode = cc.SDL_GPU_FILLMODE_FILL;
+        p.rasterizer_state.cull_mode = cc.SDL_GPU_CULLMODE_NONE;
+        p.multisample_state.sample_count = sc;
+        p.target_info = .{ .color_target_descriptions = &color_targets, .num_color_targets = 1, .depth_stencil_format = 0, .has_depth_stencil_target = false };
+        return try checkPtr(cc.SDL_CreateGPUGraphicsPipeline(device, &p), "pattern pipeline");
+    }
+
     fn buildSpritePipeline(device: *cc.SDL_GPUDevice, color_format: cc.SDL_GPUTextureFormat, sc: cc.SDL_GPUSampleCount, vspv: []const u8, fspv: []const u8) !*cc.SDL_GPUGraphicsPipeline {
         var vinfo = std.mem.zeroes(cc.SDL_GPUShaderCreateInfo);
         vinfo.code = vspv.ptr;
@@ -348,6 +410,7 @@ pub const Gpu = struct {
             .{ .location = 1, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 8 }, // local
             .{ .location = 2, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 16 }, // uv
             .{ .location = 3, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, .offset = 24 }, // color
+            .{ .location = 4, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, .offset = 28 }, // SDF weight
         };
         var blend = std.mem.zeroes(cc.SDL_GPUColorTargetBlendState);
         blend.enable_blend = true;
@@ -366,7 +429,7 @@ pub const Gpu = struct {
             .vertex_buffer_descriptions = &vbufs,
             .num_vertex_buffers = 1,
             .vertex_attributes = &vattrs,
-            .num_vertex_attributes = 4,
+            .num_vertex_attributes = 5,
         };
         p.primitive_type = cc.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
         p.rasterizer_state.fill_mode = cc.SDL_GPU_FILLMODE_FILL;
@@ -477,6 +540,8 @@ pub const Gpu = struct {
         index_count: u32 = 0,
         qbuf: ?*cc.SDL_GPUBuffer = null,
         quad_count: u32 = 0,
+        pbuf: ?*cc.SDL_GPUBuffer = null, // area fill patterns (tiled atlas cells)
+        pattern_count: u32 = 0,
     };
 
     /// Replace the view's decluttered label quads (one buffer for the whole view).
@@ -494,6 +559,8 @@ pub const Gpu = struct {
         var tb = TileBuffers{};
         if (s.quads.items.len > 0) tb.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads.items));
         tb.quad_count = @intCast(s.quads.items.len);
+        if (s.pattern_verts.items.len > 0) tb.pbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.pattern_verts.items));
+        tb.pattern_count = @intCast(s.pattern_verts.items.len);
         if (s.verts.items.len != 0 and s.indices.len != 0) {
             tb.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.verts.items));
             tb.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(s.indices));
@@ -511,6 +578,7 @@ pub const Gpu = struct {
         if (tb.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         for (tb.cbuf) |c| if (c) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (tb.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        if (tb.pbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         tb.* = .{};
     }
 
@@ -540,6 +608,22 @@ pub const Gpu = struct {
             var uu = t.uniform;
             cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
             cc.SDL_DrawGPUIndexedPrimitives(pass, t.bufs.index_count, 1, 0, 0, 0);
+        }
+        // area fill patterns, per tile — same atlas as the sprites, tiled in
+        // screen space by the fragment shader
+        if (self.sprite_tex != null and self.pattern_pipeline != null) {
+            cc.SDL_BindGPUGraphicsPipeline(pass, self.pattern_pipeline);
+            cc.SDL_SetGPUViewport(pass, &vp);
+            const psamp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
+            cc.SDL_BindGPUFragmentSamplers(pass, 0, &psamp, 1);
+            for (tiles) |t| {
+                if (t.bufs.pattern_count == 0) continue;
+                const pb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.pbuf, .offset = 0 }};
+                cc.SDL_BindGPUVertexBuffers(pass, 0, &pb, 1);
+                var uu = t.uniform;
+                cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+                cc.SDL_DrawGPUPrimitives(pass, t.bufs.pattern_count, 1, 0, 0);
+            }
         }
         // sprite symbols, per tile
         if (self.sprite_tex != null and self.sprite_pipeline != null) {
@@ -755,6 +839,7 @@ pub const Gpu = struct {
         if (self.sprite_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.glyph_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.sdf_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
+        if (self.pattern_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sampler) |sm| cc.SDL_ReleaseGPUSampler(d, sm);
         if (self.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (self.window) |w| {
