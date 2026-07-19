@@ -23,8 +23,6 @@ const frag_spv = @embedFile("chart_frag_spv");
 const sprite_vert_spv = @embedFile("sprite_vert_spv");
 const sprite_frag_spv = @embedFile("sprite_frag_spv");
 const sdf_frag_spv = @embedFile("sdf_frag_spv");
-const pattern_vert_spv = @embedFile("pattern_vert_spv");
-const pattern_frag_spv = @embedFile("pattern_frag_spv");
 
 // shader-kind bits (match chart.vert / scene.zig class numbering)
 const KIND_SOUNDING: u5 = 3;
@@ -191,7 +189,7 @@ pub const Lookout = struct {
                 .want_msaa = opts.want_msaa,
                 .native_handle = opts.native_handle,
                 .native_kind = opts.native_kind,
-            }, vert_spv, frag_spv, sprite_vert_spv, sprite_frag_spv, sdf_frag_spv, pattern_vert_spv, pattern_frag_spv),
+            }, vert_spv, frag_spv, sprite_vert_spv, sprite_frag_spv, sdf_frag_spv),
             .cam = undefined,
         };
         self.n_schemes = @min(opts.schemes.len, scene.MAX_SCHEMES);
@@ -789,7 +787,6 @@ pub const Lookout = struct {
         // Dash patterns arrive in screen px; this is what converts them to the
         // world units the tile's geometry is built in.
         s.px_per_world = 256.0 * std.math.pow(f32, 2.0, @floatFromInt(z));
-        s.density = if (self.g.pixel_density > 0) self.g.pixel_density else 1.0;
         s.sprite_atlas = if (self.sprite_atlas) |*sa| sa else null;
         s.glyph_atlas = if (self.glyph_atlas) |*ga| ga else null;
         var err: cc.tile57_error = undefined;

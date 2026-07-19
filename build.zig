@@ -40,8 +40,6 @@ pub fn build(b: *std.Build) void {
             mod.addAnonymousImport("sprite_vert_spv", .{ .root_source_file = bb.path("shaders/sprite.vert.spv") });
             mod.addAnonymousImport("sprite_frag_spv", .{ .root_source_file = bb.path("shaders/sprite.frag.spv") });
             mod.addAnonymousImport("sdf_frag_spv", .{ .root_source_file = bb.path("shaders/sdf.frag.spv") });
-            mod.addAnonymousImport("pattern_vert_spv", .{ .root_source_file = bb.path("shaders/pattern.vert.spv") });
-            mod.addAnonymousImport("pattern_frag_spv", .{ .root_source_file = bb.path("shaders/pattern.frag.spv") });
         }
     };
     const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib };
@@ -88,7 +86,7 @@ pub fn build(b: *std.Build) void {
 
     // ---- shader (re)compilation: `zig build shaders` ----
     const shaders = b.step("shaders", "Recompile GLSL -> SPIR-V (needs glslangValidator)");
-    inline for (.{ "chart.vert", "chart.frag", "sprite.vert", "sprite.frag", "sdf.frag", "pattern.vert", "pattern.frag" }) |name| {
+    inline for (.{ "chart.vert", "chart.frag", "sprite.vert", "sprite.frag", "sdf.frag" }) |name| {
         const cmd = b.addSystemCommand(&.{ "glslangValidator", "-V" });
         cmd.addFileArg(b.path("shaders/" ++ name));
         cmd.addArg("-o");
