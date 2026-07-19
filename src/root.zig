@@ -26,6 +26,39 @@ const KIND_TEXT: u5 = 4;
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
 
+/// Base mariner for a build: the user's state, but with the live-gated axes
+/// forced permissive so EVERY feature reaches the surface tagged, then gated
+/// per-frame in the shader (NOTES.md §3). Geometry-affecting fields (contours,
+/// units, dates, groups…) pass through unchanged.
+fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_mariner {
+    var m = base;
+    m.scheme = sch;
+    m.display_base = true;
+    m.display_standard = true;
+    m.display_other = true;
+    m.text_names = true;
+    m.show_light_descriptions = true;
+    m.text_other = true;
+    m.soundings = 1;
+    m.size_scale = 1.0; // runtime size lives in the shader uniform
+    return m;
+}
+
+fn hexColor(s: []const u8) ?cc.SDL_FColor {
+    var t = s;
+    if (t.len > 0 and t[0] == '#') t = t[1..];
+    if (t.len < 6) return null;
+    const r = std.fmt.parseInt(u8, t[0..2], 16) catch return null;
+    const g = std.fmt.parseInt(u8, t[2..4], 16) catch return null;
+    const b = std.fmt.parseInt(u8, t[4..6], 16) catch return null;
+    return .{
+        .r = @as(f32, @floatFromInt(r)) / 255.0,
+        .g = @as(f32, @floatFromInt(g)) / 255.0,
+        .b = @as(f32, @floatFromInt(b)) / 255.0,
+        .a = 1.0,
+    };
+}
+
 fn fileExists(path: []const u8) bool {
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
@@ -60,6 +93,17 @@ pub const Lookout = struct {
     compose: ?*cc.tile57_compose = null, // set when >1 chart (ENC_ROOT / library)
     g: gpu.Gpu,
     built: bool = false, // GPU buffers hold a current scene (CPU geometry freed)
+
+    // async build: tessellation (CPU) runs on a worker thread so the window
+    // stays responsive; the main thread uploads the result. The OLD scene keeps
+    // rendering until the new one is ready (only the first build shows blank).
+    build_thread: ?std.Thread = null,
+    building: bool = false,
+    build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    pending: ?scene.Scene = null,
+    pending_origin: camera.Vec2 = .{ .x = 0, .y = 0 },
+    job: BuildJob = undefined,
+    build_zoom: f64 = 0, // zoom the current scene was tessellated at (for LoD)
     cam: camera.Camera,
     schemes: [scene.MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
@@ -74,6 +118,7 @@ pub const Lookout = struct {
     cat_mask: u32 = 0b111,
     kind_mask: u32 = 0b11111,
     render_size_scale: f32 = 1.0,
+    nodata: [scene.MAX_SCHEMES]cc.SDL_FColor = [_]cc.SDL_FColor{.{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 }} ** scene.MAX_SCHEMES,
 
     // ---- lifecycle ----------------------------------------------------------
     /// Open ONE baked chart (.pmtiles).
@@ -110,7 +155,34 @@ pub const Lookout = struct {
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
         self.partition_path = opts.partition_path;
         cc.tile57_mariner_defaults(&self.mariner);
+        self.loadNodataColors();
         return self;
+    }
+
+    // Pull the S-52 NODATA (NODTA) color per captured scheme from tile57's
+    // colortables, so the uncovered background matches the palette.
+    fn loadNodataColors(self: *Lookout) void {
+        var out: [*c]u8 = null;
+        var len: usize = 0;
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_colortables_default(&out, &len, &err) != cc.TILE57_OK or out == null) return;
+        defer cc.tile57_free(out);
+        const parsed = std.json.parseFromSlice(std.json.Value, self.alloc, out[0..len], .{}) catch return;
+        defer parsed.deinit();
+        const root_obj = switch (parsed.value) {
+            .object => |o| o,
+            else => return,
+        };
+        for (0..self.n_schemes) |i| {
+            const name = switch (self.schemes[i]) {
+                cc.TILE57_SCHEME_DUSK => "dusk",
+                cc.TILE57_SCHEME_NIGHT => "night",
+                else => "day",
+            };
+            const scheme_obj = (root_obj.get(name) orelse continue).object;
+            const hex = (scheme_obj.get("NODTA") orelse continue).string;
+            if (hexColor(hex)) |c| self.nodata[i] = c;
+        }
     }
 
     fn addChartPath(self: *Lookout, path: [:0]const u8) void {
@@ -146,6 +218,7 @@ pub const Lookout = struct {
     }
 
     pub fn close(self: *Lookout) void {
+        self.joinBuild(); // stop the worker before tearing down handles it reads
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
@@ -153,11 +226,12 @@ pub const Lookout = struct {
         self.alloc.destroy(self);
     }
 
-    // A dispatch over the active surface source (single chart or compositor).
-    fn callSurface(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_surface_cb, m: *cc.tile57_mariner, err: *cc.tile57_error) cc.tile57_status {
+    // Dispatch over the active surface source (single chart or compositor) for an
+    // explicit view — no cam/g reads, so the worker thread can call it.
+    fn callSurfaceAt(self: *Lookout, lon: f64, lat: f64, zoom: f64, w: u32, h: u32, cb: *const cc.tile57_surface_cb, m: *cc.tile57_mariner, err: *cc.tile57_error) cc.tile57_status {
         if (self.compose) |c|
-            return cc.tile57_compose_surface(c, lon, lat, self.cam.zoom, 0.0, self.g.width, self.g.height, m, cb, err);
-        return cc.tile57_chart_surface(self.charts.items[0], lon, lat, self.cam.zoom, 0.0, self.g.width, self.g.height, m, cb, err);
+            return cc.tile57_compose_surface(c, lon, lat, zoom, 0.0, w, h, m, cb, err);
+        return cc.tile57_chart_surface(self.charts.items[0], lon, lat, zoom, 0.0, w, h, m, cb, err);
     }
 
     // ---- view ---------------------------------------------------------------
@@ -290,68 +364,135 @@ pub const Lookout = struct {
             (@as(u32, @intFromBool(text_on)) << KIND_TEXT) |
             (@as(u32, @intFromBool(sound_on)) << KIND_SOUNDING);
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
+        self.g.clear = self.nodata[self.active_scheme]; // background follows the palette
     }
 
     // ---- build + render -----------------------------------------------------
-    /// (Re)tessellate the current view + mariner. Normally called automatically
-    /// by render/snapshot; call directly to force a rebuild (e.g. new detail).
-    pub fn build(self: *Lookout) !void {
-        const origin = self.cam.center;
-        self.cam.origin = origin;
-        // Build into a LOCAL scene and free its CPU geometry once uploaded — we
-        // never keep the tessellation resident alongside the GPU copy.
-        var s = try scene.Scene.init(self.alloc, origin);
-        defer s.deinit();
-        const lon = camera.worldToLonLat(origin).x;
-        const lat = camera.worldToLonLat(origin).y;
+    const ZOOM_REBUILD = 1.25; // zoom drift (levels) that triggers a fresh LoD build
 
+    // The immutable inputs a build needs — captured at spawn so the worker never
+    // races the main thread's live camera / mariner edits.
+    pub const BuildJob = struct {
+        origin: camera.Vec2 = .{ .x = 0, .y = 0 },
+        zoom: f64 = 0,
+        width: u32 = 0,
+        height: u32 = 0,
+        base: Mariner = undefined,
+    };
+
+    // Pure-CPU tessellation into `s` for the given job — no GPU, no cam/g reads,
+    // so it is safe to run on a worker thread.
+    fn tessellateInto(self: *Lookout, s: *scene.Scene, job: BuildJob) !void {
+        const lon = camera.worldToLonLat(job.origin).x;
+        const lat = camera.worldToLonLat(job.origin).y;
         var err: cc.tile57_error = undefined;
         s.scheme_k = 0;
-        var m0 = self.buildMariner(self.schemes[0]);
-        const full = scene.fullTable(&s);
-        // north-up build (rotation is applied per-frame in the MVP), so a
-        // course-up spin never re-tessellates.
-        if (self.callSurface(lon, lat, &full, &m0, &err) != cc.TILE57_OK) {
-            std.debug.print("surface failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
+        var m0 = buildMarinerFrom(job.base, self.schemes[0]);
+        const full = scene.fullTable(s);
+        if (self.callSurfaceAt(lon, lat, job.zoom, job.width, job.height, &full, &m0, &err) != cc.TILE57_OK)
             return error.SurfaceFailed;
-        }
         for (1..self.n_schemes) |k| {
             s.scheme_k = k;
             s.color_counter = 0;
-            var mk = self.buildMariner(self.schemes[k]);
-            const ct = scene.colorTable(&s);
-            _ = self.callSurface(lon, lat, &ct, &mk, &err);
+            var mk = buildMarinerFrom(job.base, self.schemes[k]);
+            const ct = scene.colorTable(s);
+            _ = self.callSurfaceAt(lon, lat, job.zoom, job.width, job.height, &ct, &mk, &err);
             if (s.color_counter != s.items.items.len) {
                 for (s.items.items) |*it| it.colors[k] = it.colors[0];
             }
         }
         try s.finish(self.n_schemes);
-        self.g.releaseSceneBuffers(); // drop the old GPU scene before re-upload
+    }
+
+    fn jobFromCurrent(self: *Lookout) BuildJob {
+        return .{ .origin = self.cam.center, .zoom = self.cam.zoom, .width = self.g.width, .height = self.g.height, .base = self.mariner };
+    }
+
+    /// Force a SYNCHRONOUS (re)tessellation of the current view. Used by snapshot
+    /// (no frame loop) and available to force fresh detail.
+    pub fn build(self: *Lookout) !void {
+        self.joinBuild(); // don't race an in-flight async build
+        const job = self.jobFromCurrent();
+        var s = try scene.Scene.init(self.alloc, job.origin);
+        defer s.deinit();
+        try self.tessellateInto(&s, job);
+        self.cam.origin = job.origin;
+        self.g.releaseSceneBuffers();
         try self.g.uploadScene(&s);
         self.built = true;
         self.dirty = false;
+        self.build_zoom = job.zoom;
+    }
+
+    fn buildWorker(self: *Lookout) void {
+        var s = scene.Scene.init(self.alloc, self.job.origin) catch {
+            self.build_done.store(true, .release);
+            return;
+        };
+        self.tessellateInto(&s, self.job) catch {
+            s.deinit();
+            self.pending = null;
+            self.build_done.store(true, .release);
+            return;
+        };
+        self.pending = s;
+        self.build_done.store(true, .release); // publishes `pending` to the main thread
+    }
+
+    fn spawnBuild(self: *Lookout) void {
+        self.job = self.jobFromCurrent();
+        self.pending_origin = self.job.origin;
+        self.building = true;
+        self.build_done.store(false, .release);
+        self.build_thread = std.Thread.spawn(.{}, buildWorker, .{self}) catch {
+            self.building = false;
+            self.build() catch {}; // fall back to a synchronous build
+            return;
+        };
+    }
+
+    fn joinBuild(self: *Lookout) void {
+        if (self.build_thread) |t| {
+            t.join();
+            self.build_thread = null;
+        }
+        self.building = false;
+        if (self.pending) |*ps| {
+            ps.deinit();
+            self.pending = null;
+        }
+    }
+
+    // Advance the async build (call once per frame). Non-blocking.
+    fn tick(self: *Lookout) void {
+        if (self.building) {
+            if (!self.build_done.load(.acquire)) return; // still tessellating
+            if (self.build_thread) |t| {
+                t.join();
+                self.build_thread = null;
+            }
+            self.building = false;
+            if (self.pending) |*ps| {
+                self.cam.origin = self.pending_origin;
+                self.g.releaseSceneBuffers();
+                self.g.uploadScene(ps) catch {};
+                ps.deinit();
+                self.pending = null;
+                self.built = true;
+                self.dirty = false;
+                self.build_zoom = self.job.zoom;
+            }
+            return;
+        }
+        // start a build when nothing is shown, on an explicit dirty, or when the
+        // view has drifted far enough in zoom to warrant a new level of detail.
+        const drift = self.built and @abs(self.cam.zoom - self.build_zoom) >= ZOOM_REBUILD;
+        if (!self.built or self.dirty or drift) self.spawnBuild();
     }
 
     fn ensureBuilt(self: *Lookout) !void {
-        if (self.dirty or !self.built) try self.build();
-    }
-
-    /// Base mariner for the build: the user's state, but with the live-gated
-    /// axes forced permissive so EVERY feature reaches the surface tagged, then
-    /// gated per-frame in the shader (NOTES.md §3). Geometry-affecting fields
-    /// (contours, units, dates, groups…) pass through unchanged.
-    fn buildMariner(self: *Lookout, sch: Scheme) Mariner {
-        var m = self.mariner;
-        m.scheme = sch;
-        m.display_base = true;
-        m.display_standard = true;
-        m.display_other = true;
-        m.text_names = true;
-        m.show_light_descriptions = true;
-        m.text_other = true;
-        m.soundings = 1;
-        m.size_scale = 1.0; // runtime size lives in the shader uniform
-        return m;
+        const drift = self.built and @abs(self.cam.zoom - self.build_zoom) >= ZOOM_REBUILD;
+        if (self.dirty or !self.built or drift) try self.build();
     }
 
     fn uniforms(self: *Lookout) gpu.Uniforms {
@@ -369,9 +510,16 @@ pub const Lookout = struct {
     }
 
     /// Render one frame to the window and present. false if there is no window.
+    /// Non-blocking: tessellation runs on a worker thread; until the first build
+    /// lands the window shows the clear color, and during a rebuild the previous
+    /// scene keeps rendering (no flicker). LoD rebuilds fire on zoom drift.
     pub fn render(self: *Lookout) !bool {
-        try self.ensureBuilt();
+        self.tick();
         return self.g.renderWindow(self.uniforms(), self.active_scheme);
+    }
+    /// True while a background (re)build is in flight — for a host "loading" hint.
+    pub fn isBuilding(self: *Lookout) bool {
+        return self.building;
     }
     /// Render offscreen and write a PNG.
     pub fn snapshotPng(self: *Lookout, path: []const u8) !void {

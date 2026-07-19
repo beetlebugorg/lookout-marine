@@ -80,6 +80,8 @@ pub const Gpu = struct {
     color_bufs: [scene.MAX_SCHEMES]?*cc.SDL_GPUBuffer = .{ null, null, null },
     index_count: u32 = 0,
     n_schemes: usize = 0,
+    /// background = S-52 NODATA for the active palette (set by Lookout).
+    clear: cc.SDL_FColor = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
 
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
@@ -338,7 +340,7 @@ pub const Gpu = struct {
     fn recordDraws(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, u: Uniforms, scheme_k: usize) void {
         var cti = std.mem.zeroes(cc.SDL_GPUColorTargetInfo);
         cti.texture = target;
-        cti.clear_color = .{ .r = 0.05, .g = 0.10, .b = 0.16, .a = 1.0 }; // deep water-ish clear
+        cti.clear_color = self.clear; // S-52 NODATA for the active palette
         cti.load_op = cc.SDL_GPU_LOADOP_CLEAR;
         if (resolve) |rt| {
             cti.store_op = cc.SDL_GPU_STOREOP_RESOLVE;
