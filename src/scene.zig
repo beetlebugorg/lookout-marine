@@ -116,10 +116,9 @@ pub const Scene = struct {
     text_quads: std.ArrayList(QuadVertex) = .empty,
     pattern_verts: std.ArrayList(PatternVertex) = .empty,
     /// One entry per SPRITE QUAD (6 verts): the feature's S-52 draw priority.
-    /// tile57 emits in paint order now, so the quads go up in the order they
-    /// arrive and this is NOT used to reorder them — it is kept because the
-    /// buffer is split by draw type across GPU passes, and any future batching
-    /// change has to be able to restore order.
+    /// tile57 streams features in walk order and tags each with `plane`; a host
+    /// that re-buckets them into its own batches has to restore paint order
+    /// itself, which is what finish() does with this.
     quad_planes: std.ArrayList(i32) = .empty,
     /// Physical px per reference px (HiDPI density), folded into pattern cell
     /// sizes so screen-space tiling matches the framebuffer.
@@ -366,6 +365,30 @@ pub const Scene = struct {
     }
 
     // ---- finish: sort into paint order, build final buffers ----------------
+    /// Stable-sort whole sprite quads (6 verts each) by their feature's draw
+    /// priority. Stability matters: within one plane the engine's walk order IS
+    /// the intended order, so only the priority may reorder them.
+    fn sortQuadsByPlane(self: *Scene) !void {
+        const nq = self.quad_planes.items.len;
+        if (nq < 2 or self.quads.items.len != nq * 6) return;
+        const order = try self.a.alloc(u32, nq);
+        defer self.a.free(order);
+        for (order, 0..) |*o, i| o.* = @intCast(i);
+        const planes = self.quad_planes.items;
+        std.mem.sortUnstable(u32, order, planes, struct {
+            fn lt(p: []const i32, l: u32, r: u32) bool {
+                if (p[l] != p[r]) return p[l] < p[r];
+                return l < r; // ties keep walk order -> stable
+            }
+        }.lt);
+        const src = try self.a.alloc(QuadVertex, self.quads.items.len);
+        defer self.a.free(src);
+        @memcpy(src, self.quads.items);
+        for (order, 0..) |from, to| {
+            @memcpy(self.quads.items[to * 6 ..][0..6], src[@as(usize, from) * 6 ..][0..6]);
+        }
+    }
+
     pub fn finish(self: *Scene, n_schemes: usize) !void {
         self.n_schemes = n_schemes;
         // stable sort by (class-major, plane, seq) — mirror pixel.zig:549.
@@ -376,6 +399,11 @@ pub const Scene = struct {
                 return l.seq < r.seq;
             }
         }.lt);
+        // Sprites bypass DrawItem (they are their own textured pass), so restore
+        // S-52 paint order here: stable-sort the quads by the feature plane each
+        // was tagged with. Without this a low-priority symbol drawn later in the
+        // walk covers a high-priority one — lights under wrecks.
+        try self.sortQuadsByPlane();
         // final index buffer: concatenate each item's temp index range in order.
         var total_idx: usize = 0;
         for (self.items.items) |it| total_idx += it.idx_count;
