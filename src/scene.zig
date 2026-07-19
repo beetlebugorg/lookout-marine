@@ -259,8 +259,16 @@ pub const Scene = struct {
     fn scaminF(s: i64) f32 {
         return if (s <= 0) 0 else @floatFromInt(s);
     }
-    fn rgba(c: cc.tile57_rgba) Color {
-        return .{ .r = c.r, .g = c.g, .b = c.b, .a = c.a };
+    /// Unpack tile57's 0xRRGGBBAA scalar (see tile57_color in tile57.h — it is
+    /// a scalar because a small extern struct by value is miscompiled across
+    /// callconv(.c) in optimized builds).
+    fn rgba(c: cc.tile57_color) Color {
+        return .{
+            .r = @truncate(c >> 24),
+            .g = @truncate(c >> 16),
+            .b = @truncate(c >> 8),
+            .a = @truncate(c),
+        };
     }
 
     // Convert a tile57_world_rings to the reusable f32 scratch (world-relative).
@@ -343,7 +351,7 @@ fn scaminCulled(s: *Scene, f: [*c]const cc.tile57_feature) bool {
     return s.cull_scale > @as(f32, @floatFromInt(sc));
 }
 
-fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_rgba, even_odd: c_int) callconv(.c) void {
+fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_color, even_odd: c_int) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
     const item = s.newItem(CLASS_AREA, f.*.plane, Scene.rgba(color)) catch return;
@@ -355,7 +363,7 @@ fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const 
     }
 }
 
-fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_rgba) callconv(.c) void {
+fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
     _ = dash_on;
     _ = dash_off;
     const s = asScene(ctx);
@@ -368,7 +376,7 @@ fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]cons
     s.strokePolyline(s.scratch.items, Scene.ringStartsSlice(lines.*.ring_starts, lines.*.ring_count), lines.*.ring_count, hw, Scene.scaminF(f.*.scamin), flags, false, .{ 0, 0 }, item) catch return;
 }
 
-fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, rings: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, even_odd: c_int, stroke_w: f32, align_: cc.tile57_rot_align) callconv(.c) void {
+fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, rings: [*c]const cc.tile57_local_rings, color: cc.tile57_color, even_odd: c_int, stroke_w: f32, align_: cc.tile57_rot_align) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
     const sounding = clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS");
@@ -387,7 +395,7 @@ fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile
     }
 }
 
-fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, glyphs: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, halo: cc.tile57_rgba, halo_px: f32, align_: cc.tile57_rot_align) callconv(.c) void {
+fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, glyphs: [*c]const cc.tile57_local_rings, color: cc.tile57_color, halo: cc.tile57_color, halo_px: f32, align_: cc.tile57_rot_align) callconv(.c) void {
     _ = halo;
     _ = halo_px;
     const s = asScene(ctx);
@@ -447,7 +455,7 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads
 // sampling the glyph atlas. Anchor is world; (ox,oy) is the baseline-left origin
 // in reference px (alignment already applied); metrics are EM units × size_px.
-fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_rgba, halo: cc.tile57_rgba) callconv(.c) void {
+fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_color, halo: cc.tile57_color) callconv(.c) void {
     _ = align_;
     _ = halo;
     const s = asScene(ctx);
@@ -456,6 +464,7 @@ fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.til
     if (text == null or text_len == 0) return;
     const wx = s.relX(anchor.x);
     const wy = s.relY(anchor.y);
+    const col = Scene.rgba(color);
     const rad = rot_deg * std.math.pi / 180.0;
     const cs = std.math.cos(rad);
     const sn = std.math.sin(rad);
@@ -473,7 +482,7 @@ fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.til
         const uvs = [4][2]f32{ .{ gi.u0, gi.v0 }, .{ gi.u1, gi.v0 }, .{ gi.u1, gi.v1 }, .{ gi.u0, gi.v1 } };
         var q: [4]QuadVertex = undefined;
         for (0..4) |i| {
-            q[i] = .{ .wx = wx, .wy = wy, .lx = local[i][0] * cs - local[i][1] * sn, .ly = local[i][0] * sn + local[i][1] * cs, .u = uvs[i][0], .v = uvs[i][1], .r = color.r, .g = color.g, .b = color.b, .a = color.a };
+            q[i] = .{ .wx = wx, .wy = wy, .lx = local[i][0] * cs - local[i][1] * sn, .ly = local[i][0] * sn + local[i][1] * cs, .u = uvs[i][0], .v = uvs[i][1], .r = col.r, .g = col.g, .b = col.b, .a = col.a };
         }
         for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |k| s.text_quads.append(s.a, q[k]) catch return;
         pen += gi.advance * size_px;
@@ -485,26 +494,26 @@ fn fDrawTextStr(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.til
 // draw_sprite is a no-op here (sprites captured once, no per-scheme color) — but
 // it must be PRESENT so features route identically and draw_symbol parity holds.
 fn cDrawSprite(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const u8, _: usize, _: cc.tile57_world_point, _: f32, _: cc.tile57_rot_align, _: f32, _: f32) callconv(.c) void {}
-fn recordColor(ctx: ?*anyopaque, color: cc.tile57_rgba) void {
+fn recordColor(ctx: ?*anyopaque, color: cc.tile57_color) void {
     const s = asScene(ctx);
     if (s.color_counter < s.items.items.len) {
         s.items.items[s.color_counter].colors[s.scheme_k] = Scene.rgba(color);
     }
     s.color_counter += 1;
 }
-fn cFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, color: cc.tile57_rgba, _: c_int) callconv(.c) void {
+fn cFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, color: cc.tile57_color, _: c_int) callconv(.c) void {
     if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, color: cc.tile57_rgba) callconv(.c) void {
+fn cStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, color: cc.tile57_color) callconv(.c) void {
     if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+fn cDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_color, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
     if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_rgba, _: cc.tile57_rgba, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_color, _: cc.tile57_color, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
     if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
@@ -513,11 +522,11 @@ fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_worl
 // to be non-null, so each pass silences what it doesn't want: the TILE pass
 // drops text (it comes from the view-level decluttered pass instead), the LABEL
 // pass drops geometry (it comes from the tile cache instead).
-fn nFillArea(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: cc.tile57_rgba, _: c_int) callconv(.c) void {}
-fn nStrokeLine(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, _: cc.tile57_rgba) callconv(.c) void {}
-fn nDrawSymbol(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_rgba, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
-fn nDrawText(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_rgba, _: cc.tile57_rgba, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
-fn nDrawTextStr(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: f32, _: f32, _: [*c]const u8, _: usize, _: f32, _: f32, _: cc.tile57_rot_align, _: cc.tile57_rgba, _: cc.tile57_rgba) callconv(.c) void {}
+fn nFillArea(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: cc.tile57_color, _: c_int) callconv(.c) void {}
+fn nStrokeLine(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, _: cc.tile57_color) callconv(.c) void {}
+fn nDrawSymbol(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_color, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
+fn nDrawText(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_color, _: cc.tile57_color, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
+fn nDrawTextStr(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: f32, _: f32, _: [*c]const u8, _: usize, _: f32, _: f32, _: cc.tile57_rot_align, _: cc.tile57_color, _: cc.tile57_color) callconv(.c) void {}
 
 /// Geometry + symbols for ONE cached tile. Text is deliberately dropped here:
 /// a label on a feature that spans tiles gets re-anchored in every tile the
