@@ -455,17 +455,15 @@ pub const Lookout = struct {
     /// style, overscale, extra size scales…) marks the scene for a rebuild, done
     /// lazily on the next render.
     pub fn setMariner(self: *Lookout, m: Mariner) void {
-        if (marinerNeedsRebuild(self.mariner, m)) self.dropTiles(); // geometry changed
+        // Tiles capture only the active palette now, so a scheme change also
+        // needs a rebuild (not just geometry-affecting fields).
+        if (self.mariner.scheme != m.scheme or marinerNeedsRebuild(self.mariner, m)) self.dropTiles();
         self.mariner = m;
         self.deriveLive();
     }
 
     fn deriveLive(self: *Lookout) void {
-        // scheme -> which captured color buffer
-        self.active_scheme = 0;
-        for (0..self.n_schemes) |i| {
-            if (self.schemes[i] == self.mariner.scheme) self.active_scheme = i;
-        }
+        self.active_scheme = 0; // tiles hold only the active palette at index 0
         // display categories -> cat_mask
         self.cat_mask = (@as(u32, @intFromBool(self.mariner.display_base)) << 0) |
             (@as(u32, @intFromBool(self.mariner.display_standard)) << 1) |
@@ -477,7 +475,8 @@ pub const Lookout = struct {
             (@as(u32, @intFromBool(text_on)) << KIND_TEXT) |
             (@as(u32, @intFromBool(sound_on)) << KIND_SOUNDING);
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
-        self.g.clear = self.nodata[self.active_scheme]; // background follows the palette
+        const si: usize = @min(@as(usize, @intCast(self.mariner.scheme)), scene.MAX_SCHEMES - 1);
+        self.g.clear = self.nodata[si]; // background NODATA follows the palette
         self.markDirty();
     }
 
@@ -745,21 +744,14 @@ pub const Lookout = struct {
         s.cull_scale = camera.displayScaleAt(@floatFromInt(z), camera.worldToLonLat(.{ .x = origin.x + half, .y = origin.y + half }).y);
         s.sprite_atlas = if (self.sprite_atlas) |*sa| sa else null;
         var err: cc.tile57_error = undefined;
+        // Portray ONCE, in the ACTIVE palette (colors captured at index 0). A
+        // day/night change drops the cache and rebuilds — 3x cheaper per tile
+        // than capturing all three palettes up front.
         s.scheme_k = 0;
-        var m0 = buildMarinerFrom(self.mariner, self.schemes[0]);
+        var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
         const full = scene.fullTable(&s);
         self.tileSurface(z, x, y, &full, &m0, &err);
-        for (1..self.n_schemes) |k| {
-            s.scheme_k = k;
-            s.color_counter = 0;
-            var mk = buildMarinerFrom(self.mariner, self.schemes[k]);
-            const ct = scene.colorTable(&s);
-            self.tileSurface(z, x, y, &ct, &mk, &err);
-            if (s.color_counter != s.items.items.len) {
-                for (s.items.items) |*it| it.colors[k] = it.colors[0];
-            }
-        }
-        s.finish(self.n_schemes) catch {};
+        s.finish(1) catch {};
         const bufs = self.g.uploadTileScene(&s) catch gpu.Gpu.TileBuffers{};
         return .{ .bufs = bufs, .origin = origin, .last_used = self.frame_ctr };
     }
@@ -903,9 +895,13 @@ pub const Lookout = struct {
 
     // ---- convenience live toggles (mutate mariner, apply live) --------------
     pub fn cycleScheme(self: *Lookout) void {
-        const cur = self.active_scheme;
-        const next = (cur + 1) % self.n_schemes;
-        self.mariner.scheme = self.schemes[next];
+        const order = [_]Scheme{ cc.TILE57_SCHEME_DAY, cc.TILE57_SCHEME_DUSK, cc.TILE57_SCHEME_NIGHT };
+        var idx: usize = 0;
+        for (order, 0..) |s, i| if (s == self.mariner.scheme) {
+            idx = i;
+        };
+        self.mariner.scheme = order[(idx + 1) % order.len];
+        self.dropTiles(); // palette is baked into tiles — rebuild
         self.deriveLive();
     }
     pub fn toggleText(self: *Lookout) void {
