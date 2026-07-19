@@ -854,7 +854,22 @@ pub const Lookout = struct {
         // overscaling, and asking for labels beyond it returns nothing at all.
         const z = self.buildZoom();
         s.cull_scale = camera.displayScaleAt(z, ll.y);
-        var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
+        // Labels are rebuilt on every view change, so they gate at BUILD time --
+        // unlike geometry, which is captured permissively and gated live in the
+        // shader. That means the mariner's own text and display-category axes
+        // must be honoured here verbatim: forcing them permissive (as the tile
+        // build does) silently ignores the mariner's text switches and emits
+        // every label the catalogue has, which is most of what makes a wide view
+        // unreadable. size_scale stays 1.0 -- the runtime size lives in the
+        // shader uniform, and letting the engine scale too would double it.
+        var m0 = self.mariner;
+        // Declutter at the size the labels are ACTUALLY DRAWN. The engine sizes a
+        // label and its collision box from size_scale (vector.zig textDev), so on
+        // a 2x framebuffer, laying out at 1.0 and then drawing at 2.0 throws the
+        // pool's spacing away -- every label comes out twice the size of the room
+        // reserved for it, and a correctly decluttered view still reads as a mess.
+        // The text pass then draws these 1:1 (see labelUniform).
+        m0.size_scale = self.render_size_scale * self.g.pixel_density;
         const tbl = scene.labelTable(&s);
         var err: cc.tile57_error = undefined;
         const st = if (self.compose) |c|
@@ -885,7 +900,9 @@ pub const Lookout = struct {
     // The uniform the label buffer was built against (its own origin, current camera).
     fn labelUniform(self: *Lookout) ?gpu.Uniforms {
         if (self.g.label_count == 0) return null;
-        return self.uniformsForOrigin(self.label_origin);
+        var u = self.uniformsForOrigin(self.label_origin);
+        u.size_scale = 1.0; // already laid out at final size by the label pass
+        return u;
     }
 
     // Labels are world-anchored, so a small nudge leaves them correctly placed —
