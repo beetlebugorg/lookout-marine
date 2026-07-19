@@ -83,7 +83,14 @@ pub const Gpu = struct {
     /// background = S-52 NODATA for the active palette (set by Lookout).
     clear: cc.SDL_FColor = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
 
-    pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8) !Gpu {
+    // sprite symbols: textured-quad pipeline + shared atlas texture
+    sprite_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
+    sprite_tex: ?*cc.SDL_GPUTexture = null,
+    sampler: ?*cc.SDL_GPUSampler = null,
+    qbuf: ?*cc.SDL_GPUBuffer = null,
+    quad_count: u32 = 0,
+
+    pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
         try check(cc.SDL_Init(cc.SDL_INIT_VIDEO), "SDL_Init");
         const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, true, null), "CreateGPUDevice");
@@ -125,8 +132,12 @@ pub const Gpu = struct {
         }
 
         const pipeline = try buildPipeline(device, color_format, sample_count, vert_spv, frag_spv);
+        const sprite_pipeline = try buildSpritePipeline(device, color_format, sample_count, sprite_vert_spv, sprite_frag_spv);
+        const sampler = try makeSampler(device);
 
         var g = Gpu{
+            .sprite_pipeline = sprite_pipeline,
+            .sampler = sampler,
             .device = device,
             .window = window,
             .pipeline = pipeline,
@@ -297,6 +308,124 @@ pub const Gpu = struct {
         return try checkPtr(cc.SDL_CreateGPUGraphicsPipeline(device, &p), "CreateGraphicsPipeline");
     }
 
+    // Textured-quad pipeline for sprite symbols (and SDF text). QuadVertex layout;
+    // one fragment sampler (the atlas).
+    fn buildSpritePipeline(device: *cc.SDL_GPUDevice, color_format: cc.SDL_GPUTextureFormat, sc: cc.SDL_GPUSampleCount, vspv: []const u8, fspv: []const u8) !*cc.SDL_GPUGraphicsPipeline {
+        var vinfo = std.mem.zeroes(cc.SDL_GPUShaderCreateInfo);
+        vinfo.code = vspv.ptr;
+        vinfo.code_size = vspv.len;
+        vinfo.entrypoint = "main";
+        vinfo.format = cc.SDL_GPU_SHADERFORMAT_SPIRV;
+        vinfo.stage = cc.SDL_GPU_SHADERSTAGE_VERTEX;
+        vinfo.num_uniform_buffers = 1;
+        const vshader = try checkPtr(cc.SDL_CreateGPUShader(device, &vinfo), "sprite vertex shader");
+        defer cc.SDL_ReleaseGPUShader(device, vshader);
+
+        var finfo = std.mem.zeroes(cc.SDL_GPUShaderCreateInfo);
+        finfo.code = fspv.ptr;
+        finfo.code_size = fspv.len;
+        finfo.entrypoint = "main";
+        finfo.format = cc.SDL_GPU_SHADERFORMAT_SPIRV;
+        finfo.stage = cc.SDL_GPU_SHADERSTAGE_FRAGMENT;
+        finfo.num_samplers = 1;
+        const fshader = try checkPtr(cc.SDL_CreateGPUShader(device, &finfo), "sprite fragment shader");
+        defer cc.SDL_ReleaseGPUShader(device, fshader);
+
+        const vbufs = [_]cc.SDL_GPUVertexBufferDescription{
+            .{ .slot = 0, .pitch = @sizeOf(scene.QuadVertex), .input_rate = cc.SDL_GPU_VERTEXINPUTRATE_VERTEX, .instance_step_rate = 0 },
+        };
+        const vattrs = [_]cc.SDL_GPUVertexAttribute{
+            .{ .location = 0, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 0 }, // world
+            .{ .location = 1, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 8 }, // local
+            .{ .location = 2, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 16 }, // uv
+            .{ .location = 3, .buffer_slot = 0, .format = cc.SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, .offset = 24 }, // color
+        };
+        var blend = std.mem.zeroes(cc.SDL_GPUColorTargetBlendState);
+        blend.enable_blend = true;
+        blend.src_color_blendfactor = cc.SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+        blend.dst_color_blendfactor = cc.SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        blend.color_blend_op = cc.SDL_GPU_BLENDOP_ADD;
+        blend.src_alpha_blendfactor = cc.SDL_GPU_BLENDFACTOR_ONE;
+        blend.dst_alpha_blendfactor = cc.SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        blend.alpha_blend_op = cc.SDL_GPU_BLENDOP_ADD;
+        const color_targets = [_]cc.SDL_GPUColorTargetDescription{.{ .format = color_format, .blend_state = blend }};
+
+        var p = std.mem.zeroes(cc.SDL_GPUGraphicsPipelineCreateInfo);
+        p.vertex_shader = vshader;
+        p.fragment_shader = fshader;
+        p.vertex_input_state = .{
+            .vertex_buffer_descriptions = &vbufs,
+            .num_vertex_buffers = 1,
+            .vertex_attributes = &vattrs,
+            .num_vertex_attributes = 4,
+        };
+        p.primitive_type = cc.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        p.rasterizer_state.fill_mode = cc.SDL_GPU_FILLMODE_FILL;
+        p.rasterizer_state.cull_mode = cc.SDL_GPU_CULLMODE_NONE;
+        p.multisample_state.sample_count = sc;
+        p.target_info = .{ .color_target_descriptions = &color_targets, .num_color_targets = 1, .depth_stencil_format = 0, .has_depth_stencil_target = false };
+        return try checkPtr(cc.SDL_CreateGPUGraphicsPipeline(device, &p), "CreateSpritePipeline");
+    }
+
+    fn makeSampler(device: *cc.SDL_GPUDevice) !*cc.SDL_GPUSampler {
+        var si = std.mem.zeroes(cc.SDL_GPUSamplerCreateInfo);
+        si.min_filter = cc.SDL_GPU_FILTER_LINEAR;
+        si.mag_filter = cc.SDL_GPU_FILTER_LINEAR;
+        si.mipmap_mode = cc.SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+        si.address_mode_u = cc.SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        si.address_mode_v = cc.SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        si.address_mode_w = cc.SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        return try checkPtr(cc.SDL_CreateGPUSampler(device, &si), "CreateSampler");
+    }
+
+    /// Upload an RGBA8 atlas as the shared sprite texture (once per open).
+    pub fn uploadSpriteAtlas(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        var info = std.mem.zeroes(cc.SDL_GPUTextureCreateInfo);
+        info.type = cc.SDL_GPU_TEXTURETYPE_2D;
+        info.format = cc.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.usage = cc.SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = w;
+        info.height = h;
+        info.layer_count_or_depth = 1;
+        info.num_levels = 1;
+        const tex = try checkPtr(cc.SDL_CreateGPUTexture(self.device, &info), "CreateAtlasTexture");
+
+        var ti = std.mem.zeroes(cc.SDL_GPUTransferBufferCreateInfo);
+        ti.usage = cc.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = @intCast(rgba.len);
+        const tb = try checkPtr(cc.SDL_CreateGPUTransferBuffer(self.device, &ti), "AtlasTB");
+        defer cc.SDL_ReleaseGPUTransferBuffer(self.device, tb);
+        const map = cc.SDL_MapGPUTransferBuffer(self.device, tb, false);
+        @memcpy(@as([*]u8, @ptrCast(map))[0..rgba.len], rgba);
+        cc.SDL_UnmapGPUTransferBuffer(self.device, tb);
+
+        const cmd = cc.SDL_AcquireGPUCommandBuffer(self.device);
+        const cp = cc.SDL_BeginGPUCopyPass(cmd);
+        var src = std.mem.zeroes(cc.SDL_GPUTextureTransferInfo);
+        src.transfer_buffer = tb;
+        src.pixels_per_row = w;
+        src.rows_per_layer = h;
+        var dst = std.mem.zeroes(cc.SDL_GPUTextureRegion);
+        dst.texture = tex;
+        dst.w = w;
+        dst.h = h;
+        dst.d = 1;
+        cc.SDL_UploadToGPUTexture(cp, &src, &dst, false);
+        cc.SDL_EndGPUCopyPass(cp);
+        try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit atlas upload");
+        self.sprite_tex = tex;
+    }
+
+    pub fn uploadQuads(self: *Gpu, quads: []const scene.QuadVertex) !void {
+        if (self.qbuf) |b| {
+            cc.SDL_ReleaseGPUBuffer(self.device, b);
+            self.qbuf = null;
+        }
+        self.quad_count = @intCast(quads.len);
+        if (quads.len == 0) return;
+        self.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(quads));
+    }
+
     // ---- upload the built scene into persistent GPU buffers (once) ----------
     fn uploadBuffer(self: *Gpu, usage: cc.SDL_GPUBufferUsageFlags, bytes: []const u8) !*cc.SDL_GPUBuffer {
         var bi = std.mem.zeroes(cc.SDL_GPUBufferCreateInfo);
@@ -331,6 +460,7 @@ pub const Gpu = struct {
         // NODATA clear. (SDL_GPU rejects a 0-byte buffer.)
         self.index_count = 0;
         self.n_schemes = s.n_schemes;
+        try self.uploadQuads(s.quads.items); // sprite symbols (may exist even with no fills)
         if (s.verts.items.len == 0 or s.indices.len == 0) return;
         self.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.verts.items));
         self.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(s.indices));
@@ -368,6 +498,18 @@ pub const Gpu = struct {
             var uu = u;
             cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
             cc.SDL_DrawGPUIndexedPrimitives(pass, self.index_count, 1, 0, 0, 0);
+        }
+        // sprite symbols on top (textured quads sampling the shared atlas)
+        if (self.quad_count > 0 and self.sprite_tex != null and self.sprite_pipeline != null) {
+            cc.SDL_BindGPUGraphicsPipeline(pass, self.sprite_pipeline);
+            cc.SDL_SetGPUViewport(pass, &vp);
+            const qb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = self.qbuf, .offset = 0 }};
+            cc.SDL_BindGPUVertexBuffers(pass, 0, &qb, 1);
+            const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
+            cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
+            var uu = u;
+            cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+            cc.SDL_DrawGPUPrimitives(pass, self.quad_count, 1, 0, 0);
         }
         cc.SDL_EndGPURenderPass(pass);
     }
@@ -445,6 +587,10 @@ pub const Gpu = struct {
         if (self.resolve_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.download_tb) |t| cc.SDL_ReleaseGPUTransferBuffer(d, t);
         cc.SDL_ReleaseGPUGraphicsPipeline(d, self.pipeline);
+        if (self.sprite_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
+        if (self.sprite_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
+        if (self.sampler) |sm| cc.SDL_ReleaseGPUSampler(d, sm);
+        if (self.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (self.window) |w| {
             cc.SDL_ReleaseWindowFromGPUDevice(d, w);
             cc.SDL_DestroyWindow(w);

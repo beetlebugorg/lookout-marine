@@ -4,4 +4,6 @@ pub const c = @cImport({
     @cInclude("SDL3/SDL.h");
     @cInclude("tile57.h");
     @cInclude("tesselator.h");
+    @cDefine("STBI_NO_STDIO", "1");
+    @cInclude("stb_image.h");
 });

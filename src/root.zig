@@ -12,12 +12,15 @@ const cc = @import("c.zig").c;
 const scene = @import("scene.zig");
 const gpu = @import("gpu.zig");
 const camera = @import("camera.zig");
+const atlas = @import("atlas.zig");
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
 const vert_spv = @embedFile("chart_vert_spv");
 const frag_spv = @embedFile("chart_frag_spv");
+const sprite_vert_spv = @embedFile("sprite_vert_spv");
+const sprite_frag_spv = @embedFile("sprite_frag_spv");
 
 // shader-kind bits (match chart.vert / scene.zig class numbering)
 const KIND_SOUNDING: u5 = 3;
@@ -119,6 +122,7 @@ pub const Lookout = struct {
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
     partition_path: ?[:0]const u8 = null,
+    sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
 
     // derived live (uniform-only) state
     active_scheme: usize = 0,
@@ -155,7 +159,7 @@ pub const Lookout = struct {
                 .want_msaa = opts.want_msaa,
                 .native_handle = opts.native_handle,
                 .native_kind = opts.native_kind,
-            }, vert_spv, frag_spv),
+            }, vert_spv, frag_spv, sprite_vert_spv, sprite_frag_spv),
             .cam = undefined,
         };
         self.n_schemes = @min(opts.schemes.len, scene.MAX_SCHEMES);
@@ -163,7 +167,28 @@ pub const Lookout = struct {
         self.partition_path = opts.partition_path;
         cc.tile57_mariner_defaults(&self.mariner);
         self.loadNodataColors();
+        self.loadSpriteAtlas();
         return self;
+    }
+
+    // Bake the S-52 sprite-symbol atlas (from the embedded catalogue), decode it,
+    // and upload it once. Symbols/soundings then draw as textured quads.
+    fn loadSpriteAtlas(self: *Lookout) void {
+        var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_bake_sprite_mln(null, &assets, &err) != cc.TILE57_OK) return;
+        defer cc.tile57_assets_free(&assets);
+        if (assets.sprite_png == null or assets.sprite_json == null) return;
+        const png = assets.sprite_png[0..assets.sprite_png_len];
+        const json = assets.sprite_json[0..assets.sprite_json_len];
+        const a = atlas.loadSprite(self.alloc, png, json) catch return;
+        self.sprite_atlas = a;
+        self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
+            self.sprite_atlas.?.deinit();
+            self.sprite_atlas = null;
+            return;
+        };
+        std.debug.print("sprite atlas: {d}x{d}, {d} cells\n", .{ a.width, a.height, a.cells.count() });
     }
 
     // Pull the S-52 NODATA (NODTA) color per captured scheme from tile57's
@@ -226,6 +251,7 @@ pub const Lookout = struct {
 
     pub fn close(self: *Lookout) void {
         self.joinBuild(); // stop the worker before tearing down handles it reads
+        if (self.sprite_atlas) |*sa| sa.deinit();
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
@@ -403,6 +429,7 @@ pub const Lookout = struct {
         // Only tessellate features that SCAMIN-show at this zoom — a zoomed-out
         // build then tessellates coarse features, not the whole library's detail.
         s.cull_scale = camera.displayScaleAt(job.zoom, lat);
+        s.sprite_atlas = if (self.sprite_atlas) |*sa| sa else null;
         var err: cc.tile57_error = undefined;
         s.scheme_k = 0;
         var m0 = buildMarinerFrom(job.base, self.schemes[0]);

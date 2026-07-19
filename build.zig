@@ -25,16 +25,20 @@ pub fn build(b: *std.Build) void {
             mod.addIncludePath(.{ .cwd_relative = self.tile57_inc });
             mod.addIncludePath(bb.path("vendor/libtess2/Include"));
             mod.addIncludePath(bb.path("vendor/libtess2/Source"));
+            mod.addIncludePath(bb.path("vendor/stb"));
             mod.addCSourceFiles(.{
                 .root = bb.path("vendor/libtess2/Source"),
                 .files = &tess_files,
                 .flags = &.{ "-O2", "-std=gnu99" },
             });
+            mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{"-O2"} });
             mod.addObjectFile(.{ .cwd_relative = self.tile57_lib });
             mod.linkSystemLibrary("SDL3", .{});
             // precompiled SPIR-V shaders, embedded (no runtime shader compilation)
             mod.addAnonymousImport("chart_vert_spv", .{ .root_source_file = bb.path("shaders/chart.vert.spv") });
             mod.addAnonymousImport("chart_frag_spv", .{ .root_source_file = bb.path("shaders/chart.frag.spv") });
+            mod.addAnonymousImport("sprite_vert_spv", .{ .root_source_file = bb.path("shaders/sprite.vert.spv") });
+            mod.addAnonymousImport("sprite_frag_spv", .{ .root_source_file = bb.path("shaders/sprite.frag.spv") });
         }
     };
     const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib };
@@ -81,7 +85,7 @@ pub fn build(b: *std.Build) void {
 
     // ---- shader (re)compilation: `zig build shaders` ----
     const shaders = b.step("shaders", "Recompile GLSL -> SPIR-V (needs glslangValidator)");
-    inline for (.{ "chart.vert", "chart.frag" }) |name| {
+    inline for (.{ "chart.vert", "chart.frag", "sprite.vert", "sprite.frag" }) |name| {
         const cmd = b.addSystemCommand(&.{ "glslangValidator", "-V" });
         cmd.addFileArg(b.path("shaders/" ++ name));
         cmd.addArg("-o");

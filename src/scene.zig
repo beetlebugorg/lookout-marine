@@ -12,8 +12,23 @@
 const std = @import("std");
 const cc = @import("c.zig").c;
 const camera = @import("camera.zig");
+const atlas = @import("atlas.zig");
 
 pub const MAX_SCHEMES = 3;
+
+/// Textured-quad vertex for sprite symbols (and later SDF text). 28 bytes.
+pub const QuadVertex = extern struct {
+    wx: f32,
+    wy: f32,
+    lx: f32,
+    ly: f32,
+    u: f32,
+    v: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+};
 
 /// One GPU vertex. `world` is camera-relative web-mercator (f32, origin
 /// pre-subtracted); `local` is a reference-px offset the shader adds in screen
@@ -71,6 +86,10 @@ pub const Scene = struct {
     cull_scale: f32 = 0,
     tess_ns: u64 = 0, // time spent in libtess2 (to profile tessellation vs engine)
 
+    // sprite symbols: textured quads (no tessellation), one shared atlas
+    quads: std.ArrayList(QuadVertex) = .empty,
+    sprite_atlas: ?*const atlas.SpriteAtlas = null,
+
     // built outputs (after finish)
     indices: []u32 = &.{}, // final paint-ordered index buffer
     scheme_colors: [MAX_SCHEMES][]Color = .{ &.{}, &.{}, &.{} },
@@ -96,6 +115,7 @@ pub const Scene = struct {
         self.idx_tmp.deinit(self.a);
         self.items.deinit(self.a);
         self.scratch.deinit(self.a);
+        self.quads.deinit(self.a);
         if (self.tess) |t| cc.tessDeleteTess(t);
         if (self.indices.len != 0) self.a.free(self.indices);
         for (0..MAX_SCHEMES) |k| if (self.scheme_colors[k].len != 0) self.a.free(self.scheme_colors[k]);
@@ -379,8 +399,52 @@ fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57
     }
 }
 
+// Sprite symbol: look up the atlas cell for `name` and emit one textured quad
+// (2 tris) at the world anchor, sized half_w/half_h reference px, rotated. No
+// tessellation. Captured in pass 0 only (sprites have no per-scheme color).
+fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const u8, name_len: usize, anchor: cc.tile57_world_point, rot_deg: f32, align_: cc.tile57_rot_align, half_w_px: f32, half_h_px: f32) callconv(.c) void {
+    _ = align_;
+    const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
+    const at = s.sprite_atlas orelse return;
+    if (name == null) return;
+    const cell = at.lookup(name[0..name_len]) orelse return;
+    const aw: f32 = @floatFromInt(at.width);
+    const ah: f32 = @floatFromInt(at.height);
+    const tu0 = cell.x / aw;
+    const tv0 = cell.y / ah;
+    const tu1 = (cell.x + cell.w) / aw;
+    const tv1 = (cell.y + cell.h) / ah;
+    const wx = s.relX(anchor.x);
+    const wy = s.relY(anchor.y);
+    const rad = rot_deg * std.math.pi / 180.0;
+    const cs = std.math.cos(rad);
+    const sn = std.math.sin(rad);
+    const local = [4][2]f32{ .{ -half_w_px, -half_h_px }, .{ half_w_px, -half_h_px }, .{ half_w_px, half_h_px }, .{ -half_w_px, half_h_px } };
+    const uvs = [4][2]f32{ .{ tu0, tv0 }, .{ tu1, tv0 }, .{ tu1, tv1 }, .{ tu0, tv1 } };
+    var q: [4]QuadVertex = undefined;
+    for (0..4) |i| {
+        q[i] = .{
+            .wx = wx,
+            .wy = wy,
+            .lx = local[i][0] * cs - local[i][1] * sn,
+            .ly = local[i][0] * sn + local[i][1] * cs,
+            .u = uvs[i][0],
+            .v = uvs[i][1],
+            .r = 255,
+            .g = 255,
+            .b = 255,
+            .a = 255,
+        };
+    }
+    for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |idx| s.quads.append(s.a, q[idx]) catch return;
+}
+
 // Color-only table (pass k>0): geometry already captured; just record this
 // scheme's per-draw-call color into the matching DrawItem, in emission order.
+// draw_sprite is a no-op here (sprites captured once, no per-scheme color) — but
+// it must be PRESENT so features route identically and draw_symbol parity holds.
+fn cDrawSprite(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const u8, _: usize, _: cc.tile57_world_point, _: f32, _: cc.tile57_rot_align, _: f32, _: f32) callconv(.c) void {}
 fn recordColor(ctx: ?*anyopaque, color: cc.tile57_rgba) void {
     const s = asScene(ctx);
     if (s.color_counter < s.items.items.len) {
@@ -410,11 +474,11 @@ pub fn fullTable(scene: *Scene) cc.tile57_surface_cb {
         .ctx = scene,
         .fill_area = fFillArea,
         .stroke_line = fStrokeLine,
-        .draw_symbol = fDrawSymbol,
+        .draw_symbol = fDrawSymbol, // fallback for symbols not in the sprite atlas
         .draw_text = fDrawText,
-        .draw_sprite = null, // -> symbols tessellate via draw_symbol
+        .draw_sprite = fDrawSprite, // atlas symbols/soundings -> textured quads
         .draw_pattern = null, // -> pattern fills arrive as flat fill_area
-        .draw_text_str = null, // -> text tessellates via draw_text
+        .draw_text_str = null, // -> text tessellates via draw_text (SDF is next)
     };
 }
 pub fn colorTable(scene: *Scene) cc.tile57_surface_cb {
@@ -424,7 +488,7 @@ pub fn colorTable(scene: *Scene) cc.tile57_surface_cb {
         .stroke_line = cStrokeLine,
         .draw_symbol = cDrawSymbol,
         .draw_text = cDrawText,
-        .draw_sprite = null,
+        .draw_sprite = cDrawSprite, // no-op, but present so routing matches pass 0
         .draw_pattern = null,
         .draw_text_str = null,
     };
