@@ -17,6 +17,21 @@ const atlas = @import("atlas.zig");
 pub const MAX_SCHEMES = 3;
 
 /// Textured-quad vertex for sprite symbols (and later SDF text). 28 bytes.
+/// One vertex of a pattern-filled polygon: the tessellated position in world
+/// space, plus the atlas cell to tile over it and that cell's size in PHYSICAL
+/// px (device density folded in at build time, since the fragment shader tiles
+/// against gl_FragCoord which is in framebuffer px).
+pub const PatternVertex = extern struct {
+    wx: f32,
+    wy: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    cw: f32,
+    ch: f32,
+};
+
 pub const QuadVertex = extern struct {
     wx: f32,
     wy: f32,
@@ -28,6 +43,10 @@ pub const QuadVertex = extern struct {
     g: u8,
     b: u8,
     a: u8,
+    /// SDF stroke weight: 0 = normal, >0 embolden. S-52 "important text"
+    /// (group 11) is drawn heavier so it reads over a busy chart. Sprites
+    /// leave it 0 — sprite.frag ignores it.
+    weight: f32 = 0,
 };
 
 /// One GPU vertex. `world` is camera-relative web-mercator (f32, origin
@@ -44,6 +63,10 @@ pub const Vertex = extern struct {
 pub const Color = extern struct { r: u8, g: u8, b: u8, a: u8 };
 
 // paint-order class == shader kind (they share the numbering, conveniently)
+const IMPORTANT_TEXT_GROUP: i32 = 11; // S-52 §14.5 important text
+const IMPORTANT_TEXT_SCALE: f32 = 1.15;
+const IMPORTANT_TEXT_WEIGHT: f32 = 0.10;
+
 const CLASS_AREA: u8 = 0;
 const CLASS_LINE: u8 = 1;
 const CLASS_SYMBOL: u8 = 2;
@@ -95,6 +118,10 @@ pub const Scene = struct {
     sprite_atlas: ?*const atlas.SpriteAtlas = null,
     // SDF text: textured quads sampling the glyph atlas
     text_quads: std.ArrayList(QuadVertex) = .empty,
+    pattern_verts: std.ArrayList(PatternVertex) = .empty,
+    /// Physical px per reference px (HiDPI density), folded into pattern cell
+    /// sizes so screen-space tiling matches the framebuffer.
+    density: f32 = 1.0,
     glyph_atlas: ?*const atlas.GlyphAtlas = null,
 
     // built outputs (after finish)
@@ -124,6 +151,7 @@ pub const Scene = struct {
         self.scratch.deinit(self.a);
         self.quads.deinit(self.a);
         self.text_quads.deinit(self.a);
+        self.pattern_verts.deinit(self.a);
         if (self.tess) |t| cc.tessDeleteTess(t);
         if (self.indices.len != 0) self.a.free(self.indices);
         for (0..MAX_SCHEMES) |k| if (self.scheme_colors[k].len != 0) self.a.free(self.scheme_colors[k]);
@@ -405,6 +433,51 @@ fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const 
     }
 }
 
+// S-52 area fill pattern (AP): tile a cell from the shared sprite atlas across
+// the polygon. Without this the engine falls back to a flat tint, which loses
+// the distinction between e.g. dredged, foul and quality-of-data areas.
+fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const u8, name_len: usize, rings: [*c]const cc.tile57_world_rings) callconv(.c) void {
+    const s = asScene(ctx);
+    if (scaminCulled(s, f)) return;
+    const sa = s.sprite_atlas orelse return;
+    if (name == null or name_len == 0) return;
+    const raw = name[0..name_len];
+    // the engine may hand the name with or without the atlas's "pat:" prefix
+    const cell = sa.lookup(raw) orelse blk: {
+        var buf: [128]u8 = undefined;
+        if (raw.len + 4 > buf.len) return;
+        @memcpy(buf[0..4], "pat:");
+        @memcpy(buf[4..][0..raw.len], raw);
+        break :blk sa.lookup(buf[0 .. raw.len + 4]) orelse return;
+    };
+    const aw: f32 = @floatFromInt(sa.width);
+    const ah: f32 = @floatFromInt(sa.height);
+    s.worldToScratch(rings) catch return;
+    const out = s.tessContours(s.scratch.items, Scene.ringStartsSlice(rings.*.ring_starts, rings.*.ring_count), rings.*.ring_count, false) orelse return;
+    const UNDEF: c_int = ~@as(c_int, 0);
+    const pv = PatternVertex{
+        .wx = 0,
+        .wy = 0,
+        .u0 = cell.x / aw,
+        .v0 = cell.y / ah,
+        .u1 = (cell.x + cell.w) / aw,
+        .v1 = (cell.y + cell.h) / ah,
+        .cw = cell.w * s.density,
+        .ch = cell.h * s.density,
+    };
+    var e: usize = 0;
+    while (e < out.nelems) : (e += 1) {
+        const tri = [3]c_int{ out.elems[e * 3], out.elems[e * 3 + 1], out.elems[e * 3 + 2] };
+        if (tri[0] == UNDEF or tri[1] == UNDEF or tri[2] == UNDEF) continue;
+        for (tri) |idx| {
+            var v = pv;
+            v.wx = out.verts[@as(usize, @intCast(idx)) * 2];
+            v.wy = out.verts[@as(usize, @intCast(idx)) * 2 + 1];
+            s.pattern_verts.append(s.a, v) catch return;
+        }
+    }
+}
+
 fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
@@ -435,7 +508,7 @@ fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile
     }
 }
 
-fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, glyphs: [*c]const cc.tile57_local_rings, color: cc.tile57_color, halo: cc.tile57_color, halo_px: f32, align_: cc.tile57_rot_align) callconv(.c) void {
+fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, glyphs: [*c]const cc.tile57_local_rings, color: cc.tile57_color, halo: cc.tile57_color, halo_px: f32, align_: cc.tile57_rot_align, _: i32) callconv(.c) void {
     _ = halo;
     _ = halo_px;
     const s = asScene(ctx);
@@ -495,7 +568,7 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads
 // sampling the glyph atlas. Anchor is world; (ox,oy) is the baseline-left origin
 // in reference px (alignment already applied); metrics are EM units × size_px.
-fn fDrawTextStr(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_color, halo: cc.tile57_color) callconv(.c) void {
+fn fDrawTextStr(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, anchor: cc.tile57_world_point, ox_px: f32, oy_px: f32, text: [*c]const u8, text_len: usize, size_px: f32, rot_deg: f32, align_: cc.tile57_rot_align, color: cc.tile57_color, halo: cc.tile57_color, text_group: i32) callconv(.c) void {
     _ = align_;
     _ = halo;
     const s = asScene(ctx);
@@ -508,6 +581,12 @@ fn fDrawTextStr(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, anchor: cc.til
     const wx = s.relX(anchor.x);
     const wy = s.relY(anchor.y);
     const col = Scene.rgba(color);
+    // S-52 §14.5 group 11 is "important text" — the one group the mariner's text
+    // switches cannot turn off. Give it a little more size and stroke weight so
+    // it stays readable over dense areas.
+    const important = text_group == IMPORTANT_TEXT_GROUP;
+    const size_px_eff = if (important) size_px * IMPORTANT_TEXT_SCALE else size_px;
+    const weight: f32 = if (important) IMPORTANT_TEXT_WEIGHT else 0;
     const rad = rot_deg * std.math.pi / 180.0;
     const cs = std.math.cos(rad);
     const sn = std.math.sin(rad);
@@ -517,18 +596,18 @@ fn fDrawTextStr(ctx: ?*anyopaque, _: [*c]const cc.tile57_feature, anchor: cc.til
         const gi = ga.lookup(@intCast(cp)) orelse {
             continue;
         };
-        const gx = pen + gi.off_x * size_px;
-        const gy = oy_px + gi.off_y * size_px;
-        const gw = gi.w * size_px;
-        const gh = gi.h * size_px;
+        const gx = pen + gi.off_x * size_px_eff;
+        const gy = oy_px + gi.off_y * size_px_eff;
+        const gw = gi.w * size_px_eff;
+        const gh = gi.h * size_px_eff;
         const local = [4][2]f32{ .{ gx, gy }, .{ gx + gw, gy }, .{ gx + gw, gy + gh }, .{ gx, gy + gh } };
         const uvs = [4][2]f32{ .{ gi.u0, gi.v0 }, .{ gi.u1, gi.v0 }, .{ gi.u1, gi.v1 }, .{ gi.u0, gi.v1 } };
         var q: [4]QuadVertex = undefined;
         for (0..4) |i| {
-            q[i] = .{ .wx = wx, .wy = wy, .lx = local[i][0] * cs - local[i][1] * sn, .ly = local[i][0] * sn + local[i][1] * cs, .u = uvs[i][0], .v = uvs[i][1], .r = col.r, .g = col.g, .b = col.b, .a = col.a };
+            q[i] = .{ .wx = wx, .wy = wy, .lx = local[i][0] * cs - local[i][1] * sn, .ly = local[i][0] * sn + local[i][1] * cs, .u = uvs[i][0], .v = uvs[i][1], .r = col.r, .g = col.g, .b = col.b, .a = col.a, .weight = weight };
         }
         for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |k| s.text_quads.append(s.a, q[k]) catch return;
-        pen += gi.advance * size_px;
+        pen += gi.advance * size_px_eff;
     }
 }
 
@@ -556,7 +635,7 @@ fn cDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_wo
     if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
-fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_color, _: cc.tile57_color, _: f32, _: cc.tile57_rot_align) callconv(.c) void {
+fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, color: cc.tile57_color, _: cc.tile57_color, _: f32, _: cc.tile57_rot_align, _: i32) callconv(.c) void {
     if (scaminCulled(asScene(ctx), f)) return;
     recordColor(ctx, color);
 }
@@ -568,8 +647,8 @@ fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_worl
 fn nFillArea(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: cc.tile57_color, _: c_int) callconv(.c) void {}
 fn nStrokeLine(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, _: cc.tile57_color) callconv(.c) void {}
 fn nDrawSymbol(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_color, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
-fn nDrawText(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_color, _: cc.tile57_color, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
-fn nDrawTextStr(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: f32, _: f32, _: [*c]const u8, _: usize, _: f32, _: f32, _: cc.tile57_rot_align, _: cc.tile57_color, _: cc.tile57_color) callconv(.c) void {}
+fn nDrawText(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_color, _: cc.tile57_color, _: f32, _: cc.tile57_rot_align, _: i32) callconv(.c) void {}
+fn nDrawTextStr(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: f32, _: f32, _: [*c]const u8, _: usize, _: f32, _: f32, _: cc.tile57_rot_align, _: cc.tile57_color, _: cc.tile57_color, _: i32) callconv(.c) void {}
 
 /// Geometry + symbols for ONE cached tile. Text is deliberately dropped here:
 /// a label on a feature that spans tiles gets re-anchored in every tile the
@@ -584,7 +663,7 @@ pub fn tileTable(scene: *Scene) cc.tile57_surface_cb {
         .draw_symbol = fDrawSymbol, // fallback for symbols not in the sprite atlas
         .draw_text = nDrawText,
         .draw_sprite = fDrawSprite, // atlas symbols/soundings -> textured quads
-        .draw_pattern = null,
+        .draw_pattern = fDrawPattern, // area fill patterns -> tiled atlas cells
         .draw_text_str = nDrawTextStr,
     };
 }
