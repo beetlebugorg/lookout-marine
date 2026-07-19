@@ -129,6 +129,7 @@ pub const Lookout = struct {
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
     labels_dirty: bool = true, // view moved: the decluttered label set is stale
     label_origin: camera.Vec2 = .{ .x = 0, .y = 0 }, // world origin the label quads are relative to
+    label_zoom: f64 = -1, // camera zoom the label set was decluttered for
     last_change_ms: i64 = 0, // when the view last moved (debounce rebuilds during a gesture)
     cam: camera.Camera,
     schemes: [scene.MAX_SCHEMES]Scheme = undefined,
@@ -835,6 +836,9 @@ pub const Lookout = struct {
     const LABEL_SETTLE_MS = 90;
 
     fn buildLabels(self: *Lookout) void {
+        // Clear FIRST: needsRedraw() keys off labels_dirty, so any early return
+        // below would otherwise spin the render loop re-running this every frame.
+        self.labels_dirty = false;
         if (self.glyph_atlas == null) return; // no SDF atlas -> no text at all
         const t0 = cc.SDL_GetPerformanceCounter();
         var s = scene.Scene.init(self.alloc, self.cam.center) catch return;
@@ -857,7 +861,7 @@ pub const Lookout = struct {
         if (st != cc.TILE57_OK) return; // keep the previous labels rather than blank out
         self.g.uploadLabels(s.text_quads.items) catch return;
         self.label_origin = self.cam.center;
-        self.labels_dirty = false;
+        self.label_zoom = self.cam.zoom;
         const ms = @as(f64, @floatFromInt(cc.SDL_GetPerformanceCounter() - t0)) * 1000.0 / @as(f64, @floatFromInt(cc.SDL_GetPerformanceFrequency()));
         std.debug.print("labels z{d:.1}: {d} glyph quads in {d:.0} ms\n", .{ z, s.text_quads.items.len / 6, ms });
     }
@@ -866,6 +870,21 @@ pub const Lookout = struct {
     fn labelUniform(self: *Lookout) ?gpu.Uniforms {
         if (self.g.label_count == 0) return null;
         return self.uniformsForOrigin(self.label_origin);
+    }
+
+    // Labels are world-anchored, so a small nudge leaves them correctly placed —
+    // only re-declutter once the view has moved enough that the label DENSITY is
+    // wrong or newly-exposed area has none. (A stopgap: the pass is expensive
+    // because the engine re-portrays every covering tile per call.)
+    const LABEL_ZOOM_STEP = 0.25; // zoom drift that forces a re-declutter
+    const LABEL_PAN_FRAC = 0.30; // pan, as a fraction of the viewport half-extent
+
+    fn labelsStale(self: *Lookout) bool {
+        if (self.g.label_count == 0) return true;
+        if (@abs(self.cam.zoom - self.label_zoom) > LABEL_ZOOM_STEP) return true;
+        const he = self.cam.halfExtents();
+        return @abs(self.cam.center.x - self.label_origin.x) > he.x * LABEL_PAN_FRAC or
+            @abs(self.cam.center.y - self.label_origin.y) > he.y * LABEL_PAN_FRAC;
     }
 
     // Re-declutter once the gesture has stopped (see LABEL_SETTLE_MS).
@@ -913,7 +932,10 @@ pub const Lookout = struct {
         _ = self.ensureTiles(TILE_BUDGET);
         // Re-declutter only once the view stops moving; until then the previous
         // (world-anchored) labels keep drawing in the right place.
-        if (self.labels_dirty and self.labelsSettled()) self.buildLabels();
+        if (self.labels_dirty and self.labelsSettled()) {
+            self.labels_dirty = false;
+            if (self.labelsStale()) self.buildLabels();
+        }
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
