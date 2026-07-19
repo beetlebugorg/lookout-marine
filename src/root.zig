@@ -127,6 +127,8 @@ pub const Lookout = struct {
     cov_hw: f64 = 0, // half-width / half-height of coverage, world units
     cov_hh: f64 = 0,
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
+    labels_dirty: bool = true, // view moved: the decluttered label set is stale
+    label_origin: camera.Vec2 = .{ .x = 0, .y = 0 }, // world origin the label quads are relative to
     last_change_ms: i64 = 0, // when the view last moved (debounce rebuilds during a gesture)
     cam: camera.Camera,
     schemes: [scene.MAX_SCHEMES]Scheme = undefined,
@@ -585,6 +587,7 @@ pub const Lookout = struct {
     // rebuilds debounce until the gesture stops.
     fn markDirty(self: *Lookout) void {
         self.view_dirty = true;
+        self.labels_dirty = true;
         self.last_change_ms = @as(i64, @intCast(cc.SDL_GetTicks()));
     }
 
@@ -603,6 +606,7 @@ pub const Lookout = struct {
     pub fn build(self: *Lookout) !void {
         self.pollCompose(true);
         self.buildAllVisible();
+        self.buildLabels();
     }
     /// Drop all cached tiles (e.g. after a mariner change that alters geometry).
     fn dropTiles(self: *Lookout) void {
@@ -772,8 +776,9 @@ pub const Lookout = struct {
         // than capturing all three palettes up front.
         s.scheme_k = 0;
         var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
-        const full = scene.fullTable(&s);
-        self.tileSurface(z, x, y, &full, &m0, &err);
+        // geometry + symbols only; labels come from the view-level pass
+        const tbl = scene.tileTable(&s);
+        self.tileSurface(z, x, y, &tbl, &m0, &err);
         s.finish(1) catch {};
         const bufs = self.g.uploadTileScene(&s) catch gpu.Gpu.TileBuffers{};
         return .{ .bufs = bufs, .origin = origin, .last_used = self.frame_ctr };
@@ -820,6 +825,54 @@ pub const Lookout = struct {
         }
     }
 
+    // ---- view-level labels (S-52 declutter, done by tile57) -----------------
+    // A label on a feature that spans tiles would be re-anchored in every tile
+    // the feature is clipped into, so per-tile text repeats across seams. The
+    // engine resolves the WHOLE view against one collision pool and emits only
+    // the survivors, which we lay out here as SDF quads — one buffer, one draw.
+    // Labels are world-anchored, so a stale set still renders in the right place
+    // while a gesture is in flight; we only re-declutter once the view settles.
+    const LABEL_SETTLE_MS = 90;
+
+    fn buildLabels(self: *Lookout) void {
+        if (self.glyph_atlas == null) return; // no SDF atlas -> no text at all
+        const t0 = cc.SDL_GetPerformanceCounter();
+        var s = scene.Scene.init(self.alloc, self.cam.center) catch return;
+        defer s.deinit();
+        s.glyph_atlas = &self.glyph_atlas.?;
+        const ll = camera.worldToLonLat(self.cam.center);
+        // Clamp like the tiles do: past the deepest band the engine serves we are
+        // overscaling, and asking for labels beyond it returns nothing at all.
+        const z = self.buildZoom();
+        s.cull_scale = camera.displayScaleAt(z, ll.y);
+        var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
+        const tbl = scene.labelTable(&s);
+        var err: cc.tile57_error = undefined;
+        const st = if (self.compose) |c|
+            cc.tile57_compose_labels(c, ll.x, ll.y, z, self.cam.rotation, self.g.width, self.g.height, &m0, &tbl, &err)
+        else if (self.charts.items.len > 0)
+            cc.tile57_chart_labels(self.charts.items[0], ll.x, ll.y, z, self.cam.rotation, self.g.width, self.g.height, &m0, &tbl, &err)
+        else
+            cc.TILE57_OK;
+        if (st != cc.TILE57_OK) return; // keep the previous labels rather than blank out
+        self.g.uploadLabels(s.text_quads.items) catch return;
+        self.label_origin = self.cam.center;
+        self.labels_dirty = false;
+        const ms = @as(f64, @floatFromInt(cc.SDL_GetPerformanceCounter() - t0)) * 1000.0 / @as(f64, @floatFromInt(cc.SDL_GetPerformanceFrequency()));
+        std.debug.print("labels z{d:.1}: {d} glyph quads in {d:.0} ms\n", .{ z, s.text_quads.items.len / 6, ms });
+    }
+
+    // The uniform the label buffer was built against (its own origin, current camera).
+    fn labelUniform(self: *Lookout) ?gpu.Uniforms {
+        if (self.g.label_count == 0) return null;
+        return self.uniformsForOrigin(self.label_origin);
+    }
+
+    // Re-declutter once the gesture has stopped (see LABEL_SETTLE_MS).
+    fn labelsSettled(self: *Lookout) bool {
+        return @as(i64, @intCast(cc.SDL_GetTicks())) - self.last_change_ms >= LABEL_SETTLE_MS;
+    }
+
     fn collectDraws(self: *Lookout, list: *std.ArrayList(gpu.Gpu.TileDraw)) void {
         list.clearRetainingCapacity();
         const r = self.visibleRange();
@@ -854,14 +907,17 @@ pub const Lookout = struct {
                 const ph = @as(f32, @floatFromInt(cc.SDL_GetTicks() % 1600)) / 1600.0;
                 const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
                 self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
-                return self.g.renderWindowTiles(&.{}, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
+                return self.g.renderWindowTiles(&.{}, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0, null);
             }
         }
         _ = self.ensureTiles(TILE_BUDGET);
+        // Re-declutter only once the view stops moving; until then the previous
+        // (world-anchored) labels keep drawing in the right place.
+        if (self.labels_dirty and self.labelsSettled()) self.buildLabels();
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
-        const ok = try self.g.renderWindowTiles(list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
+        const ok = try self.g.renderWindowTiles(list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0, self.labelUniform());
         self.view_dirty = false;
         return ok;
     }
@@ -869,7 +925,7 @@ pub const Lookout = struct {
     /// True while the view still has tiles to fill in, or state changed — the host
     /// renders while this is true and blocks on events (idle CPU) when it's false.
     pub fn needsRedraw(self: *Lookout) bool {
-        return self.loading or self.view_dirty or self.anyVisibleMissing();
+        return self.loading or self.view_dirty or self.labels_dirty or self.anyVisibleMissing();
     }
     pub fn isBuilding(self: *Lookout) bool {
         return self.needsRedraw();
@@ -884,10 +940,11 @@ pub const Lookout = struct {
     pub fn snapshotPng(self: *Lookout, path: []const u8) !void {
         self.pollCompose(true);
         self.buildAllVisible();
+        self.buildLabels();
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
-        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
+        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0, self.labelUniform());
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.g.width, self.g.height);
     }
@@ -895,10 +952,11 @@ pub const Lookout = struct {
     pub fn snapshotRgba(self: *Lookout, dst: []u8) !void {
         self.pollCompose(true);
         self.buildAllVisible();
+        self.buildLabels();
         var list: std.ArrayList(gpu.Gpu.TileDraw) = .empty;
         defer list.deinit(self.alloc);
         self.collectDraws(&list);
-        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0);
+        const px = try self.g.renderOffscreenTiles(self.alloc, list.items, self.active_scheme, (self.kind_mask & (@as(u32, 1) << KIND_TEXT)) != 0, self.labelUniform());
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;
         @memcpy(dst[0..px.len], px);

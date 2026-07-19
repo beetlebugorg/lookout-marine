@@ -509,6 +509,51 @@ fn cDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, _: cc.tile57_worl
     recordColor(ctx, color);
 }
 
+// No-op callbacks. tile57 requires fill_area/stroke_line/draw_symbol/draw_text
+// to be non-null, so each pass silences what it doesn't want: the TILE pass
+// drops text (it comes from the view-level decluttered pass instead), the LABEL
+// pass drops geometry (it comes from the tile cache instead).
+fn nFillArea(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: cc.tile57_rgba, _: c_int) callconv(.c) void {}
+fn nStrokeLine(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: [*c]const cc.tile57_world_rings, _: f32, _: f32, _: f32, _: cc.tile57_rgba) callconv(.c) void {}
+fn nDrawSymbol(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_rgba, _: c_int, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
+fn nDrawText(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: [*c]const cc.tile57_local_rings, _: cc.tile57_rgba, _: cc.tile57_rgba, _: f32, _: cc.tile57_rot_align) callconv(.c) void {}
+fn nDrawTextStr(_: ?*anyopaque, _: [*c]const cc.tile57_feature, _: cc.tile57_world_point, _: f32, _: f32, _: [*c]const u8, _: usize, _: f32, _: f32, _: cc.tile57_rot_align, _: cc.tile57_rgba, _: cc.tile57_rgba) callconv(.c) void {}
+
+/// Geometry + symbols for ONE cached tile. Text is deliberately dropped here:
+/// a label on a feature that spans tiles gets re-anchored in every tile the
+/// feature is clipped into, so per-tile text duplicates across seams. Labels
+/// come from labelTable + tile57_{compose,chart}_labels instead, which resolves
+/// the whole view against one collision pool (S-52 declutter).
+pub fn tileTable(scene: *Scene) cc.tile57_surface_cb {
+    return .{
+        .ctx = scene,
+        .fill_area = fFillArea,
+        .stroke_line = fStrokeLine,
+        .draw_symbol = fDrawSymbol, // fallback for symbols not in the sprite atlas
+        .draw_text = nDrawText,
+        .draw_sprite = fDrawSprite, // atlas symbols/soundings -> textured quads
+        .draw_pattern = null,
+        .draw_text_str = nDrawTextStr,
+    };
+}
+
+/// The view-level label pass: tile57 emits only the labels that WON their space
+/// across the whole view, so everything arriving here is drawn as SDF quads.
+/// Geometry never arrives (the engine's labels-only mode early-returns), but the
+/// callbacks must still be present.
+pub fn labelTable(scene: *Scene) cc.tile57_surface_cb {
+    return .{
+        .ctx = scene,
+        .fill_area = nFillArea,
+        .stroke_line = nStrokeLine,
+        .draw_symbol = nDrawSymbol,
+        .draw_text = nDrawText, // no glyph outlines: SDF only
+        .draw_sprite = null,
+        .draw_pattern = null,
+        .draw_text_str = fDrawTextStr,
+    };
+}
+
 pub fn fullTable(scene: *Scene) cc.tile57_surface_cb {
     return .{
         .ctx = scene,

@@ -92,6 +92,10 @@ pub const Gpu = struct {
     // SDF text: its own pipeline (sprite.vert + sdf.frag) + glyph atlas texture
     sdf_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
     glyph_tex: ?*cc.SDL_GPUTexture = null,
+    // Labels are NOT per-tile: one decluttered set for the whole view, in one
+    // buffer, drawn last (see scene.labelTable).
+    label_buf: ?*cc.SDL_GPUBuffer = null,
+    label_count: u32 = 0,
 
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
@@ -473,17 +477,23 @@ pub const Gpu = struct {
         index_count: u32 = 0,
         qbuf: ?*cc.SDL_GPUBuffer = null,
         quad_count: u32 = 0,
-        tbuf: ?*cc.SDL_GPUBuffer = null, // SDF text quads
-        text_count: u32 = 0,
     };
+
+    /// Replace the view's decluttered label quads (one buffer for the whole view).
+    pub fn uploadLabels(self: *Gpu, quads: []const scene.QuadVertex) !void {
+        if (self.label_buf) |b| cc.SDL_ReleaseGPUBuffer(self.device, b);
+        self.label_buf = null;
+        self.label_count = 0;
+        if (quads.len == 0) return;
+        self.label_buf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(quads));
+        self.label_count = @intCast(quads.len);
+    }
 
     /// Upload one tile's tessellation to its own GPU buffers.
     pub fn uploadTileScene(self: *Gpu, s: *scene.Scene) !TileBuffers {
         var tb = TileBuffers{};
         if (s.quads.items.len > 0) tb.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads.items));
         tb.quad_count = @intCast(s.quads.items.len);
-        if (s.text_quads.items.len > 0) tb.tbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.text_quads.items));
-        tb.text_count = @intCast(s.text_quads.items.len);
         if (s.verts.items.len != 0 and s.indices.len != 0) {
             tb.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.verts.items));
             tb.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(s.indices));
@@ -501,14 +511,13 @@ pub const Gpu = struct {
         if (tb.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         for (tb.cbuf) |c| if (c) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (tb.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
-        if (tb.tbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         tb.* = .{};
     }
 
     /// One tile to draw: its buffers + the per-tile uniform (mvp folds the tile origin).
     pub const TileDraw = struct { bufs: *const TileBuffers, uniform: Uniforms };
 
-    fn recordTiles(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, tiles: []const TileDraw, scheme_k: usize, text_on: bool) void {
+    fn recordTiles(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, tiles: []const TileDraw, scheme_k: usize, text_on: bool, label_u: ?Uniforms) void {
         var cti = std.mem.zeroes(cc.SDL_GPUColorTargetInfo);
         cti.texture = target;
         cti.clear_color = self.clear;
@@ -547,25 +556,23 @@ pub const Gpu = struct {
                 cc.SDL_DrawGPUPrimitives(pass, t.bufs.quad_count, 1, 0, 0);
             }
         }
-        // SDF text on top (own pipeline + glyph atlas), gated by the text toggle
-        if (text_on and self.glyph_tex != null and self.sdf_pipeline != null) {
+        // Decluttered labels last, on top of everything (S-52 paint order): ONE
+        // view-wide buffer with one uniform, not a per-tile loop.
+        if (text_on and label_u != null and self.label_count > 0 and self.glyph_tex != null and self.sdf_pipeline != null) {
             cc.SDL_BindGPUGraphicsPipeline(pass, self.sdf_pipeline);
             cc.SDL_SetGPUViewport(pass, &vp);
             const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.glyph_tex, .sampler = self.sampler }};
             cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
-            for (tiles) |t| {
-                if (t.bufs.text_count == 0) continue;
-                const tbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.tbuf, .offset = 0 }};
-                cc.SDL_BindGPUVertexBuffers(pass, 0, &tbind, 1);
-                var uu = t.uniform;
-                cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
-                cc.SDL_DrawGPUPrimitives(pass, t.bufs.text_count, 1, 0, 0);
-            }
+            const tbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = self.label_buf, .offset = 0 }};
+            cc.SDL_BindGPUVertexBuffers(pass, 0, &tbind, 1);
+            var uu = label_u.?;
+            cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+            cc.SDL_DrawGPUPrimitives(pass, self.label_count, 1, 0, 0);
         }
         cc.SDL_EndGPURenderPass(pass);
     }
 
-    pub fn renderWindowTiles(self: *Gpu, tiles: []const TileDraw, scheme_k: usize, text_on: bool) !bool {
+    pub fn renderWindowTiles(self: *Gpu, tiles: []const TileDraw, scheme_k: usize, text_on: bool, label_u: ?Uniforms) !bool {
         const window = self.window orelse return false;
         const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
         var swap: ?*cc.SDL_GPUTexture = null;
@@ -576,16 +583,16 @@ pub const Gpu = struct {
             _ = cc.SDL_SubmitGPUCommandBuffer(cmd);
             return true;
         }
-        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, swap, tiles, scheme_k, text_on) else self.recordTiles(cmd, swap.?, null, tiles, scheme_k, text_on);
+        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, swap, tiles, scheme_k, text_on, label_u) else self.recordTiles(cmd, swap.?, null, tiles, scheme_k, text_on, label_u);
         try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit frame");
         return true;
     }
 
-    pub fn renderOffscreenTiles(self: *Gpu, alloc: std.mem.Allocator, tiles: []const TileDraw, scheme_k: usize, text_on: bool) ![]u8 {
+    pub fn renderOffscreenTiles(self: *Gpu, alloc: std.mem.Allocator, tiles: []const TileDraw, scheme_k: usize, text_on: bool, label_u: ?Uniforms) ![]u8 {
         try self.ensureOffscreenTargets();
         const resolve = self.resolve_tex.?;
         const cmd = try checkPtr(cc.SDL_AcquireGPUCommandBuffer(self.device), "AcquireCmd");
-        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, resolve, tiles, scheme_k, text_on) else self.recordTiles(cmd, resolve, null, tiles, scheme_k, text_on);
+        if (self.msaa_used) self.recordTiles(cmd, self.msaa_tex.?, resolve, tiles, scheme_k, text_on, label_u) else self.recordTiles(cmd, resolve, null, tiles, scheme_k, text_on, label_u);
         const cp = cc.SDL_BeginGPUCopyPass(cmd);
         var region = std.mem.zeroes(cc.SDL_GPUTextureRegion);
         region.texture = resolve;
@@ -739,6 +746,7 @@ pub const Gpu = struct {
         if (self.vbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (self.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         for (self.color_bufs) |cb| if (cb) |b| cc.SDL_ReleaseGPUBuffer(d, b);
+        if (self.label_buf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (self.msaa_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.resolve_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.download_tb) |t| cc.SDL_ReleaseGPUTransferBuffer(d, t);
