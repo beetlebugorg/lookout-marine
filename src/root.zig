@@ -528,7 +528,12 @@ pub const Lookout = struct {
         m0.device_scale = 1.0; // camera is in LOGICAL px; density lives in the projection
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         var err: cc.tile57_error = undefined;
-        const st = cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, z, ow, oh, &m0, &cs, &err);
+        // A library (many cells) portrays through the compositor so seams stitch
+        // across cells; a single chart goes straight to its own archive.
+        const st = if (self.compose) |c|
+            cc.tile57_compose_gpu_scene(c, ll.x, ll.y, z, ow, oh, &m0, &cs, &err)
+        else
+            cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, z, ow, oh, &m0, &cs, &err);
         if (st != cc.TILE57_OK) return; // keep the previous scene rather than blank out
         self.g.uploadGpuScene(self.alloc, &cs) catch {};
         cc.tile57_gpu_scene_free(&cs);
