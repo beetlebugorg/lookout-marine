@@ -8,7 +8,7 @@
 //! per-draw-call colors on later passes; symbols/soundings/text arrive as
 //! pre-tessellated outline rings (draw_sprite/draw_pattern/draw_text_str left
 //! NULL); soundings ride draw_symbol with cls=="SOUNDG"; the stream is NOT paint
-//! sorted, so we sort by (class-major, plane, seq) mirroring pixel.zig.
+//! sorted, so we sort by (class-major, display_priority, seq) mirroring pixel.zig.
 const std = @import("std");
 const cc = @import("c.zig").c;
 const camera = @import("camera.zig");
@@ -62,6 +62,25 @@ pub const Vertex = extern struct {
 };
 pub const Color = extern struct { r: u8, g: u8, b: u8, a: u8 };
 
+// Sprite paint bands. The sprite key is layer*1000 + display_priority, where layer is
+// tile57's OpLayer (only symbol=3 and sounding=4 reach the sprite pass) and
+// display_priority is the S-101 catalogue DrawingPriority, 0..30. That is a small
+// enough space to bucket exhaustively, which is what lets the renderer walk
+// bands across every visible tile instead of tile-by-tile.
+pub const SPRITE_LAYER_LO: i32 = 3; // OpLayer.symbol
+pub const SPRITE_LAYER_HI: i32 = 4; // OpLayer.sounding
+const PRIO_MAX: i32 = 30;
+pub const SPRITE_BANDS: usize = 2 * (PRIO_MAX + 1);
+
+/// Bucket a sprite key into its band. Out-of-range keys clamp to the ends
+/// rather than being dropped — a symbol with an unexpected priority must still
+/// draw, even if it draws at the wrong height.
+fn bandOf(key: i32) usize {
+    const layer = std.math.clamp(@divFloor(key, 1000), SPRITE_LAYER_LO, SPRITE_LAYER_HI);
+    const prio = std.math.clamp(@mod(key, 1000), 0, PRIO_MAX);
+    return @intCast((layer - SPRITE_LAYER_LO) * (PRIO_MAX + 1) + prio);
+}
+
 // paint-order class == shader kind (they share the numbering, conveniently)
 const CLASS_AREA: u8 = 0;
 const CLASS_LINE: u8 = 1;
@@ -69,13 +88,13 @@ const CLASS_SYMBOL: u8 = 2;
 const CLASS_SOUNDING: u8 = 3;
 const CLASS_TEXT: u8 = 4;
 
-fn packFlags(disp_cat: u32, kind: u8, map_align: bool) u32 {
-    return (disp_cat & 3) | (@as(u32, kind) << 2) | (@as(u32, @intFromBool(map_align)) << 5);
+fn packFlags(display_category: u32, kind: u8, map_align: bool) u32 {
+    return (display_category & 3) | (@as(u32, kind) << 2) | (@as(u32, @intFromBool(map_align)) << 5);
 }
 
 const DrawItem = struct {
     class: u8,
-    plane: i32,
+    display_priority: i32,
     seq: u32,
     vtx_first: u32,
     vtx_count: u32,
@@ -115,11 +134,18 @@ pub const Scene = struct {
     // SDF text: textured quads sampling the glyph atlas
     text_quads: std.ArrayList(QuadVertex) = .empty,
     pattern_verts: std.ArrayList(PatternVertex) = .empty,
-    /// One entry per SPRITE QUAD (6 verts): layer*1000 + S-52 draw priority.
-    /// tile57 streams features in walk order and tags each with `plane`; a host
-    /// that re-buckets them into its own batches has to restore paint order
-    /// itself, which is what finish() does with this.
-    quad_planes: std.ArrayList(i32) = .empty,
+    /// One entry per SPRITE QUAD (6 verts): the sprite paint key, layer*1000 +
+    /// display_priority. tile57 streams features in walk order and tags each with
+    /// `display_priority`; a host that re-buckets them into its own batches has to
+    /// restore paint order itself, which is what finish() does with this.
+    quad_prios: std.ArrayList(i32) = .empty,
+    /// Start of each paint band in `quads`, in VERTICES, so the renderer can
+    /// feed one straight to SDL_DrawGPUPrimitives' first_vertex. Sorting quads
+    /// within a tile is not enough on its own: tiles are drawn one after
+    /// another, so without these the renderer cannot interleave bands ACROSS
+    /// tiles and a low-priority symbol in a later tile paints over a
+    /// high-priority one in an earlier tile. See gpu.zig recordTiles.
+    quad_band_off: [SPRITE_BANDS + 1]u32 = @splat(0),
     /// Physical px per reference px (HiDPI density), folded into pattern cell
     /// sizes so screen-space tiling matches the framebuffer.
     density: f32 = 1.0,
@@ -153,7 +179,7 @@ pub const Scene = struct {
         self.quads.deinit(self.a);
         self.text_quads.deinit(self.a);
         self.pattern_verts.deinit(self.a);
-        self.quad_planes.deinit(self.a);
+        self.quad_prios.deinit(self.a);
         if (self.tess) |t| cc.tessDeleteTess(t);
         if (self.indices.len != 0) self.a.free(self.indices);
         for (0..MAX_SCHEMES) |k| if (self.scheme_colors[k].len != 0) self.a.free(self.scheme_colors[k]);
@@ -313,11 +339,11 @@ pub const Scene = struct {
         });
     }
 
-    fn newItem(self: *Scene, class: u8, plane: i32, color: Color) !*DrawItem {
+    fn newItem(self: *Scene, class: u8, display_priority: i32, color: Color) !*DrawItem {
         const seq: u32 = @intCast(self.items.items.len);
         try self.items.append(self.a, .{
             .class = class,
-            .plane = plane,
+            .display_priority = display_priority,
             .seq = seq,
             .vtx_first = @intCast(self.verts.items.len),
             .vtx_count = 0,
@@ -365,45 +391,63 @@ pub const Scene = struct {
     }
 
     // ---- finish: sort into paint order, build final buffers ----------------
-    /// Stable-sort whole sprite quads (6 verts each) by their feature's draw
-    /// priority. Stability matters: within one plane the engine's walk order IS
-    /// the intended order, so only the priority may reorder them.
-    fn sortQuadsByPlane(self: *Scene) !void {
-        const nq = self.quad_planes.items.len;
-        if (nq < 2 or self.quads.items.len != nq * 6) return;
-        const order = try self.a.alloc(u32, nq);
-        defer self.a.free(order);
-        for (order, 0..) |*o, i| o.* = @intCast(i);
-        const planes = self.quad_planes.items;
-        std.mem.sortUnstable(u32, order, planes, struct {
-            fn lt(p: []const i32, l: u32, r: u32) bool {
-                if (p[l] != p[r]) return p[l] < p[r];
-                return l < r; // ties keep walk order -> stable
+    /// Stable-sort whole sprite quads (6 verts each) by their feature's paint
+    /// key, then record where each band starts. Stability matters: within one
+    /// key the engine's walk order IS the intended order, so only the priority
+    /// may reorder them.
+    fn sortQuadsByPrio(self: *Scene) !void {
+        const nq = self.quad_prios.items.len;
+        if (nq == 0 or self.quads.items.len != nq * 6) return;
+        const prios = self.quad_prios.items;
+        if (nq > 1) {
+            const order = try self.a.alloc(u32, nq);
+            defer self.a.free(order);
+            for (order, 0..) |*o, i| o.* = @intCast(i);
+            std.mem.sortUnstable(u32, order, prios, struct {
+                fn lt(p: []const i32, l: u32, r: u32) bool {
+                    if (p[l] != p[r]) return p[l] < p[r];
+                    return l < r; // ties keep walk order -> stable
+                }
+            }.lt);
+            const src = try self.a.alloc(QuadVertex, self.quads.items.len);
+            defer self.a.free(src);
+            @memcpy(src, self.quads.items);
+            const keys = try self.a.alloc(i32, nq);
+            defer self.a.free(keys);
+            @memcpy(keys, prios);
+            for (order, 0..) |from, to| {
+                @memcpy(self.quads.items[to * 6 ..][0..6], src[@as(usize, from) * 6 ..][0..6]);
+                prios[to] = keys[from];
             }
-        }.lt);
-        const src = try self.a.alloc(QuadVertex, self.quads.items.len);
-        defer self.a.free(src);
-        @memcpy(src, self.quads.items);
-        for (order, 0..) |from, to| {
-            @memcpy(self.quads.items[to * 6 ..][0..6], src[@as(usize, from) * 6 ..][0..6]);
         }
+        // Counting pass over the now-sorted keys -> exclusive prefix sum. Every
+        // band gets an entry even when empty, so band b is always
+        // [off[b], off[b+1]) and the renderer needs no lookup table.
+        var counts: [SPRITE_BANDS]u32 = @splat(0);
+        for (prios) |k| counts[bandOf(k)] += 1;
+        var acc: u32 = 0;
+        for (0..SPRITE_BANDS) |b| {
+            self.quad_band_off[b] = acc * 6;
+            acc += counts[b];
+        }
+        self.quad_band_off[SPRITE_BANDS] = acc * 6;
     }
 
     pub fn finish(self: *Scene, n_schemes: usize) !void {
         self.n_schemes = n_schemes;
-        // stable sort by (class-major, plane, seq) — mirror pixel.zig:549.
+        // stable sort by (class-major, display_priority, seq) — mirror pixel.zig:549.
         std.mem.sort(DrawItem, self.items.items, {}, struct {
             fn lt(_: void, l: DrawItem, r: DrawItem) bool {
                 if (l.class != r.class) return l.class < r.class;
-                if (l.plane != r.plane) return l.plane < r.plane;
+                if (l.display_priority != r.display_priority) return l.display_priority < r.display_priority;
                 return l.seq < r.seq;
             }
         }.lt);
         // Sprites bypass DrawItem (they are their own textured pass), so restore
-        // S-52 paint order here: stable-sort the quads by the feature plane each
-        // was tagged with. Without this a low-priority symbol drawn later in the
+        // S-52 paint order here: stable-sort the quads by the key each was
+        // tagged with. Without this a low-priority symbol drawn later in the
         // walk covers a high-priority one — lights under wrecks.
-        try self.sortQuadsByPlane();
+        try self.sortQuadsByPrio();
         // final index buffer: concatenate each item's temp index range in order.
         var total_idx: usize = 0;
         for (self.items.items) |it| total_idx += it.idx_count;
@@ -448,15 +492,15 @@ fn scaminCulled(s: *Scene, f: [*c]const cc.tile57_feature) bool {
     if (s.cull_scale <= 0) return false;
     const sc = f.*.scamin;
     if (sc <= 0) return false;
-    if (@as(u32, @intCast(f.*.disp_cat)) == 0) return false; // BASE is never SCAMIN-culled
+    if (@as(u32, @intCast(f.*.display_category)) == 0) return false; // BASE is never SCAMIN-culled
     return s.cull_scale > @as(f32, @floatFromInt(sc));
 }
 
 fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_color, even_odd: c_int) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_AREA, f.*.plane, Scene.rgba(color)) catch return;
-    const dc: u32 = @intCast(f.*.disp_cat);
+    const item = s.newItem(CLASS_AREA, f.*.display_priority, Scene.rgba(color)) catch return;
+    const dc: u32 = @intCast(f.*.display_category);
     const flags = packFlags(dc, CLASS_AREA, false);
     s.worldToScratch(rings) catch return;
     if (s.tessContours(s.scratch.items, Scene.ringStartsSlice(rings.*.ring_starts, rings.*.ring_count), rings.*.ring_count, even_odd != 0)) |out| {
@@ -512,8 +556,8 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
 fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_LINE, f.*.plane, Scene.rgba(color)) catch return;
-    const dc: u32 = @intCast(f.*.disp_cat);
+    const item = s.newItem(CLASS_LINE, f.*.display_priority, Scene.rgba(color)) catch return;
+    const dc: u32 = @intCast(f.*.display_category);
     const flags = packFlags(dc, CLASS_LINE, false);
     s.worldToScratch(lines) catch return;
     const hw = @max(width_px, 1.0) * 0.5;
@@ -526,8 +570,8 @@ fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile
     const sounding = clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS");
     const class: u8 = if (sounding) CLASS_SOUNDING else CLASS_SYMBOL;
     const kind: u8 = class;
-    const item = s.newItem(class, f.*.plane, Scene.rgba(color)) catch return;
-    const dc: u32 = @intCast(f.*.disp_cat);
+    const item = s.newItem(class, f.*.display_priority, Scene.rgba(color)) catch return;
+    const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, kind, map_align);
     const wrel = [2]f32{ s.relX(anchor.x), s.relY(anchor.y) };
@@ -544,8 +588,8 @@ fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57
     _ = halo_px;
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_TEXT, f.*.plane, Scene.rgba(color)) catch return;
-    const dc: u32 = @intCast(f.*.disp_cat);
+    const item = s.newItem(CLASS_TEXT, f.*.display_priority, Scene.rgba(color)) catch return;
+    const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, CLASS_TEXT, map_align);
     const wrel = [2]f32{ s.relX(anchor.x), s.relY(anchor.y) };
@@ -594,13 +638,13 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
         };
     }
     for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |idx| s.quads.append(s.a, q[idx]) catch return;
-    // Key on (layer, plane) exactly like tile57 does. The engine sorts by
-    // OpLayer first — symbol(3) before sounding(4) — and by draw_prio only
+    // Key on (layer, display_priority) exactly like tile57 does. The engine sorts by
+    // OpLayer first — symbol(3) before sounding(4) — and by display_priority only
     // within a layer, so a beacon at prio 24 legitimately precedes a SOUNDG at
     // prio 18. lookout merges both layers into this one quad buffer, so sorting
-    // on plane alone would flatten them and undo the engine's order.
-    const layer: i32 = if (clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS")) 4 else 3;
-    s.quad_planes.append(s.a, layer * 1000 + f.*.plane) catch return;
+    // on display_priority alone would flatten them and undo the engine's order.
+    const layer: i32 = if (clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS")) SPRITE_LAYER_HI else SPRITE_LAYER_LO;
+    s.quad_prios.append(s.a, layer * 1000 + f.*.display_priority) catch return;
 }
 
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads

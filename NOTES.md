@@ -56,7 +56,7 @@ typedef enum { TILE57_DISP_BASE=0, TILE57_DISP_STANDARD=1, TILE57_DISP_OTHER=2 }
 typedef struct {                       // per-feature metadata carried on EVERY draw call
     const char *cls;                   // S-57 object-class acronym, NUL-terminated ("" if none)
     int64_t     scamin;                // SCAMIN 1:N denominator; <=0 => always visible
-    int32_t     plane;                 // S-52 draw priority (paint hint) — host sorts by this
+    int32_t     draw_prio;             // S-52 draw priority (S-101 DrawingPriority 0..30) — host re-sorts by this if it batches
     tile57_disp_cat disp_cat;          // BASE never SCAMIN-gated
 } tile57_feature;
 
@@ -97,7 +97,8 @@ tile57_status tile57_compose_surface(compose, lon,lat,zoom, rotation_rad, w,h, m
 | `drawSounding(depth, anchor)` → host composes digits | **No such callback.** The engine composes sounding digits itself and emits them through `draw_text` (glyph outline rings), `cls == "SOUNDG"`, honouring `mariner.soundings` + `sounding_size_scale`. | We do **not** compose digits (spec §5/§7 "reuse SNDFRM" is unnecessary). Soundings are just text with `cls=="SOUNDG"`. |
 | "Symbol atlas / glyph atlas we must build" | Leaving `draw_sprite`/`draw_text_str` **NULL** makes the engine deliver symbols and text as **pre-tessellated local outline rings** (`draw_symbol`/`draw_text`) in reference px. | **No atlas needed for the prototype.** Symbols and text tessellate exactly like areas. The atlas path (`draw_sprite`+`tile57_bake_sprite_mln`, `draw_text_str`+`tile57_bake_glyph_sdf`) is a later optimization, not required. |
 | world space = "mercator meters" (open Q §12) | `tile57_world_point` is **web-mercator normalized [0,1], y down.** `tile57_local_point` is anchor-relative reference px (constant screen size). | Camera math is in [0,1] space; screen↔world via the inverse MVP in [0,1] units. |
-| stream may be pre-sorted into paint order | Header line 555: "Calls arrive in **Surface emission order** (the host owns final paint order + label collision)." The canvas twin is pre-sorted; the **surface** twin is NOT. | We bucket/sort recorded geometry by `(draw-class, plane)` at build and emit one paint-ordered index buffer. (Confirming exact ordering via the Zig reference reader.) |
+| stream may be pre-sorted into paint order | **It is** (since tile57 `ba0d083`): "CALLS ARRIVE IN S-52 PAINT ORDER" — class-major (areas, patterns, lines, symbols, soundings, text), `draw_prio` within a class. But the header is equally clear that **batching by draw type destroys that order**, which is exactly what a GPU host does. | We batch, so we re-sort. Geometry goes out as one paint-ordered index buffer keyed `(draw-class, draw_prio)`; sprites are their own pass, keyed `layer*1000 + draw_prio` where layer is symbol(3)/sounding(4). |
+| sorting each tile's sprites is enough | **No.** Tiles are drawn one after another, so a per-tile sort still lets a low-priority symbol in one tile paint over a high-priority one in its neighbour — wrecks over soundings and lights at tile seams. | `Scene.quad_band_off` records where each `(layer, draw_prio)` band starts in the tile's quad buffer, and `gpu.recordTiles` walks the **bands outside the tile loop**. Paint order is then global across the view, at ~(non-empty bands × visible tiles) draw calls. |
 
 ## 3. Live-toggle strategy (how we satisfy acceptance criteria #2 and #3)
 

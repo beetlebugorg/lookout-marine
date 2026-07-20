@@ -540,6 +540,9 @@ pub const Gpu = struct {
         index_count: u32 = 0,
         qbuf: ?*cc.SDL_GPUBuffer = null,
         quad_count: u32 = 0,
+        /// Where each sprite paint band starts in qbuf (vertices). Lets the
+        /// renderer draw band-major across tiles — see recordTiles.
+        quad_band_off: [scene.SPRITE_BANDS + 1]u32 = @splat(0),
         pbuf: ?*cc.SDL_GPUBuffer = null, // area fill patterns (tiled atlas cells)
         pattern_count: u32 = 0,
     };
@@ -559,6 +562,7 @@ pub const Gpu = struct {
         var tb = TileBuffers{};
         if (s.quads.items.len > 0) tb.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads.items));
         tb.quad_count = @intCast(s.quads.items.len);
+        tb.quad_band_off = s.quad_band_off;
         if (s.pattern_verts.items.len > 0) tb.pbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.pattern_verts.items));
         tb.pattern_count = @intCast(s.pattern_verts.items.len);
         if (s.verts.items.len != 0 and s.indices.len != 0) {
@@ -625,19 +629,31 @@ pub const Gpu = struct {
                 cc.SDL_DrawGPUPrimitives(pass, t.bufs.pattern_count, 1, 0, 0);
             }
         }
-        // sprite symbols, per tile
+        // sprite symbols, in paint-order bands across all tiles
         if (self.sprite_tex != null and self.sprite_pipeline != null) {
             cc.SDL_BindGPUGraphicsPipeline(pass, self.sprite_pipeline);
             cc.SDL_SetGPUViewport(pass, &vp);
             const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
             cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
-            for (tiles) |t| {
-                if (t.bufs.quad_count == 0) continue;
-                const qb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.qbuf, .offset = 0 }};
-                cc.SDL_BindGPUVertexBuffers(pass, 0, &qb, 1);
-                var uu = t.uniform;
-                cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
-                cc.SDL_DrawGPUPrimitives(pass, t.bufs.quad_count, 1, 0, 0);
+            // Band-major, NOT tile-major. Each tile's quads are already sorted
+            // into paint order, but drawing tile-by-tile would still let a
+            // low-priority symbol in a later tile cover a high-priority one in
+            // an earlier tile — soundings and lights buried under a wreck from
+            // the tile next door. Walking the bands outside the tile loop makes
+            // paint order global across the view. Empty bands cost nothing, so
+            // this is ~(non-empty bands x visible tiles) draw calls.
+            for (0..scene.SPRITE_BANDS) |b| {
+                for (tiles) |t| {
+                    if (t.bufs.quad_count == 0) continue;
+                    const first = t.bufs.quad_band_off[b];
+                    const count = t.bufs.quad_band_off[b + 1] - first;
+                    if (count == 0) continue;
+                    const qb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.qbuf, .offset = 0 }};
+                    cc.SDL_BindGPUVertexBuffers(pass, 0, &qb, 1);
+                    var uu = t.uniform;
+                    cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+                    cc.SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
+                }
             }
         }
         // Decluttered labels last, on top of everything (S-52 paint order): ONE
