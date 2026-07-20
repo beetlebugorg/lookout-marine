@@ -63,28 +63,6 @@ fn scanPmtiles(alloc: std.mem.Allocator, dir: []const u8) ![][:0]const u8 {
     return list.toOwnedSlice(alloc);
 }
 
-/// Pick the ownership-partition sidecar for a chart library. A baked
-/// `partition.tpart` is authoritative and free to load, so it wins; our own
-/// `lookout.tpart` is the fallback we build and save when there is no bake
-/// sidecar to reuse. Returned path is leaked deliberately — it lives for the
-/// process, like the rest of the open options.
-fn partitionFor(alloc: std.mem.Allocator, path: [:0]const u8) ?[:0]const u8 {
-    // A bake sidecar sitting in the library dir itself (-o pointed here).
-    if (std.fs.path.joinZ(alloc, &.{ path, "partition.tpart" }) catch null) |p| {
-        if (fileExists(p)) return p;
-        alloc.free(p);
-    }
-    // The usual layout: we were handed <out>/tiles, the sidecar is in <out>.
-    if (std.fs.path.dirname(path)) |parent| {
-        if (std.fs.path.joinZ(alloc, &.{ parent, "partition.tpart" }) catch null) |p| {
-            if (fileExists(p)) return p;
-            alloc.free(p);
-        }
-    }
-    // No bake sidecar — build one ourselves and cache it beside the archives.
-    return std.fs.path.joinZ(alloc, &.{ path, "lookout.tpart" }) catch null;
-}
-
 // Open a single baked chart, or compose a directory of them.
 fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts: lk.OpenOptions) !*lk.Lookout {
     if (isDir(path)) {
@@ -94,17 +72,8 @@ fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts: lk.OpenOptions
             alloc.free(paths);
         }
         if (paths.len == 0) return error.NoBakedCharts;
-        // The ownership partition is slow to build (O(charts)) and `tile57 bake`
-        // ALREADY wrote one next to the archives it produced. Prefer that sidecar
-        // over rebuilding an identical copy under our own name: a bake writes
-        // <out>/partition.tpart with the archives under <out>/tiles, so when we
-        // are pointed at the tiles dir the baked partition is one level up.
-        // Falling back to our own lookout.tpart keeps a hand-assembled directory
-        // (no bake sidecar) working exactly as before.
-        var o = opts;
-        o.partition_path = partitionFor(alloc, path);
         std.debug.print("composing {d} charts from {s}\n", .{ paths.len, path });
-        return lk.Lookout.openCharts(alloc, paths, o);
+        return lk.Lookout.openCharts(alloc, paths, opts);
     }
     return lk.Lookout.open(alloc, path, opts);
 }

@@ -85,10 +85,7 @@ pub const OpenOptions = struct {
     /// palettes captured at build so scheme changes are instant. All three by
     /// default (day/dusk/night); index order defines the scheme<->buffer map.
     schemes: []const Scheme = &.{ cc.TILE57_SCHEME_DAY, cc.TILE57_SCHEME_DUSK, cc.TILE57_SCHEME_NIGHT },
-    /// optional ownership-partition sidecar. If it exists, compose loads it
-    /// (skips the O(charts) partition build); if not, lookout builds and SAVES it
     /// here for next time. Point this somewhere per chart-library.
-    partition_path: ?[:0]const u8 = null,
     /// EMBED into a host's native window (NSWindow / HWND / X11 …). lookout
     /// wraps it with SDL internally and renders/presents into it — the host uses
     /// its own toolkit (Swift/Cocoa, Win32, GTK) and never links SDL. Then just
@@ -140,7 +137,6 @@ pub const Lookout = struct {
     /// The authoritative S-52 display state. Edit via get/setMariner.
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
-    partition_path: ?[:0]const u8 = null,
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
@@ -196,7 +192,6 @@ pub const Lookout = struct {
         };
         self.n_schemes = @min(opts.schemes.len, scene.MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
-        self.partition_path = opts.partition_path;
         cc.tile57_mariner_defaults(&self.mariner);
         self.loadNodataColors();
         self.loadSpriteAtlas();
@@ -298,13 +293,11 @@ pub const Lookout = struct {
     fn composeWorker(self: *Lookout) void {
         var err: cc.tile57_error = undefined;
         var c: ?*cc.tile57_compose = null;
-        const had_partition = if (self.partition_path) |p| fileExists(p) else false;
-        const part: [*c]const u8 = if (self.partition_path) |p| p.ptr else null;
-        if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, part, &c, &err) == cc.TILE57_OK and c != null) {
+        // No partition path: the engine finds the sidecar its own bake wrote next
+        // to the archives, and builds one in memory if there is none. Where that
+        // file lives, and whether it is reusable, is the engine's business.
+        if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, &c, &err) == cc.TILE57_OK and c != null) {
             self.compose_result = c;
-            if (self.partition_path) |p| {
-                if (!had_partition) _ = cc.tile57_compose_save_partition(c.?, p.ptr, &err);
-            }
         } else {
             std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
         }
