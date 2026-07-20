@@ -77,15 +77,21 @@ pub const Color = extern struct { r: u8, g: u8, b: u8, a: u8 };
 // buffers, so global paint order survives batching. (plane, priority) is a
 // 2 x 31 space, small enough to bucket exhaustively.
 const PRIO_MAX: i32 = 30;
-pub const BANDS: usize = 2 * (PRIO_MAX + 1);
+pub const BANDS: usize = PRIO_MAX + 1;
 
 /// Bucket a feature into its paint band. Out-of-range values clamp rather than
 /// drop — a feature with an unexpected priority must still draw, even if it
 /// draws at the wrong height.
-pub fn bandOf(plane: i32, prio: i32) usize {
-    const p = std.math.clamp(plane, 0, 1);
-    const q = std.math.clamp(prio, 0, PRIO_MAX);
-    return @intCast(p * (PRIO_MAX + 1) + q);
+///
+/// DisplayPlane is deliberately NOT part of the key. S-52 §10.3.4.2 gives the
+/// OverRadar flag precedence over display priority only "when the RADAR overlay
+/// is present", and lookout draws no radar. Folding it in anyway lifts every
+/// OverRadar feature above higher-priority ones — a built-up area at priority 24
+/// climbing over a light sector arc at 24. The engine gates the same axis on its
+/// own radar_overlay setting; if lookout ever composites radar, this is where the
+/// plane goes back in.
+pub fn bandOf(prio: i32) usize {
+    return @intCast(std.math.clamp(prio, 0, PRIO_MAX));
 }
 
 // paint-order class == shader kind (they share the numbering, conveniently).
@@ -105,7 +111,6 @@ fn packFlags(display_category: u32, kind: u8, map_align: bool) u32 {
 
 const DrawItem = struct {
     class: u8,
-    display_plane: i32,
     display_priority: i32,
     seq: u32,
     vtx_first: u32,
@@ -363,11 +368,10 @@ pub const Scene = struct {
         });
     }
 
-    fn newItem(self: *Scene, class: u8, display_plane: i32, display_priority: i32, color: Color) !*DrawItem {
+    fn newItem(self: *Scene, class: u8, display_priority: i32, color: Color) !*DrawItem {
         const seq: u32 = @intCast(self.items.items.len);
         try self.items.append(self.a, .{
             .class = class,
-            .display_plane = display_plane,
             .display_priority = display_priority,
             .seq = seq,
             .vtx_first = @intCast(self.verts.items.len),
@@ -479,7 +483,6 @@ pub const Scene = struct {
         // priority 24) under a wreck symbol (12).
         std.mem.sort(DrawItem, self.items.items, {}, struct {
             fn lt(_: void, l: DrawItem, r: DrawItem) bool {
-                if (l.display_plane != r.display_plane) return l.display_plane < r.display_plane;
                 if (l.display_priority != r.display_priority) return l.display_priority < r.display_priority;
                 if (l.class != r.class) return l.class < r.class;
                 return l.seq < r.seq;
@@ -506,7 +509,7 @@ pub const Scene = struct {
         var band_idx: [BANDS]u32 = @splat(0);
         var band_area: [BANDS]u32 = @splat(0);
         for (self.items.items) |it| {
-            const b = bandOf(it.display_plane, it.display_priority);
+            const b = bandOf(it.display_priority);
             band_idx[b] += it.idx_count;
             if (it.class == CLASS_AREA) band_area[b] += it.idx_count;
         }
@@ -563,7 +566,7 @@ fn scaminCulled(s: *Scene, f: [*c]const cc.tile57_feature) bool {
 fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_color, even_odd: c_int) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_AREA, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(CLASS_AREA, f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const flags = packFlags(dc, CLASS_AREA, false);
     s.worldToScratch(rings) catch return;
@@ -613,7 +616,7 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
             v.wx = out.verts[@as(usize, @intCast(idx)) * 2];
             v.wy = out.verts[@as(usize, @intCast(idx)) * 2 + 1];
             s.pattern_verts.append(s.a, v) catch return;
-            s.pattern_bands.append(s.a, @intCast(bandOf(@as(i32, @intCast(f.*.display_plane)), f.*.display_priority))) catch return;
+            s.pattern_bands.append(s.a, @intCast(bandOf(f.*.display_priority))) catch return;
         }
     }
 }
@@ -621,7 +624,7 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
 fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_LINE, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(CLASS_LINE, f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const flags = packFlags(dc, CLASS_LINE, false);
     s.worldToScratch(lines) catch return;
@@ -635,7 +638,7 @@ fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile
     const sounding = clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS");
     const class: u8 = if (sounding) CLASS_SOUNDING else CLASS_SYMBOL;
     const kind: u8 = class;
-    const item = s.newItem(class, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(class, f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, kind, map_align);
@@ -653,7 +656,7 @@ fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57
     _ = halo_px;
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_TEXT, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(CLASS_TEXT, f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, CLASS_TEXT, map_align);
@@ -707,7 +710,7 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
     // renderer can interleave this pass with the geometry and pattern passes.
     // Soundings need no special layer here: the catalogue already gives them
     // priority 18, between a symbol at 12 and a light at 24.
-    s.quad_prios.append(s.a, @intCast(bandOf(@as(i32, @intCast(f.*.display_plane)), f.*.display_priority))) catch return;
+    s.quad_prios.append(s.a, @intCast(bandOf(f.*.display_priority))) catch return;
 }
 
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads
