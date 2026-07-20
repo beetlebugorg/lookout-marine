@@ -1,12 +1,14 @@
 #version 450
-// Area FILL PATTERN (S-52 AP(...)): tessellated polygon geometry in world space,
-// textured with a pattern cell tiled at a CONSTANT SCREEN SIZE. Unlike sprites
-// there is no anchor/local-px model — the triangles are the polygon itself; the
-// tiling is derived per fragment from screen position, so the pattern does not
-// swim when the camera pans or zooms between tile rebuilds.
-layout(location = 0) in vec2 a_world;  // web-mercator [0,1], camera-relative
-layout(location = 1) in vec4 a_cell;   // atlas cell rect (u0,v0,u1,v1), normalized
-layout(location = 2) in vec2 a_cellpx; // cell size in PHYSICAL px (density folded in)
+// Area FILL PATTERN (S-52 AP(...)): the tessellated polygon interior, in world
+// space, same tile57_gpu_vertex as chart.vert. The tiling is done per-fragment
+// (pattern.frag) so the cell keeps a constant screen size and, crucially, stays
+// ANCHORED TO THE CHART (world) under a pan instead of swimming with the screen.
+// This shader only projects + gates the interior; it forwards the world-anchor
+// and cell period the fragment needs.
+layout(location = 0) in vec2  a_world;
+layout(location = 1) in vec2  a_local;
+layout(location = 2) in float a_scamin;
+layout(location = 3) in uint  a_packed;
 
 layout(set = 1, binding = 0) uniform U {
     mat4  mvp;
@@ -14,16 +16,23 @@ layout(set = 1, binding = 0) uniform U {
     float size_scale;
     float current_scale;
     uint  cat_mask;
-    uint  kind_mask;
+    uint  _pad0;
     float rot_sin;
     float rot_cos;
+    vec4  color;
+    vec2  anchor_px;   // framebuffer-px position of the scene's world origin
+    vec2  cell_px;     // cell period in framebuffer px (constant screen size)
 } u;
 
-layout(location = 0) out vec4 v_cell;
-layout(location = 1) out vec2 v_cellpx;
+layout(location = 0) out vec2 v_anchor;
+layout(location = 1) out vec2 v_cell;
 
 void main() {
-    gl_Position = u.mvp * vec4(a_world, 0.0, 1.0);
-    v_cell = a_cell;
-    v_cellpx = a_cellpx * u.size_scale;
+    uint disp_cat = a_packed & 0xFFu;
+    vec4 clip = u.mvp * vec4(a_world, 0.0, 1.0);
+    bool vis = (u.cat_mask & (1u << disp_cat)) != 0u;
+    if (a_scamin > 0.0 && disp_cat != 0u && u.current_scale > a_scamin) vis = false;
+    gl_Position = vis ? clip : vec4(0.0, 0.0, 2.0, 1.0);
+    v_anchor = u.anchor_px;
+    v_cell = u.cell_px;
 }

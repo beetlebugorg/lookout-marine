@@ -4,10 +4,6 @@ const std = @import("std");
 // command line: `zig build -Dtile57=/path/to/checkout`.
 const DEFAULT_TILE57 = "/home/claude/Projects/tile57-main";
 
-const tess_files = [_][]const u8{
-    "bucketalloc.c", "dict.c", "geom.c", "mesh.c", "priorityq.c", "sweep.c", "tess.c",
-};
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -23,14 +19,10 @@ pub fn build(b: *std.Build) void {
         fn apply(self: @This(), mod: *std.Build.Module) void {
             const bb = self.b;
             mod.addIncludePath(.{ .cwd_relative = self.tile57_inc });
-            mod.addIncludePath(bb.path("vendor/libtess2/Include"));
-            mod.addIncludePath(bb.path("vendor/libtess2/Source"));
             mod.addIncludePath(bb.path("vendor/stb"));
-            mod.addCSourceFiles(.{
-                .root = bb.path("vendor/libtess2/Source"),
-                .files = &tess_files,
-                .flags = &.{ "-O2", "-std=gnu99" },
-            });
+            // Tessellation, sprite/SDF quad building and paint order all moved
+            // into tile57 (the GPU-scene ABI hands back draw-ready buffers), so
+            // the host no longer vendors libtess2. stb stays for atlas PNG decode.
             mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{"-O2"} });
             mod.addObjectFile(.{ .cwd_relative = self.tile57_lib });
             mod.linkSystemLibrary("SDL3", .{});
