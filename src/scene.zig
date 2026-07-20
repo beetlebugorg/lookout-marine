@@ -62,26 +62,37 @@ pub const Vertex = extern struct {
 };
 pub const Color = extern struct { r: u8, g: u8, b: u8, a: u8 };
 
-// Sprite paint bands. The sprite key is layer*1000 + display_priority, where layer is
-// tile57's OpLayer (only symbol=3 and sounding=4 reach the sprite pass) and
-// display_priority is the S-101 catalogue DrawingPriority, 0..30. That is a small
-// enough space to bucket exhaustively, which is what lets the renderer walk
-// bands across every visible tile instead of tile-by-tile.
-pub const SPRITE_LAYER_LO: i32 = 3; // OpLayer.symbol
-pub const SPRITE_LAYER_HI: i32 = 4; // OpLayer.sounding
+// PAINT BANDS.
+//
+// S-52 PresLib §10.3.4.1 orders the chart by DisplayPlane, then display
+// priority, then geometry class, then emission order — and the engine hands us
+// the stream ALREADY in that order. The problem is entirely ours: we split the
+// stream into four GPU buffers by draw type (indexed geometry, patterns,
+// sprites, labels) and used to draw each buffer whole. Batching by draw type
+// re-imposes class as the dominant key, which is exactly the inversion the
+// engine's own header warns about — a light sector arc (a stroke at priority
+// 24) sank under every wreck sprite (priority 12).
+//
+// The fix is to slice each buffer by band and walk the BANDS outside the
+// buffers, so global paint order survives batching. (plane, priority) is a
+// 2 x 31 space, small enough to bucket exhaustively.
 const PRIO_MAX: i32 = 30;
-pub const SPRITE_BANDS: usize = 2 * (PRIO_MAX + 1);
+pub const BANDS: usize = 2 * (PRIO_MAX + 1);
 
-/// Bucket a sprite key into its band. Out-of-range keys clamp to the ends
-/// rather than being dropped — a symbol with an unexpected priority must still
-/// draw, even if it draws at the wrong height.
-fn bandOf(key: i32) usize {
-    const layer = std.math.clamp(@divFloor(key, 1000), SPRITE_LAYER_LO, SPRITE_LAYER_HI);
-    const prio = std.math.clamp(@mod(key, 1000), 0, PRIO_MAX);
-    return @intCast((layer - SPRITE_LAYER_LO) * (PRIO_MAX + 1) + prio);
+/// Bucket a feature into its paint band. Out-of-range values clamp rather than
+/// drop — a feature with an unexpected priority must still draw, even if it
+/// draws at the wrong height.
+pub fn bandOf(plane: i32, prio: i32) usize {
+    const p = std.math.clamp(plane, 0, 1);
+    const q = std.math.clamp(prio, 0, PRIO_MAX);
+    return @intCast(p * (PRIO_MAX + 1) + q);
 }
 
-// paint-order class == shader kind (they share the numbering, conveniently)
+// paint-order class == shader kind (they share the numbering, conveniently).
+// Within a band these order area < line < symbol < sounding < text, the S-52
+// §10.3.4.1 tiebreak. Area-fill PATTERNS live in their own buffer and belong
+// between area and line, which is why the renderer draws each band as
+// areas -> patterns -> the rest -> sprites.
 const CLASS_AREA: u8 = 0;
 const CLASS_LINE: u8 = 1;
 const CLASS_SYMBOL: u8 = 2;
@@ -94,6 +105,7 @@ fn packFlags(display_category: u32, kind: u8, map_align: bool) u32 {
 
 const DrawItem = struct {
     class: u8,
+    display_plane: i32,
     display_priority: i32,
     seq: u32,
     vtx_first: u32,
@@ -139,13 +151,24 @@ pub const Scene = struct {
     /// `display_priority`; a host that re-buckets them into its own batches has to
     /// restore paint order itself, which is what finish() does with this.
     quad_prios: std.ArrayList(i32) = .empty,
+    /// One band index per PATTERN VERTEX. Patterns are their own pipeline, so
+    /// they need the same band slicing as everything else to stay between the
+    /// area fills and the line work of their band.
+    pattern_bands: std.ArrayList(u16) = .empty,
     /// Start of each paint band in `quads`, in VERTICES, so the renderer can
     /// feed one straight to SDL_DrawGPUPrimitives' first_vertex. Sorting quads
     /// within a tile is not enough on its own: tiles are drawn one after
     /// another, so without these the renderer cannot interleave bands ACROSS
     /// tiles and a low-priority symbol in a later tile paints over a
     /// high-priority one in an earlier tile. See gpu.zig recordTiles.
-    quad_band_off: [SPRITE_BANDS + 1]u32 = @splat(0),
+    quad_band_off: [BANDS + 1]u32 = @splat(0),
+    /// Index-buffer offsets per band, split at the area/non-area class boundary
+    /// so the pattern pipeline can be drawn between them. area_end is where the
+    /// band's CLASS_AREA indices stop and CLASS_LINE.. begin.
+    geom_band_off: [BANDS + 1]u32 = @splat(0),
+    geom_band_area_end: [BANDS]u32 = @splat(0),
+    /// Pattern-vertex offsets per band.
+    pattern_band_off: [BANDS + 1]u32 = @splat(0),
     /// Physical px per reference px (HiDPI density), folded into pattern cell
     /// sizes so screen-space tiling matches the framebuffer.
     density: f32 = 1.0,
@@ -180,6 +203,7 @@ pub const Scene = struct {
         self.text_quads.deinit(self.a);
         self.pattern_verts.deinit(self.a);
         self.quad_prios.deinit(self.a);
+        self.pattern_bands.deinit(self.a);
         if (self.tess) |t| cc.tessDeleteTess(t);
         if (self.indices.len != 0) self.a.free(self.indices);
         for (0..MAX_SCHEMES) |k| if (self.scheme_colors[k].len != 0) self.a.free(self.scheme_colors[k]);
@@ -339,10 +363,11 @@ pub const Scene = struct {
         });
     }
 
-    fn newItem(self: *Scene, class: u8, display_priority: i32, color: Color) !*DrawItem {
+    fn newItem(self: *Scene, class: u8, display_plane: i32, display_priority: i32, color: Color) !*DrawItem {
         const seq: u32 = @intCast(self.items.items.len);
         try self.items.append(self.a, .{
             .class = class,
+            .display_plane = display_plane,
             .display_priority = display_priority,
             .seq = seq,
             .vtx_first = @intCast(self.verts.items.len),
@@ -423,36 +448,75 @@ pub const Scene = struct {
         // Counting pass over the now-sorted keys -> exclusive prefix sum. Every
         // band gets an entry even when empty, so band b is always
         // [off[b], off[b+1]) and the renderer needs no lookup table.
-        var counts: [SPRITE_BANDS]u32 = @splat(0);
-        for (prios) |k| counts[bandOf(k)] += 1;
+        var counts: [BANDS]u32 = @splat(0);
+        for (prios) |k| counts[@intCast(std.math.clamp(k, 0, @as(i32, BANDS - 1)))] += 1;
         var acc: u32 = 0;
-        for (0..SPRITE_BANDS) |b| {
+        for (0..BANDS) |b| {
             self.quad_band_off[b] = acc * 6;
             acc += counts[b];
         }
-        self.quad_band_off[SPRITE_BANDS] = acc * 6;
+        self.quad_band_off[BANDS] = acc * 6;
+    }
+
+    /// Slice the pattern buffer by band. Patterns arrive in the engine's paint
+    /// order and are never reordered, so this is a counting pass only.
+    fn bandPatterns(self: *Scene) void {
+        var counts: [BANDS]u32 = @splat(0);
+        for (self.pattern_bands.items) |b| counts[@min(b, BANDS - 1)] += 1;
+        var acc: u32 = 0;
+        for (0..BANDS) |b| {
+            self.pattern_band_off[b] = acc;
+            acc += counts[b];
+        }
+        self.pattern_band_off[BANDS] = acc;
     }
 
     pub fn finish(self: *Scene, n_schemes: usize) !void {
         self.n_schemes = n_schemes;
-        // stable sort by (class-major, display_priority, seq) — mirror pixel.zig:549.
+        // S-52 PresLib §10.3.4.1: DisplayPlane, then display priority, then
+        // geometry class, then emission order. Class is the TIEBREAK — sorting
+        // class-major here is what used to sink a light sector arc (a line at
+        // priority 24) under a wreck symbol (12).
         std.mem.sort(DrawItem, self.items.items, {}, struct {
             fn lt(_: void, l: DrawItem, r: DrawItem) bool {
-                if (l.class != r.class) return l.class < r.class;
+                if (l.display_plane != r.display_plane) return l.display_plane < r.display_plane;
                 if (l.display_priority != r.display_priority) return l.display_priority < r.display_priority;
+                if (l.class != r.class) return l.class < r.class;
                 return l.seq < r.seq;
             }
         }.lt);
         // Sprites bypass DrawItem (they are their own textured pass), so restore
-        // S-52 paint order here: stable-sort the quads by the key each was
-        // tagged with. Without this a low-priority symbol drawn later in the
-        // walk covers a high-priority one — lights under wrecks.
+        // paint order here: stable-sort the quads by the band each was tagged
+        // with. Without this a low-priority symbol drawn later in the walk
+        // covers a high-priority one — lights under wrecks.
         try self.sortQuadsByPrio();
+        self.bandPatterns();
         // final index buffer: concatenate each item's temp index range in order.
         var total_idx: usize = 0;
         for (self.items.items) |it| total_idx += it.idx_count;
         const idx = try self.a.alloc(u32, total_idx);
         var w: usize = 0;
+        // The items are in paint order, so walking them once yields each band's
+        // index range directly. area_end additionally marks where the band's
+        // CLASS_AREA indices stop, so the renderer can slot the pattern pipeline
+        // in between (S-52 class order is area < pattern < line).
+        // Count each band's indices, and how many of them are CLASS_AREA. The
+        // items are sorted class-ascending within a band, so a band's area
+        // indices are contiguous at its start and area_end is just start+count.
+        var band_idx: [BANDS]u32 = @splat(0);
+        var band_area: [BANDS]u32 = @splat(0);
+        for (self.items.items) |it| {
+            const b = bandOf(it.display_plane, it.display_priority);
+            band_idx[b] += it.idx_count;
+            if (it.class == CLASS_AREA) band_area[b] += it.idx_count;
+        }
+        var acc: u32 = 0;
+        for (0..BANDS) |b| {
+            self.geom_band_off[b] = acc;
+            self.geom_band_area_end[b] = acc + band_area[b];
+            acc += band_idx[b];
+        }
+        self.geom_band_off[BANDS] = acc;
         for (self.items.items) |it| {
             @memcpy(idx[w .. w + it.idx_count], self.idx_tmp.items[it.idx_first .. it.idx_first + it.idx_count]);
             w += it.idx_count;
@@ -499,7 +563,7 @@ fn scaminCulled(s: *Scene, f: [*c]const cc.tile57_feature) bool {
 fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_color, even_odd: c_int) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_AREA, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(CLASS_AREA, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const flags = packFlags(dc, CLASS_AREA, false);
     s.worldToScratch(rings) catch return;
@@ -549,6 +613,7 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
             v.wx = out.verts[@as(usize, @intCast(idx)) * 2];
             v.wy = out.verts[@as(usize, @intCast(idx)) * 2 + 1];
             s.pattern_verts.append(s.a, v) catch return;
+            s.pattern_bands.append(s.a, @intCast(bandOf(@as(i32, @intCast(f.*.display_plane)), f.*.display_priority))) catch return;
         }
     }
 }
@@ -556,7 +621,7 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
 fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_LINE, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(CLASS_LINE, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const flags = packFlags(dc, CLASS_LINE, false);
     s.worldToScratch(lines) catch return;
@@ -570,7 +635,7 @@ fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile
     const sounding = clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS");
     const class: u8 = if (sounding) CLASS_SOUNDING else CLASS_SYMBOL;
     const kind: u8 = class;
-    const item = s.newItem(class, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(class, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, kind, map_align);
@@ -588,7 +653,7 @@ fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57
     _ = halo_px;
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_TEXT, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(CLASS_TEXT, @as(i32, @intCast(f.*.display_plane)), f.*.display_priority, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, CLASS_TEXT, map_align);
@@ -638,13 +703,11 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
         };
     }
     for ([_]usize{ 0, 1, 2, 0, 2, 3 }) |idx| s.quads.append(s.a, q[idx]) catch return;
-    // Key on (layer, display_priority) exactly like tile57 does. The engine sorts by
-    // OpLayer first — symbol(3) before sounding(4) — and by display_priority only
-    // within a layer, so a beacon at prio 24 legitimately precedes a SOUNDG at
-    // prio 18. lookout merges both layers into this one quad buffer, so sorting
-    // on display_priority alone would flatten them and undo the engine's order.
-    const layer: i32 = if (clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS")) SPRITE_LAYER_HI else SPRITE_LAYER_LO;
-    s.quad_prios.append(s.a, layer * 1000 + f.*.display_priority) catch return;
+    // Band on (plane, priority), the same key every other buffer uses, so the
+    // renderer can interleave this pass with the geometry and pattern passes.
+    // Soundings need no special layer here: the catalogue already gives them
+    // priority 18, between a symbol at 12 and a light at 24.
+    s.quad_prios.append(s.a, @intCast(bandOf(@as(i32, @intCast(f.*.display_plane)), f.*.display_priority))) catch return;
 }
 
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads

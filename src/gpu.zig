@@ -542,7 +542,10 @@ pub const Gpu = struct {
         quad_count: u32 = 0,
         /// Where each sprite paint band starts in qbuf (vertices). Lets the
         /// renderer draw band-major across tiles — see recordTiles.
-        quad_band_off: [scene.SPRITE_BANDS + 1]u32 = @splat(0),
+        quad_band_off: [scene.BANDS + 1]u32 = @splat(0),
+        geom_band_off: [scene.BANDS + 1]u32 = @splat(0),
+        geom_band_area_end: [scene.BANDS]u32 = @splat(0),
+        pattern_band_off: [scene.BANDS + 1]u32 = @splat(0),
         pbuf: ?*cc.SDL_GPUBuffer = null, // area fill patterns (tiled atlas cells)
         pattern_count: u32 = 0,
     };
@@ -563,6 +566,9 @@ pub const Gpu = struct {
         if (s.quads.items.len > 0) tb.qbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads.items));
         tb.quad_count = @intCast(s.quads.items.len);
         tb.quad_band_off = s.quad_band_off;
+        tb.geom_band_off = s.geom_band_off;
+        tb.geom_band_area_end = s.geom_band_area_end;
+        tb.pattern_band_off = s.pattern_band_off;
         if (s.pattern_verts.items.len > 0) tb.pbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.pattern_verts.items));
         tb.pattern_count = @intCast(s.pattern_verts.items.len);
         if (s.verts.items.len != 0 and s.indices.len != 0) {
@@ -600,54 +606,92 @@ pub const Gpu = struct {
         } else cti.store_op = cc.SDL_GPU_STOREOP_STORE;
         const pass = cc.SDL_BeginGPURenderPass(cmd, &cti, 1, null);
         const vp = cc.SDL_GPUViewport{ .x = 0, .y = 0, .w = @floatFromInt(self.width), .h = @floatFromInt(self.height), .min_depth = 0, .max_depth = 1 };
-        // flat geometry (areas + lines), per tile
-        cc.SDL_BindGPUGraphicsPipeline(pass, self.pipeline);
-        cc.SDL_SetGPUViewport(pass, &vp);
-        for (tiles) |t| {
-            if (t.bufs.index_count == 0 or t.bufs.cbuf[scheme_k] == null) continue;
-            const binds = [_]cc.SDL_GPUBufferBinding{ .{ .buffer = t.bufs.vbuf, .offset = 0 }, .{ .buffer = t.bufs.cbuf[scheme_k], .offset = 0 } };
-            cc.SDL_BindGPUVertexBuffers(pass, 0, &binds, 2);
-            const ib = cc.SDL_GPUBufferBinding{ .buffer = t.bufs.ibuf, .offset = 0 };
-            cc.SDL_BindGPUIndexBuffer(pass, &ib, cc.SDL_GPU_INDEXELEMENTSIZE_32BIT);
-            var uu = t.uniform;
-            cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
-            cc.SDL_DrawGPUIndexedPrimitives(pass, t.bufs.index_count, 1, 0, 0, 0);
-        }
-        // area fill patterns, per tile — same atlas as the sprites, tiled in
-        // screen space by the fragment shader
-        if (self.sprite_tex != null and self.pattern_pipeline != null) {
-            cc.SDL_BindGPUGraphicsPipeline(pass, self.pattern_pipeline);
-            cc.SDL_SetGPUViewport(pass, &vp);
-            const psamp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
-            cc.SDL_BindGPUFragmentSamplers(pass, 0, &psamp, 1);
-            for (tiles) |t| {
-                if (t.bufs.pattern_count == 0) continue;
-                const pb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.pbuf, .offset = 0 }};
-                cc.SDL_BindGPUVertexBuffers(pass, 0, &pb, 1);
-                var uu = t.uniform;
-                cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
-                cc.SDL_DrawGPUPrimitives(pass, t.bufs.pattern_count, 1, 0, 0);
+        // PAINT ORDER ACROSS PIPELINES.
+        //
+        // The engine hands us the scene already in S-52 order (PresLib
+        // §10.3.4.1: DisplayPlane, display priority, geometry class, emission
+        // order). We split it into three GPU buffers by draw type, and drawing
+        // those buffers whole — all geometry, then all patterns, then all
+        // sprites — silently re-imposes draw type as the dominant key. That is
+        // how a light sector arc (a stroke at priority 24) ended up under every
+        // wreck sprite (priority 12).
+        //
+        // So walk the BANDS on the outside and the buffers within, which is the
+        // only arrangement that keeps priority dominant while still batching.
+        // Within one band the class order is areas -> patterns -> lines and the
+        // rest -> sprites; geom_band_area_end is the split point in the index
+        // buffer that lets the pattern pipeline sit between the first two.
+        //
+        // Cost is ~(non-empty bands x visible tiles) draws per pipeline. Empty
+        // bands are skipped, and most of the 62 are empty on any real chart.
+        const have_pat = self.sprite_tex != null and self.pattern_pipeline != null;
+        const have_spr = self.sprite_tex != null and self.sprite_pipeline != null;
+        const atlas_samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
+
+        for (0..scene.BANDS) |b| {
+            // 1 + 3. indexed geometry: areas first, then everything else in the
+            // band, with the patterns drawn between the two.
+            for (0..2) |half| {
+                var bound = false;
+                for (tiles) |t| {
+                    if (t.bufs.index_count == 0 or t.bufs.cbuf[scheme_k] == null) continue;
+                    const bstart = t.bufs.geom_band_off[b];
+                    const amid = t.bufs.geom_band_area_end[b];
+                    const bend = t.bufs.geom_band_off[b + 1];
+                    const first = if (half == 0) bstart else amid;
+                    const last = if (half == 0) amid else bend;
+                    if (last <= first) continue;
+                    if (!bound) {
+                        cc.SDL_BindGPUGraphicsPipeline(pass, self.pipeline);
+                        cc.SDL_SetGPUViewport(pass, &vp);
+                        bound = true;
+                    }
+                    const binds = [_]cc.SDL_GPUBufferBinding{ .{ .buffer = t.bufs.vbuf, .offset = 0 }, .{ .buffer = t.bufs.cbuf[scheme_k], .offset = 0 } };
+                    cc.SDL_BindGPUVertexBuffers(pass, 0, &binds, 2);
+                    const ib = cc.SDL_GPUBufferBinding{ .buffer = t.bufs.ibuf, .offset = 0 };
+                    cc.SDL_BindGPUIndexBuffer(pass, &ib, cc.SDL_GPU_INDEXELEMENTSIZE_32BIT);
+                    var uu = t.uniform;
+                    cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+                    cc.SDL_DrawGPUIndexedPrimitives(pass, last - first, 1, first, 0, 0);
+                }
+                // 2. area fill patterns — same atlas as the sprites, tiled in
+                // screen space by the fragment shader. S-52 puts them above the
+                // area fills and below the line work of the same priority.
+                if (half == 0 and have_pat) {
+                    var pbound = false;
+                    for (tiles) |t| {
+                        if (t.bufs.pattern_count == 0) continue;
+                        const first = t.bufs.pattern_band_off[b];
+                        const count = t.bufs.pattern_band_off[b + 1] - first;
+                        if (count == 0) continue;
+                        if (!pbound) {
+                            cc.SDL_BindGPUGraphicsPipeline(pass, self.pattern_pipeline);
+                            cc.SDL_SetGPUViewport(pass, &vp);
+                            cc.SDL_BindGPUFragmentSamplers(pass, 0, &atlas_samp, 1);
+                            pbound = true;
+                        }
+                        const pb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.pbuf, .offset = 0 }};
+                        cc.SDL_BindGPUVertexBuffers(pass, 0, &pb, 1);
+                        var uu = t.uniform;
+                        cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+                        cc.SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
+                    }
+                }
             }
-        }
-        // sprite symbols, in paint-order bands across all tiles
-        if (self.sprite_tex != null and self.sprite_pipeline != null) {
-            cc.SDL_BindGPUGraphicsPipeline(pass, self.sprite_pipeline);
-            cc.SDL_SetGPUViewport(pass, &vp);
-            const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
-            cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
-            // Band-major, NOT tile-major. Each tile's quads are already sorted
-            // into paint order, but drawing tile-by-tile would still let a
-            // low-priority symbol in a later tile cover a high-priority one in
-            // an earlier tile — soundings and lights buried under a wreck from
-            // the tile next door. Walking the bands outside the tile loop makes
-            // paint order global across the view. Empty bands cost nothing, so
-            // this is ~(non-empty bands x visible tiles) draw calls.
-            for (0..scene.SPRITE_BANDS) |b| {
+            // 4. sprite symbols (point class) close the band.
+            if (have_spr) {
+                var sbound = false;
                 for (tiles) |t| {
                     if (t.bufs.quad_count == 0) continue;
                     const first = t.bufs.quad_band_off[b];
                     const count = t.bufs.quad_band_off[b + 1] - first;
                     if (count == 0) continue;
+                    if (!sbound) {
+                        cc.SDL_BindGPUGraphicsPipeline(pass, self.sprite_pipeline);
+                        cc.SDL_SetGPUViewport(pass, &vp);
+                        cc.SDL_BindGPUFragmentSamplers(pass, 0, &atlas_samp, 1);
+                        sbound = true;
+                    }
                     const qb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = t.bufs.qbuf, .offset = 0 }};
                     cc.SDL_BindGPUVertexBuffers(pass, 0, &qb, 1);
                     var uu = t.uniform;
@@ -768,8 +812,8 @@ pub const Gpu = struct {
             cc.SDL_SetGPUViewport(pass, &vp);
             const qb = [_]cc.SDL_GPUBufferBinding{.{ .buffer = self.qbuf, .offset = 0 }};
             cc.SDL_BindGPUVertexBuffers(pass, 0, &qb, 1);
-            const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
-            cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
+            const atlas_samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = self.sprite_tex, .sampler = self.sampler }};
+            cc.SDL_BindGPUFragmentSamplers(pass, 0, &atlas_samp, 1);
             var uu = u;
             cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
             cc.SDL_DrawGPUPrimitives(pass, self.quad_count, 1, 0, 0);
