@@ -323,6 +323,11 @@ pub const Lookout = struct {
             self.updateZoomLimits(); // refresh the zoom band; DON'T touch the view
             std.debug.print("composed {d} charts\n", .{self.charts.items.len});
         }
+        // The loader animated self.g.clear to a dark pulse (see render()); now that
+        // we're drawing the chart again, re-derive the live state so the clear goes
+        // back to the scheme's NODATA. Without this the composed view keeps the last
+        // dark pulse colour as its background.
+        self.deriveLive();
     }
 
     // No zooming out below the coarsest band (bounds tessellation); allow zoom-in

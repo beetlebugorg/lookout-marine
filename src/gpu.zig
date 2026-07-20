@@ -80,12 +80,6 @@ pub const Gpu = struct {
 
     /// background = S-52 NODATA for the active palette (set by Lookout).
     clear: cc.SDL_FColor = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
-    /// A full-screen triangle (NDC corners in the `world` slot) used to PAINT the
-    /// background in `clear` through the flat pipeline, rather than trust the
-    /// render-pass load-op clear. On Metal the MSAA resolve of un-drawn
-    /// (clear-only) samples came out wrong — the drawn geometry resolved fine, so
-    /// we route the background through that same, proven path. See recordDraws.
-    bg_vbuf: ?*cc.SDL_GPUBuffer = null,
 
     // The current draw-ready scene from tile57 (one whole-view GPU scene:
     // triangles + sprite/SDF quads + pattern cells, all range-sorted in paint
@@ -162,17 +156,6 @@ pub const Gpu = struct {
             .height = height,
             .pixel_density = pixel_density,
         };
-
-        // Full-screen background triangle: NDC corners in the `world` slot, no
-        // screen offset, base category, no SCAMIN. Drawn first each frame with an
-        // identity MVP so the whole target is painted in `clear` via the flat
-        // pipeline (see the bg_vbuf field / recordDraws).
-        const bg_verts = [_]cc.tile57_gpu_vertex{
-            .{ .x = -1, .y = -1, .ox = 0, .oy = 0, .scamin = 0, .disp_cat = 0, .map_align = 0, ._pad = .{ 0, 0 } },
-            .{ .x = 3, .y = -1, .ox = 0, .oy = 0, .scamin = 0, .disp_cat = 0, .map_align = 0, ._pad = .{ 0, 0 } },
-            .{ .x = -1, .y = 3, .ox = 0, .oy = 0, .scamin = 0, .disp_cat = 0, .map_align = 0, ._pad = .{ 0, 0 } },
-        };
-        g.bg_vbuf = g.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(&bg_verts)) catch null;
 
         if (window == null) {
             try g.ensureOffscreenTargets(); // headless: full readback (+snapshot)
@@ -637,26 +620,6 @@ pub const Gpu = struct {
         const vp = cc.SDL_GPUViewport{ .x = 0, .y = 0, .w = @floatFromInt(self.width), .h = @floatFromInt(self.height), .min_depth = 0, .max_depth = 1 };
         cc.SDL_SetGPUViewport(pass, &vp);
 
-        // Paint the background in `clear` through the flat pipeline FIRST, so the
-        // uncovered area is drawn geometry (which resolves correctly on every
-        // backend) rather than relying on the load-op clear + MSAA resolve, which
-        // came out wrong on Metal (NOTES §6: windowed MSAA verified on lavapipe
-        // only). Identity MVP + NDC corners => full-screen; local=0, base cat, no
-        // SCAMIN => always drawn. Everything below paints over it in paint order.
-        if (self.bg_vbuf) |bgb| {
-            var bu = std.mem.zeroes(Uniforms);
-            bu.mvp = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
-            bu.size_scale = 1;
-            bu.cat_mask = 0xFFFFFFFF;
-            bu.rot_cos = 1;
-            bu.color = .{ self.clear.r, self.clear.g, self.clear.b, self.clear.a };
-            const bgbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = bgb, .offset = 0 }};
-            cc.SDL_BindGPUGraphicsPipeline(pass, self.pipeline);
-            cc.SDL_BindGPUVertexBuffers(pass, 0, &bgbind, 1);
-            cc.SDL_PushGPUVertexUniformData(cmd, 0, &bu, @sizeOf(Uniforms));
-            cc.SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-        }
-
         const s = if (self.scene) |*sc| sc else return;
         const vbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
@@ -779,7 +742,6 @@ pub const Gpu = struct {
     pub fn deinit(self: *Gpu) void {
         const d = self.device;
         self.freeScene();
-        if (self.bg_vbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (self.msaa_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.resolve_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.download_tb) |t| cc.SDL_ReleaseGPUTransferBuffer(d, t);
