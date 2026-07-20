@@ -184,6 +184,20 @@ pub const Lookout = struct {
         self.n_schemes = @min(opts.schemes.len, MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
         cc.tile57_mariner_defaults(&self.mariner);
+        // Default to the look of a traditional paper chart, using only mariner
+        // settings. tile57's defaults are already half-way there (day scheme,
+        // four-shade graduated-blue water, symbolized boundaries, full point
+        // symbols — none of the "simplified" ECDIS symbology). What's left is
+        // the *content*: a paper chart has no display categories and no ECDIS
+        // overscale indicator, so —
+        self.mariner.display_other = true; // show seabed, cables, contour labels — the OTHER content paper always carries
+        self.mariner.soundings = 1; // paper is covered in spot soundings; show them regardless of category
+        self.mariner.show_overscale = false; // AP(OVERSC01) hatch is an ECDIS-only artifact, never on paper
+        // The ECDIS-only OTHER overlays (info callouts, meta boundaries, data
+        // quality) stay off in tile57's defaults, so display_other brings the
+        // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
+        // derives the live gates (cat_mask/sound_on/clear) from this before the
+        // first render.
         self.loadNodataColors();
         self.loadSpriteAtlas();
         self.loadGlyphAtlas();
