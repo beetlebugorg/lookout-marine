@@ -109,7 +109,23 @@ pub const Lookout = struct {
     cov_hw: f64 = 0, // half-width / half-height of coverage, world units
     cov_hh: f64 = 0,
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
-    last_change_ms: i64 = 0, // when the view last moved (debounce rebuilds during a gesture)
+    last_change_ms: i64 = 0, // when the view last moved
+
+    // Async rebuild: the engine call (portray + assemble) runs on a worker so a
+    // pan/zoom gesture never blocks; the current scene keeps drawing (the MVP just
+    // scales it — low-res but live) until the new one is uploaded, which lands
+    // mid-gesture. A PREDICTIVE prefetch warms the engine's per-tile cache for the
+    // zoom level we're heading toward, so crossing that boundary is a cache hit,
+    // not a fresh portray.
+    build_thread: ?std.Thread = null,
+    build_active: bool = false, // a worker is in flight (main-thread only)
+    build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    build_job: BuildJob = .{},
+    pending_cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene),
+    pending_ok: bool = false,
+    last_zoom: f64 = -1, // for zoom-velocity prediction
+    last_zoom_ms: i64 = 0,
+    prefetched_level: i32 = -1, // the round-zoom level last prefetched (fire once per approach)
     cam: camera.Camera,
     schemes: [MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
@@ -326,6 +342,7 @@ pub const Lookout = struct {
 
     pub fn close(self: *Lookout) void {
         self.pollCompose(true); // finish any in-flight partition build first
+        self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
         if (self.sprite_atlas) |*sa| sa.deinit();
         if (self.glyph_atlas) |*ga| ga.deinit();
         self.g.deinit();
@@ -455,7 +472,8 @@ pub const Lookout = struct {
     pub fn setMariner(self: *Lookout, m: Mariner) void {
         // A scheme change or any geometry-affecting field needs a fresh scene;
         // category / text / sounding / size changes apply live (see deriveLive).
-        if (self.mariner.scheme != m.scheme or marinerNeedsRebuild(self.mariner, m)) self.markDirty();
+        // `dirty` forces the rebuild even though the view didn't move.
+        if (self.mariner.scheme != m.scheme or marinerNeedsRebuild(self.mariner, m)) self.dirty = true;
         self.mariner = m;
         self.deriveLive();
     }
@@ -513,39 +531,150 @@ pub const Lookout = struct {
             @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
     }
 
-    // Portray the current (overscanned) view into a draw-ready GPU scene and
-    // upload it. The engine owns paint order, tessellation, sprite/SDF quads and
-    // declutter; the host only uploads and draws. Categories/text/soundings are
-    // emitted permissively and gated live, so those toggles never rebuild.
-    fn buildGpuScene(self: *Lookout) void {
-        const z = self.buildZoom();
-        const ll = camera.worldToLonLat(self.cam.center);
+    /// The immutable inputs a build needs, captured up front so a worker never
+    /// races the live camera / mariner.
+    pub const BuildJob = struct {
+        origin: camera.Vec2 = .{ .x = 0, .y = 0 },
+        zoom: f64 = 0,
+        ow: u32 = 0,
+        oh: u32 = 0,
+        mariner: cc.tile57_mariner = std.mem.zeroes(cc.tile57_mariner),
+        prefetch: bool = false, // warm the engine's tile cache only; don't upload/swap
+    };
+
+    fn jobFor(self: *Lookout, origin: camera.Vec2, zoom: f64, prefetch: bool) BuildJob {
         const lw, const lh = self.logicalSize();
-        const ow: u32 = @intFromFloat(@max(1.0, lw * OVERSCAN));
-        const oh: u32 = @intFromFloat(@max(1.0, lh * OVERSCAN));
         var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
         m0.size_scale = self.render_size_scale;
         m0.device_scale = 1.0; // camera is in LOGICAL px; density lives in the projection
-        var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
+        return .{
+            .origin = origin,
+            .zoom = zoom,
+            .ow = @intFromFloat(@max(1.0, lw * OVERSCAN)),
+            .oh = @intFromFloat(@max(1.0, lh * OVERSCAN)),
+            .mariner = m0,
+            .prefetch = prefetch,
+        };
+    }
+
+    // The pure engine call: portray the job's view into a draw-ready scene. No
+    // `self` mutation and no GPU — safe on a worker thread. A library (many
+    // cells) goes through the compositor so seams stitch; a single chart to its
+    // own archive.
+    fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
+        const ll = camera.worldToLonLat(job.origin);
+        var m0 = job.mariner;
         var err: cc.tile57_error = undefined;
-        // A library (many cells) portrays through the compositor so seams stitch
-        // across cells; a single chart goes straight to its own archive.
         const st = if (self.compose) |c|
-            cc.tile57_compose_gpu_scene(c, ll.x, ll.y, z, ow, oh, &m0, &cs, &err)
+            cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, out, &err)
         else
-            cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, z, ow, oh, &m0, &cs, &err);
-        if (st != cc.TILE57_OK) return; // keep the previous scene rather than blank out
-        self.g.uploadGpuScene(self.alloc, &cs) catch {};
-        cc.tile57_gpu_scene_free(&cs);
-        self.recordCoverage(self.cam.center, z, @floatFromInt(ow), @floatFromInt(oh));
+            cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, out, &err);
+        return st == cc.TILE57_OK;
+    }
+
+    // Adopt a built scene on the MAIN thread (only place SDL_GPU is touched): a
+    // prefetch just warms the cache (free it); a real rebuild uploads + records
+    // coverage. Frees the engine scene either way.
+    fn applyJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) void {
+        defer cc.tile57_gpu_scene_free(cs);
+        if (!ok or job.prefetch) return;
+        self.g.uploadGpuScene(self.alloc, cs) catch {};
+        self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
         self.built = true;
         self.dirty = false;
+    }
+
+    // Synchronous build (snapshots, and the very first frame so there is
+    // something to draw immediately).
+    fn buildGpuScene(self: *Lookout) void {
+        const job = self.jobFor(self.cam.center, self.buildZoom(), false);
+        var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
+        const ok = self.runJob(job, &cs);
+        self.applyJob(job, &cs, ok);
     }
 
     /// Force a build now (snapshots have no frame loop).
     pub fn build(self: *Lookout) !void {
         self.pollCompose(true);
         self.buildGpuScene();
+    }
+
+    // ---- async build --------------------------------------------------------
+    fn buildWorker(self: *Lookout) void {
+        var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
+        self.pending_ok = self.runJob(self.build_job, &cs);
+        self.pending_cs = cs;
+        self.build_done.store(true, .release); // publishes pending_* to the main thread
+    }
+
+    fn spawnBuild(self: *Lookout, job: BuildJob) void {
+        self.build_job = job;
+        self.build_active = true;
+        self.build_done.store(false, .release);
+        self.build_thread = std.Thread.spawn(.{}, buildWorker, .{self}) catch {
+            // No thread: fall back to a blocking build so we never stall forever.
+            self.build_active = false;
+            var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
+            const ok = self.runJob(job, &cs);
+            self.applyJob(job, &cs, ok);
+            return;
+        };
+    }
+
+    // Advance the async build (main thread). Adopts a finished worker's scene.
+    fn pollBuild(self: *Lookout) void {
+        if (!self.build_active or !self.build_done.load(.acquire)) return;
+        if (self.build_thread) |t| {
+            t.join();
+            self.build_thread = null;
+        }
+        self.applyJob(self.build_job, &self.pending_cs, self.pending_ok);
+        self.build_active = false;
+    }
+
+    fn joinBuild(self: *Lookout) void {
+        if (self.build_thread) |t| {
+            t.join();
+            self.build_thread = null;
+            if (self.pending_ok) cc.tile57_gpu_scene_free(&self.pending_cs);
+        }
+        self.build_active = false;
+    }
+
+    // Kick off whatever build the current view needs, async. A geometry-affecting
+    // change (`dirty`) or a coverage-exit rebuilds the current view; otherwise, if
+    // a zoom is heading toward a level boundary, PREFETCH that level so the
+    // crossing is a cache hit.
+    fn tickBuild(self: *Lookout) void {
+        self.pollBuild();
+        if (self.build_active) return;
+        if (self.dirty or self.needsRebuild()) {
+            self.spawnBuild(self.jobFor(self.cam.center, self.buildZoom(), false));
+        } else if (self.predictPrefetchLevel()) |lvl| {
+            if (lvl != self.prefetched_level) {
+                self.prefetched_level = lvl;
+                self.spawnBuild(self.jobFor(self.cam.center, @floatFromInt(lvl), true));
+            }
+        }
+    }
+
+    // Zoom-velocity heuristic: if zooming and within ~0.35 of the boundary where
+    // round(zoom) changes, return the level being approached (clamped to what the
+    // engine serves) so it can be prefetched. Null when not zooming toward one.
+    fn predictPrefetchLevel(self: *Lookout) ?i32 {
+        const now: i64 = @intCast(cc.SDL_GetTicks());
+        const dz = self.cam.zoom - self.last_zoom;
+        const recent = self.last_zoom >= 0 and now - self.last_zoom_ms < 250;
+        if (!recent or @abs(dz) < 0.01) return null;
+        // The next integer level in the zoom direction, and how far the boundary
+        // (X.5) is. round() flips at .5, so distance to the flip:
+        const bz = self.buildZoom();
+        const frac = bz - @floor(bz);
+        const to_boundary = if (dz > 0) 0.5 - frac else frac - 0.5;
+        if (to_boundary <= 0 or to_boundary > 0.35) return null;
+        const next: f64 = @round(bz) + (if (dz > 0) @as(f64, 1) else -1);
+        const lvl = std.math.clamp(next, self.cam.min_zoom, self.engine_max_zoom);
+        return @intFromFloat(lvl);
     }
 
     fn ensureBuilt(self: *Lookout) void {
@@ -583,18 +712,24 @@ pub const Lookout = struct {
                 return self.g.renderWindow(self.uniforms(), false, false);
             }
         }
-        self.ensureBuilt();
+        if (@abs(self.cam.zoom - self.last_zoom) > 1e-6) self.last_zoom_ms = @intCast(cc.SDL_GetTicks());
+        if (!self.built) {
+            self.buildGpuScene(); // first frame: synchronous, so there is something to draw now
+        } else {
+            self.tickBuild(); // subsequent rebuilds run on the worker; prefetch warms the next level
+        }
+        self.last_zoom = self.cam.zoom;
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
         self.view_dirty = false;
         return ok;
     }
 
-    /// True while the view needs another frame (state changed / still loading).
+    /// True while the view needs another frame (state changed, building, loading).
     pub fn needsRedraw(self: *Lookout) bool {
-        return self.loading or self.view_dirty or !self.built or self.needsRebuild();
+        return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {
-        return self.loading;
+        return self.loading or self.build_active;
     }
 
     /// Render offscreen and write a PNG.
@@ -635,7 +770,7 @@ pub const Lookout = struct {
             idx = i;
         };
         self.mariner.scheme = order[(idx + 1) % order.len];
-        self.markDirty(); // a new palette is a fresh scene (colours are per-range)
+        self.dirty = true; // a new palette is a fresh scene (colours are per-range)
         self.deriveLive();
     }
     pub fn toggleText(self: *Lookout) void {
@@ -655,10 +790,12 @@ pub const Lookout = struct {
     }
     pub fn nudgeSafetyContour(self: *Lookout, delta: f64) void {
         self.mariner.safety_contour = std.math.clamp(self.mariner.safety_contour + delta, 0, 200);
-        self.markDirty(); // geometry-affecting -> fresh scene next render
+        self.dirty = true; // geometry-affecting -> fresh scene
+        self.markDirty();
     }
     pub fn adjustSize(self: *Lookout, factor: f32) void {
         self.render_size_scale *= factor;
+        self.dirty = true; // sizes are baked into the geometry
         self.markDirty();
     }
 };
