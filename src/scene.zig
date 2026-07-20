@@ -7,8 +7,9 @@
 //! color schemes, so we tessellate on the first (day) pass and only re-collect
 //! per-draw-call colors on later passes; symbols/soundings/text arrive as
 //! pre-tessellated outline rings (draw_sprite/draw_pattern/draw_text_str left
-//! NULL); soundings ride draw_symbol with cls=="SOUNDG"; the stream is NOT paint
-//! sorted, so we sort by (class-major, display_priority, seq) mirroring pixel.zig.
+//! NULL); soundings ride draw_symbol with cls=="SOUNDG". The stream arrives in
+//! S-52 paint order and each call carries the engine's `paint_key`; batching by
+//! draw type breaks that order, so we bucket on the key and redraw ascending.
 const std = @import("std");
 const cc = @import("c.zig").c;
 const camera = @import("camera.zig");
@@ -64,54 +65,35 @@ pub const Color = extern struct { r: u8, g: u8, b: u8, a: u8 };
 
 // PAINT BANDS.
 //
-// S-52 PresLib §10.3.4.1 orders the chart by DisplayPlane, then display
-// priority, then geometry class, then emission order — and the engine hands us
-// the stream ALREADY in that order. The problem is entirely ours: we split the
-// stream into four GPU buffers by draw type (indexed geometry, patterns,
-// sprites, labels) and used to draw each buffer whole. Batching by draw type
-// re-imposes class as the dominant key, which is exactly the inversion the
-// engine's own header warns about — a light sector arc (a stroke at priority
-// 24) sank under every wreck sprite (priority 12).
+// The engine owns paint order. It hands every draw call a `paint_key` — its own
+// S-52 §10.3.4.1/.2 ordering (text last, DisplayPlane under radar, display
+// priority, geometry class) folded into one comparable integer. We bucket on it
+// and draw ascending.
 //
-// The fix is to slice each buffer by band and walk the BANDS outside the
-// buffers, so global paint order survives batching. (plane, priority) is a
-// 2 x 31 space, small enough to bucket exhaustively.
-const PRIO_MAX: i32 = 30;
-pub const BANDS: usize = PRIO_MAX + 1;
+// We do NOT decode it, and we keep no rule of our own. lookout used to carry a
+// copy of the class taxonomy, the priority range and the DisplayPlane gate, and
+// they drifted from the engine — the same spec bug had to be fixed twice, once
+// in each repo. Batching by draw type is what forces a host to rebuild paint
+// order at all; the key is what lets it do that without knowing any S-52.
+pub const BANDS: usize = 744; // TILE57_PAINT_KEY_MAX
 
-/// Bucket a feature into its paint band. Out-of-range values clamp rather than
-/// drop — a feature with an unexpected priority must still draw, even if it
-/// draws at the wrong height.
-///
-/// DisplayPlane is deliberately NOT part of the key. S-52 §10.3.4.2 gives the
-/// OverRadar flag precedence over display priority only "when the RADAR overlay
-/// is present", and lookout draws no radar. Folding it in anyway lifts every
-/// OverRadar feature above higher-priority ones — a built-up area at priority 24
-/// climbing over a light sector arc at 24. The engine gates the same axis on its
-/// own radar_overlay setting; if lookout ever composites radar, this is where the
-/// plane goes back in.
-pub fn bandOf(prio: i32) usize {
-    return @intCast(std.math.clamp(prio, 0, PRIO_MAX));
-}
-
-// paint-order class == shader kind (they share the numbering, conveniently).
-// Within a band these order area < line < symbol < sounding < text, the S-52
-// §10.3.4.1 tiebreak. Area-fill PATTERNS live in their own buffer and belong
-// between area and line, which is why the renderer draws each band as
-// areas -> patterns -> the rest -> sprites.
-const CLASS_AREA: u8 = 0;
-const CLASS_LINE: u8 = 1;
-const CLASS_SYMBOL: u8 = 2;
-const CLASS_SOUNDING: u8 = 3;
-const CLASS_TEXT: u8 = 4;
+// Shader kind. NOT a paint-order class — ordering comes from the engine's
+// paint_key. These only tell the fragment shader what it is drawing.
+const KIND_AREA: u8 = 0;
+const KIND_LINE: u8 = 1;
+const KIND_SYMBOL: u8 = 2;
+const KIND_SOUNDING: u8 = 3;
+const KIND_TEXT: u8 = 4;
 
 fn packFlags(display_category: u32, kind: u8, map_align: bool) u32 {
     return (display_category & 3) | (@as(u32, kind) << 2) | (@as(u32, @intFromBool(map_align)) << 5);
 }
 
 const DrawItem = struct {
-    class: u8,
-    display_priority: i32,
+    /// Shader kind (see KIND_*), not an ordering key.
+    kind: u8,
+    /// The engine's paint-order key for this call — the ONLY ordering input.
+    paint_key: u32,
     seq: u32,
     vtx_first: u32,
     vtx_count: u32,
@@ -151,10 +133,9 @@ pub const Scene = struct {
     // SDF text: textured quads sampling the glyph atlas
     text_quads: std.ArrayList(QuadVertex) = .empty,
     pattern_verts: std.ArrayList(PatternVertex) = .empty,
-    /// One entry per SPRITE QUAD (6 verts): the sprite paint key, layer*1000 +
-    /// display_priority. tile57 streams features in walk order and tags each with
-    /// `display_priority`; a host that re-buckets them into its own batches has to
-    /// restore paint order itself, which is what finish() does with this.
+    /// One entry per SPRITE QUAD (6 verts): the engine's paint_key for that call.
+    /// Sprites are their own pipeline, so they need the same band slicing as the
+    /// other buffers to land in the right place in the global order.
     quad_prios: std.ArrayList(i32) = .empty,
     /// One band index per PATTERN VERTEX. Patterns are their own pipeline, so
     /// they need the same band slicing as everything else to stay between the
@@ -167,11 +148,10 @@ pub const Scene = struct {
     /// tiles and a low-priority symbol in a later tile paints over a
     /// high-priority one in an earlier tile. See gpu.zig recordTiles.
     quad_band_off: [BANDS + 1]u32 = @splat(0),
-    /// Index-buffer offsets per band, split at the area/non-area class boundary
-    /// so the pattern pipeline can be drawn between them. area_end is where the
-    /// band's CLASS_AREA indices stop and CLASS_LINE.. begin.
+    /// Index-buffer offsets per band. No sub-split by class: the engine's key
+    /// already separates area fills, line work and symbols into different bands,
+    /// so a band holds one class and needs one draw.
     geom_band_off: [BANDS + 1]u32 = @splat(0),
-    geom_band_area_end: [BANDS]u32 = @splat(0),
     /// Pattern-vertex offsets per band.
     pattern_band_off: [BANDS + 1]u32 = @splat(0),
     /// Physical px per reference px (HiDPI density), folded into pattern cell
@@ -368,11 +348,11 @@ pub const Scene = struct {
         });
     }
 
-    fn newItem(self: *Scene, class: u8, display_priority: i32, color: Color) !*DrawItem {
+    fn newItem(self: *Scene, kind: u8, paint_key: u32, color: Color) !*DrawItem {
         const seq: u32 = @intCast(self.items.items.len);
         try self.items.append(self.a, .{
-            .class = class,
-            .display_priority = display_priority,
+            .kind = kind,
+            .paint_key = paint_key,
             .seq = seq,
             .vtx_first = @intCast(self.verts.items.len),
             .vtx_count = 0,
@@ -477,14 +457,13 @@ pub const Scene = struct {
 
     pub fn finish(self: *Scene, n_schemes: usize) !void {
         self.n_schemes = n_schemes;
-        // S-52 PresLib §10.3.4.1: DisplayPlane, then display priority, then
-        // geometry class, then emission order. Class is the TIEBREAK — sorting
-        // class-major here is what used to sink a light sector arc (a line at
-        // priority 24) under a wreck symbol (12).
+        // Sort ONLY by the engine's paint key; arrival order breaks ties, which
+        // is the emission order the engine already put the stream in. No S-52
+        // rule of our own — that is the engine's, and duplicating it is what
+        // drifted before.
         std.mem.sort(DrawItem, self.items.items, {}, struct {
             fn lt(_: void, l: DrawItem, r: DrawItem) bool {
-                if (l.display_priority != r.display_priority) return l.display_priority < r.display_priority;
-                if (l.class != r.class) return l.class < r.class;
+                if (l.paint_key != r.paint_key) return l.paint_key < r.paint_key;
                 return l.seq < r.seq;
             }
         }.lt);
@@ -501,22 +480,19 @@ pub const Scene = struct {
         var w: usize = 0;
         // The items are in paint order, so walking them once yields each band's
         // index range directly. area_end additionally marks where the band's
-        // CLASS_AREA indices stop, so the renderer can slot the pattern pipeline
+        // KIND_AREA indices stop, so the renderer can slot the pattern pipeline
         // in between (S-52 class order is area < pattern < line).
-        // Count each band's indices, and how many of them are CLASS_AREA. The
+        // Count each band's indices, and how many of them are KIND_AREA. The
         // items are sorted class-ascending within a band, so a band's area
         // indices are contiguous at its start and area_end is just start+count.
         var band_idx: [BANDS]u32 = @splat(0);
-        var band_area: [BANDS]u32 = @splat(0);
         for (self.items.items) |it| {
-            const b = bandOf(it.display_priority);
+            const b: usize = @min(it.paint_key, BANDS - 1);
             band_idx[b] += it.idx_count;
-            if (it.class == CLASS_AREA) band_area[b] += it.idx_count;
         }
         var acc: u32 = 0;
         for (0..BANDS) |b| {
             self.geom_band_off[b] = acc;
-            self.geom_band_area_end[b] = acc + band_area[b];
             acc += band_idx[b];
         }
         self.geom_band_off[BANDS] = acc;
@@ -566,9 +542,9 @@ fn scaminCulled(s: *Scene, f: [*c]const cc.tile57_feature) bool {
 fn fFillArea(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, rings: [*c]const cc.tile57_world_rings, color: cc.tile57_color, even_odd: c_int) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_AREA, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(KIND_AREA, f.*.paint_key, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
-    const flags = packFlags(dc, CLASS_AREA, false);
+    const flags = packFlags(dc, KIND_AREA, false);
     s.worldToScratch(rings) catch return;
     if (s.tessContours(s.scratch.items, Scene.ringStartsSlice(rings.*.ring_starts, rings.*.ring_count), rings.*.ring_count, even_odd != 0)) |out| {
         s.appendTess(out, false, .{ 0, 0 }, Scene.scaminF(f.*.scamin), flags, item) catch return;
@@ -616,7 +592,7 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
             v.wx = out.verts[@as(usize, @intCast(idx)) * 2];
             v.wy = out.verts[@as(usize, @intCast(idx)) * 2 + 1];
             s.pattern_verts.append(s.a, v) catch return;
-            s.pattern_bands.append(s.a, @intCast(bandOf(f.*.display_priority))) catch return;
+            s.pattern_bands.append(s.a, @intCast(@min(f.*.paint_key, BANDS - 1))) catch return;
         }
     }
 }
@@ -624,9 +600,9 @@ fn fDrawPattern(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]cons
 fn fStrokeLine(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, lines: [*c]const cc.tile57_world_rings, width_px: f32, dash_on: f32, dash_off: f32, color: cc.tile57_color) callconv(.c) void {
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_LINE, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(KIND_LINE, f.*.paint_key, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
-    const flags = packFlags(dc, CLASS_LINE, false);
+    const flags = packFlags(dc, KIND_LINE, false);
     s.worldToScratch(lines) catch return;
     const hw = @max(width_px, 1.0) * 0.5;
     s.strokePolylineDashed(s.scratch.items, Scene.ringStartsSlice(lines.*.ring_starts, lines.*.ring_count), lines.*.ring_count, hw, dash_on, dash_off, Scene.scaminF(f.*.scamin), flags, false, .{ 0, 0 }, item) catch return;
@@ -636,9 +612,8 @@ fn fDrawSymbol(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
     const sounding = clsIs(f, "SOUNDG") or clsIs(f, "SOUNDS");
-    const class: u8 = if (sounding) CLASS_SOUNDING else CLASS_SYMBOL;
-    const kind: u8 = class;
-    const item = s.newItem(class, f.*.display_priority, Scene.rgba(color)) catch return;
+    const kind: u8 = if (sounding) KIND_SOUNDING else KIND_SYMBOL;
+    const item = s.newItem(kind, f.*.paint_key, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
     const flags = packFlags(dc, kind, map_align);
@@ -656,10 +631,10 @@ fn fDrawText(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, anchor: cc.tile57
     _ = halo_px;
     const s = asScene(ctx);
     if (scaminCulled(s, f)) return;
-    const item = s.newItem(CLASS_TEXT, f.*.display_priority, Scene.rgba(color)) catch return;
+    const item = s.newItem(KIND_TEXT, f.*.paint_key, Scene.rgba(color)) catch return;
     const dc: u32 = @intCast(f.*.display_category);
     const map_align = align_ == cc.TILE57_ALIGN_MAP;
-    const flags = packFlags(dc, CLASS_TEXT, map_align);
+    const flags = packFlags(dc, KIND_TEXT, map_align);
     const wrel = [2]f32{ s.relX(anchor.x), s.relY(anchor.y) };
     s.localToScratch(glyphs) catch return;
     if (s.tessContours(s.scratch.items, Scene.ringStartsSlice(glyphs.*.ring_starts, glyphs.*.ring_count), glyphs.*.ring_count, true)) |out| {
@@ -710,7 +685,7 @@ fn fDrawSprite(ctx: ?*anyopaque, f: [*c]const cc.tile57_feature, name: [*c]const
     // renderer can interleave this pass with the geometry and pattern passes.
     // Soundings need no special layer here: the catalogue already gives them
     // priority 18, between a symbol at 12 and a light at 24.
-    s.quad_prios.append(s.a, @intCast(bandOf(f.*.display_priority))) catch return;
+    s.quad_prios.append(s.a, @intCast(@min(f.*.paint_key, BANDS - 1))) catch return;
 }
 
 // SDF text: lay the UTF-8 run out from glyph metrics into textured quads
