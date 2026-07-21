@@ -618,7 +618,7 @@ pub const Gpu = struct {
     var g_label_dbg: i8 = -1;
     var g_label_dbg_scene: usize = 0;
     fn labelDebug(self: *Gpu, s: *const Scene) void {
-        if (g_label_dbg < 0) g_label_dbg = if (std.posix.getenv("TILE57_LABEL_DEBUG") != null) 1 else 0;
+        if (g_label_dbg < 0) g_label_dbg = if (std.c.getenv("TILE57_LABEL_DEBUG") != null) 1 else 0;
         if (g_label_dbg != 1) return;
         if (s.ranges.len == g_label_dbg_scene) return; // one report per distinct scene
         g_label_dbg_scene = s.ranges.len;
