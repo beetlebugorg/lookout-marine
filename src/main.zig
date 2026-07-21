@@ -176,13 +176,44 @@ pub fn main(init: std.process.Init) !void {
     try runWindow(l, max_frames);
 }
 
-fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *bool) void {
+/// Tracks a smoothed drag velocity (logical px/sec) so releasing the mouse can
+/// hand the camera a fling.
+const PanTracker = struct {
+    last_ns: u64 = 0,
+    vx: f64 = 0,
+    vy: f64 = 0,
+    fn reset(self: *PanTracker) void {
+        self.* = .{};
+    }
+    fn sample(self: *PanTracker, dx: f32, dy: f32, ts_ns: u64) void {
+        if (self.last_ns != 0 and ts_ns > self.last_ns) {
+            const dt = @as(f64, @floatFromInt(ts_ns - self.last_ns)) / 1e9;
+            if (dt > 0.0005) {
+                self.vx = self.vx * 0.5 + (@as(f64, dx) / dt) * 0.5;
+                self.vy = self.vy * 0.5 + (@as(f64, dy) / dt) * 0.5;
+            }
+        }
+        self.last_ns = ts_ns;
+    }
+};
+
+fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *bool, pan: *PanTracker) void {
     switch (ev.type) {
         cc.SDL_EVENT_QUIT => running.* = false,
-        cc.SDL_EVENT_MOUSE_BUTTON_DOWN => dragging.* = true,
-        cc.SDL_EVENT_MOUSE_BUTTON_UP => dragging.* = false,
+        cc.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+            dragging.* = true;
+            l.flingStart(0, 0); // grabbing the map stops any coast
+            pan.reset();
+        },
+        cc.SDL_EVENT_MOUSE_BUTTON_UP => {
+            dragging.* = false;
+            l.flingStart(pan.vx, pan.vy); // throw it
+        },
         cc.SDL_EVENT_MOUSE_MOTION => {
-            if (dragging.*) l.panLogical(ev.motion.xrel, ev.motion.yrel);
+            if (dragging.*) {
+                l.panLogical(ev.motion.xrel, ev.motion.yrel);
+                pan.sample(ev.motion.xrel, ev.motion.yrel, ev.motion.timestamp);
+            }
         },
         cc.SDL_EVENT_MOUSE_WHEEL => l.zoomAtLogical(@as(f64, ev.wheel.y) * 0.25, ev.wheel.mouse_x, ev.wheel.mouse_y),
         cc.SDL_EVENT_WINDOW_RESIZED => l.resize(@intCast(ev.window.data1), @intCast(ev.window.data2)) catch {},
@@ -206,19 +237,27 @@ fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
     var dragging = false;
     var running = true;
     var frame: u64 = 0;
+    var pan = PanTracker{};
     const test_mode = max_frames != null; // render every iteration for --frames
+    var last_ns = cc.SDL_GetTicksNS();
     while (running) {
         if (max_frames) |mf| {
             if (frame >= mf) break;
         }
         var ev: cc.SDL_Event = undefined;
-        // On-demand: when the chart is static, block on events (0% CPU idle).
-        // A short timeout keeps a background build filling in progressively.
-        if (!test_mode and !l.needsRedraw()) {
+        // On-demand: block on events when static (0% CPU idle). While a zoom ease
+        // or fling is running, never block — spin so it animates every frame. A
+        // short timeout keeps a background build filling in progressively.
+        if (!test_mode and !l.animating() and !l.needsRedraw()) {
             const timeout: i32 = if (l.isBuilding()) 16 else 250;
-            if (cc.SDL_WaitEventTimeout(&ev, timeout)) handleEvent(l, &ev, &dragging, &running);
+            if (cc.SDL_WaitEventTimeout(&ev, timeout)) handleEvent(l, &ev, &dragging, &running, &pan);
         }
-        while (cc.SDL_PollEvent(&ev)) handleEvent(l, &ev, &dragging, &running);
+        while (cc.SDL_PollEvent(&ev)) handleEvent(l, &ev, &dragging, &running, &pan);
+        const now_ns = cc.SDL_GetTicksNS();
+        var dt = @as(f64, @floatFromInt(now_ns -% last_ns)) / 1e9;
+        last_ns = now_ns;
+        if (dt > 0.05) dt = 0.05; // cap the step after an idle block
+        if (l.animating()) l.tickAnim(dt);
         if (test_mode or l.needsRedraw()) {
             _ = try l.render();
             frame += 1;

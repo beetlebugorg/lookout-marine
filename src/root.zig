@@ -362,6 +362,7 @@ pub const Lookout = struct {
         self.engine_max_zoom = zr[1];
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
         self.cam.max_zoom = zr[1] + OVERSCALE_EXTRA;
+        self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
     }
 
     fn applyZoomAndView(self: *Lookout) void {
@@ -398,7 +399,7 @@ pub const Lookout = struct {
     // ---- view ---------------------------------------------------------------
     fn viewToCamera(v: View, w: f32, h: f32) camera.Camera {
         const o = camera.lonLatToWorld(v.lon, v.lat);
-        return .{ .origin = o, .center = o, .zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = w, .vh = h };
+        return .{ .origin = o, .center = o, .zoom = v.zoom, .target_zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = w, .vh = h };
     }
 
     /// A BOUNDED opening view. Deliberately the first cell's own bounds, NOT the
@@ -499,7 +500,24 @@ pub const Lookout = struct {
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        self.cam.zoomAbout(dzoom, x_pt, y_pt);
+        self.cam.zoomToward(dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
+        self.markDirty();
+    }
+
+    /// Start a fling (momentum pan) with a logical-px/sec velocity.
+    pub fn flingStart(self: *Lookout, vx: f64, vy: f64) void {
+        self.cam.flingStart(vx, vy);
+    }
+
+    /// True while the camera is easing a zoom or coasting a fling.
+    pub fn animating(self: *Lookout) bool {
+        return self.cam.animating();
+    }
+
+    /// Advance camera animations by `dt` seconds; call each frame while animating.
+    pub fn tickAnim(self: *Lookout, dt: f64) void {
+        self.cam.tick(dt);
+        self.deriveLive(); // zoom moved: refresh SCAMIN / display-scale gates
         self.markDirty();
     }
 

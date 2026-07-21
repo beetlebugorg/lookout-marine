@@ -33,6 +33,17 @@ pub const Camera = struct {
     min_zoom: f64 = 0, // clamp range (the chart's own zoom band)
     max_zoom: f64 = 24,
 
+    // ---- animation state (advanced by tick each frame) ----
+    /// The zoom `zoom` eases toward; wheel/pinch set this, not `zoom` directly, so
+    /// a small scroll animates instead of snapping. Keep in sync with `zoom` when
+    /// the view is set programmatically (setTarget).
+    target_zoom: f64 = 0,
+    zfocus: Vec2 = .{ .x = 0, .y = 0 }, // world point kept under the cursor while zooming
+    zfx: f32 = 0, // cursor px the zoom pivots about
+    zfy: f32 = 0,
+    vel_x: f64 = 0, // fling velocity, logical px/sec (decays each tick)
+    vel_y: f64 = 0,
+
     /// px-per-world-unit at the current zoom (256 px per tile).
     pub fn worldToPx(self: Camera) f64 {
         return 256.0 * std.math.pow(f64, 2.0, self.zoom);
@@ -111,6 +122,62 @@ pub const Camera = struct {
         const after = self.screenToWorld(px, py);
         self.center.x += before.x - after.x;
         self.center.y += before.y - after.y;
+    }
+
+    // Animation time constants (seconds).
+    const ZOOM_TAU = 0.085; // zoom ease — small enough to feel immediate, smooth
+    const FLING_TAU = 0.32; // fling decay
+    const FLING_MIN = 12.0; // px/s: below this the fling stops
+
+    /// Pin `target_zoom` to `zoom` — call after a programmatic view set so the
+    /// next scroll eases from the actual zoom, not a stale target.
+    pub fn setTarget(self: *Camera) void {
+        self.target_zoom = self.zoom;
+        self.vel_x = 0;
+        self.vel_y = 0;
+    }
+
+    /// Request a zoom of `dz` about (px,py): eases there over the next frames,
+    /// keeping the world point under the cursor fixed the whole way.
+    pub fn zoomToward(self: *Camera, dz: f64, px: f32, py: f32) void {
+        self.target_zoom = std.math.clamp(self.target_zoom + dz, self.min_zoom, self.max_zoom);
+        self.zfocus = self.screenToWorld(px, py);
+        self.zfx = px;
+        self.zfy = py;
+    }
+
+    /// Begin a fling with the given logical-px/sec velocity (0,0 stops one).
+    pub fn flingStart(self: *Camera, vx: f64, vy: f64) void {
+        self.vel_x = vx;
+        self.vel_y = vy;
+    }
+
+    /// True while a zoom ease or fling is still in progress.
+    pub fn animating(self: Camera) bool {
+        return @abs(self.target_zoom - self.zoom) > 1e-4 or
+            @abs(self.vel_x) > FLING_MIN or @abs(self.vel_y) > FLING_MIN;
+    }
+
+    /// Advance the zoom ease and fling by `dt` seconds.
+    pub fn tick(self: *Camera, dt: f64) void {
+        if (@abs(self.target_zoom - self.zoom) > 1e-4) {
+            const k = 1.0 - @exp(-dt / ZOOM_TAU);
+            self.zoom += (self.target_zoom - self.zoom) * k;
+            if (@abs(self.target_zoom - self.zoom) < 1e-4) self.zoom = self.target_zoom;
+            // Keep the pivot world point under its cursor px as the zoom changes.
+            const after = self.screenToWorld(self.zfx, self.zfy);
+            self.center.x += self.zfocus.x - after.x;
+            self.center.y += self.zfocus.y - after.y;
+        }
+        if (@abs(self.vel_x) > FLING_MIN or @abs(self.vel_y) > FLING_MIN) {
+            self.panPx(@floatCast(self.vel_x * dt), @floatCast(self.vel_y * dt));
+            const decay = @exp(-dt / FLING_TAU);
+            self.vel_x *= decay;
+            self.vel_y *= decay;
+        } else {
+            self.vel_x = 0;
+            self.vel_y = 0;
+        }
     }
 
     /// Pan by a screen-px delta (rotation-aware).
