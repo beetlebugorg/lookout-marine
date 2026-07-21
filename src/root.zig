@@ -351,14 +351,17 @@ pub const Lookout = struct {
         self.deriveLive();
     }
 
-    // No zooming out below the coarsest band (bounds tessellation); allow zoom-in
-    // past the deepest band as overscale.
+    // Zoom-out floor: never coarser than z4 (nor below the coarsest band's data).
+    // Zoom-in: the deepest SERVED zoom already includes one fill-up overscale level
+    // (compose_meta.max_zoom), so only a little extra on top — beyond that the chart
+    // is just magnified nodata-ish blur.
+    const MIN_ZOOM_FLOOR = 4.0;
+    const OVERSCALE_EXTRA = 2.0;
     fn updateZoomLimits(self: *Lookout) void {
-        const OVERSCALE_LEVELS = 4.0;
         const zr = self.zoomRange();
         self.engine_max_zoom = zr[1];
-        self.cam.min_zoom = zr[0];
-        self.cam.max_zoom = zr[1] + OVERSCALE_LEVELS;
+        self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
+        self.cam.max_zoom = zr[1] + OVERSCALE_EXTRA;
     }
 
     fn applyZoomAndView(self: *Lookout) void {
