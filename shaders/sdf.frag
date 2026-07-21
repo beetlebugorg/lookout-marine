@@ -11,7 +11,7 @@ layout(location = 0) out vec4 o_color;
 // over the atlas pad, so ~0.14 is roughly a 1.5 px outline that scales with the
 // text size. The halo colour is white — matched to the day palette's black text;
 // a dark palette would want the halo colour passed through instead.
-const float HALO = 0.14;
+const float HALO = 0.30;
 
 void main() {
     float d = texture(atlas, v_uv).r;
