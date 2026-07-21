@@ -519,6 +519,27 @@ pub const Lookout = struct {
         self.markDirty();
     }
 
+    /// Rotate the view about its centre by the angle the cursor swept from
+    /// (prev) to (cur), both logical points — a grab-and-spin (course-up)
+    /// gesture. Rotation is a shader uniform, so this only redraws: markDirty
+    /// sets view_dirty, and needsRebuild ignores rotation, so no scene rebuild.
+    pub fn rotateDragLogical(self: *Lookout, prev_x: f32, prev_y: f32, cur_x: f32, cur_y: f32) void {
+        const sz = self.logicalSize();
+        const cx = sz[0] * 0.5;
+        const cy = sz[1] * 0.5;
+        const a0 = std.math.atan2(@as(f64, prev_y - cy), @as(f64, prev_x - cx));
+        const a1 = std.math.atan2(@as(f64, cur_y - cy), @as(f64, cur_x - cx));
+        self.cam.rotation += a1 - a0;
+        self.markDirty();
+    }
+
+    /// Snap the view back to north-up.
+    pub fn resetRotation(self: *Lookout) void {
+        if (self.cam.rotation == 0) return;
+        self.cam.rotation = 0;
+        self.markDirty();
+    }
+
     /// Start a fling (momentum pan) with a logical-px/sec velocity.
     pub fn flingStart(self: *Lookout, vx: f64, vy: f64) void {
         self.cam.flingStart(vx, vy);

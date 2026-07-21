@@ -25,8 +25,9 @@ const USAGE =
     \\(palette swap, no re-tessellation) and lookout-zoom.png (MVP zoom, no
     \\re-tessellation), then exits.
     \\
-    \\Window controls: drag=pan (fling), wheel=zoom, n=day/night, f=feet/metres,
-    \\t=text, s=soundings, d=OTHER category, [/]=safety contour, -/=+ size, Esc=quit.
+    \\Window controls: drag=pan (fling), shift+drag=rotate (course-up), r=north-up,
+    \\wheel=zoom, n=day/night, f=feet/metres, t=text, s=soundings, d=OTHER category,
+    \\[/]=safety contour, -/=+ size, Esc=quit.
     \\
 ;
 
@@ -197,20 +198,32 @@ const PanTracker = struct {
     }
 };
 
-fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *bool, pan: *PanTracker) void {
+fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, rotating: *bool, running: *bool, pan: *PanTracker) void {
     switch (ev.type) {
         cc.SDL_EVENT_QUIT => running.* = false,
         cc.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-            dragging.* = true;
-            l.flingStart(0, 0); // grabbing the map stops any coast
-            pan.reset();
+            // Shift + grab spins the canvas (course-up); a plain grab pans.
+            if (cc.SDL_GetModState() & cc.SDL_KMOD_SHIFT != 0) {
+                rotating.* = true;
+                l.flingStart(0, 0); // grabbing stops any coast
+            } else {
+                dragging.* = true;
+                l.flingStart(0, 0);
+                pan.reset();
+            }
         },
         cc.SDL_EVENT_MOUSE_BUTTON_UP => {
-            dragging.* = false;
-            l.flingStart(pan.vx, pan.vy); // throw it
+            if (rotating.*) {
+                rotating.* = false;
+            } else {
+                dragging.* = false;
+                l.flingStart(pan.vx, pan.vy); // throw it
+            }
         },
         cc.SDL_EVENT_MOUSE_MOTION => {
-            if (dragging.*) {
+            if (rotating.*) {
+                l.rotateDragLogical(ev.motion.x - ev.motion.xrel, ev.motion.y - ev.motion.yrel, ev.motion.x, ev.motion.y);
+            } else if (dragging.*) {
                 l.panLogical(ev.motion.xrel, ev.motion.yrel);
                 pan.sample(ev.motion.xrel, ev.motion.yrel, ev.motion.timestamp);
             }
@@ -227,6 +240,7 @@ fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *boo
             cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2),
             cc.SDLK_EQUALS => l.adjustSize(1.1),
             cc.SDLK_MINUS => l.adjustSize(1.0 / 1.1),
+            cc.SDLK_R => l.resetRotation(), // back to north-up
             cc.SDLK_ESCAPE => running.* = false,
             else => {},
         },
@@ -236,6 +250,7 @@ fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *boo
 
 fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
     var dragging = false;
+    var rotating = false;
     var running = true;
     var frame: u64 = 0;
     var pan = PanTracker{};
@@ -251,9 +266,9 @@ fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
         // short timeout keeps a background build filling in progressively.
         if (!test_mode and !l.animating() and !l.needsRedraw()) {
             const timeout: i32 = if (l.isBuilding()) 16 else 250;
-            if (cc.SDL_WaitEventTimeout(&ev, timeout)) handleEvent(l, &ev, &dragging, &running, &pan);
+            if (cc.SDL_WaitEventTimeout(&ev, timeout)) handleEvent(l, &ev, &dragging, &rotating, &running, &pan);
         }
-        while (cc.SDL_PollEvent(&ev)) handleEvent(l, &ev, &dragging, &running, &pan);
+        while (cc.SDL_PollEvent(&ev)) handleEvent(l, &ev, &dragging, &rotating, &running, &pan);
         const now_ns = cc.SDL_GetTicksNS();
         var dt = @as(f64, @floatFromInt(now_ns -% last_ns)) / 1e9;
         last_ns = now_ns;
