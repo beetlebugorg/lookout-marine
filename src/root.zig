@@ -248,7 +248,9 @@ pub const Lookout = struct {
     fn loadSpriteAtlas(self: *Lookout) void {
         var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
         var err: cc.tile57_error = undefined;
-        if (cc.tile57_bake_sprite_mln(null, &assets, &err) != cc.TILE57_OK) return;
+        // Bake the atlas texture at the display density so symbols stay sharp on
+        // HiDPI; the GPU scene's UVs (runJob passes the same ratio) index it.
+        if (cc.tile57_bake_sprite_mln(null, @floatCast(self.g.pixel_density), &assets, &err) != cc.TILE57_OK) return;
         defer cc.tile57_assets_free(&assets);
         if (assets.sprite_png == null or assets.sprite_json == null) return;
         const png_bytes = assets.sprite_png[0..assets.sprite_png_len];
@@ -662,10 +664,13 @@ pub const Lookout = struct {
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
         var err: cc.tile57_error = undefined;
+        // Display density (immutable after init): the sprite quads' UVs must match
+        // the atlas texture we baked at the same ratio (loadSpriteAtlas).
+        const ratio: f64 = @floatCast(self.g.pixel_density);
         const st = if (self.compose) |c|
-            cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, out, &err)
+            cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err)
         else
-            cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, out, &err);
+            cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err);
         return st == cc.TILE57_OK;
     }
 
