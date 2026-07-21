@@ -352,16 +352,16 @@ pub const Lookout = struct {
     }
 
     // Zoom-out floor: never coarser than z4 (nor below the coarsest band's data).
-    // Zoom-in: the deepest SERVED zoom already includes one fill-up overscale level
-    // (compose_meta.max_zoom), so only a little extra on top — beyond that the chart
-    // is just magnified nodata-ish blur.
+    // Zoom-in cap: the deepest SERVED zoom (compose_meta.max_zoom) — already native
+    // + one fill-up overscale level. buildZoom clamps the scene to this, so letting
+    // cam.zoom run past it only MVP-magnifies that scene into nodata-ish blur; cap
+    // exactly there so cam.zoom == buildZoom at the limit and the chart stays crisp.
     const MIN_ZOOM_FLOOR = 4.0;
-    const OVERSCALE_EXTRA = 2.0;
     fn updateZoomLimits(self: *Lookout) void {
         const zr = self.zoomRange();
         self.engine_max_zoom = zr[1];
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
-        self.cam.max_zoom = zr[1] + OVERSCALE_EXTRA;
+        self.cam.max_zoom = zr[1];
         self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
     }
 
