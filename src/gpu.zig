@@ -610,6 +610,30 @@ pub const Gpu = struct {
         }
     }
 
+    // TILE57_LABEL_DEBUG: once per scene, report how many label ranges reach the
+    // GPU per atlas + whether the per-face textures uploaded. bold/italic=0 means
+    // the tiles carry no tier (stale cache / not baked with labels); a nonzero
+    // count with the texture present means the data is fine and the render is at
+    // fault.
+    var g_label_dbg: i8 = -1;
+    var g_label_dbg_scene: usize = 0;
+    fn labelDebug(self: *Gpu, s: *const Scene) void {
+        if (g_label_dbg < 0) g_label_dbg = if (std.posix.getenv("TILE57_LABEL_DEBUG") != null) 1 else 0;
+        if (g_label_dbg != 1) return;
+        if (s.ranges.len == g_label_dbg_scene) return; // one report per distinct scene
+        g_label_dbg_scene = s.ranges.len;
+        var reg: usize = 0;
+        var bold: usize = 0;
+        var ital: usize = 0;
+        for (s.ranges) |r| switch (r.atlas) {
+            cc.TILE57_GPU_ATLAS_GLYPH => reg += 1,
+            cc.TILE57_GPU_ATLAS_GLYPH_BOLD => bold += 1,
+            cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => ital += 1,
+            else => {},
+        };
+        std.debug.print("label ranges: regular={d} bold={d} italic={d} | bold_tex={} italic_tex={}\n", .{ reg, bold, ital, self.glyph_bold_tex != null, self.glyph_italic_tex != null });
+    }
+
     // ---- record + issue one frame's draws into a target --------------------
     // Walk the ranges in paint order, switching pipeline per range: triangles ->
     // flat-colour (or pattern) pipeline, drawn indexed; quads -> sprite or SDF
@@ -631,6 +655,7 @@ pub const Gpu = struct {
         cc.SDL_SetGPUViewport(pass, &vp);
 
         const s = if (self.scene) |*sc| sc else return;
+        self.labelDebug(s);
         const vbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
         const ib = cc.SDL_GPUBufferBinding{ .buffer = s.ibuf, .offset = 0 };
