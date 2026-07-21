@@ -361,8 +361,23 @@ pub const Lookout = struct {
         const zr = self.zoomRange();
         self.engine_max_zoom = zr[1];
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
-        self.cam.max_zoom = zr[1];
+        // Per-view cap: the deepest zoom the chart UNDER THE VIEW CENTRE can serve.
+        // Over a coarse-only area every covering cell's reach is low, so the
+        // library-wide max (zr[1], set by a distant deep chart) would zoom straight
+        // into nodata; this caps at what's actually there.
+        self.cam.max_zoom = self.viewMaxZoom();
         self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
+    }
+
+    /// Deepest servable zoom at the current view centre (tile57_compose_max_zoom_at),
+    /// falling back to the library max for a single chart or an off-coverage point.
+    fn viewMaxZoom(self: *Lookout) f64 {
+        if (self.compose) |c| {
+            const ll = camera.worldToLonLat(self.cam.center);
+            const mz = cc.tile57_compose_max_zoom_at(c, ll.x, ll.y);
+            if (mz > 0) return @floatFromInt(mz);
+        }
+        return self.zoomRange()[1];
     }
 
     fn applyZoomAndView(self: *Lookout) void {
@@ -773,6 +788,9 @@ pub const Lookout = struct {
                 return self.g.renderWindow(self.uniforms(), false, false);
             }
         }
+        // Refresh the zoom clamps for the current view centre each frame (cheap):
+        // panning into a coarser area lowers the per-view max and eases the zoom in.
+        self.updateZoomLimits();
         if (@abs(self.cam.zoom - self.last_zoom) > 1e-6) self.last_zoom_ms = @intCast(cc.SDL_GetTicks());
         if (!self.built) {
             self.buildGpuScene(); // first frame: synchronous, so there is something to draw now
