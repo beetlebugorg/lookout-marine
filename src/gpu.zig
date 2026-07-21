@@ -93,6 +93,8 @@ pub const Gpu = struct {
     sdf_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
     pattern_pipeline: ?*cc.SDL_GPUGraphicsPipeline = null,
     glyph_tex: ?*cc.SDL_GPUTexture = null,
+    glyph_bold_tex: ?*cc.SDL_GPUTexture = null,
+    glyph_italic_tex: ?*cc.SDL_GPUTexture = null,
 
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8, pattern_vert_spv: []const u8, pattern_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
@@ -462,6 +464,14 @@ pub const Gpu = struct {
     pub fn uploadGlyphAtlas(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
         self.glyph_tex = try self.makeAtlasTexture(rgba, w, h);
     }
+    /// Upload the bold / italic label-tier SDF atlas texture (TILE57_GPU_ATLAS_GLYPH_BOLD
+    /// / _ITALIC ranges sample these).
+    pub fn uploadGlyphAtlasBold(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.glyph_bold_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    pub fn uploadGlyphAtlasItalic(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.glyph_italic_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
     /// Upload an RGBA8 atlas to a fresh sampler texture.
     fn makeAtlasTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !*cc.SDL_GPUTexture {
         var info = std.mem.zeroes(cc.SDL_GPUTextureCreateInfo);
@@ -652,8 +662,16 @@ pub const Gpu = struct {
                 cc.SDL_DrawGPUIndexedPrimitives(pass, r.count, 1, r.first, 0, 0);
             } else { // QUADS
                 if (s.qbuf == null) continue;
-                const tex = if (r.atlas == cc.TILE57_GPU_ATLAS_GLYPH) self.glyph_tex else self.sprite_tex;
-                const pipe = if (r.atlas == cc.TILE57_GPU_ATLAS_GLYPH) self.sdf_pipeline else self.sprite_pipeline;
+                const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or
+                    r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or
+                    r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
+                const tex = switch (r.atlas) {
+                    cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
+                    cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
+                    cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
+                    else => self.sprite_tex,
+                };
+                const pipe = if (is_glyph) self.sdf_pipeline else self.sprite_pipeline;
                 if (tex == null or pipe == null) continue;
                 cc.SDL_BindGPUGraphicsPipeline(pass, pipe);
                 cc.SDL_BindGPUVertexBuffers(pass, 0, &qbind, 1);
@@ -749,6 +767,8 @@ pub const Gpu = struct {
         if (self.sprite_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sprite_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.glyph_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
+        if (self.glyph_bold_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
+        if (self.glyph_italic_tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (self.sdf_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.pattern_pipeline) |p| cc.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sampler) |sm| cc.SDL_ReleaseGPUSampler(d, sm);

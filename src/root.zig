@@ -220,6 +220,27 @@ pub const Lookout = struct {
             return;
         };
         std.debug.print("glyph atlas: {d}x{d}, {d} glyphs, em {d:.0}\n", .{ a.width, a.height, a.glyphs.count(), a.em_px });
+
+        // Bold + italic label-tier atlases (tile57_bake_glyph_sdf_face 1/2): the
+        // GPU scene tags a bold/italic name's range with GLYPH_BOLD / GLYPH_ITALIC.
+        self.loadGlyphFace(1, true);
+        self.loadGlyphFace(2, false);
+    }
+
+    /// Bake one label-tier face atlas (1 bold, 2 italic), decode, upload its texture.
+    /// Metrics come with the GPU-scene quad UVs, so only the texture is kept.
+    fn loadGlyphFace(self: *Lookout, face: i32, bold: bool) void {
+        var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_bake_glyph_sdf_face(&assets, face, &err) != cc.TILE57_OK) return;
+        defer cc.tile57_assets_free(&assets);
+        if (assets.sprite_png == null or assets.sprite_json == null) return;
+        var a = atlas.loadGlyph(self.alloc, assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len]) catch return;
+        defer a.deinit();
+        if (bold)
+            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch return
+        else
+            self.g.uploadGlyphAtlasItalic(a.rgba(), a.width, a.height) catch return;
     }
 
     // Bake the S-52 sprite-symbol atlas (from the embedded catalogue), decode it,
