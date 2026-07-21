@@ -95,6 +95,10 @@ pub const Gpu = struct {
     glyph_tex: ?*cc.SDL_GPUTexture = null,
     glyph_bold_tex: ?*cc.SDL_GPUTexture = null,
     glyph_italic_tex: ?*cc.SDL_GPUTexture = null,
+    /// 2^(display_zoom - scene_build_zoom): scales the pattern cell period so a
+    /// constant-screen-size fill tracks the (MVP-scaled) geometry during a zoom
+    /// instead of swimming, resetting to 1 when the scene rebuilds at the new zoom.
+    pattern_scale: f32 = 1,
 
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8, pattern_vert_spv: []const u8, pattern_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
@@ -673,7 +677,10 @@ pub const Gpu = struct {
                 cc.SDL_BindGPUIndexBuffer(pass, &ib, cc.SDL_GPU_INDEXELEMENTSIZE_32BIT);
                 if (r.pattern != cc.TILE57_GPU_NO_PATTERN and self.pattern_pipeline != null and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
                     const pt = s.patterns[r.pattern];
-                    uu.cell_px = .{ pt.w * self.pixel_density, pt.h * self.pixel_density };
+                    // Scale the cell with the zoom so it tracks the geometry (which
+                    // the MVP scales) rather than swimming during a zoom animation.
+                    const cs = self.pixel_density * self.pattern_scale;
+                    uu.cell_px = .{ pt.w * cs, pt.h * cs };
                     cc.SDL_BindGPUGraphicsPipeline(pass, self.pattern_pipeline);
                     const samp = [_]cc.SDL_GPUTextureSamplerBinding{.{ .texture = pt.tex, .sampler = self.sampler }};
                     cc.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);

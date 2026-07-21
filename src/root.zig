@@ -780,6 +780,10 @@ pub const Lookout = struct {
             self.tickBuild(); // subsequent rebuilds run on the worker; prefetch warms the next level
         }
         self.last_zoom = self.cam.zoom;
+        // Pattern cells track the geometry through a zoom (the scene is tessellated
+        // at cov_zoom; the MVP renders it at cam.zoom): scale the cell by the same
+        // factor so a constant-screen fill doesn't swim mid-zoom.
+        self.g.pattern_scale = @floatCast(std.math.pow(f64, 2.0, self.cam.zoom - self.cov_zoom));
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
         self.view_dirty = false;
         return ok;
