@@ -25,8 +25,8 @@ const USAGE =
     \\(palette swap, no re-tessellation) and lookout-zoom.png (MVP zoom, no
     \\re-tessellation), then exits.
     \\
-    \\Window controls: drag=pan, wheel=zoom, n=day/night, t=text, s=soundings,
-    \\d=OTHER category, [/]=safety contour (rebuilds), -/=+ size, Esc=quit.
+    \\Window controls: drag=pan (fling), wheel=zoom, n=day/night, f=feet/metres,
+    \\t=text, s=soundings, d=OTHER category, [/]=safety contour, -/=+ size, Esc=quit.
     \\
 ;
 
@@ -219,6 +219,7 @@ fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, running: *boo
         cc.SDL_EVENT_WINDOW_RESIZED => l.resize(@intCast(ev.window.data1), @intCast(ev.window.data2)) catch {},
         cc.SDL_EVENT_KEY_DOWN => switch (ev.key.key) {
             cc.SDLK_N => l.cycleScheme(),
+            cc.SDLK_F => l.toggleDepthUnit(),
             cc.SDLK_T => l.toggleText(),
             cc.SDLK_D => l.toggleOtherCategory(),
             cc.SDLK_S => l.toggleSoundings(),

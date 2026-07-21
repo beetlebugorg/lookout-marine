@@ -871,6 +871,16 @@ pub const Lookout = struct {
         self.mariner.display_other = !self.mariner.display_other;
         self.deriveLive();
     }
+    /// Flip depth labels/soundings between metres and feet. Portrayal-affecting
+    /// (the engine swaps the sounding glyph + SAFCON01 unit), so it re-portrays.
+    pub fn toggleDepthUnit(self: *Lookout) void {
+        self.mariner.depth_unit = if (self.mariner.depth_unit == cc.TILE57_DEPTH_FEET)
+            cc.TILE57_DEPTH_METERS
+        else
+            cc.TILE57_DEPTH_FEET;
+        self.dirty = true; // sym_s vs sym_s_ft, metres vs feet contour labels
+        self.markDirty();
+    }
     pub fn nudgeSafetyContour(self: *Lookout, delta: f64) void {
         self.mariner.safety_contour = std.math.clamp(self.mariner.safety_contour + delta, 0, 200);
         self.dirty = true; // geometry-affecting -> fresh scene
