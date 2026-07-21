@@ -5,14 +5,15 @@
 // size), plus a UV into the atlas. One quad per symbol / glyph.
 
 // tile57_gpu_quad: world(0), local(8), uv(16), color(24, ubyte4), weight(28),
-//                  scamin(32), packed(36)=disp_cat|map_align<<8
+//                  scamin(32), packed(36)=disp_cat | map_align<<8 |
+//                                          flip<<16 | tangent_q<<24
 layout(location = 0) in vec2  a_world;
 layout(location = 1) in vec2  a_local;
 layout(location = 2) in vec2  a_uv;
 layout(location = 3) in vec4  a_color;   // sprite: white; text: glyph colour
 layout(location = 4) in float a_weight;  // SDF stroke weight (0 for sprites)
 layout(location = 5) in float a_scamin;
-layout(location = 6) in uint  a_packed;  // low byte disp_cat, next byte map_align
+layout(location = 6) in uint  a_packed;  // disp_cat|map_align|flip|tangent_q
 
 layout(set = 1, binding = 0) uniform U {
     mat4  mvp;
@@ -35,9 +36,18 @@ layout(location = 2) out float v_weight;
 void main() {
     uint disp_cat = a_packed & 0xFFu;
     bool map_align = ((a_packed >> 8) & 0xFFu) != 0u;
+    bool flip      = ((a_packed >> 16) & 0xFFu) != 0u;
+    float tangent  = float((a_packed >> 24) & 0xFFu) / 256.0 * 6.2831853071795864;
 
     vec4 clip = u.mvp * vec4(a_world, 0.0, 1.0);
     vec2 local = a_local;
+    // Keep a tangent-rotated run (a depth-contour value) upright: if the run,
+    // once the view rotation is added, would read into the screen's left
+    // half-plane, turn it 180° about the anchor. cos(tangent + view_rotation) =
+    // cos·rot_cos − sin·rot_sin (rot_{sin,cos} are the view rotation's).
+    if (flip && (cos(tangent) * u.rot_cos - sin(tangent) * u.rot_sin) < 0.0) {
+        local = -local;
+    }
     if (map_align) {
         local = vec2(local.x * u.rot_cos - local.y * u.rot_sin,
                      local.x * u.rot_sin + local.y * u.rot_cos);
