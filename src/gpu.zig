@@ -671,6 +671,13 @@ pub const Gpu = struct {
                 else => {},
             }
             var uu = u;
+            // Soundings ride the mariner's show_soundings switch (the sound_on gate
+            // above), NOT the OTHER display category — S-52 files SOUNDG under OTHER,
+            // but a mariner asking for soundings isn't asking for seabed and cables.
+            // The engine tags them disp_cat=OTHER, so force the OTHER bit on for this
+            // range only; SCAMIN still culls them (disp_cat != base). Mirrors
+            // resolve.categoryVisible's SOUNDG special-case on the vector/pixel paths.
+            if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
             if (r.prim == cc.TILE57_GPU_TRIANGLES) {
                 if (s.vbuf == null or s.ibuf == null) continue;
                 cc.SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
