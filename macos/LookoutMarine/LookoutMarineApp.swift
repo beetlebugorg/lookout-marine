@@ -14,6 +14,20 @@ struct LookoutMarineApp: App {
     // survives view-tree rebuilds.
     @State private var controller = ChartController()
 
+    init() {
+        #if os(macOS)
+        // A dev build is often launched as a bare executable (build-dev.sh, a
+        // terminal) rather than through LaunchServices. Without this the app
+        // comes up as a background-ish process: no focus until clicked twice,
+        // flaky key-window behavior, unreliable full-screen. Make it a regular,
+        // active app regardless of how it was started.
+        NSApplication.shared.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView(model: model, controller: controller)
