@@ -7,17 +7,29 @@ const std = @import("std");
 
 pub const Vec2 = struct { x: f64, y: f64 };
 
+/// Wrap a world x into [0,1) — longitude is cyclic (the antimeridian).
+pub fn wrapX(x: f64) f64 {
+    return x - std.math.floor(x);
+}
+
+/// The SHORT-WAY difference a - b of two world x's, in [-0.5, 0.5): the delta
+/// that crosses the antimeridian when that is nearer.
+pub fn wrapDx(a: f64, b: f64) f64 {
+    const d = a - b;
+    return d - std.math.round(d);
+}
+
 /// lon/lat (degrees) -> normalized web-mercator [0,1], y down.
 pub fn lonLatToWorld(lon: f64, lat: f64) Vec2 {
-    const x = (lon + 180.0) / 360.0;
+    const x = wrapX((lon + 180.0) / 360.0);
     const s = std.math.sin(lat * std.math.pi / 180.0);
     const y = 0.5 - std.math.log(f64, std.math.e, (1.0 + s) / (1.0 - s)) / (4.0 * std.math.pi);
     return .{ .x = x, .y = y };
 }
 
-/// normalized world [0,1] -> lon/lat degrees.
+/// normalized world [0,1] -> lon/lat degrees ([-180, 180)).
 pub fn worldToLonLat(w: Vec2) Vec2 {
-    const lon = w.x * 360.0 - 180.0;
+    const lon = wrapX(w.x) * 360.0 - 180.0;
     const n = std.math.pi - 2.0 * std.math.pi * w.y;
     const lat = (180.0 / std.math.pi) * std.math.atan(0.5 * (std.math.exp(n) - std.math.exp(-n)));
     return .{ .x = lon, .y = lat };
@@ -47,6 +59,14 @@ pub const Camera = struct {
     /// px-per-world-unit at the current zoom (256 px per tile).
     pub fn worldToPx(self: Camera) f64 {
         return 256.0 * std.math.pow(f64, 2.0, self.zoom);
+    }
+
+    /// Keep the viewport on the map vertically: y clamps so the view can't
+    /// scroll past the mercator top/bottom (x, by contrast, wraps). When the
+    /// whole world is shorter than the viewport, center it.
+    pub fn clampY(self: *Camera) void {
+        const hh = @as(f64, self.vh) * 0.5 / self.worldToPx();
+        self.center.y = if (hh >= 0.5) 0.5 else std.math.clamp(self.center.y, hh, 1.0 - hh);
     }
 
     /// Column-major mat4 mapping camera-relative world (world - origin, as f32)
@@ -89,7 +109,8 @@ pub const Camera = struct {
         return .{ @floatCast(std.math.sin(self.rotation)), @floatCast(std.math.cos(self.rotation)) };
     }
 
-    /// screen px (y down, origin top-left) -> world [0,1] (rotation-aware).
+    /// screen px (y down, origin top-left) -> world (x wrapped to [0,1)),
+    /// rotation-aware.
     pub fn screenToWorld(self: Camera, px: f32, py: f32) Vec2 {
         const s = self.worldToPx();
         const c = std.math.cos(self.rotation);
@@ -99,15 +120,17 @@ pub const Camera = struct {
         // inverse rotation R(-theta)
         const wx = (c * ex + sn * ey) / s;
         const wy = (-sn * ex + c * ey) / s;
-        return .{ .x = self.center.x + wx, .y = self.center.y + wy };
+        return .{ .x = wrapX(self.center.x + wx), .y = self.center.y + wy };
     }
 
-    /// world [0,1] -> screen px (rotation-aware).
+    /// world [0,1] -> screen px (rotation-aware). The x delta takes the SHORT
+    /// way around the antimeridian, so a feature just across the seam maps to
+    /// the near instance instead of a world-width away.
     pub fn worldToScreen(self: Camera, w: Vec2) Vec2 {
         const s = self.worldToPx();
         const c = std.math.cos(self.rotation);
         const sn = std.math.sin(self.rotation);
-        const rx = (w.x - self.center.x) * s;
+        const rx = wrapDx(w.x, self.center.x) * s;
         const ry = (w.y - self.center.y) * s;
         return .{
             .x = (c * rx - sn * ry) + @as(f64, self.vw) * 0.5,
@@ -120,8 +143,9 @@ pub const Camera = struct {
         const before = self.screenToWorld(px, py);
         self.zoom = std.math.clamp(self.zoom + dz, self.min_zoom, self.max_zoom);
         const after = self.screenToWorld(px, py);
-        self.center.x += before.x - after.x;
+        self.center.x = wrapX(self.center.x + wrapDx(before.x, after.x));
         self.center.y += before.y - after.y;
+        self.clampY();
     }
 
     // Animation time constants (seconds).
@@ -166,8 +190,9 @@ pub const Camera = struct {
             if (@abs(self.target_zoom - self.zoom) < 1e-4) self.zoom = self.target_zoom;
             // Keep the pivot world point under its cursor px as the zoom changes.
             const after = self.screenToWorld(self.zfx, self.zfy);
-            self.center.x += self.zfocus.x - after.x;
+            self.center.x = wrapX(self.center.x + wrapDx(self.zfocus.x, after.x));
             self.center.y += self.zfocus.y - after.y;
+            self.clampY();
         }
         if (@abs(self.vel_x) > FLING_MIN or @abs(self.vel_y) > FLING_MIN) {
             self.panPx(@floatCast(self.vel_x * dt), @floatCast(self.vel_y * dt));
@@ -180,14 +205,15 @@ pub const Camera = struct {
         }
     }
 
-    /// Pan by a screen-px delta (rotation-aware).
+    /// Pan by a screen-px delta (rotation-aware). x wraps at the antimeridian.
     pub fn panPx(self: *Camera, dx: f32, dy: f32) void {
         const s = self.worldToPx();
         const c = std.math.cos(self.rotation);
         const sn = std.math.sin(self.rotation);
         // move the world opposite the drag, un-rotating the screen delta
-        self.center.x -= (c * @as(f64, dx) + sn * @as(f64, dy)) / s;
+        self.center.x = wrapX(self.center.x - (c * @as(f64, dx) + sn * @as(f64, dy)) / s);
         self.center.y -= (-sn * @as(f64, dx) + c * @as(f64, dy)) / s;
+        self.clampY();
     }
 
     /// Viewport half-extents in world units at the current zoom.

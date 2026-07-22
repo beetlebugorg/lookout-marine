@@ -21,7 +21,7 @@ layout(set = 1, binding = 0) uniform U {
     float size_scale;
     float current_scale;
     uint  cat_mask;
-    uint  _pad0;
+    float wrap_x;   // camera center world-x: wrap each vertex to the NEAR world instance
     float rot_sin;
     float rot_cos;
     vec4  color;        // per-range flat colour (straight alpha, 0..1)
@@ -35,7 +35,10 @@ void main() {
     uint disp_cat = a_packed & 0xFFu;
     bool map_align = ((a_packed >> 8) & 0xFFu) != 0u;
 
-    vec4 clip = u.mvp * vec4(a_world, 0.0, 1.0);
+    // Longitude is cyclic: draw this vertex at the world instance nearest the
+    // camera (x, x-1 or x+1), so a view straddling the antimeridian is seamless.
+    vec2 world = vec2(a_world.x + round(u.wrap_x - a_world.x), a_world.y);
+    vec4 clip = u.mvp * vec4(world, 0.0, 1.0);
 
     // line edges carry a constant-screen-size local px offset; area interiors
     // have local == 0. MAP-aligned marks turn with the chart.

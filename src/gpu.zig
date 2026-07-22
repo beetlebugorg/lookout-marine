@@ -15,7 +15,9 @@ pub const Uniforms = extern struct {
     size_scale: f32,
     current_scale: f32,
     cat_mask: u32,
-    _pad0: u32 = 0,
+    /// Camera center world-x: the vertex shaders wrap each vertex to the world
+    /// instance (x, x±1) nearest this, making the antimeridian seamless.
+    wrap_x: f32 = 0.5,
     rot_sin: f32,
     rot_cos: f32,
     color: [4]f32 = .{ 0, 0, 0, 1 }, // per-range flat colour (triangles), straight alpha
@@ -69,6 +71,18 @@ pub const Gpu = struct {
     msaa_used: bool,
     width: u32,
     height: u32,
+    /// True when `window` wraps a host-owned native view (embed mode): the host
+    /// runs the window; we must never drive its size from our side.
+    external_window: bool = false,
+    /// Embed mode: the host view's LOGICAL size, from its latest resize() call —
+    /// the authoritative point size (SDL's own idea of a wrapped window's size
+    /// goes stale across host-driven transitions like full screen).
+    host_pt_w: f32 = 0,
+    host_pt_h: f32 = 0,
+    /// SDL_GetTicks when the swapchain drawable last changed size — scenes
+    /// built near a swapchain recreation can be silently broken on this stack,
+    /// so the host schedules follow-up rebuilds while this is recent.
+    size_changed_ms: i64 = -100000,
     /// pixels per logical point (Retina/HiDPI = 2.0). SDL mouse events are in
     /// logical points; multiply by this to reach the pixel-space viewport.
     pixel_density: f32 = 1.0,
@@ -103,7 +117,13 @@ pub const Gpu = struct {
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8, pattern_vert_spv: []const u8, pattern_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
         try check(cc.SDL_Init(cc.SDL_INIT_VIDEO), "SDL_Init");
-        const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, true, null), "CreateGPUDevice");
+        // debug_mode only on request: with it on, SDL enables the Khronos
+        // validation layer whenever one is installed — a big frame cost, and the
+        // layer itself can corrupt state or crash across swapchain recreations
+        // (observed: SIGSEGV in vvl::QueueSubmission::BeginUse after the
+        // full-screen transition).
+        const debug_gpu = std.c.getenv("LOOKOUT_GPU_DEBUG") != null;
+        const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, debug_gpu, null), "CreateGPUDevice");
 
         var window: ?*cc.SDL_Window = null;
         var color_format: cc.SDL_GPUTextureFormat = cc.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -136,7 +156,7 @@ pub const Gpu = struct {
         // MSAA probe
         var sample_count: cc.SDL_GPUSampleCount = cc.SDL_GPU_SAMPLECOUNT_1;
         var msaa_used = false;
-        if (opts.want_msaa and cc.SDL_GPUTextureSupportsSampleCount(device, color_format, cc.SDL_GPU_SAMPLECOUNT_4)) {
+        if (opts.want_msaa and std.c.getenv("LOOKOUT_NO_MSAA") == null and cc.SDL_GPUTextureSupportsSampleCount(device, color_format, cc.SDL_GPU_SAMPLECOUNT_4)) {
             sample_count = cc.SDL_GPU_SAMPLECOUNT_4;
             msaa_used = true;
         }
@@ -160,6 +180,7 @@ pub const Gpu = struct {
             .msaa_used = msaa_used,
             .width = width,
             .height = height,
+            .external_window = opts.native_kind != .none,
             .pixel_density = pixel_density,
         };
 
@@ -223,6 +244,18 @@ pub const Gpu = struct {
     /// Resize the render surface. width/height are in logical points; the pixel
     /// size (HiDPI) is derived. Recreates the offscreen/MSAA targets.
     pub fn resize(self: *Gpu, width_pts: u32, height_pts: u32) !void {
+        // Embed mode: ONLY remember the host's logical size (the density ground
+        // truth) — pixel size and render targets follow the acquired swapchain
+        // (renderWindow). Two reasons: SDL_SetWindowSize on a wrapped NSWindow
+        // re-enters the AppKit layout pass that triggered the resize (unbounded
+        // recursion, aborts in the full-screen transition), and SDL's pixel
+        // query goes stale across host transitions — acting on it would thrash
+        // the MSAA target against the real drawable and blank the resolve.
+        if (self.external_window) {
+            self.host_pt_w = @floatFromInt(width_pts);
+            self.host_pt_h = @floatFromInt(height_pts);
+            return;
+        }
         var pw = width_pts;
         var ph = height_pts;
         if (self.window) |w| {
@@ -253,6 +286,21 @@ pub const Gpu = struct {
             try self.ensureOffscreenTargets();
         } else if (self.msaa_used) {
             self.msaa_tex = try self.makeColorTex(self.sample_count, false);
+        }
+        // WORKAROUND (SDL_GPU Vulkan + MoltenVK): after the implicit swapchain
+        // recreation a resize causes, geometry draws stop rasterizing (clears
+        // still land — the window shows only background). A full release +
+        // re-claim rebuilds the swapchain cleanly and restores rasterization; a
+        // minimal SDL_GPU triangle app reproduces the underlying bug. Safe here:
+        // resize is called between frames, so no command buffer is in flight.
+        if (self.window) |w| {
+            _ = cc.SDL_WaitForGPUIdle(self.device);
+            cc.SDL_ReleaseWindowFromGPUDevice(self.device, w);
+            if (!cc.SDL_ClaimWindowForGPUDevice(self.device, w)) {
+                std.debug.print("re-claim window failed: {s}\n", .{cc.SDL_GetError()});
+                return error.SdlFailure;
+            }
+            self.color_format = cc.SDL_GetGPUSwapchainTextureFormat(self.device, w);
         }
     }
 
@@ -515,11 +563,16 @@ pub const Gpu = struct {
     }
 
     // ---- upload the built scene into persistent GPU buffers (once) ----------
+    // The upload is VERIFIED (read back and compared) and retried: copy commands
+    // submitted around a swapchain recreation (a host window transition) can be
+    // silently dropped on the macOS stack, leaving a zeroed buffer — a chart
+    // that "renders" nothing. A few ms per scene rebuild buys certainty.
     fn uploadBuffer(self: *Gpu, usage: cc.SDL_GPUBufferUsageFlags, bytes: []const u8) !*cc.SDL_GPUBuffer {
         var bi = std.mem.zeroes(cc.SDL_GPUBufferCreateInfo);
         bi.usage = usage;
         bi.size = @intCast(bytes.len);
         const buf = try checkPtr(cc.SDL_CreateGPUBuffer(self.device, &bi), "CreateGPUBuffer");
+        errdefer cc.SDL_ReleaseGPUBuffer(self.device, buf);
 
         var ti = std.mem.zeroes(cc.SDL_GPUTransferBufferCreateInfo);
         ti.usage = cc.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
@@ -527,19 +580,47 @@ pub const Gpu = struct {
         const tb = try checkPtr(cc.SDL_CreateGPUTransferBuffer(self.device, &ti), "CreateUploadTB");
         defer cc.SDL_ReleaseGPUTransferBuffer(self.device, tb);
 
-        const map = cc.SDL_MapGPUTransferBuffer(self.device, tb, false);
-        const dst: [*]u8 = @ptrCast(map);
-        @memcpy(dst[0..bytes.len], bytes);
-        cc.SDL_UnmapGPUTransferBuffer(self.device, tb);
+        var attempt: usize = 0;
+        while (attempt < 3) : (attempt += 1) {
+            const map = cc.SDL_MapGPUTransferBuffer(self.device, tb, true);
+            const dst: [*]u8 = @ptrCast(map);
+            @memcpy(dst[0..bytes.len], bytes);
+            cc.SDL_UnmapGPUTransferBuffer(self.device, tb);
 
+            const cmd = cc.SDL_AcquireGPUCommandBuffer(self.device);
+            const cp = cc.SDL_BeginGPUCopyPass(cmd);
+            const src = cc.SDL_GPUTransferBufferLocation{ .transfer_buffer = tb, .offset = 0 };
+            const dstr = cc.SDL_GPUBufferRegion{ .buffer = buf, .offset = 0, .size = @intCast(bytes.len) };
+            cc.SDL_UploadToGPUBuffer(cp, &src, &dstr, false);
+            cc.SDL_EndGPUCopyPass(cp);
+            try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit upload");
+            if (self.verifyBuffer(buf, bytes)) return buf;
+            std.debug.print("scene upload verify failed (attempt {d}); retrying\n", .{attempt + 1});
+        }
+        return error.SdlFailure;
+    }
+
+    // Read `buf` back and compare with `bytes` (spot checks + full tail); false
+    // when the GPU copy didn't land.
+    fn verifyBuffer(self: *Gpu, buf: *cc.SDL_GPUBuffer, bytes: []const u8) bool {
+        var ti = std.mem.zeroes(cc.SDL_GPUTransferBufferCreateInfo);
+        ti.usage = cc.SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+        ti.size = @intCast(bytes.len);
+        const tb = cc.SDL_CreateGPUTransferBuffer(self.device, &ti) orelse return false;
+        defer cc.SDL_ReleaseGPUTransferBuffer(self.device, tb);
         const cmd = cc.SDL_AcquireGPUCommandBuffer(self.device);
         const cp = cc.SDL_BeginGPUCopyPass(cmd);
-        const src = cc.SDL_GPUTransferBufferLocation{ .transfer_buffer = tb, .offset = 0 };
-        const dstr = cc.SDL_GPUBufferRegion{ .buffer = buf, .offset = 0, .size = @intCast(bytes.len) };
-        cc.SDL_UploadToGPUBuffer(cp, &src, &dstr, false);
+        const src = cc.SDL_GPUBufferRegion{ .buffer = buf, .offset = 0, .size = @intCast(bytes.len) };
+        const dst = cc.SDL_GPUTransferBufferLocation{ .transfer_buffer = tb, .offset = 0 };
+        cc.SDL_DownloadFromGPUBuffer(cp, &src, &dst);
         cc.SDL_EndGPUCopyPass(cp);
-        try check(cc.SDL_SubmitGPUCommandBuffer(cmd), "submit upload");
-        return buf;
+        const fence = cc.SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+        if (fence == null) return false;
+        _ = cc.SDL_WaitForGPUFences(self.device, true, @ptrCast(&fence), 1);
+        cc.SDL_ReleaseGPUFence(self.device, fence);
+        const map: [*]const u8 = @ptrCast(cc.SDL_MapGPUTransferBuffer(self.device, tb, false) orelse return false);
+        defer cc.SDL_UnmapGPUTransferBuffer(self.device, tb);
+        return std.mem.eql(u8, map[0..bytes.len], bytes);
     }
 
     // ---- the draw-ready scene from tile57 ----------------------------------
@@ -547,13 +628,13 @@ pub const Gpu = struct {
     // on-screen tiling period). Uploaded per pattern the scene references.
     const PatternTex = struct { tex: ?*cc.SDL_GPUTexture = null, w: f32 = 1, h: f32 = 1 };
 
-    /// GPU-resident whole-view scene: the three buffers tile57 packs, the
+    /// GPU-resident whole-view scene: the triangle stream (pre-expanded from
+    /// tile57's indexed buffers — see uploadGpuScene), the sprite/SDF quads, the
     /// paint-ordered ranges (host-owned copy), and one texture per pattern cell.
     pub const Scene = struct {
-        vbuf: ?*cc.SDL_GPUBuffer = null, // triangle vertices (tile57_gpu_vertex)
-        ibuf: ?*cc.SDL_GPUBuffer = null, // u32 indices
+        vbuf: ?*cc.SDL_GPUBuffer = null, // de-indexed triangle vertices (tile57_gpu_vertex)
         qbuf: ?*cc.SDL_GPUBuffer = null, // sprite/SDF quads (tile57_gpu_quad)
-        index_count: u32 = 0,
+        index_count: u32 = 0, // vertices in vbuf (== the engine's index count)
         ranges: []cc.tile57_gpu_range = &.{},
         patterns: []PatternTex = &.{},
         alloc: std.mem.Allocator,
@@ -564,15 +645,29 @@ pub const Gpu = struct {
     /// are borrowed — everything needed is copied here, so the caller may free it
     /// (tile57_gpu_scene_free) as soon as this returns.
     pub fn uploadGpuScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !void {
-        self.freeScene();
+        // Build the NEW scene's buffers BEFORE releasing the old ones: freeing
+        // first lets the driver hand back a recycled buffer handle, and a stale
+        // binding cache keyed on the handle can then reference the destroyed
+        // buffer — draws that silently produce nothing.
         var out = Scene{ .alloc = alloc };
         errdefer self.freeSceneValue(&out);
 
         if (s.vertex_count > 0 and s.index_count > 0) {
+            // The engine hands indexed triangles, but we expand them into a flat
+            // vertex stream and draw NON-indexed. Indexed draws are broken on the
+            // macOS stack under this renderer (SDL_GPU Vulkan -> MoltenVK 1.4.1
+            // -> Metal): with byte-verified buffer contents, matching pipeline
+            // layouts and clean validation, vkCmdDrawIndexed deterministically
+            // resolves wrong (in-buffer but incorrect) vertices for draws deeper
+            // into the index buffer, shredding polygons into giant wedges. The
+            // same data drawn non-indexed is pixel-correct. Costs ~2x triangle
+            // vertex memory (a few MB per scene) — correctness wins.
             const verts = s.vertices[0..s.vertex_count];
             const idx = s.indices[0..s.index_count];
-            out.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(verts));
-            out.ibuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_INDEX, std.mem.sliceAsBytes(idx));
+            const flat = try alloc.alloc(cc.tile57_gpu_vertex, s.index_count);
+            defer alloc.free(flat);
+            for (idx, 0..) |ii, k| flat[k] = verts[ii];
+            out.vbuf = try self.uploadBuffer(cc.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(flat));
             out.index_count = @intCast(s.index_count);
         }
         if (s.quad_count > 0) {
@@ -593,13 +688,13 @@ pub const Gpu = struct {
                     p.tex = self.makeAtlasTexture(cell.rgba[0..need], cell.w, cell.h) catch null;
             }
         }
+        self.freeScene();
         self.scene = out;
     }
 
     fn freeSceneValue(self: *Gpu, s: *Scene) void {
         const d = self.device;
         if (s.vbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
-        if (s.ibuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         if (s.qbuf) |b| cc.SDL_ReleaseGPUBuffer(d, b);
         for (s.patterns) |p| if (p.tex) |t| cc.SDL_ReleaseGPUTexture(d, t);
         if (s.ranges.len > 0) s.alloc.free(s.ranges);
@@ -640,9 +735,10 @@ pub const Gpu = struct {
 
     // ---- record + issue one frame's draws into a target --------------------
     // Walk the ranges in paint order, switching pipeline per range: triangles ->
-    // flat-colour (or pattern) pipeline, drawn indexed; quads -> sprite or SDF
-    // pipeline, drawn straight. `text_on`/`sound_on` drop those ranges live (the
-    // engine emits them; the host gates by skipping the draw). The pattern anchor
+    // flat-colour (or pattern) pipeline; quads -> sprite or SDF pipeline. Both
+    // draw non-indexed (the triangle stream is de-indexed at upload — see
+    // uploadGpuScene). `text_on`/`sound_on` drop those ranges live (the engine
+    // emits them; the host gates by skipping the draw). The pattern anchor
     // + per-cell period ride the uniform.
     fn recordDraws(self: *Gpu, cmd: *cc.SDL_GPUCommandBuffer, target: *cc.SDL_GPUTexture, resolve: ?*cc.SDL_GPUTexture, u: Uniforms, text_on: bool, sound_on: bool) void {
         var cti = std.mem.zeroes(cc.SDL_GPUColorTargetInfo);
@@ -654,15 +750,34 @@ pub const Gpu = struct {
             cti.resolve_texture = rt;
         } else cti.store_op = cc.SDL_GPU_STOREOP_STORE;
         const pass = cc.SDL_BeginGPURenderPass(cmd, &cti, 1, null);
+        if (pass == null) std.debug.print("BeginGPURenderPass FAILED: {s}\n", .{cc.SDL_GetError()});
         defer cc.SDL_EndGPURenderPass(pass);
         const vp = cc.SDL_GPUViewport{ .x = 0, .y = 0, .w = @floatFromInt(self.width), .h = @floatFromInt(self.height), .min_depth = 0, .max_depth = 1 };
         cc.SDL_SetGPUViewport(pass, &vp);
+        // Set the scissor EXPLICITLY every pass: after a swapchain recreation
+        // (host window transition) the inherited scissor state can be stale —
+        // the load-op clear ignores scissor, so the symptom is a chart that
+        // "renders" only its background.
+        const scis = cc.SDL_Rect{ .x = 0, .y = 0, .w = @intCast(self.width), .h = @intCast(self.height) };
+        cc.SDL_SetGPUScissor(pass, &scis);
 
+        if (std.c.getenv("LOOKOUT_DRAW_DEBUG") != null) {
+            const S = struct {
+                var n: u64 = 0;
+            };
+            S.n += 1;
+            if (S.n % 20 == 1) {
+                if (self.scene) |*sc| {
+                    std.debug.print("draw: ranges={d} idx={d} vp={d}x{d} mvp=({d:.3},{d:.3},{d:.3},{d:.3}) cat={x} cs={e:.3} wrap={d:.4} sz={d:.2}\n", .{ sc.ranges.len, sc.index_count, self.width, self.height, u.mvp[0], u.mvp[5], u.mvp[12], u.mvp[13], u.cat_mask, u.current_scale, u.wrap_x, u.size_scale });
+                } else {
+                    std.debug.print("draw: NO SCENE vp={d}x{d}\n", .{ self.width, self.height });
+                }
+            }
+        }
         const s = if (self.scene) |*sc| sc else return;
         self.labelDebug(s);
         const vbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]cc.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
-        const ib = cc.SDL_GPUBufferBinding{ .buffer = s.ibuf, .offset = 0 };
 
         for (s.ranges) |r| {
             switch (r.kind) {
@@ -679,9 +794,8 @@ pub const Gpu = struct {
             // resolve.categoryVisible's SOUNDG special-case on the vector/pixel paths.
             if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
             if (r.prim == cc.TILE57_GPU_TRIANGLES) {
-                if (s.vbuf == null or s.ibuf == null) continue;
+                if (s.vbuf == null) continue;
                 cc.SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
-                cc.SDL_BindGPUIndexBuffer(pass, &ib, cc.SDL_GPU_INDEXELEMENTSIZE_32BIT);
                 if (r.pattern != cc.TILE57_GPU_NO_PATTERN and self.pattern_pipeline != null and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
                     const pt = s.patterns[r.pattern];
                     // Scale the cell with the zoom so it tracks the geometry (which
@@ -698,7 +812,9 @@ pub const Gpu = struct {
                     cc.SDL_BindGPUGraphicsPipeline(pass, self.pipeline);
                 }
                 cc.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
-                cc.SDL_DrawGPUIndexedPrimitives(pass, r.count, 1, r.first, 0, 0);
+                // range.first/count are index-buffer units, which after the
+                // upload-time expansion are exactly flat-vertex units.
+                cc.SDL_DrawGPUPrimitives(pass, r.count, 1, r.first, 0);
             } else { // QUADS
                 if (s.qbuf == null) continue;
                 const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or
@@ -743,6 +859,70 @@ pub const Gpu = struct {
         if (swap == null) {
             _ = cc.SDL_SubmitGPUCommandBuffer(cmd);
             return true; // window minimized etc.
+        }
+        // The swapchain drawable is the ground truth for the frame's size — on a
+        // wrapped native view it can differ from what SDL_GetWindowSizeInPixels
+        // claims (the layer may be laid out, or scaled, after the wrap). Adopt
+        // it: viewport, MSAA target and (via logicalSize) the camera all follow,
+        // so the picture, the cursor math and the mark sizes stay consistent.
+        if (w != self.width or h != self.height) {
+            std.debug.print("swapchain {d}x{d} (was {d}x{d}); adopting\n", .{ w, h, self.width, self.height });
+            self.size_changed_ms = @intCast(cc.SDL_GetTicks());
+            self.width = w;
+            self.height = h;
+            if (self.msaa_tex) |t| {
+                cc.SDL_ReleaseGPUTexture(self.device, t);
+                self.msaa_tex = null;
+            }
+            if (self.resolve_tex) |t| {
+                cc.SDL_ReleaseGPUTexture(self.device, t);
+                self.resolve_tex = null;
+            }
+            if (self.download_tb) |t| {
+                cc.SDL_ReleaseGPUTransferBuffer(self.device, t);
+                self.download_tb = null;
+            }
+            try self.ensureMsaa();
+            // WORKAROUND (SDL_GPU Vulkan + MoltenVK): after the IMPLICIT
+            // swapchain recreation that follows a window resize, geometry draws
+            // stop rasterizing — clears still land, so the window shows only
+            // background. (A minimal 80-line SDL_GPU triangle app reproduces
+            // it.) A full release + re-claim of the window rebuilds the
+            // swapchain cleanly and restores rasterization. We skip this frame
+            // (submit the empty command buffer — cancel is illegal once a
+            // swapchain texture is acquired) and draw next tick.
+            _ = cc.SDL_SubmitGPUCommandBuffer(cmd);
+            _ = cc.SDL_WaitForGPUIdle(self.device);
+            cc.SDL_ReleaseWindowFromGPUDevice(self.device, window);
+            if (!cc.SDL_ClaimWindowForGPUDevice(self.device, window)) {
+                std.debug.print("re-claim window failed: {s}\n", .{cc.SDL_GetError()});
+                return false;
+            }
+            self.color_format = cc.SDL_GetGPUSwapchainTextureFormat(self.device, window);
+            return true;
+        }
+        // Density is recomputed EVERY frame, not just on a size change: during an
+        // animated transition (full screen) the point size briefly lags the
+        // drawable, and a ratio captured at that moment would otherwise stick
+        // forever, leaving every mark and the camera at the wrong scale. For a
+        // wrapped view the point size comes from the HOST's resize calls —
+        // SDL_GetWindowSize goes stale across host-driven transitions.
+        {
+            var lw_f: f32 = 0;
+            if (self.external_window and self.host_pt_w > 0) {
+                lw_f = self.host_pt_w;
+            } else {
+                var lw: c_int = 0;
+                var lh: c_int = 0;
+                if (cc.SDL_GetWindowSize(window, &lw, &lh) and lw > 0) lw_f = @floatFromInt(lw);
+            }
+            if (lw_f > 0) {
+                const d = @as(f32, @floatFromInt(w)) / lw_f;
+                if (d > 0.25 and d < 8 and @abs(d - self.pixel_density) > 0.001) {
+                    std.debug.print("pixel density {d:.2} -> {d:.2}\n", .{ self.pixel_density, d });
+                    self.pixel_density = d;
+                }
+            }
         }
         if (self.msaa_used) {
             self.recordDraws(cmd, self.msaa_tex.?, swap, u, text_on, sound_on);

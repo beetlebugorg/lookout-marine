@@ -1,11 +1,16 @@
-# lookout-core
+# lookout-marine
 
-A native library + demo that opens a baked **tile57** nautical chart and renders
-it interactively on **SDL3 `SDL_GPU`** (Vulkan/Metal/D3D12), consuming tile57's
-**Surface interface** — the world-space, semantically-tagged draw-call stream.
-It follows the interface's contract: **tessellate the scene once, then transform
-it per frame** with a camera matrix. Day/night palette and mariner display gates
-switch without re-tessellating.
+A native **macOS S-52 electronic-chart plotter**. It opens a baked **tile57**
+nautical chart and renders it interactively on **SDL3 `SDL_GPU`**
+(Vulkan/Metal/D3D12), consuming tile57's **Surface interface** — the world-space,
+semantically-tagged draw-call stream. It follows the interface's contract:
+**tessellate the scene once, then transform it per frame** with a camera matrix.
+Day/night palette and mariner display gates switch without re-tessellating.
+
+The GPU chart core is wrapped in a first-class SwiftUI macOS app (`macos/`) —
+menu bar, HUD, zoom controls, mariner settings, and search — driven through the
+core's C ABI. The core also ships as a static library (`liblookout_marine.a` +
+`include/lookout.h`) and a headless demo executable.
 
 This is a prototype/proof-of-concept — not for navigation, not S-52 pixel-perfect.
 
@@ -13,12 +18,16 @@ This is a prototype/proof-of-concept — not for navigation, not S-52 pixel-perf
 
 ## What it is
 
-- **`liblookout.a`** — the core, a static library with a small C ABI
-  (`include/lookout.h`) meant to be embedded as a chart widget in an existing
-  app. It opens a chart (or composes a whole library), owns all the
-  SDL/GPU/tessellation internally, and renders into **your app's native window**
+- **`macos/`** — the app: a native SwiftUI macOS chartplotter. It embeds the Zig
+  core as a static library, drives it through `include/lookout.h`, and renders the
+  chart into an `NSView`. See `macos/README.md` to build it.
+- **`liblookout_marine.a`** — the core, a static library with a small C ABI
+  (`include/lookout.h`). It opens a chart (or composes a whole library), owns all
+  the SDL/GPU/tessellation internally, and renders into a native window
   (NSWindow / NSView / HWND / X11) or into a pixel buffer you upload yourself.
-- **`lookout`** — a demo executable driving the library (window or headless PNG).
+  The C ABI is also the internal Swift↔Zig bridge the app talks to.
+- **`lookout-marine-demo`** — a demo executable driving the core (window or
+  headless PNG); the headless/Linux smoke test.
 
 Written in **Zig** (0.16). **The host never sees or links SDL** — SDL is an
 internal implementation detail (window transport + `SDL_GPU`). All vector work

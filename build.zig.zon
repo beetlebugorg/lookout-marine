@@ -1,7 +1,7 @@
 .{
-    .name = .lookout,
+    .name = .lookout_marine,
     .version = "0.1.0",
     .minimum_zig_version = "0.16.0",
-    .fingerprint = 0x993660751f5a2d00,
+    .fingerprint = 0x40d25cc1551ceccf,
     .paths = .{ "build.zig", "build.zig.zon", "src", "shaders", "vendor", "include" },
 }

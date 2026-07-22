@@ -52,6 +52,11 @@ lookout *lookout_open_charts(const char *const *paths, size_t n,
 lookout *lookout_open_in_window(lookout_native_kind kind, void *native_handle,
                                 const char *chart_path,
                                 uint32_t width, uint32_t height, int want_msaa);
+/* Embed a composed chart LIBRARY (a directory of cells) into your native window —
+ * like lookout_open_in_window but for many baked charts at once. NULL on error. */
+lookout *lookout_open_charts_in_window(lookout_native_kind kind, void *native_handle,
+                                       const char *const *paths, size_t n,
+                                       uint32_t width, uint32_t height, int want_msaa);
 void lookout_close(lookout *h);
 
 /* ---- view -------------------------------------------------------------- */
@@ -99,6 +104,24 @@ void lookout_toggle_soundings(lookout *h);
 void lookout_toggle_other_category(lookout *h);
 void lookout_nudge_safety_contour(lookout *h, double delta);
 void lookout_adjust_size(lookout *h, float factor);
+
+/* ---- smooth interaction ------------------------------------------------ */
+/* Shift-drag course-up rotation: rotate about the view centre by the angle the
+ * cursor swept from (x0,y0) to (x1,y1), both logical points. */
+void lookout_rotate_drag_logical(lookout *h, float x0_pt, float y0_pt, float x1_pt, float y1_pt);
+/* Snap the view back to north-up. */
+void lookout_reset_rotation(lookout *h);
+/* Start a momentum pan with a logical-px/sec velocity (0,0 stops any coast when
+ * a grab starts). */
+void lookout_fling_start(lookout *h, double vx, double vy);
+/* 1 while an eased zoom or fling is in progress — render every frame while true. */
+int  lookout_animating(lookout *h);
+/* Advance the eased zoom / fling by dt seconds; call each frame while animating. */
+void lookout_tick_anim(lookout *h, double dt);
+/* 1 while a background tessellation is filling in — use a short idle timeout. */
+int  lookout_is_building(lookout *h);
+/* The current view's 1:N scale denominator (for the HUD), from the camera math. */
+double lookout_scale_denominator(lookout *h);
 
 #ifdef __cplusplus
 }

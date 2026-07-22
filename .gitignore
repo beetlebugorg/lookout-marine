@@ -2,3 +2,6 @@ zig-out/
 .zig-cache/
 *.png
 !docs/*.png
+.DS_Store
+macos/build/
+macos/LookoutMarine.xcodeproj/

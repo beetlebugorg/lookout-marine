@@ -66,6 +66,24 @@ export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_
     return @ptrCast(l);
 }
 
+/// EMBED a composed chart LIBRARY into your app's native window: like
+/// lookout_open_in_window, but takes MANY baked charts (a directory of cells) and
+/// composes them, presenting into your NSView/HWND/X11 window. NULL on error.
+export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*lookout {
+    const list = gpa.alloc([:0]const u8, n) catch return null;
+    defer gpa.free(list);
+    for (0..n) |i| list[i] = std.mem.span(paths[i]);
+    const l = lk.Lookout.openCharts(gpa, list, .{
+        .width = width,
+        .height = height,
+        .want_window = false,
+        .want_msaa = want_msaa != 0,
+        .native_handle = native_handle,
+        .native_kind = @enumFromInt(kind),
+    }) catch return null;
+    return @ptrCast(l);
+}
+
 export fn lookout_close(h: ?*lookout) void {
     if (h) |x| cast(x).close();
 }
@@ -170,6 +188,39 @@ export fn lookout_nudge_safety_contour(h: ?*lookout, delta: f64) void {
 }
 export fn lookout_adjust_size(h: ?*lookout, factor: f32) void {
     cast(h).adjustSize(factor);
+}
+
+// ---- smooth interaction (see include/lookout.h, §5 of the app spec) ---------
+/// Shift-drag course-up rotation: rotate about the view centre by the angle the
+/// cursor swept from (x0,y0) to (x1,y1), both logical points.
+export fn lookout_rotate_drag_logical(h: ?*lookout, x0_pt: f32, y0_pt: f32, x1_pt: f32, y1_pt: f32) void {
+    cast(h).rotateDragLogical(x0_pt, y0_pt, x1_pt, y1_pt);
+}
+/// Snap the view back to north-up.
+export fn lookout_reset_rotation(h: ?*lookout) void {
+    cast(h).resetRotation();
+}
+/// Start a momentum pan with a logical-px/sec velocity (pass 0,0 to stop coasting
+/// when a grab starts).
+export fn lookout_fling_start(h: ?*lookout, vx: f64, vy: f64) void {
+    cast(h).flingStart(vx, vy);
+}
+/// 1 while an eased zoom or fling is in progress — render every frame while true.
+export fn lookout_animating(h: ?*lookout) c_int {
+    return if (cast(h).animating()) 1 else 0;
+}
+/// Advance the eased zoom / fling by `dt` seconds; call each frame while animating.
+export fn lookout_tick_anim(h: ?*lookout, dt: f64) void {
+    cast(h).tickAnim(dt);
+}
+/// 1 while a background tessellation is filling in — use a short idle timeout so
+/// progressive builds appear.
+export fn lookout_is_building(h: ?*lookout) c_int {
+    return if (cast(h).isBuilding()) 1 else 0;
+}
+/// The current view's 1:N scale denominator, from the authoritative camera math.
+export fn lookout_scale_denominator(h: ?*lookout) f64 {
+    return cast(h).scaleDenominator();
 }
 
 comptime {

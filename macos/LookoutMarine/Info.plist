@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundleDisplayName</key>
+    <string>lookout-marine</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- Dev convenience: make the Homebrew MoltenVK Vulkan backend discoverable on
+         double-click. For distribution, bundle MoltenVK inside the .app and point
+         these at the bundled copy (or drop them and rely on VulkanBootstrap). -->
+    <key>LSEnvironment</key>
+    <dict>
+        <key>DYLD_LIBRARY_PATH</key>
+        <string>/opt/homebrew/lib</string>
+        <key>VK_ICD_FILENAMES</key>
+        <string>/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json</string>
+        <key>VK_DRIVER_FILES</key>
+        <string>/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json</string>
+    </dict>
+    <key>NSHumanReadableCopyright</key>
+    <string>lookout-marine</string>
+    <key>NSMainStoryboardFile</key>
+    <string></string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <!-- Declares the baked-chart extension so Open panels can filter it. -->
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.beetlebug.pmtiles</string>
+            <key>UTTypeDescription</key>
+            <string>Baked PMTiles chart</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>pmtiles</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -464,6 +464,11 @@ pub const Lookout = struct {
         self.cam.center = camera.lonLatToWorld(v.lon, v.lat);
         self.cam.zoom = v.zoom;
         self.cam.rotation = v.rotation_deg * std.math.pi / 180.0;
+        // Pin the animation target to the new pose: otherwise the zoom easer
+        // still aims at the PREVIOUS target and drags the view back (about a
+        // stale cursor pivot) on the next frames.
+        self.cam.setTarget();
+        self.cam.clampY();
         self.markDirty();
     }
     pub fn view(self: *Lookout) View {
@@ -559,6 +564,12 @@ pub const Lookout = struct {
         self.markDirty();
     }
 
+    /// The current view's S-52 display-scale denominator (the N in 1:N), from the
+    /// authoritative camera math (center latitude + zoom). For the HUD readout.
+    pub fn scaleDenominator(self: *Lookout) f64 {
+        return self.cam.displayScale();
+    }
+
     // ---- mariner (ALL S-52 settings) ---------------------------------------
     pub fn getMariner(self: *Lookout) Mariner {
         return self.mariner;
@@ -622,11 +633,13 @@ pub const Lookout = struct {
     }
 
     // True when the current view has panned/zoomed out of the built coverage.
+    // The x distance wraps: panning across the antimeridian is a short hop, not
+    // a world-width jump.
     fn needsRebuild(self: *Lookout) bool {
         if (!self.built) return true;
         if (@abs(self.buildZoom() - self.cov_zoom) > ZOOM_REBUILD) return true;
         const he = self.cam.halfExtents();
-        return @abs(self.cam.center.x - self.cov_origin.x) + he.x > self.cov_hw or
+        return @abs(camera.wrapDx(self.cam.center.x, self.cov_origin.x)) + he.x > self.cov_hw or
             @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
     }
 
@@ -679,11 +692,27 @@ pub const Lookout = struct {
     // coverage. Frees the engine scene either way.
     fn applyJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) void {
         defer cc.tile57_gpu_scene_free(cs);
+        if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
+            const ll = camera.worldToLonLat(job.origin);
+            std.debug.print("applyJob ok={} prefetch={} ll=({d:.4},{d:.4}) z={d:.2} ow={d} oh={d} verts={d} ranges={d}\n", .{ ok, job.prefetch, ll.x, ll.y, job.zoom, job.ow, job.oh, cs.vertex_count, cs.range_count });
+        }
         if (!ok or job.prefetch) return;
-        self.g.uploadGpuScene(self.alloc, cs) catch {};
+        self.g.uploadGpuScene(self.alloc, cs) catch {
+            // Upload can fail transiently (e.g. the command buffer pool during a
+            // window transition). Do NOT record coverage or clear dirty: with a
+            // null scene but satisfied coverage the chart would stay blank
+            // forever. Leaving dirty set retries the build next frame.
+            std.debug.print("scene upload failed; retrying\n", .{});
+            self.dirty = true;
+            return;
+        };
         self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
         self.built = true;
         self.dirty = false;
+        // The fresh scene must actually be DRAWN: without this an async rebuild
+        // that lands after the host's loop went idle (e.g. at the end of a
+        // full-screen transition) sits uploaded but never presented.
+        self.markDirty();
     }
 
     // Synchronous build (snapshots, and the very first frame so there is
@@ -796,6 +825,7 @@ pub const Lookout = struct {
             .size_scale = self.render_size_scale,
             .current_scale = self.cam.displayScale(),
             .cat_mask = self.cat_mask,
+            .wrap_x = @floatCast(self.cam.center.x),
             .rot_sin = rsc[0],
             .rot_cos = rsc[1],
             .anchor_px = .{ @as(f32, @floatCast(a.x)) * d, @as(f32, @floatCast(a.y)) * d },
@@ -813,6 +843,28 @@ pub const Lookout = struct {
                 self.g.freeScene();
                 return self.g.renderWindow(self.uniforms(), false, false);
             }
+        }
+        // The GPU layer adopts the real swapchain drawable size at acquire (a
+        // wrapped native view can be laid out or rescaled behind our back) —
+        // follow it here so the camera's logical viewport always matches what
+        // is actually on screen. Force a full REBUILD, not just a redraw: a
+        // scene uploaded while the drawable was mid-transition (full screen)
+        // can be lost with the old swapchain, and its coverage would otherwise
+        // satisfy the settled view forever, leaving a blank chart.
+        const lw, const lh = self.logicalSize();
+        if (self.cam.vw != lw or self.cam.vh != lh) {
+            self.cam.vw = lw;
+            self.cam.vh = lh;
+            self.dirty = true;
+            self.markDirty();
+        }
+        // Draw state around a swapchain recreation is unreliable on the macOS
+        // stack (a scene built/uploaded then can verify byte-perfect on the GPU
+        // yet rasterize nothing) — keep rebuilding until safely past it; the
+        // first post-window build displays and ends the churn.
+        if (@as(i64, @intCast(cc.SDL_GetTicks())) - self.g.size_changed_ms < 1500) {
+            self.dirty = true;
+            self.markDirty();
         }
         // Refresh the zoom clamps for the current view centre each frame (cheap):
         // panning into a coarser area lowers the per-view max and eases the zoom in.
@@ -835,6 +887,12 @@ pub const Lookout = struct {
 
     /// True while the view needs another frame (state changed, building, loading).
     pub fn needsRedraw(self: *Lookout) bool {
+        // The camera lagging the (just-adopted) drawable size counts as dirty:
+        // the adopt lands mid-render, AFTER that frame's camera sync, and the
+        // host loop may go idle before the next one — without this the resync
+        // (and the rebuild it forces) would never run.
+        const lw, const lh = self.logicalSize();
+        if (self.cam.vw != lw or self.cam.vh != lh) return true;
         return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {

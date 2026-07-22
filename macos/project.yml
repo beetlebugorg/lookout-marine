@@ -1,0 +1,90 @@
+# XcodeGen spec for the lookout-marine macOS app.
+#
+# Why XcodeGen: it declares the whole target — build settings, the Zig run-script
+# phase, header/library search paths, framework links, bridging header — in this
+# reviewable file instead of a fragile hand-written .pbxproj. Generate the project
+# with:
+#
+#     brew install xcodegen         # once
+#     cd macos && xcodegen generate # writes LookoutMarine.xcodeproj
+#     open LookoutMarine.xcodeproj
+#
+# Set TILE57_DIR (below, or in Xcode) to your tile57 checkout. The pre-build
+# script runs `zig build` to produce liblookout_marine.a before compiling Swift.
+
+name: LookoutMarine
+
+options:
+  bundleIdPrefix: org.beetlebug
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    # Point this at your tile57 checkout (contains include/ and zig-out/lib/).
+    TILE57_DIR: "$(SRCROOT)/../../tile57"
+    # Homebrew SDL3 is keg-only; override if yours lives elsewhere.
+    SDL3_DIR: "/opt/homebrew/opt/sdl3"
+
+targets:
+  LookoutMarine:
+    type: application
+    platform: macOS
+    sources:
+      - path: LookoutMarine
+    settings:
+      base:
+        PRODUCT_NAME: LookoutMarine
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LookoutMarine/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LookoutMarine/LookoutMarine.entitlements
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        # Let the Zig build phase run without the user-script sandbox blocking it.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # lookout.h (repo include/) and tile57.h.
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../include"
+          - "$(TILE57_DIR)/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out/lib"
+          - "$(TILE57_DIR)/zig-out/lib"
+          - "$(SDL3_DIR)/lib"
+        # Static Zig cores + the SDL3 dylib.
+        OTHER_LDFLAGS:
+          - "-llookout_marine"
+          - "-ltile57"
+          - "-lSDL3"
+        # Load the Homebrew SDL3 dylib at runtime (dev). For distribution, bundle
+        # SDL3 in the app and add @rpath/@executable_path/../Frameworks instead.
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(SDL3_DIR)/lib"
+    dependencies:
+      # System frameworks SDL3 + MoltenVK/Metal need on macOS.
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: IOKit.framework
+      - sdk: CoreVideo.framework
+      - sdk: CoreAudio.framework
+      - sdk: AudioToolbox.framework
+      - sdk: ForceFeedback.framework
+      - sdk: GameController.framework
+      - sdk: CoreHaptics.framework
+      - sdk: Carbon.framework
+      - sdk: CoreGraphics.framework
+      - sdk: UniformTypeIdentifiers.framework
+    preBuildScripts:
+      - name: Build Zig core (liblookout_marine.a)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
+            --search-prefix "$SDL3_DIR"

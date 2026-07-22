@@ -47,7 +47,7 @@ pub fn build(b: *std.Build) void {
         .pic = true,
     });
     cfg.apply(lib_mod);
-    const lib = b.addLibrary(.{ .name = "lookout", .linkage = .static, .root_module = lib_mod });
+    const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
     lib.installHeader(b.path("include/lookout.h"), "lookout.h");
     b.installArtifact(lib);
 
@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(exe_mod);
-    const exe = b.addExecutable(.{ .name = "lookout", .root_module = exe_mod });
+    const exe = b.addExecutable(.{ .name = "lookout-marine-demo", .root_module = exe_mod });
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
