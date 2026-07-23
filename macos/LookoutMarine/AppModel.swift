@@ -37,6 +37,11 @@ final class AppModel: ObservableObject {
     // MARK: Preferences
     @Published var useDMS = false             // HUD coordinate format
 
+    // MARK: iOS sheet/picker presentation (unused on macOS, where the file
+    // panel and Settings scene are AppKit-native)
+    @Published var showImporter = false
+    @Published var showSettings = false
+
     // MARK: Search
     @Published var searchText = ""
 
@@ -64,6 +69,14 @@ final class AppModel: ObservableObject {
             }
         }
         if let last = recents.first, FileManager.default.fileExists(atPath: last) { return [last] }
+        #if os(iOS)
+        // Cells dropped into the app's Documents (Files.app / Finder sharing)
+        // compose into the startup library.
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let dropped = chartPaths(inDirectory: docs.path)
+            if !dropped.isEmpty { return dropped }
+        }
+        #endif
         if let def = Self.defaultChartPath { return [def] }
         return []
     }

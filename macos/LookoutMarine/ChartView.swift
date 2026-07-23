@@ -5,9 +5,11 @@
 //  the on-demand render loop. All app chrome (HUD, menus, settings) is native
 //  SwiftUI drawn AROUND/OVER this view — lookout owns only the chart pixels.
 //
-//  macOS is implemented concretely below. The iOS branch is a scaffold: the same
-//  ChartController/AppModel drive it; it needs a CAMetalLayer-backed UIView, a
-//  LOOKOUT_NATIVE_UIKIT_VIEW ABI kind, and UIGestureRecognizer input (see README).
+//  The same ChartController/AppModel drive both platforms. macOS embeds lookout
+//  into this NSView directly (SDL wraps it with a CAMetalLayer). iOS can't do
+//  that — SDL has no create-from-UIView property — so lookout gets its own
+//  full-screen UIWindow inside the app's UIWindowScene, and the iOS ChartView is
+//  a transparent gesture surface in the app's chrome window layered above it.
 
 import SwiftUI
 #if canImport(AppKit)
@@ -17,6 +19,53 @@ import QuartzCore
 #if canImport(UIKit)
 import UIKit
 #endif
+
+/// All the floating chrome, over a non-interactive clear fill. Shared by both
+/// platforms: macOS hosts it in an AppKit overlay above the chart's Metal layer;
+/// iOS composes it in plain SwiftUI (the whole chrome window sits above the
+/// chart window, so no layer trickery is needed).
+struct OverlayLayer: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .overlay(alignment: .bottom) {
+                ReadoutsBadge(model: model).padding(12)
+            }
+            .overlay(alignment: .topTrailing) {
+                VStack(alignment: .trailing, spacing: 10) {
+                    SearchField(model: model)
+                    if abs(model.rotationDeg) >= 0.5 {
+                        CompassBadge(rotationDeg: model.rotationDeg) { model.northUp() }
+                    }
+                }
+                .padding(12)
+            }
+            .overlay(alignment: .topLeading) {
+                #if os(iOS)
+                ChartActionsBar(model: model).padding(12)
+                #endif
+            }
+            .overlay(alignment: .bottomTrailing) {
+                ZoomControls(model: model).padding(12)
+            }
+            .overlay(alignment: .bottomLeading) {
+                if !model.pickResults.isEmpty {
+                    IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
+                        .padding(12)
+                }
+            }
+            .overlay(alignment: .top) {
+                if model.isBuilding { BuildingPill().padding(.top, 10) }
+            }
+            .overlay {
+                if !model.hasChart { EmptyChartState(model: model) }
+            }
+            .animation(.default, value: model.pickResults)
+            .animation(.default, value: model.isBuilding)
+    }
+}
 
 #if os(macOS)
 
@@ -60,46 +109,6 @@ final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
         return hit === self ? nil : hit
-    }
-}
-
-/// All the floating chrome, over a non-interactive clear fill. Lives inside the
-/// AppKit overlay host so it draws above the chart's Metal layer.
-struct OverlayLayer: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        Color.clear
-            .allowsHitTesting(false)
-            .overlay(alignment: .bottom) {
-                ReadoutsBadge(model: model).padding(12)
-            }
-            .overlay(alignment: .topTrailing) {
-                VStack(alignment: .trailing, spacing: 10) {
-                    SearchField(model: model)
-                    if abs(model.rotationDeg) >= 0.5 {
-                        CompassBadge(rotationDeg: model.rotationDeg) { model.northUp() }
-                    }
-                }
-                .padding(12)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                ZoomControls(model: model).padding(12)
-            }
-            .overlay(alignment: .bottomLeading) {
-                if !model.pickResults.isEmpty {
-                    IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
-                        .padding(12)
-                }
-            }
-            .overlay(alignment: .top) {
-                if model.isBuilding { BuildingPill().padding(.top, 10) }
-            }
-            .overlay {
-                if !model.hasChart { EmptyChartState(model: model) }
-            }
-            .animation(.default, value: model.pickResults)
-            .animation(.default, value: model.isBuilding)
     }
 }
 
@@ -334,23 +343,334 @@ final class ChartNSView: NSView {
     }
 }
 
-#else  // ---- iOS scaffold (reuses ChartController/AppModel) --------------------
+#else  // ---- iOS (reuses ChartController/AppModel) ---------------------------
 
-struct ChartView: UIViewRepresentable {
+struct ChartView: View {
     @ObservedObject var model: AppModel
     let controller: ChartController
 
-    func makeUIView(context: Context) -> UIView {
-        // TODO(iOS): a CAMetalLayer-backed UIView + LOOKOUT_NATIVE_UIKIT_VIEW ABI
-        // kind + UIPanGestureRecognizer/UIPinchGestureRecognizer input, forwarding
-        // to the SAME ChartController used on macOS. See macos/README.md.
-        let v = UIView()
-        v.backgroundColor = .darkGray
-        controller.model = model
-        model.controller = controller
-        return v
+    var body: some View {
+        // Chrome only: the chart renders in SDL's own window and the gesture
+        // surface (ChartUIView) lives in the plain-UIKit input window between
+        // them — SwiftUI never sees chart touches (see SceneDelegate).
+        OverlayLayer(model: model)
+        .sheet(isPresented: $model.showSettings) {
+            NavigationStack {
+                SettingsView(model: model)
+                    .navigationTitle("Mariner Settings")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { Button("Done") { model.showSettings = false } }
+            }
+        }
+        .fileImporter(isPresented: $model.showImporter,
+                      allowedContentTypes: [.item, .folder]) { result in
+            if case .success(let url) = result { model.openImported(url) }
+        }
     }
-    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+/// The iOS floating command strip (macOS surfaces these in menus/toolbar).
+struct ChartActionsBar: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            bar(icon: "folder") { model.showImporter = true }
+            Divider().frame(width: 30)
+            bar(icon: "circle.lefthalf.filled") { model.cycleScheme() }
+                .disabled(!model.hasChart)
+            Divider().frame(width: 30)
+            bar(icon: "gearshape") { model.showSettings = true }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.separator))
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+    }
+
+    private func bar(icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Transparent full-screen gesture surface — the root view of the plain-UIKit
+/// INPUT window (SceneDelegate). The chart renders in lookout's OWN UIWindow
+/// below it (SDL can't wrap an existing UIView) and the SwiftUI chrome floats
+/// in a PassThroughWindow above; this view owns input, sizing, and the
+/// auto-open.
+final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelegate {
+    weak var controller: ChartController?
+    weak var model: AppModel?
+    /// The SwiftUI chrome window (set by SceneDelegate) — re-asserted key and
+    /// topmost after lookout's chart window appears.
+    weak var chromeWindow: UIWindow?
+    var lastOpenId = 0
+    private var didAutoOpen = false
+    private var lastSizePt = CGSize.zero
+
+    // pinch/rotate gesture state
+    private var lastPinchScale: CGFloat = 1
+    private var lastPinchCentroid = CGPoint.zero
+    private var rotationStartDeg = 0.0
+    /// Last pointer position from hover (nil on touch-only devices) — anchors
+    /// scroll-sink zoom at the pointer when known.
+    private var lastHoverPoint: CGPoint?
+
+    /// Trackpad/wheel sink: simulator front-ends deliver indirect scrolls to
+    /// UIScrollViews but NOT to plain gesture recognizers (measured — lists
+    /// scroll, `allowedScrollTypesMask` pans never fire). This hidden, always
+    /// re-centered scroll view rides on top of the gesture surface: pointer
+    /// scrolls move its contentOffset (converted to zoom in
+    /// scrollViewDidScroll); its pan ignores touches entirely, so finger
+    /// gestures pass to this view's recognizers as before.
+    private let scrollSink = UIScrollView()
+    private var sinkRecentering = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isMultipleTouchEnabled = true
+        installGestures()
+        installScrollSink()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    private func installScrollSink() {
+        scrollSink.backgroundColor = .clear
+        scrollSink.showsVerticalScrollIndicator = false
+        scrollSink.showsHorizontalScrollIndicator = false
+        scrollSink.contentInsetAdjustmentBehavior = .never
+        scrollSink.delegate = self
+        scrollSink.panGestureRecognizer.allowedTouchTypes = [] // pointer scrolls only — never fingers
+        scrollSink.panGestureRecognizer.allowedScrollTypesMask = .all
+        addSubview(scrollSink)
+    }
+
+    private func recenterScrollSink() {
+        sinkRecentering = true
+        scrollSink.frame = bounds
+        scrollSink.contentSize = CGSize(width: bounds.width * 3, height: bounds.height * 3)
+        scrollSink.contentOffset = CGPoint(x: bounds.width, y: bounds.height)
+        sinkRecentering = false
+    }
+
+    func scrollViewDidScroll(_ sv: UIScrollView) {
+        guard sv === scrollSink, !sinkRecentering else { return }
+        let dy = sv.contentOffset.y - bounds.height
+        let dx = sv.contentOffset.x - bounds.width
+        guard dx != 0 || dy != 0 else { return }
+        sinkRecentering = true
+        sv.contentOffset = CGPoint(x: bounds.width, y: bounds.height)
+        sinkRecentering = false
+        notePointerInput("scroll")
+        // Direction matches the macOS trackpad (ChartNSView.scrollWheel):
+        // two-finger swipe toward you zooms in. Flip the sign here if it
+        // feels inverted on a given input stack.
+        let dz = Double(-dy) * 0.01
+        if dz != 0 {
+            let anchor = lastHoverPoint ?? CGPoint(x: bounds.midX, y: bounds.midY)
+            controller?.zoom(dz, atPt: anchor)
+        }
+    }
+
+    // MARK: Lifecycle
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        maybeAutoOpen()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        recenterScrollSink()
+        // First real size → open the initial chart (at a stable size, not the
+        // transient zero/pre-layout bounds). Later sizes (rotation, split view)
+        // just resize.
+        if !didAutoOpen { maybeAutoOpen(); return }
+        let s = bounds.size
+        if s != lastSizePt {
+            lastSizePt = s
+            controller?.resize(widthPt: Double(s.width), heightPt: Double(s.height))
+        }
+    }
+
+    private func maybeAutoOpen() {
+        guard !didAutoOpen, window != nil, controller?.handle == nil,
+              bounds.width > 1, bounds.height > 1 else { return }
+        // A pending open request beats the startup default (it can only exist
+        // this early if something opened a chart before first layout).
+        let paths = model?.openRequest?.paths ?? model?.initialChartPaths() ?? []
+        guard !paths.isEmpty else { return }
+        didAutoOpen = true
+        lastSizePt = bounds.size
+        lastOpenId = model?.openRequest?.id ?? 0
+        _ = controller?.open(charts: paths, in: self)
+        hostWindowAboveChart()
+    }
+
+    /// lookout just created (and made key) its own chart UIWindow in our scene.
+    /// Restore the stack: chart (normal) < this input window < chrome window,
+    /// with chrome key so the search field can take the keyboard.
+    func hostWindowAboveChart() {
+        window?.windowLevel = .normal + 1
+        chromeWindow?.windowLevel = .normal + 2
+        chromeWindow?.makeKey()
+        // SwiftUI re-applies systemBackground (black in dark mode) to its
+        // hosting view when content attaches — clear it again now, or the
+        // chrome window paints over the chart.
+        for w in [window, chromeWindow] {
+            w?.isOpaque = false
+            w?.backgroundColor = .clear
+            w?.rootViewController?.view.isOpaque = false
+            w?.rootViewController?.view.backgroundColor = .clear
+        }
+    }
+
+    // MARK: Gestures
+
+    private func installGestures() {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(onPan(_:)))
+        pan.maximumNumberOfTouches = 1 // two-finger pans ride the pinch centroid
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(onPinch(_:)))
+        let rotate = UIRotationGestureRecognizer(target: self, action: #selector(onRotate(_:)))
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(onDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(onTwoFingerTap(_:)))
+        twoFingerTap.numberOfTouchesRequired = 2
+        let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
+        tap.require(toFail: doubleTap)
+        // Pointer devices (iPad trackpad/mouse, the simulator's host pointer):
+        // scroll to zoom at the pointer, hover to feed the cursor readout —
+        // the affordances the macOS app gets from NSEvent.
+        let scroll = UIPanGestureRecognizer(target: self, action: #selector(onScroll(_:)))
+        scroll.allowedScrollTypesMask = .all
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(onHover(_:)))
+        // Pinch + rotate + scroll compose (delegate below); scroll coexists
+        // with the finger pan because its handler only acts on 0-touch pans.
+        [pinch, rotate, scroll].forEach { $0.delegate = self }
+        [pan, pinch, rotate, doubleTap, twoFingerTap, tap, scroll, hover].forEach(addGestureRecognizer)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true // only pinch/rotate/scroll carry the delegate — they compose freely
+    }
+
+    @objc private func onPan(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began:
+            notePointerInput("pan")
+            controller?.flingStart(vx: 0, vy: 0) // grabbing stops any coast
+        case .changed:
+            let t = g.translation(in: self)
+            controller?.pan(dxPt: t.x, dyPt: t.y)
+            g.setTranslation(.zero, in: self)
+        case .ended:
+            let v = g.velocity(in: self) // points/sec — same units as the mac fling
+            controller?.flingStart(vx: Double(v.x), vy: Double(v.y))
+        default:
+            break
+        }
+    }
+
+    @objc private func onPinch(_ g: UIPinchGestureRecognizer) {
+        let p = g.location(in: self)
+        switch g.state {
+        case .began:
+            notePointerInput("pinch")
+            lastPinchScale = g.scale
+            lastPinchCentroid = p
+            controller?.flingStart(vx: 0, vy: 0)
+        case .changed:
+            // Zoom by the scale delta, anchored at the fingers' centroid…
+            let dz = log2(Double(g.scale / lastPinchScale))
+            lastPinchScale = g.scale
+            if dz != 0 { controller?.zoom(dz, atPt: p) }
+            // …and let the two-finger drag pan at the same time.
+            controller?.pan(dxPt: p.x - lastPinchCentroid.x, dyPt: p.y - lastPinchCentroid.y)
+            lastPinchCentroid = p
+        default:
+            break
+        }
+    }
+
+    @objc private func onRotate(_ g: UIRotationGestureRecognizer) {
+        guard let controller else { return }
+        switch g.state {
+        case .began:
+            rotationStartDeg = controller.currentView.rotation_deg
+        case .changed:
+            var v = controller.currentView
+            // UIKit rotation is positive clockwise; course-up rotation_deg turns
+            // the chart with the fingers. (If it fights the fingers on-device,
+            // this sign is the knob.)
+            v.rotation_deg = rotationStartDeg - Double(g.rotation) * 180 / .pi
+            controller.setView(v)
+        default:
+            break
+        }
+    }
+
+    @objc private func onTap(_ g: UITapGestureRecognizer) {
+        notePointerInput("tap")
+        let p = g.location(in: self)
+        guard let geo = controller?.geo(atPoint: p) else { return }
+        model?.pickResults = controller?.pick(lon: geo.lon, lat: geo.lat) ?? []
+    }
+
+    @objc private func onDoubleTap(_ g: UITapGestureRecognizer) {
+        controller?.zoom(1.0, atPt: g.location(in: self))
+    }
+
+    @objc private func onTwoFingerTap(_ g: UITapGestureRecognizer) {
+        controller?.zoom(-1.0, atPt: g.location(in: self))
+    }
+
+    private static var loggedInputKinds = Set<String>()
+    /// One-time-per-kind breadcrumb that input is arriving at all — simulator
+    /// front-ends don't always forward host input, and these lines are how to
+    /// tell "no events delivered" apart from "handler math is wrong".
+    private func notePointerInput(_ kind: String) {
+        if Self.loggedInputKinds.insert(kind).inserted {
+            lkLog("input active: \(kind)")
+        }
+    }
+
+    /// Trackpad/mouse scroll → zoom anchored at the pointer. The 0.01/pt factor
+    /// and sign match the macOS trackpad path (ChartNSView.scrollWheel). Only
+    /// 0-touch pans are scrolls — finger drags ride the main pan recognizer.
+    @objc private func onScroll(_ g: UIPanGestureRecognizer) {
+        guard g.state == .changed, g.numberOfTouches == 0 else { return }
+        notePointerInput("scroll")
+        let d = g.translation(in: self)
+        g.setTranslation(.zero, in: self)
+        let dz = Double(d.y) * 0.01
+        if dz != 0 { controller?.zoom(dz, atPt: g.location(in: self)) }
+    }
+
+    /// Pointer hover → live cursor lat/lon in the HUD (parity with macOS
+    /// mouseMoved; touches don't hover, so this only fires for pointers).
+    @objc private func onHover(_ g: UIHoverGestureRecognizer) {
+        switch g.state {
+        case .began, .changed:
+            notePointerInput("hover")
+            let p = g.location(in: self)
+            lastHoverPoint = p
+            if let geo = controller?.geo(atPoint: p) {
+                model?.cursorLon = geo.lon
+                model?.cursorLat = geo.lat
+            }
+        default:
+            lastHoverPoint = nil
+            model?.cursorLon = nil
+            model?.cursorLat = nil
+        }
+    }
 }
 
 #endif

@@ -18,6 +18,7 @@ options:
   bundleIdPrefix: org.beetlebug
   deploymentTarget:
     macOS: "14.0"
+    iOS: "17.0"
   createIntermediateGroups: true
 
 settings:
@@ -26,6 +27,11 @@ settings:
     TILE57_DIR: "$(SRCROOT)/../../tile57"
     # Homebrew SDL3 is keg-only; override if yours lives elsewhere.
     SDL3_DIR: "/opt/homebrew/opt/sdl3"
+    # iOS builds of the native deps (no Homebrew on iOS — see README "iOS").
+    # Per-platform: PLATFORM_NAME is iphoneos / iphonesimulator, so device and
+    # simulator artifacts never collide.
+    # SDL3_IOS_DIR needs include/SDL3 + lib/libSDL3.a built for that platform.
+    SDL3_IOS_DIR: "$(SRCROOT)/../ios-deps/sdl3/$(PLATFORM_NAME)"
 
 targets:
   LookoutMarine:
@@ -88,3 +94,129 @@ targets:
           cd "$SRCROOT/.."
           zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
             --search-prefix "$SDL3_DIR"
+
+  # ---- iOS -------------------------------------------------------------------
+  # Same Swift sources; the chart renders in lookout's own full-screen UIWindow
+  # (LOOKOUT_NATIVE_UIKIT_WINDOWSCENE) behind the transparent SwiftUI chrome.
+  # Needs iOS builds of the native deps first — none come from Homebrew:
+  #   • SDL3 static for iOS in $(SDL3_IOS_DIR)  (include/SDL3 + lib/libSDL3.a)
+  #   • MoltenVK.xcframework in $(MOLTENVK_IOS_DIR)  (the iOS Vulkan driver)
+  #   • tile57 cross-built:  cd $TILE57_DIR && zig build -Dtarget=aarch64-ios \
+  #       --sysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -p zig-out-ios
+  # The pre-build script cross-builds liblookout_marine.a the same way.
+  # See macos/README.md "iOS" for the full walkthrough.
+  LookoutMarine-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: LookoutMarine
+        excludes:
+          - "Info.plist"
+          - "LookoutMarine.entitlements"
+    settings:
+      base:
+        PRODUCT_NAME: LookoutMarine
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-ios
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LookoutMarine-iOS/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # The Zig cores / SDL3 / MoltenVK are built arm64-only (Apple Silicon
+        # simulators + all supported devices) — don't ask ld for x86_64.
+        ARCHS: arm64
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../include"
+          - "$(TILE57_DIR)/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
+          - "$(TILE57_DIR)/zig-out-$(PLATFORM_NAME)/lib"
+          - "$(SDL3_IOS_DIR)/lib"
+        # The merged, libtool-repacked Zig cores (see the pre-build script).
+        # SDL3's static objects are already folded in by the zig build — no
+        # separate -lSDL3.
+        OTHER_LDFLAGS:
+          - "-llookoutall"
+    dependencies:
+      # The Vulkan implementation SDL_GPU loads at runtime. If SDL's loader
+      # doesn't find it by default, set the SDL_VULKAN_LIBRARY hint to the
+      # framework binary path (see README).
+      - framework: ../ios-deps/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework
+        embed: true
+      # System frameworks SDL3 + MoltenVK/Metal need on iOS.
+      - sdk: UIKit.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreVideo.framework
+      - sdk: CoreMotion.framework
+      - sdk: CoreHaptics.framework
+      - sdk: GameController.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreAudio.framework
+      - sdk: IOSurface.framework
+      - sdk: UniformTypeIdentifiers.framework
+    preBuildScripts:
+      - name: Build Zig core for iOS (liblookout_marine.a)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          case "$PLATFORM_NAME" in
+            iphonesimulator) ZIG_TARGET=aarch64-ios-simulator ;;
+            *)               ZIG_TARGET=aarch64-ios ;;
+          esac
+          # NOTE: the search prefix must stay RELATIVE (to the repo root we just
+          # cd'd into) — with --sysroot set, zig rewrites absolute -L paths to
+          # live under the SDK root and would never find SDL3.
+          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
+            -Dtile57_lib="$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a" \
+            -Dtarget="$ZIG_TARGET" \
+            --sysroot "$(xcrun --sdk $PLATFORM_NAME --show-sdk-path)" \
+            --search-prefix "ios-deps/sdl3/$PLATFORM_NAME" \
+            -p "zig-out-$PLATFORM_NAME"
+          # ld64 AND libtool both drop zig-emitted archive members ("64-bit
+          # mach-o not 8-byte aligned"), so feeding the archives to libtool
+          # silently loses every symbol. Extract the members to loose object
+          # files (which have no offset-alignment problem; zig also records
+          # mode-0 permissions, hence the chmod) and repack from those.
+          REPACK="zig-out-$PLATFORM_NAME/repack"
+          rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
+          (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
+          (cd "$REPACK/tile57"  && ar x "$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a")
+          chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
+          xcrun -sdk "$PLATFORM_NAME" libtool -static \
+            -o "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" \
+            "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o 2>/dev/null
+
+  # Touch-delivery smoke test (XCUITest): pinch must move the zoom readout.
+  # Run: xcodebuild test -scheme LookoutMarine-iOS -destination 'platform=iOS Simulator,...'
+  LookoutMarine-iOS-UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LookoutMarine-iOS/UITests
+    dependencies:
+      - target: LookoutMarine-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-ios-uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: LookoutMarine-iOS
+
+schemes:
+  LookoutMarine-iOS:
+    build:
+      targets:
+        LookoutMarine-iOS: all
+    test:
+      targets:
+        - LookoutMarine-iOS-UITests

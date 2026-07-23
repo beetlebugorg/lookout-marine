@@ -1,7 +1,13 @@
 zig-out/
+zig-out-*/
 .zig-cache/
 *.png
 !docs/*.png
 .DS_Store
 macos/build/
+macos/build-ios/
 macos/LookoutMarine.xcodeproj/
+# iOS builds of the native deps (SDL3 source+static, MoltenVK) — fetched/built
+# locally per macos/README.md "iOS"; the local SDL patch is tracked at
+# macos/sdl-ios-simulator-device-features.patch.
+ios-deps/

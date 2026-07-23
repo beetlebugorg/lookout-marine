@@ -1,0 +1,25 @@
+diff --git a/src/gpu/vulkan/SDL_gpu_vulkan.c b/src/gpu/vulkan/SDL_gpu_vulkan.c
+index ae19a13..a5a1752 100644
+--- a/src/gpu/vulkan/SDL_gpu_vulkan.c
++++ b/src/gpu/vulkan/SDL_gpu_vulkan.c
+@@ -12245,6 +12245,20 @@ static Uint8 VULKAN_INTERNAL_IsDeviceSuitable(
+         physicalDevice,
+         &deviceFeatures);
+ 
++    /* lookout-marine LOCAL build patch — NOT for upstream (see the repo's
++     * macos/README.md "iOS"). The iOS-simulator MoltenVK device (GPU Family
++     * Apple 2) lacks some of the always-requested features below; the chart
++     * renderer uses none of them, so demote unsupported ones from required to
++     * disabled instead of rejecting the only device the simulator has. */
++    if (!deviceFeatures.independentBlend || !deviceFeatures.imageCubeArray || !deviceFeatures.sampleRateShading) {
++        SDL_LogWarn(SDL_LOG_CATEGORY_GPU,
++                    "Vulkan: demoting unsupported device features (independentBlend=%d imageCubeArray=%d sampleRateShading=%d)",
++                    deviceFeatures.independentBlend, deviceFeatures.imageCubeArray, deviceFeatures.sampleRateShading);
++        if (!deviceFeatures.independentBlend) features->desiredVulkan10DeviceFeatures.independentBlend = VK_FALSE;
++        if (!deviceFeatures.imageCubeArray) features->desiredVulkan10DeviceFeatures.imageCubeArray = VK_FALSE;
++        if (!deviceFeatures.sampleRateShading) features->desiredVulkan10DeviceFeatures.sampleRateShading = VK_FALSE;
++    }
++
+     if ((!deviceFeatures.independentBlend && features->desiredVulkan10DeviceFeatures.independentBlend) ||
+         (!deviceFeatures.imageCubeArray && features->desiredVulkan10DeviceFeatures.imageCubeArray) ||
+         (!deviceFeatures.depthClamp && features->desiredVulkan10DeviceFeatures.depthClamp) ||

@@ -1,9 +1,12 @@
-//  OpenPanel.swift — the macOS "Open Chart…" file picker.
+//  OpenPanel.swift — the "Open Chart…" file pickers.
 //
-//  Shared by the File menu and the empty-state button so there's one code path.
-//  We deliberately DON'T restrict allowedContentTypes to a dynamic .pmtiles UTI —
-//  that greys out the user's charts if the type isn't registered. Instead we
-//  accept any file or folder and let the engine validate.
+//  macOS: an NSOpenPanel shared by the File menu and the empty-state button so
+//  there's one code path. We deliberately DON'T restrict allowedContentTypes to
+//  a dynamic .pmtiles UTI — that greys out the user's charts if the type isn't
+//  registered. Instead we accept any file or folder and let the engine validate.
+//
+//  iOS: the SwiftUI fileImporter (presented by ChartView) hands its picked URL
+//  to openImported below.
 
 #if os(macOS)
 import AppKit
@@ -22,6 +25,36 @@ extension AppModel {
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         if isDir.boolValue { openChartDirectory(url.path) } else { openChart(url.path) }
+    }
+}
+#endif
+
+#if os(iOS)
+import Foundation
+
+extension AppModel {
+    /// Import a picked chart (or folder of cells) into the app container, then
+    /// open the copy. Copying sidesteps security-scope lifetime: the engine
+    /// mmaps the cells for as long as the chart stays open, but the picker's
+    /// scoped access ends the moment the URL is released.
+    func openImported(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let chartsDir = docs.appendingPathComponent("Charts", isDirectory: true)
+        let dest = chartsDir.appendingPathComponent(url.lastPathComponent)
+        do {
+            try fm.createDirectory(at: chartsDir, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.copyItem(at: url, to: dest)
+        } catch {
+            openError = "Couldn't import the chart:\n\(error.localizedDescription)"
+            return
+        }
+        var isDir: ObjCBool = false
+        fm.fileExists(atPath: dest.path, isDirectory: &isDir)
+        if isDir.boolValue { openChartDirectory(dest.path) } else { openChart(dest.path) }
     }
 }
 #endif

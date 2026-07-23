@@ -66,17 +66,28 @@ final class ChartController: NSObject {
         close()
         self.view = view
 
-        #if os(macOS)
         let (wPt, hPt) = Self.pointSize(of: view)
-        let viewPtr = Unmanaged.passUnretained(view).toOpaque()
+        #if os(macOS)
+        // Embed straight into the chart NSView (SDL wraps it with a CAMetalLayer).
+        let kind = LOOKOUT_NATIVE_COCOA_VIEW
+        let nativePtr: UnsafeMutableRawPointer? = Unmanaged.passUnretained(view).toOpaque()
+        #else
+        // SDL can't wrap an existing UIView: pass the scene and SDL creates its
+        // own full-screen chart UIWindow inside it; the app's chrome window is
+        // re-raised above it afterwards (ChartUIView.hostWindowAboveChart).
+        // nil scene => SDL falls back to the active scene.
+        let kind = LOOKOUT_NATIVE_UIKIT_WINDOWSCENE
+        let nativePtr: UnsafeMutableRawPointer? =
+            (view.window?.windowScene).map { Unmanaged.passUnretained($0).toOpaque() }
+        #endif
         lkLog("opening \(paths.count) chart(s) into a \(Int(wPt))×\(Int(hPt))pt view: \(paths.first ?? "")")
         let opened: OpaquePointer? = withCStrings(paths) { cpaths in
             if cpaths.count == 1 {
-                return lookout_open_in_window(LOOKOUT_NATIVE_COCOA_VIEW, viewPtr, cpaths[0],
+                return lookout_open_in_window(kind, nativePtr, cpaths[0],
                                               UInt32(wPt), UInt32(hPt), 1)
             }
             return cpaths.withUnsafeBufferPointer { buf in
-                lookout_open_charts_in_window(LOOKOUT_NATIVE_COCOA_VIEW, viewPtr, buf.baseAddress,
+                lookout_open_charts_in_window(kind, nativePtr, buf.baseAddress,
                                               buf.count, UInt32(wPt), UInt32(hPt), 1)
             }
         }
@@ -107,11 +118,6 @@ final class ChartController: NSObject {
         model?.hasChart = true
         model?.chartPath = chartPath
         return true
-        #else
-        // iOS reuse: needs a LOOKOUT_NATIVE_UIKIT_VIEW ABI kind + a CAMetalLayer-
-        // backed UIView. Scaffolded — see macos/README.md "iOS reuse".
-        return false
-        #endif
     }
 
     /// Re-open into the view we already render into (menu/search/panel opens
@@ -373,10 +379,10 @@ final class ChartController: NSObject {
 
 /// Run `body` with an array of C strings valid only for its duration. Elements
 /// are optional to match C's `const char *const *` (nullable inner pointers).
+/// Iterative on purpose: nesting one withCString closure per element blew the
+/// 1 MB iOS main-thread stack at chart-library scale (7k+ cells).
 private func withCStrings<R>(_ strings: [String], _ body: ([UnsafePointer<CChar>?]) -> R) -> R {
-    func recurse(_ i: Int, _ acc: [UnsafePointer<CChar>?]) -> R {
-        if i == strings.count { return body(acc) }
-        return strings[i].withCString { cs in recurse(i + 1, acc + [cs]) }
-    }
-    return recurse(0, [])
+    let dups: [UnsafeMutablePointer<CChar>?] = strings.map { strdup($0) }
+    defer { dups.forEach { free($0) } }
+    return body(dups.map { UnsafePointer($0) })
 }

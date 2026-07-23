@@ -24,8 +24,16 @@ if [[ "$1" == "--zig" ]]; then
 fi
 
 echo "==> repack + merge zig archives (ld64 alignment)"
+# ld64 AND libtool silently DROP zig-emitted archive members whose offsets
+# aren't 8-byte aligned — feeding the archives to libtool directly can lose
+# symbols depending on member sizes. Extract to loose objects (zig also records
+# mode-0 member permissions, hence the chmod) and repack from those.
+rm -rf "$OUT/repack"; mkdir -p "$OUT/repack/lookout" "$OUT/repack/tile57"
+(cd "$OUT/repack/lookout" && ar x "$REPO/zig-out/lib/liblookout_marine.a")
+(cd "$OUT/repack/tile57"  && ar x "$TILE57/zig-out/lib/libtile57.a")
+chmod 644 "$OUT"/repack/lookout/*.o "$OUT"/repack/tile57/*.o
 xcrun libtool -static -o "$OUT/liblookoutall.a" \
-  zig-out/lib/liblookout_marine.a "$TILE57/zig-out/lib/libtile57.a" 2>/dev/null
+  "$OUT"/repack/lookout/*.o "$OUT"/repack/tile57/*.o 2>/dev/null
 
 echo "==> compile stb"
 xcrun clang -c -O2 -DSTBI_NO_STDIO=1 -I vendor/stb vendor/stb/stb_image_impl.c -o "$OUT/stb_image_impl.o"
