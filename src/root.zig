@@ -928,8 +928,28 @@ pub const Lookout = struct {
             th = h.final();
         }
         const ll2 = camera.worldToLonLat(job.origin);
-        std.debug.print("build z{d:.2} {s} {d} ms ok={} verts={d} quads={d} ranges={d} ow={d} oh={d} density={d:.2} ll=({d:.5},{d:.5}) tri={x}\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt, st == cc.TILE57_OK, out.vertex_count, out.quad_count, out.range_count, job.ow, job.oh, self.g.pixel_density, ll2.x, ll2.y, th });
+        std.debug.print("build z{d:.2} {s} {d} ms ok={} verts={d} quads={d} ranges={d} ow={d} oh={d} density={d:.2} ll=({d:.5},{d:.5}) tri={x} mset={x}\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt, st == cc.TILE57_OK, out.vertex_count, out.quad_count, out.range_count, job.ow, job.oh, self.g.pixel_density, ll2.x, ll2.y, th, marinerGeomHash(&job.mariner) });
         return st == cc.TILE57_OK;
+    }
+
+    /// Hash of every geometry-affecting mariner field a build depends on (the
+    /// marinerNeedsRebuild list + scheme + size scale). Two builds with the same
+    /// mset and view are comparable across machines; differing msets explain a
+    /// scene difference before anything else is suspected.
+    fn marinerGeomHash(m: *const cc.tile57_mariner) u64 {
+        var h = std.hash.Wyhash.init(0);
+        inline for (.{
+            "scheme",           "size_scale",         "shallow_contour",     "safety_contour",
+            "deep_contour",     "safety_depth",       "four_shade_water",    "depth_unit",
+            "data_quality",     "show_inform_callouts", "show_meta_bounds",  "show_isolated_dangers_shallow",
+            "boundary_style",   "simplified_points",  "show_full_sector_lines", "date_dependent",
+            "highlight_date_dependent", "ignore_scamin", "scamin_filter_gate", "show_overscale",
+            "text_size_scale",  "sounding_size_scale",
+        }) |f| h.update(std.mem.asBytes(&@field(m.*, f)));
+        h.update(&m.date_view);
+        if (m.viewing_groups_off_len > 0 and m.viewing_groups_off != null)
+            h.update(std.mem.sliceAsBytes(m.viewing_groups_off[0..m.viewing_groups_off_len]));
+        return h.final();
     }
 
     // Adopt a built scene on the MAIN thread (only place the GPU is touched): a
