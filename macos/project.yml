@@ -76,6 +76,20 @@ targets:
           ( cd "$TILE57_DIR" && zig build lib -Doptimize=ReleaseFast )
           cd "$SRCROOT/.."
           zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast
+          # Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so
+          # a rebuilt Zig core would never RELINK the app (stale core in the
+          # bundle). Force the link when the archive contents changed by
+          # removing the previous executable (link-only cost). Zig's outputs
+          # are deterministic, so an unchanged core hashes identically. The
+          # stamp lives in TARGET_BUILD_DIR: per configuration, like the
+          # executable it guards.
+          CORE_HASH=$(cat "zig-out/lib/liblookout_marine.a" "$TILE57_DIR/zig-out/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
+          STAMP="$TARGET_BUILD_DIR/.zigcore.stamp"
+          if [ "$(cat "$STAMP" 2>/dev/null)" != "$CORE_HASH" ]; then
+            mkdir -p "$TARGET_BUILD_DIR"
+            echo "$CORE_HASH" > "$STAMP"
+            rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
+          fi
 
   # ---- iOS -------------------------------------------------------------------
   # Same Swift sources; the chart renders via Metal into ChartUIView's own
@@ -151,19 +165,43 @@ targets:
             -Dtarget="$ZIG_TARGET" \
             --sysroot "$SYSROOT" \
             -p "zig-out-$PLATFORM_NAME"
+          # Zig's outputs are deterministic, so an unchanged core hashes
+          # identically — used twice below: to skip the repack, and to force
+          # Xcode to relink when the core DID change.
+          CORE_HASH=$(cat "zig-out-$PLATFORM_NAME/lib/liblookout_marine.a" "$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
+
           # ld64 AND libtool both drop zig-emitted archive members ("64-bit
           # mach-o not 8-byte aligned"), so feeding the archives to libtool
           # silently loses every symbol. Extract the members to loose object
           # files (which have no offset-alignment problem; zig also records
           # mode-0 permissions, hence the chmod) and repack from those.
-          REPACK="zig-out-$PLATFORM_NAME/repack"
-          rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
-          (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
-          (cd "$REPACK/tile57"  && ar x "$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a")
-          chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
-          xcrun -sdk "$PLATFORM_NAME" libtool -static \
-            -o "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" \
-            "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o 2>/dev/null
+          # Skipped when the archives are byte-identical to the last repack.
+          REPACK_STAMP="zig-out-$PLATFORM_NAME/lib/.liblookoutall.stamp"
+          if [ "$(cat "$REPACK_STAMP" 2>/dev/null)" != "$CORE_HASH" ] \
+             || [ ! -f "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" ]; then
+            REPACK="zig-out-$PLATFORM_NAME/repack"
+            rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
+            (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
+            (cd "$REPACK/tile57"  && ar x "$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a")
+            chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
+            xcrun -sdk "$PLATFORM_NAME" libtool -static \
+              -o "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" \
+              "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o 2>/dev/null
+            echo "$CORE_HASH" > "$REPACK_STAMP"
+          fi
+
+          # Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so
+          # a rebuilt Zig core would never RELINK the app (stale core in the
+          # bundle). Force the link when the core changed by removing the
+          # previous executable (link-only cost). The stamp lives in
+          # TARGET_BUILD_DIR: per configuration/platform, like the executable
+          # it guards.
+          LINK_STAMP="$TARGET_BUILD_DIR/.zigcore.stamp"
+          if [ "$(cat "$LINK_STAMP" 2>/dev/null)" != "$CORE_HASH" ]; then
+            mkdir -p "$TARGET_BUILD_DIR"
+            echo "$CORE_HASH" > "$LINK_STAMP"
+            rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
+          fi
 
   # Touch-delivery smoke test (XCUITest): pinch must move the zoom readout.
   # Run: xcodebuild test -scheme LookoutMarine-iOS -destination 'platform=iOS Simulator,...'
