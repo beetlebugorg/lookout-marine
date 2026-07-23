@@ -422,7 +422,7 @@ struct ChartActionsBar: View {
 /// below it (SDL can't wrap an existing UIView) and the SwiftUI chrome floats
 /// in a PassThroughWindow above; this view owns input, sizing, and the
 /// auto-open.
-final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelegate {
+final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     /// lookout renders via Metal straight into this view's backing layer —
     /// the input window IS the chart surface now (no separate render window).
     override class var layerClass: AnyClass { CAMetalLayer.self }
@@ -438,21 +438,12 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
 
     // pinch/rotate gesture state
     private var lastPinchScale: CGFloat = 1
-    private var lastPinchCentroid = CGPoint.zero
-    private var rotationStartDeg = 0.0
+    private var rotationEngaged = false // rotate stays inert until past a dead-zone
+    private var rotationBaseDeg = 0.0   // chart rotation when the dead-zone was crossed
+    private var rotationOffset = 0.0    // gesture rotation (rad) at that moment
     /// Last pointer position from hover (nil on touch-only devices) — anchors
-    /// scroll-sink zoom at the pointer when known.
+    /// trackpad scroll-zoom at the pointer when known.
     private var lastHoverPoint: CGPoint?
-
-    /// Trackpad/wheel sink: simulator front-ends deliver indirect scrolls to
-    /// UIScrollViews but NOT to plain gesture recognizers (measured — lists
-    /// scroll, `allowedScrollTypesMask` pans never fire). This hidden, always
-    /// re-centered scroll view rides on top of the gesture surface: pointer
-    /// scrolls move its contentOffset (converted to zoom in
-    /// scrollViewDidScroll); its pan ignores touches entirely, so finger
-    /// gestures pass to this view's recognizers as before.
-    private let scrollSink = UIScrollView()
-    private var sinkRecentering = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -461,47 +452,8 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         layer.backgroundColor = CGColor(red: 0.576, green: 0.682, blue: 0.733, alpha: 1)
         isMultipleTouchEnabled = true
         installGestures()
-        installScrollSink()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
-
-    private func installScrollSink() {
-        scrollSink.backgroundColor = .clear
-        scrollSink.showsVerticalScrollIndicator = false
-        scrollSink.showsHorizontalScrollIndicator = false
-        scrollSink.contentInsetAdjustmentBehavior = .never
-        scrollSink.delegate = self
-        scrollSink.panGestureRecognizer.allowedTouchTypes = [] // pointer scrolls only — never fingers
-        scrollSink.panGestureRecognizer.allowedScrollTypesMask = .all
-        addSubview(scrollSink)
-    }
-
-    private func recenterScrollSink() {
-        sinkRecentering = true
-        scrollSink.frame = bounds
-        scrollSink.contentSize = CGSize(width: bounds.width * 3, height: bounds.height * 3)
-        scrollSink.contentOffset = CGPoint(x: bounds.width, y: bounds.height)
-        sinkRecentering = false
-    }
-
-    func scrollViewDidScroll(_ sv: UIScrollView) {
-        guard sv === scrollSink, !sinkRecentering else { return }
-        let dy = sv.contentOffset.y - bounds.height
-        let dx = sv.contentOffset.x - bounds.width
-        guard dx != 0 || dy != 0 else { return }
-        sinkRecentering = true
-        sv.contentOffset = CGPoint(x: bounds.width, y: bounds.height)
-        sinkRecentering = false
-        notePointerInput("scroll")
-        // Direction matches the macOS trackpad (ChartNSView.scrollWheel):
-        // two-finger swipe toward you zooms in. Flip the sign here if it
-        // feels inverted on a given input stack.
-        let dz = Double(-dy) * 0.01
-        if dz != 0 {
-            let anchor = lastHoverPoint ?? CGPoint(x: bounds.midX, y: bounds.midY)
-            controller?.zoom(dz, atPt: anchor)
-        }
-    }
 
     // MARK: Lifecycle
 
@@ -525,7 +477,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
     override func layoutSubviews() {
         super.layoutSubviews()
         syncLayerScale()
-        recenterScrollSink()
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes (rotation, split view)
         // just resize.
@@ -576,8 +527,10 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
     // MARK: Gestures
 
     private func installGestures() {
+        // One finger drags = pan; drag INCLUDES an indirect pointer (trackpad /
+        // mouse / the simulator's host pointer), so a pointer drag pans too.
         let pan = UIPanGestureRecognizer(target: self, action: #selector(onPan(_:)))
-        pan.maximumNumberOfTouches = 1 // two-finger pans ride the pinch centroid
+        pan.maximumNumberOfTouches = 1
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(onPinch(_:)))
         let rotate = UIRotationGestureRecognizer(target: self, action: #selector(onRotate(_:)))
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(onDoubleTap(_:)))
@@ -586,21 +539,21 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         twoFingerTap.numberOfTouchesRequired = 2
         let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
         tap.require(toFail: doubleTap)
-        // Pointer devices (iPad trackpad/mouse, the simulator's host pointer):
-        // scroll to zoom at the pointer, hover to feed the cursor readout —
-        // the affordances the macOS app gets from NSEvent.
-        let scroll = UIPanGestureRecognizer(target: self, action: #selector(onScroll(_:)))
-        scroll.allowedScrollTypesMask = .all
+        // Hover feeds the cursor read-out on pointer devices; touches don't hover.
+        // (No scroll-to-zoom recognizer: `allowedScrollTypesMask` also fires on a
+        // pointer *drag*, which then zoomed instead of panned. Pinch is the zoom
+        // gesture; +/- and double-tap cover pointer users.)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(onHover(_:)))
-        // Pinch + rotate + scroll compose (delegate below); scroll coexists
-        // with the finger pan because its handler only acts on 0-touch pans.
-        [pinch, rotate, scroll].forEach { $0.delegate = self }
-        [pan, pinch, rotate, doubleTap, twoFingerTap, tap, scroll, hover].forEach(addGestureRecognizer)
+        [pinch, rotate].forEach { $0.delegate = self } // only these compose (see below)
+        [pan, pinch, rotate, doubleTap, twoFingerTap, tap, hover].forEach(addGestureRecognizer)
     }
 
+    /// Only pinch↔rotate may run together (one two-finger manipulation). Pan is
+    /// deliberately EXCLUSIVE with them so a drag can't also zoom/rotate.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true // only pinch/rotate/scroll carry the delegate — they compose freely
+        let pair: Set = [ObjectIdentifier(type(of: gestureRecognizer)), ObjectIdentifier(type(of: other))]
+        return pair.isSubset(of: [ObjectIdentifier(UIPinchGestureRecognizer.self), ObjectIdentifier(UIRotationGestureRecognizer.self)])
     }
 
     @objc private func onPan(_ g: UIPanGestureRecognizer) {
@@ -620,38 +573,45 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         }
     }
 
+    // Pinch = zoom to the fingers' centroid. Pure zoom (no simultaneous pan):
+    // the centroid IS the anchor, so the chart point under the fingers stays
+    // put; adding a centroid-delta pan on top fought that anchor and made the
+    // zoom feel like it drifted off the pinch.
     @objc private func onPinch(_ g: UIPinchGestureRecognizer) {
-        let p = g.location(in: self)
         switch g.state {
         case .began:
             notePointerInput("pinch")
             lastPinchScale = g.scale
-            lastPinchCentroid = p
             controller?.flingStart(vx: 0, vy: 0)
         case .changed:
-            // Zoom by the scale delta, anchored at the fingers' centroid…
             let dz = log2(Double(g.scale / lastPinchScale))
             lastPinchScale = g.scale
-            if dz != 0 { controller?.zoom(dz, atPt: p) }
-            // …and let the two-finger drag pan at the same time.
-            controller?.pan(dxPt: p.x - lastPinchCentroid.x, dyPt: p.y - lastPinchCentroid.y)
-            lastPinchCentroid = p
+            if dz != 0 { controller?.zoom(dz, atPt: g.location(in: self)) }
         default:
             break
         }
     }
 
+    // Rotate = course-up, but with a DEAD-ZONE so an incidental twist during a
+    // pinch-zoom doesn't spin the chart. Stays inert until the fingers have
+    // turned past ~18°, then tracks from there (no jump).
+    private static let rotateDeadzone = 18.0 * .pi / 180.0 // radians
     @objc private func onRotate(_ g: UIRotationGestureRecognizer) {
         guard let controller else { return }
         switch g.state {
         case .began:
-            rotationStartDeg = controller.currentView.rotation_deg
+            rotationEngaged = false
         case .changed:
+            if !rotationEngaged {
+                guard abs(g.rotation) >= Self.rotateDeadzone else { return }
+                rotationEngaged = true
+                rotationBaseDeg = controller.currentView.rotation_deg
+                rotationOffset = g.rotation // subtract so there's no jump on engage
+            }
             var v = controller.currentView
             // UIKit rotation is positive clockwise; course-up rotation_deg turns
-            // the chart with the fingers. (If it fights the fingers on-device,
-            // this sign is the knob.)
-            v.rotation_deg = rotationStartDeg - Double(g.rotation) * 180 / .pi
+            // the chart with the fingers. (Flip this sign if it fights them.)
+            v.rotation_deg = rotationBaseDeg - Double(g.rotation - rotationOffset) * 180 / .pi
             controller.setView(v)
         default:
             break
@@ -681,18 +641,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         if Self.loggedInputKinds.insert(kind).inserted {
             lkLog("input active: \(kind)")
         }
-    }
-
-    /// Trackpad/mouse scroll → zoom anchored at the pointer. The 0.01/pt factor
-    /// and sign match the macOS trackpad path (ChartNSView.scrollWheel). Only
-    /// 0-touch pans are scrolls — finger drags ride the main pan recognizer.
-    @objc private func onScroll(_ g: UIPanGestureRecognizer) {
-        guard g.state == .changed, g.numberOfTouches == 0 else { return }
-        notePointerInput("scroll")
-        let d = g.translation(in: self)
-        g.setTranslation(.zero, in: self)
-        let dz = Double(d.y) * 0.01
-        if dz != 0 { controller?.zoom(dz, atPt: g.location(in: self)) }
     }
 
     /// Pointer hover → live cursor lat/lon in the HUD (parity with macOS
