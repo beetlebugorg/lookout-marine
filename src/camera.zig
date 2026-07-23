@@ -235,3 +235,24 @@ pub fn displayScaleAt(zoom: f64, lat_deg: f64) f32 {
     const C: f64 = 559082264.029; // OSM scale denom at z0, equator, 96dpi
     return @floatCast(C * std.math.cos(lat_deg * std.math.pi / 180.0) / std.math.pow(f64, 2.0, zoom));
 }
+
+// Zoom-to-cursor: the world point under a screen point stays under it across a
+// zoom. This is the anchor math both platforms share (macOS wheel/pinch, iOS
+// pinch/double-tap all funnel through zoomAbout) — so it verifies "zoom to
+// cursor" deterministically, no UI or GPU.
+test "zoomAbout keeps the point under the cursor fixed" {
+    const std_testing = std.testing;
+    const origin = lonLatToWorld(-76.48, 38.98);
+    inline for (.{ .{ 300.0, 200.0, 2.0 }, .{ 1180.0, 60.0, 1.3 }, .{ 20.0, 860.0, -1.7 } }) |cfg| {
+        const px: f32 = cfg[0];
+        const py: f32 = cfg[1];
+        const dz: f64 = cfg[2];
+        var cam = Camera{ .origin = origin, .center = origin, .zoom = 12, .target_zoom = 12, .vw = 1200, .vh = 900, .min_zoom = 2, .max_zoom = 22 };
+        const w_before = cam.screenToWorld(px, py);
+        cam.zoomAbout(dz, px, py);
+        const w_after = cam.screenToWorld(px, py);
+        // Same world point under the same screen point, to sub-pixel world units.
+        try std_testing.expectApproxEqAbs(w_before.x, w_after.x, 1e-9);
+        try std_testing.expectApproxEqAbs(w_before.y, w_after.y, 1e-9);
+    }
+}
