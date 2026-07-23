@@ -70,25 +70,40 @@ final class AppModel: ObservableObject {
     // MARK: - Opening charts
 
     /// Paths to open on first appearance: $LOOKOUT_OPEN (a chart or a folder of
-    /// cells — dev/CLI convenience), else the last recent, else the demo default.
+    /// cells — dev/CLI convenience), else (iOS) everything in Documents, else
+    /// the last recent, else the demo default.
     func initialChartPaths() -> [String] {
         if let p = ProcessInfo.processInfo.environment["LOOKOUT_OPEN"] {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: p, isDirectory: &isDir) {
-                return isDir.boolValue ? chartPaths(inDirectory: p) : [p]
-            }
+            let cells = cellPaths(for: p)
+            if !cells.isEmpty { return cells }
         }
-        if let last = recents.first, FileManager.default.fileExists(atPath: last) { return [last] }
         #if os(iOS)
-        // Cells dropped into the app's Documents (Files.app / Finder sharing)
-        // compose into the startup library.
+        // On iOS, Documents IS the chart library (Files.app / Finder-sharing
+        // drops and importer copies all land there): compose ALL of it at
+        // launch. This must beat recents — a recent is at most a subset of
+        // Documents, and launching into it would silently hide the rest of
+        // the library (a device that imported a 7k-cell folder would reopen
+        // as exactly one cell).
         if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             let dropped = chartPaths(inDirectory: docs.path)
             if !dropped.isEmpty { return dropped }
         }
         #endif
+        if let last = recents.first {
+            let cells = cellPaths(for: last)
+            if !cells.isEmpty { return cells }
+        }
         if let def = Self.defaultChartPath { return [def] }
         return []
+    }
+
+    /// An open target as its concrete cell list: a folder of cells expands to
+    /// every baked cell under it, a chart file is itself, a dangling path is
+    /// empty (callers fall through to their next candidate).
+    private func cellPaths(for target: String) -> [String] {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target, isDirectory: &isDir) else { return [] }
+        return isDir.boolValue ? chartPaths(inDirectory: target) : [target]
     }
 
     /// All baked cells under a directory, sorted (the compose library set).
@@ -108,19 +123,31 @@ final class AppModel: ObservableObject {
         return FileManager.default.fileExists(atPath: p) ? p : nil
     }
 
-    /// Request opening a single `.pmtiles` file.
-    func openChart(_ path: String) { requestOpen([path]) }
+    /// Request opening a chart path — a single `.pmtiles` file, or a folder of
+    /// cells (a recent can be either, so this dispatches on what's on disk).
+    func openChart(_ path: String) {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else { return }
+        if isDir.boolValue {
+            openChartDirectory(path)
+        } else {
+            requestOpen([path], recent: path)
+        }
+    }
 
     /// Request opening every `.pmtiles` under a directory (compose a library).
     func openChartDirectory(_ dir: String) {
         let paths = chartPaths(inDirectory: dir)
-        if !paths.isEmpty { requestOpen(paths) }
+        if !paths.isEmpty { requestOpen(paths, recent: dir) }
     }
 
-    private func requestOpen(_ paths: [String]) {
+    /// `recent` is what the USER opened (the folder for a library, the file for
+    /// a single cell) — recording the first cell of a folder open would make
+    /// the next launch silently reopen one cell instead of the library.
+    private func requestOpen(_ paths: [String], recent: String) {
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
-        if let first = paths.first { noteRecent(first) }
+        noteRecent(recent)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
         // runs: flag now, open on the next runloop turn so SwiftUI paints.
         isOpening = true
