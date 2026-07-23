@@ -129,6 +129,15 @@ pub const Gpu = struct {
                 std.debug.print("layer: {d}x{d} logical -> {d}x{d} pixels (density {d:.2})\n", .{ opts.width, opts.height, pw, ph, g.pixel_density });
             }
         }
+        // Debug: force the atlas/scene density (repro a device's @3x path headless).
+        if (std.c.getenv("LOOKOUT_DENSITY")) |ds| {
+            if (std.fmt.parseFloat(f32, std.mem.sliceTo(ds, 0)) catch null) |d| {
+                if (d > 0.25 and d < 8) {
+                    g.pixel_density = d;
+                    std.debug.print("LOOKOUT_DENSITY override: density {d:.2}\n", .{d});
+                }
+            }
+        }
         return g;
     }
 

@@ -375,12 +375,33 @@ pub const Lookout = struct {
         self.bakeAndCacheSprite(png_name, json_name, scale_name);
     }
 
+    /// The largest sprite-atlas texture dimension this platform can hold as ONE
+    /// texture. Real iOS devices report 16384, but a 3x symbol atlas is ~10.9k px
+    /// tall (~268 MB RGBA) and such a texture UPLOADS ONLY PARTIALLY on device —
+    /// the un-populated rows sample black, so symbols and line-style patterns
+    /// packed low in the sheet render as solid-black blobs. Cap iOS (device AND
+    /// simulator) at 8192 so the bake reduces its scale to fit; macOS is fine.
+    fn spriteMaxDim() u32 {
+        const bi = @import("builtin");
+        if (std.c.getenv("LOOKOUT_MAXDIM")) |m| {
+            if (std.fmt.parseInt(u32, std.mem.sliceTo(m, 0), 10) catch null) |v| return v;
+        }
+        return if (bi.os.tag == .ios or bi.os.tag == .tvos) 8192 else 16384;
+    }
+
     /// Decode a sprite atlas PNG+JSON and upload it. `atlas_scale := scale` (the
-    /// bake ratio) so the scene's sprite UVs match. `note`d cache loads never
-    /// exceed the device max (they were fit-baked); this only guards a surprise.
+    /// bake ratio) so the scene's sprite UVs match. Rejects an atlas larger than
+    /// this platform can upload as one texture (a stale oversized CACHE entry) so
+    /// the caller falls through to a fresh, fit-to-size bake.
     fn uploadSprite(self: *Lookout, png_b: []const u8, json: []const u8, scale: f32, note: bool) bool {
         _ = note;
         const a = atlas.loadSprite(self.alloc, png_b, json) catch return false;
+        if (@max(a.width, a.height) > spriteMaxDim()) {
+            var m = a;
+            m.deinit();
+            std.debug.print("cached sprite atlas {d}x{d} exceeds max {d}; rebaking\n", .{ a.width, a.height, spriteMaxDim() });
+            return false;
+        }
         self.sprite_atlas = a;
         self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
             self.sprite_atlas.?.deinit();
@@ -392,14 +413,13 @@ pub const Lookout = struct {
     }
 
     // Bake the S-52 sprite-symbol atlas at the display density, upload it, and
-    // write it to the app cache so later opens skip the (slow) rasterize. Some
-    // GPUs can't take the full-density result as one texture (the iOS-simulator
-    // caps textures at 8192 and a 3x bake is ~10.9k tall; an oversized Metal
-    // texture ABORTS, it doesn't error), so shrink the bake scale until it fits
-    // and remember it (atlas_scale) so scene UVs stay in step.
+    // write it to the app cache so later opens skip the (slow) rasterize. iOS
+    // can't take the full-density result as one texture (a 3x bake is ~10.9k px
+    // tall / ~268 MB and uploads only partially on device — the rest samples
+    // black), so shrink the bake scale until it fits spriteMaxDim() and remember
+    // it (atlas_scale) so scene UVs stay in step.
     fn bakeAndCacheSprite(self: *Lookout, png_name: []const u8, json_name: []const u8, scale_name: []const u8) void {
-        const bi = @import("builtin");
-        const max_dim: u32 = if (bi.os.tag == .ios and bi.abi == .simulator) 8192 else 16384;
+        const max_dim: u32 = spriteMaxDim();
         var scale: f32 = self.g.pixel_density;
         self.atlas_scale = scale;
         var attempts: u8 = 0;
