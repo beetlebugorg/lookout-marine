@@ -917,7 +917,7 @@ pub const Lookout = struct {
             cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err);
         const dt = gpu.ticksMs() - t0;
         self.last_build_ms.store(dt, .monotonic);
-        std.debug.print("build z{d:.2} {s} {d} ms\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt });
+        std.debug.print("build z{d:.2} {s} {d} ms ok={} verts={d} quads={d} ranges={d}\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt, st == cc.TILE57_OK, out.vertex_count, out.quad_count, out.range_count });
         return st == cc.TILE57_OK;
     }
 

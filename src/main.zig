@@ -135,6 +135,22 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("view: lon={d:.5} lat={d:.5} zoom={d:.2}\n", .{ v.lon, v.lat, v.zoom });
     l.setView(v);
 
+    // --sweep: drive a zoom SESSION (many sequential builds through the
+    // engine's per-tile geometry cache, like a real pinch), then land on the
+    // requested view and snapshot. Repros cache-assembly bugs a single build
+    // never sees.
+    for (args) |a2| {
+        if (std.mem.eql(u8, a2, "--sweep")) {
+            var zz: f64 = v.zoom + 4.5;
+            while (zz > v.zoom - 2.0) : (zz -= 0.31) {
+                l.setView(.{ .lon = v.lon, .lat = v.lat, .zoom = zz });
+                try l.build();
+            }
+            l.setView(v);
+            break;
+        }
+    }
+
     // day (first render lazily builds the scene)
     try l.snapshotPng(png_out);
     std.debug.print("wrote {s} (day)\n", .{png_out});
