@@ -917,7 +917,18 @@ pub const Lookout = struct {
             cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err);
         const dt = gpu.ticksMs() - t0;
         self.last_build_ms.store(dt, .monotonic);
-        std.debug.print("build z{d:.2} {s} {d} ms ok={} verts={d} quads={d} ranges={d} ow={d} oh={d} density={d:.2}\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt, st == cc.TILE57_OK, out.vertex_count, out.quad_count, out.range_count, job.ow, job.oh, self.g.pixel_density });
+        // tri= is a content hash of the triangle geometry — density- and
+        // atlas-independent, so a device build of a view is directly comparable
+        // against a Mac build of the same ll/zoom/ow/oh.
+        var th: u64 = 0;
+        if (st == cc.TILE57_OK) {
+            var h = std.hash.Wyhash.init(0);
+            if (out.vertex_count > 0) h.update(std.mem.sliceAsBytes(out.vertices[0..out.vertex_count]));
+            if (out.index_count > 0) h.update(std.mem.sliceAsBytes(out.indices[0..out.index_count]));
+            th = h.final();
+        }
+        const ll2 = camera.worldToLonLat(job.origin);
+        std.debug.print("build z{d:.2} {s} {d} ms ok={} verts={d} quads={d} ranges={d} ow={d} oh={d} density={d:.2} ll=({d:.5},{d:.5}) tri={x}\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt, st == cc.TILE57_OK, out.vertex_count, out.quad_count, out.range_count, job.ow, job.oh, self.g.pixel_density, ll2.x, ll2.y, th });
         return st == cc.TILE57_OK;
     }
 
