@@ -224,15 +224,32 @@ final class ChartNSView: NSView {
     /// Open the last recent / default chart once, as soon as the view has a valid
     /// size and a window. Opening at a transient (0×0 / pre-layout) size and then
     /// resizing mid-open can wedge the swapchain, so we wait for a real size.
+    ///
+    /// The open is DEFERRED off the current AppKit call stack: our first layout
+    /// can run inside the window controller's windowDidLoad, and opening there
+    /// registers SDL's windowDidResize listener while AppKit is still placing /
+    /// restoring the window frame. The restoration resize then walks into SDL's
+    /// listener, whose ScheduleContextUpdates touches NSOpenGLContext — which
+    /// dies on a poisoned GL stub at that point of app startup (crash observed
+    /// on macOS 26.5: SwiftUI sizeAndPlaceWindow → SDL windowDidResize →
+    /// +[NSOpenGLContext currentContext] → 0xbad4007).
     func maybeAutoOpen() {
         guard !didAutoOpen, window != nil, controller?.handle == nil,
               bounds.width > 1, bounds.height > 1,
               let paths = model?.initialChartPaths(), !paths.isEmpty else { return }
         didAutoOpen = true
-        lastOpenId = model?.openRequest?.id ?? 0
-        _ = controller?.open(charts: paths, in: self)
-        raiseOverlay() // SDL just swapped our layer to CAMetalLayer — put chrome back on top
-        syncMetalLayerScale()
+        // No frame restoration for this window: the chart reopens from our own
+        // recents, and the fromServer frame restore is exactly the mid-load
+        // resize the deferral above is dodging.
+        window?.isRestorable = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.controller?.handle == nil else { return }
+            self.lastOpenId = self.model?.openRequest?.id ?? 0
+            _ = self.controller?.open(charts: paths, in: self)
+            self.raiseOverlay() // SDL just swapped our layer to CAMetalLayer — put chrome back on top
+            self.syncMetalLayerScale()
+            self.controller?.resize(widthPt: Double(self.bounds.width), heightPt: Double(self.bounds.height))
+        }
     }
 
     override func viewDidChangeBackingProperties() {
