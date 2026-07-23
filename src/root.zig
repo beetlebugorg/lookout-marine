@@ -928,7 +928,23 @@ pub const Lookout = struct {
         defer cc.tile57_gpu_scene_free(cs);
         if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
             const ll = camera.worldToLonLat(job.origin);
-            std.debug.print("applyJob ok={} prefetch={} ll=({d:.4},{d:.4}) z={d:.2} ow={d} oh={d} verts={d} ranges={d}\n", .{ ok, job.prefetch, ll.x, ll.y, job.zoom, job.ow, job.oh, cs.vertex_count, cs.range_count });
+            // Content hashes: compare a device's scene against a Mac build of the
+            // SAME view (lon/lat/integer zoom via go-to-coordinate + zoom buttons,
+            // --width/--height for ow/oh, LOOKOUT_DENSITY/LOOKOUT_MAXDIM to match
+            // density + atlas scale). Identical hashes with different pictures
+            // convict the draw layer; different hashes convict the engine build.
+            var th: u64 = 0;
+            var qh: u64 = 0;
+            if (ok) {
+                var h = std.hash.Wyhash.init(0);
+                if (cs.vertex_count > 0) h.update(std.mem.sliceAsBytes(cs.vertices[0..cs.vertex_count]));
+                if (cs.index_count > 0) h.update(std.mem.sliceAsBytes(cs.indices[0..cs.index_count]));
+                th = h.final();
+                var h2 = std.hash.Wyhash.init(0);
+                if (cs.quad_count > 0) h2.update(std.mem.sliceAsBytes(cs.quads[0..cs.quad_count]));
+                qh = h2.final();
+            }
+            std.debug.print("applyJob ok={} prefetch={} ll=({d:.4},{d:.4}) z={d:.2} ow={d} oh={d} verts={d} ranges={d} tri_hash={x} quad_hash={x}\n", .{ ok, job.prefetch, ll.x, ll.y, job.zoom, job.ow, job.oh, cs.vertex_count, cs.range_count, th, qh });
         }
         if (!ok or job.prefetch) return;
         self.g.uploadGpuScene(self.alloc, cs) catch {
