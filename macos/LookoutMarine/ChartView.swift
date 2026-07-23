@@ -609,9 +609,11 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
                 rotationOffset = g.rotation // subtract so there's no jump on engage
             }
             var v = controller.currentView
-            // UIKit rotation is positive clockwise; course-up rotation_deg turns
-            // the chart with the fingers. (Flip this sign if it fights them.)
-            v.rotation_deg = rotationBaseDeg - Double(g.rotation - rotationOffset) * 180 / .pi
+            // UIKit rotation is positive clockwise (y-down), and so is the
+            // core's rotation: the macOS grab-and-spin adds the swept atan2
+            // angle straight onto cam.rotation. ADD here too, so the chart
+            // turns WITH the fingers; subtracting fought them.
+            v.rotation_deg = rotationBaseDeg + Double(g.rotation - rotationOffset) * 180 / .pi
             controller.setView(v)
         default:
             break
