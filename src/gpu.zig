@@ -198,6 +198,13 @@ pub const Gpu = struct {
     pub fn uploadGpuScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !void {
         var out = Scene{ .alloc = alloc };
         errdefer self.freeSceneValue(&out);
+        if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
+            std.debug.print("scene bytes: tris {d} ({d} idx x {d}B) quads {d} ({d} quads x6x{d}B) patterns {d}\n", .{
+                s.index_count * @sizeOf(cc.tile57_gpu_vertex),  s.index_count, @sizeOf(cc.tile57_gpu_vertex),
+                s.quad_count * 6 * @sizeOf(cc.tile57_gpu_quad), s.quad_count,  @sizeOf(cc.tile57_gpu_quad),
+                s.pattern_count,
+            });
+        }
 
         if (s.vertex_count > 0 and s.index_count > 0) {
             // The engine hands indexed triangles; we keep the historical
