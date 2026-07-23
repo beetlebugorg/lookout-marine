@@ -1,0 +1,721 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		06B5BBB30960E8F05B6C8866 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
+		09693BA46EA360C5604CC0DE /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
+		0FC697E6E69C983F38573E8D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
+		23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
+		299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
+		3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
+		40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
+		4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
+		4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
+		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
+		5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
+		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
+		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
+		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
+		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
+		91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
+		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
+		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
+		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
+		BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
+		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
+		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
+		D3A82191350619AF27200EF4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
+		D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
+		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
+		E64003666647657D54AE2A68 /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
+		E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
+		E88374AC97201A82AABB83C2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
+		ECECFDFE0FF0EF289D858D19 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
+		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
+		F84839EF2608C611368BF909 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
+		FA0A1A3D4513B2121791CD8E /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
+		FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
+		FD9CA492CC32E134017339D9 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		CDFFA14B2286295D84D56D42 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2A01BBEEFB9BB3FB14C0C549 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ABAEBDCFCC218F9164521159;
+			remoteInfo = "LookoutMarine-iOS";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0196916E70289224C21747BF /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
+		063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		08B62D296D34C231163DF7C2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		0ACD979758E1C7A0557028AA /* MarinerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettings.swift; sourceTree = "<group>"; };
+		10B668C8717144E00D603812 /* LookoutMarine-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
+		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		64750619C04C6E8FC58ADF3C /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
+		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
+		684AE423C6C360B8C64E8187 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
+		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
+		83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOS-UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		867B3D3BE969AB708C6FD1A6 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		C30C216F6C0285110D3B2A87 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
+		D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
+		D26F78CDEC3CDA7C0807297F /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
+		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
+		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartInteractionTests.swift; sourceTree = "<group>"; };
+		FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LookoutMarine.entitlements; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0CBF278F6CFCF0D8A5C98A7B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */,
+				E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */,
+				93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */,
+				FD9CA492CC32E134017339D9 /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DE9DB18C055E956FBC2E37C4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */,
+				9310F043177B162A821FDF99 /* Metal.framework in Frameworks */,
+				4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */,
+				E88374AC97201A82AABB83C2 /* CoreGraphics.framework in Frameworks */,
+				4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		03D60F73A6EF0CE678D0A090 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		066E288701BD08B9A8DA8053 = {
+			isa = PBXGroup;
+			children = (
+				07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */,
+				ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */,
+				87EF150269B4560D22106C89 /* Frameworks */,
+				CCC54782152F8720212B3D54 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */ = {
+			isa = PBXGroup;
+			children = (
+				867B3D3BE969AB708C6FD1A6 /* AppModel.swift */,
+				ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */,
+				2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */,
+				67B9484301248E7DF8AD6EE2 /* ChartView.swift */,
+				0196916E70289224C21747BF /* Commands.swift */,
+				73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */,
+				5624860C29AF07752A4CE208 /* Info.plist */,
+				FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */,
+				D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */,
+				0ACD979758E1C7A0557028AA /* MarinerSettings.swift */,
+				684AE423C6C360B8C64E8187 /* OpenPanel.swift */,
+				64750619C04C6E8FC58ADF3C /* Platform.swift */,
+				D26F78CDEC3CDA7C0807297F /* SearchField.swift */,
+				08B62D296D34C231163DF7C2 /* SettingsView.swift */,
+				C30C216F6C0285110D3B2A87 /* ZoomControls.swift */,
+			);
+			path = LookoutMarine;
+			sourceTree = "<group>";
+		};
+		87EF150269B4560D22106C89 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */,
+				8FB061C18A2E1449AB1D30F1 /* Metal.framework */,
+				2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */,
+				9D5D7B15F4286B70544A80B2 /* UIKit.framework */,
+				063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		CCC54782152F8720212B3D54 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */,
+				10B668C8717144E00D603812 /* LookoutMarine-iOS.app */,
+				F025332072E90FBEB0445CEB /* LookoutMarine.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */ = {
+			isa = PBXGroup;
+			children = (
+				03D60F73A6EF0CE678D0A090 /* UITests */,
+			);
+			path = "LookoutMarine-iOS";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7DC91D64E44F15978302A618 /* LookoutMarine-iOS-UITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EE5EA841DC1F5B39198C5A19 /* Build configuration list for PBXNativeTarget "LookoutMarine-iOS-UITests" */;
+			buildPhases = (
+				B766CF8E344761C5E94AAF48 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6FA04E319DB568F0458B79CF /* PBXTargetDependency */,
+			);
+			name = "LookoutMarine-iOS-UITests";
+			packageProductDependencies = (
+			);
+			productName = "LookoutMarine-iOS-UITests";
+			productReference = 83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		98D5486F698D955D344F0F65 /* LookoutMarine */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9C3ECF9BD93BBA14B99E5413 /* Build configuration list for PBXNativeTarget "LookoutMarine" */;
+			buildPhases = (
+				FD025247F664D75EE2467E79 /* Build Zig cores (tile57 + liblookout_marine.a) */,
+				71524DC6FB6E9C34F9DB5322 /* Sources */,
+				0CBF278F6CFCF0D8A5C98A7B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LookoutMarine;
+			packageProductDependencies = (
+			);
+			productName = LookoutMarine;
+			productReference = F025332072E90FBEB0445CEB /* LookoutMarine.app */;
+			productType = "com.apple.product-type.application";
+		};
+		ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 06DB6226127DD37ADC6C301A /* Build configuration list for PBXNativeTarget "LookoutMarine-iOS" */;
+			buildPhases = (
+				BD8D42CE4A8738F96B8FF764 /* Build Zig cores for iOS (tile57 + liblookout_marine.a) */,
+				95BC3126A20103FF3F84572E /* Sources */,
+				DE9DB18C055E956FBC2E37C4 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "LookoutMarine-iOS";
+			packageProductDependencies = (
+			);
+			productName = "LookoutMarine-iOS";
+			productReference = 10B668C8717144E00D603812 /* LookoutMarine-iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2A01BBEEFB9BB3FB14C0C549 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					7DC91D64E44F15978302A618 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = ABAEBDCFCC218F9164521159;
+					};
+					98D5486F698D955D344F0F65 = {
+						ProvisioningStyle = Automatic;
+					};
+					ABAEBDCFCC218F9164521159 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = ECA5CF36E3B3C0F2D2767E21 /* Build configuration list for PBXProject "LookoutMarine" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 066E288701BD08B9A8DA8053;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CCC54782152F8720212B3D54 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				98D5486F698D955D344F0F65 /* LookoutMarine */,
+				ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */,
+				7DC91D64E44F15978302A618 /* LookoutMarine-iOS-UITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		BD8D42CE4A8738F96B8FF764 /* Build Zig cores for iOS (tile57 + liblookout_marine.a) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Zig cores for iOS (tile57 + liblookout_marine.a)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n# Provenance: the build log states exactly which checkouts and\n# commits these cores came from — never infer it again.\necho \"zig cores: tile57=$TILE57_DIR @ $(git -C \"$TILE57_DIR\" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C \"$SRCROOT/..\" rev-parse --short HEAD 2>/dev/null || echo '?')\"\ntest -f \"$TILE57_DIR/build.zig\" || { echo \"error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout\" >&2; exit 1; }\ncase \"$PLATFORM_NAME\" in\n  iphonesimulator) ZIG_TARGET=aarch64-ios-simulator ;;\n  *)               ZIG_TARGET=aarch64-ios ;;\nesac\n# The iOS SDK sysroot. $SDKROOT is set by Xcode to the active SDK, so\n# this works in the Xcode build env even when the *shell's* xcrun/\n# xcode-select points at the Command Line Tools (which have no iOS SDK\n# -> an empty --sysroot). Fall back to xcrun for non-Xcode invocations.\nSYSROOT=\"${SDKROOT:-$(xcrun --sdk \"$PLATFORM_NAME\" --show-sdk-path)}\"\n\n# 1) Cross-build the tile57 ENGINE for this platform, so its\n#    libtile57.a exists before the lookout core links it. Zig's cache\n#    makes this ~instant when tile57 is unchanged. (Previously a manual\n#    prerequisite; see macos/README.md \"iOS\".)\n( cd \"$TILE57_DIR\" && zig build lib \\\n    -Dtarget=\"$ZIG_TARGET\" -Doptimize=ReleaseFast \\\n    --sysroot \"$SYSROOT\" -p \"zig-out-$PLATFORM_NAME\" )\n\n# 2) Cross-build the lookout core against it.\ncd \"$SRCROOT/..\"\nzig build -Dtile57=\"$TILE57_DIR\" -Doptimize=ReleaseFast \\\n  -Dtile57_lib=\"$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a\" \\\n  -Dtarget=\"$ZIG_TARGET\" \\\n  --sysroot \"$SYSROOT\" \\\n  -p \"zig-out-$PLATFORM_NAME\"\n# Zig's outputs are deterministic, so an unchanged core hashes\n# identically — used twice below: to skip the repack, and to force\n# Xcode to relink when the core DID change.\nCORE_HASH=$(cat \"zig-out-$PLATFORM_NAME/lib/liblookout_marine.a\" \"$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a\" | /usr/bin/shasum | cut -d' ' -f1)\n\n# ld64 AND libtool both drop zig-emitted archive members (\"64-bit\n# mach-o not 8-byte aligned\"), so feeding the archives to libtool\n# silently loses every symbol. Extract the members to loose object\n# files (which have no offset-alignment problem; zig also records\n# mode-0 permissions, hence the chmod) and repack from those.\n# Skipped when the archives are byte-identical to the last repack.\nREPACK_STAMP=\"zig-out-$PLATFORM_NAME/lib/.liblookoutall.stamp\"\nif [ \"$(cat \"$REPACK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ] \\\n   || [ ! -f \"zig-out-$PLATFORM_NAME/lib/liblookoutall.a\" ]; then\n  REPACK=\"zig-out-$PLATFORM_NAME/repack\"\n  rm -rf \"$REPACK\"; mkdir -p \"$REPACK/lookout\" \"$REPACK/tile57\"\n  (cd \"$REPACK/lookout\" && ar x ../../lib/liblookout_marine.a)\n  (cd \"$REPACK/tile57\"  && ar x \"$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a\")\n  chmod 644 \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o\n  xcrun -sdk \"$PLATFORM_NAME\" libtool -static \\\n    -o \"zig-out-$PLATFORM_NAME/lib/liblookoutall.a\" \\\n    \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o 2>/dev/null\n  echo \"$CORE_HASH\" > \"$REPACK_STAMP\"\nfi\n\n# Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so\n# a rebuilt Zig core would never RELINK the app (stale core in the\n# bundle). Force the link when the core changed by removing the\n# previous executable (link-only cost). The stamp lives in\n# TARGET_BUILD_DIR: per configuration/platform, like the executable\n# it guards.\nLINK_STAMP=\"$TARGET_BUILD_DIR/.zigcore.stamp\"\nif [ \"$(cat \"$LINK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ]; then\n  mkdir -p \"$TARGET_BUILD_DIR\"\n  echo \"$CORE_HASH\" > \"$LINK_STAMP\"\n  rm -f \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\nfi\n";
+		};
+		FD025247F664D75EE2467E79 /* Build Zig cores (tile57 + liblookout_marine.a) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Zig cores (tile57 + liblookout_marine.a)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n# Provenance: the build log states exactly which checkouts and\n# commits these cores came from — never infer it again.\necho \"zig cores: tile57=$TILE57_DIR @ $(git -C \"$TILE57_DIR\" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C \"$SRCROOT/..\" rev-parse --short HEAD 2>/dev/null || echo '?')\"\ntest -f \"$TILE57_DIR/build.zig\" || { echo \"error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout\" >&2; exit 1; }\n# Build the tile57 ENGINE first so its libtile57.a exists before the\n# lookout core links it. Zig's cache makes this ~instant when tile57\n# is unchanged. (Previously a manual prerequisite.)\n( cd \"$TILE57_DIR\" && zig build lib -Doptimize=ReleaseFast )\ncd \"$SRCROOT/..\"\nzig build -Dtile57=\"$TILE57_DIR\" -Doptimize=ReleaseFast\n# Zig's outputs are deterministic, so an unchanged core hashes\n# identically — used twice below: to skip the repack, and to force\n# Xcode to relink when the core DID change.\nCORE_HASH=$(cat \"zig-out/lib/liblookout_marine.a\" \"$TILE57_DIR/zig-out/lib/libtile57.a\" | /usr/bin/shasum | cut -d' ' -f1)\n\n# ld64 AND libtool both drop/reject zig-emitted archive members\n# (\"64-bit mach-o not 8-byte aligned\"), so the raw archives are never\n# linked directly: extract to loose objects (no offset-alignment\n# problem; zig also records mode-0 permissions, hence the chmod) and\n# repack, exactly like the iOS target. Skipped when unchanged.\nREPACK_STAMP=\"zig-out/lib/.liblookoutall.stamp\"\nif [ \"$(cat \"$REPACK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ] \\\n   || [ ! -f \"zig-out/lib/liblookoutall.a\" ]; then\n  REPACK=\"zig-out/repack\"\n  rm -rf \"$REPACK\"; mkdir -p \"$REPACK/lookout\" \"$REPACK/tile57\"\n  (cd \"$REPACK/lookout\" && ar x ../../lib/liblookout_marine.a)\n  (cd \"$REPACK/tile57\"  && ar x \"$TILE57_DIR/zig-out/lib/libtile57.a\")\n  chmod 644 \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o\n  xcrun -sdk macosx libtool -static \\\n    -o \"zig-out/lib/liblookoutall.a\" \\\n    \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o 2>/dev/null\n  echo \"$CORE_HASH\" > \"$REPACK_STAMP\"\nfi\n\n# Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so\n# a rebuilt Zig core would never RELINK the app (stale core in the\n# bundle). Force the link when the core changed by removing the\n# previous executable (link-only cost). The stamp lives in\n# TARGET_BUILD_DIR: per configuration, like the executable it guards.\nLINK_STAMP=\"$TARGET_BUILD_DIR/.zigcore.stamp\"\nif [ \"$(cat \"$LINK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ]; then\n  mkdir -p \"$TARGET_BUILD_DIR\"\n  echo \"$CORE_HASH\" > \"$LINK_STAMP\"\n  rm -f \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		71524DC6FB6E9C34F9DB5322 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B884496C571D0C49742E3299 /* AppModel.swift in Sources */,
+				794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */,
+				E64003666647657D54AE2A68 /* ChartView.swift in Sources */,
+				0FC697E6E69C983F38573E8D /* Commands.swift in Sources */,
+				FA0A1A3D4513B2121791CD8E /* HUDOverlay.swift in Sources */,
+				D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */,
+				ECECFDFE0FF0EF289D858D19 /* MarinerSettings.swift in Sources */,
+				BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */,
+				CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */,
+				3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */,
+				5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */,
+				40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		95BC3126A20103FF3F84572E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */,
+				BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */,
+				09693BA46EA360C5604CC0DE /* ChartView.swift in Sources */,
+				91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */,
+				299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */,
+				58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */,
+				F84839EF2608C611368BF909 /* MarinerSettings.swift in Sources */,
+				23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */,
+				D3A82191350619AF27200EF4 /* Platform.swift in Sources */,
+				4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */,
+				FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */,
+				06B5BBB30960E8F05B6C8866 /* ZoomControls.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B766CF8E344761C5E94AAF48 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		6FA04E319DB568F0458B79CF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */;
+			targetProxy = CDFFA14B2286295D84D56D42 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		346A6E641061E902C34B07D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios-uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "LookoutMarine-iOS";
+			};
+			name = Release;
+		};
+		39D6E981C2796AC9775EDB47 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../include",
+					"$(TILE57_DIR)/include",
+				);
+				INFOPLIST_FILE = "LookoutMarine-iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"-llookoutall",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios";
+				PRODUCT_NAME = LookoutMarine;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6645E525B9E3871201EA361B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios-uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "LookoutMarine-iOS";
+			};
+			name = Debug;
+		};
+		79B796714823EA4239E7EDD2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TILE57_DIR = "$(SRCROOT)/../../tile57";
+			};
+			name = Debug;
+		};
+		B929C85E1916BDBF6EDC3F56 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TILE57_DIR = "$(SRCROOT)/../../tile57";
+			};
+			name = Release;
+		};
+		D4028988297387E7CCBFE1AB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = LookoutMarine/LookoutMarine.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../include",
+					"$(TILE57_DIR)/include",
+				);
+				INFOPLIST_FILE = LookoutMarine/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"-llookoutall",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine";
+				PRODUCT_NAME = LookoutMarine;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F75E78BD1116101F48BF6436 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../include",
+					"$(TILE57_DIR)/include",
+				);
+				INFOPLIST_FILE = "LookoutMarine-iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"-llookoutall",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios";
+				PRODUCT_NAME = LookoutMarine;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F8E2B75C8A35030B2F8C1929 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = LookoutMarine/LookoutMarine.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../include",
+					"$(TILE57_DIR)/include",
+				);
+				INFOPLIST_FILE = LookoutMarine/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"-llookoutall",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine";
+				PRODUCT_NAME = LookoutMarine;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		06DB6226127DD37ADC6C301A /* Build configuration list for PBXNativeTarget "LookoutMarine-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F75E78BD1116101F48BF6436 /* Debug */,
+				39D6E981C2796AC9775EDB47 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9C3ECF9BD93BBA14B99E5413 /* Build configuration list for PBXNativeTarget "LookoutMarine" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F8E2B75C8A35030B2F8C1929 /* Debug */,
+				D4028988297387E7CCBFE1AB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		ECA5CF36E3B3C0F2D2767E21 /* Build configuration list for PBXProject "LookoutMarine" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				79B796714823EA4239E7EDD2 /* Debug */,
+				B929C85E1916BDBF6EDC3F56 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EE5EA841DC1F5B39198C5A19 /* Build configuration list for PBXNativeTarget "LookoutMarine-iOS-UITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6645E525B9E3871201EA361B /* Debug */,
+				346A6E641061E902C34B07D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 2A01BBEEFB9BB3FB14C0C549 /* Project object */;
+}

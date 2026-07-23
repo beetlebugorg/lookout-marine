@@ -8,7 +8,6 @@ zig-out-*/
 # build-iosdev, DerivedData, …) — never tracked.
 macos/build*/
 macos/DerivedData/
-macos/LookoutMarine.xcodeproj/
 # iOS builds of the native deps (obsolete since the Metal port; kept ignored
 # in case an old checkout still has them).
 ios-deps/
