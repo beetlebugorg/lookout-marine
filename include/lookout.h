@@ -28,7 +28,12 @@ typedef enum {
     LOOKOUT_NATIVE_COCOA_WINDOW = 1, /* NSWindow*  (macOS) */
     LOOKOUT_NATIVE_COCOA_VIEW   = 2, /* NSView*    (macOS) */
     LOOKOUT_NATIVE_WIN32_HWND   = 3, /* HWND       (Windows) */
-    LOOKOUT_NATIVE_X11_WINDOW   = 4  /* X11 Window XID cast to a void* */
+    LOOKOUT_NATIVE_X11_WINDOW   = 4, /* X11 Window XID cast to a void* */
+    /* UIWindowScene* (iOS). SDL cannot wrap an existing UIView, so the chart
+     * gets its own full-screen UIWindow created INSIDE the given scene (NULL =>
+     * the active scene). Layer your app's chrome window above it and forward
+     * touches via the lookout_pan/zoom/... calls, same as the other kinds. */
+    LOOKOUT_NATIVE_UIKIT_WINDOWSCENE = 5
 } lookout_native_kind;
 
 /* ---- lifecycle --------------------------------------------------------- */

@@ -47,6 +47,10 @@ pub const NativeKind = enum(c_int) {
     cocoa_view = 2, // NSView*    (macOS, embed in a view hierarchy)
     win32_hwnd = 3, // HWND       (Windows)
     x11_window = 4, // X11 Window (XID, passed as the pointer's integer value)
+    // UIWindowScene* (iOS). SDL can't wrap an existing UIView — it creates its
+    // own full-screen UIWindow inside the given scene (null => active scene);
+    // the host layers its chrome window above and forwards touches to us.
+    uikit_windowscene = 5,
 };
 
 pub const Options = struct {
@@ -116,6 +120,23 @@ pub const Gpu = struct {
 
     pub fn init(opts: Options, vert_spv: []const u8, frag_spv: []const u8, sprite_vert_spv: []const u8, sprite_frag_spv: []const u8, sdf_frag_spv: []const u8, pattern_vert_spv: []const u8, pattern_frag_spv: []const u8) !Gpu {
         // lookout always owns SDL + the GPU device; the host never sees them.
+        // The host app owns main(), not SDL_main — declare that before Init
+        // (required on platforms that check, e.g. the iOS UIKit backend).
+        cc.SDL_SetMainReady();
+        // iOS has no system Vulkan: SDL's default dlopen("libvulkan.dylib")
+        // fails, so point it at the app-embedded MoltenVK framework (dlopen
+        // resolves @rpath via the app's LC_RPATH → @executable_path/Frameworks).
+        // An SDL_VULKAN_LIBRARY env var still overrides via the hint priority.
+        if (@import("builtin").os.tag == .ios and std.c.getenv("SDL_VULKAN_LIBRARY") == null) {
+            _ = cc.SDL_SetHint(cc.SDL_HINT_VULKAN_LIBRARY, "@rpath/MoltenVK.framework/MoltenVK");
+        }
+        // iOS simulator: SimMetalHost (the simulator's Metal XPC service)
+        // crashes encoding Metal argument buffers — MoltenVK's default
+        // descriptor path (SIGABRT in MVKDescriptorPool::initDescriptorSet).
+        // Classic descriptor binding works; leave real devices on the default.
+        if (@import("builtin").os.tag == .ios and @import("builtin").abi == .simulator) {
+            _ = cc.SDL_setenv_unsafe("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+        }
         try check(cc.SDL_Init(cc.SDL_INIT_VIDEO), "SDL_Init");
         // debug_mode only on request: with it on, SDL enables the Khronos
         // validation layer whenever one is installed — a big frame cost, and the
@@ -123,7 +144,19 @@ pub const Gpu = struct {
         // (observed: SIGSEGV in vvl::QueueSubmission::BeginUse after the
         // full-screen transition).
         const debug_gpu = std.c.getenv("LOOKOUT_GPU_DEBUG") != null;
-        const device = try checkPtr(cc.SDL_CreateGPUDevice(cc.SDL_GPU_SHADERFORMAT_SPIRV, debug_gpu, null), "CreateGPUDevice");
+        const gpu_props = cc.SDL_CreateProperties();
+        defer cc.SDL_DestroyProperties(gpu_props);
+        _ = cc.SDL_SetBooleanProperty(gpu_props, cc.SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
+        _ = cc.SDL_SetBooleanProperty(gpu_props, cc.SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, debug_gpu);
+        // Opt OUT of the Vulkan device features SDL requests by default —
+        // 2D chart rendering uses none of them, and requiring them rejects
+        // limited drivers outright (the iOS-simulator MoltenVK device, "GPU
+        // Family Apple 2", fails SDL's suitability check on them).
+        _ = cc.SDL_SetBooleanProperty(gpu_props, cc.SDL_PROP_GPU_DEVICE_CREATE_FEATURE_CLIP_DISTANCE_BOOLEAN, false);
+        _ = cc.SDL_SetBooleanProperty(gpu_props, cc.SDL_PROP_GPU_DEVICE_CREATE_FEATURE_DEPTH_CLAMPING_BOOLEAN, false);
+        _ = cc.SDL_SetBooleanProperty(gpu_props, cc.SDL_PROP_GPU_DEVICE_CREATE_FEATURE_INDIRECT_DRAW_FIRST_INSTANCE_BOOLEAN, false);
+        _ = cc.SDL_SetBooleanProperty(gpu_props, cc.SDL_PROP_GPU_DEVICE_CREATE_FEATURE_ANISOTROPY_BOOLEAN, false);
+        const device = try checkPtr(cc.SDL_CreateGPUDeviceWithProperties(gpu_props), "CreateGPUDevice");
 
         var window: ?*cc.SDL_Window = null;
         var color_format: cc.SDL_GPUTextureFormat = cc.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -203,6 +236,10 @@ pub const Gpu = struct {
             .cocoa_view => _ = cc.SDL_SetPointerProperty(props, cc.SDL_PROP_WINDOW_CREATE_COCOA_VIEW_POINTER, handle),
             .win32_hwnd => _ = cc.SDL_SetPointerProperty(props, cc.SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, handle),
             .x11_window => _ = cc.SDL_SetNumberProperty(props, cc.SDL_PROP_WINDOW_CREATE_X11_WINDOW_NUMBER, @intCast(@intFromPtr(handle))),
+            // null scene is fine: SDL defaults to the active UIWindowScene.
+            .uikit_windowscene => if (handle != null) {
+                _ = cc.SDL_SetPointerProperty(props, cc.SDL_PROP_WINDOW_CREATE_WINDOWSCENE_POINTER, handle);
+            },
             .none => return null,
         }
         _ = cc.SDL_SetNumberProperty(props, cc.SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, @intCast(w));

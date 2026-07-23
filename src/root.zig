@@ -134,6 +134,11 @@ pub const Lookout = struct {
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
+    /// The density the sprite atlas was actually baked at. Usually the display
+    /// pixel density, but reduced when the full-density atlas would exceed the
+    /// device's max texture dimension (loadSpriteAtlas). Scene builds must pass
+    /// THIS ratio so sprite UVs index the atlas we uploaded.
+    atlas_scale: f32 = 1.0,
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
@@ -246,23 +251,45 @@ pub const Lookout = struct {
     // Bake the S-52 sprite-symbol atlas (from the embedded catalogue), decode it,
     // and upload it once. Symbols/soundings then draw as textured quads.
     fn loadSpriteAtlas(self: *Lookout) void {
-        var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
-        var err: cc.tile57_error = undefined;
         // Bake the atlas texture at the display density so symbols stay sharp on
         // HiDPI; the GPU scene's UVs (runJob passes the same ratio) index it.
-        if (cc.tile57_bake_sprite_mln(null, @floatCast(self.g.pixel_density), &assets, &err) != cc.TILE57_OK) return;
-        defer cc.tile57_assets_free(&assets);
-        if (assets.sprite_png == null or assets.sprite_json == null) return;
-        const png_bytes = assets.sprite_png[0..assets.sprite_png_len];
-        const json = assets.sprite_json[0..assets.sprite_json_len];
-        const a = atlas.loadSprite(self.alloc, png_bytes, json) catch return;
-        self.sprite_atlas = a;
-        self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
-            self.sprite_atlas.?.deinit();
-            self.sprite_atlas = null;
+        // Not every device can take the full-density result as one texture (the
+        // iOS-simulator GPU caps textures at 8192 and a 3x bake is ~10.9k tall;
+        // creating an oversized Metal texture ABORTS, it doesn't error) — so
+        // shrink the bake scale until the atlas fits, and remember the scale
+        // actually used (atlas_scale) so scene UVs stay in step.
+        const bi = @import("builtin");
+        const max_dim: u32 = if (bi.os.tag == .ios and bi.abi == .simulator) 8192 else 16384;
+        var scale: f32 = self.g.pixel_density;
+        self.atlas_scale = scale;
+        var attempts: u8 = 0;
+        while (attempts < 4) : (attempts += 1) {
+            var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
+            var err: cc.tile57_error = undefined;
+            if (cc.tile57_bake_sprite_mln(null, @floatCast(scale), &assets, &err) != cc.TILE57_OK) return;
+            defer cc.tile57_assets_free(&assets);
+            if (assets.sprite_png == null or assets.sprite_json == null) return;
+            const png_bytes = assets.sprite_png[0..assets.sprite_png_len];
+            const json = assets.sprite_json[0..assets.sprite_json_len];
+            var a = atlas.loadSprite(self.alloc, png_bytes, json) catch return;
+            const largest = @max(a.width, a.height);
+            if (largest > max_dim) {
+                a.deinit();
+                const fit = @as(f32, @floatFromInt(max_dim)) / @as(f32, @floatFromInt(largest));
+                scale = @max(1.0, scale * fit * 0.98); // 2% slack for packer variance
+                std.debug.print("sprite atlas {d}x{d} exceeds max texture {d}; rebaking at {d:.2}x\n", .{ a.width, a.height, max_dim, scale });
+                continue;
+            }
+            self.sprite_atlas = a;
+            self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
+                self.sprite_atlas.?.deinit();
+                self.sprite_atlas = null;
+                return;
+            };
+            self.atlas_scale = scale;
+            std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells\n", .{ a.width, a.height, scale, a.cells.count() });
             return;
-        };
-        std.debug.print("sprite atlas: {d}x{d}, {d} cells\n", .{ a.width, a.height, a.cells.count() });
+        }
     }
 
     // Pull the S-52 NODATA (NODTA) color per captured scheme from tile57's
@@ -677,9 +704,10 @@ pub const Lookout = struct {
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
         var err: cc.tile57_error = undefined;
-        // Display density (immutable after init): the sprite quads' UVs must match
-        // the atlas texture we baked at the same ratio (loadSpriteAtlas).
-        const ratio: f64 = @floatCast(self.g.pixel_density);
+        // The sprite quads' UVs must match the atlas texture we actually baked —
+        // atlas_scale is the display density unless the atlas had to shrink to
+        // fit the device's max texture dimension (loadSpriteAtlas).
+        const ratio: f64 = @floatCast(self.atlas_scale);
         const st = if (self.compose) |c|
             cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err)
         else

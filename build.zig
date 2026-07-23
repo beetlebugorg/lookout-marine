@@ -10,7 +10,10 @@ pub fn build(b: *std.Build) void {
     const tile57 = b.option([]const u8, "tile57", "tile57 checkout dir") orelse DEFAULT_TILE57;
 
     const tile57_inc = b.pathJoin(&.{ tile57, "include" });
-    const tile57_lib = b.pathJoin(&.{ tile57, "zig-out/lib/libtile57.a" });
+    // Cross builds keep per-platform archives (zig-out-iphonesimulator/…) —
+    // point tile57_lib at the one matching -Dtarget.
+    const tile57_lib = b.option([]const u8, "tile57_lib", "path to libtile57.a (default <tile57>/zig-out/lib/libtile57.a)") orelse
+        b.pathJoin(&.{ tile57, "zig-out/lib/libtile57.a" });
 
     const Cfg = struct {
         b: *std.Build,
@@ -18,6 +21,10 @@ pub fn build(b: *std.Build) void {
         tile57_lib: []const u8,
         fn apply(self: @This(), mod: *std.Build.Module) void {
             const bb = self.b;
+            // Non-macOS Apple targets (-Dtarget=aarch64-ios[-simulator]) need
+            // that SDK's libc headers: pass --sysroot; Zig only bundles macOS's.
+            if (bb.sysroot) |sysroot|
+                mod.addSystemIncludePath(.{ .cwd_relative = bb.pathJoin(&.{ sysroot, "usr/include" }) });
             mod.addIncludePath(.{ .cwd_relative = self.tile57_inc });
             mod.addIncludePath(bb.path("vendor/stb"));
             // Tessellation, sprite/SDF quad building and paint order all moved
@@ -45,13 +52,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
+        // iOS: std.debug's stack-trace machinery references
+        // _dyld_get_image_header_containing_address, which iOS' libdyld doesn't
+        // export — strip so the panic path never pulls it in.
+        .strip = target.result.os.tag == .ios,
     });
     cfg.apply(lib_mod);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
     lib.installHeader(b.path("include/lookout.h"), "lookout.h");
     b.installArtifact(lib);
 
-    // ---- the demo executable ----
+    // ---- the demo executable + tests (host platforms only: an iOS cross-build
+    // `-Dtarget=aarch64-ios` produces just the static lib for the app to link;
+    // a standalone exe can't launch there and won't link without the app's
+    // frameworks) ----
+    if (target.result.os.tag == .ios) return;
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
