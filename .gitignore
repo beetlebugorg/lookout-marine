@@ -4,10 +4,11 @@ zig-out-*/
 *.png
 !docs/*.png
 .DS_Store
-macos/build/
-macos/build-ios/
+# Xcode / xcodegen build products and derived data (build, build-ios,
+# build-iosdev, DerivedData, …) — never tracked.
+macos/build*/
+macos/DerivedData/
 macos/LookoutMarine.xcodeproj/
-# iOS builds of the native deps (SDL3 source+static, MoltenVK) — fetched/built
-# locally per macos/README.md "iOS"; the local SDL patch is tracked at
-# macos/sdl-ios-simulator-device-features.patch.
+# iOS builds of the native deps (obsolete since the Metal port; kept ignored
+# in case an old checkout still has them).
 ios-deps/

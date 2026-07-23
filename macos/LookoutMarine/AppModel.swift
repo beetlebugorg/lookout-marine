@@ -28,6 +28,9 @@ final class AppModel: ObservableObject {
     /// True from the moment an open is scheduled until lookout_open returns —
     /// covers the synchronous open (a 7k-cell library takes seconds).
     @Published var isOpening = false
+    /// True while the FIRST-run one-time symbol/font atlas bake runs (the app
+    /// cache is empty). Drives a distinct "Preparing chart symbols" message.
+    @Published var preparingSymbols = false
     /// False until the first scene after an open has actually rendered; with
     /// isOpening it drives the big startup loader (later rebuilds only show
     /// the small BuildingPill).

@@ -118,6 +118,15 @@ final class ChartController: NSObject {
         return true
     }
 
+    /// Attach the surface we render into, WITHOUT opening a chart yet. iOS calls
+    /// this as soon as ChartUIView has a window, so a mid-session open (importing
+    /// a chart when the app launched with none) has a view to reopen into — on
+    /// iOS the chart lives in ChartUIView, and there is no SwiftUI representable
+    /// to service a pending openRequest as a fallback.
+    func attachView(_ v: PlatformView) {
+        if view == nil { view = v }
+    }
+
     /// Re-open into the view we already render into (menu/search/panel opens
     /// after the first open — the AppModel calls this directly because SwiftUI
     /// stops updating the wrapped content view). False when no view yet.

@@ -40,36 +40,30 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
     return m;
 }
 
-/// Uniform box-average downscale of an RGBA8 image (src w×h -> dst nw×nh, both
-/// dst dims <= src). Straight-alpha average per destination texel over its
-/// source box. Caller frees the returned buffer.
-fn boxDownscaleRgba(alloc: std.mem.Allocator, src: []const u8, w: u32, h: u32, nw: u32, nh: u32) ![]u8 {
-    const out = try alloc.alloc(u8, @as(usize, nw) * nh * 4);
-    errdefer alloc.free(out);
-    var oy: u32 = 0;
-    while (oy < nh) : (oy += 1) {
-        const sy0 = oy * h / nh;
-        const sy1 = @max(sy0 + 1, (oy + 1) * h / nh);
-        var ox: u32 = 0;
-        while (ox < nw) : (ox += 1) {
-            const sx0 = ox * w / nw;
-            const sx1 = @max(sx0 + 1, (ox + 1) * w / nw);
-            var acc: [4]u64 = .{ 0, 0, 0, 0 };
-            var n: u64 = 0;
-            var sy = sy0;
-            while (sy < sy1) : (sy += 1) {
-                var sx = sx0;
-                while (sx < sx1) : (sx += 1) {
-                    const i = (@as(usize, sy) * w + sx) * 4;
-                    inline for (0..4) |c| acc[c] += src[i + c];
-                    n += 1;
-                }
-            }
-            const o = (@as(usize, oy) * nw + ox) * 4;
-            inline for (0..4) |c| out[o + c] = @intCast(acc[c] / @max(1, n));
-        }
-    }
-    return out;
+/// The app's atlas cache directory: `$HOME/Library/Caches/lookout/v<version>`
+/// — writable in the macOS and iOS sandboxes alike, purgeable by the OS (it's
+/// a rebuildable cache). Created here; owned by `alloc`. Null if HOME is unset.
+/// Keyed by tile57 version so a catalogue/engine change invalidates old atlases.
+pub fn atlasCacheDir(alloc: std.mem.Allocator) ?[]u8 {
+    const home = std.c.getenv("HOME") orelse return null;
+    const ver = std.mem.span(cc.tile57_version());
+    const dir = std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch return null;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    return dir;
+}
+
+/// True when the atlas cache is already populated (the density-independent glyph
+/// atlas is present) — i.e. the next open will NOT need the one-time bake. The
+/// host queries this to show a "preparing symbols" message only on first run.
+pub fn atlasCacheReady(alloc: std.mem.Allocator) bool {
+    const dir = atlasCacheDir(alloc) orelse return false;
+    defer alloc.free(dir);
+    const path = std.fmt.allocPrint(alloc, "{s}/glyph.png", .{dir}) catch return false;
+    defer alloc.free(path);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
 }
 
 fn hexColor(s: []const u8) ?gpu.Color {
@@ -108,20 +102,9 @@ pub const OpenOptions = struct {
     /// input via pan/zoom/setView/resize.
     native_handle: ?*anyopaque = null,
     native_kind: gpu.NativeKind = .none,
-    /// Directory that may hold a tile57 `_assets/` sidecar set (baked symbol +
-    /// SDF-font atlases). When present, the atlases load from disk instead of
-    /// re-rasterizing every open (~1.3s at 1x, more at HiDPI). Normally the
-    /// chart's own directory; null => always live-bake.
-    assets_dir: ?[]const u8 = null,
 };
 
 pub const NativeKind = gpu.NativeKind;
-
-/// Ratio the shared `_assets/` sprite atlas is baked at (tile57 emits a single
-/// 3x atlas; cell_px/ppm is ratio-invariant so this is correct at any device
-/// density — see bakeAssetsDir in tile57). Passed to the scene build so its
-/// normalized sprite UVs match the uploaded texture.
-const ASSETS_SPRITE_RATIO: f32 = 3.0;
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
@@ -169,7 +152,7 @@ pub const Lookout = struct {
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
-    /// Resolved tile57 `_assets` dir (walk-up from the chart), or null to live-bake.
+    /// The app's atlas cache dir ($HOME/Library/Caches/lookout/...), or null.
     assets_root: ?[]u8 = null,
     /// The density the sprite atlas was actually baked at. Usually the display
     /// pixel density, but reduced when the full-density atlas would exceed the
@@ -249,7 +232,7 @@ pub const Lookout = struct {
         // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
         // derives the live gates (cat_mask/sound_on/clear) from this before the
         // first render.
-        self.assets_root = self.resolveAssetsRoot(opts.assets_dir);
+        self.assets_root = atlasCacheDir(self.alloc);
         self.loadNodataColors();
         self.loadSpriteAtlas();
         if (dbg) {
@@ -261,34 +244,8 @@ pub const Lookout = struct {
         return self;
     }
 
-    /// Find the tile57 `_assets` directory by walking UP from `start`: a single
-    /// chart sits in a mirrored tree (out/REGION/CELL.pmtiles) with `_assets` at
-    /// the library ROOT, while a flat library has it right alongside — so try
-    /// `<dir>/_assets`, then each parent, a few levels. Returns the resolved
-    /// `_assets` path (owned by self.alloc; freed in close) or null.
-    fn resolveAssetsRoot(self: *Lookout, start: ?[]const u8) ?[]u8 {
-        var dir = start orelse return null;
-        const io = std.Io.Threaded.global_single_threaded.io();
-        var levels: u8 = 0;
-        while (levels < 8) : (levels += 1) {
-            const cand = std.fmt.allocPrint(self.alloc, "{s}/_assets", .{dir}) catch return null;
-            if (std.Io.Dir.cwd().openDir(io, cand, .{})) |d| {
-                var dd = d;
-                dd.close(io);
-                return cand; // exists
-            } else |_| {
-                self.alloc.free(cand);
-                const parent = std.fs.path.dirname(dir) orelse return null;
-                if (parent.len == 0 or std.mem.eql(u8, parent, dir)) return null;
-                dir = parent;
-            }
-        }
-        return null;
-    }
-
-    /// Read `<assets_root>/<name>` into an alloc'd buffer, or null on any miss —
-    /// the caller then live-bakes. `assets_root` is resolved once in create.
-    fn readAsset(self: *Lookout, name: []const u8) ?[]u8 {
+    /// Read `<cache>/<name>` (the app's own atlas cache), or null on any miss.
+    fn readCache(self: *Lookout, name: []const u8) ?[]u8 {
         const root = self.assets_root orelse return null;
         const path = std.fmt.allocPrint(self.alloc, "{s}/{s}", .{ root, name }) catch return null;
         defer self.alloc.free(path);
@@ -296,14 +253,24 @@ pub const Lookout = struct {
         return std.Io.Dir.cwd().readFileAlloc(io, path, self.alloc, .limited(256 * 1024 * 1024)) catch null;
     }
 
-    // Load the SDF label-glyph atlas (from the `_assets/` sidecar if present,
-    // else a live bake), decode, upload once. Text then draws as SDF quads
-    // (crisp at any zoom) instead of tessellated glyph outlines.
+    /// Write `<cache>/<name>`. Best-effort: the atlas is already uploaded, so a
+    /// failure just means the next open re-bakes.
+    fn writeCache(self: *Lookout, name: []const u8, bytes: []const u8) void {
+        const root = self.assets_root orelse return;
+        const path = std.fmt.allocPrint(self.alloc, "{s}/{s}", .{ root, name }) catch return;
+        defer self.alloc.free(path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes }) catch {};
+    }
+
+    // Load the SDF label-glyph atlas: from the app cache if present, else bake
+    // it once (from the embedded catalogue) and cache it. Text then draws as SDF
+    // quads (crisp at any zoom) instead of tessellated glyph outlines. The SDF
+    // atlas is resolution-independent, so one cached copy serves every density.
     fn loadGlyphAtlas(self: *Lookout) void {
-        // Sidecar first: glyph.png + glyph.json (resolution-independent SDF).
-        if (self.readAsset("glyph.png")) |png_b| {
+        if (self.readCache("glyph.png")) |png_b| {
             defer self.alloc.free(png_b);
-            if (self.readAsset("glyph.json")) |json| {
+            if (self.readCache("glyph.json")) |json| {
                 defer self.alloc.free(json);
                 if (self.uploadGlyphRegular(png_b, json)) {
                     self.loadGlyphFace(1, true);
@@ -312,13 +279,18 @@ pub const Lookout = struct {
                 }
             }
         }
-        // Live bake fallback.
+        // Bake + cache.
         var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
         var err: cc.tile57_error = undefined;
         if (cc.tile57_bake_glyph_sdf(&assets, &err) != cc.TILE57_OK) return;
         defer cc.tile57_assets_free(&assets);
         if (assets.sprite_png == null or assets.sprite_json == null) return;
-        _ = self.uploadGlyphRegular(assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len]);
+        const png_b = assets.sprite_png[0..assets.sprite_png_len];
+        const json = assets.sprite_json[0..assets.sprite_json_len];
+        if (self.uploadGlyphRegular(png_b, json)) {
+            self.writeCache("glyph.png", png_b);
+            self.writeCache("glyph.json", json);
+        }
         self.loadGlyphFace(1, true);
         self.loadGlyphFace(2, false);
     }
@@ -341,9 +313,9 @@ pub const Lookout = struct {
     fn loadGlyphFace(self: *Lookout, face: i32, bold: bool) void {
         const png_name = if (bold) "glyph-bold.png" else "glyph-italic.png";
         const json_name = if (bold) "glyph-bold.json" else "glyph-italic.json";
-        if (self.readAsset(png_name)) |png_b| {
+        if (self.readCache(png_name)) |png_b| {
             defer self.alloc.free(png_b);
-            if (self.readAsset(json_name)) |json| {
+            if (self.readCache(json_name)) |json| {
                 defer self.alloc.free(json);
                 if (self.uploadGlyphFace(png_b, json, bold)) return;
             }
@@ -353,7 +325,12 @@ pub const Lookout = struct {
         if (cc.tile57_bake_glyph_sdf_face(&assets, face, &err) != cc.TILE57_OK) return;
         defer cc.tile57_assets_free(&assets);
         if (assets.sprite_png == null or assets.sprite_json == null) return;
-        _ = self.uploadGlyphFace(assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len], bold);
+        const png_b = assets.sprite_png[0..assets.sprite_png_len];
+        const json = assets.sprite_json[0..assets.sprite_json_len];
+        if (self.uploadGlyphFace(png_b, json, bold)) {
+            self.writeCache(png_name, png_b);
+            self.writeCache(json_name, json);
+        }
     }
 
     fn uploadGlyphFace(self: *Lookout, png_b: []const u8, json: []const u8, bold: bool) bool {
@@ -366,66 +343,61 @@ pub const Lookout = struct {
         return true;
     }
 
-    // Load the S-52 sprite-symbol atlas — from the `_assets/` sidecar (a single
-    // 3x atlas, baked once by tile57) if present, else a live bake — decode, and
-    // upload it once. Symbols/soundings then draw as textured quads.
+    // Load the S-52 sprite-symbol atlas: from the app cache if present, else
+    // bake it once at the display density and cache it. The cache key includes
+    // the density (a Retina 2x bake differs from 1x); the scale that actually
+    // fit (see below) rides a small sidecar so the load matches the scene UVs.
     fn loadSpriteAtlas(self: *Lookout) void {
-        if (self.readAsset("sprite@3x.png")) |png_b| {
+        var keybuf: [24]u8 = undefined;
+        const key = std.fmt.bufPrint(&keybuf, "sprite@{d:.2}", .{self.g.pixel_density}) catch "sprite@x";
+        var pn: [32]u8 = undefined;
+        var jn: [32]u8 = undefined;
+        var sn: [32]u8 = undefined;
+        const png_name = std.fmt.bufPrint(&pn, "{s}.png", .{key}) catch return;
+        const json_name = std.fmt.bufPrint(&jn, "{s}.json", .{key}) catch return;
+        const scale_name = std.fmt.bufPrint(&sn, "{s}.scale", .{key}) catch return;
+
+        if (self.readCache(png_name)) |png_b| {
             defer self.alloc.free(png_b);
-            if (self.readAsset("sprite@3x.json")) |json| {
+            if (self.readCache(json_name)) |json| {
                 defer self.alloc.free(json);
-                if (self.uploadSpriteFromBytes(png_b, json, ASSETS_SPRITE_RATIO)) return;
+                var scale: f32 = self.g.pixel_density;
+                if (self.readCache(scale_name)) |sb| {
+                    defer self.alloc.free(sb);
+                    scale = std.fmt.parseFloat(f32, std.mem.trim(u8, sb, " \n\r\t")) catch scale;
+                }
+                if (self.uploadSprite(png_b, json, scale, false)) {
+                    std.debug.print("sprite atlas @ {d:.2}x (cache)\n", .{scale});
+                    return;
+                }
             }
         }
-        self.bakeSpriteAtlas();
+        self.bakeAndCacheSprite(png_name, json_name, scale_name);
     }
 
-    /// Decode a sprite atlas PNG+JSON and upload it, downscaling the texture
-    /// uniformly to fit the device max texture dimension if needed (the 3x
-    /// sidecar is ~6144x10902 — over the iOS-simulator 8192 cap). Downscaling
-    /// preserves the normalized UV layout, so the scene's ratio-`scale` UVs
-    /// still index it. atlas_scale := scale (the atlas's bake ratio).
-    fn uploadSpriteFromBytes(self: *Lookout, png_b: []const u8, json: []const u8, scale: f32) bool {
-        var a = atlas.loadSprite(self.alloc, png_b, json) catch return false;
-        const bi = @import("builtin");
-        const max_dim: u32 = if (bi.os.tag == .ios and bi.abi == .simulator) 8192 else 16384;
-        const largest = @max(a.width, a.height);
-        if (largest > max_dim) {
-            const f = @as(f32, @floatFromInt(max_dim)) / @as(f32, @floatFromInt(largest));
-            const nw: u32 = @max(1, @as(u32, @intFromFloat(@as(f32, @floatFromInt(a.width)) * f)));
-            const nh: u32 = @max(1, @as(u32, @intFromFloat(@as(f32, @floatFromInt(a.height)) * f)));
-            const small = boxDownscaleRgba(self.alloc, a.rgba(), a.width, a.height, nw, nh) catch {
-                a.deinit();
-                return false;
-            };
-            defer self.alloc.free(small);
-            self.g.uploadSpriteAtlas(small, nw, nh) catch {
-                a.deinit();
-                return false;
-            };
-            std.debug.print("sprite atlas: {d}x{d} -> {d}x{d} (fit) @ {d:.2}x, {d} cells\n", .{ a.width, a.height, nw, nh, scale, a.cells.count() });
-        } else {
-            self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
-                a.deinit();
-                return false;
-            };
-            std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells (sidecar)\n", .{ a.width, a.height, scale, a.cells.count() });
-        }
+    /// Decode a sprite atlas PNG+JSON and upload it. `atlas_scale := scale` (the
+    /// bake ratio) so the scene's sprite UVs match. `note`d cache loads never
+    /// exceed the device max (they were fit-baked); this only guards a surprise.
+    fn uploadSprite(self: *Lookout, png_b: []const u8, json: []const u8, scale: f32, note: bool) bool {
+        _ = note;
+        const a = atlas.loadSprite(self.alloc, png_b, json) catch return false;
         self.sprite_atlas = a;
+        self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
+            self.sprite_atlas.?.deinit();
+            self.sprite_atlas = null;
+            return false;
+        };
         self.atlas_scale = scale;
         return true;
     }
 
-    // Live-bake fallback: rasterize the S-52 sprite-symbol atlas from the
-    // embedded catalogue at the display density.
-    fn bakeSpriteAtlas(self: *Lookout) void {
-        // Bake the atlas texture at the display density so symbols stay sharp on
-        // HiDPI; the GPU scene's UVs (runJob passes the same ratio) index it.
-        // Not every device can take the full-density result as one texture (the
-        // iOS-simulator GPU caps textures at 8192 and a 3x bake is ~10.9k tall;
-        // creating an oversized Metal texture ABORTS, it doesn't error) — so
-        // shrink the bake scale until the atlas fits, and remember the scale
-        // actually used (atlas_scale) so scene UVs stay in step.
+    // Bake the S-52 sprite-symbol atlas at the display density, upload it, and
+    // write it to the app cache so later opens skip the (slow) rasterize. Some
+    // GPUs can't take the full-density result as one texture (the iOS-simulator
+    // caps textures at 8192 and a 3x bake is ~10.9k tall; an oversized Metal
+    // texture ABORTS, it doesn't error), so shrink the bake scale until it fits
+    // and remember it (atlas_scale) so scene UVs stay in step.
+    fn bakeAndCacheSprite(self: *Lookout, png_name: []const u8, json_name: []const u8, scale_name: []const u8) void {
         const bi = @import("builtin");
         const max_dim: u32 = if (bi.os.tag == .ios and bi.abi == .simulator) 8192 else 16384;
         var scale: f32 = self.g.pixel_density;
@@ -455,7 +427,12 @@ pub const Lookout = struct {
                 return;
             };
             self.atlas_scale = scale;
-            std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells\n", .{ a.width, a.height, scale, a.cells.count() });
+            std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells (baked)\n", .{ a.width, a.height, scale, a.cells.count() });
+            // Cache the fit result (the on-disk PNG/JSON are the baked bytes).
+            self.writeCache(png_name, png_bytes);
+            self.writeCache(json_name, json);
+            var sbuf: [16]u8 = undefined;
+            if (std.fmt.bufPrint(&sbuf, "{d:.4}", .{scale})) |s| self.writeCache(scale_name, s) else |_| {}
             return;
         }
     }

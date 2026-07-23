@@ -59,12 +59,9 @@ fn scanPmtiles(alloc: std.mem.Allocator, dir: []const u8) ![][:0]const u8 {
     return list.toOwnedSlice(alloc);
 }
 
-// Open a single baked chart, or compose a directory of them. The `_assets/`
-// sidecar (baked symbol/font atlases) sits in the chart's own directory.
-fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts_in: lk.OpenOptions) !*lk.Lookout {
-    var opts = opts_in;
+// Open a single baked chart, or compose a directory of them.
+fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts: lk.OpenOptions) !*lk.Lookout {
     if (isDir(path)) {
-        opts.assets_dir = path; // the library directory itself
         const paths = try scanPmtiles(alloc, path);
         defer {
             for (paths) |p| alloc.free(p);
@@ -74,7 +71,6 @@ fn openTarget(alloc: std.mem.Allocator, path: [:0]const u8, opts_in: lk.OpenOpti
         std.debug.print("composing {d} charts from {s}\n", .{ paths.len, path });
         return lk.Lookout.openCharts(alloc, paths, opts);
     }
-    opts.assets_dir = std.fs.path.dirname(path) orelse ".";
     return lk.Lookout.open(alloc, path, opts);
 }
 

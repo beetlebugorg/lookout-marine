@@ -168,16 +168,25 @@ struct ContentView: View {
 /// Full startup loader: shown from launch until the first scene after an open
 /// has rendered (later rebuilds only show the small BuildingPill).
 struct StartupLoader: View {
+    /// First launch: the symbol/font atlases are being baked + cached (one-time,
+    /// a couple of seconds). Later launches load them from cache — just "loading".
+    var preparing: Bool = false
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "map")
+            Image(systemName: preparing ? "square.grid.3x3.square" : "map")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
             ProgressView()
                 .controlSize(.large)
-            Text("Loading charts…")
-                .font(.callout)
+            Text(preparing ? "Preparing chart symbols…" : "Loading charts…")
+                .font(.callout.weight(.medium))
                 .foregroundStyle(.secondary)
+            if preparing {
+                Text("First launch only — this is cached for next time.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(40)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))

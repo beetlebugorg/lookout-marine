@@ -59,7 +59,7 @@ struct OverlayLayer: View {
                 if model.isBuilding { BuildingPill().padding(.top, 10) }
             }
             .overlay {
-                if model.showStartupLoader { StartupLoader() }
+                if model.showStartupLoader { StartupLoader(preparing: model.preparingSymbols) }
                 else if !model.hasChart { EmptyChartState(model: model) }
             }
             .animation(.default, value: model.pickResults)
@@ -241,9 +241,10 @@ final class ChartNSView: NSView {
         // resize the deferral above is dodging.
         window?.isRestorable = false
         model?.isOpening = true // loader up before the (synchronous) open runs
+        model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            defer { self.model?.isOpening = false }
+            defer { self.model?.isOpening = false; self.model?.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
             self.lastOpenId = self.model?.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
@@ -507,6 +508,10 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
     override func didMoveToWindow() {
         super.didMoveToWindow()
         syncLayerScale()
+        // Attach as the render surface immediately, so an imported-chart open
+        // works even when the app launched with no default chart (nothing has
+        // called controller.open yet, so controller.view would be nil).
+        if window != nil { controller?.attachView(self) }
         maybeAutoOpen()
     }
 
@@ -542,9 +547,10 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         didAutoOpen = true
         lastSizePt = bounds.size
         model?.isOpening = true // loader up before the (synchronous) open runs
+        model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            defer { self.model?.isOpening = false }
+            defer { self.model?.isOpening = false; self.model?.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
             self.lastOpenId = self.model?.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)

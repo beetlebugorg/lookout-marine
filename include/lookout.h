@@ -58,6 +58,11 @@ lookout *lookout_open_charts_in_window(lookout_native_kind kind, void *native_ha
                                        uint32_t width, uint32_t height, int want_msaa);
 void lookout_close(lookout *h);
 
+/* 1 if the symbol/font atlas cache is already built — the next open won't need
+ * the one-time rasterize (~1.3s at 1x, more at HiDPI). Call before opening to
+ * show a "preparing chart symbols" indicator only on the first run. */
+int lookout_atlas_cache_ready(void);
+
 /* ---- view -------------------------------------------------------------- */
 void lookout_fit_chart(lookout *h, lookout_view *out); /* fit the whole cell */
 void lookout_set_view(lookout *h, const lookout_view *v);
