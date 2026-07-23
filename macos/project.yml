@@ -53,12 +53,11 @@ targets:
           - "$(TILE57_DIR)/include"
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../zig-out/lib"
-          - "$(TILE57_DIR)/zig-out/lib"
-        # Static Zig cores (rendering is direct Metal — the shim is inside
-        # liblookout_marine.a).
+        # The merged, libtool-repacked Zig cores (see the pre-build script) —
+        # ld64 rejects zig-emitted archive members ("not 8-byte aligned"), so
+        # the raw archives are never linked directly on ANY platform.
         OTHER_LDFLAGS:
-          - "-llookout_marine"
-          - "-ltile57"
+          - "-llookoutall"
     dependencies:
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
@@ -80,18 +79,39 @@ targets:
           ( cd "$TILE57_DIR" && zig build lib -Doptimize=ReleaseFast )
           cd "$SRCROOT/.."
           zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast
+          # Zig's outputs are deterministic, so an unchanged core hashes
+          # identically — used twice below: to skip the repack, and to force
+          # Xcode to relink when the core DID change.
+          CORE_HASH=$(cat "zig-out/lib/liblookout_marine.a" "$TILE57_DIR/zig-out/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
+
+          # ld64 AND libtool both drop/reject zig-emitted archive members
+          # ("64-bit mach-o not 8-byte aligned"), so the raw archives are never
+          # linked directly: extract to loose objects (no offset-alignment
+          # problem; zig also records mode-0 permissions, hence the chmod) and
+          # repack, exactly like the iOS target. Skipped when unchanged.
+          REPACK_STAMP="zig-out/lib/.liblookoutall.stamp"
+          if [ "$(cat "$REPACK_STAMP" 2>/dev/null)" != "$CORE_HASH" ] \
+             || [ ! -f "zig-out/lib/liblookoutall.a" ]; then
+            REPACK="zig-out/repack"
+            rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
+            (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
+            (cd "$REPACK/tile57"  && ar x "$TILE57_DIR/zig-out/lib/libtile57.a")
+            chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
+            xcrun -sdk macosx libtool -static \
+              -o "zig-out/lib/liblookoutall.a" \
+              "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o 2>/dev/null
+            echo "$CORE_HASH" > "$REPACK_STAMP"
+          fi
+
           # Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so
           # a rebuilt Zig core would never RELINK the app (stale core in the
-          # bundle). Force the link when the archive contents changed by
-          # removing the previous executable (link-only cost). Zig's outputs
-          # are deterministic, so an unchanged core hashes identically. The
-          # stamp lives in TARGET_BUILD_DIR: per configuration, like the
-          # executable it guards.
-          CORE_HASH=$(cat "zig-out/lib/liblookout_marine.a" "$TILE57_DIR/zig-out/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
-          STAMP="$TARGET_BUILD_DIR/.zigcore.stamp"
-          if [ "$(cat "$STAMP" 2>/dev/null)" != "$CORE_HASH" ]; then
+          # bundle). Force the link when the core changed by removing the
+          # previous executable (link-only cost). The stamp lives in
+          # TARGET_BUILD_DIR: per configuration, like the executable it guards.
+          LINK_STAMP="$TARGET_BUILD_DIR/.zigcore.stamp"
+          if [ "$(cat "$LINK_STAMP" 2>/dev/null)" != "$CORE_HASH" ]; then
             mkdir -p "$TARGET_BUILD_DIR"
-            echo "$CORE_HASH" > "$STAMP"
+            echo "$CORE_HASH" > "$LINK_STAMP"
             rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
           fi
 
