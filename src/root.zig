@@ -592,9 +592,14 @@ pub const Lookout = struct {
         return .{ .origin = o, .center = o, .zoom = v.zoom, .target_zoom = v.zoom, .rotation = v.rotation_deg * std.math.pi / 180.0, .vw = w, .vh = h };
     }
 
-    /// A BOUNDED opening view. Deliberately the first cell's own bounds, NOT the
-    /// union of a whole library — fitting a big composite would tessellate the
-    /// entire library into one gigantic scene. Pan/zoom reaches the rest.
+    /// A BOUNDED opening view. Deliberately ONE cell's own bounds, NOT the union
+    /// of a whole library — fitting a big composite would tessellate the entire
+    /// library into one gigantic scene. Pan/zoom reaches the rest.
+    ///
+    /// For a library we fit the MOST DETAILED cell (smallest bounds area), not
+    /// the first alphabetically: a US ENC's first cell is usually a tiny-scale
+    /// EEZ overview (e.g. US1EEZ1M) that opens as an empty ocean rectangle. A
+    /// harbour/approach cell lands the user on actual chart content instead.
     pub fn fitChart(self: *Lookout) View {
         var west: f64 = 0;
         var south: f64 = 0;
@@ -604,18 +609,31 @@ pub const Lookout = struct {
         var min_zoom: u8 = 0;
         var max_zoom: u8 = 22;
         {
-            var info: cc.tile57_info = undefined;
-            cc.tile57_chart_get_info(self.charts.items[0], &info);
-            if (info.has_bounds) {
-                west = info.west;
-                south = info.south;
-                east = info.east;
-                north = info.north;
-                min_zoom = info.min_zoom;
-                max_zoom = info.max_zoom;
-                has_bounds = true;
-            } else if (info.has_anchor) {
-                return .{ .lon = info.anchor_lon, .lat = info.anchor_lat, .zoom = info.anchor_zoom };
+            // Pick the smallest-area bounded cell as the opening view. Falls back
+            // to the first cell's anchor (or the first cell) when none is bounded.
+            var best_area: f64 = std.math.floatMax(f64);
+            var anchor: ?View = null;
+            for (self.charts.items) |ch| {
+                var info: cc.tile57_info = undefined;
+                cc.tile57_chart_get_info(ch, &info);
+                if (info.has_bounds) {
+                    const area = @abs(info.east - info.west) * @abs(info.north - info.south);
+                    if (area < best_area) {
+                        best_area = area;
+                        west = info.west;
+                        south = info.south;
+                        east = info.east;
+                        north = info.north;
+                        min_zoom = info.min_zoom;
+                        max_zoom = info.max_zoom;
+                        has_bounds = true;
+                    }
+                } else if (anchor == null and info.has_anchor) {
+                    anchor = .{ .lon = info.anchor_lon, .lat = info.anchor_lat, .zoom = info.anchor_zoom };
+                }
+            }
+            if (!has_bounds) {
+                if (anchor) |a| return a;
             }
         }
         if (!has_bounds) return .{ .lon = 0, .lat = 0, .zoom = 2 };
