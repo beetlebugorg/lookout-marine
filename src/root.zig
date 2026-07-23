@@ -147,6 +147,10 @@ pub const Lookout = struct {
     /// prefetch gate — on hardware where a build takes seconds, the single
     /// worker is too precious to spend on a speculative warm.
     last_build_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    /// When the last build FAILED (0 = never): tickBuild backs off rather than
+    /// respawning the identical failing build every frame — a hot loop that
+    /// keeps the exact pressure that made it fail.
+    last_fail_ms: i64 = 0,
     prefetched_level: i32 = -1, // the round-zoom level last prefetched (fire once per approach)
     cam: camera.Camera,
     schemes: [MAX_SCHEMES]Scheme = undefined,
@@ -915,6 +919,7 @@ pub const Lookout = struct {
             cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err)
         else
             cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err);
+        if (st != cc.TILE57_OK) std.debug.print("build ERROR: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
         const dt = gpu.ticksMs() - t0;
         self.last_build_ms.store(dt, .monotonic);
         // tri= is a content hash of the triangle geometry — density- and
@@ -957,6 +962,7 @@ pub const Lookout = struct {
     // coverage. Frees the engine scene either way.
     fn applyJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) void {
         defer cc.tile57_gpu_scene_free(cs);
+        self.last_fail_ms = if (!ok and !job.prefetch) gpu.ticksMs() else 0;
         if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
             const ll = camera.worldToLonLat(job.origin);
             // Content hashes: compare a device's scene against a Mac build of the
@@ -1063,9 +1069,11 @@ pub const Lookout = struct {
     // such hardware too: it occupies the one worker for seconds exactly when a
     // real rebuild is about to be needed.
     const PREFETCH_MAX_BUILD_MS = 600;
+    const FAIL_BACKOFF_MS = 400;
     fn tickBuild(self: *Lookout) void {
         self.pollBuild();
         if (self.build_active) return;
+        if (self.last_fail_ms != 0 and gpu.ticksMs() - self.last_fail_ms < FAIL_BACKOFF_MS) return;
         if (self.dirty or self.needsRebuild()) {
             self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));
         } else if (self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {

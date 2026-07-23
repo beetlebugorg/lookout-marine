@@ -135,6 +135,44 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("view: lon={d:.5} lat={d:.5} zoom={d:.2}\n", .{ v.lon, v.lat, v.zoom });
     l.setView(v);
 
+    // --zoomscan: at the FIXED center, build every half-zoom from 4 to 14 and
+    // report whether the CENTER of the render is chart or NODATA. The center
+    // pixel is the same geo point at every zoom, so a point that reads chart
+    // at one zoom and NODATA at a deeper one — while chart again deeper still —
+    // is ground that vanishes when it shouldn't, caught without a device or an
+    // eyeball. (NODATA = the clear colour; sampled as a 5x5 majority.)
+    for (args) |a2| {
+        if (std.mem.eql(u8, a2, "--zoomscan")) {
+            const px_n: usize = @as(usize, l.g.width) * l.g.height * 4;
+            const buf = try alloc.alloc(u8, px_n);
+            defer alloc.free(buf);
+            var zz: f64 = 4.0;
+            while (zz <= 14.01) : (zz += 0.5) {
+                l.setView(.{ .lon = v.lon, .lat = v.lat, .zoom = zz });
+                try l.snapshotRgba(buf);
+                var nodata_ct: u32 = 0;
+                const cx = l.g.width / 2;
+                const cy = l.g.height / 2;
+                var dy: i32 = -2;
+                while (dy <= 2) : (dy += 1) {
+                    var dx: i32 = -2;
+                    while (dx <= 2) : (dx += 1) {
+                        const xx: usize = @intCast(@as(i32, @intCast(cx)) + dx);
+                        const yy: usize = @intCast(@as(i32, @intCast(cy)) + dy);
+                        const o = (yy * l.g.width + xx) * 4;
+                        const r = buf[o];
+                        const g = buf[o + 1];
+                        const b = buf[o + 2];
+                        // NODATA day palette ~ (147,174,187)
+                        if (@abs(@as(i32, r) - 147) < 4 and @abs(@as(i32, g) - 174) < 4 and @abs(@as(i32, b) - 187) < 4) nodata_ct += 1;
+                    }
+                }
+                std.debug.print("zoomscan z={d:.1} {s}\n", .{ zz, if (nodata_ct >= 13) "NODATA" else "chart" });
+            }
+            return;
+        }
+    }
+
     // --sweep: drive a zoom SESSION (many sequential builds through the
     // engine's per-tile geometry cache, like a real pinch), then land on the
     // requested view and snapshot. Repros cache-assembly bugs a single build
