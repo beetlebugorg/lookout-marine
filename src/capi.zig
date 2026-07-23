@@ -1,6 +1,13 @@
 //! C ABI for lookout-core (see include/lookout.h). A thin, 1:1 wrapper over the
 //! Zig `Lookout` widget. Uses the C allocator so C hosts need no allocator.
 const std = @import("std");
+
+/// Parent directory of a chart path — where a tile57 `_assets/` sidecar set
+/// would sit (for a library, the directory the cells live in). Empty/"." when
+/// the path has no directory component. Borrowed from `path` (no alloc).
+fn assetsDirOf(path: []const u8) []const u8 {
+    return std.fs.path.dirname(path) orelse ".";
+}
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
 
@@ -28,6 +35,7 @@ export fn lookout_open(chart_path: [*:0]const u8, width: u32, height: u32, want_
         .height = height,
         .want_window = want_window != 0,
         .want_msaa = want_msaa != 0,
+        .assets_dir = assetsDirOf(std.mem.span(chart_path)),
     }) catch return null;
     return @ptrCast(l);
 }
@@ -43,6 +51,7 @@ export fn lookout_open_charts(paths: [*]const [*:0]const u8, n: usize, width: u3
         .height = height,
         .want_window = want_window != 0,
         .want_msaa = want_msaa != 0,
+        .assets_dir = if (n > 0) assetsDirOf(list[0]) else null,
     }) catch return null;
     return @ptrCast(l);
 }
@@ -60,6 +69,7 @@ export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_
         .want_msaa = want_msaa != 0,
         .native_handle = native_handle,
         .native_kind = nativeKind(kind) orelse return null,
+        .assets_dir = assetsDirOf(std.mem.span(chart_path)),
     }) catch return null;
     return @ptrCast(l);
 }
@@ -78,6 +88,7 @@ export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque,
         .want_msaa = want_msaa != 0,
         .native_handle = native_handle,
         .native_kind = nativeKind(kind) orelse return null,
+        .assets_dir = if (n > 0) assetsDirOf(list[0]) else null,
     }) catch return null;
     return @ptrCast(l);
 }

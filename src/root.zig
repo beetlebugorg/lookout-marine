@@ -40,6 +40,38 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
     return m;
 }
 
+/// Uniform box-average downscale of an RGBA8 image (src w×h -> dst nw×nh, both
+/// dst dims <= src). Straight-alpha average per destination texel over its
+/// source box. Caller frees the returned buffer.
+fn boxDownscaleRgba(alloc: std.mem.Allocator, src: []const u8, w: u32, h: u32, nw: u32, nh: u32) ![]u8 {
+    const out = try alloc.alloc(u8, @as(usize, nw) * nh * 4);
+    errdefer alloc.free(out);
+    var oy: u32 = 0;
+    while (oy < nh) : (oy += 1) {
+        const sy0 = oy * h / nh;
+        const sy1 = @max(sy0 + 1, (oy + 1) * h / nh);
+        var ox: u32 = 0;
+        while (ox < nw) : (ox += 1) {
+            const sx0 = ox * w / nw;
+            const sx1 = @max(sx0 + 1, (ox + 1) * w / nw);
+            var acc: [4]u64 = .{ 0, 0, 0, 0 };
+            var n: u64 = 0;
+            var sy = sy0;
+            while (sy < sy1) : (sy += 1) {
+                var sx = sx0;
+                while (sx < sx1) : (sx += 1) {
+                    const i = (@as(usize, sy) * w + sx) * 4;
+                    inline for (0..4) |c| acc[c] += src[i + c];
+                    n += 1;
+                }
+            }
+            const o = (@as(usize, oy) * nw + ox) * 4;
+            inline for (0..4) |c| out[o + c] = @intCast(acc[c] / @max(1, n));
+        }
+    }
+    return out;
+}
+
 fn hexColor(s: []const u8) ?gpu.Color {
     var t = s;
     if (t.len > 0 and t[0] == '#') t = t[1..];
@@ -76,9 +108,20 @@ pub const OpenOptions = struct {
     /// input via pan/zoom/setView/resize.
     native_handle: ?*anyopaque = null,
     native_kind: gpu.NativeKind = .none,
+    /// Directory that may hold a tile57 `_assets/` sidecar set (baked symbol +
+    /// SDF-font atlases). When present, the atlases load from disk instead of
+    /// re-rasterizing every open (~1.3s at 1x, more at HiDPI). Normally the
+    /// chart's own directory; null => always live-bake.
+    assets_dir: ?[]const u8 = null,
 };
 
 pub const NativeKind = gpu.NativeKind;
+
+/// Ratio the shared `_assets/` sprite atlas is baked at (tile57 emits a single
+/// 3x atlas; cell_px/ppm is ratio-invariant so this is correct at any device
+/// density — see bakeAssetsDir in tile57). Passed to the scene build so its
+/// normalized sprite UVs match the uploaded texture.
+const ASSETS_SPRITE_RATIO: f32 = 3.0;
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
@@ -126,6 +169,8 @@ pub const Lookout = struct {
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
+    /// Resolved tile57 `_assets` dir (walk-up from the chart), or null to live-bake.
+    assets_root: ?[]u8 = null,
     /// The density the sprite atlas was actually baked at. Usually the display
     /// pixel density, but reduced when the full-density atlas would exceed the
     /// device's max texture dimension (loadSpriteAtlas). Scene builds must pass
@@ -204,10 +249,11 @@ pub const Lookout = struct {
         // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
         // derives the live gates (cat_mask/sound_on/clear) from this before the
         // first render.
+        self.assets_root = self.resolveAssetsRoot(opts.assets_dir);
         self.loadNodataColors();
         self.loadSpriteAtlas();
         if (dbg) {
-            std.debug.print("  loadSpriteAtlas (bake+decode+upload) {d} ms\n", .{gpu.ticksMs() - t});
+            std.debug.print("  loadSpriteAtlas {d} ms\n", .{gpu.ticksMs() - t});
             t = gpu.ticksMs();
         }
         self.loadGlyphAtlas();
@@ -215,48 +261,164 @@ pub const Lookout = struct {
         return self;
     }
 
-    // Bake the SDF label-glyph atlas, decode, upload once. Text then draws as SDF
-    // quads (crisp at any zoom) instead of tessellated glyph outlines.
+    /// Find the tile57 `_assets` directory by walking UP from `start`: a single
+    /// chart sits in a mirrored tree (out/REGION/CELL.pmtiles) with `_assets` at
+    /// the library ROOT, while a flat library has it right alongside — so try
+    /// `<dir>/_assets`, then each parent, a few levels. Returns the resolved
+    /// `_assets` path (owned by self.alloc; freed in close) or null.
+    fn resolveAssetsRoot(self: *Lookout, start: ?[]const u8) ?[]u8 {
+        var dir = start orelse return null;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var levels: u8 = 0;
+        while (levels < 8) : (levels += 1) {
+            const cand = std.fmt.allocPrint(self.alloc, "{s}/_assets", .{dir}) catch return null;
+            if (std.Io.Dir.cwd().openDir(io, cand, .{})) |d| {
+                var dd = d;
+                dd.close(io);
+                return cand; // exists
+            } else |_| {
+                self.alloc.free(cand);
+                const parent = std.fs.path.dirname(dir) orelse return null;
+                if (parent.len == 0 or std.mem.eql(u8, parent, dir)) return null;
+                dir = parent;
+            }
+        }
+        return null;
+    }
+
+    /// Read `<assets_root>/<name>` into an alloc'd buffer, or null on any miss —
+    /// the caller then live-bakes. `assets_root` is resolved once in create.
+    fn readAsset(self: *Lookout, name: []const u8) ?[]u8 {
+        const root = self.assets_root orelse return null;
+        const path = std.fmt.allocPrint(self.alloc, "{s}/{s}", .{ root, name }) catch return null;
+        defer self.alloc.free(path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.Dir.cwd().readFileAlloc(io, path, self.alloc, .limited(256 * 1024 * 1024)) catch null;
+    }
+
+    // Load the SDF label-glyph atlas (from the `_assets/` sidecar if present,
+    // else a live bake), decode, upload once. Text then draws as SDF quads
+    // (crisp at any zoom) instead of tessellated glyph outlines.
     fn loadGlyphAtlas(self: *Lookout) void {
+        // Sidecar first: glyph.png + glyph.json (resolution-independent SDF).
+        if (self.readAsset("glyph.png")) |png_b| {
+            defer self.alloc.free(png_b);
+            if (self.readAsset("glyph.json")) |json| {
+                defer self.alloc.free(json);
+                if (self.uploadGlyphRegular(png_b, json)) {
+                    self.loadGlyphFace(1, true);
+                    self.loadGlyphFace(2, false);
+                    return;
+                }
+            }
+        }
+        // Live bake fallback.
         var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
         var err: cc.tile57_error = undefined;
         if (cc.tile57_bake_glyph_sdf(&assets, &err) != cc.TILE57_OK) return;
         defer cc.tile57_assets_free(&assets);
         if (assets.sprite_png == null or assets.sprite_json == null) return;
-        const a = atlas.loadGlyph(self.alloc, assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len]) catch return;
-        self.glyph_atlas = a;
-        self.g.uploadGlyphAtlas(a.rgba(), a.width, a.height) catch {
-            self.glyph_atlas.?.deinit();
-            self.glyph_atlas = null;
-            return;
-        };
-        std.debug.print("glyph atlas: {d}x{d}, {d} glyphs, em {d:.0}\n", .{ a.width, a.height, a.glyphs.count(), a.em_px });
-
-        // Bold + italic label-tier atlases (tile57_bake_glyph_sdf_face 1/2): the
-        // GPU scene tags a bold/italic name's range with GLYPH_BOLD / GLYPH_ITALIC.
+        _ = self.uploadGlyphRegular(assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len]);
         self.loadGlyphFace(1, true);
         self.loadGlyphFace(2, false);
     }
 
-    /// Bake one label-tier face atlas (1 bold, 2 italic), decode, upload its texture.
-    /// Metrics come with the GPU-scene quad UVs, so only the texture is kept.
+    fn uploadGlyphRegular(self: *Lookout, png_b: []const u8, json: []const u8) bool {
+        const a = atlas.loadGlyph(self.alloc, png_b, json) catch return false;
+        self.glyph_atlas = a;
+        self.g.uploadGlyphAtlas(a.rgba(), a.width, a.height) catch {
+            self.glyph_atlas.?.deinit();
+            self.glyph_atlas = null;
+            return false;
+        };
+        std.debug.print("glyph atlas: {d}x{d}, {d} glyphs, em {d:.0}\n", .{ a.width, a.height, a.glyphs.count(), a.em_px });
+        return true;
+    }
+
+    /// Load one label-tier face atlas (1 bold, 2 italic) — sidecar or live bake —
+    /// decode, upload its texture. Metrics ride the GPU-scene quad UVs, so only
+    /// the texture is kept.
     fn loadGlyphFace(self: *Lookout, face: i32, bold: bool) void {
+        const png_name = if (bold) "glyph-bold.png" else "glyph-italic.png";
+        const json_name = if (bold) "glyph-bold.json" else "glyph-italic.json";
+        if (self.readAsset(png_name)) |png_b| {
+            defer self.alloc.free(png_b);
+            if (self.readAsset(json_name)) |json| {
+                defer self.alloc.free(json);
+                if (self.uploadGlyphFace(png_b, json, bold)) return;
+            }
+        }
         var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
         var err: cc.tile57_error = undefined;
         if (cc.tile57_bake_glyph_sdf_face(&assets, face, &err) != cc.TILE57_OK) return;
         defer cc.tile57_assets_free(&assets);
         if (assets.sprite_png == null or assets.sprite_json == null) return;
-        var a = atlas.loadGlyph(self.alloc, assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len]) catch return;
-        defer a.deinit();
-        if (bold)
-            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch return
-        else
-            self.g.uploadGlyphAtlasItalic(a.rgba(), a.width, a.height) catch return;
+        _ = self.uploadGlyphFace(assets.sprite_png[0..assets.sprite_png_len], assets.sprite_json[0..assets.sprite_json_len], bold);
     }
 
-    // Bake the S-52 sprite-symbol atlas (from the embedded catalogue), decode it,
-    // and upload it once. Symbols/soundings then draw as textured quads.
+    fn uploadGlyphFace(self: *Lookout, png_b: []const u8, json: []const u8, bold: bool) bool {
+        var a = atlas.loadGlyph(self.alloc, png_b, json) catch return false;
+        defer a.deinit();
+        if (bold)
+            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch return false
+        else
+            self.g.uploadGlyphAtlasItalic(a.rgba(), a.width, a.height) catch return false;
+        return true;
+    }
+
+    // Load the S-52 sprite-symbol atlas — from the `_assets/` sidecar (a single
+    // 3x atlas, baked once by tile57) if present, else a live bake — decode, and
+    // upload it once. Symbols/soundings then draw as textured quads.
     fn loadSpriteAtlas(self: *Lookout) void {
+        if (self.readAsset("sprite@3x.png")) |png_b| {
+            defer self.alloc.free(png_b);
+            if (self.readAsset("sprite@3x.json")) |json| {
+                defer self.alloc.free(json);
+                if (self.uploadSpriteFromBytes(png_b, json, ASSETS_SPRITE_RATIO)) return;
+            }
+        }
+        self.bakeSpriteAtlas();
+    }
+
+    /// Decode a sprite atlas PNG+JSON and upload it, downscaling the texture
+    /// uniformly to fit the device max texture dimension if needed (the 3x
+    /// sidecar is ~6144x10902 — over the iOS-simulator 8192 cap). Downscaling
+    /// preserves the normalized UV layout, so the scene's ratio-`scale` UVs
+    /// still index it. atlas_scale := scale (the atlas's bake ratio).
+    fn uploadSpriteFromBytes(self: *Lookout, png_b: []const u8, json: []const u8, scale: f32) bool {
+        var a = atlas.loadSprite(self.alloc, png_b, json) catch return false;
+        const bi = @import("builtin");
+        const max_dim: u32 = if (bi.os.tag == .ios and bi.abi == .simulator) 8192 else 16384;
+        const largest = @max(a.width, a.height);
+        if (largest > max_dim) {
+            const f = @as(f32, @floatFromInt(max_dim)) / @as(f32, @floatFromInt(largest));
+            const nw: u32 = @max(1, @as(u32, @intFromFloat(@as(f32, @floatFromInt(a.width)) * f)));
+            const nh: u32 = @max(1, @as(u32, @intFromFloat(@as(f32, @floatFromInt(a.height)) * f)));
+            const small = boxDownscaleRgba(self.alloc, a.rgba(), a.width, a.height, nw, nh) catch {
+                a.deinit();
+                return false;
+            };
+            defer self.alloc.free(small);
+            self.g.uploadSpriteAtlas(small, nw, nh) catch {
+                a.deinit();
+                return false;
+            };
+            std.debug.print("sprite atlas: {d}x{d} -> {d}x{d} (fit) @ {d:.2}x, {d} cells\n", .{ a.width, a.height, nw, nh, scale, a.cells.count() });
+        } else {
+            self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
+                a.deinit();
+                return false;
+            };
+            std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells (sidecar)\n", .{ a.width, a.height, scale, a.cells.count() });
+        }
+        self.sprite_atlas = a;
+        self.atlas_scale = scale;
+        return true;
+    }
+
+    // Live-bake fallback: rasterize the S-52 sprite-symbol atlas from the
+    // embedded catalogue at the display density.
+    fn bakeSpriteAtlas(self: *Lookout) void {
         // Bake the atlas texture at the display density so symbols stay sharp on
         // HiDPI; the GPU scene's UVs (runJob passes the same ratio) index it.
         // Not every device can take the full-density result as one texture (the
@@ -439,6 +601,7 @@ pub const Lookout = struct {
         self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
         if (self.sprite_atlas) |*sa| sa.deinit();
         if (self.glyph_atlas) |*ga| ga.deinit();
+        if (self.assets_root) |r| self.alloc.free(r);
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
