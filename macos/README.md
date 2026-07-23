@@ -97,22 +97,18 @@ via a hidden always-recentered `UIScrollView` sink (simulator front-ends feed
 scroll views but never `allowedScrollTypesMask` recognizers). Pinch/pan and
 the chrome buttons are verified end-to-end by the XCUITests.
 
-**Building.** The only dependency beyond this repo is tile57 cross-built per
-platform (no SDL, no MoltenVK — rendering is direct Metal):
-
-```sh
-cd $TILE57_DIR
-zig build lib -Dtarget=aarch64-ios-simulator \
-  --sysroot "$(xcrun --sdk iphonesimulator --show-sdk-path)" -p zig-out-iphonesimulator
-# (aarch64-ios + iphoneos + -p zig-out-iphoneos for device builds)
-```
-
-Then `xcodegen generate` and build/run the **LookoutMarine-iOS** scheme; the
-pre-build script cross-compiles `liblookout_marine.a` (picking device vs
-simulator from `PLATFORM_NAME`) and repacks the archives for ld64 (both ld64
-and libtool silently DROP zig-emitted archive members over an offset-alignment
-quirk — the script extracts to loose objects and repacks; `build-dev.sh` does
-the same for macOS).
+**Building.** No dependency beyond this repo and a tile57 checkout (no SDL, no
+MoltenVK — rendering is direct Metal). Just `xcodegen generate` and build/run
+the **LookoutMarine-iOS** scheme: the pre-build script cross-compiles **both**
+the tile57 engine and `liblookout_marine.a` for the active `PLATFORM_NAME`
+(device vs simulator) and repacks the archives for ld64 (both ld64 and libtool
+silently DROP zig-emitted archive members over an offset-alignment quirk — the
+script extracts to loose objects and repacks; `build-dev.sh` does the same for
+macOS). It resolves the iOS SDK from Xcode's own `$SDKROOT`, so it works even
+when the shell's `xcode-select` points at the Command Line Tools (which have no
+iOS SDK — the `xcrun … --show-sdk-path` you'd run by hand comes back empty).
+`TILE57_DIR` defaults to `$(SRCROOT)/../../tile57`; override it in the project's
+build settings if your checkout is elsewhere.
 
 **Gotchas.** FrontBoard caches scene sessions per install: after changing the
 scene configuration, a plain reinstall keeps the stale session and the

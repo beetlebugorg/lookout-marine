@@ -65,11 +65,15 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: UniformTypeIdentifiers.framework
     preBuildScripts:
-      - name: Build Zig core (liblookout_marine.a)
+      - name: Build Zig cores (tile57 + liblookout_marine.a)
         basedOnDependencyAnalysis: false
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          # Build the tile57 ENGINE first so its libtile57.a exists before the
+          # lookout core links it. Zig's cache makes this ~instant when tile57
+          # is unchanged. (Previously a manual prerequisite.)
+          ( cd "$TILE57_DIR" && zig build lib -Doptimize=ReleaseFast )
           cd "$SRCROOT/.."
           zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast
 
@@ -117,20 +121,35 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: UniformTypeIdentifiers.framework
     preBuildScripts:
-      - name: Build Zig core for iOS (liblookout_marine.a)
+      - name: Build Zig cores for iOS (tile57 + liblookout_marine.a)
         basedOnDependencyAnalysis: false
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          cd "$SRCROOT/.."
           case "$PLATFORM_NAME" in
             iphonesimulator) ZIG_TARGET=aarch64-ios-simulator ;;
             *)               ZIG_TARGET=aarch64-ios ;;
           esac
+          # The iOS SDK sysroot. $SDKROOT is set by Xcode to the active SDK, so
+          # this works in the Xcode build env even when the *shell's* xcrun/
+          # xcode-select points at the Command Line Tools (which have no iOS SDK
+          # -> an empty --sysroot). Fall back to xcrun for non-Xcode invocations.
+          SYSROOT="${SDKROOT:-$(xcrun --sdk "$PLATFORM_NAME" --show-sdk-path)}"
+
+          # 1) Cross-build the tile57 ENGINE for this platform, so its
+          #    libtile57.a exists before the lookout core links it. Zig's cache
+          #    makes this ~instant when tile57 is unchanged. (Previously a manual
+          #    prerequisite; see macos/README.md "iOS".)
+          ( cd "$TILE57_DIR" && zig build lib \
+              -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseFast \
+              --sysroot "$SYSROOT" -p "zig-out-$PLATFORM_NAME" )
+
+          # 2) Cross-build the lookout core against it.
+          cd "$SRCROOT/.."
           zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
             -Dtile57_lib="$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a" \
             -Dtarget="$ZIG_TARGET" \
-            --sysroot "$(xcrun --sdk $PLATFORM_NAME --show-sdk-path)" \
+            --sysroot "$SYSROOT" \
             -p "zig-out-$PLATFORM_NAME"
           # ld64 AND libtool both drop zig-emitted archive members ("64-bit
           # mach-o not 8-byte aligned"), so feeding the archives to libtool
