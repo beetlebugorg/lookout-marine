@@ -163,7 +163,13 @@ pub const Lookout = struct {
     }
 
     fn create(alloc: std.mem.Allocator, opts: OpenOptions) !*Lookout {
+        const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
+        var t = gpu.ticksMs();
         cc.tile57_warmup();
+        if (dbg) {
+            std.debug.print("  warmup {d} ms\n", .{gpu.ticksMs() - t});
+            t = gpu.ticksMs();
+        }
         const self = try alloc.create(Lookout);
         self.* = .{
             .alloc = alloc,
@@ -177,6 +183,10 @@ pub const Lookout = struct {
             }),
             .cam = undefined,
         };
+        if (dbg) {
+            std.debug.print("  gpu.init (Metal device+shaders+pipelines) {d} ms\n", .{gpu.ticksMs() - t});
+            t = gpu.ticksMs();
+        }
         self.n_schemes = @min(opts.schemes.len, MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
         cc.tile57_mariner_defaults(&self.mariner);
@@ -196,7 +206,12 @@ pub const Lookout = struct {
         // first render.
         self.loadNodataColors();
         self.loadSpriteAtlas();
+        if (dbg) {
+            std.debug.print("  loadSpriteAtlas (bake+decode+upload) {d} ms\n", .{gpu.ticksMs() - t});
+            t = gpu.ticksMs();
+        }
         self.loadGlyphAtlas();
+        if (dbg) std.debug.print("  loadGlyphAtlas {d} ms\n", .{gpu.ticksMs() - t});
         return self;
     }
 

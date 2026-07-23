@@ -165,6 +165,28 @@ struct ContentView: View {
     }
 }
 
+/// Full startup loader: shown from launch until the first scene after an open
+/// has rendered (later rebuilds only show the small BuildingPill).
+struct StartupLoader: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "map")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            ProgressView()
+                .controlSize(.large)
+            Text("Loading charts…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(40)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator))
+        .shadow(color: .black.opacity(0.2), radius: 20, y: 6)
+        .accessibilityIdentifier("startup-loader")
+    }
+}
+
 /// Small "building the chart" indicator shown top-center while tessellating.
 struct BuildingPill: View {
     var body: some View {

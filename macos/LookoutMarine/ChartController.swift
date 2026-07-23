@@ -65,6 +65,7 @@ final class ChartController: NSObject {
         guard !paths.isEmpty else { return false }
         close()
         self.view = view
+        model?.firstBuildDone = false
 
         let (wPt, hPt) = Self.pointSize(of: view)
         // Both platforms: lookout renders via Metal straight into the view's
@@ -90,7 +91,7 @@ final class ChartController: NSObject {
         }
         guard let h = opened else {
             lkLog("open FAILED (lookout_open_in_window returned null — GPU device or chart file?)")
-            model?.openError = "Couldn't open the chart.\nThe file may be unreadable, or the GPU/Vulkan (MoltenVK) device couldn't be created."
+            model?.openError = "Couldn't open the chart.\nThe file may be unreadable, or the Metal device couldn't be created."
             return false
         }
         lkLog("open OK")
@@ -187,6 +188,9 @@ final class ChartController: NSObject {
             idleTicks = 0
         } else {
             // Static: pause after a couple of quiet ticks so idle is ~0% CPU.
+            // Reaching idle also means the first scene after an open has
+            // rendered — retire the startup loader.
+            if model?.firstBuildDone == false { model?.firstBuildDone = true }
             idleTicks += 1
             if idleTicks > 2 { link.isPaused = true }
         }

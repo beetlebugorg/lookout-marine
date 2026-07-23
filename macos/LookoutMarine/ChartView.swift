@@ -5,11 +5,10 @@
 //  the on-demand render loop. All app chrome (HUD, menus, settings) is native
 //  SwiftUI drawn AROUND/OVER this view — lookout owns only the chart pixels.
 //
-//  The same ChartController/AppModel drive both platforms. macOS embeds lookout
-//  into this NSView directly (SDL wraps it with a CAMetalLayer). iOS can't do
-//  that — SDL has no create-from-UIView property — so lookout gets its own
-//  full-screen UIWindow inside the app's UIWindowScene, and the iOS ChartView is
-//  a transparent gesture surface in the app's chrome window layered above it.
+//  The same ChartController/AppModel drive both platforms; lookout renders via
+//  Metal into the chart view's own CAMetalLayer. macOS embeds it in this
+//  NSView; on iOS the surface is ChartUIView in the plain-UIKit input window
+//  (SwiftUI swallows touches), with the chrome in a PassThroughWindow above.
 
 import SwiftUI
 #if canImport(AppKit)
@@ -60,7 +59,8 @@ struct OverlayLayer: View {
                 if model.isBuilding { BuildingPill().padding(.top, 10) }
             }
             .overlay {
-                if !model.hasChart { EmptyChartState(model: model) }
+                if model.showStartupLoader { StartupLoader() }
+                else if !model.hasChart { EmptyChartState(model: model) }
             }
             .animation(.default, value: model.pickResults)
             .animation(.default, value: model.isBuilding)
@@ -122,11 +122,10 @@ final class ChartNSView: NSView {
     private var overlayHost: NSView?
     private var fsObservers: [NSObjectProtocol] = []
 
-    /// Host the floating chrome as a SUBVIEW of the chart. SDL replaces this view's
-    /// backing layer with a CAMetalLayer; a subview's layer becomes a *sublayer* of
-    /// it, which CoreAnimation composites ABOVE the presented drawable (a sibling
-    /// view in the same window would be hidden by the async swapchain present).
-    /// PassThroughHostingView lets empty-area clicks reach our own mouse handlers.
+    /// Host the floating chrome as a SUBVIEW of the chart: a subview's layer is a
+    /// *sublayer* of the backing CAMetalLayer, which CoreAnimation composites
+    /// ABOVE the presented drawable. PassThroughHostingView lets empty-area
+    /// clicks reach our own mouse handlers.
     func installOverlay<V: View>(_ view: V) {
         let host = PassThroughHostingView(rootView: view)
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -140,7 +139,7 @@ final class ChartNSView: NSView {
         overlayHost = host
     }
 
-    /// Re-attach the overlay above SDL's freshly-installed CAMetalLayer.
+    /// Keep the overlay the frontmost subview after (re)opens.
     func raiseOverlay() {
         guard let host = overlayHost else { return }
         addSubview(host) // re-adding brings it to front / re-parents onto the new layer
@@ -161,13 +160,15 @@ final class ChartNSView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
-    /// Back this view with our OWN CAMetalLayer so SDL adopts it (instead of
-    /// attaching a fresh one at 1x). Its contentsScale is set before the chart
-    /// opens, so the Vulkan/Metal swapchain is created at true Retina pixels —
-    /// poking the scale after creation doesn't retroactively resize a swapchain.
+    /// The view's backing layer IS the render target lookout presents into.
+    /// contentsScale is set before the chart opens so the first drawable is
+    /// true Retina pixels.
     override func makeBackingLayer() -> CALayer {
         let ml = CAMetalLayer()
         ml.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        // S-52 NODATA (day): what the first presented frame will clear to —
+        // showing it immediately kills the white flash before that frame.
+        ml.backgroundColor = CGColor(red: 0.576, green: 0.682, blue: 0.733, alpha: 1)
         return ml
     }
 
@@ -207,11 +208,8 @@ final class ChartNSView: NSView {
         syncMetalLayerScale()
     }
 
-    /// SDL wraps this view with a CAMetalLayer but leaves it at 1x and sized to
-    /// the window, so the swapchain drawable comes out logical-sized (blurry, 2x
-    /// magnified, and offset against the cursor math). Force the layer to the
-    /// view's true backing scale and pixel size; the render core adopts whatever
-    /// drawable results (see Gpu.renderWindow), keeping camera and picture exact.
+    /// Keep the layer's contentsScale at the window's backing scale — the
+    /// render core sizes drawables from bounds × contentsScale each frame.
     func syncMetalLayerScale() {
         guard let ml = layer as? CAMetalLayer else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
@@ -242,11 +240,14 @@ final class ChartNSView: NSView {
         // recents, and the fromServer frame restore is exactly the mid-load
         // resize the deferral above is dodging.
         window?.isRestorable = false
+        model?.isOpening = true // loader up before the (synchronous) open runs
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.controller?.handle == nil else { return }
+            guard let self else { return }
+            defer { self.model?.isOpening = false }
+            guard self.controller?.handle == nil else { return }
             self.lastOpenId = self.model?.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
-            self.raiseOverlay() // SDL just swapped our layer to CAMetalLayer — put chrome back on top
+            self.raiseOverlay()
             self.syncMetalLayerScale()
             self.controller?.resize(widthPt: Double(self.bounds.width), heightPt: Double(self.bounds.height))
         }
@@ -454,7 +455,9 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .clear
+        // S-52 NODATA (day): what the first presented frame clears to — kills
+        // the white flash before that frame.
+        layer.backgroundColor = CGColor(red: 0.576, green: 0.682, blue: 0.733, alpha: 1)
         isMultipleTouchEnabled = true
         installGestures()
         installScrollSink()
@@ -538,9 +541,15 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
-        lastOpenId = model?.openRequest?.id ?? 0
-        _ = controller?.open(charts: paths, in: self)
-        hostWindowAboveChart()
+        model?.isOpening = true // loader up before the (synchronous) open runs
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            defer { self.model?.isOpening = false }
+            guard self.controller?.handle == nil else { return }
+            self.lastOpenId = self.model?.openRequest?.id ?? 0
+            _ = self.controller?.open(charts: paths, in: self)
+            self.hostWindowAboveChart()
+        }
     }
 
     /// The chart renders in THIS window's layer; keep the chrome window above

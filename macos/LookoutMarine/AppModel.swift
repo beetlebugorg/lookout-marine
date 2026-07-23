@@ -24,6 +24,16 @@ final class AppModel: ObservableObject {
     @Published var openError: String?
     private var openSeq = 0
 
+    // MARK: Startup loader state
+    /// True from the moment an open is scheduled until lookout_open returns —
+    /// covers the synchronous open (a 7k-cell library takes seconds).
+    @Published var isOpening = false
+    /// False until the first scene after an open has actually rendered; with
+    /// isOpening it drives the big startup loader (later rebuilds only show
+    /// the small BuildingPill).
+    @Published var firstBuildDone = false
+    var showStartupLoader: Bool { isOpening || (hasChart && !firstBuildDone) }
+
     // MARK: Live HUD readouts (pushed by ChartController / the chart view)
     @Published var cursorLon: Double?
     @Published var cursorLat: Double?
@@ -108,14 +118,20 @@ final class AppModel: ObservableObject {
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
         if let first = paths.first { noteRecent(first) }
-        // Drive the controller DIRECTLY rather than relying on the SwiftUI
-        // update cycle: once SDL wraps the chart NSView, the hosting content
-        // view stops receiving SwiftUI updates (updateNSView never re-runs), so
-        // a published request would sit unserviced and the chart would never
-        // reload. The controller already owns the backing view; updateNSView
-        // remains only as the fallback for a request racing the first layout.
-        if let c = controller, c.reopen(charts: paths) {
-            openRequest = nil
+        // Show the loader BEFORE the (synchronous, possibly seconds-long) open
+        // runs: flag now, open on the next runloop turn so SwiftUI paints.
+        isOpening = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Drive the controller DIRECTLY rather than relying on the SwiftUI
+            // update cycle: once the chart view is live the hosting content
+            // view stops receiving updates, so a published request would sit
+            // unserviced. The update path remains only as the fallback for a
+            // request racing the first layout.
+            if let c = self.controller, c.reopen(charts: paths) {
+                self.openRequest = nil
+            }
+            self.isOpening = false
         }
     }
 

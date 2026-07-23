@@ -90,6 +90,7 @@ struct IdentifyPanel: View {
             ForEach(results) { f in
                 HStack(spacing: 6) {
                     Text(f.cls).font(.system(.caption, design: .monospaced).bold())
+                        .accessibilityIdentifier("identify-cls")
                     Text(f.chart).font(.caption2).foregroundStyle(.secondary)
                 }
             }
