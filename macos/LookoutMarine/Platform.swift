@@ -103,4 +103,11 @@ enum Platform {
         return view.window?.screen.scale ?? view.traitCollection.displayScale
         #endif
     }
+
+    /// The CAMetalLayer lookout renders into: the view's own backing layer on
+    /// both platforms (ChartNSView.makeBackingLayer / ChartUIView.layerClass).
+    @MainActor
+    static func metalLayer(of view: PlatformView) -> CAMetalLayer? {
+        view.layer as? CAMetalLayer
+    }
 }

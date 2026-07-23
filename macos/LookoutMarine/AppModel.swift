@@ -52,9 +52,6 @@ final class AppModel: ObservableObject {
 
     init() {
         recents = UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
-        #if os(macOS)
-        VulkanBootstrap.configure()   // make the MoltenVK backend discoverable
-        #endif
     }
 
     // MARK: - Opening charts

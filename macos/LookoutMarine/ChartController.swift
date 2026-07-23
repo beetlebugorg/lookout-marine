@@ -67,19 +67,16 @@ final class ChartController: NSObject {
         self.view = view
 
         let (wPt, hPt) = Self.pointSize(of: view)
-        #if os(macOS)
-        // Embed straight into the chart NSView (SDL wraps it with a CAMetalLayer).
-        let kind = LOOKOUT_NATIVE_COCOA_VIEW
-        let nativePtr: UnsafeMutableRawPointer? = Unmanaged.passUnretained(view).toOpaque()
-        #else
-        // SDL can't wrap an existing UIView: pass the scene and SDL creates its
-        // own full-screen chart UIWindow inside it; the app's chrome window is
-        // re-raised above it afterwards (ChartUIView.hostWindowAboveChart).
-        // nil scene => SDL falls back to the active scene.
-        let kind = LOOKOUT_NATIVE_UIKIT_WINDOWSCENE
-        let nativePtr: UnsafeMutableRawPointer? =
-            (view.window?.windowScene).map { Unmanaged.passUnretained($0).toOpaque() }
-        #endif
+        // Both platforms: lookout renders via Metal straight into the view's
+        // own CAMetalLayer. The layer stays host-owned; lookout only attaches
+        // its device and presents drawables.
+        guard let layer = Platform.metalLayer(of: view) else {
+            lkLog("open FAILED — the chart view has no CAMetalLayer backing")
+            model?.openError = "The chart view has no Metal layer."
+            return false
+        }
+        let kind = LOOKOUT_NATIVE_METAL_LAYER
+        let nativePtr: UnsafeMutableRawPointer? = Unmanaged.passUnretained(layer).toOpaque()
         lkLog("opening \(paths.count) chart(s) into a \(Int(wPt))×\(Int(hPt))pt view: \(paths.first ?? "")")
         let opened: OpaquePointer? = withCStrings(paths) { cpaths in
             if cpaths.count == 1 {

@@ -17,14 +17,6 @@ const png = @import("png.zig");
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
-const vert_spv = @embedFile("chart_vert_spv");
-const frag_spv = @embedFile("chart_frag_spv");
-const sprite_vert_spv = @embedFile("sprite_vert_spv");
-const sprite_frag_spv = @embedFile("sprite_frag_spv");
-const sdf_frag_spv = @embedFile("sdf_frag_spv");
-const pattern_vert_spv = @embedFile("pattern_vert_spv");
-const pattern_frag_spv = @embedFile("pattern_frag_spv");
-
 const MAX_SCHEMES = 3; // day / dusk / night
 
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
@@ -48,7 +40,7 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
     return m;
 }
 
-fn hexColor(s: []const u8) ?cc.SDL_FColor {
+fn hexColor(s: []const u8) ?gpu.Color {
     var t = s;
     if (t.len > 0 and t[0] == '#') t = t[1..];
     if (t.len < 6) return null;
@@ -78,10 +70,10 @@ pub const OpenOptions = struct {
     /// default (day/dusk/night); index order defines the scheme<->buffer map.
     schemes: []const Scheme = &.{ cc.TILE57_SCHEME_DAY, cc.TILE57_SCHEME_DUSK, cc.TILE57_SCHEME_NIGHT },
     /// here for next time. Point this somewhere per chart-library.
-    /// EMBED into a host's native window (NSWindow / HWND / X11 …). lookout
-    /// wraps it with SDL internally and renders/presents into it — the host uses
-    /// its own toolkit (Swift/Cocoa, Win32, GTK) and never links SDL. Then just
-    /// call render() each frame and feed input via pan/zoom/setView/resize.
+    /// EMBED into a host view: hand over its CAMetalLayer (kind .metal_layer)
+    /// and lookout renders/presents straight into it — the host keeps its own
+    /// toolkit and event loop. Then just call render() each frame and feed
+    /// input via pan/zoom/setView/resize.
     native_handle: ?*anyopaque = null,
     native_kind: gpu.NativeKind = .none,
 };
@@ -148,7 +140,7 @@ pub const Lookout = struct {
     text_on: bool = true, // draw text ranges (labels)
     sound_on: bool = true, // draw sounding ranges
     render_size_scale: f32 = 1.0,
-    nodata: [MAX_SCHEMES]cc.SDL_FColor = [_]cc.SDL_FColor{.{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 }} ** MAX_SCHEMES,
+    nodata: [MAX_SCHEMES]gpu.Color = [_]gpu.Color{.{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 }} ** MAX_SCHEMES,
 
     // ---- lifecycle ----------------------------------------------------------
     /// Open ONE baked chart (.pmtiles).
@@ -161,13 +153,12 @@ pub const Lookout = struct {
     pub fn openCharts(alloc: std.mem.Allocator, paths: []const [:0]const u8, opts: OpenOptions) !*Lookout {
         const self = try create(alloc, opts);
         errdefer self.close();
-        const t0 = cc.SDL_GetPerformanceCounter();
+        const t0 = gpu.ticksMs();
         for (paths) |p| self.addChartPath(p);
-        const t1 = cc.SDL_GetPerformanceCounter();
+        const t1 = gpu.ticksMs();
         try self.finishOpen();
-        const t2 = cc.SDL_GetPerformanceCounter();
-        const f: f64 = @floatFromInt(cc.SDL_GetPerformanceFrequency());
-        std.debug.print("open: {d} charts opened in {d:.0} ms, compose+partition in {d:.0} ms\n", .{ self.charts.items.len, @as(f64, @floatFromInt(t1 - t0)) * 1000 / f, @as(f64, @floatFromInt(t2 - t1)) * 1000 / f });
+        const t2 = gpu.ticksMs();
+        std.debug.print("open: {d} charts opened in {d} ms, compose+partition in {d} ms\n", .{ self.charts.items.len, t1 - t0, t2 - t1 });
         return self;
     }
 
@@ -183,7 +174,7 @@ pub const Lookout = struct {
                 .want_msaa = opts.want_msaa,
                 .native_handle = opts.native_handle,
                 .native_kind = opts.native_kind,
-            }, vert_spv, frag_spv, sprite_vert_spv, sprite_frag_spv, sdf_frag_spv, pattern_vert_spv, pattern_frag_spv),
+            }),
             .cam = undefined,
         };
         self.n_schemes = @min(opts.schemes.len, MAX_SCHEMES);
@@ -646,7 +637,7 @@ pub const Lookout = struct {
 
     fn markDirty(self: *Lookout) void {
         self.view_dirty = true;
-        self.last_change_ms = @as(i64, @intCast(cc.SDL_GetTicks()));
+        self.last_change_ms = gpu.ticksMs();
     }
 
     // Record the coverage of the scene just built, so needsRebuild can tell when
@@ -715,7 +706,7 @@ pub const Lookout = struct {
         return st == cc.TILE57_OK;
     }
 
-    // Adopt a built scene on the MAIN thread (only place SDL_GPU is touched): a
+    // Adopt a built scene on the MAIN thread (only place the GPU is touched): a
     // prefetch just warms the cache (free it); a real rebuild uploads + records
     // coverage. Frees the engine scene either way.
     fn applyJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) void {
@@ -821,7 +812,7 @@ pub const Lookout = struct {
     // round(zoom) changes, return the level being approached (clamped to what the
     // engine serves) so it can be prefetched. Null when not zooming toward one.
     fn predictPrefetchLevel(self: *Lookout) ?i32 {
-        const now: i64 = @intCast(cc.SDL_GetTicks());
+        const now: i64 = gpu.ticksMs();
         const dz = self.cam.zoom - self.last_zoom;
         const recent = self.last_zoom >= 0 and now - self.last_zoom_ms < 250;
         if (!recent or @abs(dz) < 0.01) return null;
@@ -865,7 +856,7 @@ pub const Lookout = struct {
         if (self.loading) {
             self.pollCompose(false);
             if (self.loading) {
-                const ph = @as(f32, @floatFromInt(cc.SDL_GetTicks() % 1600)) / 1600.0;
+                const ph = @as(f32, @floatFromInt(@mod(gpu.ticksMs(), 1600))) / 1600.0;
                 const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
                 self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
                 self.g.freeScene();
@@ -890,14 +881,14 @@ pub const Lookout = struct {
         // stack (a scene built/uploaded then can verify byte-perfect on the GPU
         // yet rasterize nothing) — keep rebuilding until safely past it; the
         // first post-window build displays and ends the churn.
-        if (@as(i64, @intCast(cc.SDL_GetTicks())) - self.g.size_changed_ms < 1500) {
+        if (gpu.ticksMs() - self.g.size_changed_ms < 1500) {
             self.dirty = true;
             self.markDirty();
         }
         // Refresh the zoom clamps for the current view centre each frame (cheap):
         // panning into a coarser area lowers the per-view max and eases the zoom in.
         self.updateZoomLimits();
-        if (@abs(self.cam.zoom - self.last_zoom) > 1e-6) self.last_zoom_ms = @intCast(cc.SDL_GetTicks());
+        if (@abs(self.cam.zoom - self.last_zoom) > 1e-6) self.last_zoom_ms = gpu.ticksMs();
         if (!self.built) {
             self.buildGpuScene(); // first frame: synchronous, so there is something to draw now
         } else {

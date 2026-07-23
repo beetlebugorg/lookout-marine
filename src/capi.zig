@@ -46,12 +46,10 @@ export fn lookout_open_charts(paths: [*]const [*:0]const u8, n: usize, width: u3
     }) catch return null;
     return @ptrCast(l);
 }
-/// EMBED into your app's native window. `kind` is a lookout_native_kind:
-///   1 NSWindow*  2 NSView*  3 HWND  4 X11 Window (XID cast to a pointer).
-/// lookout wraps it with SDL internally and renders/presents into it — your app
-/// keeps its own toolkit + event loop and never links SDL. Then call
-/// lookout_render() each frame and feed input via lookout_pan/zoom/set_view/
-/// resize. NULL on error.
+/// EMBED into your app's view. `kind` is a lookout_native_kind (1 =
+/// CAMetalLayer*); lookout renders and presents straight into the layer — your
+/// app keeps its own toolkit + event loop. Then call lookout_render() each
+/// frame and feed input via lookout_pan/zoom/set_view/resize. NULL on error.
 export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*lookout {
     const path_z = gpa.dupeZ(u8, std.mem.span(chart_path)) catch return null;
     defer gpa.free(path_z);
@@ -61,14 +59,14 @@ export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_
         .want_window = false,
         .want_msaa = want_msaa != 0,
         .native_handle = native_handle,
-        .native_kind = @enumFromInt(kind),
+        .native_kind = nativeKind(kind) orelse return null,
     }) catch return null;
     return @ptrCast(l);
 }
 
-/// EMBED a composed chart LIBRARY into your app's native window: like
-/// lookout_open_in_window, but takes MANY baked charts (a directory of cells) and
-/// composes them, presenting into your NSView/HWND/X11 window. NULL on error.
+/// EMBED a composed chart LIBRARY into your app's view: like
+/// lookout_open_in_window, but takes MANY baked charts (a directory of cells)
+/// and composes them, presenting into your CAMetalLayer. NULL on error.
 export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*lookout {
     const list = gpa.alloc([:0]const u8, n) catch return null;
     defer gpa.free(list);
@@ -79,9 +77,18 @@ export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque,
         .want_window = false,
         .want_msaa = want_msaa != 0,
         .native_handle = native_handle,
-        .native_kind = @enumFromInt(kind),
+        .native_kind = nativeKind(kind) orelse return null,
     }) catch return null;
     return @ptrCast(l);
+}
+
+/// Reject unknown kind values from stale hosts instead of trusting the int.
+fn nativeKind(kind: c_int) ?lk.NativeKind {
+    return switch (kind) {
+        0 => .none,
+        1 => .metal_layer,
+        else => null,
+    };
 }
 
 export fn lookout_close(h: ?*lookout) void {

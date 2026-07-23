@@ -25,13 +25,6 @@ settings:
   base:
     # Point this at your tile57 checkout (contains include/ and zig-out/lib/).
     TILE57_DIR: "$(SRCROOT)/../../tile57"
-    # Homebrew SDL3 is keg-only; override if yours lives elsewhere.
-    SDL3_DIR: "/opt/homebrew/opt/sdl3"
-    # iOS builds of the native deps (no Homebrew on iOS — see README "iOS").
-    # Per-platform: PLATFORM_NAME is iphoneos / iphonesimulator, so device and
-    # simulator artifacts never collide.
-    # SDL3_IOS_DIR needs include/SDL3 + lib/libSDL3.a built for that platform.
-    SDL3_IOS_DIR: "$(SRCROOT)/../ios-deps/sdl3/$(PLATFORM_NAME)"
 
 targets:
   LookoutMarine:
@@ -61,28 +54,14 @@ targets:
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../zig-out/lib"
           - "$(TILE57_DIR)/zig-out/lib"
-          - "$(SDL3_DIR)/lib"
-        # Static Zig cores + the SDL3 dylib.
+        # Static Zig cores (rendering is direct Metal — the shim is inside
+        # liblookout_marine.a).
         OTHER_LDFLAGS:
           - "-llookout_marine"
           - "-ltile57"
-          - "-lSDL3"
-        # Load the Homebrew SDL3 dylib at runtime (dev). For distribution, bundle
-        # SDL3 in the app and add @rpath/@executable_path/../Frameworks instead.
-        LD_RUNPATH_SEARCH_PATHS:
-          - "$(SDL3_DIR)/lib"
     dependencies:
-      # System frameworks SDL3 + MoltenVK/Metal need on macOS.
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
-      - sdk: IOKit.framework
-      - sdk: CoreVideo.framework
-      - sdk: CoreAudio.framework
-      - sdk: AudioToolbox.framework
-      - sdk: ForceFeedback.framework
-      - sdk: GameController.framework
-      - sdk: CoreHaptics.framework
-      - sdk: Carbon.framework
       - sdk: CoreGraphics.framework
       - sdk: UniformTypeIdentifiers.framework
     preBuildScripts:
@@ -92,19 +71,14 @@ targets:
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
           cd "$SRCROOT/.."
-          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
-            --search-prefix "$SDL3_DIR"
+          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast
 
   # ---- iOS -------------------------------------------------------------------
-  # Same Swift sources; the chart renders in lookout's own full-screen UIWindow
-  # (LOOKOUT_NATIVE_UIKIT_WINDOWSCENE) behind the transparent SwiftUI chrome.
-  # Needs iOS builds of the native deps first — none come from Homebrew:
-  #   • SDL3 static for iOS in $(SDL3_IOS_DIR)  (include/SDL3 + lib/libSDL3.a)
-  #   • MoltenVK.xcframework in $(MOLTENVK_IOS_DIR)  (the iOS Vulkan driver)
-  #   • tile57 cross-built:  cd $TILE57_DIR && zig build -Dtarget=aarch64-ios \
-  #       --sysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -p zig-out-ios
-  # The pre-build script cross-builds liblookout_marine.a the same way.
-  # See macos/README.md "iOS" for the full walkthrough.
+  # Same Swift sources; the chart renders via Metal into ChartUIView's own
+  # CAMetalLayer (the plain-UIKit input window), with the SwiftUI chrome in a
+  # PassThroughWindow above. Only dependency beyond this repo: tile57
+  # cross-built per platform (the pre-build script expects
+  # $TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a).
   LookoutMarine-iOS:
     type: application
     platform: iOS
@@ -125,41 +99,22 @@ targets:
         CODE_SIGN_STYLE: Automatic
         SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        # The Zig cores / SDL3 / MoltenVK are built arm64-only (Apple Silicon
-        # simulators + all supported devices) — don't ask ld for x86_64.
+        # The Zig cores are built arm64-only (Apple Silicon simulators + all
+        # supported devices) — don't ask ld for x86_64.
         ARCHS: arm64
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/../include"
           - "$(TILE57_DIR)/include"
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
-          - "$(TILE57_DIR)/zig-out-$(PLATFORM_NAME)/lib"
-          - "$(SDL3_IOS_DIR)/lib"
         # The merged, libtool-repacked Zig cores (see the pre-build script).
-        # SDL3's static objects are already folded in by the zig build — no
-        # separate -lSDL3.
         OTHER_LDFLAGS:
           - "-llookoutall"
     dependencies:
-      # The Vulkan implementation SDL_GPU loads at runtime. If SDL's loader
-      # doesn't find it by default, set the SDL_VULKAN_LIBRARY hint to the
-      # framework binary path (see README).
-      - framework: ../ios-deps/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework
-        embed: true
-      # System frameworks SDL3 + MoltenVK/Metal need on iOS.
       - sdk: UIKit.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
       - sdk: CoreGraphics.framework
-      - sdk: CoreVideo.framework
-      - sdk: CoreMotion.framework
-      - sdk: CoreHaptics.framework
-      - sdk: GameController.framework
-      - sdk: CoreBluetooth.framework
-      - sdk: AVFoundation.framework
-      - sdk: AudioToolbox.framework
-      - sdk: CoreAudio.framework
-      - sdk: IOSurface.framework
       - sdk: UniformTypeIdentifiers.framework
     preBuildScripts:
       - name: Build Zig core for iOS (liblookout_marine.a)
@@ -172,14 +127,10 @@ targets:
             iphonesimulator) ZIG_TARGET=aarch64-ios-simulator ;;
             *)               ZIG_TARGET=aarch64-ios ;;
           esac
-          # NOTE: the search prefix must stay RELATIVE (to the repo root we just
-          # cd'd into) — with --sysroot set, zig rewrites absolute -L paths to
-          # live under the SDK root and would never find SDL3.
           zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
             -Dtile57_lib="$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a" \
             -Dtarget="$ZIG_TARGET" \
             --sysroot "$(xcrun --sdk $PLATFORM_NAME --show-sdk-path)" \
-            --search-prefix "ios-deps/sdl3/$PLATFORM_NAME" \
             -p "zig-out-$PLATFORM_NAME"
           # ld64 AND libtool both drop zig-emitted archive members ("64-bit
           # mach-o not 8-byte aligned"), so feeding the archives to libtool

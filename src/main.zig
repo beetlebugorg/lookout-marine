@@ -1,7 +1,8 @@
-//! lookout demo: open a baked tile57 chart and render it on SDL_GPU.
-//!   lookout <chart.pmtiles> [--window] [--png OUT] [--lon L --lat L --zoom Z]
-//! Headless default: render day + night PNGs (night proves palette swap needs
-//! no re-tessellation) and exit. --window: interactive pan/zoom + live toggles.
+//! lookout demo: open a baked tile57 chart and render snapshots via Metal.
+//!   lookout <chart.pmtiles> [--png OUT] [--lon L --lat L --zoom Z]
+//! Renders day + night PNGs (night proves palette swap needs no
+//! re-tessellation) and a zoomed frame, then exits. The interactive host is
+//! the macOS app (macos/) — the demo is the headless render/parity tool.
 const std = @import("std");
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
@@ -9,26 +10,19 @@ const lk = @import("root.zig");
 const DEFAULT_CHART = "/home/claude/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles";
 
 const USAGE =
-    \\lookout — render a baked tile57 chart on SDL_GPU
+    \\lookout — render a baked tile57 chart to PNG snapshots (Metal, headless)
     \\
     \\usage: lookout <chart.pmtiles> [options]
     \\
-    \\  <chart.pmtiles>   a baked tile57 PMTiles archive (required)
-    \\  --window          open an interactive window (needs a display; HiDPI-aware)
+    \\  <chart.pmtiles>   a baked tile57 PMTiles archive (or a directory of them)
     \\  --width W --height H   render size in pixels (default 1600x1200)
-    \\  --frames N        window mode: exit after N frames (testing)
-    \\  --png OUT         headless day PNG output path (default lookout.png)
+    \\  --png OUT         day PNG output path (default lookout.png)
     \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
     \\  -h, --help        this help
     \\
-    \\Headless (no --window) writes lookout.png (day), lookout-night.png
-    \\(palette swap, no re-tessellation) and lookout-zoom.png (MVP zoom, no
-    \\re-tessellation), then exits.
-    \\
-    \\Window controls: drag=pan (fling), shift+drag=rotate (course-up), r=north-up,
-    \\tap=identify (logs cell+class per feature), wheel=zoom, n=day/night,
-    \\f=feet/metres, t=text, s=soundings, d=OTHER category, [/]=safety contour,
-    \\-/=+ size, Esc=quit.
+    \\Writes lookout.png (day), lookout-night.png (palette swap, no
+    \\re-tessellation) and lookout-zoom.png (MVP zoom, no re-tessellation),
+    \\then exits. The interactive host is the macOS app (macos/).
     \\
 ;
 
@@ -85,12 +79,10 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     var chart_path: ?[:0]const u8 = null;
-    var want_window = false;
     var png_out: []const u8 = "lookout.png";
     var lon: ?f64 = null;
     var lat: ?f64 = null;
     var zoom: ?f64 = null;
-    var max_frames: ?u64 = null; // window mode: exit after N frames (for testing)
     var width: u32 = 1600;
     var height: u32 = 1200;
     var i: usize = 1;
@@ -99,8 +91,6 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
             std.debug.print("{s}", .{USAGE});
             return;
-        } else if (std.mem.eql(u8, a, "--window")) {
-            want_window = true;
         } else if (std.mem.eql(u8, a, "--png") and i + 1 < args.len) {
             i += 1;
             png_out = args[i];
@@ -113,9 +103,6 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--zoom") and i + 1 < args.len) {
             i += 1;
             zoom = try std.fmt.parseFloat(f64, args[i]);
-        } else if (std.mem.eql(u8, a, "--frames") and i + 1 < args.len) {
-            i += 1;
-            max_frames = try std.fmt.parseInt(u64, args[i], 10);
         } else if (std.mem.eql(u8, a, "--width") and i + 1 < args.len) {
             i += 1;
             width = try std.fmt.parseInt(u32, args[i], 10);
@@ -135,13 +122,7 @@ pub fn main(init: std.process.Init) !void {
         return error.NoChart;
     };
 
-    // headless default: force SDL's offscreen video driver. --window keeps the
-    // platform driver (Lookout.open falls back to offscreen if it can't open one).
-    if (!want_window) {
-        _ = cc.SDL_SetHint(cc.SDL_HINT_VIDEO_DRIVER, "offscreen");
-    }
-
-    const l = openTarget(alloc, chart, .{ .want_window = want_window, .width = width, .height = height }) catch {
+    const l = openTarget(alloc, chart, .{ .want_window = false, .width = width, .height = height }) catch {
         std.debug.print("error: could not open chart(s) '{s}'.\n", .{chart});
         return error.ChartOpenFailed;
     };
@@ -154,158 +135,20 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("view: lon={d:.5} lat={d:.5} zoom={d:.2}\n", .{ v.lon, v.lat, v.zoom });
     l.setView(v);
 
-    if (!want_window) {
-        // day (first render lazily builds the scene)
-        try l.snapshotPng(png_out);
-        std.debug.print("wrote {s} (day)\n", .{png_out});
-        // night — set the mariner scheme; a palette swap only, NO re-tessellation
-        var m = l.getMariner();
-        m.scheme = cc.TILE57_SCHEME_NIGHT;
-        l.setMariner(m);
-        try l.snapshotPng("lookout-night.png");
-        std.debug.print("wrote lookout-night.png (night, no re-tessellation)\n", .{});
-        // camera demo: zoom 2 levels via the MVP only, no rebuild
-        m.scheme = cc.TILE57_SCHEME_DAY;
-        l.setMariner(m);
-        l.zoomAt(2.0, @as(f32, @floatFromInt(l.g.width)) * 0.5, @as(f32, @floatFromInt(l.g.height)) * 0.5);
-        try l.snapshotPng("lookout-zoom.png");
-        std.debug.print("wrote lookout-zoom.png (zoomed via MVP only, no re-tessellation)\n", .{});
-        std.debug.print("MSAA: {s}\n", .{if (l.g.msaa_used) "4x" else "off (unsupported)"});
-        return;
-    }
-
-    // interactive
-    try runWindow(l, max_frames);
-}
-
-/// Tracks a smoothed drag velocity (logical px/sec) so releasing the mouse can
-/// hand the camera a fling.
-const PanTracker = struct {
-    last_ns: u64 = 0,
-    vx: f64 = 0,
-    vy: f64 = 0,
-    fn reset(self: *PanTracker) void {
-        self.* = .{};
-    }
-    fn sample(self: *PanTracker, dx: f32, dy: f32, ts_ns: u64) void {
-        if (self.last_ns != 0 and ts_ns > self.last_ns) {
-            const dt = @as(f64, @floatFromInt(ts_ns - self.last_ns)) / 1e9;
-            if (dt > 0.0005) {
-                self.vx = self.vx * 0.5 + (@as(f64, dx) / dt) * 0.5;
-                self.vy = self.vy * 0.5 + (@as(f64, dy) / dt) * 0.5;
-            }
-        }
-        self.last_ns = ts_ns;
-    }
-};
-
-/// Cursor-pick callback: one condensed line per feature under the tap — the
-/// source CELL and object class, no attribute dump. Enough to identify what (and
-/// which cell) is under the cursor.
-fn pickLog(ctx: ?*anyopaque, cls: [*c]const u8, cls_len: usize, s57: [*c]const u8, s57_len: usize, chart: [*c]const u8, chart_len: usize) callconv(.c) void {
-    _ = ctx;
-    _ = s57;
-    _ = s57_len;
-    std.debug.print("  {s}  {s}\n", .{ chart[0..chart_len], cls[0..cls_len] });
-}
-
-/// Log a condensed pick at a screen point: a header with the geographic point +
-/// zoom, then pickLog's one line per feature.
-fn tapPick(l: *lk.Lookout, x_pt: f32, y_pt: f32) void {
-    const g = l.screenToGeo(x_pt, y_pt);
-    std.debug.print("pick {d:.4},{d:.4} z{d:.1}:\n", .{ g.lat, g.lon, l.view().zoom });
-    var cb = cc.tile57_query_cb{ .ctx = null, .feature = pickLog };
-    l.pick(g.lon, g.lat, &cb);
-}
-
-fn handleEvent(l: *lk.Lookout, ev: *cc.SDL_Event, dragging: *bool, rotating: *bool, running: *bool, pan: *PanTracker, down: *[2]f32) void {
-    switch (ev.type) {
-        cc.SDL_EVENT_QUIT => running.* = false,
-        cc.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-            down.* = .{ ev.button.x, ev.button.y }; // for tap-vs-drag on release
-            // Shift + grab spins the canvas (course-up); a plain grab pans.
-            if (cc.SDL_GetModState() & cc.SDL_KMOD_SHIFT != 0) {
-                rotating.* = true;
-                l.flingStart(0, 0); // grabbing stops any coast
-            } else {
-                dragging.* = true;
-                l.flingStart(0, 0);
-                pan.reset();
-            }
-        },
-        cc.SDL_EVENT_MOUSE_BUTTON_UP => {
-            if (rotating.*) {
-                rotating.* = false;
-            } else {
-                dragging.* = false;
-                // A press that barely moved is a TAP (identify), not a pan: no fling.
-                const dx = ev.button.x - down.*[0];
-                const dy = ev.button.y - down.*[1];
-                if (dx * dx + dy * dy <= 16) { // <= 4 logical px
-                    tapPick(l, ev.button.x, ev.button.y);
-                } else {
-                    l.flingStart(pan.vx, pan.vy); // throw it
-                }
-            }
-        },
-        cc.SDL_EVENT_MOUSE_MOTION => {
-            if (rotating.*) {
-                l.rotateDragLogical(ev.motion.x - ev.motion.xrel, ev.motion.y - ev.motion.yrel, ev.motion.x, ev.motion.y);
-            } else if (dragging.*) {
-                l.panLogical(ev.motion.xrel, ev.motion.yrel);
-                pan.sample(ev.motion.xrel, ev.motion.yrel, ev.motion.timestamp);
-            }
-        },
-        cc.SDL_EVENT_MOUSE_WHEEL => l.zoomAtLogical(@as(f64, ev.wheel.y) * 0.25, ev.wheel.mouse_x, ev.wheel.mouse_y),
-        cc.SDL_EVENT_WINDOW_RESIZED => l.resize(@intCast(ev.window.data1), @intCast(ev.window.data2)) catch {},
-        cc.SDL_EVENT_KEY_DOWN => switch (ev.key.key) {
-            cc.SDLK_N => l.cycleScheme(),
-            cc.SDLK_F => l.toggleDepthUnit(),
-            cc.SDLK_T => l.toggleText(),
-            cc.SDLK_D => l.toggleOtherCategory(),
-            cc.SDLK_S => l.toggleSoundings(),
-            cc.SDLK_LEFTBRACKET => l.nudgeSafetyContour(-2),
-            cc.SDLK_RIGHTBRACKET => l.nudgeSafetyContour(2),
-            cc.SDLK_EQUALS => l.adjustSize(1.1),
-            cc.SDLK_MINUS => l.adjustSize(1.0 / 1.1),
-            cc.SDLK_R => l.resetRotation(), // back to north-up
-            cc.SDLK_ESCAPE => running.* = false,
-            else => {},
-        },
-        else => {},
-    }
-}
-
-fn runWindow(l: *lk.Lookout, max_frames: ?u64) !void {
-    var dragging = false;
-    var rotating = false;
-    var tap_down = [2]f32{ 0, 0 };
-    var running = true;
-    var frame: u64 = 0;
-    var pan = PanTracker{};
-    const test_mode = max_frames != null; // render every iteration for --frames
-    var last_ns = cc.SDL_GetTicksNS();
-    while (running) {
-        if (max_frames) |mf| {
-            if (frame >= mf) break;
-        }
-        var ev: cc.SDL_Event = undefined;
-        // On-demand: block on events when static (0% CPU idle). While a zoom ease
-        // or fling is running, never block — spin so it animates every frame. A
-        // short timeout keeps a background build filling in progressively.
-        if (!test_mode and !l.animating() and !l.needsRedraw()) {
-            const timeout: i32 = if (l.isBuilding()) 16 else 250;
-            if (cc.SDL_WaitEventTimeout(&ev, timeout)) handleEvent(l, &ev, &dragging, &rotating, &running, &pan, &tap_down);
-        }
-        while (cc.SDL_PollEvent(&ev)) handleEvent(l, &ev, &dragging, &rotating, &running, &pan, &tap_down);
-        const now_ns = cc.SDL_GetTicksNS();
-        var dt = @as(f64, @floatFromInt(now_ns -% last_ns)) / 1e9;
-        last_ns = now_ns;
-        if (dt > 0.05) dt = 0.05; // cap the step after an idle block
-        if (l.animating()) l.tickAnim(dt);
-        if (test_mode or l.needsRedraw()) {
-            _ = try l.render();
-            frame += 1;
-        }
-    }
+    // day (first render lazily builds the scene)
+    try l.snapshotPng(png_out);
+    std.debug.print("wrote {s} (day)\n", .{png_out});
+    // night — set the mariner scheme; a palette swap only, NO re-tessellation
+    var m = l.getMariner();
+    m.scheme = cc.TILE57_SCHEME_NIGHT;
+    l.setMariner(m);
+    try l.snapshotPng("lookout-night.png");
+    std.debug.print("wrote lookout-night.png (night, no re-tessellation)\n", .{});
+    // camera demo: zoom 2 levels via the MVP only, no rebuild
+    m.scheme = cc.TILE57_SCHEME_DAY;
+    l.setMariner(m);
+    l.zoomAt(2.0, @as(f32, @floatFromInt(l.g.width)) * 0.5, @as(f32, @floatFromInt(l.g.height)) * 0.5);
+    try l.snapshotPng("lookout-zoom.png");
+    std.debug.print("wrote lookout-zoom.png (zoomed via MVP only, no re-tessellation)\n", .{});
+    std.debug.print("MSAA: {s}\n", .{if (l.g.msaa_used) "4x" else "off (unsupported)"});
 }

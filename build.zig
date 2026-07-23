@@ -22,25 +22,26 @@ pub fn build(b: *std.Build) void {
         fn apply(self: @This(), mod: *std.Build.Module) void {
             const bb = self.b;
             // Non-macOS Apple targets (-Dtarget=aarch64-ios[-simulator]) need
-            // that SDK's libc headers: pass --sysroot; Zig only bundles macOS's.
-            if (bb.sysroot) |sysroot|
+            // that SDK's libc AND framework headers (Metal/QuartzCore for the
+            // shim): pass --sysroot; Zig only bundles macOS's.
+            if (bb.sysroot) |sysroot| {
                 mod.addSystemIncludePath(.{ .cwd_relative = bb.pathJoin(&.{ sysroot, "usr/include" }) });
+                mod.addSystemFrameworkPath(.{ .cwd_relative = bb.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
+            }
             mod.addIncludePath(.{ .cwd_relative = self.tile57_inc });
             mod.addIncludePath(bb.path("vendor/stb"));
+            mod.addIncludePath(bb.path("src")); // metal_shim.h for the @cImport
             // Tessellation, sprite/SDF quad building and paint order all moved
             // into tile57 (the GPU-scene ABI hands back draw-ready buffers), so
             // the host no longer vendors libtess2. stb stays for atlas PNG decode.
             mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{"-O2"} });
+            // The Metal transport (ObjC behind a C face). Manual retain/release
+            // on purpose — objects live in C structs (see metal_shim.m).
+            mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc" } });
             mod.addObjectFile(.{ .cwd_relative = self.tile57_lib });
-            mod.linkSystemLibrary("SDL3", .{});
-            // precompiled SPIR-V shaders, embedded (no runtime shader compilation)
-            mod.addAnonymousImport("chart_vert_spv", .{ .root_source_file = bb.path("shaders/chart.vert.spv") });
-            mod.addAnonymousImport("chart_frag_spv", .{ .root_source_file = bb.path("shaders/chart.frag.spv") });
-            mod.addAnonymousImport("sprite_vert_spv", .{ .root_source_file = bb.path("shaders/sprite.vert.spv") });
-            mod.addAnonymousImport("sprite_frag_spv", .{ .root_source_file = bb.path("shaders/sprite.frag.spv") });
-            mod.addAnonymousImport("sdf_frag_spv", .{ .root_source_file = bb.path("shaders/sdf.frag.spv") });
-            mod.addAnonymousImport("pattern_vert_spv", .{ .root_source_file = bb.path("shaders/pattern.vert.spv") });
-            mod.addAnonymousImport("pattern_frag_spv", .{ .root_source_file = bb.path("shaders/pattern.frag.spv") });
+            // Metal shader source, compiled by the shim at runtime (no offline
+            // shader toolchain).
+            mod.addAnonymousImport("metal_src", .{ .root_source_file = bb.path("shaders/lookout.metal") });
         }
     };
     const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib };
@@ -63,9 +64,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // ---- the demo executable + tests (host platforms only: an iOS cross-build
-    // `-Dtarget=aarch64-ios` produces just the static lib for the app to link;
-    // a standalone exe can't launch there and won't link without the app's
-    // frameworks) ----
+    // `-Dtarget=aarch64-ios` produces just the static lib for the app to link) ----
     if (target.result.os.tag == .ios) return;
 
     const exe_mod = b.createModule(.{
@@ -75,6 +74,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(exe_mod);
+    exe_mod.linkFramework("Metal", .{});
+    exe_mod.linkFramework("QuartzCore", .{});
+    exe_mod.linkFramework("Foundation", .{});
     const exe = b.addExecutable(.{ .name = "lookout-marine-demo", .root_module = exe_mod });
     b.installArtifact(exe);
 
@@ -91,17 +93,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(test_mod);
+    test_mod.linkFramework("Metal", .{});
+    test_mod.linkFramework("QuartzCore", .{});
+    test_mod.linkFramework("Foundation", .{});
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
-
-    // ---- shader (re)compilation: `zig build shaders` ----
-    const shaders = b.step("shaders", "Recompile GLSL -> SPIR-V (needs glslangValidator)");
-    inline for (.{ "chart.vert", "chart.frag", "sprite.vert", "sprite.frag", "sdf.frag", "pattern.vert", "pattern.frag" }) |name| {
-        const cmd = b.addSystemCommand(&.{ "glslangValidator", "-V" });
-        cmd.addFileArg(b.path("shaders/" ++ name));
-        cmd.addArg("-o");
-        const out = cmd.addOutputFileArg(name ++ ".spv");
-        const install = b.addInstallFileWithDir(out, .{ .custom = "../shaders" }, name ++ ".spv");
-        shaders.dependOn(&install.step);
-    }
 }

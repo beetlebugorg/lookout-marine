@@ -22,18 +22,13 @@ typedef struct lookout lookout;
 /* A camera pose. rotation_deg is course-up rotation (0 = north-up). */
 typedef struct { double lon, lat, zoom, rotation_deg; } lookout_view;
 
-/* Native window handle kinds for lookout_open_in_window. */
+/* Native handle kinds for lookout_open_in_window. Apple-only: lookout renders
+ * via Metal directly into a CAMetalLayer the host owns (an NSView's backing
+ * layer on macOS, a UIView's layerClass on iOS). See the `sdl-gpu` git tag for
+ * the last cross-platform (SDL_GPU/Vulkan) revision. */
 typedef enum {
-    LOOKOUT_NATIVE_NONE = 0,
-    LOOKOUT_NATIVE_COCOA_WINDOW = 1, /* NSWindow*  (macOS) */
-    LOOKOUT_NATIVE_COCOA_VIEW   = 2, /* NSView*    (macOS) */
-    LOOKOUT_NATIVE_WIN32_HWND   = 3, /* HWND       (Windows) */
-    LOOKOUT_NATIVE_X11_WINDOW   = 4, /* X11 Window XID cast to a void* */
-    /* UIWindowScene* (iOS). SDL cannot wrap an existing UIView, so the chart
-     * gets its own full-screen UIWindow created INSIDE the given scene (NULL =>
-     * the active scene). Layer your app's chrome window above it and forward
-     * touches via the lookout_pan/zoom/... calls, same as the other kinds. */
-    LOOKOUT_NATIVE_UIKIT_WINDOWSCENE = 5
+    LOOKOUT_NATIVE_NONE = 0,        /* offscreen only (snapshot) */
+    LOOKOUT_NATIVE_METAL_LAYER = 1  /* CAMetalLayer* (macOS & iOS) */
 } lookout_native_kind;
 
 /* ---- lifecycle --------------------------------------------------------- */
@@ -48,12 +43,11 @@ lookout *lookout_open_charts(const char *const *paths, size_t n,
                              uint32_t width, uint32_t height,
                              int want_window, int want_msaa);
 
-/* Embed into your app's native window (NSWindow / NSView / HWND / X11). lookout
- * wraps it with SDL internally and renders/presents into it — your app keeps its
- * own toolkit (Swift/Cocoa, Win32, GTK) and its own event loop, and never links
- * SDL. Drive it with lookout_render() each frame; forward input via lookout_pan/
+/* Embed into your app's view: pass its CAMetalLayer and lookout renders and
+ * presents straight into it — your app keeps its own toolkit and event loop.
+ * Drive it with lookout_render() each frame; forward input via lookout_pan/
  * zoom/set_view and lookout_resize on native resize. (For hosts that only want
- * pixels, use lookout_snapshot_rgba instead — no window handle needed.) */
+ * pixels, use lookout_snapshot_rgba instead — no layer needed.) */
 lookout *lookout_open_in_window(lookout_native_kind kind, void *native_handle,
                                 const char *chart_path,
                                 uint32_t width, uint32_t height, int want_msaa);

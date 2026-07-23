@@ -421,6 +421,10 @@ struct ChartActionsBar: View {
 /// in a PassThroughWindow above; this view owns input, sizing, and the
 /// auto-open.
 final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelegate {
+    /// lookout renders via Metal straight into this view's backing layer —
+    /// the input window IS the chart surface now (no separate render window).
+    override class var layerClass: AnyClass { CAMetalLayer.self }
+
     weak var controller: ChartController?
     weak var model: AppModel?
     /// The SwiftUI chrome window (set by SceneDelegate) — re-asserted key and
@@ -499,11 +503,20 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        syncLayerScale()
         maybeAutoOpen()
+    }
+
+    /// Keep the Metal layer's contentsScale at the screen's density — the
+    /// render core derives its pixel size from bounds × contentsScale.
+    private func syncLayerScale() {
+        let scale = window?.screen.scale ?? traitCollection.displayScale
+        if scale > 0, layer.contentsScale != scale { layer.contentsScale = scale }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        syncLayerScale()
         recenterScrollSink()
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes (rotation, split view)
@@ -530,21 +543,18 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate, UIScrollViewDelega
         hostWindowAboveChart()
     }
 
-    /// lookout just created (and made key) its own chart UIWindow in our scene.
-    /// Restore the stack: chart (normal) < this input window < chrome window,
-    /// with chrome key so the search field can take the keyboard.
+    /// The chart renders in THIS window's layer; keep the chrome window above
+    /// and transparent. SwiftUI re-applies systemBackground (black in dark
+    /// mode) to its hosting view when content attaches — clear it again after
+    /// the open, or the chrome window paints over the chart.
     func hostWindowAboveChart() {
-        window?.windowLevel = .normal + 1
         chromeWindow?.windowLevel = .normal + 2
         chromeWindow?.makeKey()
-        // SwiftUI re-applies systemBackground (black in dark mode) to its
-        // hosting view when content attaches — clear it again now, or the
-        // chrome window paints over the chart.
-        for w in [window, chromeWindow] {
-            w?.isOpaque = false
-            w?.backgroundColor = .clear
-            w?.rootViewController?.view.isOpaque = false
-            w?.rootViewController?.view.backgroundColor = .clear
+        if let w = chromeWindow {
+            w.isOpaque = false
+            w.backgroundColor = .clear
+            w.rootViewController?.view.isOpaque = false
+            w.rootViewController?.view.backgroundColor = .clear
         }
     }
 

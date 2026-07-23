@@ -1,9 +1,11 @@
 # lookout-marine — macOS app
 
-A native SwiftUI macOS S-52 chartplotter wrapped around the Zig `SDL_GPU` chart
-core. All app chrome (menu bar, HUD, zoom controls, mariner settings, search) is
+A native SwiftUI macOS S-52 chartplotter wrapped around the Zig chart core,
+which renders via **Metal directly** into the chart view's own `CAMetalLayer`.
+All app chrome (menu bar, HUD, zoom controls, mariner settings, search) is
 native SwiftUI; the chart itself is one GPU-rendered `NSView` driven through the
-`lookout.h` C ABI.
+`lookout.h` C ABI. (The cross-platform SDL_GPU/Vulkan/MoltenVK predecessor
+lives at the `sdl-gpu` git tag.)
 
 ## Prerequisites
 
@@ -15,8 +17,6 @@ native SwiftUI; the chart itself is one GPU-rendered `NSView` driven through the
   git submodule update --init --recursive   # portrayal catalogue
   zig build                                  # produces zig-out/lib/libtile57.a
   ```
-- **SDL3** (`brew install sdl3`). It is keg-only; the project points at
-  `/opt/homebrew/opt/sdl3` by default (override `SDL3_DIR`).
 - **XcodeGen** to generate the project (`brew install xcodegen`).
 
 ## Build & run
@@ -73,121 +73,69 @@ The bulk of the app is platform-neutral and reused verbatim on iOS: `AppModel`,
 display-link render loop). Platform code is isolated behind `#if os(...)` and
 `Platform.swift`.
 
-**How the chart is embedded (differs from macOS by necessity).** SDL3 has no
-create-property for wrapping an existing `UIView` (its only iOS embed hook is
-`SDL_PROP_WINDOW_CREATE_WINDOWSCENE_POINTER`), so the originally sketched
-`LOOKOUT_NATIVE_UIKIT_VIEW` kind isn't implementable. Instead:
+**Architecture.** iOS uses the UIKit lifecycle (AppDelegate + SceneDelegate, no
+WindowGroup) with a two-window stack, bottom → top:
 
-- The ABI kind is **`LOOKOUT_NATIVE_UIKIT_WINDOWSCENE`**: the host passes its
-  `UIWindowScene` (or NULL for the active scene) and lookout/SDL creates its own
-  **full-screen chart `UIWindow` inside that scene**.
-- iOS uses the **UIKit lifecycle** (AppDelegate + SceneDelegate, no
-  WindowGroup) and a three-window stack, bottom → top:
-  1. **SDL's chart window** (created at open; renders the chart),
-  2. the **input window** — `ChartUIView` in plain UIKit. This split exists
-     because SwiftUI's hosting view hit-tests as itself across its whole
-     window and *never* forwards touches to UIKit subviews or window-attached
-     recognizers (measured; see `LookoutMarine-iOS/UITests`) — a gesture
-     surface inside SwiftUI renders fine but never hears a touch.
-  3. the **chrome window** — the SwiftUI overlay in a `PassThroughWindow`
-     (empty areas return nil from hitTest and fall through to the input
-     window; controls keep their touches). Its hosting-view background must be
-     re-cleared after content attaches or it paints over the chart
-     (`hostWindowAboveChart`).
-- Gestures on the input window: one-finger pan with velocity fling, pinch zoom
-  anchored at the centroid (a two-finger drag pans via the centroid at the same
-  time), two-finger twist to rotate, tap to identify, double-tap /
-  two-finger-tap to zoom in/out, pointer scroll-to-zoom + hover readout
-  (trackpad/mouse). Pinch/pan verified end-to-end by the XCUITests.
-- **Gotcha:** FrontBoard caches scene sessions per install. After changing the
-  scene configuration (e.g. this lifecycle switch), a plain reinstall keeps the
-  stale session and the SceneDelegate silently never connects — `simctl
-  uninstall` (or delete the app) first.
-- Charts arrive as files: the Files-app picker imports (copies) a `.pmtiles`
-  cell or a folder of cells into `Documents/Charts`, and anything dropped into
-  the app's Documents via Files/Finder sharing composes into the startup
-  library.
-- The Zig core calls `SDL_SetMainReady()` before `SDL_Init` (the host app owns
-  `main()`, which SDL's UIKit backend otherwise objects to).
+1. the **input window** — `ChartUIView` in plain UIKit, whose backing layer IS
+   the chart's `CAMetalLayer` (lookout renders straight into it). Plain UIKit
+   because SwiftUI's hosting view hit-tests as itself across its whole window
+   and never forwards touches to UIKit subviews or window-attached recognizers
+   (measured; see `LookoutMarine-iOS/UITests`) — a gesture surface inside
+   SwiftUI renders fine but never hears a touch.
+2. the **chrome window** — the SwiftUI overlay in a `PassThroughWindow`. Empty
+   areas fall through to the input window; controls keep their touches. SwiftUI
+   controls have no distinct hit-test views, so the pass-through decision
+   consults the accessibility tree (interactive-trait element frames). Its
+   hosting-view background must be re-cleared after content attaches or it
+   paints over the chart (`hostWindowAboveChart`).
 
-**Building the iOS target.** `xcodegen generate` also emits a
-`LookoutMarine-iOS` target, but its native deps must be built for iOS first —
-none come from Homebrew:
+Gestures on the input window: one-finger pan with velocity fling, pinch zoom
+anchored at the centroid (a two-finger drag pans via the centroid at the same
+time), two-finger twist to rotate, tap to identify, double-tap /
+two-finger-tap to zoom in/out, pointer hover readout, and trackpad/wheel zoom
+via a hidden always-recentered `UIScrollView` sink (simulator front-ends feed
+scroll views but never `allowedScrollTypesMask` recognizers). Pinch/pan and
+the chrome buttons are verified end-to-end by the XCUITests.
 
-1. **SDL3 static for iOS** → `ios-deps/sdl3/` (`include/SDL3` + `lib/libSDL3.a`),
-   e.g. `cmake -B build-ios -DCMAKE_SYSTEM_NAME=iOS -DSDL_STATIC=ON` from an SDL
-   checkout.
-2. **MoltenVK.xcframework** → `ios-deps/molten-vk/` (from a MoltenVK release or
-   `make ios` in its repo). It is embedded in the app; if SDL's Vulkan loader
-   doesn't find it at runtime, point the `SDL_VULKAN_LIBRARY` hint at the
-   framework binary.
-3. **tile57 for iOS**: `cd $TILE57_DIR && zig build -Dtarget=aarch64-ios
-   --sysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -p zig-out-ios`.
-4. The target's pre-build script cross-builds `liblookout_marine.a` the same way
-   (into `zig-out-ios/`), picking `aarch64-ios-simulator` automatically for
-   simulator builds — build SDL3/tile57 for the simulator too in that case.
+**Building.** The only dependency beyond this repo is tile57 cross-built per
+platform (no SDL, no MoltenVK — rendering is direct Metal):
 
-**Status: verified rendering in the iOS 27 simulator** (iPhone 17 Pro, Xcode 27
-beta): the chart draws full-screen with the SwiftUI chrome floating above it,
-charts auto-open from Documents, and the window layering works as designed.
-What made it work (all baked in, no env vars needed at runtime):
+```sh
+cd $TILE57_DIR
+zig build lib -Dtarget=aarch64-ios-simulator \
+  --sysroot "$(xcrun --sdk iphonesimulator --show-sdk-path)" -p zig-out-iphonesimulator
+# (aarch64-ios + iphoneos + -p zig-out-iphoneos for device builds)
+```
 
-- `SDL_SetMainReady()` + the `SDL_VULKAN_LIBRARY` hint pointing at
-  `@rpath/MoltenVK.framework/MoltenVK` (src/gpu.zig — iOS has no system
-  Vulkan loader).
-- GPU device creation opts out of the Vulkan features SDL requests by default
-  (`clip distance`, `depth clamping`, `indirect-draw first-instance`,
-  `anisotropy`) — unused by 2D chart rendering, and the simulator GPU (GPU
-  Family Apple 2) fails SDL's suitability check on them.
-- **A local patch to our vendored SDL build** —
-  `macos/sdl-ios-simulator-device-features.patch`, applied to
-  `ios-deps/SDL-src` — demotes SDL's three always-required features
-  (`independentBlend`/`imageCubeArray`/`sampleRateShading`) to
-  disabled-when-unsupported so the simulator device isn't rejected outright.
-  Local build only; do **not** submit upstream (SDL does not accept
-  AI-authored contributions).
-- The sprite atlas shrinks its bake density until it fits the device's max
-  texture dimension (8192 on the simulator; a 3x bake is ~10.9k tall and an
-  oversized Metal texture aborts, it doesn't error) — `src/root.zig
-  loadSpriteAtlas`, with `atlas_scale` keeping scene UVs in step.
-- On the simulator only, MoltenVK's Metal argument buffers are disabled
-  (`MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0` set in-process): the simulator's
-  Metal XPC service crashes encoding them. Real devices keep the default.
-- The Zig archives are extracted to loose objects and repacked with `libtool`
-  (project.yml pre-build script; `build-dev.sh` does the same for macOS) — both
-  ld64 and libtool silently DROP zig-emitted archive members over an
-  offset-alignment quirk.
-- If you build from the CLI with `CODE_SIGNING_ALLOWED=NO`, ad-hoc sign the
-  products before installing (`codesign -f -s -` on the MoltenVK framework
-  binary, `LookoutMarine.debug.dylib`, and the app) — even the simulator
-  refuses to dyld-load an unsigned embedded framework. Building in Xcode with
-  default signing does this for you.
+Then `xcodegen generate` and build/run the **LookoutMarine-iOS** scheme; the
+pre-build script cross-compiles `liblookout_marine.a` (picking device vs
+simulator from `PLATFORM_NAME`) and repacks the archives for ld64 (both ld64
+and libtool silently DROP zig-emitted archive members over an offset-alignment
+quirk — the script extracts to loose objects and repacks; `build-dev.sh` does
+the same for macOS).
 
-Still untested on a REAL device (needs a signing team + device builds of the
-deps): the rotation gesture's sign (flagged in `ChartUIView.onRotate`), Metal
-argument buffers on-device, and full-density (16384-cap) atlas baking.
+**Gotchas.** FrontBoard caches scene sessions per install: after changing the
+scene configuration, a plain reinstall keeps the stale session and the
+SceneDelegate silently never connects — `simctl uninstall` (or delete the app)
+first. Charts arrive as files: the Files-app picker imports (copies) a
+`.pmtiles` cell or a folder into `Documents/Charts`, and anything dropped into
+the app's Documents via Files/Finder sharing composes into the startup
+library. Still untested on a real device (needs a signing team): the rotation
+gesture's sign (flagged in `ChartUIView.onRotate`).
 
-## Driver-stack workarounds (SDL_GPU Vulkan → MoltenVK → Metal)
+## Rendering (Metal)
 
-Three silent faults in this stack are worked around in `src/gpu.zig` — each was
-isolated with the data verified at every prior step:
-
-- **Indexed draws resolve wrong vertices** (polygons shred into giant wedges).
-  The scene is de-indexed at upload (`uploadGpuScene`) and drawn non-indexed.
-- **After any swapchain recreation (window resize / full screen), geometry
-  stops rasterizing** — clears still land, so the chart shows only background,
-  forever. An 80-line SDL_GPU triangle app reproduces it. On every resize the
-  window is released and re-claimed on the GPU device, which rebuilds the
-  swapchain cleanly and restores rasterization.
-- **`SDL_SetWindowSize` on a wrapped native window re-enters AppKit layout**
-  (unbounded recursion → abort during the full-screen transition). In embed
-  mode the host owns the window size; the renderer adopts the acquired
-  swapchain size each frame instead.
-
-Scene uploads are also read back and verified (retried on mismatch), and
-`SDL_CreateGPUDevice` debug mode is opt-in (`LOOKOUT_GPU_DEBUG=1`) — with it
-on, an installed Khronos validation layer gets injected into every run and can
-itself crash across swapchain recreations.
+The core renders via Metal directly (`src/metal_shim.m` + runtime-compiled
+`shaders/lookout.metal`): the host passes its `CAMetalLayer`
+(`LOOKOUT_NATIVE_METAL_LAYER`) and lookout attaches a device, four pipelines
+(chart / sprite / SDF / pattern) and presents drawables into it. Offscreen
+snapshots render to a shared-storage texture and read back. This replaced the
+SDL_GPU → Vulkan → MoltenVK stack and with it every driver workaround that
+stack accumulated (indexed-draw corruption, swapchain-recreation
+rasterization loss, validation-layer crashes, simulator argument-buffer
+crashes, atlas-size aborts — see the `sdl-gpu` tag for the archaeology). The
+Metal port was verified pixel-identical against the SDL renderer on the
+snapshot suite (day / night palette / MVP zoom) before the switch.
 
 ## Deferred (noted so they aren't dropped)
 
