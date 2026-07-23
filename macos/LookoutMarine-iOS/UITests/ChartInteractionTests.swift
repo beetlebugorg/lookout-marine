@@ -19,8 +19,12 @@ final class ChartInteractionTests: XCTestCase {
         XCTAssertTrue(zoom.waitForExistence(timeout: 45), "zoom readout never appeared — chart did not open/render")
         let before = zoom.label
 
-        // Pinch out at screen center → the chart must zoom in.
-        app.pinch(withScale: 2.0, velocity: 2.0)
+        // Pinch IN at screen center → the chart must zoom OUT. (Not a pinch
+        // out: a library opens FIT to its most-detailed cell, which sits AT the
+        // per-view zoom cap — there is no deeper data there, so zooming in is
+        // correctly a no-op. Zooming out always has room: the floor is z4,
+        // far below any fit view.)
+        app.pinch(withScale: 0.5, velocity: -2.0)
         Thread.sleep(forTimeInterval: 2)
         XCTAssertNotEqual(zoom.label, before,
                           "pinch did not change the zoom readout — touches are not reaching the chart")

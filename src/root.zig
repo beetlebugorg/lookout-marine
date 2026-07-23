@@ -143,6 +143,10 @@ pub const Lookout = struct {
     pending_ok: bool = false,
     last_zoom: f64 = -1, // for zoom-velocity prediction
     last_zoom_ms: i64 = 0,
+    /// Wall-clock of the last engine build (worker-written, main-read): the
+    /// prefetch gate — on hardware where a build takes seconds, the single
+    /// worker is too precious to spend on a speculative warm.
+    last_build_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     prefetched_level: i32 = -1, // the round-zoom level last prefetched (fire once per approach)
     cam: camera.Camera,
     schemes: [MAX_SCHEMES]Scheme = undefined,
@@ -828,6 +832,18 @@ pub const Lookout = struct {
         return @min(self.cam.zoom, self.engine_max_zoom);
     }
 
+    // The zoom the NEXT scene should be built FOR: where the camera is HEADING
+    // (target_zoom — a pinch/wheel moves it ahead of the eased zoom), clamped
+    // like buildZoom. A build takes seconds on a phone; building for the zoom
+    // the user is LEAVING guarantees the scene lands already stale, and during
+    // a continuous zoom-out the stale coverage shrinks to a patch in NODATA
+    // until the next build lands. Building for the target lands on (or much
+    // nearer) the settle zoom. Idle or panning, target == zoom, so this is
+    // exactly buildZoom.
+    fn buildTargetZoom(self: *Lookout) f64 {
+        return @min(self.cam.target_zoom, self.engine_max_zoom);
+    }
+
     fn markDirty(self: *Lookout) void {
         self.view_dirty = true;
         self.last_change_ms = gpu.ticksMs();
@@ -845,10 +861,12 @@ pub const Lookout = struct {
 
     // True when the current view has panned/zoomed out of the built coverage.
     // The x distance wraps: panning across the antimeridian is a short hop, not
-    // a world-width jump.
+    // a world-width jump. The zoom test compares the coverage against the zoom
+    // the next build WOULD use (the target) — comparing against the still-easing
+    // camera zoom would re-spawn identical builds all the way through the ease.
     fn needsRebuild(self: *Lookout) bool {
         if (!self.built) return true;
-        if (@abs(self.buildZoom() - self.cov_zoom) > ZOOM_REBUILD) return true;
+        if (@abs(self.buildTargetZoom() - self.cov_zoom) > ZOOM_REBUILD) return true;
         const he = self.cam.halfExtents();
         return @abs(camera.wrapDx(self.cam.center.x, self.cov_origin.x)) + he.x > self.cov_hw or
             @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
@@ -885,6 +903,7 @@ pub const Lookout = struct {
     // cells) goes through the compositor so seams stitch; a single chart to its
     // own archive.
     fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
+        const t0 = gpu.ticksMs();
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
         var err: cc.tile57_error = undefined;
@@ -896,6 +915,9 @@ pub const Lookout = struct {
             cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err)
         else
             cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err);
+        const dt = gpu.ticksMs() - t0;
+        self.last_build_ms.store(dt, .monotonic);
+        std.debug.print("build z{d:.2} {s} {d} ms\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt });
         return st == cc.TILE57_OK;
     }
 
@@ -987,16 +1009,24 @@ pub const Lookout = struct {
     // Kick off whatever build the current view needs, async. A geometry-affecting
     // change (`dirty`) or a coverage-exit rebuilds the current view; otherwise, if
     // a zoom is heading toward a level boundary, PREFETCH that level so the
-    // crossing is a cache hit.
+    // crossing is a cache hit. Rebuilds target the camera's TARGET zoom (where
+    // the gesture is heading), not the eased position — on hardware where a
+    // build takes seconds, building for the zoom being left behind lands stale
+    // and the view outruns its coverage into NODATA. The prefetch is skipped on
+    // such hardware too: it occupies the one worker for seconds exactly when a
+    // real rebuild is about to be needed.
+    const PREFETCH_MAX_BUILD_MS = 600;
     fn tickBuild(self: *Lookout) void {
         self.pollBuild();
         if (self.build_active) return;
         if (self.dirty or self.needsRebuild()) {
-            self.spawnBuild(self.jobFor(self.cam.center, self.buildZoom(), false));
-        } else if (self.predictPrefetchLevel()) |lvl| {
-            if (lvl != self.prefetched_level) {
-                self.prefetched_level = lvl;
-                self.spawnBuild(self.jobFor(self.cam.center, @floatFromInt(lvl), true));
+            self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));
+        } else if (self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {
+            if (self.predictPrefetchLevel()) |lvl| {
+                if (lvl != self.prefetched_level) {
+                    self.prefetched_level = lvl;
+                    self.spawnBuild(self.jobFor(self.cam.center, @floatFromInt(lvl), true));
+                }
             }
         }
     }
