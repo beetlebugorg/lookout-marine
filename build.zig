@@ -34,10 +34,10 @@ pub fn build(b: *std.Build) void {
             // Tessellation, sprite/SDF quad building and paint order all moved
             // into tile57 (the GPU-scene ABI hands back draw-ready buffers), so
             // the host no longer vendors libtess2. stb stays for atlas PNG decode.
-            mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{"-O2"} });
+            mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{ "-O2", "-fno-sanitize=undefined" } });
             // The Metal transport (ObjC behind a C face). Manual retain/release
             // on purpose — objects live in C structs (see metal_shim.m).
-            mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc" } });
+            mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
             mod.addObjectFile(.{ .cwd_relative = self.tile57_lib });
             // Metal shader source, compiled by the shim at runtime (no offline
             // shader toolchain).

@@ -70,6 +70,10 @@ targets:
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          # Provenance: the build log states exactly which checkouts and
+          # commits these cores came from — never infer it again.
+          echo "zig cores: tile57=$TILE57_DIR @ $(git -C "$TILE57_DIR" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?')"
+          test -f "$TILE57_DIR/build.zig" || { echo "error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout" >&2; exit 1; }
           # Build the tile57 ENGINE first so its libtile57.a exists before the
           # lookout core links it. Zig's cache makes this ~instant when tile57
           # is unchanged. (Previously a manual prerequisite.)
@@ -140,6 +144,10 @@ targets:
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          # Provenance: the build log states exactly which checkouts and
+          # commits these cores came from — never infer it again.
+          echo "zig cores: tile57=$TILE57_DIR @ $(git -C "$TILE57_DIR" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?')"
+          test -f "$TILE57_DIR/build.zig" || { echo "error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout" >&2; exit 1; }
           case "$PLATFORM_NAME" in
             iphonesimulator) ZIG_TARGET=aarch64-ios-simulator ;;
             *)               ZIG_TARGET=aarch64-ios ;;
