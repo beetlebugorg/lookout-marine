@@ -13,6 +13,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <Foundation/Foundation.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <time.h>
 #include "metal_shim.h"
 
 #if __has_feature(objc_arc)
@@ -36,8 +38,25 @@ struct lkm_ctx {
     // render (main) thread there, lkm_begin_frame returns NULL when the pool
     // is saturated and the host simply skips the frame — the display link
     // retries next tick with input processing never starved.
-    dispatch_semaphore_t inflight;
+    // A COUNTER, not a semaphore: permits return via drawable handlers, and a
+    // handler can silently never fire (drawables dropped in a swapchain resize,
+    // occlusion, backgrounding). A semaphore starved forever exactly that way —
+    // frozen chart, live HUD. The counter self-heals: no permit back within
+    // 500ms of saturation means the outstanding presents are gone, not slow.
+    _Atomic int inflight_n;
+    _Atomic long inflight_ret_ms; // monotonic ms of the last permit return
 };
+
+static long lkm_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static void lkm_inflight_return(lkm_ctx *c) {
+    atomic_fetch_sub_explicit(&c->inflight_n, 1, memory_order_relaxed);
+    atomic_store_explicit(&c->inflight_ret_ms, lkm_now_ms(), memory_order_relaxed);
+}
 
 struct lkm_frame {
     lkm_ctx *ctx;
@@ -122,7 +141,8 @@ lkm_ctx *lkm_create(void *metal_layer, const char *msl_source, int want_msaa,
             }
 
             c->msaa_on = want_msaa && [c->device supportsTextureSampleCount:4];
-            c->inflight = dispatch_semaphore_create(3); // matches CAMetalLayer's default pool
+            atomic_store_explicit(&c->inflight_n, 0, memory_order_relaxed);
+            atomic_store_explicit(&c->inflight_ret_ms, lkm_now_ms(), memory_order_relaxed);
             int samples = c->msaa_on ? 4 : 1;
             if (msaa_out) *msaa_out = c->msaa_on;
 
@@ -300,15 +320,26 @@ lkm_frame *lkm_begin_frame(lkm_ctx *c, const float clear[4]) {
         uint32_t w = 0, h = 0;
         lkm_layer_sync(c, &w, &h);
         if (w == 0 || h == 0) return NULL;
-        if (dispatch_semaphore_wait(c->inflight, DISPATCH_TIME_NOW) != 0)
-            return NULL; // all drawables still queued for glass: skip, don't stall
+        int n = atomic_load_explicit(&c->inflight_n, memory_order_relaxed);
+        if (n < 0) { // late returns after a self-heal reset: clamp
+            atomic_store_explicit(&c->inflight_n, 0, memory_order_relaxed);
+            n = 0;
+        }
+        if (n >= 3) {
+            long since = lkm_now_ms() - atomic_load_explicit(&c->inflight_ret_ms, memory_order_relaxed);
+            if (since < 500) return NULL; // healthy backpressure: skip, don't stall
+            // No permit back in 500ms: those presents are lost (resize,
+            // occlusion), not queued. Reset rather than freeze forever.
+            atomic_store_explicit(&c->inflight_n, 0, memory_order_relaxed);
+        }
+        atomic_fetch_add_explicit(&c->inflight_n, 1, memory_order_relaxed);
         id<CAMetalDrawable> drawable = [c->layer nextDrawable];
         if (!drawable) {
-            dispatch_semaphore_signal(c->inflight);
+            lkm_inflight_return(c);
             return NULL;
         }
         lkm_frame *f = begin_pass(c, drawable.texture, drawable, nil, w, h, clear);
-        if (!f) dispatch_semaphore_signal(c->inflight);
+        if (!f) lkm_inflight_return(c);
         return f;
     }
 }
@@ -390,7 +421,7 @@ void lkm_end_frame(lkm_frame *f) {
             if ([(id)f->drawable respondsToSelector:@selector(addPresentedHandler:)]) {
                 presented_gate = 1;
                 [f->drawable addPresentedHandler:^(id<MTLDrawable> d) {
-                    dispatch_semaphore_signal(c->inflight);
+                    lkm_inflight_return(c);
                 }];
             }
             [f->cmd presentDrawable:f->drawable];
@@ -400,7 +431,7 @@ void lkm_end_frame(lkm_frame *f) {
             // Diagnostics only (racy read is fine): how long the GPU actually
             // spent on the frame — the CPU-vs-GPU-bound discriminator.
             c->last_gpu_ms = (cb.GPUEndTime - cb.GPUStartTime) * 1000.0;
-            if (gated_on_complete) dispatch_semaphore_signal(c->inflight);
+            if (gated_on_complete) lkm_inflight_return(c);
         }];
         [f->cmd commit];
         [f->enc release];

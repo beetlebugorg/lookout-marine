@@ -57,5 +57,10 @@
 	<!-- UIKit asks for this for full pointer/trackpad support (iPad, simulator). -->
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- Let the chart's CADisplayLink run above 60Hz on ProMotion phones (the
+	     link asks for 60-120; without this key iPhones clamp to 60 and the
+	     adaptive governor is quicker to downshift). -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 </dict>
 </plist>

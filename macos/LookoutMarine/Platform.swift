@@ -90,7 +90,14 @@ enum Platform {
         #if os(macOS)
         return view.displayLink(target: target, selector: selector) // macOS 14+
         #else
-        return CADisplayLink(target: target, selector: selector)
+        let link = CADisplayLink(target: target, selector: selector)
+        // Without an explicit range iOS ADAPTIVELY DOWNSHIFTS the link when
+        // frames miss (a chart pinch is exactly that workload) and then stays
+        // low — measured as a 30-45fps cap. Ask for the display's full rate;
+        // ProMotion above 60 additionally needs
+        // CADisableMinimumFrameDurationOnPhone in Info.plist.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        return link
         #endif
     }
 
