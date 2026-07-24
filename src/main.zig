@@ -6,6 +6,7 @@
 const std = @import("std");
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
+const gpuTicksUs = @import("gpu.zig").ticksUs;
 
 const DEFAULT_CHART = "/home/claude/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles";
 
@@ -217,6 +218,24 @@ pub fn main(init: std.process.Init) !void {
             }
             l.setView(v);
             break;
+        }
+    }
+
+    // --bench: render the settled scene offscreen 60 times and report per-frame
+    // cost. Offscreen serializes CPU encode + GPU + readback per frame, so this
+    // is an upper bound on frame cost, comparable across encoder changes.
+    for (args) |a2| {
+        if (std.mem.eql(u8, a2, "--bench")) {
+            const px_n: usize = @as(usize, l.g.width) * l.g.height * 4;
+            const buf = try alloc.alloc(u8, px_n);
+            defer alloc.free(buf);
+            try l.snapshotRgba(buf); // build + warm
+            const t0 = gpuTicksUs();
+            var fi: usize = 0;
+            while (fi < 60) : (fi += 1) try l.snapshotRgba(buf);
+            const dt = gpuTicksUs() - t0;
+            std.debug.print("bench: {d:.2} ms/frame over 60 offscreen frames\n", .{@as(f64, @floatFromInt(dt)) / 1000.0 / 60.0});
+            return;
         }
     }
 

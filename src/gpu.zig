@@ -40,6 +40,13 @@ pub fn ticksMs() i64 {
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
+/// Monotonic microseconds — frame-cost timing needs sub-ms resolution.
+pub fn ticksUs() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 /// How to interpret Options.native_handle. Apple-only: the host hands us its
 /// CAMetalLayer (an NSView's backing layer on macOS, a UIView's layerClass on
 /// iOS) and keeps its own toolkit and event loop.
@@ -92,6 +99,18 @@ pub const Gpu = struct {
     glyph_italic_tex: ?*cc.lkm_tex = null,
     /// recordDraws outcome signature — a new line prints only when it changes.
     last_draw_log: u64 = 0,
+    // Rolling frame-cost stats, printed once per STAT_FRAMES rendered frames:
+    // CPU encode ms (recordDraws walk) and the GPU ms of the last completed
+    // frame — the CPU-vs-GPU-bound discriminator for the frame-rate work.
+    stat_enc_sum_ms: f64 = 0,
+    stat_enc_max_ms: f64 = 0,
+    stat_gpu_sum_ms: f64 = 0,
+    stat_gpu_max_ms: f64 = 0,
+    stat_frames: u32 = 0,
+    stat_acq_sum_ms: f64 = 0,
+    stat_acq_max_ms: f64 = 0,
+    stat_active_ms: i64 = 0, // sum of sub-100ms inter-frame gaps (idle pauses excluded)
+    stat_last_frame_ms: i64 = 0,
     /// 2^(display_zoom - scene_build_zoom): scales the pattern cell period so a
     /// constant-screen-size fill tracks the (MVP-scaled) geometry during a zoom
     /// instead of swimming, resetting to 1 when the scene rebuilds at the new zoom.
@@ -199,6 +218,28 @@ pub const Gpu = struct {
     /// are borrowed — everything needed is copied here, so the caller may free it
     /// (tile57_gpu_scene_free) as soon as this returns.
     pub fn uploadGpuScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !void {
+        self.adoptScene(try self.makeScene(alloc, s));
+    }
+
+    /// Swap the staged scene in as current (frees the previous one). This is
+    /// the ONLY mutation recordDraws can race with, so it must run on the
+    /// render thread; everything expensive lives in makeScene.
+    pub fn adoptScene(self: *Gpu, sc: Scene) void {
+        self.freeScene();
+        self.scene = sc;
+    }
+
+    /// Free a staged Scene that was never adopted (e.g. superseded build).
+    pub fn freeStagedScene(self: *Gpu, sc: *Scene) void {
+        self.freeSceneValue(sc);
+    }
+
+    /// Build a GPU-resident Scene from the engine's C scene WITHOUT installing
+    /// it. Thread-safe: Metal resource creation may run on ANY thread, and this
+    /// is where the whole scene's bytes get copied into MTLBuffers — tens of MB
+    /// that measured as ~40% of active CPU when it ran on the render thread
+    /// mid-gesture. The build worker stages here; the render thread adopts.
+    pub fn makeScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !Scene {
         var out = Scene{ .alloc = alloc };
         errdefer self.freeSceneValue(&out);
         if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
@@ -262,8 +303,7 @@ pub const Gpu = struct {
                     p.tex = cc.lkm_new_texture_rgba(self.ctx, cell.rgba, cell.w, cell.h);
             }
         }
-        self.freeScene();
-        self.scene = out;
+        return out;
     }
 
     fn freeSceneValue(self: *Gpu, s: *Scene) void {
@@ -326,6 +366,12 @@ pub const Gpu = struct {
         var sk_patt: u32 = 0;
         var sk_nobuf: u32 = 0;
         var sk_noatlas: u32 = 0;
+        // Ranges are paint-sorted, so consecutive ranges usually share the
+        // whole uniform payload (colour runs, same cat mask): send uniforms
+        // only when the bytes actually change. At phone range counts this
+        // removes most of the frame's encoder traffic.
+        var last_u: ?Uniforms = null;
+        var usets: u32 = 0;
 
         for (s.ranges) |r| {
             switch (r.kind) {
@@ -371,7 +417,11 @@ pub const Gpu = struct {
                     uu.color = normColor(r.color);
                     cc.lkm_set_pipeline(f, cc.LKM_PIPE_CHART);
                 }
-                cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+                if (last_u == null or !std.mem.eql(u8, std.mem.asBytes(&last_u.?), std.mem.asBytes(&uu))) {
+                    cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+                    last_u = uu;
+                    usets += 1;
+                }
                 cc.lkm_draw_indexed(f, ibuf, r.first, r.count);
                 drawn += 1;
             } else { // QUADS
@@ -394,7 +444,11 @@ pub const Gpu = struct {
                 cc.lkm_set_pipeline(f, if (is_glyph) cc.LKM_PIPE_SDF else cc.LKM_PIPE_SPRITE);
                 cc.lkm_bind_vbuf(f, qbuf);
                 cc.lkm_bind_texture(f, tex);
-                cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+                if (last_u == null or !std.mem.eql(u8, std.mem.asBytes(&last_u.?), std.mem.asBytes(&uu))) {
+                    cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+                    last_u = uu;
+                    usets += 1;
+                }
                 cc.lkm_draw(f, r.first, r.count);
                 drawn += 1;
             }
@@ -413,7 +467,7 @@ pub const Gpu = struct {
         const sig = h.final();
         if (sig != self.last_draw_log) {
             self.last_draw_log = sig;
-            std.debug.print("draw: {d}/{d} ranges to GPU (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ drawn, s.ranges.len, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
+            std.debug.print("draw: {d}/{d} ranges to GPU ({d} uniform sends) (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ drawn, s.ranges.len, usets, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
         }
     }
 
@@ -432,7 +486,17 @@ pub const Gpu = struct {
     pub fn renderWindow(self: *Gpu, u: Uniforms, text_on: bool, sound_on: bool) !bool {
         if (!self.has_layer) return false;
         const clear = [4]f32{ self.clear.r, self.clear.g, self.clear.b, self.clear.a };
-        const f = cc.lkm_begin_frame(self.ctx, &clear) orelse return true; // no drawable: skip the frame
+        // Time the drawable acquire separately: nextDrawable BLOCKS when the
+        // swapchain is exhausted, and that wait is invisible to the encode/gpu
+        // numbers — the third column of the frame-cost triage.
+        const ta0 = ticksUs();
+        // NULL = swapchain saturated (or mid-transition): SKIP without stalling.
+        // Returning false tells render() to keep view_dirty set, so the display
+        // link retries next tick and the skipped content still lands.
+        const f = cc.lkm_begin_frame(self.ctx, &clear) orelse return false;
+        const acq_ms = @as(f64, @floatFromInt(ticksUs() - ta0)) / 1000.0;
+        self.stat_acq_sum_ms += acq_ms;
+        self.stat_acq_max_ms = @max(self.stat_acq_max_ms, acq_ms);
         // The drawable is the ground truth for the frame's size: viewport and
         // (via logicalSize) the camera follow it, so the picture, the cursor
         // math and the mark sizes stay consistent across host transitions.
@@ -455,8 +519,47 @@ pub const Gpu = struct {
                 self.pixel_density = d;
             }
         }
+        const t0 = ticksUs();
         self.recordDraws(f, u, text_on, sound_on);
+        const enc_ms = @as(f64, @floatFromInt(ticksUs() - t0)) / 1000.0;
         cc.lkm_end_frame(f);
+        const gpu_ms = cc.lkm_last_gpu_ms(self.ctx);
+        self.stat_enc_sum_ms += enc_ms;
+        self.stat_enc_max_ms = @max(self.stat_enc_max_ms, enc_ms);
+        self.stat_gpu_sum_ms += gpu_ms;
+        self.stat_gpu_max_ms = @max(self.stat_gpu_max_ms, gpu_ms);
+        self.stat_frames += 1;
+        {
+            // fps over ACTIVE time only: the display link pauses when idle, so
+            // wall-clock fps would count think-time between gestures. Gaps
+            // >=100ms are idle (or a hitch so bad it reads the same) and are
+            // excluded from the denominator.
+            const now = ticksMs();
+            const gap = now - self.stat_last_frame_ms;
+            if (self.stat_last_frame_ms > 0 and gap < 100) self.stat_active_ms += gap;
+            self.stat_last_frame_ms = now;
+        }
+        if (self.stat_frames >= 120) {
+            const n: f64 = @floatFromInt(self.stat_frames);
+            const fps: f64 = if (self.stat_active_ms > 0)
+                n * 1000.0 / @as(f64, @floatFromInt(self.stat_active_ms))
+            else
+                0;
+            std.debug.print("frame: acquire avg {d:.2} max {d:.2} | encode avg {d:.2} max {d:.2} | gpu avg {d:.2} max {d:.2} ms | ~{d:.0} fps active ({d} frames)\n", .{
+                self.stat_acq_sum_ms / n, self.stat_acq_max_ms,
+                self.stat_enc_sum_ms / n, self.stat_enc_max_ms,
+                self.stat_gpu_sum_ms / n, self.stat_gpu_max_ms,
+                fps, self.stat_frames,
+            });
+            self.stat_acq_sum_ms = 0;
+            self.stat_acq_max_ms = 0;
+            self.stat_active_ms = 0;
+            self.stat_enc_sum_ms = 0;
+            self.stat_enc_max_ms = 0;
+            self.stat_gpu_sum_ms = 0;
+            self.stat_gpu_max_ms = 0;
+            self.stat_frames = 0;
+        }
         return true;
     }
 

@@ -72,6 +72,8 @@ void lkm_draw_indexed(lkm_frame *f, lkm_buf *ib, uint32_t first, uint32_t count)
  * offscreen variant waits for completion and writes w*h*4 bytes of top-down
  * BGRA8 into out_bgra (the caller swizzles). Both destroy the frame. */
 void lkm_end_frame(lkm_frame *f);
+/* GPU time (ms) of the most recently COMPLETED window frame; 0 until one lands. */
+double lkm_last_gpu_ms(lkm_ctx *c);
 int lkm_end_offscreen_read(lkm_frame *f, void *out_bgra);
 
 #ifdef __cplusplus

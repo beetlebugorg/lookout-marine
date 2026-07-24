@@ -364,16 +364,27 @@ final class ChartController: NSObject {
 
     // MARK: - Push live readouts to the UI
 
+    private var lastReadoutsAt: TimeInterval = 0
     private func pushReadouts() {
         guard let model, let h = handle else { return }
+        // @Published fires objectWillChange on ASSIGNMENT, changed or not — an
+        // unconditional push per rendered frame re-evaluated the SwiftUI HUD at
+        // frame rate and showed up as per-frame AttributeGraph work in a
+        // gesture profile. Throttle to 10Hz (readouts are human-readable text)
+        // and only assign what actually changed.
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastReadoutsAt < 0.1 { return }
+        lastReadoutsAt = now
         var v = lookout_view()
         lookout_get_view(h, &v)
-        model.rotationDeg = v.rotation_deg
-        model.zoomLevel = v.zoom
-        model.scaleDenominator = lookout_scale_denominator(h)
+        if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
+        if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
+        let sd = lookout_scale_denominator(h)
+        if model.scaleDenominator != sd { model.scaleDenominator = sd }
         var m = tile57_mariner()
         lookout_get_mariner(h, &m)
-        model.scheme = Int(m.scheme.rawValue)
+        let sch = Int(m.scheme.rawValue)
+        if model.scheme != sch { model.scheme = sch }
     }
 
     // MARK: - Helpers

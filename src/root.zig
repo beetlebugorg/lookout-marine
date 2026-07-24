@@ -151,8 +151,16 @@ pub const Lookout = struct {
     build_active: bool = false, // a worker is in flight (main-thread only)
     build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     build_job: BuildJob = .{},
-    pending_cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene),
     pending_ok: bool = false,
+    // viewMaxZoom cache (see there).
+    zl_valid: bool = false,
+    zl_center: camera.Vec2 = .{ .x = 0, .y = 0 },
+    zl_zoom: f64 = 0,
+    zl_max: f64 = 22,
+    // GPU scene STAGED by the worker (buffers already created off-thread; the
+    // render thread only swaps pointers in applyStaged). Null when the build
+    // failed, was a prefetch, or staging itself failed (retried via dirty).
+    pending_scene: ?gpu.Gpu.Scene = null,
     last_zoom: f64 = -1, // for zoom-velocity prediction
     last_zoom_ms: i64 = 0,
     /// Wall-clock of the last engine build (worker-written, main-read): the
@@ -561,6 +569,7 @@ pub const Lookout = struct {
         self.loading = false;
         if (self.compose_result) |c| {
             self.compose = c;
+            self.zl_valid = false; // new partition — the cached per-view max is stale
             self.updateZoomLimits(); // refresh the zoom band; DON'T touch the view
             std.debug.print("composed {d} charts\n", .{self.charts.items.len});
         }
@@ -591,13 +600,25 @@ pub const Lookout = struct {
 
     /// Deepest servable zoom at the current view centre (tile57_compose_max_zoom_at),
     /// falling back to the library max for a single chart or an off-coverage point.
+    /// CACHED by view position: updateZoomLimits runs every frame, and the
+    /// engine query walks the partition — it measured 14% of active CPU in a
+    /// gesture profile. Recomputed after ~32 screen px of pan or half a zoom
+    /// level; compose adoption invalidates (zl_valid).
     fn viewMaxZoom(self: *Lookout) f64 {
-        if (self.compose) |c| {
-            const ll = camera.worldToLonLat(self.cam.center);
-            const mz = cc.tile57_compose_max_zoom_at(c, ll.x, ll.y);
-            if (mz > 0) return @floatFromInt(mz);
-        }
-        return self.zoomRange()[1];
+        const c = self.compose orelse return self.zoomRange()[1];
+        const thresh = 32.0 / (std.math.exp2(self.cam.zoom) * 256.0);
+        if (self.zl_valid and
+            @abs(self.cam.center.x - self.zl_center.x) <= thresh and
+            @abs(self.cam.center.y - self.zl_center.y) <= thresh and
+            @abs(self.cam.zoom - self.zl_zoom) <= 0.5)
+            return self.zl_max;
+        const ll = camera.worldToLonLat(self.cam.center);
+        const mz = cc.tile57_compose_max_zoom_at(c, ll.x, ll.y);
+        self.zl_max = if (mz > 0) @floatFromInt(mz) else self.zoomRange()[1];
+        self.zl_center = self.cam.center;
+        self.zl_zoom = self.cam.zoom;
+        self.zl_valid = true;
+        return self.zl_max;
     }
 
     fn applyZoomAndView(self: *Lookout) void {
@@ -977,12 +998,45 @@ pub const Lookout = struct {
         return h.final();
     }
 
-    // Adopt a built scene on the MAIN thread (only place the GPU is touched): a
-    // prefetch just warms the cache (free it); a real rebuild uploads + records
-    // coverage. Frees the engine scene either way.
-    fn applyJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) void {
-        defer cc.tile57_gpu_scene_free(cs);
+    // Adopt a STAGED scene on the render thread: a prefetch only warmed the
+    // engine cache (nothing staged); a real rebuild swaps the staged buffers in
+    // and records coverage. The engine C scene was already freed by whoever
+    // staged (worker or sync path) — this touches only host state.
+    fn applyStaged(self: *Lookout, job: BuildJob, ok: bool, staged: ?gpu.Gpu.Scene) void {
         self.last_fail_ms = if (!ok and !job.prefetch) gpu.ticksMs() else 0;
+        if (!ok or job.prefetch) {
+            if (staged) |sc| {
+                var v = sc;
+                self.g.freeStagedScene(&v);
+            }
+            return;
+        }
+        const sc = staged orelse {
+            // Staging can fail transiently (e.g. buffer pool during a window
+            // transition). Do NOT record coverage or clear dirty: with a null
+            // scene but satisfied coverage the chart would stay blank forever.
+            // Leaving dirty set retries the build next frame.
+            std.debug.print("scene upload failed; retrying\n", .{});
+            self.dirty = true;
+            return;
+        };
+        self.g.adoptScene(sc);
+        self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
+        self.built = true;
+        self.dirty = false;
+        // The fresh scene must actually be DRAWN: without this an async rebuild
+        // that lands after the host's loop went idle (e.g. at the end of a
+        // full-screen transition) sits uploaded but never presented.
+        self.markDirty();
+    }
+
+    // Stage a finished engine scene into GPU buffers + free the engine scene.
+    // Runs on WHICHEVER thread ran the build (worker or sync) — resource
+    // creation is thread-safe; only applyStaged's swap belongs to the render
+    // thread. Also home of the LOOKOUT_SCENE_DEBUG hash line, which needs the
+    // C scene alive.
+    fn stageJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) ?gpu.Gpu.Scene {
+        defer cc.tile57_gpu_scene_free(cs);
         if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
             const ll = camera.worldToLonLat(job.origin);
             // Content hashes: compare a device's scene against a Mac build of the
@@ -1003,23 +1057,8 @@ pub const Lookout = struct {
             }
             std.debug.print("applyJob ok={} prefetch={} ll=({d:.4},{d:.4}) z={d:.2} ow={d} oh={d} verts={d} ranges={d} tri_hash={x} quad_hash={x}\n", .{ ok, job.prefetch, ll.x, ll.y, job.zoom, job.ow, job.oh, cs.vertex_count, cs.range_count, th, qh });
         }
-        if (!ok or job.prefetch) return;
-        self.g.uploadGpuScene(self.alloc, cs) catch {
-            // Upload can fail transiently (e.g. the command buffer pool during a
-            // window transition). Do NOT record coverage or clear dirty: with a
-            // null scene but satisfied coverage the chart would stay blank
-            // forever. Leaving dirty set retries the build next frame.
-            std.debug.print("scene upload failed; retrying\n", .{});
-            self.dirty = true;
-            return;
-        };
-        self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
-        self.built = true;
-        self.dirty = false;
-        // The fresh scene must actually be DRAWN: without this an async rebuild
-        // that lands after the host's loop went idle (e.g. at the end of a
-        // full-screen transition) sits uploaded but never presented.
-        self.markDirty();
+        if (!ok or job.prefetch) return null;
+        return self.g.makeScene(self.alloc, cs) catch null;
     }
 
     // Synchronous build (snapshots, and the very first frame so there is
@@ -1028,7 +1067,7 @@ pub const Lookout = struct {
         const job = self.jobFor(self.cam.center, self.buildZoom(), false);
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         const ok = self.runJob(job, &cs);
-        self.applyJob(job, &cs, ok);
+        self.applyStaged(job, ok, self.stageJob(job, &cs, ok));
     }
 
     /// Force a build now (snapshots have no frame loop).
@@ -1041,7 +1080,10 @@ pub const Lookout = struct {
     fn buildWorker(self: *Lookout) void {
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         self.pending_ok = self.runJob(self.build_job, &cs);
-        self.pending_cs = cs;
+        // Stage the GPU buffers HERE, off the render thread: creating them
+        // copies the whole scene (tens of MB — ~40% of active CPU in a gesture
+        // profile when it ran on the render thread). Frees the engine scene.
+        self.pending_scene = self.stageJob(self.build_job, &cs, self.pending_ok);
         self.build_done.store(true, .release); // publishes pending_* to the main thread
     }
 
@@ -1054,7 +1096,7 @@ pub const Lookout = struct {
             self.build_active = false;
             var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
             const ok = self.runJob(job, &cs);
-            self.applyJob(job, &cs, ok);
+            self.applyStaged(job, ok, self.stageJob(job, &cs, ok));
             return;
         };
     }
@@ -1066,7 +1108,8 @@ pub const Lookout = struct {
             t.join();
             self.build_thread = null;
         }
-        self.applyJob(self.build_job, &self.pending_cs, self.pending_ok);
+        self.applyStaged(self.build_job, self.pending_ok, self.pending_scene);
+        self.pending_scene = null;
         self.build_active = false;
     }
 
@@ -1074,7 +1117,11 @@ pub const Lookout = struct {
         if (self.build_thread) |t| {
             t.join();
             self.build_thread = null;
-            if (self.pending_ok) cc.tile57_gpu_scene_free(&self.pending_cs);
+            if (self.pending_scene) |sc| {
+                var v = sc;
+                self.g.freeStagedScene(&v);
+                self.pending_scene = null;
+            }
         }
         self.build_active = false;
     }
@@ -1210,7 +1257,9 @@ pub const Lookout = struct {
         // factor so a constant-screen fill doesn't swim mid-zoom.
         self.g.pattern_scale = @floatCast(std.math.pow(f64, 2.0, self.cam.zoom - self.cov_zoom));
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
-        self.view_dirty = false;
+        // A SKIPPED frame (swapchain saturated) must not clear the flag: the
+        // pending content still needs a successful present.
+        if (ok) self.view_dirty = false;
         return ok;
     }
 

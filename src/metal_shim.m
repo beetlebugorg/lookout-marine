@@ -28,6 +28,15 @@ struct lkm_ctx {
     id<MTLTexture> msaa;           // retained; lazily (re)sized 4x color target
     uint32_t msaa_w, msaa_h;
     int msaa_on;
+    double last_gpu_ms;            // GPU time of the last COMPLETED frame (async;
+                                   // written on the completion queue, read racily
+                                   // for diagnostics only)
+    // In-flight window-frame gate. nextDrawable BLOCKS the calling thread for
+    // tens of ms when presents outpace the compositor; instead of stalling the
+    // render (main) thread there, lkm_begin_frame returns NULL when the pool
+    // is saturated and the host simply skips the frame — the display link
+    // retries next tick with input processing never starved.
+    dispatch_semaphore_t inflight;
 };
 
 struct lkm_frame {
@@ -37,6 +46,12 @@ struct lkm_frame {
     id<CAMetalDrawable> drawable;  // retained for the frame (window path)
     id<MTLTexture> readback;       // retained for the frame (offscreen path)
     uint32_t w, h;
+    // Redundant-state elision: a chart frame walks thousands of paint-ordered
+    // ranges that mostly share pipeline/buffer/texture; skipping the repeat
+    // encoder calls is a large CPU-side win at phone range counts.
+    int cur_pipe;                  // -1 = none bound yet
+    lkm_buf *cur_vbuf;
+    lkm_tex *cur_tex;
 };
 
 struct lkm_buf {
@@ -107,6 +122,7 @@ lkm_ctx *lkm_create(void *metal_layer, const char *msl_source, int want_msaa,
             }
 
             c->msaa_on = want_msaa && [c->device supportsTextureSampleCount:4];
+            c->inflight = dispatch_semaphore_create(3); // matches CAMetalLayer's default pool
             int samples = c->msaa_on ? 4 : 1;
             if (msaa_out) *msaa_out = c->msaa_on;
 
@@ -268,6 +284,7 @@ static lkm_frame *begin_pass(lkm_ctx *c, id<MTLTexture> target, id<CAMetalDrawab
     [enc setFragmentSamplerState:c->sampler atIndex:0];
     lkm_frame *f = calloc(1, sizeof(*f));
     f->ctx = c;
+    f->cur_pipe = -1;
     f->cmd = [cmd retain];
     f->enc = [enc retain];
     f->drawable = [drawable retain];
@@ -283,9 +300,16 @@ lkm_frame *lkm_begin_frame(lkm_ctx *c, const float clear[4]) {
         uint32_t w = 0, h = 0;
         lkm_layer_sync(c, &w, &h);
         if (w == 0 || h == 0) return NULL;
+        if (dispatch_semaphore_wait(c->inflight, DISPATCH_TIME_NOW) != 0)
+            return NULL; // all drawables still queued for glass: skip, don't stall
         id<CAMetalDrawable> drawable = [c->layer nextDrawable];
-        if (!drawable) return NULL;
-        return begin_pass(c, drawable.texture, drawable, nil, w, h, clear);
+        if (!drawable) {
+            dispatch_semaphore_signal(c->inflight);
+            return NULL;
+        }
+        lkm_frame *f = begin_pass(c, drawable.texture, drawable, nil, w, h, clear);
+        if (!f) dispatch_semaphore_signal(c->inflight);
+        return f;
     }
 }
 
@@ -307,17 +331,20 @@ lkm_frame *lkm_begin_offscreen(lkm_ctx *c, uint32_t w, uint32_t h, const float c
 }
 
 void lkm_set_pipeline(lkm_frame *f, int which) {
-    if (!f || which < 0 || which > 3) return;
+    if (!f || which < 0 || which > 3 || f->cur_pipe == which) return;
+    f->cur_pipe = which;
     [f->enc setRenderPipelineState:f->ctx->pipes[which]];
 }
 
 void lkm_bind_vbuf(lkm_frame *f, lkm_buf *b) {
-    if (!f || !b) return;
+    if (!f || !b || f->cur_vbuf == b) return;
+    f->cur_vbuf = b;
     [f->enc setVertexBuffer:b->buf offset:0 atIndex:0];
 }
 
 void lkm_bind_texture(lkm_frame *f, lkm_tex *t) {
-    if (!f || !t) return;
+    if (!f || !t || f->cur_tex == t) return;
+    f->cur_tex = t;
     [f->enc setFragmentTexture:t->tex atIndex:0];
 }
 
@@ -347,7 +374,34 @@ void lkm_end_frame(lkm_frame *f) {
     if (!f) return;
     @autoreleasepool {
         [f->enc endEncoding];
-        if (f->drawable) [f->cmd presentDrawable:f->drawable];
+        lkm_ctx *c = f->ctx;
+        // The inflight permit returns when the drawable is ON GLASS — not at
+        // GPU completion, which lands tens of ms earlier when the compositor is
+        // the bottleneck. Gating on GPU completion recycled permits before the
+        // pool had a drawable free, and nextDrawable blocked anyway. Handlers
+        // must be registered BEFORE the present is scheduled.
+        int presented_gate = 0;
+        if (f->drawable) {
+            // The SIMULATOR's CAMetalDrawable does not implement
+            // addPresentedHandler: (unrecognized selector) — probe first. On
+            // hardware the permit returns when the frame is ON GLASS; in the
+            // sim it falls back to GPU completion below (imperfect, but sim
+            // frame pacing is not a target).
+            if ([(id)f->drawable respondsToSelector:@selector(addPresentedHandler:)]) {
+                presented_gate = 1;
+                [f->drawable addPresentedHandler:^(id<MTLDrawable> d) {
+                    dispatch_semaphore_signal(c->inflight);
+                }];
+            }
+            [f->cmd presentDrawable:f->drawable];
+        }
+        int gated_on_complete = (f->drawable != nil) && !presented_gate;
+        [f->cmd addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            // Diagnostics only (racy read is fine): how long the GPU actually
+            // spent on the frame — the CPU-vs-GPU-bound discriminator.
+            c->last_gpu_ms = (cb.GPUEndTime - cb.GPUStartTime) * 1000.0;
+            if (gated_on_complete) dispatch_semaphore_signal(c->inflight);
+        }];
         [f->cmd commit];
         [f->enc release];
         [f->cmd release];
@@ -355,6 +409,10 @@ void lkm_end_frame(lkm_frame *f) {
         [f->readback release];
     }
     free(f);
+}
+
+double lkm_last_gpu_ms(lkm_ctx *c) {
+    return c ? c->last_gpu_ms : 0;
 }
 
 int lkm_end_offscreen_read(lkm_frame *f, void *out_bgra) {
