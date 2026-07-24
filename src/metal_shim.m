@@ -234,7 +234,13 @@ static void ensure_msaa(lkm_ctx *c, uint32_t w, uint32_t h) {
     d.textureType = MTLTextureType2DMultisample;
     d.sampleCount = 4;
     d.usage = MTLTextureUsageRenderTarget;
-    d.storageMode = MTLStorageModePrivate;
+    // TBDR GPUs never need this texture backed: it is cleared on load and
+    // resolved on store, so the samples live only in tile memory. Memoryless
+    // saves w*h*4*4 bytes (~48MB at phone density); Intel Macs need Private.
+    if ([c->device supportsFamily:MTLGPUFamilyApple2])
+        d.storageMode = MTLStorageModeMemoryless;
+    else
+        d.storageMode = MTLStorageModePrivate;
     c->msaa = [c->device newTextureWithDescriptor:d]; // +1
     c->msaa_w = w;
     c->msaa_h = h;
@@ -323,6 +329,18 @@ void lkm_set_uniforms(lkm_frame *f, const void *bytes, size_t len) {
 void lkm_draw(lkm_frame *f, uint32_t first, uint32_t count) {
     if (!f) return;
     [f->enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:first vertexCount:count];
+}
+
+// Indexed draw against the bound vertex buffer. `first` is in INDEX units
+// (u32). The shaders fetch via [[vertex_id]], which for an indexed draw is the
+// fetched index value — so the same shaders serve both draw paths.
+void lkm_draw_indexed(lkm_frame *f, lkm_buf *ib, uint32_t first, uint32_t count) {
+    if (!f || !ib) return;
+    [f->enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                       indexCount:count
+                        indexType:MTLIndexTypeUInt32
+                      indexBuffer:ib->buf
+                indexBufferOffset:(NSUInteger)first * 4];
 }
 
 void lkm_end_frame(lkm_frame *f) {

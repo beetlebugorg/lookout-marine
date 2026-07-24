@@ -106,6 +106,10 @@ pub const OpenOptions = struct {
 
 pub const NativeKind = gpu.NativeKind;
 
+const OsUnfairLock = extern struct { v: u32 = 0 };
+extern "c" fn os_unfair_lock_lock(l: *OsUnfairLock) void;
+extern "c" fn os_unfair_lock_unlock(l: *OsUnfairLock) void;
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -136,6 +140,14 @@ pub const Lookout = struct {
     // zoom level we're heading toward, so crossing that boundary is a cache hit,
     // not a fresh portray.
     build_thread: ?std.Thread = null,
+    // Serializes ENGINE entry from other threads against the build worker: the
+    // engine mutates shared state on any access (reader directory caches decode
+    // lazily, the geometry cache inserts/evicts), so a main-thread pick during
+    // an in-flight worker build is a data race without this. Held for the whole
+    // engine call; a tap during a slow build waits rather than corrupting.
+    // os_unfair_lock (kernel-blocking, not a spin) because Zig 0.16 puts
+    // std's mutex behind an Io, which this layer does not take.
+    engine_mu: OsUnfairLock = .{},
     build_active: bool = false, // a worker is in flight (main-thread only)
     build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     build_job: BuildJob = .{},
@@ -913,6 +925,8 @@ pub const Lookout = struct {
     // cells) goes through the compositor so seams stitch; a single chart to its
     // own archive.
     fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
+        os_unfair_lock_lock(&self.engine_mu);
+        defer os_unfair_lock_unlock(&self.engine_mu);
         const t0 = gpu.ticksMs();
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
@@ -1236,6 +1250,8 @@ pub const Lookout = struct {
     /// S-52 §10.8 cursor pick at a geographic point: `cb.feature` fires once per
     /// feature under it (class acronym + full S-57 attribute JSON + source cell).
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+        os_unfair_lock_lock(&self.engine_mu);
+        defer os_unfair_lock_unlock(&self.engine_mu);
         var err: cc.tile57_error = undefined;
         if (self.compose) |c| {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);

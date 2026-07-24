@@ -65,6 +65,8 @@ void lkm_bind_vbuf(lkm_frame *f, lkm_buf *b);
 void lkm_bind_texture(lkm_frame *f, lkm_tex *t);
 void lkm_set_uniforms(lkm_frame *f, const void *bytes, size_t len);
 void lkm_draw(lkm_frame *f, uint32_t first, uint32_t count);
+/* Indexed triangles against the bound vertex buffer; `first` in u32-index units. */
+void lkm_draw_indexed(lkm_frame *f, lkm_buf *ib, uint32_t first, uint32_t count);
 
 /* End the pass. The window variant presents and returns immediately; the
  * offscreen variant waits for completion and writes w*h*4 bytes of top-down

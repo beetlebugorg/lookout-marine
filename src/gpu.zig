@@ -185,9 +185,10 @@ pub const Gpu = struct {
     /// tile57's indexed buffers — see uploadGpuScene), the sprite/SDF quads, the
     /// paint-ordered ranges (host-owned copy), and one texture per pattern cell.
     pub const Scene = struct {
-        vbuf: ?*cc.lkm_buf = null, // de-indexed triangle vertices (tile57_gpu_vertex)
+        vbuf: ?*cc.lkm_buf = null, // triangle vertices (tile57_gpu_vertex), indexed by ibuf
+        ibuf: ?*cc.lkm_buf = null, // u32 triangle indices; ranges' first/count index HERE
         qbuf: ?*cc.lkm_buf = null, // sprite/SDF quads (tile57_gpu_quad)
-        index_count: u32 = 0, // vertices in vbuf (== the engine's index count)
+        index_count: u32 = 0, // entries in ibuf (== the engine's index count)
         ranges: []cc.tile57_gpu_range = &.{},
         patterns: []PatternTex = &.{},
         alloc: std.mem.Allocator,
@@ -201,25 +202,23 @@ pub const Gpu = struct {
         var out = Scene{ .alloc = alloc };
         errdefer self.freeSceneValue(&out);
         if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
-            std.debug.print("scene bytes: tris {d} ({d} idx x {d}B) quads {d} ({d} quads x6x{d}B) patterns {d}\n", .{
-                s.index_count * @sizeOf(cc.tile57_gpu_vertex),  s.index_count, @sizeOf(cc.tile57_gpu_vertex),
+            std.debug.print("scene bytes: tris {d} ({d} verts x {d}B + {d} idx x4B) quads {d} ({d} quads x6x{d}B) patterns {d}\n", .{
+                s.vertex_count * @sizeOf(cc.tile57_gpu_vertex) + s.index_count * 4, s.vertex_count, @sizeOf(cc.tile57_gpu_vertex), s.index_count,
                 s.quad_count * 6 * @sizeOf(cc.tile57_gpu_quad), s.quad_count,  @sizeOf(cc.tile57_gpu_quad),
                 s.pattern_count,
             });
         }
 
         if (s.vertex_count > 0 and s.index_count > 0) {
-            // The engine hands indexed triangles; we keep the historical
-            // de-indexed flat stream (the ranges' first/count are index units,
-            // which after expansion are exactly flat-vertex units). ~2x vertex
-            // memory, zero ambiguity.
-            const verts = s.vertices[0..s.vertex_count];
-            const idx = s.indices[0..s.index_count];
-            const flat = try alloc.alloc(cc.tile57_gpu_vertex, s.index_count);
-            defer alloc.free(flat);
-            for (idx, 0..) |ii, k| flat[k] = verts[ii];
-            const bytes = std.mem.sliceAsBytes(flat);
-            out.vbuf = cc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+            // The engine hands indexed triangles; upload BOTH buffers verbatim
+            // and draw indexed. The ranges' first/count are index units, which
+            // is exactly drawIndexedPrimitives' addressing — and the vertex
+            // buffer stays at vertex_count instead of the ~2x de-indexed
+            // flat stream this path historically uploaded.
+            const vb = std.mem.sliceAsBytes(s.vertices[0..s.vertex_count]);
+            out.vbuf = cc.lkm_new_buffer(self.ctx, vb.ptr, vb.len) orelse return error.MetalFailure;
+            const ib = std.mem.sliceAsBytes(s.indices[0..s.index_count]);
+            out.ibuf = cc.lkm_new_buffer(self.ctx, ib.ptr, ib.len) orelse return error.MetalFailure;
             out.index_count = @intCast(s.index_count);
         }
         if (s.quad_count > 0) {
@@ -270,6 +269,7 @@ pub const Gpu = struct {
     fn freeSceneValue(self: *Gpu, s: *Scene) void {
         _ = self;
         if (s.vbuf) |b| cc.lkm_free_buffer(b);
+        if (s.ibuf) |b| cc.lkm_free_buffer(b);
         if (s.qbuf) |b| cc.lkm_free_buffer(b);
         for (s.patterns) |p| if (p.tex) |t| cc.lkm_free_texture(t);
         if (s.ranges.len > 0) s.alloc.free(s.ranges);
@@ -351,6 +351,10 @@ pub const Gpu = struct {
                     sk_nobuf += 1;
                     continue;
                 };
+                const ibuf = s.ibuf orelse {
+                    sk_nobuf += 1;
+                    continue;
+                };
                 cc.lkm_bind_vbuf(f, vbuf);
                 if (r.pattern != cc.TILE57_GPU_NO_PATTERN and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
                     const pt = s.patterns[r.pattern];
@@ -368,7 +372,7 @@ pub const Gpu = struct {
                     cc.lkm_set_pipeline(f, cc.LKM_PIPE_CHART);
                 }
                 cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
-                cc.lkm_draw(f, r.first, r.count);
+                cc.lkm_draw_indexed(f, ibuf, r.first, r.count);
                 drawn += 1;
             } else { // QUADS
                 const qbuf = s.qbuf orelse {
