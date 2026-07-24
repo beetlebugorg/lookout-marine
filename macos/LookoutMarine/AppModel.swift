@@ -48,7 +48,9 @@ final class AppModel: ObservableObject {
     @Published var isBuilding = false         // a background tessellation is filling in
 
     // MARK: Preferences
-    @Published var useDMS = false             // HUD coordinate format
+    @Published var useDMS = UserDefaults.standard.bool(forKey: "hud.useDMS") {
+        didSet { UserDefaults.standard.set(useDMS, forKey: "hud.useDMS") }
+    } // HUD coordinate format
 
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
     // panel and Settings scene are AppKit-native)
@@ -178,13 +180,20 @@ final class AppModel: ObservableObject {
     func zoomOut()  { controller?.zoomCentered(-1.0) }
     func zoomToFit(){ controller?.fitChart() }
     func northUp()  { controller?.resetRotation() }
-    func cycleScheme() { controller?.cycleScheme() }
+    /// Scheme changes from the MENU must persist like ones from the settings
+    /// form (the form saves in its own apply path).
+    func cycleScheme() {
+        guard let c = controller else { return }
+        c.cycleScheme()
+        MarinerSettings.save(c.getMariner())
+    }
     /// Set the color scheme directly (0 day / 1 dusk / 2 night).
     func setScheme(_ s: Int) {
         guard let c = controller else { return }
         var m = c.getMariner()
         m.scheme = tile57_scheme(UInt32(s))
         c.setMariner(m)
+        MarinerSettings.save(m)
     }
     func toggleText() { controller?.toggleText() }
     func toggleSoundings() { controller?.toggleSoundings() }

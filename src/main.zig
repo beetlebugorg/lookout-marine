@@ -123,6 +123,18 @@ pub fn main(init: std.process.Init) !void {
         return error.NoChart;
     };
 
+    // --safety N: set the mariner's safety contour before the first build —
+    // the depth-band verification hook (bands must move when it does).
+    var safety: ?f64 = null;
+    {
+        var j: usize = 1;
+        while (j < args.len) : (j += 1) {
+            if (std.mem.eql(u8, args[j], "--safety") and j + 1 < args.len) {
+                safety = std.fmt.parseFloat(f64, args[j + 1]) catch null;
+            }
+        }
+    }
+
     const l = openTarget(alloc, chart, .{ .want_window = false, .width = width, .height = height }) catch {
         std.debug.print("error: could not open chart(s) '{s}'.\n", .{chart});
         return error.ChartOpenFailed;
@@ -135,6 +147,12 @@ pub fn main(init: std.process.Init) !void {
         l.fitChart();
     std.debug.print("view: lon={d:.5} lat={d:.5} zoom={d:.2}\n", .{ v.lon, v.lat, v.zoom });
     l.setView(v);
+    if (safety) |sc| {
+        var m = l.getMariner();
+        m.safety_contour = sc;
+        l.setMariner(m);
+        std.debug.print("safety contour = {d}\n", .{sc});
+    }
 
     // --zoomscan: at the FIXED center, build every half-zoom from 4 to 14 and
     // report whether the CENTER of the render is chart or NODATA. The center

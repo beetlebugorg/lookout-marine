@@ -440,6 +440,8 @@ void lkm_bind_texture(lkm_frame *f, lkm_tex *t) {
 void lkm_set_uniforms(lkm_frame *f, const void *bytes, size_t len) {
     if (!f) return;
     [f->enc setVertexBytes:bytes length:len atIndex:1];
+    // The SDF text fragment stage reads the uniform too (palette halo colour).
+    [f->enc setFragmentBytes:bytes length:len atIndex:1];
 }
 
 void lkm_draw(lkm_frame *f, uint32_t first, uint32_t count) {

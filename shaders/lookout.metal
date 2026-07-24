@@ -190,6 +190,7 @@ fragment float4 sprite_frag(QuadOut in [[stage_in]],
 // screen-space derivative. `weight` is the white HALO width (SDF field units,
 // 0 = none) that lifts the name tiers off busy soundings.
 fragment float4 sdf_frag(QuadOut in [[stage_in]],
+                         constant U &u [[buffer(1)]],
                          texture2d<float> atlas [[texture(0)]],
                          sampler smp [[sampler(0)]]) {
     float d = atlas.sample(smp, in.uv).r;
@@ -199,7 +200,11 @@ fragment float4 sdf_frag(QuadOut in [[stage_in]],
         float halo_a = smoothstep(0.5 - in.weight - w, 0.5 - in.weight + w, d);
         float cov = max(a, halo_a);
         if (cov <= 0.0) discard_fragment();
-        float3 col = mix(float3(1.0), in.color.rgb, a); // white halo, glyph colour inside
+        // Halo in the PALETTE's background colour (u.color = NODATA of the
+        // active scheme, set per SDF range by the host): a hardcoded white
+        // halo glared at night — light glyphs in a white outline on a dark
+        // chart, the opposite of night vision.
+        float3 col = mix(u.color.rgb, in.color.rgb, a);
         return float4(col, cov * in.color.a);
     }
     if (a <= 0.0) discard_fragment();

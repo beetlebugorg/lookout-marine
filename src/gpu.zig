@@ -546,6 +546,10 @@ pub const Gpu = struct {
                     continue;
                 };
                 pipe = if (is_glyph) cc.LKM_PIPE_SDF else cc.LKM_PIPE_SPRITE;
+                // Text halos render in the PALETTE background colour (see
+                // sdf_frag): night text was unreadable inside a hardcoded
+                // white halo. Part of the run spec, so runs split on it.
+                if (is_glyph) uu.color = .{ self.clear.r, self.clear.g, self.clear.b, 1 };
             }
             ranges_drawn += 1;
             if (run.active and run.prim == r.prim and run.pipe == pipe and run.tex == tex and

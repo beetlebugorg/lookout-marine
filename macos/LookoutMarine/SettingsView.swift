@@ -54,6 +54,16 @@ private struct DisplayTab: View {
 private struct DepthsTab: View {
     @ObservedObject var m: MarinerSettings
     private var unit: String { m.depthUnit == .feet ? "ft" : "m" }
+    /// The ENGINE always takes metres (S-57 depths are metres; the unit only
+    /// changes sounding labels). Feet mode edits through this converted
+    /// binding — previously the field said "ft" but sent the number as metres.
+    private func depth(_ b: Binding<Double>) -> Binding<Double> {
+        guard m.depthUnit == .feet else { return b }
+        return Binding(
+            get: { (b.wrappedValue * 3.28084).rounded(toPlaces: 1) },
+            set: { b.wrappedValue = $0 / 3.28084 }
+        )
+    }
     var body: some View {
         Form {
             Section {
@@ -63,10 +73,10 @@ private struct DepthsTab: View {
                 .pickerStyle(.segmented)
             }
             Section {
-                DepthRow("Shallow contour", $m.shallowContour, unit)
-                DepthRow("Safety contour", $m.safetyContour, unit)
-                DepthRow("Deep contour", $m.deepContour, unit)
-                DepthRow("Safety depth", $m.safetyDepth, unit)
+                DepthRow("Shallow contour", depth($m.shallowContour), unit)
+                DepthRow("Safety contour", depth($m.safetyContour), unit)
+                DepthRow("Deep contour", depth($m.deepContour), unit)
+                DepthRow("Safety depth", depth($m.safetyDepth), unit)
             } header: {
                 Text("Contours (\(unit))")
             } footer: {
@@ -175,4 +185,11 @@ private struct SizeRow: View {
 
 private extension Text {
     func captionFooter() -> some View { self.font(.caption).foregroundStyle(.secondary) }
+}
+
+private extension Double {
+    func rounded(toPlaces p: Int) -> Double {
+        let k = pow(10.0, Double(p))
+        return (self * k).rounded() / k
+    }
 }

@@ -125,6 +125,13 @@ final class ChartController: NSObject {
         // backing scale factor here in the bridge, per the app spec.
         syncDeviceScale()
 
+        // Saved mariner settings (contours, scheme, toggles) overlay the engine
+        // defaults — the settings form saves on every applied edit, so the
+        // chart reopens exactly as the mariner left it.
+        var mm = getMariner()
+        MarinerSettings.applySavedOverlay(&mm)
+        setMariner(mm)
+
         startDisplayLink()
         pushReadouts()
         model?.hasChart = true
