@@ -76,9 +76,16 @@ targets:
           # Build the tile57 ENGINE first so its libtile57.a exists before the
           # lookout core links it. Zig's cache makes this ~instant when tile57
           # is unchanged. (Previously a manual prerequisite.)
-          ( cd "$TILE57_DIR" && zig build lib -Doptimize=ReleaseFast )
+          # Version the target at the DEPLOYMENT minimum: an unversioned native
+          # build stamps objects with the build machine's OS and ld warns
+          # "built for newer macOS version than being linked" on every object.
+          ZIG_MAC_TARGET="$(uname -m | sed s/arm64/aarch64/)-macos.${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+          # An explicit -Dtarget makes zig a CROSS build: no automatic SDK
+          # discovery, so hand it the sysroot like the iOS script does.
+          MAC_SYSROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+          ( cd "$TILE57_DIR" && zig build lib -Doptimize=ReleaseFast -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT" )
           cd "$SRCROOT/.."
-          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast
+          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT"
           # Zig's outputs are deterministic, so an unchanged core hashes
           # identically — used twice below: to skip the repack, and to force
           # Xcode to relink when the core DID change.
@@ -168,9 +175,11 @@ targets:
           # commits these cores came from — never infer it again.
           echo "zig cores: tile57=$TILE57_DIR @ $(git -C "$TILE57_DIR" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?')"
           test -f "$TILE57_DIR/build.zig" || { echo "error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout" >&2; exit 1; }
+          # Versioned at the deployment minimum — see the macOS target's note.
+          IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
           case "$PLATFORM_NAME" in
-            iphonesimulator) ZIG_TARGET=aarch64-ios-simulator ;;
-            *)               ZIG_TARGET=aarch64-ios ;;
+            iphonesimulator) ZIG_TARGET="aarch64-ios.${IOS_MIN}-simulator" ;;
+            *)               ZIG_TARGET="aarch64-ios.${IOS_MIN}" ;;
           esac
           # The iOS SDK sysroot. $SDKROOT is set by Xcode to the active SDK, so
           # this works in the Xcode build env even when the *shell's* xcrun/
