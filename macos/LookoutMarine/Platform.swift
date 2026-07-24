@@ -99,6 +99,10 @@ enum Platform {
         // processing when rendering rode the main thread, which is why this
         // was pinned to 60 for a while).
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        // Settle the "is this panel even ProMotion" question in the log: the
+        // fps column can only ever approach THIS number.
+        let maxHz = view.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond
+        print("[lookout] display maximumFramesPerSecond = \(maxHz)")
         return link
         #endif
     }
