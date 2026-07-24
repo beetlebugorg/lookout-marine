@@ -11,8 +11,10 @@
 //  Coordinate units (see include/lookout.h):
 //    • open / resize / pan / zoom       — LOGICAL POINTS (lookout scales by
 //                                         pixel density internally)
-//    • screen_to_geo / geo_to_screen    — PIXELS (no _logical variant), so we
-//                                         multiply points by pixel_density here.
+//    • screen_to_geo / geo_to_screen    — LOGICAL POINTS too (the camera is
+//                                         logical-native; multiplying by
+//                                         density here sent every tap ~density
+//                                         times too far from the view centre).
 //  All unit conversion is centralized in this file; callers speak in points.
 
 #if canImport(AppKit)
@@ -285,19 +287,17 @@ final class ChartController: NSObject {
     /// Chart lon/lat under a view point (top-left origin — the view is flipped).
     func geo(atPoint pt: CGPoint) -> (lon: Double, lat: Double)? {
         guard let h = handle else { return nil }
-        let d = Float(lookout_pixel_density(h))
         var lon = 0.0, lat = 0.0
-        lookout_screen_to_geo(h, Float(pt.x) * d, Float(pt.y) * d, &lon, &lat)
+        lookout_screen_to_geo(h, Float(pt.x), Float(pt.y), &lon, &lat)
         return (lon, lat)
     }
 
     /// View point (top-left origin) for a chart lon/lat.
     func screenPoint(forGeoLon lon: Double, lat: Double) -> CGPoint {
         guard let h = handle else { return .zero }
-        let d = CGFloat(lookout_pixel_density(h))
         var x: Float = 0, y: Float = 0
         lookout_geo_to_screen(h, lon, lat, &x, &y)
-        return CGPoint(x: CGFloat(x) / d, y: CGFloat(y) / d)
+        return CGPoint(x: CGFloat(x), y: CGFloat(y))
     }
 
     // MARK: - Mariner state
