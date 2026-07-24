@@ -86,6 +86,9 @@ pub fn main(init: std.process.Init) !void {
     var zoom: ?f64 = null;
     var width: u32 = 1600;
     var height: u32 = 1200;
+    // --safety N: set the mariner's safety contour before the first build —
+    // the depth-band verification hook (bands must move when it does).
+    var safety: ?f64 = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -110,6 +113,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--height") and i + 1 < args.len) {
             i += 1;
             height = try std.fmt.parseInt(u32, args[i], 10);
+        } else if (std.mem.eql(u8, a, "--safety") and i + 1 < args.len) {
+            i += 1;
+            safety = std.fmt.parseFloat(f64, args[i]) catch null;
         } else if (a[0] != '-') {
             chart_path = args[i][0.. :0];
         }
@@ -122,18 +128,6 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("error: no chart given.\n\n{s}", .{USAGE});
         return error.NoChart;
     };
-
-    // --safety N: set the mariner's safety contour before the first build —
-    // the depth-band verification hook (bands must move when it does).
-    var safety: ?f64 = null;
-    {
-        var j: usize = 1;
-        while (j < args.len) : (j += 1) {
-            if (std.mem.eql(u8, args[j], "--safety") and j + 1 < args.len) {
-                safety = std.fmt.parseFloat(f64, args[j + 1]) catch null;
-            }
-        }
-    }
 
     const l = openTarget(alloc, chart, .{ .want_window = false, .width = width, .height = height }) catch {
         std.debug.print("error: could not open chart(s) '{s}'.\n", .{chart});

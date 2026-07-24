@@ -1,9 +1,15 @@
-//  SettingsView.swift — the S-52 mariner settings, as a native macOS
-//  preferences window (tabbed) that binds to the live chart.
+//  SettingsView.swift — the S-52 mariner settings.
 //
-//  Platform-neutral SwiftUI. MarinerSettings.bind() loads the engine's current
-//  state and auto-applies edits (debounced); visibility changes show live and
-//  emission changes rebuild lazily. On iOS the same tabs drop into a sheet.
+//  macOS: a native tabbed preferences window. iOS: ONE scrollable grouped form
+//  in the presenting sheet (a fixed-size TabView fights sheet sizing and buries
+//  content behind a tab bar). Both bind the same MarinerSettings model:
+//  bind() loads the engine state, edits auto-apply (debounced) and SAVE.
+//
+//  The Depths section explains the S-52 shading model instead of assuming it:
+//  the single most-reported "bug" was a safety-contour change not turning
+//  water white — which is FOUR-shade semantics (white starts at the DEEP
+//  contour) plus chart-ladder snapping, not a bug. The band preview makes the
+//  model visible where the knobs are.
 
 import SwiftUI
 
@@ -12,132 +18,216 @@ struct SettingsView: View {
     @StateObject private var m = MarinerSettings()
 
     var body: some View {
+        content
+            .onAppear { m.bind(to: model.controller) }
+    }
+
+    @ViewBuilder private var content: some View {
+        #if os(macOS)
         TabView {
-            DisplayTab(m: m).tabItem { Label("Display", systemImage: "paintpalette") }
-            DepthsTab(m: m).tabItem { Label("Depths", systemImage: "water.waves") }
-            SymbolsTab(m: m).tabItem { Label("Text & Symbols", systemImage: "textformat") }
-            AdvancedTab(m: m).tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+            Form { DisplaySections(m: m) }.formStyle(.grouped)
+                .tabItem { Label("Display", systemImage: "paintpalette") }
+            Form { DepthsSections(m: m) }.formStyle(.grouped)
+                .tabItem { Label("Depths", systemImage: "water.waves") }
+            Form { SymbolsSections(m: m) }.formStyle(.grouped)
+                .tabItem { Label("Text & Symbols", systemImage: "textformat") }
+            Form { AdvancedSections(m: m) }.formStyle(.grouped)
+                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
-        .frame(width: 460, height: 430)
-        .onAppear { m.bind(to: model.controller) }
+        .frame(width: 480, height: 480)
+        #else
+        Form {
+            DisplaySections(m: m)
+            DepthsSections(m: m)
+            SymbolsSections(m: m)
+            AdvancedSections(m: m)
+        }
+        // The presenting sheet (ChartView) supplies the Done button.
+        #endif
     }
 }
 
-// MARK: - Tabs
+// MARK: - Display
 
-private struct DisplayTab: View {
+private struct DisplaySections: View {
     @ObservedObject var m: MarinerSettings
     var body: some View {
-        Form {
-            Section {
-                Picker("Color scheme", selection: $m.scheme) {
-                    ForEach(MarinerScheme.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            } footer: { Text("Day, dusk and night palettes switch instantly.").captionFooter() }
-
-            Section("Detail") {
-                Picker("Display category", selection: $m.displayCategory) {
-                    ForEach(MarinerDisplayCategory.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Picker("Soundings", selection: $m.soundings) {
-                    ForEach(MarinerSoundings.allCases) { Text($0.label).tag($0) }
-                }
-                Toggle("Four-shade water", isOn: $m.fourShadeWater)
+        Section {
+            Picker("Color scheme", selection: $m.scheme) {
+                ForEach(MarinerScheme.allCases) { Text($0.label).tag($0) }
             }
+            .pickerStyle(.segmented)
+        } footer: { Text("Day, dusk and night palettes switch instantly.").captionFooter() }
+
+        Section {
+            Picker("Display category", selection: $m.displayCategory) {
+                ForEach(MarinerDisplayCategory.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Soundings", selection: $m.soundings) {
+                ForEach(MarinerSoundings.allCases) { Text($0.label).tag($0) }
+            }
+        } header: { Text("Detail") } footer: {
+            Text("Base ⊂ Standard ⊂ Other. Spot soundings switch independently of the category.").captionFooter()
         }
-        .formStyle(.grouped)
     }
 }
 
-private struct DepthsTab: View {
+// MARK: - Depths
+
+private struct DepthsSections: View {
     @ObservedObject var m: MarinerSettings
-    private var unit: String { m.depthUnit == .feet ? "ft" : "m" }
+    private var feet: Bool { m.depthUnit == .feet }
+    private var unit: String { feet ? "ft" : "m" }
+
     /// The ENGINE always takes metres (S-57 depths are metres; the unit only
-    /// changes sounding labels). Feet mode edits through this converted
-    /// binding — previously the field said "ft" but sent the number as metres.
+    /// changes sounding and contour labels). Feet mode edits through this
+    /// converted binding, in WHOLE feet — a depth read to fractions of a foot
+    /// is noise, and the previous form sent "ft" values as metres.
     private func depth(_ b: Binding<Double>) -> Binding<Double> {
-        guard m.depthUnit == .feet else { return b }
+        guard feet else { return b }
         return Binding(
-            get: { (b.wrappedValue * 3.28084).rounded(toPlaces: 1) },
-            set: { b.wrappedValue = $0 / 3.28084 }
+            get: { (b.wrappedValue * 3.28084).rounded() },
+            set: { b.wrappedValue = $0.rounded() / 3.28084 }
         )
     }
+
     var body: some View {
-        Form {
-            Section {
-                Picker("Depth unit", selection: $m.depthUnit) {
-                    ForEach(MarinerDepthUnit.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
+        Section {
+            Picker("Depth unit", selection: $m.depthUnit) {
+                ForEach(MarinerDepthUnit.allCases) { Text($0.label).tag($0) }
             }
-            Section {
-                DepthRow("Shallow contour", depth($m.shallowContour), unit)
-                DepthRow("Safety contour", depth($m.safetyContour), unit)
-                DepthRow("Deep contour", depth($m.deepContour), unit)
-                DepthRow("Safety depth", depth($m.safetyDepth), unit)
-            } header: {
-                Text("Contours (\(unit))")
-            } footer: {
-                Text("The safety contour is the bold line separating safe from unsafe water.").captionFooter()
+            .pickerStyle(.segmented)
+            Picker("Water shading", selection: $m.fourShadeWater) {
+                Text("Two shades").tag(false)
+                Text("Four shades").tag(true)
             }
+            .pickerStyle(.segmented)
+        } footer: {
+            Text(m.fourShadeWater
+                 ? "Four shades: white (safe) water starts at the DEEP contour; the safety contour separates the two middle blues."
+                 : "Two shades: water deeper than the safety contour is white (safe), everything shallower is blue.")
+                .captionFooter()
         }
-        .formStyle(.grouped)
+
+        Section {
+            BandPreview(m: m)
+                .listRowInsets(EdgeInsets())
+        } footer: {
+            Text("Shading follows the depth areas in the chart: the effective safety contour is the next DEEPER contour available in the data, drawn bold.").captionFooter()
+        }
+
+        Section {
+            if m.fourShadeWater {
+                DepthRow("Shallow contour", depth($m.shallowContour), unit, whole: feet)
+            }
+            DepthRow("Safety contour", depth($m.safetyContour), unit, whole: feet)
+            if m.fourShadeWater {
+                DepthRow("Deep contour", depth($m.deepContour), unit, whole: feet)
+            }
+            DepthRow("Safety depth", depth($m.safetyDepth), unit, whole: feet)
+        } header: {
+            Text("Contours (\(unit))")
+        } footer: {
+            Text("Safety depth bolds soundings at or shoaler than it; it does not shade water.").captionFooter()
+        }
     }
 }
 
-private struct SymbolsTab: View {
+/// Schematic of the S-52 depth bands for the CURRENT settings: which shades
+/// exist, and which contour separates each pair. Colours approximate the day
+/// palette — this is a legend, not the palette itself.
+private struct BandPreview: View {
     @ObservedObject var m: MarinerSettings
+    private var feet: Bool { m.depthUnit == .feet }
+
+    private func label(_ metres: Double) -> String {
+        feet ? "\(Int((metres * 3.28084).rounded())) ft" : String(format: "%g m", metres)
+    }
+
     var body: some View {
-        Form {
-            Section("Text") {
-                Toggle("Feature names", isOn: $m.textNames)
-                Toggle("Light descriptions", isOn: $m.showLightDescriptions)
-                Toggle("Other text", isOn: $m.textOther)
-            }
-            Section("Symbols") {
-                Toggle("Simplified point symbols", isOn: $m.simplifiedPoints)
-                Picker("Boundaries", selection: $m.boundaryStyle) {
-                    ForEach(MarinerBoundaryStyle.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Toggle("Full light-sector lines", isOn: $m.showFullSectorLines)
+        let bands: [(Color, String)] = m.fourShadeWater
+            ? [
+                (Color(red: 0.55, green: 0.80, blue: 0.60), "drying"),
+                (Color(red: 0.45, green: 0.75, blue: 0.93), "0–\(label(min(m.shallowContour, m.safetyContour)))"),
+                (Color(red: 0.55, green: 0.82, blue: 0.97), "–\(label(m.safetyContour))"),
+                (Color(red: 0.75, green: 0.90, blue: 0.99), "–\(label(max(m.deepContour, m.safetyContour)))"),
+                (Color.white, "deeper"),
+            ]
+            : [
+                (Color(red: 0.55, green: 0.80, blue: 0.60), "drying"),
+                (Color(red: 0.45, green: 0.75, blue: 0.93), "0–\(label(m.safetyContour))"),
+                (Color.white, "deeper"),
+            ]
+        HStack(spacing: 0) {
+            ForEach(Array(bands.enumerated()), id: \.offset) { _, band in
+                band.0
+                    .overlay(alignment: .bottom) {
+                        Text(band.1)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.black.opacity(0.75))
+                            .padding(.bottom, 2)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
             }
         }
-        .formStyle(.grouped)
+        .frame(height: 34)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
+        .padding(10)
     }
 }
 
-private struct AdvancedTab: View {
+// MARK: - Text & Symbols
+
+private struct SymbolsSections: View {
     @ObservedObject var m: MarinerSettings
     var body: some View {
-        Form {
-            Section("Safety & Quality") {
-                Toggle("Data quality overlay", isOn: $m.dataQuality)
-                Toggle("Isolated dangers in shallow water", isOn: $m.showIsolatedDangersShallow)
-                Toggle("Information callouts", isOn: $m.showInformCallouts)
-                Toggle("Meta boundaries", isOn: $m.showMetaBounds)
-                Toggle("Overscale indication", isOn: $m.showOverscale)
-            }
-            Section("Sizing") {
-                SizeRow("Overall size", $m.sizeScale)
-                SizeRow("Text size", $m.textSizeScale)
-                SizeRow("Sounding size", $m.soundingSizeScale)
-            }
-            Section {
-                Toggle("Date-dependent features", isOn: $m.dateDependent)
-                Toggle("Highlight date-dependent", isOn: $m.highlightDateDependent)
-                LabeledContent("View date") {
-                    TextField("YYYYMMDD", text: $m.dateView)
-                        .frame(width: 110)
-                        .multilineTextAlignment(.trailing)
-                }
-            } header: {
-                Text("Dates")
-            } footer: { Text("Leave the date empty to use today.").captionFooter() }
+        Section("Text") {
+            Toggle("Feature names", isOn: $m.textNames)
+            Toggle("Light descriptions", isOn: $m.showLightDescriptions)
+            Toggle("Other text", isOn: $m.textOther)
         }
-        .formStyle(.grouped)
+        Section("Symbols") {
+            Toggle("Simplified point symbols", isOn: $m.simplifiedPoints)
+            Picker("Boundaries", selection: $m.boundaryStyle) {
+                ForEach(MarinerBoundaryStyle.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Toggle("Full light-sector lines", isOn: $m.showFullSectorLines)
+        }
+    }
+}
+
+// MARK: - Advanced
+
+private struct AdvancedSections: View {
+    @ObservedObject var m: MarinerSettings
+    var body: some View {
+        Section("Safety & Quality") {
+            Toggle("Data quality overlay", isOn: $m.dataQuality)
+            Toggle("Isolated dangers in shallow water", isOn: $m.showIsolatedDangersShallow)
+            Toggle("Information callouts", isOn: $m.showInformCallouts)
+            Toggle("Meta boundaries", isOn: $m.showMetaBounds)
+            Toggle("Overscale indication", isOn: $m.showOverscale)
+        }
+        Section("Sizing") {
+            SizeRow("Overall size", $m.sizeScale)
+            SizeRow("Text size", $m.textSizeScale)
+            SizeRow("Sounding size", $m.soundingSizeScale)
+        }
+        Section {
+            Toggle("Date-dependent features", isOn: $m.dateDependent)
+            Toggle("Highlight date-dependent", isOn: $m.highlightDateDependent)
+            LabeledContent("View date") {
+                TextField("YYYYMMDD", text: $m.dateView)
+                    .frame(width: 110)
+                    .multilineTextAlignment(.trailing)
+            }
+        } header: {
+            Text("Dates")
+        } footer: { Text("Leave the date empty to use today.").captionFooter() }
     }
 }
 
@@ -147,20 +237,22 @@ private struct DepthRow: View {
     let title: String
     @Binding var value: Double
     let unit: String
-    init(_ title: String, _ value: Binding<Double>, _ unit: String) {
-        self.title = title; self._value = value; self.unit = unit
+    let whole: Bool
+    init(_ title: String, _ value: Binding<Double>, _ unit: String, whole: Bool) {
+        self.title = title; self._value = value; self.unit = unit; self.whole = whole
     }
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 6) {
-                TextField("", value: $value, format: .number.precision(.fractionLength(0...1)))
+                TextField("", value: $value,
+                          format: .number.precision(.fractionLength(whole ? 0...0 : 0...1)))
                     .labelsHidden()
                     .frame(width: 62)
                     .multilineTextAlignment(.trailing)
                     #if os(iOS)
-                    .keyboardType(.decimalPad)
+                    .keyboardType(whole ? .numberPad : .decimalPad)
                     #endif
-                Stepper("", value: $value, in: 0...200, step: 1).labelsHidden()
+                Stepper("", value: $value, in: 0...660, step: 1).labelsHidden()
                 Text(unit).foregroundStyle(.secondary).frame(width: 20, alignment: .leading)
             }
         }
@@ -185,11 +277,4 @@ private struct SizeRow: View {
 
 private extension Text {
     func captionFooter() -> some View { self.font(.caption).foregroundStyle(.secondary) }
-}
-
-private extension Double {
-    func rounded(toPlaces p: Int) -> Double {
-        let k = pow(10.0, Double(p))
-        return (self * k).rounded() / k
-    }
 }
