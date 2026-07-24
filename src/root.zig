@@ -224,6 +224,21 @@ pub const Lookout = struct {
     fn create(alloc: std.mem.Allocator, opts: OpenOptions) !*Lookout {
         const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
         var t = gpu.ticksMs();
+        // ABI gate: a header/library skew in the GPU structs renders GARBAGE
+        // (a sheared vertex stream — wrong colours everywhere, junk triangles,
+        // single-digit fps), not an error. Refuse loudly instead. A tile57 too
+        // old to export this fails at LINK time, which is better still.
+        const want: u32 = @as(u32, @sizeOf(cc.tile57_gpu_vertex)) |
+            (@as(u32, @sizeOf(cc.tile57_gpu_quad)) << 8) |
+            (@as(u32, @sizeOf(cc.tile57_gpu_range)) << 16);
+        const got = cc.tile57_abi_gpu_layout();
+        if (got != want) {
+            std.debug.print("FATAL: tile57 GPU ABI mismatch — header says vertex/quad/range = {d}/{d}/{d} B, linked engine says {d}/{d}/{d} B. Rebuild BOTH repos at matching commits.\n", .{
+                @sizeOf(cc.tile57_gpu_vertex),  @sizeOf(cc.tile57_gpu_quad),  @sizeOf(cc.tile57_gpu_range),
+                got & 0xff,                     (got >> 8) & 0xff,            (got >> 16) & 0xff,
+            });
+            return error.EngineAbiMismatch;
+        }
         cc.tile57_warmup();
         if (dbg) {
             std.debug.print("  warmup {d} ms\n", .{gpu.ticksMs() - t});

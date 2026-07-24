@@ -325,7 +325,13 @@ lkm_frame *lkm_begin_frame(lkm_ctx *c, const float clear[4]) {
             atomic_store_explicit(&c->inflight_n, 0, memory_order_relaxed);
             n = 0;
         }
-        if (n >= 3) {
+        // Cap at 2, one BELOW the drawable pool of 3: a drawable whose
+        // presented-handler has fired is still on glass until the next frame
+        // supersedes it, so at 3-in-flight the gate opens while the pool is
+        // still empty and nextDrawable blocks ~a full vsync anyway — measured
+        // as acquire avg ~15ms (one 60Hz period) on device with a fast GPU.
+        // At 2-in-flight there is always a free drawable and acquire is ~0.
+        if (n >= 2) {
             long since = lkm_now_ms() - atomic_load_explicit(&c->inflight_ret_ms, memory_order_relaxed);
             if (since < 500) return NULL; // healthy backpressure: skip, don't stall
             // No permit back in 500ms: those presents are lost (resize,
