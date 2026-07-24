@@ -22,7 +22,17 @@ struct ReadoutsBadge: View {
                 .font(.system(.callout, design: .monospaced))
                 .lineLimit(1)
                 .fixedSize()
-            HStack(spacing: 8) {
+            if model.overscale > 1.05 {
+                Text(String(format: "×%.1f", model.overscale))
+                    .font(.caption.bold())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.orange.opacity(0.25), in: Capsule())
+                    .foregroundStyle(.orange)
+                    .fixedSize()
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 10) {
                 Label(scaleString, systemImage: "ruler")
                 Label(zoomString, systemImage: "plus.magnifyingglass")
                 #if os(macOS)
@@ -33,20 +43,14 @@ struct ReadoutsBadge: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .fixedSize()
-            if model.overscale > 1.05 {
-                Text(String(format: "×%.1f", model.overscale))
-                    .font(.caption.bold())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.orange.opacity(0.25), in: Capsule())
-                    .foregroundStyle(.orange)
-                    .fixedSize()
-            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule(style: .continuous))
-        .overlay(Capsule().strokeBorder(.separator.opacity(0.5)))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        // A full-width BAR (not a floating capsule): the material extends
+        // through the bottom safe area so the chart never peeks under it.
+        .background { Rectangle().fill(.regularMaterial).ignoresSafeArea(edges: [.bottom, .horizontal]) }
+        .overlay(alignment: .top) { Divider().opacity(0.5) }
         .allowsHitTesting(false)
     }
 

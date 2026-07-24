@@ -70,6 +70,26 @@ final class ChartInteractionTests: XCTestCase {
         XCTAssertTrue(zoom.exists, "app died during the soak")
     }
 
+    /// Rotation: the chart window stack and chrome must survive an orientation
+    /// change (drawable resize -> engine rebuild) with the HUD still present.
+    func testRotationKeepsChartAlive() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let zoom = app.staticTexts.matching(NSPredicate(format: "label MATCHES 'z[0-9.]+'")).firstMatch
+        XCTAssertTrue(zoom.waitForExistence(timeout: 45), "zoom readout never appeared")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        Thread.sleep(forTimeInterval: 4)
+        XCTAssertTrue(zoom.exists, "HUD lost after rotating to landscape")
+        app.pinch(withScale: 0.7, velocity: -2.0)
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(zoom.exists, "chart died interacting in landscape")
+
+        XCUIDevice.shared.orientation = .portrait
+        Thread.sleep(forTimeInterval: 4)
+        XCTAssertTrue(zoom.exists, "HUD lost after rotating back to portrait")
+    }
+
     /// The other half of the PassThroughWindow contract: chrome controls must
     /// KEEP their touches (only empty chrome falls through to the chart).
     func testChromeButtonsStillWork() throws {

@@ -30,14 +30,14 @@ struct OverlayLayer: View {
     var body: some View {
         Color.clear
             .allowsHitTesting(false)
-            // HUD: pinned to the bottom (safe-area aware), a slim capsule.
+            // HUD: a full-width bar flush with the bottom edge.
             .overlay(alignment: .bottom) {
                 ReadoutsBadge(model: model)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
             }
             // Chartplotter-style bubbles, top-right: search (expands to the
-            // field), settings, and the compass when rotated.
+            // field), settings, and the compass when rotated. Pinned to the
+            // PHYSICAL trailing edge — in landscape the side safe-area inset
+            // left them floating toward the middle.
             .overlay(alignment: .topTrailing) {
                 VStack(alignment: .trailing, spacing: 10) {
                     HStack(alignment: .top, spacing: 10) {
@@ -58,18 +58,21 @@ struct OverlayLayer: View {
                     }
                 }
                 .padding(12)
+                .ignoresSafeArea(.container, edges: .trailing)
             }
-            // Zoom bubbles sit ABOVE the HUD line, never overlapping it.
+            // Zoom bubbles sit ABOVE the HUD bar, never overlapping it, pinned
+            // to the physical trailing edge like the top bubbles.
             .overlay(alignment: .bottomTrailing) {
                 ZoomControls(model: model)
                     .padding(.trailing, 12)
-                    .padding(.bottom, 64)
+                    .padding(.bottom, 52)
+                    .ignoresSafeArea(.container, edges: .trailing)
             }
             .overlay(alignment: .bottomLeading) {
                 if !model.pickResults.isEmpty {
                     IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
                         .padding(.leading, 12)
-                        .padding(.bottom, 64)
+                        .padding(.bottom, 52)
                 }
             }
             .overlay(alignment: .top) {

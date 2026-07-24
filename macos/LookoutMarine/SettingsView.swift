@@ -25,14 +25,14 @@ struct SettingsView: View {
     @ViewBuilder private var content: some View {
         // The presenting sheet (iOS) supplies the Done button.
         TabView {
-            Form { ChartsSections(model: model) }.formStyle(.grouped)
-                .tabItem { Label("Charts", systemImage: "map") }
             Form { DisplaySections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Display", systemImage: "paintpalette") }
             Form { DepthsSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Depths", systemImage: "water.waves") }
             Form { SymbolsSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Text", systemImage: "textformat") }
+            Form { ChartsSections(model: model) }.formStyle(.grouped)
+                .tabItem { Label("Charts", systemImage: "map") }
             Form { AdvancedSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
