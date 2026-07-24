@@ -1,9 +1,9 @@
-//  SettingsView.swift — the S-52 mariner settings.
-//
-//  macOS: a native tabbed preferences window. iOS: ONE scrollable grouped form
-//  in the presenting sheet (a fixed-size TabView fights sheet sizing and buries
-//  content behind a tab bar). Both bind the same MarinerSettings model:
-//  bind() loads the engine state, edits auto-apply (debounced) and SAVE.
+//  SettingsView.swift — the S-52 mariner settings, tabbed on BOTH platforms
+//  (Display / Depths / Text & Symbols / Advanced — the mariner thinks in those
+//  groups). macOS sizes the tab window itself; iOS lets the sheet size the
+//  TabView (the old fixed 460x430 frame fought the sheet). One MarinerSettings
+//  model behind both: bind() loads the engine state, edits auto-apply
+//  (debounced) and SAVE.
 //
 //  The Depths section explains the S-52 shading model instead of assuming it:
 //  the single most-reported "bug" was a safety-contour change not turning
@@ -23,27 +23,76 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var content: some View {
-        #if os(macOS)
+        // The presenting sheet (iOS) supplies the Done button.
         TabView {
+            Form { ChartsSections(model: model) }.formStyle(.grouped)
+                .tabItem { Label("Charts", systemImage: "map") }
             Form { DisplaySections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Display", systemImage: "paintpalette") }
             Form { DepthsSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Depths", systemImage: "water.waves") }
             Form { SymbolsSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Text & Symbols", systemImage: "textformat") }
+                .tabItem { Label("Text", systemImage: "textformat") }
             Form { AdvancedSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
+        #if os(macOS)
         .frame(width: 480, height: 480)
-        #else
-        Form {
-            DisplaySections(m: m)
-            DepthsSections(m: m)
-            SymbolsSections(m: m)
-            AdvancedSections(m: m)
-        }
-        // The presenting sheet (ChartView) supplies the Done button.
         #endif
+    }
+}
+
+// MARK: - Charts
+
+/// Chart selection: the open library, recents, and the picker. iOS imports via
+/// the file importer (sheet-swapped by addChartsFromSettings); macOS uses the
+/// shared NSOpenPanel.
+private struct ChartsSections: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Section {
+            if let p = model.chartPath {
+                Label {
+                    Text(displayName(p)).lineLimit(1).truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "map.fill").foregroundStyle(.tint)
+                }
+            } else {
+                Text("No chart open").foregroundStyle(.secondary)
+            }
+        } header: { Text("Open") }
+
+        if !model.recents.isEmpty {
+            Section {
+                ForEach(model.recents, id: \.self) { p in
+                    Button {
+                        model.openChart(p)
+                    } label: {
+                        HStack {
+                            Image(systemName: p == model.chartPath ? "checkmark.circle.fill" : "clock")
+                                .foregroundStyle(p == model.chartPath ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            Text(displayName(p)).lineLimit(1).truncationMode(.middle)
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            } header: { Text("Recent") }
+        }
+
+        Section {
+            Button {
+                model.addChartsFromSettings()
+            } label: {
+                Label("Add Charts…", systemImage: "plus")
+            }
+        } footer: {
+            Text("A folder of baked cells opens as one seamless library.").captionFooter()
+        }
+    }
+
+    private func displayName(_ path: String) -> String {
+        (path as NSString).lastPathComponent
     }
 }
 

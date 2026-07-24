@@ -25,34 +25,51 @@ import UIKit
 /// chart window, so no layer trickery is needed).
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
+    @State private var searchOpen = false
 
     var body: some View {
         Color.clear
             .allowsHitTesting(false)
+            // HUD: pinned to the bottom (safe-area aware), a slim capsule.
             .overlay(alignment: .bottom) {
-                ReadoutsBadge(model: model).padding(12)
+                ReadoutsBadge(model: model)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
             }
+            // Chartplotter-style bubbles, top-right: search (expands to the
+            // field), settings, and the compass when rotated.
             .overlay(alignment: .topTrailing) {
                 VStack(alignment: .trailing, spacing: 10) {
-                    SearchField(model: model)
+                    HStack(alignment: .top, spacing: 10) {
+                        if searchOpen {
+                            SearchField(model: model)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                        ChromeBubble(system: searchOpen ? "xmark" : "magnifyingglass",
+                                     help: "Go to coordinate") {
+                            withAnimation(.snappy) { searchOpen.toggle() }
+                        }
+                        ChromeBubble(system: "gearshape", help: "Mariner settings") {
+                            model.showSettings = true
+                        }
+                    }
                     if abs(model.rotationDeg) >= 0.5 {
                         CompassBadge(rotationDeg: model.rotationDeg) { model.northUp() }
                     }
                 }
                 .padding(12)
             }
-            .overlay(alignment: .topLeading) {
-                #if os(iOS)
-                ChartActionsBar(model: model).padding(12)
-                #endif
-            }
+            // Zoom bubbles sit ABOVE the HUD line, never overlapping it.
             .overlay(alignment: .bottomTrailing) {
-                ZoomControls(model: model).padding(12)
+                ZoomControls(model: model)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 64)
             }
             .overlay(alignment: .bottomLeading) {
                 if !model.pickResults.isEmpty {
                     IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
-                        .padding(12)
+                        .padding(.leading, 12)
+                        .padding(.bottom, 64)
                 }
             }
             .overlay(alignment: .top) {
@@ -64,6 +81,27 @@ struct OverlayLayer: View {
             }
             .animation(.default, value: model.pickResults)
             .animation(.default, value: model.isBuilding)
+    }
+}
+
+/// One floating circular chrome button (chartplotter-style bubble).
+struct ChromeBubble: View {
+    let system: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .background(.regularMaterial, in: Circle())
+        .overlay(Circle().strokeBorder(.separator.opacity(0.5)))
+        .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+        .help(help)
     }
 }
 
@@ -388,34 +426,6 @@ struct ChartView: View {
     }
 }
 
-/// The iOS floating command strip (macOS surfaces these in menus/toolbar).
-struct ChartActionsBar: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        VStack(spacing: 0) {
-            bar(icon: "folder") { model.showImporter = true }
-            Divider().frame(width: 30)
-            bar(icon: "circle.lefthalf.filled") { model.cycleScheme() }
-                .disabled(!model.hasChart)
-            Divider().frame(width: 30)
-            bar(icon: "gearshape") { model.showSettings = true }
-        }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.separator))
-        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
-    }
-
-    private func bar(icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
 
 /// Transparent full-screen gesture surface — the root view of the plain-UIKit
 /// INPUT window (SceneDelegate). The chart renders in lookout's OWN UIWindow

@@ -313,6 +313,15 @@ export fn lookout_is_building(h: ?*lookout) c_int {
     defer l.apiUnlock();
     return if (l.isBuilding()) 1 else 0;
 }
+/// Live overscale factor (>= 1): how far the view is zoomed past the deepest
+/// data at the centre. Show an overscale indication when > ~1.05 (S-52 wants
+/// overscale INDICATED, not forbidden).
+export fn lookout_overscale(h: ?*lookout) f64 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return l.overscale();
+}
+
 /// The current view's 1:N scale denominator, from the authoritative camera math.
 export fn lookout_scale_denominator(h: ?*lookout) f64 {
     const l = locked(h);

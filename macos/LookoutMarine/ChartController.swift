@@ -408,6 +408,10 @@ final class ChartController: NSObject {
         lookout_get_view(h, &v)
         if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
+        if model.centerLat != v.lat { model.centerLat = v.lat }
+        if model.centerLon != v.lon { model.centerLon = v.lon }
+        let ov = lookout_overscale(h)
+        if model.overscale != ov { model.overscale = ov }
         let sd = lookout_scale_denominator(h)
         if model.scaleDenominator != sd { model.scaleDenominator = sd }
         var m = tile57_mariner()

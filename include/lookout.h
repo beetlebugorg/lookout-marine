@@ -127,6 +127,8 @@ void lookout_tick_anim(lookout *h, double dt);
 /* 1 while a background tessellation is filling in — use a short idle timeout. */
 int  lookout_is_building(lookout *h);
 /* The current view's 1:N scale denominator (for the HUD), from the camera math. */
+/* Live overscale factor (>=1); indicate when > ~1.05. */
+double lookout_overscale(lookout *h);
 double lookout_scale_denominator(lookout *h);
 
 #ifdef __cplusplus

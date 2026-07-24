@@ -44,6 +44,9 @@ final class AppModel: ObservableObject {
     @Published var zoomLevel: Double = 0      // fractional web-mercator zoom
     @Published var scheme: Int = 0            // 0 day, 1 dusk, 2 night
     @Published var rotationDeg: Double = 0
+    @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
+    @Published var centerLat: Double = 0
+    @Published var centerLon: Double = 0
     @Published var pickResults: [PickFeature] = []
     @Published var isBuilding = false         // a background tessellation is filling in
 
@@ -172,6 +175,17 @@ final class AppModel: ObservableObject {
         recents.insert(path, at: 0)
         if recents.count > 10 { recents = Array(recents.prefix(10)) }
         UserDefaults.standard.set(recents, forKey: recentsKey)
+    }
+
+    /// "Add charts" from the SETTINGS sheet (iOS): the importer and the sheet
+    /// share one presenting host, so dismiss the sheet first.
+    func addChartsFromSettings() {
+        #if os(iOS)
+        showSettings = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { self.showImporter = true }
+        #else
+        presentOpenPanel()
+        #endif
     }
 
     // MARK: - Commands (menu / buttons)

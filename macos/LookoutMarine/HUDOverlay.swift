@@ -7,39 +7,66 @@
 
 import SwiftUI
 
-/// Cursor lat/lon, 1:N scale, zoom, and color scheme — one row, centered at the
-/// bottom of the chart. Non-interactive.
+/// Lat/lon (cursor when hovering, else the view centre), 1:N scale, zoom,
+/// scheme, and — when zoomed past the data — an amber OVERSCALE badge. One
+/// row, pinned at the bottom of the chart. Non-interactive.
 struct ReadoutsBadge: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
+            Image(systemName: model.cursorLat != nil ? "cursorarrow" : "location")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Text(coordString)
                 .font(.system(.callout, design: .monospaced))
-            HStack(spacing: 10) {
+                .lineLimit(1)
+                .fixedSize()
+            HStack(spacing: 8) {
                 Label(scaleString, systemImage: "ruler")
                 Label(zoomString, systemImage: "plus.magnifyingglass")
+                #if os(macOS)
                 Label(model.schemeName, systemImage: "circle.lefthalf.filled")
+                #endif
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize()
+            if model.overscale > 1.05 {
+                Text(String(format: "×%.1f", model.overscale))
+                    .font(.caption.bold())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.orange.opacity(0.25), in: Capsule())
+                    .foregroundStyle(.orange)
+                    .fixedSize()
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.regularMaterial, in: Capsule(style: .continuous))
+        .overlay(Capsule().strokeBorder(.separator.opacity(0.5)))
         .allowsHitTesting(false)
     }
 
     private var coordString: String {
-        guard let lat = model.cursorLat, let lon = model.cursorLon else { return "—, —" }
+        let lat = model.cursorLat ?? model.centerLat
+        let lon = model.cursorLon ?? model.centerLon
+        #if os(iOS)
+        if !model.useDMS { return String(format: "%.4f, %.4f", lat, lon) }
+        #endif
         return model.useDMS
             ? "\(CoordFormat.dms(lat, isLat: true))  \(CoordFormat.dms(lon, isLat: false))"
             : String(format: "%.5f, %.5f", lat, lon)
     }
 
+    /// Compact 1:N — "1:24k" / "1:2.1M": the HUD is a glance, not a survey.
     private var scaleString: String {
         let n = model.scaleDenominator
         guard n > 0 else { return "1:—" }
+        if n >= 1_000_000 { return String(format: "1:%.1fM", n / 1_000_000) }
+        if n >= 10_000 { return String(format: "1:%.0fk", n / 1_000) }
         return "1:\(Int(n.rounded()).formatted())"
     }
 

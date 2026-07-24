@@ -614,7 +614,11 @@ pub const Lookout = struct {
         // Over a coarse-only area every covering cell's reach is low, so the
         // library-wide max (zr[1], set by a distant deep chart) would zoom straight
         // into nodata; this caps at what's actually there.
-        self.cam.max_zoom = self.viewMaxZoom();
+        // Allow zooming PAST the deepest data by a bounded margin: the scene
+        // stays built at the data's max zoom and the MVP magnifies it (same
+        // path as a pinch between rebuilds), with the HUD showing an overscale
+        // badge (lookout_overscale). S-52 permits overscale WITH indication.
+        self.cam.max_zoom = self.viewMaxZoom() + OVERSCALE_ALLOW;
         self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
     }
 
@@ -1162,6 +1166,8 @@ pub const Lookout = struct {
     // and the view outruns its coverage into NODATA. The prefetch is skipped on
     // such hardware too: it occupies the one worker for seconds exactly when a
     // real rebuild is about to be needed.
+    /// Zoom levels the camera may run past the deepest servable data.
+    const OVERSCALE_ALLOW = 2.0;
     const PREFETCH_MAX_BUILD_MS = 600;
     const FAIL_BACKOFF_MS = 400;
     /// OS memory warning: drop what can be rebuilt. Engine caches go at the
@@ -1325,6 +1331,13 @@ pub const Lookout = struct {
     // ---- pick (tap-to-identify) --------------------------------------------
     /// S-52 §10.8 cursor pick at a geographic point: `cb.feature` fires once per
     /// feature under it (class acronym + full S-57 attribute JSON + source cell).
+    /// Live overscale factor: 2^(zoom - deepest servable zoom at the centre),
+    /// clamped to >= 1. 1.0 = at or under the data's scale.
+    pub fn overscale(self: *Lookout) f64 {
+        const over = self.cam.zoom - self.viewMaxZoom();
+        return if (over <= 0) 1.0 else std.math.exp2(over);
+    }
+
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
         os_unfair_lock_lock(&self.engine_mu);
         defer os_unfair_lock_unlock(&self.engine_mu);
