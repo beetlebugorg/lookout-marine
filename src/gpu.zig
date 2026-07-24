@@ -360,18 +360,57 @@ pub const Gpu = struct {
             return;
         };
         self.labelDebug(s);
-        var drawn: u32 = 0;
+        var drawn: u32 = 0; // DRAW CALLS issued (after merging), not ranges
+        var ranges_drawn: u32 = 0;
         var sk_text: u32 = 0;
         var sk_sound: u32 = 0;
         var sk_patt: u32 = 0;
         var sk_nobuf: u32 = 0;
         var sk_noatlas: u32 = 0;
-        // Ranges are paint-sorted, so consecutive ranges usually share the
-        // whole uniform payload (colour runs, same cat mask): send uniforms
-        // only when the bytes actually change. At phone range counts this
-        // removes most of the frame's encoder traffic.
         var last_u: ?Uniforms = null;
         var usets: u32 = 0;
+
+        // CONTIGUOUS ranges with the same draw spec (pipeline, texture,
+        // uniform payload) collapse into ONE draw call. Colour lives in the
+        // vertices, so a whole band of differently-coloured fills is a single
+        // spec — at coastal zooms this turns thousands of per-range draws
+        // (measured as the phone's frame-rate cap) into a handful. A skipped
+        // range breaks index contiguity, so merging can never draw gated-off
+        // content. Paint order is preserved: merged triangles rasterize in
+        // index order, exactly as they did as separate draws.
+        const Run = struct {
+            active: bool = false,
+            prim: @TypeOf(s.ranges[0].prim) = undefined,
+            pipe: c_int = 0,
+            tex: ?*cc.lkm_tex = null,
+            first: u32 = 0,
+            count: u32 = 0,
+            uu: Uniforms = undefined,
+        };
+        var run = Run{};
+        const Flush = struct {
+            fn go(f2: *cc.lkm_frame, sc: *const Scene, rn: *const Run, lu: *?Uniforms, us: *u32, dr: *u32) void {
+                if (rn.prim == cc.TILE57_GPU_TRIANGLES) {
+                    cc.lkm_bind_vbuf(f2, sc.vbuf.?);
+                    cc.lkm_set_pipeline(f2, rn.pipe);
+                    if (rn.tex) |t| cc.lkm_bind_texture(f2, t);
+                } else {
+                    cc.lkm_set_pipeline(f2, rn.pipe);
+                    cc.lkm_bind_vbuf(f2, sc.qbuf.?);
+                    cc.lkm_bind_texture(f2, rn.tex.?);
+                }
+                if (lu.* == null or !std.mem.eql(u8, std.mem.asBytes(&lu.*.?), std.mem.asBytes(&rn.uu))) {
+                    cc.lkm_set_uniforms(f2, &rn.uu, @sizeOf(Uniforms));
+                    lu.* = rn.uu;
+                    us.* += 1;
+                }
+                if (rn.prim == cc.TILE57_GPU_TRIANGLES)
+                    cc.lkm_draw_indexed(f2, sc.ibuf.?, rn.first, rn.count)
+                else
+                    cc.lkm_draw(f2, rn.first, rn.count);
+                dr.* += 1;
+            }
+        };
 
         for (s.ranges) |r| {
             switch (r.kind) {
@@ -392,47 +431,37 @@ pub const Gpu = struct {
             // The engine tags them disp_cat=OTHER, so force the OTHER bit on for this
             // range only; SCAMIN still culls them (disp_cat != base).
             if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
+            var pipe: c_int = undefined;
+            var tex: ?*cc.lkm_tex = null;
             if (r.prim == cc.TILE57_GPU_TRIANGLES) {
-                const vbuf = s.vbuf orelse {
+                if (s.vbuf == null or s.ibuf == null) {
                     sk_nobuf += 1;
                     continue;
-                };
-                const ibuf = s.ibuf orelse {
-                    sk_nobuf += 1;
-                    continue;
-                };
-                cc.lkm_bind_vbuf(f, vbuf);
+                }
                 if (r.pattern != cc.TILE57_GPU_NO_PATTERN and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
                     const pt = s.patterns[r.pattern];
                     // Scale the cell with the zoom so it tracks the geometry (which
                     // the MVP scales) rather than swimming during a zoom animation.
                     const cs = self.pixel_density * self.pattern_scale;
                     uu.cell_px = .{ pt.w * cs, pt.h * cs };
-                    cc.lkm_set_pipeline(f, cc.LKM_PIPE_PATTERN);
-                    cc.lkm_bind_texture(f, pt.tex.?);
+                    pipe = cc.LKM_PIPE_PATTERN;
+                    tex = pt.tex;
                 } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
                     sk_patt += 1;
                     continue; // a pattern with no cell texture: the fill under it already drew
                 } else {
-                    uu.color = normColor(r.color);
-                    cc.lkm_set_pipeline(f, cc.LKM_PIPE_CHART);
+                    // Colour rides the VERTICES (see tile57_gpu_vertex.color).
+                    pipe = cc.LKM_PIPE_CHART;
                 }
-                if (last_u == null or !std.mem.eql(u8, std.mem.asBytes(&last_u.?), std.mem.asBytes(&uu))) {
-                    cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
-                    last_u = uu;
-                    usets += 1;
-                }
-                cc.lkm_draw_indexed(f, ibuf, r.first, r.count);
-                drawn += 1;
             } else { // QUADS
-                const qbuf = s.qbuf orelse {
+                if (s.qbuf == null) {
                     sk_nobuf += 1;
                     continue;
-                };
+                }
                 const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or
                     r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or
                     r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
-                const tex = switch (r.atlas) {
+                tex = switch (r.atlas) {
                     cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
                     cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
                     cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
@@ -441,18 +470,20 @@ pub const Gpu = struct {
                     sk_noatlas += 1;
                     continue;
                 };
-                cc.lkm_set_pipeline(f, if (is_glyph) cc.LKM_PIPE_SDF else cc.LKM_PIPE_SPRITE);
-                cc.lkm_bind_vbuf(f, qbuf);
-                cc.lkm_bind_texture(f, tex);
-                if (last_u == null or !std.mem.eql(u8, std.mem.asBytes(&last_u.?), std.mem.asBytes(&uu))) {
-                    cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
-                    last_u = uu;
-                    usets += 1;
-                }
-                cc.lkm_draw(f, r.first, r.count);
-                drawn += 1;
+                pipe = if (is_glyph) cc.LKM_PIPE_SDF else cc.LKM_PIPE_SPRITE;
             }
+            ranges_drawn += 1;
+            if (run.active and run.prim == r.prim and run.pipe == pipe and run.tex == tex and
+                run.first + run.count == r.first and
+                std.mem.eql(u8, std.mem.asBytes(&run.uu), std.mem.asBytes(&uu)))
+            {
+                run.count += r.count;
+                continue;
+            }
+            if (run.active) Flush.go(f, s, &run, &last_u, &usets, &drawn);
+            run = .{ .active = true, .prim = r.prim, .pipe = pipe, .tex = tex, .first = r.first, .count = r.count, .uu = uu };
         }
+        if (run.active) Flush.go(f, s, &run, &last_u, &usets, &drawn);
         // One line per DISTINCT draw outcome (not per frame): what the GPU was
         // actually asked to draw for this scene, and everything withheld, with
         // reasons. The scene said what exists; this says what made it to Metal.
@@ -467,7 +498,7 @@ pub const Gpu = struct {
         const sig = h.final();
         if (sig != self.last_draw_log) {
             self.last_draw_log = sig;
-            std.debug.print("draw: {d}/{d} ranges to GPU ({d} uniform sends) (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ drawn, s.ranges.len, usets, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
+            std.debug.print("draw: {d}/{d} ranges in {d} draws ({d} uniform sends) (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ ranges_drawn, s.ranges.len, drawn, usets, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
         }
     }
 

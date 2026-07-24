@@ -29,11 +29,16 @@ struct U {
 };
 
 // ---- vertex streams (== tile57 ABI structs) --------------------------------
-struct ChartVertex {            // tile57_gpu_vertex, 24 B
-    float2 world;               // web-mercator [0,1], camera-relative
-    float2 local;               // anchor-relative reference px
+struct ChartVertex {            // tile57_gpu_vertex, 28 B
+    // packed_float2, NOT float2: float2 is 8-aligned in MSL, which would pad
+    // this struct's array stride to 32 while the CPU writes 28-byte-packed
+    // vertices — every vertex after the first would read garbage.
+    packed_float2 world;        // web-mercator [0,1], camera-relative
+    packed_float2 local;        // anchor-relative reference px
     float  scamin;              // SCAMIN 1:N denominator (<=0 => always visible)
     uint   packed;              // low byte disp_cat, next byte map_align
+    uchar4 color;               // straight-alpha RGBA — per-vertex so ranges of
+                                // different colours merge into one draw
 };
 
 struct QuadVertex {             // tile57_gpu_quad, 40 B
@@ -84,7 +89,7 @@ vertex ChartOut chart_vert(uint vid [[vertex_id]],
 
     ChartOut out;
     out.pos = visible(u, disp_cat, v.scamin) ? clip : float4(0.0, 0.0, 2.0, 1.0); // z=2 -> clipped
-    out.color = u.color;
+    out.color = float4(v.color) / 255.0;
     return out;
 }
 
