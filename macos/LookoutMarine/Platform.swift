@@ -93,13 +93,12 @@ enum Platform {
         let link = CADisplayLink(target: target, selector: selector)
         // Without an explicit range iOS ADAPTIVELY DOWNSHIFTS the link when
         // frames miss (a chart pinch is exactly that workload) and then stays
-        // low — measured as a 30-45fps cap. PIN 60, don't chase 120: during
-        // touch a ProMotion display boosts the link to 120Hz, and at that
-        // cadence the 3-drawable pool (2 in flight + 1 still on glass) runs
-        // dry and nextDrawable blocks — measured as acquire spiking to ~15ms
-        // with fps dips to ~40 exactly while interacting. A steady 60 beats
-        // a stuttering 120.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+        // low — measured as a 30-45fps cap. 60-120: with rendering on its own
+        // queue, a ProMotion 120Hz boost is safe — a pool-dry nextDrawable
+        // wait paces the RENDER thread only (that wait starved gesture
+        // processing when rendering rode the main thread, which is why this
+        // was pinned to 60 for a while).
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         return link
         #endif
     }

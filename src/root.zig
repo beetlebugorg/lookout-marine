@@ -140,6 +140,11 @@ pub const Lookout = struct {
     // zoom level we're heading toward, so crossing that boundary is a cache hit,
     // not a fresh portray.
     build_thread: ?std.Thread = null,
+    // API-entry lock (see capi.locked): serializes the C ABI between the
+    // host's input thread and its render thread. Distinct from engine_mu,
+    // which serializes ENGINE access between API calls and the build worker;
+    // api_mu is always the OUTER lock of the two.
+    api_mu: OsUnfairLock = .{},
     // Serializes ENGINE entry from other threads against the build worker: the
     // engine mutates shared state on any access (reader directory caches decode
     // lazily, the geometry cache inserts/evicts), so a main-thread pick during
@@ -960,6 +965,13 @@ pub const Lookout = struct {
     // `self` mutation and no GPU — safe on a worker thread. A library (many
     // cells) goes through the compositor so seams stitch; a single chart to its
     // own archive.
+    pub fn apiLock(self: *Lookout) void {
+        os_unfair_lock_lock(&self.api_mu);
+    }
+    pub fn apiUnlock(self: *Lookout) void {
+        os_unfair_lock_unlock(&self.api_mu);
+    }
+
     fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
         os_unfair_lock_lock(&self.engine_mu);
         defer os_unfair_lock_unlock(&self.engine_mu);

@@ -50,6 +50,15 @@ final class ChartController: NSObject {
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval = 0
     private var idleTicks = 0
+    /// Rendering runs OFF the main thread so UIKit gesture bursts can never
+    /// delay a frame slot (the 120Hz budget is 8.3ms). The display link stays
+    /// on main as the pacemaker; each tick hands one render to this queue.
+    /// The C ABI serializes itself (api_mu), so gestures landing mid-render
+    /// simply wait a millisecond or two.
+    private let renderQueue = DispatchQueue(label: "lookout.render", qos: .userInteractive)
+    /// Main-thread-only: a render is queued or running; further ticks skip
+    /// instead of piling up (the link fires again next vsync anyway).
+    private var renderInFlight = false
 
     // MARK: - Lifecycle
 
@@ -140,8 +149,13 @@ final class ChartController: NSObject {
 
     func close() {
         stopDisplayLink()
-        if let h = handle { lookout_close(h) }
+        // The render queue is the only other caller into the handle; a sync
+        // barrier here means close never destroys a lookout mid-render (the
+        // ABI's api_mu cannot protect against its own destruction).
+        let h = handle
         handle = nil
+        renderQueue.sync {}
+        if let h { lookout_close(h) }
     }
 
     // MARK: - Render loop (on-demand)
@@ -191,9 +205,18 @@ final class ChartController: NSObject {
         if model?.isBuilding != building { model?.isBuilding = building }
 
         if animating || lookout_needs_redraw(h) != 0 {
-            _ = lookout_render(h)
+            if !renderInFlight {
+                renderInFlight = true
+                renderQueue.async { [weak self] in
+                    _ = lookout_render(h)
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.renderInFlight = false
+                        self.pushReadouts()
+                    }
+                }
+            }
             idleTicks = 0
-            pushReadouts()
         } else if building {
             // A background tessellation is filling in — keep ticking so it appears.
             idleTicks = 0
