@@ -90,6 +90,8 @@ pub const Gpu = struct {
     glyph_tex: ?*cc.lkm_tex = null,
     glyph_bold_tex: ?*cc.lkm_tex = null,
     glyph_italic_tex: ?*cc.lkm_tex = null,
+    /// recordDraws outcome signature — a new line prints only when it changes.
+    last_draw_log: u64 = 0,
     /// 2^(display_zoom - scene_build_zoom): scales the pattern cell period so a
     /// constant-screen-size fill tracks the (MVP-scaled) geometry during a zoom
     /// instead of swimming, resetting to 1 when the scene rebuilds at the new zoom.
@@ -226,6 +228,29 @@ pub const Gpu = struct {
         }
         if (s.range_count > 0) {
             out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+            // BOUNDS AUDIT: a range pointing past its buffer draws undefined
+            // memory — recycled heap on one platform (often coincidentally
+            // correct), fresh zero pages on another (tile-shaped nothing).
+            // The scene hash never covered ranges, so this must scream.
+            var bad_tri: u32 = 0;
+            var bad_quad: u32 = 0;
+            var bad_idx: u32 = 0;
+            for (out.ranges) |r| {
+                const first: u64 = r.first;
+                const count: u64 = r.count;
+                if (r.prim == cc.TILE57_GPU_TRIANGLES) {
+                    if (first + count > s.index_count) bad_tri += 1;
+                } else {
+                    if (first + count > s.quad_count * 6) bad_quad += 1;
+                }
+            }
+            if (s.index_count > 0) {
+                for (s.indices[0..s.index_count]) |ii| {
+                    if (ii >= s.vertex_count) bad_idx += 1;
+                }
+            }
+            if (bad_tri + bad_quad + bad_idx > 0)
+                std.debug.print("SCENE BOUNDS VIOLATION: {d} tri-ranges, {d} quad-ranges past their buffers; {d} indices past vertex count (verts={d} idx={d} quads={d})\n", .{ bad_tri, bad_quad, bad_idx, s.vertex_count, s.index_count, s.quad_count });
         }
         if (s.pattern_count > 0) {
             out.patterns = try alloc.alloc(PatternTex, s.pattern_count);
@@ -287,13 +312,31 @@ pub const Gpu = struct {
     // host gates by skipping the draw). The pattern anchor + per-cell period
     // ride the uniform.
     fn recordDraws(self: *Gpu, f: *cc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
-        const s = if (self.scene) |*sc| sc else return;
+        const s = if (self.scene) |*sc| sc else {
+            if (self.last_draw_log != 0) {
+                self.last_draw_log = 0;
+                std.debug.print("draw: NO SCENE (nothing to draw)\n", .{});
+            }
+            return;
+        };
         self.labelDebug(s);
+        var drawn: u32 = 0;
+        var sk_text: u32 = 0;
+        var sk_sound: u32 = 0;
+        var sk_patt: u32 = 0;
+        var sk_nobuf: u32 = 0;
+        var sk_noatlas: u32 = 0;
 
         for (s.ranges) |r| {
             switch (r.kind) {
-                cc.TILE57_GPU_TEXT => if (!text_on) continue,
-                cc.TILE57_GPU_SOUNDING => if (!sound_on) continue,
+                cc.TILE57_GPU_TEXT => if (!text_on) {
+                    sk_text += 1;
+                    continue;
+                },
+                cc.TILE57_GPU_SOUNDING => if (!sound_on) {
+                    sk_sound += 1;
+                    continue;
+                },
                 else => {},
             }
             var uu = u;
@@ -304,7 +347,10 @@ pub const Gpu = struct {
             // range only; SCAMIN still culls them (disp_cat != base).
             if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
             if (r.prim == cc.TILE57_GPU_TRIANGLES) {
-                const vbuf = s.vbuf orelse continue;
+                const vbuf = s.vbuf orelse {
+                    sk_nobuf += 1;
+                    continue;
+                };
                 cc.lkm_bind_vbuf(f, vbuf);
                 if (r.pattern != cc.TILE57_GPU_NO_PATTERN and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
                     const pt = s.patterns[r.pattern];
@@ -315,6 +361,7 @@ pub const Gpu = struct {
                     cc.lkm_set_pipeline(f, cc.LKM_PIPE_PATTERN);
                     cc.lkm_bind_texture(f, pt.tex.?);
                 } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
+                    sk_patt += 1;
                     continue; // a pattern with no cell texture: the fill under it already drew
                 } else {
                     uu.color = normColor(r.color);
@@ -322,8 +369,12 @@ pub const Gpu = struct {
                 }
                 cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
                 cc.lkm_draw(f, r.first, r.count);
+                drawn += 1;
             } else { // QUADS
-                const qbuf = s.qbuf orelse continue;
+                const qbuf = s.qbuf orelse {
+                    sk_nobuf += 1;
+                    continue;
+                };
                 const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or
                     r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or
                     r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
@@ -332,13 +383,33 @@ pub const Gpu = struct {
                     cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
                     cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
                     else => self.sprite_tex,
-                } orelse continue;
+                } orelse {
+                    sk_noatlas += 1;
+                    continue;
+                };
                 cc.lkm_set_pipeline(f, if (is_glyph) cc.LKM_PIPE_SDF else cc.LKM_PIPE_SPRITE);
                 cc.lkm_bind_vbuf(f, qbuf);
                 cc.lkm_bind_texture(f, tex);
                 cc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
                 cc.lkm_draw(f, r.first, r.count);
+                drawn += 1;
             }
+        }
+        // One line per DISTINCT draw outcome (not per frame): what the GPU was
+        // actually asked to draw for this scene, and everything withheld, with
+        // reasons. The scene said what exists; this says what made it to Metal.
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&drawn));
+        h.update(std.mem.asBytes(&sk_text));
+        h.update(std.mem.asBytes(&sk_sound));
+        h.update(std.mem.asBytes(&sk_patt));
+        h.update(std.mem.asBytes(&sk_nobuf));
+        h.update(std.mem.asBytes(&sk_noatlas));
+        h.update(std.mem.asBytes(&s.index_count));
+        const sig = h.final();
+        if (sig != self.last_draw_log) {
+            self.last_draw_log = sig;
+            std.debug.print("draw: {d}/{d} ranges to GPU (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ drawn, s.ranges.len, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
         }
     }
 
