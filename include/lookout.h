@@ -115,6 +115,8 @@ void lookout_adjust_size(lookout *h, float factor);
 void lookout_rotate_drag_logical(lookout *h, float x0_pt, float y0_pt, float x1_pt, float y1_pt);
 /* Snap the view back to north-up. */
 void lookout_reset_rotation(lookout *h);
+/* OS memory warning: trim reclaimable engine caches at the next safe point. */
+void lookout_memory_warning(lookout *h);
 /* Start a momentum pan with a logical-px/sec velocity (0,0 stops any coast when
  * a grab starts). */
 void lookout_fling_start(lookout *h, double vx, double vy);

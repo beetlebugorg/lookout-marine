@@ -16,6 +16,15 @@ pub const SpriteAtlas = struct {
     parsed: std.json.Parsed(std.json.Value), // keeps the cell-name strings alive
     alloc: std.mem.Allocator,
 
+    /// Free the pixel plane ONLY (the GPU has its copy after upload); the cell
+    /// map stays. ~150 MB at a device-density bake — pure waste to retain.
+    pub fn freePixels(self: *SpriteAtlas) void {
+        if (self.pixels != null) {
+            cc.stbi_image_free(self.pixels);
+            self.pixels = null;
+        }
+    }
+
     pub fn deinit(self: *SpriteAtlas) void {
         cc.stbi_image_free(self.pixels);
         self.cells.deinit(self.alloc);
@@ -41,6 +50,14 @@ pub const GlyphAtlas = struct {
     glyphs: std.AutoHashMapUnmanaged(u21, GlyphInfo),
     parsed: std.json.Parsed(std.json.Value),
     alloc: std.mem.Allocator,
+
+    /// Free the pixel plane ONLY (the GPU has its copy after upload).
+    pub fn freePixels(self: *GlyphAtlas) void {
+        if (self.pixels != null) {
+            cc.stbi_image_free(self.pixels);
+            self.pixels = null;
+        }
+    }
 
     pub fn deinit(self: *GlyphAtlas) void {
         cc.stbi_image_free(self.pixels);

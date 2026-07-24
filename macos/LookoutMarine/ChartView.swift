@@ -452,6 +452,12 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         layer.backgroundColor = CGColor(red: 0.576, green: 0.682, blue: 0.733, alpha: 1)
         isMultipleTouchEnabled = true
         installGestures()
+        // OS memory pressure: hand the warning to the engine, which trims its
+        // reclaimable caches at the next safe point instead of ignoring it.
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            if let h = self?.controller?.handle { lookout_memory_warning(h) }
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 

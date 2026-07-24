@@ -173,6 +173,37 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // --tour: a long pan+zoom SESSION in one process — hop the camera along
+    // the coast at several zooms per stop, building every view. The leak
+    // detector: run it and watch the process RSS; a healthy engine plateaus.
+    for (args) |a2| {
+        if (std.mem.eql(u8, a2, "--tour")) {
+            const stops = [_][2]f64{
+                .{ -83.1, 45.6 },  .{ -82.5, 44.0 },  .{ -79.5, 43.3 },  .{ -76.3, 39.0 },
+                .{ -76.0, 37.0 },  .{ -75.5, 35.2 },  .{ -79.9, 32.7 },  .{ -81.4, 30.4 },
+                .{ -80.1, 25.8 },  .{ -82.5, 27.8 },  .{ -88.0, 30.3 },  .{ -90.1, 29.1 },
+                .{ -93.3, 29.8 },  .{ -95.0, 29.3 },  .{ -122.4, 37.8 }, .{ -123.0, 44.6 },
+                .{ -122.3, 47.6 }, .{ -149.9, 61.2 }, .{ -157.9, 21.3 }, .{ -70.9, 42.3 },
+            };
+            var round: usize = 0;
+            while (round < 3) : (round += 1) {
+                for (stops) |st| {
+                    var zz: f64 = 5.0;
+                    while (zz <= 13.0) : (zz += 2.0) { // zoom IN...
+                        l.setView(.{ .lon = st[0], .lat = st[1], .zoom = zz });
+                        try l.build();
+                    }
+                    while (zz >= 5.0) : (zz -= 2.0) { // ...and back OUT
+                        l.setView(.{ .lon = st[0], .lat = st[1], .zoom = zz });
+                        try l.build();
+                    }
+                }
+                std.debug.print("tour round {d} done\n", .{round + 1});
+            }
+            return;
+        }
+    }
+
     // --sweep: drive a zoom SESSION (many sequential builds through the
     // engine's per-tile geometry cache, like a real pinch), then land on the
     // requested view and snapshot. Repros cache-assembly bugs a single build

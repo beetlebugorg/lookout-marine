@@ -211,6 +211,11 @@ export fn lookout_adjust_size(h: ?*lookout, factor: f32) void {
 export fn lookout_rotate_drag_logical(h: ?*lookout, x0_pt: f32, y0_pt: f32, x1_pt: f32, y1_pt: f32) void {
     cast(h).rotateDragLogical(x0_pt, y0_pt, x1_pt, y1_pt);
 }
+/// OS memory warning: trim reclaimable caches at the next safe point.
+export fn lookout_memory_warning(h: ?*lookout) void {
+    cast(h).memoryWarning();
+}
+
 /// Snap the view back to north-up.
 export fn lookout_reset_rotation(h: ?*lookout) void {
     cast(h).resetRotation();

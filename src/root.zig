@@ -147,6 +147,9 @@ pub const Lookout = struct {
     /// prefetch gate — on hardware where a build takes seconds, the single
     /// worker is too precious to spend on a speculative warm.
     last_build_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    /// Set by the host on an OS memory warning; tickBuild trims the engine's
+    /// reclaimable caches at the next safe point (no build in flight).
+    trim_requested: bool = false,
     /// When the last build FAILED (0 = never): tickBuild backs off rather than
     /// respawning the identical failing build every frame — a hot loop that
     /// keeps the exact pressure that made it fail.
@@ -311,6 +314,7 @@ pub const Lookout = struct {
             self.glyph_atlas = null;
             return false;
         };
+        self.glyph_atlas.?.freePixels(); // GPU has its copy
         std.debug.print("glyph atlas: {d}x{d}, {d} glyphs, em {d:.0}\n", .{ a.width, a.height, a.glyphs.count(), a.em_px });
         return true;
     }
@@ -416,6 +420,7 @@ pub const Lookout = struct {
             self.sprite_atlas = null;
             return false;
         };
+        self.sprite_atlas.?.freePixels(); // GPU has its copy; ~150 MB back
         self.atlas_scale = scale;
         return true;
     }
@@ -454,6 +459,7 @@ pub const Lookout = struct {
                 self.sprite_atlas = null;
                 return;
             };
+            self.sprite_atlas.?.freePixels(); // GPU has its copy
             self.atlas_scale = scale;
             std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells (baked)\n", .{ a.width, a.height, scale, a.cells.count() });
             // Cache the fit result (the on-disk PNG/JSON are the baked bytes).
@@ -1070,9 +1076,21 @@ pub const Lookout = struct {
     // real rebuild is about to be needed.
     const PREFETCH_MAX_BUILD_MS = 600;
     const FAIL_BACKOFF_MS = 400;
+    /// OS memory warning: drop what can be rebuilt. Engine caches go at the
+    /// next safe point (between builds); the CPU-side scene copy stays (it IS
+    /// the picture).
+    pub fn memoryWarning(self: *Lookout) void {
+        self.trim_requested = true;
+    }
+
     fn tickBuild(self: *Lookout) void {
         self.pollBuild();
         if (self.build_active) return;
+        if (self.trim_requested) {
+            self.trim_requested = false;
+            cc.tile57_trim_caches(); // safe: no build in flight
+            std.debug.print("memory warning: engine caches trimmed\n", .{});
+        }
         if (self.last_fail_ms != 0 and gpu.ticksMs() - self.last_fail_ms < FAIL_BACKOFF_MS) return;
         if (self.dirty or self.needsRebuild()) {
             self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));
