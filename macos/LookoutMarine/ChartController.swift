@@ -56,9 +56,12 @@ final class ChartController: NSObject {
     /// The C ABI serializes itself (api_mu), so gestures landing mid-render
     /// simply wait a millisecond or two.
     private let renderQueue = DispatchQueue(label: "lookout.render", qos: .userInteractive)
-    /// Main-thread-only: a render is queued or running; further ticks skip
-    /// instead of piling up (the link fires again next vsync anyway).
-    private var renderInFlight = false
+    /// One-render-at-a-time gate. A semaphore, NOT a main-thread flag: the
+    /// gate must reopen the INSTANT the render returns, on the render thread —
+    /// clearing it via a main-queue hop meant the next 120Hz tick often found
+    /// it still closed (main busy with gestures) and skipped, capping the loop
+    /// at ~half the link rate exactly during interaction.
+    private let renderGate = DispatchSemaphore(value: 1)
 
     // MARK: - Lifecycle
 
@@ -205,15 +208,11 @@ final class ChartController: NSObject {
         if model?.isBuilding != building { model?.isBuilding = building }
 
         if animating || lookout_needs_redraw(h) != 0 {
-            if !renderInFlight {
-                renderInFlight = true
+            if renderGate.wait(timeout: .now()) == .success {
                 renderQueue.async { [weak self] in
                     _ = lookout_render(h)
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        self.renderInFlight = false
-                        self.pushReadouts()
-                    }
+                    self?.renderGate.signal()
+                    DispatchQueue.main.async { self?.pushReadouts() }
                 }
             }
             idleTicks = 0
