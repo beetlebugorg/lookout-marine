@@ -61,6 +61,9 @@ lkm_frame *lkm_begin_frame(lkm_ctx *c, const float clear[4]);
 lkm_frame *lkm_begin_offscreen(lkm_ctx *c, uint32_t w_px, uint32_t h_px, const float clear[4]);
 
 void lkm_set_pipeline(lkm_frame *f, int which);
+/* 1 = opaque pass (depth LESS + write, draw front-to-back); 0 = blended pass
+ * (LESS, no write, draw in paint order). Default per frame is 0. */
+void lkm_set_depth_mode(lkm_frame *f, int opaque);
 void lkm_bind_vbuf(lkm_frame *f, lkm_buf *b);
 void lkm_bind_texture(lkm_frame *f, lkm_tex *t);
 void lkm_set_uniforms(lkm_frame *f, const void *bytes, size_t len);

@@ -30,6 +30,10 @@ struct lkm_ctx {
     id<MTLTexture> msaa;           // retained; lazily (re)sized 4x color target
     uint32_t msaa_w, msaa_h;
     int msaa_on;
+    id<MTLTexture> depth;          // retained; lazily (re)sized depth target
+    uint32_t depth_w, depth_h;
+    id<MTLDepthStencilState> ds_opaque; // LESS + write (front-to-back opaque pass)
+    id<MTLDepthStencilState> ds_blend;  // LESS, no write (paint-order blended pass)
     double last_gpu_ms;            // GPU time of the last COMPLETED frame (async;
                                    // written on the completion queue, read racily
                                    // for diagnostics only)
@@ -95,6 +99,7 @@ static id<MTLRenderPipelineState> make_pipe(id<MTLDevice> dev, id<MTLLibrary> li
     id<MTLRenderPipelineState> p = nil;
     if (vf && ff) {
         d.rasterSampleCount = samples;
+        d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
         MTLRenderPipelineColorAttachmentDescriptor *ca = d.colorAttachments[0];
         ca.pixelFormat = MTLPixelFormatBGRA8Unorm;
         // Straight-alpha over, alpha accumulates (matches the old blend state).
@@ -143,6 +148,13 @@ lkm_ctx *lkm_create(void *metal_layer, const char *msl_source, int want_msaa,
             c->msaa_on = want_msaa && [c->device supportsTextureSampleCount:4];
             atomic_store_explicit(&c->inflight_n, 0, memory_order_relaxed);
             atomic_store_explicit(&c->inflight_ret_ms, lkm_now_ms(), memory_order_relaxed);
+            MTLDepthStencilDescriptor *dd = [[MTLDepthStencilDescriptor alloc] init];
+            dd.depthCompareFunction = MTLCompareFunctionLess;
+            dd.depthWriteEnabled = YES;
+            c->ds_opaque = [c->device newDepthStencilStateWithDescriptor:dd]; // +1
+            dd.depthWriteEnabled = NO;
+            c->ds_blend = [c->device newDepthStencilStateWithDescriptor:dd]; // +1
+            [dd release];
             int samples = c->msaa_on ? 4 : 1;
             if (msaa_out) *msaa_out = c->msaa_on;
 
@@ -197,6 +209,9 @@ void lkm_destroy(lkm_ctx *c) {
         for (int i = 0; i < 4; i++) [c->pipes[i] release];
         [c->sampler release];
         [c->msaa release];
+        [c->depth release];
+        [c->ds_opaque release];
+        [c->ds_blend release];
     }
     free(c);
 }
@@ -258,6 +273,30 @@ void lkm_free_texture(lkm_tex *t) {
     free(t);
 }
 
+static void ensure_depth(lkm_ctx *c, uint32_t w, uint32_t h) {
+    if (c->depth && c->depth_w == w && c->depth_h == h) return;
+    [c->depth release];
+    c->depth = nil;
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                                                 width:w
+                                                                                height:h
+                                                                             mipmapped:NO];
+    if (c->msaa_on) {
+        d.textureType = MTLTextureType2DMultisample;
+        d.sampleCount = 4;
+    }
+    d.usage = MTLTextureUsageRenderTarget;
+    // Same story as the MSAA target: cleared on load, never stored — on TBDR
+    // GPUs the depth samples live only in tile memory.
+    if ([c->device supportsFamily:MTLGPUFamilyApple2])
+        d.storageMode = MTLStorageModeMemoryless;
+    else
+        d.storageMode = MTLStorageModePrivate;
+    c->depth = [c->device newTextureWithDescriptor:d]; // +1
+    c->depth_w = w;
+    c->depth_h = h;
+}
+
 static void ensure_msaa(lkm_ctx *c, uint32_t w, uint32_t h) {
     if (!c->msaa_on) return;
     if (c->msaa && c->msaa_w == w && c->msaa_h == h) return;
@@ -286,7 +325,12 @@ static void ensure_msaa(lkm_ctx *c, uint32_t w, uint32_t h) {
 static lkm_frame *begin_pass(lkm_ctx *c, id<MTLTexture> target, id<CAMetalDrawable> drawable,
                              id<MTLTexture> readback, uint32_t w, uint32_t h, const float clear[4]) {
     ensure_msaa(c, w, h);
+    ensure_depth(c, w, h);
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.depthAttachment.texture = c->depth;
+    rp.depthAttachment.clearDepth = 1.0; // farthest; paint-order depths are < 1
+    rp.depthAttachment.loadAction = MTLLoadActionClear;
+    rp.depthAttachment.storeAction = MTLStoreActionDontCare;
     MTLRenderPassColorAttachmentDescriptor *ca = rp.colorAttachments[0];
     ca.clearColor = MTLClearColorMake(clear[0], clear[1], clear[2], clear[3]);
     ca.loadAction = MTLLoadActionClear;
@@ -302,6 +346,9 @@ static lkm_frame *begin_pass(lkm_ctx *c, id<MTLTexture> target, id<CAMetalDrawab
     id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
     if (!enc) return NULL;
     [enc setFragmentSamplerState:c->sampler atIndex:0];
+    [enc setDepthStencilState:c->ds_blend]; // default: test only — a host that
+                                            // never draws an opaque pass gets
+                                            // exactly the old painter's order
     lkm_frame *f = calloc(1, sizeof(*f));
     f->ctx = c;
     f->cur_pipe = -1;
@@ -365,6 +412,11 @@ lkm_frame *lkm_begin_offscreen(lkm_ctx *c, uint32_t w, uint32_t h, const float c
         [t release]; // begin_pass retained it as f->readback
         return f;
     }
+}
+
+void lkm_set_depth_mode(lkm_frame *f, int opaque) {
+    if (!f) return;
+    [f->enc setDepthStencilState:opaque ? f->ctx->ds_opaque : f->ctx->ds_blend];
 }
 
 void lkm_set_pipeline(lkm_frame *f, int which) {

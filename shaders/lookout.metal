@@ -29,26 +29,32 @@ struct U {
 };
 
 // ---- vertex streams (== tile57 ABI structs) --------------------------------
-struct ChartVertex {            // tile57_gpu_vertex, 28 B
-    // packed_float2, NOT float2: float2 is 8-aligned in MSL, which would pad
-    // this struct's array stride to 32 while the CPU writes 28-byte-packed
-    // vertices — every vertex after the first would read garbage.
+struct ChartVertex {            // tile57_gpu_vertex, 32 B
+    // packed_float2 keeps the stride EXACTLY the CPU struct's — natural float2
+    // alignment once sheared a 28-byte layout to a 32-byte stride and every
+    // vertex after the first read garbage. 32 happens to be 8-aligned today;
+    // packed stays anyway so a future field can't re-open the trap.
     packed_float2 world;        // web-mercator [0,1], camera-relative
     packed_float2 local;        // anchor-relative reference px
     float  scamin;              // SCAMIN 1:N denominator (<=0 => always visible)
     uint   packed;              // low byte disp_cat, next byte map_align
     uchar4 color;               // straight-alpha RGBA — per-vertex so ranges of
                                 // different colours merge into one draw
+    float  depth;               // paint-order depth (0,1), later = smaller;
+                                // opaque pass: LESS+write, blended: LESS only
 };
 
-struct QuadVertex {             // tile57_gpu_quad, 40 B
-    float2 world;
-    float2 local;
-    float2 uv;
+struct QuadVertex {             // tile57_gpu_quad, 44 B
+    // packed_float2: 44 is not 8-aligned — natural float2 would pad the stride
+    // to 48 and shear the stream (see ChartVertex).
+    packed_float2 world;
+    packed_float2 local;
+    packed_float2 uv;
     uchar4 color;               // sprite: white; text: glyph colour
     float  weight;              // SDF halo width (0 for sprites)
     float  scamin;
     uint   packed;              // disp_cat | map_align<<8 | flip<<16 | tangent_q<<24
+    float  depth;               // paint-order depth — brick quads sit UNDER fills
 };
 
 // Longitude is cyclic: draw each vertex at the world instance nearest the
@@ -87,6 +93,7 @@ vertex ChartOut chart_vert(uint vid [[vertex_id]],
     }
     clip.xy += local * u.px_to_clip * u.size_scale * clip.w;
 
+    clip.z = v.depth * clip.w; // paint-order depth (ortho: w = 1)
     ChartOut out;
     out.pos = visible(u, disp_cat, v.scamin) ? clip : float4(0.0, 0.0, 2.0, 1.0); // z=2 -> clipped
     out.color = float4(v.color) / 255.0;
@@ -113,6 +120,7 @@ vertex PatternOut pattern_vert(uint vid [[vertex_id]],
     ChartVertex v = verts[vid];
     uint disp_cat = v.packed & 0xFFu;
     float4 clip = project(u, v.world);
+    clip.z = v.depth * clip.w; // paint-order depth: patterns depth-test too
     PatternOut out;
     out.pos = visible(u, disp_cat, v.scamin) ? clip : float4(0.0, 0.0, 2.0, 1.0);
     out.anchor = u.anchor_px;
@@ -162,6 +170,7 @@ vertex QuadOut sprite_vert(uint vid [[vertex_id]],
                        local.x * u.rot_sin + local.y * u.rot_cos);
     }
     clip.xy += local * u.px_to_clip * u.size_scale * clip.w;
+    clip.z = v.depth * clip.w; // paint-order depth: brick quads lose to fills above
 
     QuadOut out;
     out.pos = visible(u, disp_cat, v.scamin) ? clip : float4(0.0, 0.0, 2.0, 1.0);

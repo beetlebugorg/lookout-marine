@@ -268,6 +268,28 @@ pub const Gpu = struct {
         }
         if (s.range_count > 0) {
             out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+            // DEPTH AUDIT (diagnostic, env-gated): paint-order depth must strictly decrease
+            // across triangle ranges, or the depth-tested opaque pass inverts.
+            if (std.c.getenv("LOOKOUT_DEPTH_AUDIT") != null and s.index_count > 0) {
+                var prev_d: f32 = 2.0;
+                var bad: u32 = 0;
+                for (s.ranges[0..s.range_count], 0..) |r, ri| {
+                    if (r.prim != cc.TILE57_GPU_TRIANGLES or r.count == 0) continue;
+                    const d = s.vertices[s.indices[r.first]].depth;
+                    var mixed: u32 = 0;
+                    for (s.indices[r.first..][0..r.count]) |ix| {
+                        if (s.vertices[ix].depth != d) mixed += 1;
+                    }
+                    if (mixed > 0) std.debug.print("MIXED DEPTH range {d}: {d}/{d} verts differ from {d}\n", .{ ri, mixed, r.count, d });
+                    if (d >= prev_d) {
+                        bad += 1;
+                        if (bad <= 5)
+                            std.debug.print("DEPTH INVERSION at range {d}: d={d} prev={d} key={d} flags={d}\n", .{ ri, d, prev_d, r.paint_key, r.flags });
+                    }
+                    prev_d = d;
+                }
+                if (bad > 0) std.debug.print("DEPTH AUDIT: {d} inversions of {d} ranges\n", .{ bad, s.range_count });
+            }
             // BOUNDS AUDIT: a range pointing past its buffer draws undefined
             // memory — recycled heap on one platform (often coincidentally
             // correct), fresh zero pages on another (tile-shaped nothing).
@@ -388,6 +410,7 @@ pub const Gpu = struct {
             uu: Uniforms = undefined,
         };
         var run = Run{};
+        var opq_runs: u32 = 0;
         const Flush = struct {
             fn go(f2: *cc.lkm_frame, sc: *const Scene, rn: *const Run, lu: *?Uniforms, us: *u32, dr: *u32) void {
                 if (rn.prim == cc.TILE57_GPU_TRIANGLES) {
@@ -412,6 +435,57 @@ pub const Gpu = struct {
             }
         };
 
+        // PHASE A — OPAQUE, front-to-back, depth write ON: every fragment that
+        // loses the depth test never shades, so stacked S-52 fills cost ~one
+        // shade per pixel instead of one per layer. Walked in REVERSE paint
+        // order (front first); contiguous ranges merge exactly as in phase B.
+        // Correctness leans on per-range depth, not draw order — order here is
+        // purely an early-z optimization.
+        // Diagnostic valve: single-phase painter's order (no opaque pass) — the
+        // ground truth to diff against when a depth-pass artifact is suspected.
+        const two_phase = std.c.getenv("LOOKOUT_NO_OPAQUE_PASS") == null;
+        if (s.vbuf != null and s.ibuf != null and two_phase) {
+            cc.lkm_set_depth_mode(f, 1);
+            var a_first: u32 = 0;
+            var a_count: u32 = 0;
+            var a_uu: Uniforms = u;
+            var i: usize = s.ranges.len;
+            while (i > 0) {
+                i -= 1;
+                const r = s.ranges[i];
+                if ((r.flags & 1) == 0 or r.prim != cc.TILE57_GPU_TRIANGLES or r.pattern != cc.TILE57_GPU_NO_PATTERN) continue;
+                if (r.kind == cc.TILE57_GPU_TEXT and !text_on) continue; // counted in phase B
+                if (r.kind == cc.TILE57_GPU_SOUNDING and !sound_on) continue;
+                var uu = u;
+                if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2; // same tweak as phase B
+                ranges_drawn += 1;
+                if (a_count > 0 and r.first + r.count == a_first and
+                    std.mem.eql(u8, std.mem.asBytes(&a_uu), std.mem.asBytes(&uu)))
+                {
+                    a_first = r.first;
+                    a_count += r.count;
+                    continue;
+                }
+                if (a_count > 0) {
+                    const orun = Run{ .active = true, .prim = r.prim, .pipe = cc.LKM_PIPE_CHART, .tex = null, .first = a_first, .count = a_count, .uu = a_uu };
+                    Flush.go(f, s, &orun, &last_u, &usets, &drawn);
+                    opq_runs += 1;
+                }
+                a_first = r.first;
+                a_count = r.count;
+                a_uu = uu;
+            }
+            if (a_count > 0) {
+                const orun = Run{ .active = true, .prim = cc.TILE57_GPU_TRIANGLES, .pipe = cc.LKM_PIPE_CHART, .tex = null, .first = a_first, .count = a_count, .uu = a_uu };
+                Flush.go(f, s, &orun, &last_u, &usets, &drawn);
+                opq_runs += 1;
+            }
+        }
+
+        // PHASE B — everything else in paint order, depth test only: content
+        // UNDER an opaque surface is culled by the phase-A depth, everything
+        // else blends exactly as painter's order always did.
+        cc.lkm_set_depth_mode(f, 0);
         for (s.ranges) |r| {
             switch (r.kind) {
                 cc.TILE57_GPU_TEXT => if (!text_on) {
@@ -424,6 +498,7 @@ pub const Gpu = struct {
                 },
                 else => {},
             }
+            if (two_phase and (r.flags & 1) != 0 and r.prim == cc.TILE57_GPU_TRIANGLES and r.pattern == cc.TILE57_GPU_NO_PATTERN) continue; // drew in phase A
             var uu = u;
             // Soundings ride the mariner's show_soundings switch (the sound_on gate
             // above), NOT the OTHER display category — S-52 files SOUNDG under OTHER,
