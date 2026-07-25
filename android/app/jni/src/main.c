@@ -96,10 +96,10 @@ int main(int argc, char *argv[]) {
     Uint64 last = SDL_GetTicks();
 
     while (running) {
+        bool dirty = false; // an interaction this tick -> force a render
         SDL_Event e;
         // Block up to a frame for input, then drain the queue — event-driven so
-        // an idle chart isn't burning the CPU/GPU (the emulator's software
-        // Vulkan is slow; a real device runs this at display rate).
+        // an idle chart isn't burning the CPU/GPU.
         if (SDL_WaitEventTimeout(&e, 16)) {
             do {
                 switch (e.type) {
@@ -110,6 +110,7 @@ int main(int argc, char *argv[]) {
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                         win_w = (float)e.window.data1;
                         win_h = (float)e.window.data2;
+                        dirty = true;
                         break;
                     case SDL_EVENT_FINGER_DOWN:
                         finger_down(e.tfinger.fingerID, e.tfinger.x, e.tfinger.y);
@@ -118,7 +119,6 @@ int main(int argc, char *argv[]) {
                         finger_up(e.tfinger.fingerID);
                         break;
                     case SDL_EVENT_FINGER_MOTION:
-                        // update tracked position
                         for (int i = 0; i < g_nfingers; i++) {
                             if (g_fingers[i].id == e.tfinger.fingerID) {
                                 g_fingers[i].x = e.tfinger.x;
@@ -135,18 +135,36 @@ int main(int argc, char *argv[]) {
                             if (g_pinch_dist > 1.0f && dist > 1.0f) {
                                 const double dz = log2((double)(dist / g_pinch_dist)); // apart => zoom in
                                 lookout_zoom_at(l, dz, (ax + bx) * 0.5f, (ay + by) * 0.5f);
+                                SDL_Log("pinch: dz=%.3f dist=%.1f mid=(%.0f,%.0f)", dz, dist, (ax + bx) * 0.5f, (ay + by) * 0.5f);
+                                dirty = true;
                             }
                             g_pinch_dist = dist;
                         } else {
-                            // one finger: pan (drag the chart with the finger —
-                            // positive sign, matching the Apple shell).
+                            // one finger: pan (drag the chart with the finger).
                             lookout_pan(l, e.tfinger.dx * win_w, e.tfinger.dy * win_h);
+                            dirty = true;
                         }
                         break;
                     case SDL_EVENT_MOUSE_WHEEL:
-                        // emulator convenience: wheel zooms at the screen centre.
                         lookout_zoom_at(l, (double)e.wheel.y * 0.3, win_w * 0.5f, win_h * 0.5f);
+                        SDL_Log("wheel: y=%.2f", e.wheel.y);
+                        dirty = true;
                         break;
+                    case SDL_EVENT_KEY_DOWN: {
+                        // Keyboard zoom — always available on the emulator's HW
+                        // keyboard, so it isolates zoom from touch/wheel input.
+                        // '+'/'=' in, '-' out.
+                        const SDL_Keycode k = e.key.key;
+                        double dz = 0;
+                        if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) dz = 0.5;
+                        else if (k == SDLK_MINUS || k == SDLK_KP_MINUS) dz = -0.5;
+                        if (dz != 0) {
+                            lookout_zoom_at(l, dz, win_w * 0.5f, win_h * 0.5f);
+                            SDL_Log("key zoom: dz=%.2f (win %.0fx%.0f)", dz, win_w, win_h);
+                            dirty = true;
+                        }
+                        break;
+                    }
                     default:
                         break;
                 }
@@ -157,7 +175,7 @@ int main(int argc, char *argv[]) {
         const double dt = (double)(now - last) / 1000.0;
         last = now;
         if (lookout_animating(l)) lookout_tick_anim(l, dt);
-        if (lookout_needs_redraw(l) || lookout_animating(l)) lookout_render(l);
+        if (dirty || lookout_needs_redraw(l) || lookout_animating(l)) lookout_render(l);
     }
 
     lookout_close(l);
