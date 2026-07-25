@@ -1,4 +1,4 @@
-# XcodeGen spec for the lookout-marine macOS app.
+# XcodeGen spec for the Lookout Marine app (macOS + iOS/iPadOS).
 #
 # Why XcodeGen: it declares the whole target — build settings, the Zig run-script
 # phase, header/library search paths, framework links, bridging header — in this
@@ -9,8 +9,11 @@
 #     cd macos && xcodegen generate # writes LookoutMarine.xcodeproj
 #     open LookoutMarine.xcodeproj
 #
-# Set TILE57_DIR (below, or in Xcode) to your tile57 checkout. The pre-build
-# script runs `zig build` to produce liblookout_marine.a before compiling Swift.
+# The only other tool needed is Zig: the pre-build script runs `zig build`,
+# which builds the lookout core AND the tile57 engine (a zig package
+# dependency — a sibling ../tile57 checkout if present, else fetched
+# automatically per the pin in ../build.zig.zon) and installs the archives +
+# headers into ../zig-out*/ for the app target to link.
 
 name: LookoutMarine
 
@@ -20,11 +23,6 @@ options:
     macOS: "14.0"
     iOS: "17.0"
   createIntermediateGroups: true
-
-settings:
-  base:
-    # Point this at your tile57 checkout (contains include/ and zig-out/lib/).
-    TILE57_DIR: "$(SRCROOT)/../../tile57"
 
 targets:
   LookoutMarine:
@@ -45,12 +43,14 @@ targets:
         CODE_SIGN_ENTITLEMENTS: LookoutMarine/LookoutMarine.entitlements
         CODE_SIGN_STYLE: Automatic
         SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        # The Zig cores are built arm64-only (Apple Silicon) — without this a
+        # Release build tries a universal binary and the x86_64 slice fails.
+        ARCHS: arm64
         # Let the Zig build phase run without the user-script sandbox blocking it.
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        # lookout.h (repo include/) and tile57.h.
+        # lookout.h + tile57.h, both installed by `zig build`.
         HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/../include"
-          - "$(TILE57_DIR)/include"
+          - "$(SRCROOT)/../zig-out/include"
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../zig-out/lib"
         # The merged, libtool-repacked Zig cores (see the pre-build script) —
@@ -64,18 +64,16 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: UniformTypeIdentifiers.framework
     preBuildScripts:
-      - name: Build Zig cores (tile57 + liblookout_marine.a)
+      - name: Build Zig cores (lookout + tile57 dependency)
         basedOnDependencyAnalysis: false
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          # Provenance: the build log states exactly which checkouts and
-          # commits these cores came from — never infer it again.
-          echo "zig cores: tile57=$TILE57_DIR @ $(git -C "$TILE57_DIR" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?')"
-          test -f "$TILE57_DIR/build.zig" || { echo "error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout" >&2; exit 1; }
-          # Build the tile57 ENGINE first so its libtile57.a exists before the
-          # lookout core links it. Zig's cache makes this ~instant when tile57
-          # is unchanged. (Previously a manual prerequisite.)
+          # Provenance: the build log states exactly which sources these cores
+          # came from — never infer it again. tile57 is a zig package
+          # dependency: a sibling checkout when present, else the zon pin.
+          T57="$SRCROOT/../../tile57"
+          echo "zig cores: lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f "$T57/build.zig" ] && git -C "$T57" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')"
           # Version the target at the DEPLOYMENT minimum: an unversioned native
           # build stamps objects with the build machine's OS and ld warns
           # "built for newer macOS version than being linked" on every object.
@@ -83,13 +81,16 @@ targets:
           # An explicit -Dtarget makes zig a CROSS build: no automatic SDK
           # discovery, so hand it the sysroot like the iOS script does.
           MAC_SYSROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
-          ( cd "$TILE57_DIR" && zig build lib -Doptimize=ReleaseFast -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT" )
           cd "$SRCROOT/.."
-          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT"
+          # One build: the tile57 engine (zig package dependency) + the lookout
+          # core, installing liblookout_marine.a, libtile57.a, and both headers
+          # into zig-out/. ReleaseFast is the build.zig default; explicit here
+          # so the app build states its intent.
+          zig build -Doptimize=ReleaseFast -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT"
           # Zig's outputs are deterministic, so an unchanged core hashes
           # identically — used twice below: to skip the repack, and to force
           # Xcode to relink when the core DID change.
-          CORE_HASH=$(cat "zig-out/lib/liblookout_marine.a" "$TILE57_DIR/zig-out/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
+          CORE_HASH=$(cat "zig-out/lib/liblookout_marine.a" "zig-out/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
 
           # ld64 AND libtool both drop/reject zig-emitted archive members
           # ("64-bit mach-o not 8-byte aligned"), so the raw archives are never
@@ -102,7 +103,7 @@ targets:
             REPACK="zig-out/repack"
             rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
             (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
-            (cd "$REPACK/tile57"  && ar x "$TILE57_DIR/zig-out/lib/libtile57.a")
+            (cd "$REPACK/tile57"  && ar x ../../lib/libtile57.a)
             chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
             xcrun -sdk macosx libtool -static \
               -o "zig-out/lib/liblookoutall.a" \
@@ -122,12 +123,12 @@ targets:
             rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
           fi
 
-  # ---- iOS -------------------------------------------------------------------
+  # ---- iOS / iPadOS ----------------------------------------------------------
   # Same Swift sources; the chart renders via Metal into ChartUIView's own
   # CAMetalLayer (the plain-UIKit input window), with the SwiftUI chrome in a
-  # PassThroughWindow above. Only dependency beyond this repo: tile57
-  # cross-built per platform (the pre-build script expects
-  # $TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a).
+  # PassThroughWindow above. No dependency beyond this repo: the pre-build
+  # script cross-builds the zig cores (tile57 included, as a package
+  # dependency) per platform into ../zig-out-$PLATFORM_NAME/.
   LookoutMarine-iOS:
     type: application
     platform: iOS
@@ -152,8 +153,7 @@ targets:
         # supported devices) — don't ask ld for x86_64.
         ARCHS: arm64
         HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/../include"
-          - "$(TILE57_DIR)/include"
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include"
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
         # The merged, libtool-repacked Zig cores (see the pre-build script).
@@ -166,15 +166,16 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: UniformTypeIdentifiers.framework
     preBuildScripts:
-      - name: Build Zig cores for iOS (tile57 + liblookout_marine.a)
+      - name: Build Zig cores for iOS (lookout + tile57 dependency)
         basedOnDependencyAnalysis: false
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          # Provenance: the build log states exactly which checkouts and
-          # commits these cores came from — never infer it again.
-          echo "zig cores: tile57=$TILE57_DIR @ $(git -C "$TILE57_DIR" rev-parse --short HEAD 2>/dev/null || echo '?') | lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?')"
-          test -f "$TILE57_DIR/build.zig" || { echo "error: TILE57_DIR ($TILE57_DIR) is not a tile57 checkout" >&2; exit 1; }
+          # Provenance: the build log states exactly which sources these cores
+          # came from — never infer it again. tile57 is a zig package
+          # dependency: a sibling checkout when present, else the zon pin.
+          T57="$SRCROOT/../../tile57"
+          echo "zig cores: lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f "$T57/build.zig" ] && git -C "$T57" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')"
           # Versioned at the deployment minimum — see the macOS target's note.
           IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
           case "$PLATFORM_NAME" in
@@ -187,25 +188,19 @@ targets:
           # -> an empty --sysroot). Fall back to xcrun for non-Xcode invocations.
           SYSROOT="${SDKROOT:-$(xcrun --sdk "$PLATFORM_NAME" --show-sdk-path)}"
 
-          # 1) Cross-build the tile57 ENGINE for this platform, so its
-          #    libtile57.a exists before the lookout core links it. Zig's cache
-          #    makes this ~instant when tile57 is unchanged. (Previously a manual
-          #    prerequisite; see macos/README.md "iOS".)
-          ( cd "$TILE57_DIR" && zig build lib \
-              -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseFast \
-              --sysroot "$SYSROOT" -p "zig-out-$PLATFORM_NAME" )
-
-          # 2) Cross-build the lookout core against it.
+          # One cross-build: the tile57 engine (zig package dependency) + the
+          # lookout core, installing both archives + headers into
+          # zig-out-$PLATFORM_NAME/ (device and simulator keep separate
+          # prefixes). Zig's cache makes unchanged rebuilds ~instant.
           cd "$SRCROOT/.."
-          zig build -Dtile57="$TILE57_DIR" -Doptimize=ReleaseFast \
-            -Dtile57_lib="$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a" \
+          zig build -Doptimize=ReleaseFast \
             -Dtarget="$ZIG_TARGET" \
             --sysroot "$SYSROOT" \
             -p "zig-out-$PLATFORM_NAME"
           # Zig's outputs are deterministic, so an unchanged core hashes
           # identically — used twice below: to skip the repack, and to force
           # Xcode to relink when the core DID change.
-          CORE_HASH=$(cat "zig-out-$PLATFORM_NAME/lib/liblookout_marine.a" "$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
+          CORE_HASH=$(cat "zig-out-$PLATFORM_NAME/lib/liblookout_marine.a" "zig-out-$PLATFORM_NAME/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
 
           # ld64 AND libtool both drop zig-emitted archive members ("64-bit
           # mach-o not 8-byte aligned"), so feeding the archives to libtool
@@ -219,7 +214,7 @@ targets:
             REPACK="zig-out-$PLATFORM_NAME/repack"
             rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
             (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
-            (cd "$REPACK/tile57"  && ar x "$TILE57_DIR/zig-out-$PLATFORM_NAME/lib/libtile57.a")
+            (cd "$REPACK/tile57"  && ar x ../../lib/libtile57.a)
             chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
             xcrun -sdk "$PLATFORM_NAME" libtool -static \
               -o "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" \

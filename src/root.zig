@@ -24,7 +24,7 @@ pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 }
 
 /// Base mariner for a build: the user's state, but with the live-gated axes
 /// forced permissive so EVERY feature reaches the surface tagged, then gated
-/// per-frame in the shader (NOTES.md §3). Geometry-affecting fields (contours,
+/// per-frame in the shader. Geometry-affecting fields (contours,
 /// units, dates, groups…) pass through unchanged.
 fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_mariner {
     var m = base;

@@ -1,23 +1,22 @@
-# lookout-marine — macOS app
+# Lookout Marine — the app (macOS + iOS/iPadOS)
 
-A native SwiftUI macOS S-52 chartplotter wrapped around the Zig chart core,
-which renders via **Metal directly** into the chart view's own `CAMetalLayer`.
+A native SwiftUI S-52 chartplotter wrapped around the Zig chart core, which
+renders via **Metal directly** into the chart view's own `CAMetalLayer`.
 All app chrome (menu bar, HUD, zoom controls, mariner settings, search) is
-native SwiftUI; the chart itself is one GPU-rendered `NSView` driven through the
+native SwiftUI; the chart itself is one GPU-rendered view driven through the
 `lookout.h` C ABI. (The cross-platform SDL_GPU/Vulkan/MoltenVK predecessor
 lives at the `sdl-gpu` git tag.)
 
 ## Prerequisites
 
-- **Xcode** (or Command Line Tools) — macOS 14+ deployment target.
+- **Xcode** — macOS 14+ / iOS 17+ deployment targets.
 - **Zig 0.16.0** on `PATH` (`brew install zig`).
-- **tile57** checked out and built:
-  ```sh
-  cd ../../tile57            # your tile57 checkout
-  git submodule update --init --recursive   # portrayal catalogue
-  zig build                                  # produces zig-out/lib/libtile57.a
-  ```
 - **XcodeGen** to generate the project (`brew install xcodegen`).
+
+tile57 is NOT a prerequisite: it's a zig package dependency of the core. A
+sibling checkout at `../../tile57` is used when present (dev setups — engine
+edits rebuild live); otherwise the commit pinned in `../build.zig.zon` is
+fetched automatically on first build.
 
 ## Build & run
 
@@ -27,26 +26,22 @@ xcodegen generate            # writes LookoutMarine.xcodeproj from project.yml
 open LookoutMarine.xcodeproj
 ```
 
-In Xcode, set **TILE57_DIR** (and `SDL3_DIR` if needed) in the project's build
-settings if the defaults don't match your machine, then Run. The project's
-pre-build script runs `zig build -Dtile57=$TILE57_DIR -Doptimize=ReleaseFast`,
-producing `../zig-out/lib/liblookout_marine.a`, which the app links together with
-`libtile57.a` and SDL3.
+Pick a target and Run. The pre-build script runs
+`zig build -Doptimize=ReleaseFast`, which builds the tile57 engine + the
+lookout core and installs the archives and headers into `../zig-out*/`
+(per-platform prefixes for iOS device vs simulator); the app links the
+libtool-repacked pair as `liblookoutall.a`. The Zig cores are ReleaseFast in
+every configuration — build the app itself with Xcode's Release configuration
+for a fully non-debug binary.
 
 **No Xcode?** `macos/build-dev.sh [--zig]` builds the same app with just the
 Command Line Tools (swiftc + a hand-rolled bundle) into `macos/build/`.
-Override `TILE57` / `SDL3` / `OUT` in the environment if the defaults don't fit.
 
 You need a baked `.pmtiles` chart to see anything: **File ▸ Open Chart…** picks a
 `.pmtiles` file (or a folder of cells to compose a library). On first launch the
 app also probes `$LOOKOUT_OPEN` (a chart, or a folder of cells — handy for dev
 runs from the terminal), then the last recent, then the demo default
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
-
-> The SDL3 dylib is loaded from the Homebrew keg at runtime via an rpath (dev
-> convenience). For distribution, bundle `SDL3` inside the app and add an
-> `@rpath`/`@executable_path/../Frameworks` runpath instead. MoltenVK/Vulkan must
-> be discoverable for `SDL_GPU` (the same requirement as the Zig demo).
 
 ## What's in here
 
@@ -97,18 +92,18 @@ via a hidden always-recentered `UIScrollView` sink (simulator front-ends feed
 scroll views but never `allowedScrollTypesMask` recognizers). Pinch/pan and
 the chrome buttons are verified end-to-end by the XCUITests.
 
-**Building.** No dependency beyond this repo and a tile57 checkout (no SDL, no
-MoltenVK — rendering is direct Metal). Just `xcodegen generate` and build/run
-the **LookoutMarine-iOS** scheme: the pre-build script cross-compiles **both**
-the tile57 engine and `liblookout_marine.a` for the active `PLATFORM_NAME`
-(device vs simulator) and repacks the archives for ld64 (both ld64 and libtool
-silently DROP zig-emitted archive members over an offset-alignment quirk — the
-script extracts to loose objects and repacks; `build-dev.sh` does the same for
-macOS). It resolves the iOS SDK from Xcode's own `$SDKROOT`, so it works even
-when the shell's `xcode-select` points at the Command Line Tools (which have no
-iOS SDK — the `xcrun … --show-sdk-path` you'd run by hand comes back empty).
-`TILE57_DIR` defaults to `$(SRCROOT)/../../tile57`; override it in the project's
-build settings if your checkout is elsewhere.
+**Building.** No dependency beyond this repo (tile57 arrives as the core's zig
+package dependency; no SDL, no MoltenVK — rendering is direct Metal). Just
+`xcodegen generate` and build/run the **LookoutMarine-iOS** scheme: the
+pre-build script runs one `zig build` that cross-compiles the tile57 engine +
+`liblookout_marine.a` for the active `PLATFORM_NAME` (device vs simulator,
+separate `zig-out-*` prefixes) and repacks the archives for ld64 (both ld64
+and libtool silently DROP zig-emitted archive members over an offset-alignment
+quirk — the script extracts to loose objects and repacks; `build-dev.sh` does
+the same for macOS). It resolves the iOS SDK from Xcode's own `$SDKROOT`, so
+it works even when the shell's `xcode-select` points at the Command Line Tools
+(which have no iOS SDK — the `xcrun … --show-sdk-path` you'd run by hand comes
+back empty).
 
 **Gotchas.** FrontBoard caches scene sessions per install: after changing the
 scene configuration, a plain reinstall keeps the stale session and the
@@ -139,8 +134,9 @@ snapshot suite (day / night palette / MVP zoom) before the switch.
   name/feature search is stubbed and labelled "coming soon". It needs a name
   index in tile57 plus a matching `lookout_*` query — out of Phase-1 scope. We do
   not fake results.
-- **iOS target.** Code-complete (see "iOS" above) but not yet built or run on a
-  device: it needs Xcode plus iOS builds of SDL3, MoltenVK, and tile57.
+- **Real-device run.** The simulator app is built and XCUITest-verified; a
+  physical-device run still needs a signing team (and a check of the rotation
+  gesture's sign — see `ChartUIView.onRotate`).
 - **WASM plugin canvas.** Out of scope this phase; the architecture keeps the
   chart `NSView` a clean surface and `ChartController` the single render/state
   owner so the plugin host can hook the same tick later.

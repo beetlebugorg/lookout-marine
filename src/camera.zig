@@ -1,5 +1,5 @@
-//! Camera math in web-mercator [0,1] space (the Surface interface's world space —
-//! see NOTES.md §4). The camera is NEVER baked into vertex data; every frame we
+//! Camera math in web-mercator [0,1] space (the tile57 GPU scene's world
+//! space). The camera is NEVER baked into vertex data; every frame we
 //! rebuild a single MVP from the camera state and hand it to the vertex shader.
 //! Geometry is stored camera-relative to a fixed `origin` so f32 precision holds
 //! even when zoomed into a harbor.

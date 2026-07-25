@@ -1,6 +1,9 @@
 zig-out/
 zig-out-*/
 .zig-cache/
+# Fetched zig packages, materialized per-project (tile57 + the S-101
+# catalogue arrive here on machines without a sibling checkout).
+zig-pkg/
 *.png
 !docs/*.png
 .DS_Store
@@ -8,6 +11,3 @@ zig-out-*/
 # build-iosdev, DerivedData, …) — never tracked.
 macos/build*/
 macos/DerivedData/
-# iOS builds of the native deps (obsolete since the Metal port; kept ignored
-# in case an old checkout still has them).
-ios-deps/

@@ -3,5 +3,19 @@
     .version = "0.1.0",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0x40d25cc1551ceccf,
+    .dependencies = .{
+        // The tile57 chart engine, built from source inside this build. Both
+        // entries are lazy and build.zig picks exactly one: `tile57_local`
+        // when a sibling checkout exists at ../tile57 (dev setups — your
+        // engine edits rebuild live), otherwise the pinned `tile57` git
+        // dependency is fetched automatically, so a fresh clone of this repo
+        // alone builds. Bump the commit + hash here to move the pin.
+        .tile57 = .{
+            .url = "git+https://github.com/beetlebugorg/tile57#4358a4940275162047cf009da26b5ff2cdfab6e7",
+            .hash = "tile57-0.3.0-SAveCMnOeACeVq9Go2k_AuYgcs4prBryD0dGVcch6lFF",
+            .lazy = true,
+        },
+        .tile57_local = .{ .path = "../tile57", .lazy = true },
+    },
     .paths = .{ "build.zig", "build.zig.zon", "src", "shaders", "vendor", "include" },
 }
