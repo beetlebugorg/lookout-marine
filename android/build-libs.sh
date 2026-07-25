@@ -10,9 +10,35 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 core="$(cd "$here/.." && pwd)"
 
-NDK="${ANDROID_NDK:-$HOME/../../opt/homebrew/share/android-commandlinetools/ndk/27.2.12479018}"
-[ -d "$NDK" ] || NDK="/opt/homebrew/share/android-commandlinetools/ndk/27.2.12479018"
+# Locate the NDK: explicit env, else the highest ndk/<version> under a known SDK
+# root (Android Studio, Homebrew cmdline-tools, Linux). Fail loudly rather than
+# passing a bad path (which yields cryptic "stdio.h file not found" C errors).
+find_ndk() {
+    for d in "${ANDROID_NDK:-}" "${ANDROID_NDK_HOME:-}"; do
+        [ -n "$d" ] && [ -d "$d" ] && { echo "$d"; return 0; }
+    done
+    for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" \
+                "$HOME/Library/Android/sdk" "$HOME/Android/Sdk" \
+                "/opt/homebrew/share/android-commandlinetools" \
+                "/usr/local/share/android-commandlinetools"; do
+        [ -n "$root" ] || continue
+        if [ -d "$root/ndk" ]; then
+            local v
+            v="$(ls -1 "$root/ndk" 2>/dev/null | sort -V | tail -1)"
+            [ -n "$v" ] && [ -d "$root/ndk/$v" ] && { echo "$root/ndk/$v"; return 0; }
+        fi
+        [ -d "$root/ndk-bundle" ] && { echo "$root/ndk-bundle"; return 0; }
+    done
+    return 1
+}
+NDK="$(find_ndk)" || {
+    echo "error: Android NDK not found. Set ANDROID_NDK=/path/to/ndk/<version> (or" >&2
+    echo "       install one: sdkmanager 'ndk;27.2.12479018')." >&2
+    exit 1
+}
+echo "using NDK: $NDK"
 SDL_INC="$here/app/jni/SDL/include"
+[ -f "$SDL_INC/SDL3/SDL.h" ] || { echo "error: SDL submodule missing — run: git submodule update --init $here/app/jni/SDL" >&2; exit 1; }
 
 # ABIs to build (space-separated). macOS ships bash 3.2 — no associative arrays.
 ABIS="${ABIS:-arm64-v8a}"
