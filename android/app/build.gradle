@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "org.libsdl.app"
+    namespace = "org.beetlebug.lookout"
     compileSdkVersion 35
     ndkVersion = "27.2.12479018"
     defaultConfig {

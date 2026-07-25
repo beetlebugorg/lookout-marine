@@ -42,7 +42,7 @@ arm64 devices); add ABIs in `build-libs.sh` and `app/build.gradle`.
 # a windowed arm64 emulator (drop -no-window for the phone window)
 $ANDROID_HOME/emulator/emulator -avd <avd> -gpu host &
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n org.beetlebug.lookout/org.libsdl.app.SDLActivity
+adb shell am start -n org.beetlebug.lookout/.LookoutActivity
 adb logcat -s SDL lookout   # logs
 ```
 
