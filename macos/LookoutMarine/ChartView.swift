@@ -44,17 +44,21 @@ struct OverlayLayer: View {
                         if searchOpen {
                             SearchField(model: model)
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
+                                .chromeHitRegion("search-field")
                         }
                         ChromeBubble(system: searchOpen ? "xmark" : "magnifyingglass",
                                      help: "Go to coordinate") {
                             withAnimation(.snappy) { searchOpen.toggle() }
                         }
+                        .chromeHitRegion("search-bubble")
                         ChromeBubble(system: "gearshape", help: "Mariner settings") {
                             model.showSettings = true
                         }
+                        .chromeHitRegion("settings-bubble")
                     }
                     if abs(model.rotationDeg) >= 0.5 {
                         CompassBadge(rotationDeg: model.rotationDeg) { model.northUp() }
+                            .chromeHitRegion("compass")
                     }
                 }
                 .padding(12)
@@ -64,6 +68,7 @@ struct OverlayLayer: View {
             // to the physical trailing edge like the top bubbles.
             .overlay(alignment: .bottomTrailing) {
                 ZoomControls(model: model)
+                    .chromeHitRegion("zoom")
                     .padding(.trailing, 12)
                     .padding(.bottom, 52)
                     .ignoresSafeArea(.container, edges: .trailing)
@@ -71,6 +76,7 @@ struct OverlayLayer: View {
             .overlay(alignment: .bottomLeading) {
                 if !model.pickResults.isEmpty {
                     IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
+                        .chromeHitRegion("identify")
                         .padding(.leading, 12)
                         .padding(.bottom, 52)
                 }
@@ -80,12 +86,39 @@ struct OverlayLayer: View {
             }
             .overlay {
                 if model.showStartupLoader { StartupLoader(preparing: model.preparingSymbols) }
-                else if !model.hasChart { EmptyChartState(model: model) }
+                else if !model.hasChart { EmptyChartState(model: model).chromeHitRegion("empty-state") }
             }
             .animation(.default, value: model.pickResults)
             .animation(.default, value: model.isBuilding)
     }
 }
+
+#if os(iOS)
+/// Publish this view's GLOBAL frame as tappable chrome (see ChromeHitMap):
+/// PassThroughWindow keeps touches inside these frames, everything else falls
+/// through to the chart. The chrome window is full-scene, so SwiftUI's .global
+/// space and the window's hit-test coordinates coincide.
+private struct ChromeHitRegion: ViewModifier {
+    let id: String
+    func body(content: Content) -> some View {
+        content.background {
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { ChromeHitMap.shared.set(id, g.frame(in: .global)) }
+                    .onChange(of: g.frame(in: .global)) { _, f in ChromeHitMap.shared.set(id, f) }
+                    .onDisappear { ChromeHitMap.shared.remove(id) }
+            }
+        }
+    }
+}
+extension View {
+    func chromeHitRegion(_ id: String) -> some View { modifier(ChromeHitRegion(id: id)) }
+}
+#else
+extension View {
+    func chromeHitRegion(_ id: String) -> some View { self }
+}
+#endif
 
 /// One floating circular chrome button (chartplotter-style bubble).
 struct ChromeBubble: View {

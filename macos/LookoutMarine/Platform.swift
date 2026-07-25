@@ -35,18 +35,44 @@ func lkLog(_ message: String) {
 }
 
 #if os(iOS)
+/// The interactive chrome's SCREEN-SPACE footprint, published by the SwiftUI
+/// side (chromeHitRegion modifier) and consulted by PassThroughWindow. The
+/// accessibility-tree scan below remains as a FALLBACK, but it cannot be the
+/// primary mechanism: without an active accessibility client (VoiceOver, UI
+/// tests) SwiftUI materializes that tree lazily or not at all — chrome taps
+/// worked under XCUITest and DIED on a bare device (iPad, first field report).
+/// Frames are plain data written at layout time: deterministic everywhere.
+final class ChromeHitMap {
+    static let shared = ChromeHitMap()
+    private var rects: [String: CGRect] = [:]
+    private let lock = NSLock()
+    func set(_ id: String, _ rect: CGRect) {
+        lock.lock(); defer { lock.unlock() }
+        rects[id] = rect
+    }
+    func remove(_ id: String) {
+        lock.lock(); defer { lock.unlock() }
+        rects[id] = nil
+    }
+    func contains(_ p: CGPoint) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return rects.values.contains { $0.contains(p) }
+    }
+}
+
 /// The chrome window: SwiftUI controls stay interactive, but touches on empty
 /// chrome fall through (hitTest nil) to the input window below.
 ///
 /// SwiftUI draws its controls WITHOUT distinct backing UIViews — a Button
 /// hit-tests as the bare hosting view, identical to empty space — so the
 /// canonical "pass through when the hit is the root view" trick alone would
-/// drop control taps onto the chart. The accessibility tree, however, does
-/// carry every control with an accurate screen frame; consult it to decide.
+/// drop control taps onto the chart. The chrome publishes its interactive
+/// frames (ChromeHitMap); the accessibility tree is the fallback.
 final class PassThroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         guard hit === rootViewController?.view else { return hit } // real subview (sheet, keyboard, …)
+        if ChromeHitMap.shared.contains(point) { return hit }
         return hasInteractiveElement(at: point) ? hit : nil
     }
 
