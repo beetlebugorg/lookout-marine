@@ -120,6 +120,20 @@ final class ChartController: NSObject {
         lookout_fit_chart(h, &v)
         lookout_set_view(h, &v)
 
+        // Dev hook, mirroring $LOOKOUT_OPEN: $LOOKOUT_VIEW="lon,lat,zoom[,rot]"
+        // replaces the fit view at open — deterministic framing for dev runs
+        // and screenshots (simctl forwards it as SIMCTL_CHILD_LOOKOUT_VIEW).
+        if let spec = ProcessInfo.processInfo.environment["LOOKOUT_VIEW"] {
+            let p = spec.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if p.count >= 3 {
+                v = lookout_view(lon: p[0], lat: p[1], zoom: p[2],
+                                 rotation_deg: p.count > 3 ? p[3] : 0)
+                lookout_set_view(h, &v)
+            } else {
+                lkLog("ignoring malformed LOOKOUT_VIEW '\(spec)' (want lon,lat,zoom[,rot])")
+            }
+        }
+
         // HiDPI physical sizing: the engine reads pixel density from the swapchain,
         // but the mariner's device_scale (symbol/text physical size) is set from the
         // backing scale factor here in the bridge, per the app spec.

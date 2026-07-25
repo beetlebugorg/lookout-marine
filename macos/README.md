@@ -41,24 +41,27 @@ You need a baked `.pmtiles` chart to see anything: **File ▸ Open Chart…** pi
 `.pmtiles` file (or a folder of cells to compose a library). On first launch the
 app also probes `$LOOKOUT_OPEN` (a chart, or a folder of cells — handy for dev
 runs from the terminal), then the last recent, then the demo default
-`~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
+`~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`. A second dev hook,
+`$LOOKOUT_VIEW="lon,lat,zoom[,rot]"`, pins the opening camera (deterministic
+framing for screenshots; `simctl launch` forwards both as `SIMCTL_CHILD_*`).
 
 ## What's in here
 
 | File | Role |
 |------|------|
-| `LookoutMarineApp.swift` | `@main` App: window `ZStack`, Settings scene, commands |
-| `ChartView.swift` | `NSViewRepresentable` + backing `NSView`: input, on-demand loop |
-| `ChartController.swift` | `@MainActor` owner of the `lookout*` handle; the one funnel for every `lookout_*` call and the display-link render loop |
-| `AppModel.swift` | Shared observable state; menu/search actions; coordinate parser |
-| `MarinerSettings.swift` | Swift mirror of `tile57_mariner` (round-trips engine-only fields) |
-| `SettingsView.swift` | The S-52 mariner form (⌘,) |
+| `LookoutMarineApp.swift` | `@main` App: window `ZStack`, Settings scene, commands; iOS AppDelegate/SceneDelegate + the two-window stack |
+| `ChartView.swift` | macOS: `NSViewRepresentable` + backing `NSView` (input, on-demand loop). iOS: the chrome `OverlayLayer` + `ChartUIView`, the plain-UIKit gesture surface |
+| `ChartController.swift` | `@MainActor` owner of the `lookout*` handle; the one funnel for every `lookout_*` call, the display-link render loop, and the `LOOKOUT_VIEW` dev hook |
+| `AppModel.swift` | Shared observable state; open paths (`LOOKOUT_OPEN`, Documents, recents); coordinate parser |
+| `MarinerSettings.swift` | Swift mirror of `tile57_mariner` (round-trips engine-only fields; persists as a versioned dictionary) |
+| `SettingsView.swift` | The S-52 mariner form (⌘, / the gear) |
 | `HUDOverlay.swift` | Cursor lat/lon, 1:N scale, scheme, compass, identify results |
-| `ZoomControls.swift` | Floating +/−/fit/north buttons |
+| `ZoomControls.swift` | Floating +/−/north bubbles |
 | `SearchField.swift` | Coordinate go-to (feature search stubbed) |
+| `OpenPanel.swift` | The Open Chart… pickers (NSOpenPanel / fileImporter hand-off) |
 | `Commands.swift` | Native menu bar (macOS) |
-| `Platform.swift` | The macOS/iOS seam (typealiases + display-link/scale helpers) |
-| `project.yml` | XcodeGen target definition (all build settings) |
+| `Platform.swift` | The macOS/iOS seam: typealiases, display-link/scale helpers, PassThroughWindow, iOS-15 compat shims |
+| `project.yml` | XcodeGen target definition (all build settings + the zig pre-build) |
 
 ## iOS
 
@@ -127,6 +130,24 @@ rasterization loss, validation-layer crashes, simulator argument-buffer
 crashes, atlas-size aborts — see the `sdl-gpu` tag for the archaeology). The
 Metal port was verified pixel-identical against the SDL renderer on the
 snapshot suite (day / night palette / MVP zoom) before the switch.
+
+## Testing
+
+- **Core unit tests:** `zig build test` from the repo root (camera math, scene
+  lifecycle).
+- **Render parity / smoke:** `zig-out/bin/lookout-marine-demo <chart.pmtiles>`
+  renders day / night / zoomed PNGs headlessly — the same core the app links.
+- **Touch delivery (XCUITest):**
+  ```sh
+  xcodebuild test -project LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+    -destination 'platform=iOS Simulator,id=<UDID>'
+  ```
+  Pinch-zoom, pan, rotation survival, and chrome-button delivery — the
+  contracts the two-window stack can silently break.
+- **Env-gated helpers** (skipped in the normal plan): pass
+  `TEST_RUNNER_LOOKOUT_SOAK=1` for a 60-second interaction soak (profiling a
+  hot render loop), or `TEST_RUNNER_LOOKOUT_FRAME=1` to frame the chart in
+  landscape and hold it for an outside `simctl io screenshot`.
 
 ## Deferred (noted so they aren't dropped)
 

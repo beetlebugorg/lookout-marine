@@ -90,6 +90,35 @@ final class ChartInteractionTests: XCTestCase {
         XCTAssertTrue(zoom.exists, "HUD lost after rotating back to portrait")
     }
 
+    /// Not a correctness test: frames the chart for a README/screenshot pass —
+    /// landscape, double-tap-zoomed into the harbor — then HOLDS so an outside
+    /// `simctl io screenshot` can capture the live app. Attaches to the running
+    /// app (activate) to keep its opened chart. Skipped unless LOOKOUT_FRAME=1
+    /// (pass TEST_RUNNER_LOOKOUT_FRAME=1 through xcodebuild).
+    func testFrameForScreenshot() throws {
+        guard ProcessInfo.processInfo.environment["LOOKOUT_FRAME"] == "1" else {
+            throw XCTSkip("set LOOKOUT_FRAME=1 to run the screenshot framing hold")
+        }
+        let app = XCUIApplication()
+        app.activate()
+        let zoom = app.staticTexts.matching(NSPredicate(format: "label MATCHES 'z[0-9.]+'")).firstMatch
+        XCTAssertTrue(zoom.waitForExistence(timeout: 45), "zoom readout never appeared")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        Thread.sleep(forTimeInterval: 4)
+
+        // Zoom toward the harbor (double-tap anchors at the tap point); pause
+        // between taps so each band rebuild lands before the next step.
+        let harbor = app.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.42))
+        for _ in 0..<2 {
+            harbor.doubleTap()
+            Thread.sleep(forTimeInterval: 3)
+        }
+        // Capture window: screenshots are taken from outside during this hold.
+        Thread.sleep(forTimeInterval: 40)
+        XCTAssertTrue(zoom.exists, "app died while holding for the screenshot")
+    }
+
     /// The other half of the PassThroughWindow contract: chrome controls must
     /// KEEP their touches (only empty chrome falls through to the chart).
     func testChromeButtonsStillWork() throws {
