@@ -134,7 +134,11 @@ pub fn build(b: *std.Build) void {
             // stdlib.h `_Nonnull`-on-array declarations error; gnu99 accepts them
             // (matches tile57's C flags). Harmless for stb elsewhere.
             mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined" } });
-            mod.addObjectFile(self.tile57_lib);
+            // Embed tile57 into liblookout_marine.a so Apple/native consumers link
+            // one archive. NOT on android: Zig embeds it as a NESTED .a member,
+            // which ld.lld rejects ("neither ET_REL nor LLVM bitcode") — there the
+            // gradle/CMake build links libtile57.a alongside liblookout_marine.a.
+            if (!self.android) mod.addObjectFile(self.tile57_lib);
             if (self.use_sdl) {
                 if (self.android) {
                     // Android: the gradle/CMake build links SDL3; here we only need

@@ -106,9 +106,39 @@ pub const OpenOptions = struct {
 
 pub const NativeKind = gpu.NativeKind;
 
-const OsUnfairLock = extern struct { v: u32 = 0 };
-extern "c" fn os_unfair_lock_lock(l: *OsUnfairLock) void;
-extern "c" fn os_unfair_lock_unlock(l: *OsUnfairLock) void;
+// A kernel-blocking lock for api_mu / engine_mu (NOT a spin). On Darwin that's
+// os_unfair_lock — Zig 0.16's std.Thread.Mutex spins there, and this layer takes
+// no Io. Everywhere else (Android/Linux/Windows) std.Thread.Mutex is the futex
+// path, which is also kernel-blocking. os_unfair_lock is Apple-only, so it must
+// not reach a non-Apple link.
+const Lock = if (@import("builtin").os.tag.isDarwin())
+    struct {
+        const Handle = extern struct { v: u32 = 0 };
+        extern "c" fn os_unfair_lock_lock(l: *Handle) void;
+        extern "c" fn os_unfair_lock_unlock(l: *Handle) void;
+        h: Handle = .{},
+        fn lock(self: *@This()) void {
+            os_unfair_lock_lock(&self.h);
+        }
+        fn unlock(self: *@This()) void {
+            os_unfair_lock_unlock(&self.h);
+        }
+    }
+else
+    struct {
+        // Zig 0.16 has no std.Thread.Mutex (it moved behind an Io this layer
+        // doesn't take), so use pthread directly. A zeroed pthread_mutex_t is
+        // PTHREAD_MUTEX_INITIALIZER on Linux/bionic — kernel-blocking, no init call.
+        extern "c" fn pthread_mutex_lock(m: *std.c.pthread_mutex_t) c_int;
+        extern "c" fn pthread_mutex_unlock(m: *std.c.pthread_mutex_t) c_int;
+        m: std.c.pthread_mutex_t = std.mem.zeroes(std.c.pthread_mutex_t),
+        fn lock(self: *@This()) void {
+            _ = pthread_mutex_lock(&self.m);
+        }
+        fn unlock(self: *@This()) void {
+            _ = pthread_mutex_unlock(&self.m);
+        }
+    };
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
@@ -144,7 +174,7 @@ pub const Lookout = struct {
     // host's input thread and its render thread. Distinct from engine_mu,
     // which serializes ENGINE access between API calls and the build worker;
     // api_mu is always the OUTER lock of the two.
-    api_mu: OsUnfairLock = .{},
+    api_mu: Lock = .{},
     // Serializes ENGINE entry from other threads against the build worker: the
     // engine mutates shared state on any access (reader directory caches decode
     // lazily, the geometry cache inserts/evicts), so a main-thread pick during
@@ -152,7 +182,7 @@ pub const Lookout = struct {
     // engine call; a tap during a slow build waits rather than corrupting.
     // os_unfair_lock (kernel-blocking, not a spin) because Zig 0.16 puts
     // std's mutex behind an Io, which this layer does not take.
-    engine_mu: OsUnfairLock = .{},
+    engine_mu: Lock = .{},
     build_active: bool = false, // a worker is in flight (main-thread only)
     build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     build_job: BuildJob = .{},
@@ -239,8 +269,8 @@ pub const Lookout = struct {
         const got = cc.tile57_abi_gpu_layout();
         if (got != want) {
             std.debug.print("FATAL: tile57 GPU ABI mismatch — header says vertex/quad/range = {d}/{d}/{d} B, linked engine says {d}/{d}/{d} B. Rebuild BOTH repos at matching commits.\n", .{
-                @sizeOf(cc.tile57_gpu_vertex),  @sizeOf(cc.tile57_gpu_quad),  @sizeOf(cc.tile57_gpu_range),
-                got & 0xff,                     (got >> 8) & 0xff,            (got >> 16) & 0xff,
+                @sizeOf(cc.tile57_gpu_vertex), @sizeOf(cc.tile57_gpu_quad), @sizeOf(cc.tile57_gpu_range),
+                got & 0xff,                    (got >> 8) & 0xff,           (got >> 16) & 0xff,
             });
             return error.EngineAbiMismatch;
         }
@@ -970,15 +1000,15 @@ pub const Lookout = struct {
     // cells) goes through the compositor so seams stitch; a single chart to its
     // own archive.
     pub fn apiLock(self: *Lookout) void {
-        os_unfair_lock_lock(&self.api_mu);
+        self.api_mu.lock();
     }
     pub fn apiUnlock(self: *Lookout) void {
-        os_unfair_lock_unlock(&self.api_mu);
+        self.api_mu.unlock();
     }
 
     fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
-        os_unfair_lock_lock(&self.engine_mu);
-        defer os_unfair_lock_unlock(&self.engine_mu);
+        self.engine_mu.lock();
+        defer self.engine_mu.unlock();
         const t0 = gpu.ticksMs();
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
@@ -1016,12 +1046,12 @@ pub const Lookout = struct {
     fn marinerGeomHash(m: *const cc.tile57_mariner) u64 {
         var h = std.hash.Wyhash.init(0);
         inline for (.{
-            "scheme",           "size_scale",         "shallow_contour",     "safety_contour",
-            "deep_contour",     "safety_depth",       "four_shade_water",    "depth_unit",
-            "data_quality",     "show_inform_callouts", "show_meta_bounds",  "show_isolated_dangers_shallow",
-            "boundary_style",   "simplified_points",  "show_full_sector_lines", "date_dependent",
-            "highlight_date_dependent", "ignore_scamin", "scamin_filter_gate", "show_overscale",
-            "text_size_scale",  "sounding_size_scale",
+            "scheme",                   "size_scale",           "shallow_contour",        "safety_contour",
+            "deep_contour",             "safety_depth",         "four_shade_water",       "depth_unit",
+            "data_quality",             "show_inform_callouts", "show_meta_bounds",       "show_isolated_dangers_shallow",
+            "boundary_style",           "simplified_points",    "show_full_sector_lines", "date_dependent",
+            "highlight_date_dependent", "ignore_scamin",        "scamin_filter_gate",     "show_overscale",
+            "text_size_scale",          "sounding_size_scale",
         }) |f| h.update(std.mem.asBytes(&@field(m.*, f)));
         h.update(&m.date_view);
         if (m.viewing_groups_off_len > 0 and m.viewing_groups_off != null)
@@ -1339,8 +1369,8 @@ pub const Lookout = struct {
     }
 
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
-        os_unfair_lock_lock(&self.engine_mu);
-        defer os_unfair_lock_unlock(&self.engine_mu);
+        self.engine_mu.lock();
+        defer self.engine_mu.unlock();
         var err: cc.tile57_error = undefined;
         if (self.compose) |c| {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);
