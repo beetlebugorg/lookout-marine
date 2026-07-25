@@ -68,7 +68,6 @@
          An example Java class can be found in README-android.md
     -->
     <application android:label="@string/app_name"
-        android:icon="@mipmap/ic_launcher"
         android:allowBackup="true"
         android:theme="@style/AppTheme"
         android:enableOnBackInvokedCallback="false"
