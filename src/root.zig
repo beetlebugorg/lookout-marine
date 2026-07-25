@@ -17,6 +17,13 @@ const png = @import("png.zig");
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
+// The async build stages the GPU scene (SDL_AcquireGPUCommandBuffer + a copy
+// pass + submit) on the worker thread. Metal tolerates that; SDL_GPU/Vulkan does
+// not — concurrent command buffers on the same device race the render thread and
+// the rebuilt scene swaps in blank. On SDL, build inline on the render thread so
+// the upload is submitted before the draw that reads it.
+const async_build = !@import("build_options").gpu_sdl;
+
 const MAX_SCHEMES = 3; // day / dusk / night
 
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
@@ -1150,6 +1157,13 @@ pub const Lookout = struct {
 
     fn spawnBuild(self: *Lookout, job: BuildJob) void {
         self.build_job = job;
+        if (!async_build) {
+            // SDL_GPU: stage on the render thread (see `async_build`).
+            var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
+            const ok = self.runJob(job, &cs);
+            self.applyStaged(job, ok, self.stageJob(job, &cs, ok));
+            return;
+        }
         self.build_active = true;
         self.build_done.store(false, .release);
         self.build_thread = std.Thread.spawn(.{}, buildWorker, .{self}) catch {
@@ -1218,7 +1232,7 @@ pub const Lookout = struct {
         if (self.last_fail_ms != 0 and gpu.ticksMs() - self.last_fail_ms < FAIL_BACKOFF_MS) return;
         if (self.dirty or self.needsRebuild()) {
             self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));
-        } else if (self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {
+        } else if (async_build and self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {
             if (self.predictPrefetchLevel()) |lvl| {
                 if (lvl != self.prefetched_level) {
                     self.prefetched_level = lvl;
