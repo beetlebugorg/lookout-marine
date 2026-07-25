@@ -25,15 +25,15 @@ struct SettingsView: View {
     @ViewBuilder private var content: some View {
         // The presenting sheet (iOS) supplies the Done button.
         TabView {
-            Form { DisplaySections(m: m) }.formStyle(.grouped)
+            Form { DisplaySections(m: m) }.groupedForm()
                 .tabItem { Label("Display", systemImage: "paintpalette") }
-            Form { DepthsSections(m: m) }.formStyle(.grouped)
+            Form { DepthsSections(m: m) }.groupedForm()
                 .tabItem { Label("Depths", systemImage: "water.waves") }
-            Form { SymbolsSections(m: m) }.formStyle(.grouped)
+            Form { SymbolsSections(m: m) }.groupedForm()
                 .tabItem { Label("Text", systemImage: "textformat") }
-            Form { ChartsSections(model: model) }.formStyle(.grouped)
+            Form { ChartsSections(model: model) }.groupedForm()
                 .tabItem { Label("Charts", systemImage: "map") }
-            Form { AdvancedSections(m: m) }.formStyle(.grouped)
+            Form { AdvancedSections(m: m) }.groupedForm()
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
         #if os(macOS)
@@ -269,7 +269,7 @@ private struct AdvancedSections: View {
         Section {
             Toggle("Date-dependent features", isOn: $m.dateDependent)
             Toggle("Highlight date-dependent", isOn: $m.highlightDateDependent)
-            LabeledContent("View date") {
+            LabeledRow("View date") {
                 TextField("YYYYMMDD", text: $m.dateView)
                     .frame(width: 110)
                     .multilineTextAlignment(.trailing)
@@ -291,7 +291,7 @@ private struct DepthRow: View {
         self.title = title; self._value = value; self.unit = unit; self.whole = whole
     }
     var body: some View {
-        LabeledContent(title) {
+        LabeledRow(title) {
             HStack(spacing: 6) {
                 TextField("", value: $value,
                           format: .number.precision(.fractionLength(whole ? 0...0 : 0...1)))

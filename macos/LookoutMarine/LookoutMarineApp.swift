@@ -190,7 +190,7 @@ struct StartupLoader: View {
         }
         .padding(40)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.hairline))
         .shadow(color: .black.opacity(0.2), radius: 20, y: 6)
         .accessibilityIdentifier("startup-loader")
     }
@@ -205,7 +205,7 @@ struct BuildingPill: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().stroke(.separator))
+        .overlay(Capsule().stroke(.hairline))
     }
 }
 
@@ -252,7 +252,7 @@ struct EmptyChartState: View {
         }
         .padding(36)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.hairline))
         .shadow(color: .black.opacity(0.2), radius: 20, y: 6)
     }
 }

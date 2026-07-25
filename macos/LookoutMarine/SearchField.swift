@@ -37,7 +37,7 @@ struct SearchField: View {
         }
         .frame(width: 320)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.hairline))
     }
 
     @ViewBuilder private var results: some View {

@@ -29,7 +29,7 @@ struct ZoomControls: View {
         }
         .buttonStyle(.plain)
         .background(.regularMaterial, in: Circle())
-        .overlay(Circle().strokeBorder(.separator.opacity(0.5)))
+        .overlay(Circle().strokeBorder(.hairline.opacity(0.5)))
         .help(help)
     }
 }

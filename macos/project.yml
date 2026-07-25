@@ -21,7 +21,7 @@ options:
   bundleIdPrefix: org.beetlebug
   deploymentTarget:
     macOS: "14.0"
-    iOS: "17.0"
+    iOS: "15.0"
   createIntermediateGroups: true
 
 targets:
@@ -177,7 +177,7 @@ targets:
           T57="$SRCROOT/../../tile57"
           echo "zig cores: lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f "$T57/build.zig" ] && git -C "$T57" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')"
           # Versioned at the deployment minimum — see the macOS target's note.
-          IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
+          IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-15.0}"
           case "$PLATFORM_NAME" in
             iphonesimulator) ZIG_TARGET="aarch64-ios.${IOS_MIN}-simulator" ;;
             *)               ZIG_TARGET="aarch64-ios.${IOS_MIN}" ;;

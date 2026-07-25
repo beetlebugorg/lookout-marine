@@ -88,7 +88,7 @@ struct CompassBadge: View {
         Button(action: onReset) {
             ZStack {
                 Circle().fill(.regularMaterial)
-                Circle().stroke(.separator)
+                Circle().stroke(.hairline)
                 Image(systemName: "location.north.fill")
                     .foregroundStyle(.red)
                     .rotationEffect(.degrees(-rotationDeg))

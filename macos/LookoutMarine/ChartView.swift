@@ -105,7 +105,9 @@ private struct ChromeHitRegion: ViewModifier {
             GeometryReader { g in
                 Color.clear
                     .onAppear { ChromeHitMap.shared.set(id, g.frame(in: .global)) }
-                    .onChange(of: g.frame(in: .global)) { _, f in ChromeHitMap.shared.set(id, f) }
+                    // One-parameter onChange: the iOS 17 (of:initial:_:) form
+                    // is unavailable on the iOS 15 floor.
+                    .onChange(of: g.frame(in: .global)) { f in ChromeHitMap.shared.set(id, f) }
                     .onDisappear { ChromeHitMap.shared.remove(id) }
             }
         }
@@ -135,7 +137,7 @@ struct ChromeBubble: View {
         }
         .buttonStyle(.plain)
         .background(.regularMaterial, in: Circle())
-        .overlay(Circle().strokeBorder(.separator.opacity(0.5)))
+        .overlay(Circle().strokeBorder(.hairline.opacity(0.5)))
         .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
         .help(help)
     }
@@ -448,17 +450,26 @@ struct ChartView: View {
         // them — SwiftUI never sees chart touches (see SceneDelegate).
         OverlayLayer(model: model)
         .sheet(isPresented: $model.showSettings) {
-            NavigationStack {
-                SettingsView(model: model)
-                    .navigationTitle("Mariner Settings")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { Button("Done") { model.showSettings = false } }
+            // NavigationStack is iOS 16+; NavigationView carries the same
+            // title + Done toolbar on the iOS 15 floor.
+            if #available(iOS 16.0, *) {
+                NavigationStack { settingsSheetContent }
+            } else {
+                NavigationView { settingsSheetContent }
+                    .navigationViewStyle(.stack)
             }
         }
         .fileImporter(isPresented: $model.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
             if case .success(let url) = result { model.openImported(url) }
         }
+    }
+
+    private var settingsSheetContent: some View {
+        SettingsView(model: model)
+            .navigationTitle("Mariner Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { model.showSettings = false } }
     }
 }
 

@@ -9,7 +9,7 @@ lives at the `sdl-gpu` git tag.)
 
 ## Prerequisites
 
-- **Xcode** — macOS 14+ / iOS 17+ deployment targets.
+- **Xcode** — macOS 14+ / iOS 15+ deployment targets.
 - **Zig 0.16.0** on `PATH` (`brew install zig`).
 - **XcodeGen** to generate the project (`brew install xcodegen`).
 

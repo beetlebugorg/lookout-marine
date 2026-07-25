@@ -109,6 +109,58 @@ final class PassThroughWindow: UIWindow {
 }
 #endif
 
+// MARK: - iOS 15 compatibility shims
+//
+// The app floor is iOS 15 (older iPads); macOS stays 14. These cover the
+// handful of 16/17-era SwiftUI conveniences the shared UI uses.
+
+extension ShapeStyle where Self == Color {
+    /// `.separator` (the ShapeStyle) is iOS 17+ — the underlying platform
+    /// colour has been there since iOS 13 / macOS 10.14. Same leading-dot
+    /// ergonomics at the call sites.
+    static var hairline: Color {
+        #if os(macOS)
+        Color(nsColor: .separatorColor)
+        #else
+        Color(uiColor: .separator)
+        #endif
+    }
+}
+
+/// `LabeledContent` is iOS 16+. Same shape on 16+/macOS; a plain
+/// title / spacer / content row on iOS 15.
+struct LabeledRow<Content: View>: View {
+    private let title: String
+    @ViewBuilder private let content: () -> Content
+    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+    var body: some View {
+        if #available(iOS 16.0, macOS 13.0, *) {
+            LabeledContent(title, content: content)
+        } else {
+            HStack {
+                Text(title)
+                Spacer()
+                content()
+            }
+        }
+    }
+}
+
+extension View {
+    /// `.formStyle(.grouped)` is iOS 16+. On iOS 15 a `Form` already renders
+    /// as an inset-grouped list, so the fallback is a no-op.
+    @ViewBuilder func groupedForm() -> some View {
+        if #available(iOS 16.0, macOS 13.0, *) {
+            formStyle(.grouped)
+        } else {
+            self
+        }
+    }
+}
+
 enum Platform {
     /// A display link for `view`, on both platforms.
     @MainActor

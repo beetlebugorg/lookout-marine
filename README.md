@@ -45,7 +45,7 @@ pre-built.
 
 ## Building the app (Xcode)
 
-Prerequisites: **Xcode** (macOS 14+ / iOS 17+ SDKs), **Zig 0.16**
+Prerequisites: **Xcode** (macOS 14+ SDK; iOS deployment floor is 15.0), **Zig 0.16**
 (`brew install zig`), **XcodeGen** (`brew install xcodegen`).
 
 ```sh
