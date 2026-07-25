@@ -94,6 +94,12 @@ int main(int argc, char *argv[]) {
     lookout_set_view(l, &v);
 
     float win_w = 1080.0f, win_h = 2160.0f; // pixels; updated from window events
+    // The camera works in LOGICAL points (framebuffer / density) — feeding it
+    // physical pixels anchored zooms outside the viewport and slung the view
+    // off the chart (blank scene). Convert every touch to logical and use the
+    // *_logical ABI (whose zoom also eases via tick_anim instead of snapping).
+    float dens = lookout_pixel_density(l);
+    if (dens <= 0.0f) dens = 1.0f;
     bool running = true;
     Uint64 last = SDL_GetTicks();
 
@@ -112,6 +118,8 @@ int main(int argc, char *argv[]) {
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                         win_w = (float)e.window.data1;
                         win_h = (float)e.window.data2;
+                        dens = lookout_pixel_density(l);
+                        if (dens <= 0.0f) dens = 1.0f;
                         dirty = true;
                         break;
                     case SDL_EVENT_FINGER_DOWN:
@@ -121,10 +129,10 @@ int main(int argc, char *argv[]) {
                             // double-tap (double-click on the emulator) -> zoom in
                             // at the point. A guaranteed touch-only zoom path.
                             const Uint64 t = SDL_GetTicks();
-                            const float px = e.tfinger.x * win_w, py = e.tfinger.y * win_h;
+                            const float px = e.tfinger.x * win_w / dens, py = e.tfinger.y * win_h / dens;
                             if (t - g_last_tap_ms < 300 && fabsf(px - g_last_tap_x) < 60.0f && fabsf(py - g_last_tap_y) < 60.0f) {
-                                lookout_zoom_at(l, 1.0, px, py);
-                                SDL_Log("double-tap zoom at (%.0f,%.0f)", px, py);
+                                lookout_zoom_at_logical(l, 1.0, px, py);
+                                SDL_Log("double-tap zoom at logical (%.0f,%.0f) dens=%.2f", px, py, dens);
                                 dirty = true;
                                 g_last_tap_ms = 0;
                             } else {
@@ -148,25 +156,25 @@ int main(int argc, char *argv[]) {
                         }
                         if (g_nfingers >= 2) {
                             // pinch: zoom by the change in the first two fingers'
-                            // separation, anchored at their midpoint.
-                            const float ax = g_fingers[0].x * win_w, ay = g_fingers[0].y * win_h;
-                            const float bx = g_fingers[1].x * win_w, by = g_fingers[1].y * win_h;
+                            // separation, anchored at their midpoint (logical pts).
+                            const float ax = g_fingers[0].x * win_w / dens, ay = g_fingers[0].y * win_h / dens;
+                            const float bx = g_fingers[1].x * win_w / dens, by = g_fingers[1].y * win_h / dens;
                             const float dist = hypotf(ax - bx, ay - by);
                             if (g_pinch_dist > 1.0f && dist > 1.0f) {
                                 const double dz = log2((double)(dist / g_pinch_dist)); // apart => zoom in
-                                lookout_zoom_at(l, dz, (ax + bx) * 0.5f, (ay + by) * 0.5f);
+                                lookout_zoom_at_logical(l, dz, (ax + bx) * 0.5f, (ay + by) * 0.5f);
                                 SDL_Log("pinch: dz=%.3f dist=%.1f mid=(%.0f,%.0f)", dz, dist, (ax + bx) * 0.5f, (ay + by) * 0.5f);
                                 dirty = true;
                             }
                             g_pinch_dist = dist;
                         } else {
-                            // one finger: pan (drag the chart with the finger).
-                            lookout_pan(l, e.tfinger.dx * win_w, e.tfinger.dy * win_h);
+                            // one finger: pan (drag the chart 1:1 with the finger).
+                            lookout_pan_logical(l, e.tfinger.dx * win_w / dens, e.tfinger.dy * win_h / dens);
                             dirty = true;
                         }
                         break;
                     case SDL_EVENT_MOUSE_WHEEL:
-                        lookout_zoom_at(l, (double)e.wheel.y * 0.3, win_w * 0.5f, win_h * 0.5f);
+                        lookout_zoom_at_logical(l, (double)e.wheel.y * 0.3, win_w * 0.5f / dens, win_h * 0.5f / dens);
                         SDL_Log("wheel: y=%.2f", e.wheel.y);
                         dirty = true;
                         break;
@@ -179,8 +187,8 @@ int main(int argc, char *argv[]) {
                         if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) dz = 0.5;
                         else if (k == SDLK_MINUS || k == SDLK_KP_MINUS) dz = -0.5;
                         if (dz != 0) {
-                            lookout_zoom_at(l, dz, win_w * 0.5f, win_h * 0.5f);
-                            SDL_Log("key zoom: dz=%.2f (win %.0fx%.0f)", dz, win_w, win_h);
+                            lookout_zoom_at_logical(l, dz, win_w * 0.5f / dens, win_h * 0.5f / dens);
+                            SDL_Log("key zoom: dz=%.2f (win %.0fx%.0f dens %.2f)", dz, win_w, win_h, dens);
                             dirty = true;
                         }
                         break;
