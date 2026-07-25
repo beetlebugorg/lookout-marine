@@ -53,6 +53,8 @@ static struct {
 } g_fingers[MAX_FINGERS];
 static int g_nfingers = 0;
 static float g_pinch_dist = 0.0f; // last two-finger distance in px (0 = none yet)
+static Uint64 g_last_tap_ms = 0;  // double-tap detection
+static float g_last_tap_x = 0, g_last_tap_y = 0;
 
 static void finger_down(SDL_FingerID id, float x, float y) {
     if (g_nfingers < MAX_FINGERS) {
@@ -114,9 +116,27 @@ int main(int argc, char *argv[]) {
                         break;
                     case SDL_EVENT_FINGER_DOWN:
                         finger_down(e.tfinger.fingerID, e.tfinger.x, e.tfinger.y);
+                        SDL_Log("finger down: n=%d", g_nfingers);
+                        if (g_nfingers == 1) {
+                            // double-tap (double-click on the emulator) -> zoom in
+                            // at the point. A guaranteed touch-only zoom path.
+                            const Uint64 t = SDL_GetTicks();
+                            const float px = e.tfinger.x * win_w, py = e.tfinger.y * win_h;
+                            if (t - g_last_tap_ms < 300 && fabsf(px - g_last_tap_x) < 60.0f && fabsf(py - g_last_tap_y) < 60.0f) {
+                                lookout_zoom_at(l, 1.0, px, py);
+                                SDL_Log("double-tap zoom at (%.0f,%.0f)", px, py);
+                                dirty = true;
+                                g_last_tap_ms = 0;
+                            } else {
+                                g_last_tap_ms = t;
+                                g_last_tap_x = px;
+                                g_last_tap_y = py;
+                            }
+                        }
                         break;
                     case SDL_EVENT_FINGER_UP:
                         finger_up(e.tfinger.fingerID);
+                        SDL_Log("finger up: n=%d", g_nfingers);
                         break;
                     case SDL_EVENT_FINGER_MOTION:
                         for (int i = 0; i < g_nfingers; i++) {
