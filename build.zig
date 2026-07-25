@@ -23,6 +23,18 @@ pub fn build(b: *std.Build) void {
     // standardOptimizeOption, which would keep the no-flag default at Debug.)
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse .ReleaseFast;
 
+    // Renderer backend: Metal on Apple, SDL_GPU (Vulkan/D3D12/Metal) everywhere
+    // else. Default by platform; `-Dbackend=sdl` also works on macOS to test the
+    // SDL path natively (SDL_GPU -> Metal there). See src/gpu.zig.
+    const Backend = enum { metal, sdl };
+    const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
+    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl") orelse
+        (if (is_apple) Backend.metal else Backend.sdl);
+    const use_sdl = backend == .sdl;
+    const build_opts = b.addOptions();
+    build_opts.addOption(bool, "gpu_sdl", use_sdl);
+    const build_opts_mod = build_opts.createModule();
+
     const tile57_dep = (if (haveLocalTile57(b))
         b.lazyDependency("tile57_local", .{ .target = target, .optimize = optimize })
     else
@@ -42,8 +54,11 @@ pub fn build(b: *std.Build) void {
         b: *std.Build,
         tile57_inc: std.Build.LazyPath,
         tile57_lib: std.Build.LazyPath,
+        use_sdl: bool,
+        build_opts_mod: *std.Build.Module,
         fn apply(self: @This(), mod: *std.Build.Module) void {
             const bb = self.b;
+            mod.addImport("build_options", self.build_opts_mod); // src/gpu.zig backend switch
             // Non-macOS Apple targets (-Dtarget=aarch64-ios[-simulator]) need
             // that SDK's libc AND framework headers (Metal/QuartzCore for the
             // shim): pass --sysroot; Zig only bundles macOS's.
@@ -53,21 +68,37 @@ pub fn build(b: *std.Build) void {
             }
             mod.addIncludePath(self.tile57_inc);
             mod.addIncludePath(bb.path("vendor/stb"));
-            mod.addIncludePath(bb.path("src")); // metal_shim.h for the @cImport
+            mod.addIncludePath(bb.path("src")); // metal_shim.h / c_sdl.zig for the @cImport
             // Tessellation, sprite/SDF quad building and paint order all live
             // in tile57 (the GPU-scene ABI hands back draw-ready buffers), so
             // the host vendors no tessellator. stb stays for atlas PNG decode.
             mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{ "-O2", "-fno-sanitize=undefined" } });
-            // The Metal transport (ObjC behind a C face). Manual retain/release
-            // on purpose — objects live in C structs (see metal_shim.m).
-            mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
             mod.addObjectFile(self.tile57_lib);
-            // Metal shader source, compiled by the shim at runtime (no offline
-            // shader toolchain).
-            mod.addAnonymousImport("metal_src", .{ .root_source_file = bb.path("shaders/lookout.metal") });
+            if (self.use_sdl) {
+                // SDL3 provides the window + SDL_GPU transport; pkg-config gives
+                // the include path so c_sdl.zig's @cInclude("SDL3/SDL.h") resolves.
+                mod.linkSystemLibrary("SDL3", .{});
+                // Precompiled SPIR-V, embedded (no runtime shader toolchain).
+                const spv = [_][2][]const u8{
+                    .{ "chart_vert_spv", "shaders/vk/chart.vert.spv" },
+                    .{ "chart_frag_spv", "shaders/vk/chart.frag.spv" },
+                    .{ "sprite_vert_spv", "shaders/vk/sprite.vert.spv" },
+                    .{ "sprite_frag_spv", "shaders/vk/sprite.frag.spv" },
+                    .{ "sdf_frag_spv", "shaders/vk/sdf.frag.spv" },
+                    .{ "pattern_vert_spv", "shaders/vk/pattern.vert.spv" },
+                    .{ "pattern_frag_spv", "shaders/vk/pattern.frag.spv" },
+                };
+                for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = bb.path(e[1]) });
+            } else {
+                // The Metal transport (ObjC behind a C face). Manual
+                // retain/release on purpose — objects live in C structs.
+                mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
+                // Metal shader source, compiled by the shim at runtime.
+                mod.addAnonymousImport("metal_src", .{ .root_source_file = bb.path("shaders/lookout.metal") });
+            }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .use_sdl = use_sdl, .build_opts_mod = build_opts_mod };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -95,7 +126,9 @@ pub fn build(b: *std.Build) void {
 
     // ---- the demo executable + tests (host platforms only: an iOS cross-build
     // `-Dtarget=aarch64-ios` produces just the static libs for the app to link) ----
-    if (target.result.os.tag == .ios) return;
+    const cross_only = target.result.os.tag == .ios or
+        target.result.abi == .android or target.result.abi == .androideabi;
+    if (cross_only) return;
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -104,9 +137,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(exe_mod);
-    exe_mod.linkFramework("Metal", .{});
-    exe_mod.linkFramework("QuartzCore", .{});
-    exe_mod.linkFramework("Foundation", .{});
+    if (!use_sdl) {
+        exe_mod.linkFramework("Metal", .{});
+        exe_mod.linkFramework("QuartzCore", .{});
+        exe_mod.linkFramework("Foundation", .{});
+    }
     const exe = b.addExecutable(.{ .name = "lookout-marine-demo", .root_module = exe_mod });
     b.installArtifact(exe);
 
@@ -123,9 +158,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(test_mod);
-    test_mod.linkFramework("Metal", .{});
-    test_mod.linkFramework("QuartzCore", .{});
-    test_mod.linkFramework("Foundation", .{});
+    if (!use_sdl) {
+        test_mod.linkFramework("Metal", .{});
+        test_mod.linkFramework("QuartzCore", .{});
+        test_mod.linkFramework("Foundation", .{});
+    }
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
 }

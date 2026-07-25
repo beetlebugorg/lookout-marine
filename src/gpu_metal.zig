@@ -1,0 +1,710 @@
+//! Metal transport: device, four pipelines, persistent buffers, and a per-frame
+//! render (present into the host's CAMetalLayer OR headless offscreen
+//! readback). All vector work happened in the engine — the frame phase here
+//! only updates a uniform and issues draws (spec §6).
+//!
+//! Apple-only by design (see the `sdl-gpu` tag for the cross-platform SDL_GPU
+//! predecessor and the driver-stack workarounds this replaces): the ObjC lives
+//! in metal_shim.m, shaders in shaders/lookout.metal (compiled at runtime).
+const std = @import("std");
+const cc = @import("c.zig").c;
+const mc = @import("c_metal.zig").c;
+const png = @import("png.zig");
+const msl_source = @embedFile("metal_src");
+
+/// Vertex-shader uniform block (128 bytes). Matches `struct U` in
+/// shaders/lookout.metal. Colour is per-RANGE (one draw = one colour), so it
+/// rides the uniform; `anchor_px`/`cell_px` drive the pattern tiling.
+pub const Uniforms = extern struct {
+    mvp: [16]f32,
+    px_to_clip: [2]f32,
+    size_scale: f32,
+    current_scale: f32,
+    cat_mask: u32,
+    /// Camera center world-x: the vertex shaders wrap each vertex to the world
+    /// instance (x, x±1) nearest this, making the antimeridian seamless.
+    wrap_x: f32 = 0.5,
+    rot_sin: f32,
+    rot_cos: f32,
+    color: [4]f32 = .{ 0, 0, 0, 1 }, // per-range flat colour (triangles), straight alpha
+    anchor_px: [2]f32 = .{ 0, 0 }, // pattern: framebuffer px of the scene's phase origin
+    cell_px: [2]f32 = .{ 1, 1 }, // pattern: cell period in framebuffer px
+};
+
+/// RGBA colour 0..1 (drop-in for the old SDL_FColor uses).
+pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
+
+/// Monotonic milliseconds from an arbitrary epoch (drop-in for SDL_GetTicks).
+pub fn ticksMs() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
+/// Monotonic microseconds — frame-cost timing needs sub-ms resolution.
+pub fn ticksUs() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+/// How to interpret Options.native_handle. Apple-only: the host hands us its
+/// CAMetalLayer (an NSView's backing layer on macOS, a UIView's layerClass on
+/// iOS) and keeps its own toolkit and event loop.
+pub const NativeKind = enum(c_int) {
+    none = 0,
+    metal_layer = 1, // CAMetalLayer* (macOS & iOS)
+};
+
+pub const Options = struct {
+    width: u32,
+    height: u32,
+    /// Kept for ABI shape; there is no library-owned window anymore. Without a
+    /// layer, rendering is offscreen (snapshot) only.
+    want_window: bool,
+    want_msaa: bool,
+    native_handle: ?*anyopaque = null,
+    native_kind: NativeKind = .none,
+};
+
+pub const Gpu = struct {
+    ctx: *mc.lkm_ctx,
+    has_layer: bool,
+    msaa_used: bool,
+    width: u32,
+    height: u32,
+    /// True when rendering into a host-owned layer: the host drives the size
+    /// (its resize() calls set the LOGICAL size; pixels follow the layer).
+    external_window: bool = false,
+    /// Host view's LOGICAL size from its latest resize() call — the pixel
+    /// density denominator.
+    host_pt_w: f32 = 0,
+    host_pt_h: f32 = 0,
+    /// ticksMs() when the drawable last changed size — scenes built mid-resize
+    /// are rebuilt by the host while this is recent.
+    size_changed_ms: i64 = -100000,
+    /// pixels per logical point (Retina/HiDPI = 2.0/3.0).
+    pixel_density: f32 = 1.0,
+
+    /// background = S-52 NODATA for the active palette (set by Lookout).
+    clear: Color = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
+
+    // The current draw-ready scene from tile57 (one whole-view GPU scene:
+    // triangles + sprite/SDF quads + pattern cells, all range-sorted in paint
+    // order). Uploaded once per rebuild; a frame only pushes uniforms + draws.
+    scene: ?Scene = null,
+
+    sprite_tex: ?*mc.lkm_tex = null,
+    glyph_tex: ?*mc.lkm_tex = null,
+    glyph_bold_tex: ?*mc.lkm_tex = null,
+    glyph_italic_tex: ?*mc.lkm_tex = null,
+    /// recordDraws outcome signature — a new line prints only when it changes.
+    last_draw_log: u64 = 0,
+    // Rolling frame-cost stats, printed once per STAT_FRAMES rendered frames:
+    // CPU encode ms (recordDraws walk) and the GPU ms of the last completed
+    // frame — the CPU-vs-GPU-bound discriminator for the frame-rate work.
+    stat_enc_sum_ms: f64 = 0,
+    stat_enc_max_ms: f64 = 0,
+    stat_gpu_sum_ms: f64 = 0,
+    stat_gpu_max_ms: f64 = 0,
+    stat_frames: u32 = 0,
+    stat_acq_sum_ms: f64 = 0,
+    stat_acq_max_ms: f64 = 0,
+    stat_active_ms: i64 = 0, // sum of sub-100ms inter-frame gaps (idle pauses excluded)
+    stat_last_frame_ms: i64 = 0,
+    /// 2^(display_zoom - scene_build_zoom): scales the pattern cell period so a
+    /// constant-screen-size fill tracks the (MVP-scaled) geometry during a zoom
+    /// instead of swimming, resetting to 1 when the scene rebuilds at the new zoom.
+    pattern_scale: f32 = 1,
+
+    pub fn init(opts: Options) !Gpu {
+        const layer: ?*anyopaque = if (opts.native_kind == .metal_layer) opts.native_handle else null;
+        var err: [mc.LKM_ERR_LEN]u8 = undefined;
+        err[0] = 0;
+        var msaa_out: c_int = 0;
+        const ctx = mc.lkm_create(layer, msl_source, @intFromBool(opts.want_msaa), &msaa_out, &err) orelse {
+            std.debug.print("Metal init failed: {s}\n", .{std.mem.sliceTo(&err, 0)});
+            return error.MetalFailure;
+        };
+
+        var g = Gpu{
+            .ctx = ctx,
+            .has_layer = layer != null,
+            .msaa_used = msaa_out != 0,
+            .width = opts.width,
+            .height = opts.height,
+            .external_window = layer != null,
+        };
+        if (layer != null) {
+            var pw: u32 = 0;
+            var ph: u32 = 0;
+            mc.lkm_layer_sync(ctx, &pw, &ph);
+            if (pw > 0 and ph > 0) {
+                g.width = pw;
+                g.height = ph;
+                g.host_pt_w = @floatFromInt(opts.width);
+                g.host_pt_h = @floatFromInt(opts.height);
+                if (opts.width > 0) {
+                    const d = @as(f32, @floatFromInt(pw)) / @as(f32, @floatFromInt(opts.width));
+                    if (d > 0.25 and d < 8) g.pixel_density = d;
+                }
+                std.debug.print("layer: {d}x{d} logical -> {d}x{d} pixels (density {d:.2})\n", .{ opts.width, opts.height, pw, ph, g.pixel_density });
+            }
+        }
+        // Debug: force the atlas/scene density (repro a device's @3x path headless).
+        if (std.c.getenv("LOOKOUT_DENSITY")) |ds| {
+            if (std.fmt.parseFloat(f32, std.mem.sliceTo(ds, 0)) catch null) |d| {
+                if (d > 0.25 and d < 8) {
+                    g.pixel_density = d;
+                    std.debug.print("LOOKOUT_DENSITY override: density {d:.2}\n", .{d});
+                }
+            }
+        }
+        return g;
+    }
+
+    /// Resize the render surface. width/height are in logical points. With a
+    /// layer, only the logical size is recorded — pixels follow the layer's
+    /// bounds × contentsScale each frame (renderWindow adopts them).
+    pub fn resize(self: *Gpu, width_pts: u32, height_pts: u32) !void {
+        if (self.has_layer) {
+            self.host_pt_w = @floatFromInt(width_pts);
+            self.host_pt_h = @floatFromInt(height_pts);
+            return;
+        }
+        if (width_pts == self.width and height_pts == self.height) return;
+        self.width = width_pts;
+        self.height = height_pts;
+    }
+
+    pub fn uploadSpriteAtlas(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.sprite_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    pub fn uploadGlyphAtlas(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.glyph_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    /// Upload the bold / italic label-tier SDF atlas texture (TILE57_GPU_ATLAS_GLYPH_BOLD
+    /// / _ITALIC ranges sample these).
+    pub fn uploadGlyphAtlasBold(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.glyph_bold_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    pub fn uploadGlyphAtlasItalic(self: *Gpu, rgba: []const u8, w: u32, h: u32) !void {
+        self.glyph_italic_tex = try self.makeAtlasTexture(rgba, w, h);
+    }
+    fn makeAtlasTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !*mc.lkm_tex {
+        if (rgba.len < @as(usize, w) * h * 4) return error.MetalFailure;
+        return mc.lkm_new_texture_rgba(self.ctx, rgba.ptr, w, h) orelse error.MetalFailure;
+    }
+
+    // ---- the draw-ready scene from tile57 ----------------------------------
+    // One pattern cell as its own sampler texture, plus its device-px size (the
+    // on-screen tiling period). Uploaded per pattern the scene references.
+    const PatternTex = struct { tex: ?*mc.lkm_tex = null, w: f32 = 1, h: f32 = 1 };
+
+    /// GPU-resident whole-view scene: the triangle stream (pre-expanded from
+    /// tile57's indexed buffers — see uploadGpuScene), the sprite/SDF quads, the
+    /// paint-ordered ranges (host-owned copy), and one texture per pattern cell.
+    pub const Scene = struct {
+        vbuf: ?*mc.lkm_buf = null, // triangle vertices (tile57_gpu_vertex), indexed by ibuf
+        ibuf: ?*mc.lkm_buf = null, // u32 triangle indices; ranges' first/count index HERE
+        qbuf: ?*mc.lkm_buf = null, // sprite/SDF quads (tile57_gpu_quad)
+        index_count: u32 = 0, // entries in ibuf (== the engine's index count)
+        ranges: []cc.tile57_gpu_range = &.{},
+        patterns: []PatternTex = &.{},
+        alloc: std.mem.Allocator,
+    };
+
+    /// Upload a `tile57_gpu_scene` into GPU buffers + pattern textures and adopt
+    /// it as the current scene (freeing any previous one). The C scene's pointers
+    /// are borrowed — everything needed is copied here, so the caller may free it
+    /// (tile57_gpu_scene_free) as soon as this returns.
+    pub fn uploadGpuScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !void {
+        self.adoptScene(try self.makeScene(alloc, s));
+    }
+
+    /// Swap the staged scene in as current (frees the previous one). This is
+    /// the ONLY mutation recordDraws can race with, so it must run on the
+    /// render thread; everything expensive lives in makeScene.
+    pub fn adoptScene(self: *Gpu, sc: Scene) void {
+        self.freeScene();
+        self.scene = sc;
+    }
+
+    /// Free a staged Scene that was never adopted (e.g. superseded build).
+    pub fn freeStagedScene(self: *Gpu, sc: *Scene) void {
+        self.freeSceneValue(sc);
+    }
+
+    /// Build a GPU-resident Scene from the engine's C scene WITHOUT installing
+    /// it. Thread-safe: Metal resource creation may run on ANY thread, and this
+    /// is where the whole scene's bytes get copied into MTLBuffers — tens of MB
+    /// that measured as ~40% of active CPU when it ran on the render thread
+    /// mid-gesture. The build worker stages here; the render thread adopts.
+    pub fn makeScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !Scene {
+        var out = Scene{ .alloc = alloc };
+        errdefer self.freeSceneValue(&out);
+        if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
+            std.debug.print("scene bytes: tris {d} ({d} verts x {d}B + {d} idx x4B) quads {d} ({d} quads x6x{d}B) patterns {d}\n", .{
+                s.vertex_count * @sizeOf(cc.tile57_gpu_vertex) + s.index_count * 4, s.vertex_count, @sizeOf(cc.tile57_gpu_vertex), s.index_count,
+                s.quad_count * 6 * @sizeOf(cc.tile57_gpu_quad),                     s.quad_count,   @sizeOf(cc.tile57_gpu_quad),   s.pattern_count,
+            });
+        }
+
+        if (s.vertex_count > 0 and s.index_count > 0) {
+            // The engine hands indexed triangles; upload BOTH buffers verbatim
+            // and draw indexed. The ranges' first/count are index units, which
+            // is exactly drawIndexedPrimitives' addressing — and the vertex
+            // buffer stays at vertex_count instead of the ~2x de-indexed
+            // flat stream this path historically uploaded.
+            const vb = std.mem.sliceAsBytes(s.vertices[0..s.vertex_count]);
+            out.vbuf = mc.lkm_new_buffer(self.ctx, vb.ptr, vb.len) orelse return error.MetalFailure;
+            const ib = std.mem.sliceAsBytes(s.indices[0..s.index_count]);
+            out.ibuf = mc.lkm_new_buffer(self.ctx, ib.ptr, ib.len) orelse return error.MetalFailure;
+            out.index_count = @intCast(s.index_count);
+        }
+        if (s.quad_count > 0) {
+            const bytes = std.mem.sliceAsBytes(s.quads[0..s.quad_count]);
+            out.qbuf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+        }
+        if (s.range_count > 0) {
+            out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+            // DEPTH AUDIT (diagnostic, env-gated): paint-order depth must strictly decrease
+            // across triangle ranges, or the depth-tested opaque pass inverts.
+            if (std.c.getenv("LOOKOUT_DEPTH_AUDIT") != null and s.index_count > 0) {
+                var prev_d: f32 = 2.0;
+                var bad: u32 = 0;
+                for (s.ranges[0..s.range_count], 0..) |r, ri| {
+                    if (r.prim != cc.TILE57_GPU_TRIANGLES or r.count == 0) continue;
+                    const d = s.vertices[s.indices[r.first]].depth;
+                    var mixed: u32 = 0;
+                    for (s.indices[r.first..][0..r.count]) |ix| {
+                        if (s.vertices[ix].depth != d) mixed += 1;
+                    }
+                    if (mixed > 0) std.debug.print("MIXED DEPTH range {d}: {d}/{d} verts differ from {d}\n", .{ ri, mixed, r.count, d });
+                    if (d >= prev_d) {
+                        bad += 1;
+                        if (bad <= 5)
+                            std.debug.print("DEPTH INVERSION at range {d}: d={d} prev={d} key={d} flags={d}\n", .{ ri, d, prev_d, r.paint_key, r.flags });
+                    }
+                    prev_d = d;
+                }
+                if (bad > 0) std.debug.print("DEPTH AUDIT: {d} inversions of {d} ranges\n", .{ bad, s.range_count });
+            }
+            // BOUNDS AUDIT: a range pointing past its buffer draws undefined
+            // memory — recycled heap on one platform (often coincidentally
+            // correct), fresh zero pages on another (tile-shaped nothing).
+            // The scene hash never covered ranges, so this must scream.
+            var bad_tri: u32 = 0;
+            var bad_quad: u32 = 0;
+            var bad_idx: u32 = 0;
+            for (out.ranges) |r| {
+                const first: u64 = r.first;
+                const count: u64 = r.count;
+                if (r.prim == cc.TILE57_GPU_TRIANGLES) {
+                    if (first + count > s.index_count) bad_tri += 1;
+                } else {
+                    if (first + count > s.quad_count * 6) bad_quad += 1;
+                }
+            }
+            if (s.index_count > 0) {
+                for (s.indices[0..s.index_count]) |ii| {
+                    if (ii >= s.vertex_count) bad_idx += 1;
+                }
+            }
+            if (bad_tri + bad_quad + bad_idx > 0)
+                std.debug.print("SCENE BOUNDS VIOLATION: {d} tri-ranges, {d} quad-ranges past their buffers; {d} indices past vertex count (verts={d} idx={d} quads={d})\n", .{ bad_tri, bad_quad, bad_idx, s.vertex_count, s.index_count, s.quad_count });
+        }
+        if (s.pattern_count > 0) {
+            out.patterns = try alloc.alloc(PatternTex, s.pattern_count);
+            for (out.patterns) |*p| p.* = .{};
+            for (s.patterns[0..s.pattern_count], out.patterns) |cell, *p| {
+                p.w = @floatFromInt(cell.w);
+                p.h = @floatFromInt(cell.h);
+                const need = @as(usize, cell.w) * cell.h * 4;
+                if (cell.w > 0 and cell.h > 0 and cell.w <= 4096 and cell.h <= 4096 and cell.rgba != null and cell.rgba_len >= need)
+                    p.tex = mc.lkm_new_texture_rgba(self.ctx, cell.rgba, cell.w, cell.h);
+            }
+        }
+        return out;
+    }
+
+    fn freeSceneValue(self: *Gpu, s: *Scene) void {
+        _ = self;
+        if (s.vbuf) |b| mc.lkm_free_buffer(b);
+        if (s.ibuf) |b| mc.lkm_free_buffer(b);
+        if (s.qbuf) |b| mc.lkm_free_buffer(b);
+        for (s.patterns) |p| if (p.tex) |t| mc.lkm_free_texture(t);
+        if (s.ranges.len > 0) s.alloc.free(s.ranges);
+        if (s.patterns.len > 0) s.alloc.free(s.patterns);
+        s.* = .{ .alloc = s.alloc };
+    }
+
+    pub fn freeScene(self: *Gpu) void {
+        if (self.scene) |*s| {
+            self.freeSceneValue(s);
+            self.scene = null;
+        }
+    }
+
+    // TILE57_LABEL_DEBUG: once per scene, report how many label ranges reach the
+    // GPU per atlas + whether the per-face textures uploaded.
+    var g_label_dbg: i8 = -1;
+    var g_label_dbg_scene: usize = 0;
+    fn labelDebug(self: *Gpu, s: *const Scene) void {
+        if (g_label_dbg < 0) g_label_dbg = if (std.c.getenv("TILE57_LABEL_DEBUG") != null) 1 else 0;
+        if (g_label_dbg != 1) return;
+        if (s.ranges.len == g_label_dbg_scene) return; // one report per distinct scene
+        g_label_dbg_scene = s.ranges.len;
+        var reg: usize = 0;
+        var bold: usize = 0;
+        var ital: usize = 0;
+        for (s.ranges) |r| switch (r.atlas) {
+            cc.TILE57_GPU_ATLAS_GLYPH => reg += 1,
+            cc.TILE57_GPU_ATLAS_GLYPH_BOLD => bold += 1,
+            cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => ital += 1,
+            else => {},
+        };
+        std.debug.print("label ranges: regular={d} bold={d} italic={d} | bold_tex={} italic_tex={}\n", .{ reg, bold, ital, self.glyph_bold_tex != null, self.glyph_italic_tex != null });
+    }
+
+    // ---- record one frame's draws into an open frame ------------------------
+    // Walk the ranges in paint order, switching pipeline per range: triangles ->
+    // flat-colour (or pattern) pipeline; quads -> sprite or SDF pipeline.
+    // `text_on`/`sound_on` drop those ranges live (the engine emits them; the
+    // host gates by skipping the draw). The pattern anchor + per-cell period
+    // ride the uniform.
+    fn recordDraws(self: *Gpu, f: *mc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+        const s = if (self.scene) |*sc| sc else {
+            if (self.last_draw_log != 0) {
+                self.last_draw_log = 0;
+                std.debug.print("draw: NO SCENE (nothing to draw)\n", .{});
+            }
+            return;
+        };
+        self.labelDebug(s);
+        var drawn: u32 = 0; // DRAW CALLS issued (after merging), not ranges
+        var ranges_drawn: u32 = 0;
+        var sk_text: u32 = 0;
+        var sk_sound: u32 = 0;
+        var sk_patt: u32 = 0;
+        var sk_nobuf: u32 = 0;
+        var sk_noatlas: u32 = 0;
+        var last_u: ?Uniforms = null;
+        var usets: u32 = 0;
+
+        // CONTIGUOUS ranges with the same draw spec (pipeline, texture,
+        // uniform payload) collapse into ONE draw call. Colour lives in the
+        // vertices, so a whole band of differently-coloured fills is a single
+        // spec — at coastal zooms this turns thousands of per-range draws
+        // (measured as the phone's frame-rate cap) into a handful. A skipped
+        // range breaks index contiguity, so merging can never draw gated-off
+        // content. Paint order is preserved: merged triangles rasterize in
+        // index order, exactly as they did as separate draws.
+        const Run = struct {
+            active: bool = false,
+            prim: @TypeOf(s.ranges[0].prim) = undefined,
+            pipe: c_int = 0,
+            tex: ?*mc.lkm_tex = null,
+            first: u32 = 0,
+            count: u32 = 0,
+            uu: Uniforms = undefined,
+        };
+        var run = Run{};
+        var opq_runs: u32 = 0;
+        const Flush = struct {
+            fn go(f2: *mc.lkm_frame, sc: *const Scene, rn: *const Run, lu: *?Uniforms, us: *u32, dr: *u32) void {
+                if (rn.prim == cc.TILE57_GPU_TRIANGLES) {
+                    mc.lkm_bind_vbuf(f2, sc.vbuf.?);
+                    mc.lkm_set_pipeline(f2, rn.pipe);
+                    if (rn.tex) |t| mc.lkm_bind_texture(f2, t);
+                } else {
+                    mc.lkm_set_pipeline(f2, rn.pipe);
+                    mc.lkm_bind_vbuf(f2, sc.qbuf.?);
+                    mc.lkm_bind_texture(f2, rn.tex.?);
+                }
+                if (lu.* == null or !std.mem.eql(u8, std.mem.asBytes(&lu.*.?), std.mem.asBytes(&rn.uu))) {
+                    mc.lkm_set_uniforms(f2, &rn.uu, @sizeOf(Uniforms));
+                    lu.* = rn.uu;
+                    us.* += 1;
+                }
+                if (rn.prim == cc.TILE57_GPU_TRIANGLES)
+                    mc.lkm_draw_indexed(f2, sc.ibuf.?, rn.first, rn.count)
+                else
+                    mc.lkm_draw(f2, rn.first, rn.count);
+                dr.* += 1;
+            }
+        };
+
+        // PHASE A — OPAQUE, front-to-back, depth write ON: every fragment that
+        // loses the depth test never shades, so stacked S-52 fills cost ~one
+        // shade per pixel instead of one per layer. Walked in REVERSE paint
+        // order (front first); contiguous ranges merge exactly as in phase B.
+        // Correctness leans on per-range depth, not draw order — order here is
+        // purely an early-z optimization.
+        // Diagnostic valve: single-phase painter's order (no opaque pass) — the
+        // ground truth to diff against when a depth-pass artifact is suspected.
+        const two_phase = std.c.getenv("LOOKOUT_NO_OPAQUE_PASS") == null;
+        if (s.vbuf != null and s.ibuf != null and two_phase) {
+            mc.lkm_set_depth_mode(f, 1);
+            var a_first: u32 = 0;
+            var a_count: u32 = 0;
+            var a_uu: Uniforms = u;
+            var i: usize = s.ranges.len;
+            while (i > 0) {
+                i -= 1;
+                const r = s.ranges[i];
+                if ((r.flags & 1) == 0 or r.prim != cc.TILE57_GPU_TRIANGLES or r.pattern != cc.TILE57_GPU_NO_PATTERN) continue;
+                if (r.kind == cc.TILE57_GPU_TEXT and !text_on) continue; // counted in phase B
+                if (r.kind == cc.TILE57_GPU_SOUNDING and !sound_on) continue;
+                var uu = u;
+                if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2; // same tweak as phase B
+                ranges_drawn += 1;
+                if (a_count > 0 and r.first + r.count == a_first and
+                    std.mem.eql(u8, std.mem.asBytes(&a_uu), std.mem.asBytes(&uu)))
+                {
+                    a_first = r.first;
+                    a_count += r.count;
+                    continue;
+                }
+                if (a_count > 0) {
+                    const orun = Run{ .active = true, .prim = r.prim, .pipe = mc.LKM_PIPE_CHART, .tex = null, .first = a_first, .count = a_count, .uu = a_uu };
+                    Flush.go(f, s, &orun, &last_u, &usets, &drawn);
+                    opq_runs += 1;
+                }
+                a_first = r.first;
+                a_count = r.count;
+                a_uu = uu;
+            }
+            if (a_count > 0) {
+                const orun = Run{ .active = true, .prim = cc.TILE57_GPU_TRIANGLES, .pipe = mc.LKM_PIPE_CHART, .tex = null, .first = a_first, .count = a_count, .uu = a_uu };
+                Flush.go(f, s, &orun, &last_u, &usets, &drawn);
+                opq_runs += 1;
+            }
+        }
+
+        // PHASE B — everything else in paint order, depth test only: content
+        // UNDER an opaque surface is culled by the phase-A depth, everything
+        // else blends exactly as painter's order always did.
+        mc.lkm_set_depth_mode(f, 0);
+        for (s.ranges) |r| {
+            switch (r.kind) {
+                cc.TILE57_GPU_TEXT => if (!text_on) {
+                    sk_text += 1;
+                    continue;
+                },
+                cc.TILE57_GPU_SOUNDING => if (!sound_on) {
+                    sk_sound += 1;
+                    continue;
+                },
+                else => {},
+            }
+            if (two_phase and (r.flags & 1) != 0 and r.prim == cc.TILE57_GPU_TRIANGLES and r.pattern == cc.TILE57_GPU_NO_PATTERN) continue; // drew in phase A
+            var uu = u;
+            // Soundings ride the mariner's show_soundings switch (the sound_on gate
+            // above), NOT the OTHER display category — S-52 files SOUNDG under OTHER,
+            // but a mariner asking for soundings isn't asking for seabed and cables.
+            // The engine tags them disp_cat=OTHER, so force the OTHER bit on for this
+            // range only; SCAMIN still culls them (disp_cat != base).
+            if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
+            var pipe: c_int = undefined;
+            var tex: ?*mc.lkm_tex = null;
+            if (r.prim == cc.TILE57_GPU_TRIANGLES) {
+                if (s.vbuf == null or s.ibuf == null) {
+                    sk_nobuf += 1;
+                    continue;
+                }
+                if (r.pattern != cc.TILE57_GPU_NO_PATTERN and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
+                    const pt = s.patterns[r.pattern];
+                    // Scale the cell with the zoom so it tracks the geometry (which
+                    // the MVP scales) rather than swimming during a zoom animation.
+                    const cs = self.pixel_density * self.pattern_scale;
+                    uu.cell_px = .{ pt.w * cs, pt.h * cs };
+                    pipe = mc.LKM_PIPE_PATTERN;
+                    tex = pt.tex;
+                } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
+                    sk_patt += 1;
+                    continue; // a pattern with no cell texture: the fill under it already drew
+                } else {
+                    // Colour rides the VERTICES (see tile57_gpu_vertex.color).
+                    pipe = mc.LKM_PIPE_CHART;
+                }
+            } else { // QUADS
+                if (s.qbuf == null) {
+                    sk_nobuf += 1;
+                    continue;
+                }
+                const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or
+                    r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or
+                    r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
+                tex = switch (r.atlas) {
+                    cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
+                    cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
+                    cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
+                    else => self.sprite_tex,
+                } orelse {
+                    sk_noatlas += 1;
+                    continue;
+                };
+                pipe = if (is_glyph) mc.LKM_PIPE_SDF else mc.LKM_PIPE_SPRITE;
+                // Text halos render in the PALETTE background colour (see
+                // sdf_frag): night text was unreadable inside a hardcoded
+                // white halo. Part of the run spec, so runs split on it.
+                if (is_glyph) uu.color = .{ self.clear.r, self.clear.g, self.clear.b, 1 };
+            }
+            ranges_drawn += 1;
+            if (run.active and run.prim == r.prim and run.pipe == pipe and run.tex == tex and
+                run.first + run.count == r.first and
+                std.mem.eql(u8, std.mem.asBytes(&run.uu), std.mem.asBytes(&uu)))
+            {
+                run.count += r.count;
+                continue;
+            }
+            if (run.active) Flush.go(f, s, &run, &last_u, &usets, &drawn);
+            run = .{ .active = true, .prim = r.prim, .pipe = pipe, .tex = tex, .first = r.first, .count = r.count, .uu = uu };
+        }
+        if (run.active) Flush.go(f, s, &run, &last_u, &usets, &drawn);
+        // One line per DISTINCT draw outcome (not per frame): what the GPU was
+        // actually asked to draw for this scene, and everything withheld, with
+        // reasons. The scene said what exists; this says what made it to Metal.
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&drawn));
+        h.update(std.mem.asBytes(&sk_text));
+        h.update(std.mem.asBytes(&sk_sound));
+        h.update(std.mem.asBytes(&sk_patt));
+        h.update(std.mem.asBytes(&sk_nobuf));
+        h.update(std.mem.asBytes(&sk_noatlas));
+        h.update(std.mem.asBytes(&s.index_count));
+        const sig = h.final();
+        if (sig != self.last_draw_log) {
+            self.last_draw_log = sig;
+            std.debug.print("draw: {d}/{d} ranges in {d} draws ({d} uniform sends) (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ ranges_drawn, s.ranges.len, drawn, usets, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
+        }
+    }
+
+    /// tile57 straight-alpha RGBA (0..255) -> shader colour (0..1).
+    fn normColor(c: [4]u8) [4]f32 {
+        return .{
+            @as(f32, @floatFromInt(c[0])) / 255.0,
+            @as(f32, @floatFromInt(c[1])) / 255.0,
+            @as(f32, @floatFromInt(c[2])) / 255.0,
+            @as(f32, @floatFromInt(c[3])) / 255.0,
+        };
+    }
+
+    /// Render one frame into the host's layer and present. Returns false when
+    /// there is no layer to present into.
+    pub fn renderWindow(self: *Gpu, u: Uniforms, text_on: bool, sound_on: bool) !bool {
+        if (!self.has_layer) return false;
+        const clear = [4]f32{ self.clear.r, self.clear.g, self.clear.b, self.clear.a };
+        // Time the drawable acquire separately: nextDrawable BLOCKS when the
+        // swapchain is exhausted, and that wait is invisible to the encode/gpu
+        // numbers — the third column of the frame-cost triage.
+        const ta0 = ticksUs();
+        // NULL = swapchain saturated (or mid-transition): SKIP without stalling.
+        // Returning false tells render() to keep view_dirty set, so the display
+        // link retries next tick and the skipped content still lands.
+        const f = mc.lkm_begin_frame(self.ctx, &clear) orelse return false;
+        const acq_ms = @as(f64, @floatFromInt(ticksUs() - ta0)) / 1000.0;
+        self.stat_acq_sum_ms += acq_ms;
+        self.stat_acq_max_ms = @max(self.stat_acq_max_ms, acq_ms);
+        // The drawable is the ground truth for the frame's size: viewport and
+        // (via logicalSize) the camera follow it, so the picture, the cursor
+        // math and the mark sizes stay consistent across host transitions.
+        var w: u32 = 0;
+        var h: u32 = 0;
+        mc.lkm_layer_sync(self.ctx, &w, &h);
+        if (w != self.width or h != self.height) {
+            std.debug.print("drawable {d}x{d} (was {d}x{d}); adopting\n", .{ w, h, self.width, self.height });
+            self.size_changed_ms = ticksMs();
+            self.width = w;
+            self.height = h;
+        }
+        // Density is recomputed every frame: during an animated transition the
+        // point size briefly lags the drawable, and a ratio captured at that
+        // moment would otherwise stick forever.
+        if (self.host_pt_w > 0) {
+            const d = @as(f32, @floatFromInt(w)) / self.host_pt_w;
+            if (d > 0.25 and d < 8 and @abs(d - self.pixel_density) > 0.001) {
+                std.debug.print("pixel density {d:.2} -> {d:.2}\n", .{ self.pixel_density, d });
+                self.pixel_density = d;
+            }
+        }
+        const t0 = ticksUs();
+        self.recordDraws(f, u, text_on, sound_on);
+        const enc_ms = @as(f64, @floatFromInt(ticksUs() - t0)) / 1000.0;
+        mc.lkm_end_frame(f);
+        const gpu_ms = mc.lkm_last_gpu_ms(self.ctx);
+        self.stat_enc_sum_ms += enc_ms;
+        self.stat_enc_max_ms = @max(self.stat_enc_max_ms, enc_ms);
+        self.stat_gpu_sum_ms += gpu_ms;
+        self.stat_gpu_max_ms = @max(self.stat_gpu_max_ms, gpu_ms);
+        self.stat_frames += 1;
+        {
+            // fps over ACTIVE time only: the display link pauses when idle, so
+            // wall-clock fps would count think-time between gestures. Gaps
+            // >=100ms are idle (or a hitch so bad it reads the same) and are
+            // excluded from the denominator.
+            const now = ticksMs();
+            const gap = now - self.stat_last_frame_ms;
+            if (self.stat_last_frame_ms > 0 and gap < 100) self.stat_active_ms += gap;
+            self.stat_last_frame_ms = now;
+        }
+        if (self.stat_frames >= 120) {
+            const n: f64 = @floatFromInt(self.stat_frames);
+            const fps: f64 = if (self.stat_active_ms > 0)
+                n * 1000.0 / @as(f64, @floatFromInt(self.stat_active_ms))
+            else
+                0;
+            std.debug.print("frame: acquire avg {d:.2} max {d:.2} | encode avg {d:.2} max {d:.2} | gpu avg {d:.2} max {d:.2} ms | ~{d:.0} fps active ({d} frames)\n", .{
+                self.stat_acq_sum_ms / n, self.stat_acq_max_ms,
+                self.stat_enc_sum_ms / n, self.stat_enc_max_ms,
+                self.stat_gpu_sum_ms / n, self.stat_gpu_max_ms,
+                fps,                      self.stat_frames,
+            });
+            self.stat_acq_sum_ms = 0;
+            self.stat_acq_max_ms = 0;
+            self.stat_active_ms = 0;
+            self.stat_enc_sum_ms = 0;
+            self.stat_enc_max_ms = 0;
+            self.stat_gpu_sum_ms = 0;
+            self.stat_gpu_max_ms = 0;
+            self.stat_frames = 0;
+        }
+        return true;
+    }
+
+    /// Render one frame offscreen and read the pixels back (RGBA8, top-down).
+    pub fn renderOffscreen(self: *Gpu, alloc: std.mem.Allocator, u: Uniforms, text_on: bool, sound_on: bool) ![]u8 {
+        const clear = [4]f32{ self.clear.r, self.clear.g, self.clear.b, self.clear.a };
+        const f = mc.lkm_begin_offscreen(self.ctx, self.width, self.height, &clear) orelse return error.MetalFailure;
+        self.recordDraws(f, u, text_on, sound_on);
+        const n = @as(usize, self.width) * self.height * 4;
+        const pixels = try alloc.alloc(u8, n);
+        errdefer alloc.free(pixels);
+        if (mc.lkm_end_offscreen_read(f, pixels.ptr) == 0) return error.MetalFailure;
+        // The render target is the layer-native BGRA8 — swizzle to the RGBA the
+        // snapshot ABI promises.
+        var i: usize = 0;
+        while (i < n) : (i += 4) {
+            const b = pixels[i];
+            pixels[i] = pixels[i + 2];
+            pixels[i + 2] = b;
+        }
+        return pixels;
+    }
+
+    pub fn savePng(self: *Gpu, alloc: std.mem.Allocator, path: []const u8, u: Uniforms, text_on: bool, sound_on: bool) !void {
+        const pixels = try self.renderOffscreen(alloc, u, text_on, sound_on);
+        defer alloc.free(pixels);
+        try png.write(alloc, path, pixels, self.width, self.height);
+    }
+
+    pub fn deinit(self: *Gpu) void {
+        self.freeScene();
+        if (self.sprite_tex) |t| mc.lkm_free_texture(t);
+        if (self.glyph_tex) |t| mc.lkm_free_texture(t);
+        if (self.glyph_bold_tex) |t| mc.lkm_free_texture(t);
+        if (self.glyph_italic_tex) |t| mc.lkm_free_texture(t);
+        mc.lkm_destroy(self.ctx);
+    }
+};
