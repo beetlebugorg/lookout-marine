@@ -235,6 +235,14 @@ pub const Lookout = struct {
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
+    // Deepest zoom a build actually produced geometry for. A chart's declared
+    // max_zoom can overreport: a tile exists there in metadata but carries no
+    // features under the view, so building at that level returns OK-but-empty.
+    // Adopting that blanks a good scene. Capping engine_max_zoom to the last
+    // level that DID draw keeps buildTargetZoom on servable data, so a zoom-in
+    // overscales the good scene (the intended behaviour) instead of going blank.
+    // Reset on a new view (setView/fitChart) so a different area re-probes.
+    served_max_zoom: f64 = 1e9,
 
     // derived live (uniform-only) state
     cat_mask: u32 = 0b111,
@@ -645,7 +653,7 @@ pub const Lookout = struct {
     const MIN_ZOOM_FLOOR = 4.0;
     fn updateZoomLimits(self: *Lookout) void {
         const zr = self.zoomRange();
-        self.engine_max_zoom = zr[1];
+        self.engine_max_zoom = @min(zr[1], self.served_max_zoom);
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
         // Per-view cap: the deepest zoom the chart UNDER THE VIEW CENTRE can serve.
         // Over a coarse-only area every covering cell's reach is low, so the
@@ -783,6 +791,7 @@ pub const Lookout = struct {
         self.cam.center = camera.lonLatToWorld(v.lon, v.lat);
         self.cam.zoom = v.zoom;
         self.cam.rotation = v.rotation_deg * std.math.pi / 180.0;
+        self.served_max_zoom = 1e9; // new ground: re-probe how deep it serves
         // Pin the animation target to the new pose: otherwise the zoom easer
         // still aims at the PREVIOUS target and drags the view back (about a
         // stale cursor pivot) on the next frames.
@@ -1088,6 +1097,18 @@ pub const Lookout = struct {
             self.dirty = true;
             return;
         };
+        // A zoom-in that built empty: the chart's declared max_zoom overreports
+        // and there is no geometry this deep under the view. Don't blank the good
+        // scene — keep it, cap the servable max here so buildTargetZoom stops
+        // chasing the empty level, and let cam.zoom overscale (MVP-magnify) it.
+        if (self.built and sc.ranges.len == 0 and job.zoom > self.cov_zoom + ZOOM_REBUILD) {
+            var v = sc;
+            self.g.freeStagedScene(&v);
+            self.served_max_zoom = self.cov_zoom;
+            self.updateZoomLimits(); // re-clamp target/max to the corrected max
+            self.dirty = false; // don't respin the same empty build
+            return;
+        }
         self.g.adoptScene(sc);
         self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
         self.built = true;
