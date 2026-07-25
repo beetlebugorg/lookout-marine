@@ -52,21 +52,30 @@ dependencies {
 
 // Cross-compile the Zig core (liblookout_marine.a + libtile57.a via build-libs.sh)
 // before CMake links it, so a plain `./gradlew assembleDebug` rebuilds everything
-// in one step. Runs with the exact NDK gradle uses (android.ndkDirectory) and the
-// ABIs from abiFilters. externalNativeBuild* (the CMake link) depends on it.
-def buildZigCore = tasks.register('buildZigCore', Exec) {
-    workingDir = file("${projectDir}/..")            // the android/ dir
-    commandLine './build-libs.sh'
-    environment 'ANDROID_NDK', android.ndkDirectory
-    def abis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
-    if (abis) environment 'ABIS', abis.join(' ')
-    // Always run — `zig build` is incremental (fast on a warm cache), so this
-    // avoids fragile up-to-date checks across the lookout + sibling tile57 trees.
-}
-// AGP names the native tasks buildCMake<Variant>[<abi>] / configureCMake… (older
-// AGP used externalNativeBuild…) — cover both so the .a's exist before the link.
-tasks.matching {
-    it.name.contains('CMake') || it.name.startsWith('externalNativeBuild')
-}.configureEach {
-    dependsOn buildZigCore
+// in one step. One task per build type so the debug APK gets a Debug core (~2.4x
+// faster to compile) and release gets ReleaseFast. Override with -PcoreOpt=<mode>.
+// Runs with the exact NDK gradle uses (android.ndkDirectory) and the ABIs from
+// abiFilters; the CMake link tasks depend on the matching variant's task.
+def zigAbis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
+['debug', 'release'].each { bt ->
+    def opt = project.hasProperty('coreOpt') ? project.coreOpt
+              : (bt == 'release' ? 'ReleaseFast' : 'Debug')
+    def cap = bt.capitalize()
+    def t = tasks.register("buildZigCore${cap}", Exec) {
+        workingDir = file("${projectDir}/..")        // the android/ dir
+        commandLine './build-libs.sh'
+        environment 'ANDROID_NDK', android.ndkDirectory
+        environment 'OPT', opt
+        if (zigAbis) environment 'ABIS', zigAbis.join(' ')
+        // Always run — `zig build` is incremental (fast on a warm cache), so this
+        // avoids fragile up-to-date checks across the lookout + sibling tile57 trees.
+    }
+    // AGP names the native tasks buildCMake<Variant>[<abi>] / configureCMake…
+    // (older AGP used externalNativeBuild…) — cover both, matched to this variant.
+    tasks.matching {
+        (it.name.contains('CMake') || it.name.startsWith('externalNativeBuild')) &&
+        it.name.toLowerCase().contains(bt)
+    }.configureEach {
+        dependsOn t
+    }
 }

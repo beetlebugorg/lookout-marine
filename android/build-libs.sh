@@ -42,6 +42,11 @@ SDL_INC="$here/app/jni/SDL/include"
 
 # ABIs to build (space-separated). macOS ships bash 3.2 — no associative arrays.
 ABIS="${ABIS:-arm64-v8a}"
+# Zig optimize mode. ReleaseFast (the core's default) runs LLVM's full optimizer
+# over tile57 + lookout and costs ~3 min per changed build; Debug is ~2.4x faster
+# to compile (at some runtime cost). Gradle passes OPT=Debug for the debug APK and
+# OPT=ReleaseFast for release; OPT= overrides either from the CLI.
+OPT="${OPT:-ReleaseFast}"
 
 abi_triple() {
     case "$1" in
@@ -55,8 +60,8 @@ abi_triple() {
 
 for abi in $ABIS; do
     triple="$(abi_triple "$abi")"
-    echo ">> building core for $abi ($triple)"
-    ( cd "$core" && zig build -Dtarget="$triple" -Dandroid-ndk="$NDK" -Dsdl-include="$SDL_INC" )
+    echo ">> building core for $abi ($triple) [$OPT]"
+    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" -Dsdl-include="$SDL_INC" )
     dest="$here/app/jni/prebuilt/$abi"
     mkdir -p "$dest"
     # On android liblookout doesn't embed tile57 (nested .a breaks ld.lld), so
