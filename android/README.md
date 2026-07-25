@@ -25,16 +25,19 @@ Prerequisites: JDK 17, Android SDK (platform 35, build-tools 35, **NDK
 `local.properties` (`sdk.dir=…`) and `ANDROID_NDK`.
 
 ```sh
-git submodule update --init app/jni/SDL      # SDL3 source
-./build-libs.sh                              # Zig core -> app/jni/prebuilt/arm64-v8a/
-./gradlew assembleDebug                      # -> app/build/outputs/apk/debug/app-debug.apk
+git submodule update --init app/jni/SDL      # SDL3 source (once)
+./gradlew assembleDebug                       # -> app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`build-libs.sh` runs, per ABI:
+Gradle's `buildZigCore` task runs `build-libs.sh` automatically before the CMake
+link (with the exact NDK gradle resolved from `ndkVersion`), so `assembleDebug`
+rebuilds the Zig core too — no separate step. `build-libs.sh` runs, per ABI:
 `zig build -Dtarget=<triple> -Dandroid-ndk=$ANDROID_NDK -Dsdl-include=app/jni/SDL/include`
-and copies `liblookout_marine.a` + `libtile57.a`. Rerun it whenever the core
-changes. Only `arm64-v8a` is wired today (matches Apple-silicon emulators + real
-arm64 devices); add ABIs in `build-libs.sh` and `app/build.gradle`.
+and copies `liblookout_marine.a` + `libtile57.a` into `app/jni/prebuilt/<abi>/`.
+Only `arm64-v8a` is wired today (Apple-silicon emulators + real arm64 devices);
+add ABIs in `app/build.gradle`'s `abiFilters` (passed to `build-libs.sh` as
+`ABIS`). Run `./build-libs.sh` by hand only to cross-compile the core outside a
+gradle build.
 
 ## Run
 

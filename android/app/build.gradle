@@ -49,3 +49,24 @@ android {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
 }
+
+// Cross-compile the Zig core (liblookout_marine.a + libtile57.a via build-libs.sh)
+// before CMake links it, so a plain `./gradlew assembleDebug` rebuilds everything
+// in one step. Runs with the exact NDK gradle uses (android.ndkDirectory) and the
+// ABIs from abiFilters. externalNativeBuild* (the CMake link) depends on it.
+def buildZigCore = tasks.register('buildZigCore', Exec) {
+    workingDir = file("${projectDir}/..")            // the android/ dir
+    commandLine './build-libs.sh'
+    environment 'ANDROID_NDK', android.ndkDirectory
+    def abis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
+    if (abis) environment 'ABIS', abis.join(' ')
+    // Always run — `zig build` is incremental (fast on a warm cache), so this
+    // avoids fragile up-to-date checks across the lookout + sibling tile57 trees.
+}
+// AGP names the native tasks buildCMake<Variant>[<abi>] / configureCMake… (older
+// AGP used externalNativeBuild…) — cover both so the .a's exist before the link.
+tasks.matching {
+    it.name.contains('CMake') || it.name.startsWith('externalNativeBuild')
+}.configureEach {
+    dependsOn buildZigCore
+}
