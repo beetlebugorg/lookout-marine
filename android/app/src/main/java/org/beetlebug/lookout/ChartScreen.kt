@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,8 +43,9 @@ import kotlinx.coroutines.delay
  */
 @Composable
 fun ChartScreen(
-    chartPath: String,
+    charts: ChartsModel,
     controller: ChartController,
+    onRequestFileAccess: () -> Unit,
     onViewCreated: (LookoutView) -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
@@ -69,10 +71,18 @@ fun ChartScreen(
                 centreY = it.height * 0.5f / density
             },
     ) {
-        AndroidView(
-            factory = { ctx -> LookoutView(ctx, chartPath, controller).also(onViewCreated) },
-            modifier = Modifier.fillMaxSize(),
-        )
+        // Keyed on the library generation: picking a different chart folder
+        // builds a NEW SurfaceView, so the old engine handle closes with its
+        // surface (surfaceDestroyed) and the new one opens on the new cell set.
+        // Re-tessellation is unavoidable either way — the scene is per-library.
+        key(charts.generation) {
+            AndroidView(
+                factory = { ctx ->
+                    LookoutView(ctx, charts.chartPaths, controller).also(onViewCreated)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         // ---- top-right controls: what used to be gesture-only ---------------
         Column(
@@ -121,7 +131,12 @@ fun ChartScreen(
     }
 
     if (showSettings) {
-        SettingsSheet(m = controller.mariner, onDismiss = { showSettings = false })
+        SettingsSheet(
+            m = controller.mariner,
+            charts = charts,
+            onRequestAccess = onRequestFileAccess,
+            onDismiss = { showSettings = false },
+        )
     }
 }
 

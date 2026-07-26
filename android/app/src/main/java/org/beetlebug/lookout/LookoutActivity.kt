@@ -1,6 +1,10 @@
 package org.beetlebug.lookout
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
@@ -21,23 +25,27 @@ import java.io.FileOutputStream
  * the HUD, the controls and the settings sheet — the analogue of HUDOverlay
  * and SettingsView sitting over the Metal layer.
  *
- * Charts come from one of two places (see [resolveChart]): a chart pushed into
- * the app's external files dir, else the one baked into the APK assets, copied
- * to internal storage once (tile57 opens charts by path / mmap, which can't read
- * an APK asset directly).
+ * Charts come from a library chosen in the Charts tab, else anything pushed into
+ * the app's external files dir, else the cell baked into the APK assets — see
+ * [ChartsModel]. Chosen libraries are opened IN PLACE (by path, mmap'd), never
+ * copied; the bundled asset is the one exception, since an APK asset has no path
+ * of its own.
  */
 class LookoutActivity : ComponentActivity() {
     private var chartView: LookoutView? = null
     private lateinit var controller: ChartController
+    private lateinit var charts: ChartsModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Chart under the system bars; the Compose chrome insets itself.
         enableEdgeToEdge()
 
-        val chart = resolveChart()
-        if (chart == null) {
-            Log.e(TAG, "no chart: nothing pushed, and asset extraction failed")
+        // The bundled cell is the last resort, extracted once; the model prefers
+        // a chosen library, then anything pushed into our external files dir.
+        charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))
+        if (charts.chartPaths.isEmpty()) {
+            Log.e(TAG, "no charts: none chosen, none pushed, asset extraction failed")
             finish()
             return
         }
@@ -48,13 +56,54 @@ class LookoutActivity : ComponentActivity() {
             // settings sheet at night would undo the night palette's whole point.
             LookoutTheme(dark = controller.mariner.scheme != Scheme.DAY) {
                 ChartScreen(
-                    chartPath = chart,
+                    charts = charts,
+                    onRequestFileAccess = ::requestFileAccess,
                     controller = controller,
                     onViewCreated = { chartView = it },
                 )
             }
         }
     }
+
+    /**
+     * The permission has to be granted in system settings (there is no dialog
+     * for MANAGE_EXTERNAL_STORAGE), so re-read it whenever we come back.
+     */
+    override fun onResume() {
+        super.onResume()
+        if (::charts.isInitialized) charts.refreshAccess()
+    }
+
+    /**
+     * Ask for read access to the whole shared volume, because charts are opened
+     * IN PLACE by path — see the manifest for why a SAF tree can't serve. API 30+
+     * routes to the "All files access" settings screen; earlier releases still
+     * have a runtime dialog for the legacy read permission.
+     */
+    private fun requestFileAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val uri = Uri.fromParts("package", packageName, null)
+            // The app-specific screen can be missing on some builds; fall back to
+            // the global list rather than throwing.
+            val intents = listOf(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri),
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+            )
+            for (i in intents) {
+                if (i.resolveActivity(packageManager) != null) {
+                    startActivity(i)
+                    return
+                }
+            }
+            Log.w(TAG, "no all-files-access settings screen on this build")
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), REQ_READ)
+        }
+    }
+
+    // No onRequestPermissionsResult: whichever route was taken — the settings
+    // screen or the legacy dialog — the Activity resumes afterwards, and
+    // onResume re-reads the permission. One path, not two.
 
     /** Hand the engine's reclaimable caches back under memory pressure. */
     override fun onTrimMemory(level: Int) {
@@ -72,45 +121,6 @@ class LookoutActivity : ComponentActivity() {
      */
     override fun onGenericMotionEvent(e: MotionEvent): Boolean =
         chartView?.handleScroll(e) == true || super.onGenericMotionEvent(e)
-
-    /**
-     * The chart to open: a pushed one if there is one, else the baked-in demo
-     * cell. Pushed charts win so a chart can be swapped without rebuilding the
-     * APK — bake on the host, then, with no permissions and no root:
-     *
-     *     adb push tiles/ /sdcard/Android/data/org.beetlebug.lookout/files/charts/
-     *
-     * The engine opens ONE chart per handle, so of several pushed cells the
-     * first by path wins; the Charts tab (not built yet) is where picking among
-     * them belongs, and composing them needs a lookout_open_charts binding.
-     */
-    private fun resolveChart(): String? = pushedChart() ?: extractAsset(CHART_ASSET, CHART_NAME)
-
-    /**
-     * The first *.pmtiles under `<externalFilesDir>/charts`, or null. Searched
-     * recursively: `tile57 bake_tree` mirrors the ENC tree (REGION/CELL.pmtiles),
-     * so a pushed library is nested, not flat. The directory is created here so
-     * that a first run leaves an obvious target to push into.
-     */
-    private fun pushedChart(): String? {
-        val dir = File(getExternalFilesDir(null) ?: return null, CHART_DIR)
-        if (!dir.isDirectory && !dir.mkdirs()) {
-            Log.w(TAG, "could not create $dir")
-            return null
-        }
-        val charts = dir.walkTopDown()
-            .filter { it.isFile && it.extension == "pmtiles" }
-            .sortedBy { it.path }
-            .toList()
-        if (charts.isEmpty()) {
-            Log.i(TAG, "no pushed charts in $dir; using the bundled chart")
-            return null
-        }
-        val chart = charts.first()
-        Log.i(TAG, "pushed chart -> $chart (${chart.length()} bytes)" +
-            if (charts.size > 1) ", ${charts.size - 1} other(s) ignored" else "")
-        return chart.absolutePath
-    }
 
     /** Copy an APK asset to internal storage (skipped when already current). */
     private fun extractAsset(asset: String, outName: String): String? {
@@ -134,7 +144,6 @@ class LookoutActivity : ComponentActivity() {
         const val TAG = "lookout"
         const val CHART_ASSET = "charts/US5MD1MC.pmtiles"
         const val CHART_NAME = "US5MD1MC.pmtiles"
-        /** Push target, under the app's external files dir. */
-        const val CHART_DIR = "charts"
+        const val REQ_READ = 1
     }
 }

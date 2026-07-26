@@ -27,6 +27,7 @@ const cc = @import("c.zig").c;
 // The C ABI (capi.zig exports, same archive — resolved at link).
 const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 };
 extern fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
+extern fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_close(h: ?*anyopaque) void;
 extern fn lookout_resize(h: ?*anyopaque, width: u32, height: u32) c_int;
 extern fn lookout_fit_chart(h: ?*anyopaque, v: *lookout_view) c_int;
@@ -90,7 +91,49 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpen(env: [*c]j.JNIEnv, cls: j.jcl
         j.ANativeWindow_release(win);
         return 0;
     };
-    // Tell the camera its logical size straight away (density = px/pts).
+    return finishOpen(l, win, w_pts, h_pts);
+}
+
+/// long nOpenCharts(String[] chartPaths, Surface surface, int widthPx,
+///                  int heightPx, int widthPts, int heightPts, boolean msaa)
+///
+/// Open a chart LIBRARY: many baked cells composed into one view, the engine
+/// picking the owner per tile from its band/tier partition. The host's whole job
+/// is to enumerate the paths — the partition sidecar next to the archives is
+/// found (or built in memory) by the engine, not named here.
+///
+/// The compose+partition build is slow for a big library, so the engine runs it
+/// on a worker and shows its loader; the first cell renders immediately.
+export fn Java_org_beetlebug_lookout_Lookout_nOpenCharts(env: [*c]j.JNIEnv, cls: j.jclass, paths: j.jobjectArray, surface: j.jobject, w_px: j.jint, h_px: j.jint, w_pts: j.jint, h_pts: j.jint, msaa: j.jboolean) j.jlong {
+    _ = cls;
+    const count = env_(env).GetArrayLength.?(env, paths);
+    if (count <= 0) return 0;
+    const n: usize = @intCast(count);
+    // Both arrays are needed to RELEASE: ReleaseStringUTFChars wants the
+    // jstring its chars came from, so the local refs are kept alongside.
+    const strs = gpa.alloc(j.jstring, n) catch return 0;
+    defer gpa.free(strs);
+    const cs = gpa.alloc([*:0]const u8, n) catch return 0;
+    defer gpa.free(cs);
+    var got: usize = 0;
+    defer for (0..got) |i| env_(env).ReleaseStringUTFChars.?(env, strs[i], @ptrCast(cs[i]));
+    while (got < n) : (got += 1) {
+        const s: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, paths, @intCast(got)));
+        const c = env_(env).GetStringUTFChars.?(env, s, null) orelse return 0;
+        strs[got] = s;
+        cs[got] = @ptrCast(c);
+    }
+    const win = j.ANativeWindow_fromSurface(env, surface) orelse return 0;
+    const l = lookout_open_charts_in_window(LOOKOUT_NATIVE_ANDROID_WINDOW, win, cs.ptr, n, @intCast(w_px), @intCast(h_px), if (msaa != 0) 1 else 0) orelse {
+        j.ANativeWindow_release(win);
+        return 0;
+    };
+    return finishOpen(l, win, w_pts, h_pts);
+}
+
+/// The tail both opens share: hand the camera its LOGICAL size (so the core can
+/// derive density = px/pts), frame the data, and wrap it all in a Handle.
+fn finishOpen(l: *anyopaque, win: *j.ANativeWindow, w_pts: j.jint, h_pts: j.jint) j.jlong {
     _ = lookout_resize(l, @intCast(w_pts), @intCast(h_pts));
     var v: lookout_view = undefined;
     if (lookout_fit_chart(l, &v) == 0) lookout_set_view(l, &v);

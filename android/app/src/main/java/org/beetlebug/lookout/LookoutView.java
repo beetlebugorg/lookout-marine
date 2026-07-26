@@ -24,7 +24,8 @@ import android.view.SurfaceView;
 public final class LookoutView extends SurfaceView
         implements SurfaceHolder.Callback, Choreographer.FrameCallback {
 
-    private final String chartPath;
+    // Every cell to compose, not one chart: a pushed library is opened whole.
+    private final String[] chartPaths;
     private final float density;
     private final ChartController controller;
     // Written on the main thread (surfaceChanged/surfaceDestroyed), read on the
@@ -40,9 +41,9 @@ public final class LookoutView extends SurfaceView
     // engine tessellation itself runs on a further worker inside the core.
     private HandlerThread renderThread;
 
-    public LookoutView(Context context, String chartPath, ChartController controller) {
+    public LookoutView(Context context, String[] chartPaths, ChartController controller) {
         super(context);
-        this.chartPath = chartPath;
+        this.chartPaths = chartPaths;
         this.controller = controller;
         float d = context.getResources().getDisplayMetrics().density;
         this.density = d > 0 ? d : 1f;
@@ -242,7 +243,7 @@ public final class LookoutView extends SurfaceView
     public void surfaceChanged(SurfaceHolder holder, int format, int wPx, int hPx) {
         int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
         if (lk == null) {
-            lk = Lookout.open(chartPath, holder.getSurface(), wPx, hPx, wPts, hPts, true);
+            lk = Lookout.openCharts(chartPaths, holder.getSurface(), wPx, hPx, wPts, hPts, true);
             if (lk == null) return;
             lastFrameNs = 0;
             // Before the render thread starts: attach restores the mariner's
@@ -274,8 +275,10 @@ public final class LookoutView extends SurfaceView
             renderThread = null;
         }
         // The render thread is stopped, so no more native calls are in flight;
-        // drop the controller's reference before the handle dies.
-        controller.detach();
+        // drop the controller's reference before the handle dies — passing OUR
+        // handle so a later teardown can't detach the controller from a newer
+        // view's engine (switching library recreates this view).
+        controller.detach(lk);
         if (lk != null) {
             lk.close();
             lk = null;

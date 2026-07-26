@@ -71,7 +71,15 @@ class ChartController(private val appContext: Context) {
         lastPushed = null
     }
 
-    fun detach() {
+    /**
+     * Drop [l]'s handle — but only if it is still the live one. Switching chart
+     * library recreates the SurfaceView, and the outgoing view's
+     * surfaceDestroyed can land AFTER the incoming view has already attached;
+     * clearing unconditionally would leave the controller detached from a live
+     * engine (a frozen HUD, dead settings) until the next surface change.
+     */
+    fun detach(l: Lookout?) {
+        if (l != null && lk !== l) return
         main.removeCallbacks(applyMarinerNow)
         lk = null
         identify = emptyList()

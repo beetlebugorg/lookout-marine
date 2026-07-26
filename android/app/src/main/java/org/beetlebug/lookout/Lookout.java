@@ -34,6 +34,18 @@ public final class Lookout implements AutoCloseable {
         return h == 0 ? null : new Lookout(h);
     }
 
+    /**
+     * Open a chart LIBRARY: many baked cells composed into one seamless view,
+     * the engine choosing the owner per tile from its band/tier partition.
+     * Returns null on failure. One path behaves exactly like open().
+     */
+    public static Lookout openCharts(String[] chartPaths, Surface surface,
+                                     int widthPx, int heightPx,
+                                     int widthPts, int heightPts, boolean msaa) {
+        long h = nOpenCharts(chartPaths, surface, widthPx, heightPx, widthPts, heightPts, msaa);
+        return h == 0 ? null : new Lookout(h);
+    }
+
     @Override
     public void close() {
         if (h != 0) {
@@ -132,6 +144,9 @@ public final class Lookout implements AutoCloseable {
     private static native long nOpen(String chartPath, Surface surface,
                                      int widthPx, int heightPx,
                                      int widthPts, int heightPts, boolean msaa);
+    private static native long nOpenCharts(String[] chartPaths, Surface surface,
+                                           int widthPx, int heightPx,
+                                           int widthPts, int heightPts, boolean msaa);
     private static native void nClose(long h);
     private static native void nResize(long h, int wPts, int hPts);
     private static native void nFitChart(long h);

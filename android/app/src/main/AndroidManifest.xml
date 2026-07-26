@@ -13,10 +13,23 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!--
+      Charts are opened WHERE THEY LIE, by path: tile57 mmaps each cell and finds
+      the bake's partition.tpart by walking parent directories, so it needs real
+      filesystem paths. A SAF tree (content:// URI) has neither a path nor a
+      parent walk, and copying a library in to get one would duplicate gigabytes
+      of chart data on the device — so this asks for broad read access instead.
+      Not acceptable for a Play release; this build is sideloaded.
+      On API <= 29 the legacy read permission does the same job.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
     <application android:label="@string/app_name"
         android:allowBackup="true"
         android:theme="@style/AppTheme"
-        android:hardwareAccelerated="true" >
+        android:hardwareAccelerated="true"
+        android:requestLegacyExternalStorage="true" >
 
         <activity android:name="org.beetlebug.lookout.LookoutActivity"
             android:label="@string/app_name"

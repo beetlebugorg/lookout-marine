@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -64,14 +65,21 @@ private const val FEET_PER_METRE = 3.28084
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSheet(m: MarinerState, onDismiss: () -> Unit) {
+fun SettingsSheet(
+    m: MarinerState,
+    charts: ChartsModel,
+    onRequestAccess: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Display", "Depths", "Text", "Advanced")
+    val tabs = listOf("Display", "Depths", "Text", "Advanced", "Charts")
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxHeight(0.92f)) {
-            TabRow(selectedTabIndex = tab) {
+            // Scrollable, not fixed: five labels don't fit a phone's width, and
+            // "Advanced" ellipsising to "Advan…" is worse than a row that scrolls.
+            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
                 tabs.forEachIndexed { i, title ->
                     Tab(
                         selected = tab == i,
@@ -90,7 +98,8 @@ fun SettingsSheet(m: MarinerState, onDismiss: () -> Unit) {
                     0 -> DisplaySection(m)
                     1 -> DepthsSection(m)
                     2 -> SymbolsSection(m)
-                    else -> AdvancedSection(m)
+                    3 -> AdvancedSection(m)
+                    else -> ChartsSection(charts, onRequestAccess)
                 }
             }
         }
@@ -323,7 +332,7 @@ private fun AdvancedSection(m: MarinerState) {
 // ---- rows -------------------------------------------------------------------
 
 @Composable
-private fun SectionHeader(text: String) {
+internal fun SectionHeader(text: String) {
     HorizontalDivider(Modifier.padding(top = 12.dp))
     Text(
         text = text.uppercase(Locale.US),
@@ -335,7 +344,7 @@ private fun SectionHeader(text: String) {
 }
 
 @Composable
-private fun Footer(text: String) {
+internal fun Footer(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodySmall,
