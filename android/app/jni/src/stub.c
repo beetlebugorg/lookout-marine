@@ -2,14 +2,8 @@
  * natives live inside liblookout_marine.a, kept via --whole-archive); CMake
  * just needs one translation unit to own the target.
  *
- * It also owns one piece of real work: getting the engine's diagnostics into
- * logcat. The core reports through std.debug.print — every "open: N charts
- * opened in X ms", "composed N charts", "compose_open failed: …", "skip
- * '<cell>': …" and build timing line goes to stderr, and on Android stderr is
- * /dev/null unless someone claims it. Which means the exact lines you need to
- * answer "why is only one chart loading?" are invisible on device while being
- * perfectly visible on macOS. So: pipe stderr+stdout into __android_log_write
- * under the same "lookout" tag the Java side uses. */
+ * It also pipes stdout/stderr to logcat: the core reports through
+ * std.debug.print, and Android drops stderr on the floor. */
 #include <jni.h>
 #include <pthread.h>
 #include <errno.h>
@@ -22,9 +16,7 @@
 
 static int log_pipe[2];
 
-/* Forward whole lines; a partial write waits for its newline rather than
- * arriving as its own log entry. Long lines are flushed at buffer capacity
- * (logcat truncates around 4k anyway). */
+/* Whole lines only; a partial write waits for its newline. */
 static void *log_pump(void *arg) {
     (void)arg;
     char buf[2048];
@@ -55,8 +47,7 @@ static void *log_pump(void *arg) {
     return NULL;
 }
 
-/* stdio is line-buffered at best and fully buffered when not a tty, which would
- * hold engine output back until a flush; unbuffer both before redirecting. */
+/* Unbuffered, or output sits in libc until a flush. */
 static void redirect_stdio_to_logcat(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
