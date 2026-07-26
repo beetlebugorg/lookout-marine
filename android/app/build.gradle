@@ -76,14 +76,13 @@ dependencies {
 
 // Cross-compile the Zig core (liblookout_marine.a + libtile57.a via build-libs.sh)
 // before CMake links it, so a plain `./gradlew assembleDebug` rebuilds everything
-// in one step. One task per build type so the debug APK gets a Debug core (~2.4x
-// faster to compile) and release gets ReleaseFast. Override with -PcoreOpt=<mode>.
+// in one step. One task per build type, both optimized (-PcoreOpt=<mode> overrides).
 // Runs with the exact NDK gradle uses (android.ndkDirectory) and the ABIs from
 // abiFilters; the CMake link tasks depend on the matching variant's task.
 def zigAbis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
 ['debug', 'release'].each { bt ->
-    def opt = project.hasProperty('coreOpt') ? project.coreOpt
-              : (bt == 'release' ? 'ReleaseFast' : 'Debug')
+    // Both optimized: a Debug core is ~8.7x slower in compose (87s z5 scene).
+    def opt = project.hasProperty('coreOpt') ? project.coreOpt : 'ReleaseFast'
     def cap = bt.capitalize()
     def t = tasks.register("buildZigCore${cap}", Exec) {
         workingDir = file("${projectDir}/..")        // the android/ dir

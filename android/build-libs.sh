@@ -39,10 +39,8 @@ echo "using NDK: $NDK"
 
 # ABIs to build (space-separated). macOS ships bash 3.2 — no associative arrays.
 ABIS="${ABIS:-arm64-v8a}"
-# Zig optimize mode. ReleaseFast (the core's default) runs LLVM's full optimizer
-# over tile57 + lookout and costs ~3 min per changed build; Debug is ~2.4x faster
-# to compile (at some runtime cost). Gradle passes OPT=Debug for the debug APK and
-# OPT=ReleaseFast for release; OPT= overrides either from the CLI.
+# Zig optimize mode. Debug compiles ~2.4x faster but runs ~8.7x slower in compose,
+# so gradle passes ReleaseFast for both APKs; OPT= overrides from the CLI.
 OPT="${OPT:-ReleaseFast}"
 
 abi_triple() {
