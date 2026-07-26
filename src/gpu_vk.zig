@@ -751,7 +751,15 @@ pub const Gpu = struct {
         sci.imageArrayLayers = 1;
         sci.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         sci.imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        sci.preTransform = caps.currentTransform;
+        // Declaring currentTransform promises the presentation engine that the
+        // frame is ALREADY rotated into the display's orientation. We never
+        // pre-rotate, so on a device reporting ROTATE_90 the map stays put
+        // while the screen turns and lands squeezed into the new aspect. Ask
+        // for identity and let the compositor rotate.
+        sci.preTransform = if (caps.supportedTransforms & vk.VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR != 0)
+            @as(u32, vk.VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        else
+            caps.currentTransform;
         sci.compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         sci.presentMode = vk.VK_PRESENT_MODE_FIFO_KHR; // vsync; always available
         sci.clipped = vk.VK_TRUE;
@@ -803,6 +811,17 @@ pub const Gpu = struct {
         self.sc_count = 0;
     }
 
+    /// True when the swapchain no longer matches the host's declared viewport
+    /// (a rotation): host points x density is the pixel extent we should have.
+    fn extentStale(self: *const Gpu) bool {
+        if (self.host_pt_w <= 0 or self.host_pt_h <= 0 or self.pixel_density <= 0) return false;
+        const w: u32 = @intFromFloat(@round(self.host_pt_w * self.pixel_density));
+        const h: u32 = @intFromFloat(@round(self.host_pt_h * self.pixel_density));
+        const dw = if (w > self.width) w - self.width else self.width - w;
+        const dh = if (h > self.height) h - self.height else self.height - h;
+        return dw > 2 or dh > 2; // slack for the points->pixels rounding
+    }
+
     fn recreateSwapchain(self: *Gpu) void {
         _ = vk.vkDeviceWaitIdle(self.device);
         self.destroySwapchainViews();
@@ -811,6 +830,7 @@ pub const Gpu = struct {
             logErr("swapchain recreate failed: %d", .{@as(c_int, @intFromError(e))});
             return;
         };
+        logInfo("vk: swapchain now %ux%u (host pts %ux%u)", .{ self.width, self.height, @as(u32, @intFromFloat(self.host_pt_w)), @as(u32, @intFromFloat(self.host_pt_h)) });
         self.size_changed_ms = ticksMs();
     }
 
@@ -1202,7 +1222,14 @@ pub const Gpu = struct {
         pi.pSwapchains = &self.swapchain;
         pi.pImageIndices = &image_index;
         const pr = vk.vkQueuePresentKHR(self.queue, &pi);
-        if (pr == vk.VK_ERROR_OUT_OF_DATE_KHR or pr == vk.VK_SUBOPTIMAL_KHR) self.recreateSwapchain();
+        // Asking for an identity preTransform on a display whose
+        // currentTransform is a rotation makes SUBOPTIMAL the PERMANENT steady
+        // state, so it alone is no reason to rebuild — that recreates the
+        // swapchain every frame. Rebuild on it only when the extent actually
+        // disagrees with the viewport the host declared.
+        if (pr == vk.VK_ERROR_OUT_OF_DATE_KHR or (pr == vk.VK_SUBOPTIMAL_KHR and self.extentStale())) {
+            self.recreateSwapchain();
+        }
         return true;
     }
 
