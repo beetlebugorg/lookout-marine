@@ -138,7 +138,14 @@ public final class LookoutView extends SurfaceView
     // event), but only ENGAGES past a threshold: almost no two-finger pinch is
     // perfectly twist-free, and rotating the chart a degree per zoom would make
     // north drift for no reason.
-    private static final float ROTATE_ENGAGE_DEG = 10f;
+    private static final float ROTATE_ENGAGE_DEG = 18f;
+    // atan2 of the vector BETWEEN the fingers is mostly noise when they are
+    // close: a 2px tremor is 0.4 deg at 300px of separation but 2.3 deg at
+    // 50px — and a pinch drives them together, so the twist gets loudest
+    // exactly while zooming. Below this span it is not a signal.
+    private static final float MIN_TWIST_SPAN_DP = 96f;
+    // Engaged, a held-still pinch should not creep.
+    private static final float TWIST_DEADBAND_DEG = 0.25f;
     private boolean rotating;
     private float twistPrevDeg, twistAccumDeg;
 
@@ -205,13 +212,17 @@ public final class LookoutView extends SurfaceView
         float d = now - twistPrevDeg;
         while (d > 180f) d -= 360f;   // shortest way round the wrap
         while (d < -180f) d += 360f;
-        twistPrevDeg = now;
+        twistPrevDeg = now; // always, so re-entering never replays a stale sweep
+
+        final float span = (float) Math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0));
+        if (span < MIN_TWIST_SPAN_DP * density) return;
 
         if (!rotating) {
             twistAccumDeg += d;
             if (Math.abs(twistAccumDeg) < ROTATE_ENGAGE_DEG) return;
             rotating = true; // engaged: from here the twist tracks 1:1
         }
+        if (Math.abs(d) < TWIST_DEADBAND_DEG) return;
         final float cx = getWidth() * 0.5f / density, cy = getHeight() * 0.5f / density;
         final double r = Math.toRadians(d);
         // A unit vector before and after the sweep, offset from the centre.
