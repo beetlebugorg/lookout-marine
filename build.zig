@@ -15,6 +15,53 @@ fn haveLocalTile57(b: *std.Build) bool {
     return true;
 }
 
+// The NDK triple for an *-linux-android target (null otherwise). Mirrors
+// tile57's build.zig: the C deps need the NDK sysroot's bionic + arch headers.
+fn androidTriple(target: std.Build.ResolvedTarget) ?[]const u8 {
+    const t = target.result;
+    if (t.abi != .android and t.abi != .androideabi) return null;
+    return switch (t.cpu.arch) {
+        .aarch64 => "aarch64-linux-android",
+        .x86_64 => "x86_64-linux-android",
+        .x86 => "i686-linux-android",
+        .arm, .thumb => "arm-linux-androideabi",
+        else => null,
+    };
+}
+
+fn ndkSysroot(b: *std.Build, ndk: []const u8) []const u8 {
+    const base = b.fmt("{s}/toolchains/llvm/prebuilt", .{ndk});
+    // The NDK ships one host toolchain dir. Probe the host-OS default FIRST (what
+    // the NDK actually ships — e.g. darwin-x86_64 even on Apple silicon) so the
+    // result is correct regardless of how accessAbsolute behaves; only fall
+    // through to alternates (a future darwin-arm64 toolchain) if it's absent.
+    const candidates: []const []const u8 = switch (@import("builtin").os.tag) {
+        .macos => &.{ "darwin-x86_64", "darwin-arm64" },
+        .windows => &.{"windows-x86_64"},
+        else => &.{ "linux-x86_64", "linux-aarch64" },
+    };
+    for (candidates) |host| {
+        const sysroot = b.fmt("{s}/{s}/sysroot", .{ base, host });
+        std.Io.Dir.accessAbsolute(b.graph.io, b.fmt("{s}/usr/include", .{sysroot}), .{}) catch continue;
+        return sysroot;
+    }
+    return b.fmt("{s}/{s}/sysroot", .{ base, candidates[0] }); // default; clear path in errors
+}
+
+fn androidLibcFile(b: *std.Build, ndk: []const u8, triple: []const u8, api: u32) std.Build.LazyPath {
+    const sysroot = ndkSysroot(b, ndk);
+    const content = b.fmt(
+        \\include_dir={s}/usr/include
+        \\sys_include_dir={s}/usr/include/{s}
+        \\crt_dir={s}/usr/lib/{s}/{d}
+        \\msvc_lib_dir=
+        \\kernel32_lib_dir=
+        \\gcc_dir=
+        \\
+    , .{ sysroot, sysroot, triple, sysroot, triple, api });
+    return b.addWriteFiles().add(b.fmt("android-libc-{s}.txt", .{triple}), content);
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     // Non-debug by default: the app chases 60 fps and a Debug core visibly
@@ -23,10 +70,44 @@ pub fn build(b: *std.Build) void {
     // standardOptimizeOption, which would keep the no-flag default at Debug.)
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse .ReleaseFast;
 
-    const tile57_dep = (if (haveLocalTile57(b))
-        b.lazyDependency("tile57_local", .{ .target = target, .optimize = optimize })
+    // Renderer backend: native on mobile, SDL on extended platforms —
+    //   * metal: Apple (macOS / iOS), direct Metal
+    //   * vk:    Android, direct Vulkan onto an ANativeWindow (the Java shell
+    //            owns the Activity/Surface; no SDL, no SDLActivity)
+    //   * sdl:   Windows / Linux (SDL_GPU: D3D12/Vulkan), also `-Dbackend=sdl`
+    //            on macOS to exercise that path natively (SDL_GPU -> Metal)
+    // Default by platform; see src/gpu.zig.
+    const Backend = enum { metal, sdl, vk };
+    const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
+    const target_android = target.result.abi == .android or target.result.abi == .androideabi;
+    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk") orelse
+        (if (is_apple) Backend.metal else if (target_android) Backend.vk else Backend.sdl);
+    const use_sdl = backend == .sdl;
+    const use_vk = backend == .vk;
+    if (use_vk and !target_android)
+        @panic("-Dbackend=vk is Android-only (ANativeWindow surface); use sdl or metal here");
+    const build_opts = b.addOptions();
+    build_opts.addOption(bool, "gpu_sdl", use_sdl);
+    build_opts.addOption(bool, "gpu_vk", use_vk);
+    const build_opts_mod = build_opts.createModule();
+
+    // Android cross-compile (mirrors tile57's -Dandroid-ndk): the C deps need the
+    // NDK sysroot's bionic + arch headers; the SDL backend also needs SDL3 headers
+    // (SDL itself is linked by the android gradle/CMake build, not here).
+    const android_ndk = b.option([]const u8, "android-ndk", "Android NDK root (for -Dtarget=*-linux-android)");
+    const android_api = b.option(u32, "android-api", "Android API level (default 24)") orelse 24;
+    const sdl_include = b.option([]const u8, "sdl-include", "SDL3 include dir for the android sdl backend (e.g. SDL/include)");
+    const android_libc: ?std.Build.LazyPath = if (androidTriple(target)) |triple|
+        (if (android_ndk) |ndk| androidLibcFile(b, ndk, triple, android_api) else null)
     else
-        b.lazyDependency("tile57", .{ .target = target, .optimize = optimize })) orelse
+        null;
+    const is_android = androidTriple(target) != null;
+
+    const dep_args = .{ .target = target, .optimize = optimize, .@"android-ndk" = android_ndk, .@"android-api" = android_api };
+    const tile57_dep = (if (haveLocalTile57(b))
+        b.lazyDependency("tile57_local", dep_args)
+    else
+        b.lazyDependency("tile57", dep_args)) orelse
         return; // fetch scheduled; the runner downloads it and re-runs build()
 
     // The engine archive rides a named lazy path, not dep.artifact() — tile57's
@@ -42,8 +123,24 @@ pub fn build(b: *std.Build) void {
         b: *std.Build,
         tile57_inc: std.Build.LazyPath,
         tile57_lib: std.Build.LazyPath,
+        use_sdl: bool,
+        use_vk: bool,
+        android: bool,
+        sdl_include: ?[]const u8,
+        build_opts_mod: *std.Build.Module,
         fn apply(self: @This(), mod: *std.Build.Module) void {
             const bb = self.b;
+            mod.addImport("build_options", self.build_opts_mod); // src/gpu.zig backend switch
+            if (self.android) {
+                // Neutralise bionic's nullability keywords for OUR parse: clang's
+                // translate-c (@cImport of stb_image.h -> stdlib.h) rejects
+                // `_Nonnull` on array params ("cannot be applied to non-pointer
+                // type 'unsigned short [3]'"). Defining them empty drops the hints
+                // — harmless (annotations only) and applies to C-compile + cImport.
+                mod.addCMacro("_Nonnull", "");
+                mod.addCMacro("_Nullable", "");
+                mod.addCMacro("_Null_unspecified", "");
+            }
             // Non-macOS Apple targets (-Dtarget=aarch64-ios[-simulator]) need
             // that SDK's libc AND framework headers (Metal/QuartzCore for the
             // shim): pass --sysroot; Zig only bundles macOS's.
@@ -53,21 +150,55 @@ pub fn build(b: *std.Build) void {
             }
             mod.addIncludePath(self.tile57_inc);
             mod.addIncludePath(bb.path("vendor/stb"));
-            mod.addIncludePath(bb.path("src")); // metal_shim.h for the @cImport
+            mod.addIncludePath(bb.path("src")); // metal_shim.h / c_sdl.zig for the @cImport
             // Tessellation, sprite/SDF quad building and paint order all live
             // in tile57 (the GPU-scene ABI hands back draw-ready buffers), so
             // the host vendors no tessellator. stb stays for atlas PNG decode.
-            mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{ "-O2", "-fno-sanitize=undefined" } });
-            // The Metal transport (ObjC behind a C face). Manual retain/release
-            // on purpose — objects live in C structs (see metal_shim.m).
-            mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
-            mod.addObjectFile(self.tile57_lib);
-            // Metal shader source, compiled by the shim at runtime (no offline
-            // shader toolchain).
-            mod.addAnonymousImport("metal_src", .{ .root_source_file = bb.path("shaders/lookout.metal") });
+            // -std=gnu99: under the newer clang default, Android's bionic
+            // stdlib.h `_Nonnull`-on-array declarations error; gnu99 accepts them
+            // (matches tile57's C flags). Harmless for stb elsewhere.
+            mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined" } });
+            // Embed tile57 into liblookout_marine.a so Apple/native consumers link
+            // one archive. NOT on android: Zig embeds it as a NESTED .a member,
+            // which ld.lld rejects ("neither ET_REL nor LLVM bitcode") — there the
+            // gradle/CMake build links libtile57.a alongside liblookout_marine.a.
+            if (!self.android) mod.addObjectFile(self.tile57_lib);
+            if (self.use_sdl) {
+                if (self.android) {
+                    // Android: the gradle/CMake build links SDL3; here we only need
+                    // its headers so c_sdl.zig's @cInclude("SDL3/SDL.h") resolves.
+                    if (self.sdl_include) |inc| mod.addSystemIncludePath(.{ .cwd_relative = inc });
+                } else {
+                    // Native: pkg-config gives include + link.
+                    mod.linkSystemLibrary("SDL3", .{});
+                }
+            }
+            if (self.use_sdl or self.use_vk) {
+                // Precompiled SPIR-V, embedded (no runtime shader toolchain).
+                // Shared by both Vulkan-flavoured backends: the raw-vk pipeline
+                // layout mirrors SDL_GPU's set numbering (vtx UBO set 1, frag
+                // sampler set 2, frag UBO set 3), so one .spv set serves both.
+                const spv = [_][2][]const u8{
+                    .{ "chart_vert_spv", "shaders/vk/chart.vert.spv" },
+                    .{ "chart_frag_spv", "shaders/vk/chart.frag.spv" },
+                    .{ "sprite_vert_spv", "shaders/vk/sprite.vert.spv" },
+                    .{ "sprite_frag_spv", "shaders/vk/sprite.frag.spv" },
+                    .{ "sdf_frag_spv", "shaders/vk/sdf.frag.spv" },
+                    .{ "pattern_vert_spv", "shaders/vk/pattern.vert.spv" },
+                    .{ "pattern_frag_spv", "shaders/vk/pattern.frag.spv" },
+                };
+                for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = bb.path(e[1]) });
+            }
+            if (!self.use_sdl and !self.use_vk) {
+                // The Metal transport (ObjC behind a C face). Manual
+                // retain/release on purpose — objects live in C structs.
+                mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
+                // Metal shader source, compiled by the shim at runtime.
+                mod.addAnonymousImport("metal_src", .{ .root_source_file = bb.path("shaders/lookout.metal") });
+            }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .use_sdl = use_sdl, .use_vk = use_vk, .android = is_android, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -83,6 +214,8 @@ pub fn build(b: *std.Build) void {
     });
     cfg.apply(lib_mod);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
+    if (android_libc) |libc| lib.setLibCFile(libc); // NDK sysroot for the C deps
+
     lib.installHeader(b.path("include/lookout.h"), "lookout.h");
     // tile57.h rides along (lookout.h includes it), so the app's header search
     // path is just <prefix>/include.
@@ -95,7 +228,9 @@ pub fn build(b: *std.Build) void {
 
     // ---- the demo executable + tests (host platforms only: an iOS cross-build
     // `-Dtarget=aarch64-ios` produces just the static libs for the app to link) ----
-    if (target.result.os.tag == .ios) return;
+    const cross_only = target.result.os.tag == .ios or
+        target.result.abi == .android or target.result.abi == .androideabi;
+    if (cross_only) return;
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -104,9 +239,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(exe_mod);
-    exe_mod.linkFramework("Metal", .{});
-    exe_mod.linkFramework("QuartzCore", .{});
-    exe_mod.linkFramework("Foundation", .{});
+    if (!use_sdl) {
+        exe_mod.linkFramework("Metal", .{});
+        exe_mod.linkFramework("QuartzCore", .{});
+        exe_mod.linkFramework("Foundation", .{});
+    }
     const exe = b.addExecutable(.{ .name = "lookout-marine-demo", .root_module = exe_mod });
     b.installArtifact(exe);
 
@@ -123,9 +260,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(test_mod);
-    test_mod.linkFramework("Metal", .{});
-    test_mod.linkFramework("QuartzCore", .{});
-    test_mod.linkFramework("Foundation", .{});
+    if (!use_sdl) {
+        test_mod.linkFramework("Metal", .{});
+        test_mod.linkFramework("QuartzCore", .{});
+        test_mod.linkFramework("Foundation", .{});
+    }
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
 }

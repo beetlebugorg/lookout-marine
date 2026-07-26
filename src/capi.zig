@@ -1,9 +1,23 @@
 //! C ABI for lookout-core (see include/lookout.h). A thin, 1:1 wrapper over the
 //! Zig `Lookout` widget. Uses the C allocator so C hosts need no allocator.
 const std = @import("std");
+const builtin = @import("builtin");
 
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
+
+// On Android, native stderr goes nowhere — a Zig panic (Debug safety check,
+// unreachable, …) would die as a bare SIGABRT with no message in logcat. Route
+// the panic message through the android log first, then abort as usual.
+extern "c" fn __android_log_print(prio: c_int, tag: [*:0]const u8, fmt: [*:0]const u8, ...) c_int;
+fn androidPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    _ = __android_log_print(6, "lookout", "PANIC: %.*s (ra=0x%zx)", @as(c_int, @intCast(@min(msg.len, 512))), msg.ptr, first_trace_addr orelse 0);
+    std.process.abort();
+}
+pub const panic = if (builtin.abi.isAndroid())
+    std.debug.FullPanic(androidPanic)
+else
+    std.debug.FullPanic(std.debug.defaultPanic);
 
 const gpa = std.heap.c_allocator;
 
@@ -95,12 +109,13 @@ export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque,
 }
 
 /// Reject unknown kind values from stale hosts instead of trusting the int.
+/// Kinds beyond the Apple pair exist only in the superset enums of the
+/// SDL/Vulkan backends — gate on the field so the Metal build still compiles.
 fn nativeKind(kind: c_int) ?lk.NativeKind {
-    return switch (kind) {
-        0 => .none,
-        1 => .metal_layer,
-        else => null,
-    };
+    if (kind == 0) return .none;
+    if (kind == 1) return .metal_layer;
+    if (@hasField(lk.NativeKind, "android_window") and kind == 7) return .android_window;
+    return null;
 }
 
 export fn lookout_close(h: ?*lookout) void {
@@ -331,4 +346,7 @@ export fn lookout_scale_denominator(h: ?*lookout) f64 {
 
 comptime {
     _ = lookout_open;
+    // The Android Java shell's JNI natives ride in the same archive on vk
+    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout).
+    if (@import("build_options").gpu_vk) _ = @import("jni_android.zig");
 }
