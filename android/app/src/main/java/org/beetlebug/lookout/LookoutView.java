@@ -40,6 +40,15 @@ public final class LookoutView extends SurfaceView
     // ("Skipped N frames"); here it only occupies the render thread, and the
     // engine tessellation itself runs on a further worker inside the core.
     private HandlerThread renderThread;
+    // Gestures post here instead of calling in directly: the C ABI's per-handle
+    // lock is held for a whole frame, so a UI-thread call froze for that long.
+    private volatile Handler engine;
+
+    /** Run something on the render thread, or drop it if there is no engine. */
+    private void onEngine(Runnable r) {
+        Handler h = engine;
+        if (h != null && lk != null) h.post(r);
+    }
 
     public LookoutView(Context context, String[] chartPaths, ChartController controller) {
         super(context);
@@ -58,13 +67,14 @@ public final class LookoutView extends SurfaceView
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
                 // distance is previous-minus-current; the chart drags WITH the finger
-                if (lk != null) lk.pan(-dx / density, -dy / density);
+                onEngine(() -> lk.pan(-dx / density, -dy / density));
                 return true;
             }
 
             @Override
             public boolean onDoubleTap(MotionEvent e) {
-                if (lk != null) lk.zoomAt(1.0, e.getX() / density, e.getY() / density);
+                final float x = e.getX() / density, y = e.getY() / density;
+                onEngine(() -> lk.zoomAt(1.0, x, y));
                 return true;
             }
 
@@ -80,7 +90,7 @@ public final class LookoutView extends SurfaceView
              *  logical-unit, so scale before crossing. */
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
-                if (lk != null) lk.flingStart(vx / density, vy / density);
+                onEngine(() -> lk.flingStart(vx / density, vy / density));
                 return true;
             }
 
@@ -97,7 +107,7 @@ public final class LookoutView extends SurfaceView
             public boolean onDown(MotionEvent e) {
                 // A new grab stops any coast, so the chart doesn't slide out
                 // from under the finger that just caught it.
-                if (lk != null) lk.flingStart(0, 0);
+                onEngine(() -> lk.flingStart(0, 0));
                 return true; // claim the stream
             }
         });
@@ -106,9 +116,10 @@ public final class LookoutView extends SurfaceView
             @Override
             public boolean onScale(ScaleGestureDetector det) {
                 float f = det.getScaleFactor();
-                if (lk != null && f > 0) {
-                    lk.zoomAt(Math.log(f) / Math.log(2.0),
-                              det.getFocusX() / density, det.getFocusY() / density);
+                if (f > 0) {
+                    final double dz = Math.log(f) / Math.log(2.0);
+                    final float fx = det.getFocusX() / density, fy = det.getFocusY() / density;
+                    onEngine(() -> lk.zoomAt(dz, fx, fy));
                 }
                 return true;
             }
@@ -161,8 +172,9 @@ public final class LookoutView extends SurfaceView
                 if (e.getPointerCount() >= 2) trackTwist(e);
                 break;
             case MotionEvent.ACTION_UP:
-                if (twoTap && lk != null && e.getEventTime() - twoDownMs < 300) {
-                    lk.zoomAt(-1.0, twoMidX / density, twoMidY / density);
+                if (twoTap && e.getEventTime() - twoDownMs < 300) {
+                    final float mx = twoMidX / density, my = twoMidY / density;
+                    onEngine(() -> lk.zoomAt(-1.0, mx, my));
                 }
                 twoTap = false;
                 rotating = false;
@@ -200,12 +212,11 @@ public final class LookoutView extends SurfaceView
             if (Math.abs(twistAccumDeg) < ROTATE_ENGAGE_DEG) return;
             rotating = true; // engaged: from here the twist tracks 1:1
         }
-        if (lk == null) return;
-        float cx = getWidth() * 0.5f / density, cy = getHeight() * 0.5f / density;
-        double r = Math.toRadians(d);
+        final float cx = getWidth() * 0.5f / density, cy = getHeight() * 0.5f / density;
+        final double r = Math.toRadians(d);
         // A unit vector before and after the sweep, offset from the centre.
-        lk.rotateDrag(cx + 100f, cy,
-                      cx + 100f * (float) Math.cos(r), cy + 100f * (float) Math.sin(r));
+        onEngine(() -> lk.rotateDrag(cx + 100f, cy,
+                cx + 100f * (float) Math.cos(r), cy + 100f * (float) Math.sin(r)));
     }
 
     /** Mouse / trackpad: the scroll wheel zooms about the cursor (the natural
@@ -224,7 +235,9 @@ public final class LookoutView extends SurfaceView
             x = getWidth() * 0.5f;
             y = getHeight() * 0.5f;
         }
-        lk.zoomAt(v * 0.5, x / density, y / density);
+        final double dz = v * 0.5;
+        final float zx = x / density, zy = y / density;
+        onEngine(() -> lk.zoomAt(dz, zx, zy));
         return true;
     }
 
@@ -249,13 +262,15 @@ public final class LookoutView extends SurfaceView
             // Before the render thread starts: attach restores the mariner's
             // saved settings, and they must be in place for the FIRST build or
             // the chart tessellates once at defaults and immediately again.
-            controller.attach(lk);
             renderThread = new HandlerThread("lookout-render");
             renderThread.start();
+            engine = new Handler(renderThread.getLooper());
+            // Same queue for the chrome. Inline natives are safe here: no frame
+            // runs until the callback below is posted.
+            controller.attach(lk, engine);
             // Choreographer is per-thread: fetch it ON the render thread so the
             // vsync callbacks (and every render) land there.
-            new Handler(renderThread.getLooper()).post(
-                    () -> Choreographer.getInstance().postFrameCallback(this));
+            engine.post(() -> Choreographer.getInstance().postFrameCallback(this));
         } else {
             lk.resize(wPts, hPts);
         }
@@ -273,6 +288,7 @@ public final class LookoutView extends SurfaceView
                 Thread.currentThread().interrupt();
             }
             renderThread = null;
+            engine = null;
         }
         // The render thread is stopped, so no more native calls are in flight;
         // drop the controller's reference before the handle dies — passing OUR

@@ -26,17 +26,26 @@ data class Readouts(
  * handle) and the Compose chrome. The Android analogue of ChartController.swift
  * plus AppModel.
  *
- * Threading: everything public here is main-thread except [onFrameRendered],
- * which the render thread calls. The engine's own api lock serializes the
- * native calls; close() is the one exception, and LookoutView stops the render
- * thread before it — so `lk` never dies underneath a main-thread call, because
- * detach() and every UI callback are on the same (main) thread.
+ * Threading: every public entry point is called on the main thread, but the
+ * native calls are POSTED to the render thread ([engine]) — the api lock is held
+ * for a whole frame, so calling in directly froze the UI for that long. Results
+ * that drive Compose state hop back via [main]. LookoutView stops the render
+ * thread before close(), so queued work always drains against a live handle.
  */
 class ChartController(private val appContext: Context) {
 
     @Volatile private var lk: Lookout? = null
 
     private val main = Handler(Looper.getMainLooper())
+
+    /** The render thread's queue; null while detached. */
+    @Volatile private var engine: Handler? = null
+
+    /** Run [block] on the render thread, or drop it if there is no engine. */
+    private fun onEngine(block: (Lookout) -> Unit) {
+        val h = engine ?: return
+        h.post { lk?.let(block) }
+    }
     private val readoutBuf = DoubleArray(Lookout.READOUTS_LEN)
     private val geoBuf = DoubleArray(2)
 
@@ -60,8 +69,9 @@ class ChartController(private val appContext: Context) {
      * the first tessellation — otherwise the chart builds once at defaults and
      * immediately rebuilds.
      */
-    fun attach(l: Lookout) {
+    fun attach(l: Lookout, queue: Handler) {
         lk = l
+        engine = queue
         val v = DoubleArray(Lookout.MARINER_LEN)
         l.getMariner(v)                       // the engine's own defaults
         var date = l.getMarinerDate()
@@ -80,7 +90,7 @@ class ChartController(private val appContext: Context) {
      */
     fun detach(l: Lookout?) {
         if (l != null && lk !== l) return
-        main.removeCallbacks(applyMarinerNow)
+        engine = null
         lk = null
         identify = emptyList()
     }
@@ -116,20 +126,19 @@ class ChartController(private val appContext: Context) {
 
     // ---- mariner -----------------------------------------------------------
 
-    private val applyMarinerNow = Runnable {
-        val l = lk ?: return@Runnable
-        l.setMariner(mariner.values, mariner.dateView)
-        MarinerState.save(appContext, mariner.values, mariner.dateView)
-    }
-
     /**
      * Push the edited settings to the engine and persist them. Debounced by the
      * caller (see ChartScreen) so dragging a slider doesn't thrash the engine
-     * into a rebuild per frame.
+     * into a rebuild per frame. The values are snapshotted here so the render
+     * thread never reads the form's array while the UI is editing it.
      */
     fun applyMariner() {
-        main.removeCallbacks(applyMarinerNow)
-        applyMarinerNow.run()
+        val v = mariner.values.copyOf()
+        val date = mariner.dateView
+        onEngine { l ->
+            l.setMariner(v, date)
+            MarinerState.save(appContext, v, date)
+        }
     }
 
     /**
@@ -138,20 +147,19 @@ class ChartController(private val appContext: Context) {
      * and they must persist too, or a scheme picked from the toolbar is lost on
      * relaunch while the same scheme picked in the sheet survives.
      */
-    private fun syncMarinerFromEngine() {
-        val l = lk ?: return
+    private fun syncMarinerFromEngine(l: Lookout) {
         val v = DoubleArray(Lookout.MARINER_LEN)
         l.getMariner(v)
         val date = l.getMarinerDate()
-        mariner.loadFrom(v, date)
         MarinerState.save(appContext, v, date)
+        main.post { mariner.loadFrom(v, date) }
     }
 
     // ---- actions -----------------------------------------------------------
 
-    fun cycleScheme() {
-        lk?.cycleScheme()
-        syncMarinerFromEngine()
+    fun cycleScheme() = onEngine { l ->
+        l.cycleScheme()
+        syncMarinerFromEngine(l)
     }
 
     fun setScheme(s: Scheme) {
@@ -160,28 +168,20 @@ class ChartController(private val appContext: Context) {
     }
 
     /** Zoom about the view centre — what the +/- buttons do. */
-    fun zoomBy(dz: Double, centreXPts: Float, centreYPts: Float) {
-        lk?.zoomAt(dz, centreXPts, centreYPts)
-    }
+    fun zoomBy(dz: Double, centreXPts: Float, centreYPts: Float) =
+        onEngine { it.zoomAt(dz, centreXPts, centreYPts) }
 
-    fun fitChart() {
-        lk?.fitChart()
-    }
+    fun fitChart() = onEngine { it.fitChart() }
 
-    fun resetRotation() {
-        lk?.resetRotation()
-    }
+    fun resetRotation() = onEngine { it.resetRotation() }
 
-    fun memoryWarning() {
-        lk?.memoryWarning()
-    }
+    fun memoryWarning() = onEngine { it.memoryWarning() }
 
     /** Tap-to-identify at a point in logical points. */
-    fun identifyAt(xPts: Float, yPts: Float) {
-        val l = lk ?: return
+    fun identifyAt(xPts: Float, yPts: Float) = onEngine { l ->
         l.screenToGeo(xPts, yPts, geoBuf)
         val flat = l.pick(geoBuf[0], geoBuf[1])
-        identify = if (flat == null || flat.isEmpty()) {
+        val found = if (flat == null || flat.isEmpty()) {
             emptyList()
         } else {
             (flat.indices step 3).map { i ->
@@ -192,6 +192,7 @@ class ChartController(private val appContext: Context) {
                 )
             }
         }
+        main.post { identify = found }
     }
 
     fun dismissIdentify() {
