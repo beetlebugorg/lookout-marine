@@ -1,0 +1,104 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+android {
+    namespace = "org.beetlebug.lookout"
+    compileSdkVersion 35
+    ndkVersion = "27.2.12479018"
+    defaultConfig {
+        applicationId = "org.beetlebug.lookout"
+        // minSdk 24 matches the NDK API level the Zig core is built against
+        // (see -Dandroid-api / the libc crt dir).
+        minSdkVersion 24
+        targetSdkVersion 35
+        versionCode 1
+        versionName "1.0"
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_PLATFORM=android-24", "-DANDROID_STL=c++_static"
+                // arm64-v8a only: the Apple-silicon emulator image + the prebuilt
+                // Zig core are AArch64. Add more once cross-built for them.
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    applicationVariants.all { variant ->
+        tasks["merge${variant.name.capitalize()}Assets"]
+            .dependsOn("externalNativeBuild${variant.name.capitalize()}")
+    }
+    sourceSets.main {
+        jniLibs.srcDir 'libs'
+    }
+    externalNativeBuild {
+        cmake {
+            path 'jni/CMakeLists.txt'
+        }
+    }
+    lint {
+        abortOnError = false
+    }
+    buildFeatures {
+        compose = true
+    }
+    // Compose (and the AndroidX libs it pulls) are compiled for Java 17.
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+
+    // The chrome around the chart — the Android analogue of the SwiftUI shell.
+    // The chart itself stays a SurfaceView the Zig core renders into via
+    // Vulkan; Compose only draws the HUD, the controls and the settings sheet.
+    implementation platform('androidx.compose:compose-bom:2024.10.01')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+}
+
+// Cross-compile the Zig core (liblookout_marine.a + libtile57.a via build-libs.sh)
+// before CMake links it, so a plain `./gradlew assembleDebug` rebuilds everything
+// in one step. One task per build type, both optimized (-PcoreOpt=<mode> overrides).
+// Runs with the exact NDK gradle uses (android.ndkDirectory) and the ABIs from
+// abiFilters; the CMake link tasks depend on the matching variant's task.
+def zigAbis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
+['debug', 'release'].each { bt ->
+    // Both optimized: a Debug core is ~8.7x slower in compose (87s z5 scene).
+    def opt = project.hasProperty('coreOpt') ? project.coreOpt : 'ReleaseFast'
+    def cap = bt.capitalize()
+    def t = tasks.register("buildZigCore${cap}", Exec) {
+        workingDir = file("${projectDir}/..")        // the android/ dir
+        commandLine './build-libs.sh'
+        environment 'ANDROID_NDK', android.ndkDirectory
+        environment 'OPT', opt
+        if (zigAbis) environment 'ABIS', zigAbis.join(' ')
+        // Always run — `zig build` is incremental (fast on a warm cache), so this
+        // avoids fragile up-to-date checks across the lookout + sibling tile57 trees.
+    }
+    // AGP names the native tasks buildCMake<Variant>[<abi>] / configureCMake…
+    // (older AGP used externalNativeBuild…) — cover both, matched to this variant.
+    tasks.matching {
+        (it.name.contains('CMake') || it.name.startsWith('externalNativeBuild')) &&
+        it.name.toLowerCase().contains(bt)
+    }.configureEach {
+        dependsOn t
+    }
+}

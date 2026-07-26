@@ -17,6 +17,17 @@ const png = @import("png.zig");
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
+// The async build's WORKER runs tessellation (runJob — pure engine, no GPU) on
+// every backend: a rebuild takes ~1s on a phone and must never sit inside
+// render(), where it would hold the api lock against the gesture thread.
+// STAGING (GPU buffer creation + upload submit) is backend-dependent: Metal
+// tolerates it on the worker thread; the Vulkan-flavoured backends do not —
+// queue submission is externally synchronized, a worker-thread submit races
+// the render thread's and the rebuilt scene swaps in blank. There the worker
+// hands the C scene back and pollBuild stages it on the render thread, ordered
+// before the draw that reads it.
+const async_stage = !(@import("build_options").gpu_sdl or @import("build_options").gpu_vk);
+
 const MAX_SCHEMES = 3; // day / dusk / night
 
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
@@ -106,9 +117,39 @@ pub const OpenOptions = struct {
 
 pub const NativeKind = gpu.NativeKind;
 
-const OsUnfairLock = extern struct { v: u32 = 0 };
-extern "c" fn os_unfair_lock_lock(l: *OsUnfairLock) void;
-extern "c" fn os_unfair_lock_unlock(l: *OsUnfairLock) void;
+// A kernel-blocking lock for api_mu / engine_mu (NOT a spin). On Darwin that's
+// os_unfair_lock — Zig 0.16's std.Thread.Mutex spins there, and this layer takes
+// no Io. Everywhere else (Android/Linux/Windows) std.Thread.Mutex is the futex
+// path, which is also kernel-blocking. os_unfair_lock is Apple-only, so it must
+// not reach a non-Apple link.
+const Lock = if (@import("builtin").os.tag.isDarwin())
+    struct {
+        const Handle = extern struct { v: u32 = 0 };
+        extern "c" fn os_unfair_lock_lock(l: *Handle) void;
+        extern "c" fn os_unfair_lock_unlock(l: *Handle) void;
+        h: Handle = .{},
+        fn lock(self: *@This()) void {
+            os_unfair_lock_lock(&self.h);
+        }
+        fn unlock(self: *@This()) void {
+            os_unfair_lock_unlock(&self.h);
+        }
+    }
+else
+    struct {
+        // Zig 0.16 has no std.Thread.Mutex (it moved behind an Io this layer
+        // doesn't take), so use pthread directly. A zeroed pthread_mutex_t is
+        // PTHREAD_MUTEX_INITIALIZER on Linux/bionic — kernel-blocking, no init call.
+        extern "c" fn pthread_mutex_lock(m: *std.c.pthread_mutex_t) c_int;
+        extern "c" fn pthread_mutex_unlock(m: *std.c.pthread_mutex_t) c_int;
+        m: std.c.pthread_mutex_t = std.mem.zeroes(std.c.pthread_mutex_t),
+        fn lock(self: *@This()) void {
+            _ = pthread_mutex_lock(&self.m);
+        }
+        fn unlock(self: *@This()) void {
+            _ = pthread_mutex_unlock(&self.m);
+        }
+    };
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
@@ -144,7 +185,7 @@ pub const Lookout = struct {
     // host's input thread and its render thread. Distinct from engine_mu,
     // which serializes ENGINE access between API calls and the build worker;
     // api_mu is always the OUTER lock of the two.
-    api_mu: OsUnfairLock = .{},
+    api_mu: Lock = .{},
     // Serializes ENGINE entry from other threads against the build worker: the
     // engine mutates shared state on any access (reader directory caches decode
     // lazily, the geometry cache inserts/evicts), so a main-thread pick during
@@ -152,7 +193,7 @@ pub const Lookout = struct {
     // engine call; a tap during a slow build waits rather than corrupting.
     // os_unfair_lock (kernel-blocking, not a spin) because Zig 0.16 puts
     // std's mutex behind an Io, which this layer does not take.
-    engine_mu: OsUnfairLock = .{},
+    engine_mu: Lock = .{},
     build_active: bool = false, // a worker is in flight (main-thread only)
     build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     build_job: BuildJob = .{},
@@ -166,6 +207,10 @@ pub const Lookout = struct {
     // render thread only swaps pointers in applyStaged). Null when the build
     // failed, was a prefetch, or staging itself failed (retried via dirty).
     pending_scene: ?gpu.Gpu.Scene = null,
+    // !async_stage backends: the worker's raw C scene, staged by pollBuild on
+    // the render thread instead (Vulkan queue submits are render-thread-only).
+    pending_cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene),
+    pending_cs_valid: bool = false,
     last_zoom: f64 = -1, // for zoom-velocity prediction
     last_zoom_ms: i64 = 0,
     /// Wall-clock of the last engine build (worker-written, main-read): the
@@ -198,6 +243,14 @@ pub const Lookout = struct {
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
+    // Deepest zoom a build actually produced geometry for. A chart's declared
+    // max_zoom can overreport: a tile exists there in metadata but carries no
+    // features under the view, so building at that level returns OK-but-empty.
+    // Adopting that blanks a good scene. Capping engine_max_zoom to the last
+    // level that DID draw keeps buildTargetZoom on servable data, so a zoom-in
+    // overscales the good scene (the intended behaviour) instead of going blank.
+    // Reset on a new view (setView/fitChart) so a different area re-probes.
+    served_max_zoom: f64 = 1e9,
 
     // derived live (uniform-only) state
     cat_mask: u32 = 0b111,
@@ -239,8 +292,8 @@ pub const Lookout = struct {
         const got = cc.tile57_abi_gpu_layout();
         if (got != want) {
             std.debug.print("FATAL: tile57 GPU ABI mismatch — header says vertex/quad/range = {d}/{d}/{d} B, linked engine says {d}/{d}/{d} B. Rebuild BOTH repos at matching commits.\n", .{
-                @sizeOf(cc.tile57_gpu_vertex),  @sizeOf(cc.tile57_gpu_quad),  @sizeOf(cc.tile57_gpu_range),
-                got & 0xff,                     (got >> 8) & 0xff,            (got >> 16) & 0xff,
+                @sizeOf(cc.tile57_gpu_vertex), @sizeOf(cc.tile57_gpu_quad), @sizeOf(cc.tile57_gpu_range),
+                got & 0xff,                    (got >> 8) & 0xff,           (got >> 16) & 0xff,
             });
             return error.EngineAbiMismatch;
         }
@@ -608,7 +661,7 @@ pub const Lookout = struct {
     const MIN_ZOOM_FLOOR = 4.0;
     fn updateZoomLimits(self: *Lookout) void {
         const zr = self.zoomRange();
-        self.engine_max_zoom = zr[1];
+        self.engine_max_zoom = @min(zr[1], self.served_max_zoom);
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
         // Per-view cap: the deepest zoom the chart UNDER THE VIEW CENTRE can serve.
         // Over a coarse-only area every covering cell's reach is low, so the
@@ -746,6 +799,7 @@ pub const Lookout = struct {
         self.cam.center = camera.lonLatToWorld(v.lon, v.lat);
         self.cam.zoom = v.zoom;
         self.cam.rotation = v.rotation_deg * std.math.pi / 180.0;
+        self.served_max_zoom = 1e9; // new ground: re-probe how deep it serves
         // Pin the animation target to the new pose: otherwise the zoom easer
         // still aims at the PREVIOUS target and drags the view back (about a
         // stale cursor pivot) on the next frames.
@@ -970,15 +1024,15 @@ pub const Lookout = struct {
     // cells) goes through the compositor so seams stitch; a single chart to its
     // own archive.
     pub fn apiLock(self: *Lookout) void {
-        os_unfair_lock_lock(&self.api_mu);
+        self.api_mu.lock();
     }
     pub fn apiUnlock(self: *Lookout) void {
-        os_unfair_lock_unlock(&self.api_mu);
+        self.api_mu.unlock();
     }
 
     fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
-        os_unfair_lock_lock(&self.engine_mu);
-        defer os_unfair_lock_unlock(&self.engine_mu);
+        self.engine_mu.lock();
+        defer self.engine_mu.unlock();
         const t0 = gpu.ticksMs();
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
@@ -1016,12 +1070,12 @@ pub const Lookout = struct {
     fn marinerGeomHash(m: *const cc.tile57_mariner) u64 {
         var h = std.hash.Wyhash.init(0);
         inline for (.{
-            "scheme",           "size_scale",         "shallow_contour",     "safety_contour",
-            "deep_contour",     "safety_depth",       "four_shade_water",    "depth_unit",
-            "data_quality",     "show_inform_callouts", "show_meta_bounds",  "show_isolated_dangers_shallow",
-            "boundary_style",   "simplified_points",  "show_full_sector_lines", "date_dependent",
-            "highlight_date_dependent", "ignore_scamin", "scamin_filter_gate", "show_overscale",
-            "text_size_scale",  "sounding_size_scale",
+            "scheme",                   "size_scale",           "shallow_contour",        "safety_contour",
+            "deep_contour",             "safety_depth",         "four_shade_water",       "depth_unit",
+            "data_quality",             "show_inform_callouts", "show_meta_bounds",       "show_isolated_dangers_shallow",
+            "boundary_style",           "simplified_points",    "show_full_sector_lines", "date_dependent",
+            "highlight_date_dependent", "ignore_scamin",        "scamin_filter_gate",     "show_overscale",
+            "text_size_scale",          "sounding_size_scale",
         }) |f| h.update(std.mem.asBytes(&@field(m.*, f)));
         h.update(&m.date_view);
         if (m.viewing_groups_off_len > 0 and m.viewing_groups_off != null)
@@ -1051,6 +1105,18 @@ pub const Lookout = struct {
             self.dirty = true;
             return;
         };
+        // A zoom-in that built empty: the chart's declared max_zoom overreports
+        // and there is no geometry this deep under the view. Don't blank the good
+        // scene — keep it, cap the servable max here so buildTargetZoom stops
+        // chasing the empty level, and let cam.zoom overscale (MVP-magnify) it.
+        if (self.built and sc.ranges.len == 0 and job.zoom > self.cov_zoom + ZOOM_REBUILD) {
+            var v = sc;
+            self.g.freeStagedScene(&v);
+            self.served_max_zoom = self.cov_zoom;
+            self.updateZoomLimits(); // re-clamp target/max to the corrected max
+            self.dirty = false; // don't respin the same empty build
+            return;
+        }
         self.g.adoptScene(sc);
         self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
         self.built = true;
@@ -1111,10 +1177,18 @@ pub const Lookout = struct {
     fn buildWorker(self: *Lookout) void {
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         self.pending_ok = self.runJob(self.build_job, &cs);
-        // Stage the GPU buffers HERE, off the render thread: creating them
-        // copies the whole scene (tens of MB — ~40% of active CPU in a gesture
-        // profile when it ran on the render thread). Frees the engine scene.
-        self.pending_scene = self.stageJob(self.build_job, &cs, self.pending_ok);
+        if (async_stage) {
+            // Stage the GPU buffers HERE, off the render thread: creating them
+            // copies the whole scene (tens of MB — ~40% of active CPU in a
+            // gesture profile when it ran on the render thread). Frees the
+            // engine scene.
+            self.pending_scene = self.stageJob(self.build_job, &cs, self.pending_ok);
+        } else {
+            // Vulkan backends: GPU work is render-thread-only. Hand the raw C
+            // scene over; pollBuild stages it there.
+            self.pending_cs = cs;
+            self.pending_cs_valid = true;
+        }
         self.build_done.store(true, .release); // publishes pending_* to the main thread
     }
 
@@ -1132,12 +1206,17 @@ pub const Lookout = struct {
         };
     }
 
-    // Advance the async build (main thread). Adopts a finished worker's scene.
+    // Advance the async build (render thread). Adopts a finished worker's
+    // scene — staging it here first on backends where the worker couldn't.
     fn pollBuild(self: *Lookout) void {
         if (!self.build_active or !self.build_done.load(.acquire)) return;
         if (self.build_thread) |t| {
             t.join();
             self.build_thread = null;
+        }
+        if (!async_stage and self.pending_cs_valid) {
+            self.pending_scene = self.stageJob(self.build_job, &self.pending_cs, self.pending_ok);
+            self.pending_cs_valid = false; // stageJob freed the C scene
         }
         self.applyStaged(self.build_job, self.pending_ok, self.pending_scene);
         self.pending_scene = null;
@@ -1152,6 +1231,10 @@ pub const Lookout = struct {
                 var v = sc;
                 self.g.freeStagedScene(&v);
                 self.pending_scene = null;
+            }
+            if (!async_stage and self.pending_cs_valid) {
+                cc.tile57_gpu_scene_free(&self.pending_cs);
+                self.pending_cs_valid = false;
             }
         }
         self.build_active = false;
@@ -1339,8 +1422,8 @@ pub const Lookout = struct {
     }
 
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
-        os_unfair_lock_lock(&self.engine_mu);
-        defer os_unfair_lock_unlock(&self.engine_mu);
+        self.engine_mu.lock();
+        defer self.engine_mu.unlock();
         var err: cc.tile57_error = undefined;
         if (self.compose) |c| {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);

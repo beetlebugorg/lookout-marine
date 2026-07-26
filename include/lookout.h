@@ -22,13 +22,18 @@ typedef struct lookout lookout;
 /* A camera pose. rotation_deg is course-up rotation (0 = north-up). */
 typedef struct { double lon, lat, zoom, rotation_deg; } lookout_view;
 
-/* Native handle kinds for lookout_open_in_window. Apple-only: lookout renders
- * via Metal directly into a CAMetalLayer the host owns (an NSView's backing
- * layer on macOS, a UIView's layerClass on iOS). See the `sdl-gpu` git tag for
- * the last cross-platform (SDL_GPU/Vulkan) revision. */
+/* Native handle kinds for lookout_open_in_window. The host hands lookout its
+ * native drawing surface and keeps its own toolkit + event loop; lookout
+ * renders and presents straight into it:
+ *   - Apple: a CAMetalLayer (an NSView's backing layer on macOS, a UIView's
+ *     layerClass on iOS), rendered via Metal.
+ *   - Android: an ANativeWindow* (ANativeWindow_fromSurface of a SurfaceView's
+ *     Surface), rendered via Vulkan. Builds with -Dbackend=vk only.
+ * Values 2..6 are reserved (SDL-hosted desktop windows; see gpu_sdl.zig). */
 typedef enum {
-    LOOKOUT_NATIVE_NONE = 0,        /* offscreen only (snapshot) */
-    LOOKOUT_NATIVE_METAL_LAYER = 1  /* CAMetalLayer* (macOS & iOS) */
+    LOOKOUT_NATIVE_NONE = 0,           /* offscreen only (snapshot) */
+    LOOKOUT_NATIVE_METAL_LAYER = 1,    /* CAMetalLayer* (macOS & iOS) */
+    LOOKOUT_NATIVE_ANDROID_WINDOW = 7  /* ANativeWindow* (Android, vk backend) */
 } lookout_native_kind;
 
 /* ---- lifecycle --------------------------------------------------------- */
