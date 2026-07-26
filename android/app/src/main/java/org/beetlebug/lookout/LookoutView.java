@@ -35,6 +35,11 @@ public final class LookoutView extends SurfaceView
         float d = context.getResources().getDisplayMetrics().density;
         this.density = d > 0 ? d : 1f;
         getHolder().addCallback(this);
+        // Scroll/rotary events need a focus target; without this they dispatch
+        // to the Activity (handled there too, but keep the direct path alive).
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        requestFocus();
 
         gestures = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
@@ -119,17 +124,28 @@ public final class LookoutView extends SurfaceView
     }
 
     /** Mouse / trackpad: the scroll wheel zooms about the cursor (the natural
-     *  zoom on the emulator, where pinch needs a modifier key). */
+     *  zoom on the emulator, where pinch needs a modifier key). Also called by
+     *  the Activity's onGenericMotionEvent fallback — scroll events arrive
+     *  there instead when the pointer isn't hover-focused on this view. */
+    public boolean handleScroll(MotionEvent e) {
+        if (e.getActionMasked() != MotionEvent.ACTION_SCROLL || lk == null) return false;
+        float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
+        if (v == 0) v = e.getAxisValue(MotionEvent.AXIS_SCROLL); // rotary encoders
+        android.util.Log.i("lookout", "scroll: src=0x" + Integer.toHexString(e.getSource())
+                + " v=" + v + " at (" + e.getX() + "," + e.getY() + ")");
+        if (v == 0) return false;
+        float x = e.getX(), y = e.getY();
+        if (x <= 0 && y <= 0) { // no cursor position (rotary): zoom about center
+            x = getWidth() * 0.5f;
+            y = getHeight() * 0.5f;
+        }
+        lk.zoomAt(v * 0.5, x / density, y / density);
+        return true;
+    }
+
     @Override
     public boolean onGenericMotionEvent(MotionEvent e) {
-        if (e.getActionMasked() == MotionEvent.ACTION_SCROLL && lk != null) {
-            float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
-            if (v != 0) {
-                lk.zoomAt(v * 0.5, e.getX() / density, e.getY() / density);
-                return true;
-            }
-        }
-        return super.onGenericMotionEvent(e);
+        return handleScroll(e) || super.onGenericMotionEvent(e);
     }
 
     // ---- surface lifecycle --------------------------------------------------

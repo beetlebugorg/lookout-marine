@@ -3,6 +3,7 @@ package org.beetlebug.lookout;
 import android.app.Activity;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.MotionEvent;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -23,6 +24,8 @@ public class LookoutActivity extends Activity {
     private static final String CHART_ASSET = "charts/US5MD1MC.pmtiles";
     private static final String CHART_NAME = "US5MD1MC.pmtiles";
 
+    private LookoutView view;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -32,7 +35,16 @@ public class LookoutActivity extends Activity {
             finish();
             return;
         }
-        setContentView(new LookoutView(this, chart));
+        view = new LookoutView(this, chart);
+        setContentView(view);
+    }
+
+    /** Scroll-wheel fallback: when the pointer isn't hover-focused on the
+     *  SurfaceView, ACTION_SCROLL lands here instead of the view. */
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent e) {
+        if (view != null && view.handleScroll(e)) return true;
+        return super.onGenericMotionEvent(e);
     }
 
     /** Copy an APK asset to internal storage (skipped when already current). */
