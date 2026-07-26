@@ -10,8 +10,10 @@ import android.view.Surface;
  * pixels by DisplayMetrics.density before calling. The one exception is
  * open(), whose widthPx/heightPx describe the Surface itself.
  *
- * Threading: call every method on the main thread (the native side assumes
- * it; gestures and Choreographer callbacks both land there naturally).
+ * Threading: the native side holds an api lock per call, so gestures (main
+ * thread) and the frame loop (LookoutView's render thread) may call
+ * concurrently. close() is the exception — stop the render thread first
+ * (LookoutView.surfaceDestroyed does).
  */
 public final class Lookout implements AutoCloseable {
     static {

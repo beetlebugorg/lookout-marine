@@ -8,9 +8,10 @@
 //! the camera's own unit. Java divides pixels by DisplayMetrics.density before
 //! crossing; gpu_vk derives pixel_density from surface px / resize() points.
 //!
-//! Threading: the Java shell calls every native on the main thread (gestures +
-//! Choreographer frame callbacks), and the C ABI additionally holds its own
-//! api lock, so there is no JNI-side synchronization.
+//! Threading: gestures call in on the main thread while LookoutView's frame
+//! loop calls nRender/nTickAnim on a dedicated render thread — the C ABI's
+//! api lock serializes them (its documented shape). nClose is externally
+//! serialized: the shell stops the render thread before closing.
 const std = @import("std");
 
 const j = @cImport({

@@ -17,12 +17,16 @@ const png = @import("png.zig");
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
-// The async build stages the GPU scene (command-buffer upload + submit) on the
-// worker thread. Metal tolerates that; the Vulkan-flavoured backends do not —
-// queue submission is externally synchronized, so a worker-thread submit races
-// the render thread's and the rebuilt scene swaps in blank. There, build inline
-// on the render thread so the upload is submitted before the draw that reads it.
-const async_build = !(@import("build_options").gpu_sdl or @import("build_options").gpu_vk);
+// The async build's WORKER runs tessellation (runJob — pure engine, no GPU) on
+// every backend: a rebuild takes ~1s on a phone and must never sit inside
+// render(), where it would hold the api lock against the gesture thread.
+// STAGING (GPU buffer creation + upload submit) is backend-dependent: Metal
+// tolerates it on the worker thread; the Vulkan-flavoured backends do not —
+// queue submission is externally synchronized, a worker-thread submit races
+// the render thread's and the rebuilt scene swaps in blank. There the worker
+// hands the C scene back and pollBuild stages it on the render thread, ordered
+// before the draw that reads it.
+const async_stage = !(@import("build_options").gpu_sdl or @import("build_options").gpu_vk);
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
@@ -203,6 +207,10 @@ pub const Lookout = struct {
     // render thread only swaps pointers in applyStaged). Null when the build
     // failed, was a prefetch, or staging itself failed (retried via dirty).
     pending_scene: ?gpu.Gpu.Scene = null,
+    // !async_stage backends: the worker's raw C scene, staged by pollBuild on
+    // the render thread instead (Vulkan queue submits are render-thread-only).
+    pending_cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene),
+    pending_cs_valid: bool = false,
     last_zoom: f64 = -1, // for zoom-velocity prediction
     last_zoom_ms: i64 = 0,
     /// Wall-clock of the last engine build (worker-written, main-read): the
@@ -1169,22 +1177,23 @@ pub const Lookout = struct {
     fn buildWorker(self: *Lookout) void {
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         self.pending_ok = self.runJob(self.build_job, &cs);
-        // Stage the GPU buffers HERE, off the render thread: creating them
-        // copies the whole scene (tens of MB — ~40% of active CPU in a gesture
-        // profile when it ran on the render thread). Frees the engine scene.
-        self.pending_scene = self.stageJob(self.build_job, &cs, self.pending_ok);
+        if (async_stage) {
+            // Stage the GPU buffers HERE, off the render thread: creating them
+            // copies the whole scene (tens of MB — ~40% of active CPU in a
+            // gesture profile when it ran on the render thread). Frees the
+            // engine scene.
+            self.pending_scene = self.stageJob(self.build_job, &cs, self.pending_ok);
+        } else {
+            // Vulkan backends: GPU work is render-thread-only. Hand the raw C
+            // scene over; pollBuild stages it there.
+            self.pending_cs = cs;
+            self.pending_cs_valid = true;
+        }
         self.build_done.store(true, .release); // publishes pending_* to the main thread
     }
 
     fn spawnBuild(self: *Lookout, job: BuildJob) void {
         self.build_job = job;
-        if (!async_build) {
-            // SDL_GPU: stage on the render thread (see `async_build`).
-            var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
-            const ok = self.runJob(job, &cs);
-            self.applyStaged(job, ok, self.stageJob(job, &cs, ok));
-            return;
-        }
         self.build_active = true;
         self.build_done.store(false, .release);
         self.build_thread = std.Thread.spawn(.{}, buildWorker, .{self}) catch {
@@ -1197,12 +1206,17 @@ pub const Lookout = struct {
         };
     }
 
-    // Advance the async build (main thread). Adopts a finished worker's scene.
+    // Advance the async build (render thread). Adopts a finished worker's
+    // scene — staging it here first on backends where the worker couldn't.
     fn pollBuild(self: *Lookout) void {
         if (!self.build_active or !self.build_done.load(.acquire)) return;
         if (self.build_thread) |t| {
             t.join();
             self.build_thread = null;
+        }
+        if (!async_stage and self.pending_cs_valid) {
+            self.pending_scene = self.stageJob(self.build_job, &self.pending_cs, self.pending_ok);
+            self.pending_cs_valid = false; // stageJob freed the C scene
         }
         self.applyStaged(self.build_job, self.pending_ok, self.pending_scene);
         self.pending_scene = null;
@@ -1217,6 +1231,10 @@ pub const Lookout = struct {
                 var v = sc;
                 self.g.freeStagedScene(&v);
                 self.pending_scene = null;
+            }
+            if (!async_stage and self.pending_cs_valid) {
+                cc.tile57_gpu_scene_free(&self.pending_cs);
+                self.pending_cs_valid = false;
             }
         }
         self.build_active = false;
@@ -1253,7 +1271,7 @@ pub const Lookout = struct {
         if (self.last_fail_ms != 0 and gpu.ticksMs() - self.last_fail_ms < FAIL_BACKOFF_MS) return;
         if (self.dirty or self.needsRebuild()) {
             self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));
-        } else if (async_build and self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {
+        } else if (self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {
             if (self.predictPrefetchLevel()) |lvl| {
                 if (lvl != self.prefetched_level) {
                     self.prefetched_level = lvl;

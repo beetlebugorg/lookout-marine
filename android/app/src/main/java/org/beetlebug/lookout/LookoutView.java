@@ -1,6 +1,8 @@
 package org.beetlebug.lookout;
 
 import android.content.Context;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.view.Choreographer;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -24,10 +26,18 @@ public final class LookoutView extends SurfaceView
 
     private final String chartPath;
     private final float density;
-    private Lookout lk;
+    // Written on the main thread (surfaceChanged/surfaceDestroyed), read on the
+    // render thread — the C ABI's api lock serializes the actual native calls.
+    private volatile Lookout lk;
     private long lastFrameNs;
     private final GestureDetector gestures;
     private final ScaleGestureDetector scaler;
+    // Frames run on a dedicated render thread (the C ABI's intended shape:
+    // gestures on main, lookout_render on a render thread). A rebuild after a
+    // zoom re-tessellates for ~a second — on the main thread that froze the UI
+    // ("Skipped N frames"); here it only occupies the render thread, and the
+    // engine tessellation itself runs on a further worker inside the core.
+    private HandlerThread renderThread;
 
     public LookoutView(Context context, String chartPath) {
         super(context);
@@ -159,8 +169,14 @@ public final class LookoutView extends SurfaceView
         int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
         if (lk == null) {
             lk = Lookout.open(chartPath, holder.getSurface(), wPx, hPx, wPts, hPts, true);
+            if (lk == null) return;
             lastFrameNs = 0;
-            Choreographer.getInstance().postFrameCallback(this);
+            renderThread = new HandlerThread("lookout-render");
+            renderThread.start();
+            // Choreographer is per-thread: fetch it ON the render thread so the
+            // vsync callbacks (and every render) land there.
+            new Handler(renderThread.getLooper()).post(
+                    () -> Choreographer.getInstance().postFrameCallback(this));
         } else {
             lk.resize(wPts, hPts);
         }
@@ -168,23 +184,34 @@ public final class LookoutView extends SurfaceView
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        Choreographer.getInstance().removeFrameCallback(this);
+        // close() must be externally serialized against every other call (the
+        // C ABI contract): stop the render thread first, then close.
+        if (renderThread != null) {
+            renderThread.quitSafely();
+            try {
+                renderThread.join();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            renderThread = null;
+        }
         if (lk != null) {
             lk.close();
             lk = null;
         }
     }
 
-    // ---- frame loop ----------------------------------------------------------
+    // ---- frame loop (render thread) -----------------------------------------
     @Override
     public void doFrame(long frameTimeNanos) {
-        if (lk == null) return;
+        Lookout l = lk;
+        if (l == null) return; // surface tearing down: stop rescheduling
         double dt = lastFrameNs == 0 ? 0.0 : (frameTimeNanos - lastFrameNs) / 1e9;
         lastFrameNs = frameTimeNanos;
         if (dt > 0.1) dt = 0.1; // resumed from pause: don't lurch the ease
-        boolean animating = lk.animating();
-        if (animating && dt > 0) lk.tickAnim(dt);
-        if (animating || lk.needsRedraw()) lk.render();
-        Choreographer.getInstance().postFrameCallback(this);
+        boolean animating = l.animating();
+        if (animating && dt > 0) l.tickAnim(dt);
+        if (animating || l.needsRedraw()) l.render();
+        Choreographer.getInstance().postFrameCallback(this); // this thread's Choreographer
     }
 }
