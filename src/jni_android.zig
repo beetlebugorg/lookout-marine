@@ -47,9 +47,15 @@ const gpa = std.heap.c_allocator;
 inline fn env_(env: [*c]j.JNIEnv) *const j.JNINativeInterface {
     return env.*; // JNIEnv is already `const JNINativeInterface*`
 }
+// jlong <-> pointer is a BIT-pattern round-trip, not a value cast: Android's
+// scudo returns TAGGED pointers (top byte 0xb4 under TBI/MTE), which read as
+// >= 2^63 unsigned — @intCast into signed jlong panics on the tag bit.
 fn fromLong(h: j.jlong) ?*Handle {
     if (h == 0) return null;
-    return @ptrFromInt(@as(usize, @intCast(h)));
+    return @ptrFromInt(@as(usize, @bitCast(h)));
+}
+fn toLong(h: *Handle) j.jlong {
+    return @bitCast(@as(u64, @intFromPtr(h)));
 }
 
 /// long nOpen(String chartPath, Surface surface, int widthPx, int heightPx,
@@ -76,7 +82,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpen(env: [*c]j.JNIEnv, cls: j.jcl
         return 0;
     };
     h.* = .{ .l = l, .win = win };
-    return @intCast(@intFromPtr(h));
+    return toLong(h);
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nClose(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
