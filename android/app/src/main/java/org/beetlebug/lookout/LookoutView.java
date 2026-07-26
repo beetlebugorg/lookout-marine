@@ -26,6 +26,7 @@ public final class LookoutView extends SurfaceView
 
     private final String chartPath;
     private final float density;
+    private final ChartController controller;
     // Written on the main thread (surfaceChanged/surfaceDestroyed), read on the
     // render thread — the C ABI's api lock serializes the actual native calls.
     private volatile Lookout lk;
@@ -39,9 +40,10 @@ public final class LookoutView extends SurfaceView
     // engine tessellation itself runs on a further worker inside the core.
     private HandlerThread renderThread;
 
-    public LookoutView(Context context, String chartPath) {
+    public LookoutView(Context context, String chartPath, ChartController controller) {
         super(context);
         this.chartPath = chartPath;
+        this.controller = controller;
         float d = context.getResources().getDisplayMetrics().density;
         this.density = d > 0 ? d : 1f;
         getHolder().addCallback(this);
@@ -65,13 +67,36 @@ public final class LookoutView extends SurfaceView
                 return true;
             }
 
+            /** Tap a feature to identify it (S-52 cursor pick). "Confirmed"
+             *  waits out the double-tap window so a zoom doesn't also pick. */
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                controller.identifyAt(e.getX() / density, e.getY() / density);
+                return true;
+            }
+
+            /** Momentum pan. GestureDetector reports px/sec; the camera is
+             *  logical-unit, so scale before crossing. */
+            @Override
+            public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
+                if (lk != null) lk.flingStart(vx / density, vy / density);
+                return true;
+            }
+
+            /** Through the controller, not the handle: a scheme change has to
+             *  land in the settings state and be SAVED, or a scheme picked by
+             *  long-press is lost on relaunch while the same scheme picked in
+             *  the sheet survives. */
             @Override
             public void onLongPress(MotionEvent e) {
-                if (lk != null) lk.cycleScheme();
+                controller.cycleScheme();
             }
 
             @Override
             public boolean onDown(MotionEvent e) {
+                // A new grab stops any coast, so the chart doesn't slide out
+                // from under the finger that just caught it.
+                if (lk != null) lk.flingStart(0, 0);
                 return true; // claim the stream
             }
         });
@@ -96,6 +121,20 @@ public final class LookoutView extends SurfaceView
     private float twoMidX, twoMidY;
     private boolean twoTap;
 
+    // Two-finger twist = course-up rotation. Tracked here because there is no
+    // platform rotate detector. It runs alongside the pinch (both see every
+    // event), but only ENGAGES past a threshold: almost no two-finger pinch is
+    // perfectly twist-free, and rotating the chart a degree per zoom would make
+    // north drift for no reason.
+    private static final float ROTATE_ENGAGE_DEG = 10f;
+    private boolean rotating;
+    private float twistPrevDeg, twistAccumDeg;
+
+    /** Angle of the vector between the first two pointers, in degrees. */
+    private static float twistAngle(MotionEvent e) {
+        return (float) Math.toDegrees(Math.atan2(e.getY(1) - e.getY(0), e.getX(1) - e.getX(0)));
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         switch (e.getActionMasked()) {
@@ -105,6 +144,9 @@ public final class LookoutView extends SurfaceView
                     twoDownMs = e.getEventTime();
                     twoMidX = (e.getX(0) + e.getX(1)) * 0.5f;
                     twoMidY = (e.getY(0) + e.getY(1)) * 0.5f;
+                    twistPrevDeg = twistAngle(e);
+                    twistAccumDeg = 0;
+                    rotating = false;
                 } else {
                     twoTap = false; // third finger: not a two-finger tap
                 }
@@ -115,15 +157,21 @@ public final class LookoutView extends SurfaceView
                     float my = (e.getY(0) + e.getY(1)) * 0.5f;
                     if (Math.hypot(mx - twoMidX, my - twoMidY) > 24f * density) twoTap = false;
                 }
+                if (e.getPointerCount() >= 2) trackTwist(e);
                 break;
             case MotionEvent.ACTION_UP:
                 if (twoTap && lk != null && e.getEventTime() - twoDownMs < 300) {
                     lk.zoomAt(-1.0, twoMidX / density, twoMidY / density);
                 }
                 twoTap = false;
+                rotating = false;
+                break;
+            case MotionEvent.ACTION_POINTER_UP:
+                rotating = false; // down to one finger: the twist is over
                 break;
             case MotionEvent.ACTION_CANCEL:
                 twoTap = false;
+                rotating = false;
                 break;
         }
         // Both detectors see every event: pinch zooms while its focal-point
@@ -131,6 +179,32 @@ public final class LookoutView extends SurfaceView
         scaler.onTouchEvent(e);
         gestures.onTouchEvent(e);
         return true;
+    }
+
+    /**
+     * Feed the twist to the camera. lookout_rotate_drag_logical rotates about
+     * the VIEW CENTRE by the angle swept from one point to another, so handing
+     * it centre+previous-vector and centre+current-vector expresses exactly the
+     * angle the two fingers turned through (the vector length is irrelevant).
+     */
+    private void trackTwist(MotionEvent e) {
+        float now = twistAngle(e);
+        float d = now - twistPrevDeg;
+        while (d > 180f) d -= 360f;   // shortest way round the wrap
+        while (d < -180f) d += 360f;
+        twistPrevDeg = now;
+
+        if (!rotating) {
+            twistAccumDeg += d;
+            if (Math.abs(twistAccumDeg) < ROTATE_ENGAGE_DEG) return;
+            rotating = true; // engaged: from here the twist tracks 1:1
+        }
+        if (lk == null) return;
+        float cx = getWidth() * 0.5f / density, cy = getHeight() * 0.5f / density;
+        double r = Math.toRadians(d);
+        // A unit vector before and after the sweep, offset from the centre.
+        lk.rotateDrag(cx + 100f, cy,
+                      cx + 100f * (float) Math.cos(r), cy + 100f * (float) Math.sin(r));
     }
 
     /** Mouse / trackpad: the scroll wheel zooms about the cursor (the natural
@@ -171,6 +245,10 @@ public final class LookoutView extends SurfaceView
             lk = Lookout.open(chartPath, holder.getSurface(), wPx, hPx, wPts, hPts, true);
             if (lk == null) return;
             lastFrameNs = 0;
+            // Before the render thread starts: attach restores the mariner's
+            // saved settings, and they must be in place for the FIRST build or
+            // the chart tessellates once at defaults and immediately again.
+            controller.attach(lk);
             renderThread = new HandlerThread("lookout-render");
             renderThread.start();
             // Choreographer is per-thread: fetch it ON the render thread so the
@@ -195,6 +273,9 @@ public final class LookoutView extends SurfaceView
             }
             renderThread = null;
         }
+        // The render thread is stopped, so no more native calls are in flight;
+        // drop the controller's reference before the handle dies.
+        controller.detach();
         if (lk != null) {
             lk.close();
             lk = null;
@@ -212,6 +293,9 @@ public final class LookoutView extends SurfaceView
         boolean animating = l.animating();
         if (animating && dt > 0) l.tickAnim(dt);
         if (animating || l.needsRedraw()) l.render();
+        // Sample the HUD here rather than on a timer: the readouts describe the
+        // frame that was just presented. The controller throttles the push.
+        controller.onFrameRendered(frameTimeNanos);
         Choreographer.getInstance().postFrameCallback(this); // this thread's Choreographer
     }
 }

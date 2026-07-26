@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="android:Theme.NoTitleBar.Fullscreen">
-        <!-- Customize your theme here. -->
+    <!-- The chart is the whole window: no action bar, and the Activity goes
+         edge-to-edge (enableEdgeToEdge) so the chart draws under the system
+         bars while the Compose chrome insets itself — the analogue of the iOS
+         HUD bar extending through the bottom safe area. Compose Material3
+         brings its own styling, so this only has to be action-bar-free. -->
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
     </style>
 </resources>
