@@ -20,14 +20,24 @@ const std = @import("std");
 const cc = @import("c.zig").c; // tile57 + stb (shared; matches root's scene types)
 const vk = @import("c_vk.zig").c; // Vulkan + ANativeWindow + android log
 
-// Precompiled SPIR-V (see build.zig: -Dbackend=vk embeds these).
-const chart_vert_spv: []const u8 = @embedFile("chart_vert_spv");
-const chart_frag_spv: []const u8 = @embedFile("chart_frag_spv");
-const sprite_vert_spv: []const u8 = @embedFile("sprite_vert_spv");
-const sprite_frag_spv: []const u8 = @embedFile("sprite_frag_spv");
-const sdf_frag_spv: []const u8 = @embedFile("sdf_frag_spv");
-const pattern_vert_spv: []const u8 = @embedFile("pattern_vert_spv");
-const pattern_frag_spv: []const u8 = @embedFile("pattern_frag_spv");
+// Precompiled SPIR-V (see build.zig: -Dbackend=vk embeds these), converted to
+// u32 words at comptime: @embedFile data carries NO alignment guarantee, and
+// vkCreateShaderModule wants 4-aligned pCode — an @alignCast there panics (or
+// is UB in release) whenever the linker happens to place a blob unaligned.
+fn spvWords(comptime raw: []const u8) []const u32 {
+    if (raw.len % 4 != 0) @compileError("SPIR-V length not a multiple of 4");
+    comptime var words: [raw.len / 4]u32 = undefined;
+    comptime @memcpy(std.mem.sliceAsBytes(words[0..]), raw);
+    const final = words;
+    return &final;
+}
+const chart_vert_spv = spvWords(@embedFile("chart_vert_spv"));
+const chart_frag_spv = spvWords(@embedFile("chart_frag_spv"));
+const sprite_vert_spv = spvWords(@embedFile("sprite_vert_spv"));
+const sprite_frag_spv = spvWords(@embedFile("sprite_frag_spv"));
+const sdf_frag_spv = spvWords(@embedFile("sdf_frag_spv"));
+const pattern_vert_spv = spvWords(@embedFile("pattern_vert_spv"));
+const pattern_frag_spv = spvWords(@embedFile("pattern_frag_spv"));
 
 /// Vertex/fragment uniform block (128 bytes). Byte-identical to `struct U` in
 /// shaders/vk/*.
@@ -62,7 +72,10 @@ pub fn ticksMs() i64 {
 }
 
 fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
-    _ = @call(.auto, vk.__android_log_print, .{ vk.ANDROID_LOG_ERROR, "lookout" } ++ .{fmt} ++ args);
+    _ = @call(.auto, vk.__android_log_print, .{ @as(c_int, vk.ANDROID_LOG_ERROR), @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+}
+fn logInfo(comptime fmt: [*:0]const u8, args: anytype) void {
+    _ = @call(.auto, vk.__android_log_print, .{ @as(c_int, vk.ANDROID_LOG_INFO), @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
 }
 
 /// How to interpret Options.native_handle. Superset across backends so
@@ -127,6 +140,7 @@ pub const Gpu = struct {
     sc_fbs: [8]vk.VkFramebuffer = @splat(null),
     sc_count: u32 = 0,
     color_format: vk.VkFormat = vk.VK_FORMAT_R8G8B8A8_UNORM,
+    color_space: vk.VkColorSpaceKHR = vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
 
     render_pass: vk.VkRenderPass = null, // -> PRESENT (window)
     off_pass: vk.VkRenderPass = null, // -> TRANSFER_SRC (offscreen)
@@ -202,6 +216,7 @@ pub const Gpu = struct {
         }
         var instance: vk.VkInstance = null;
         try check(vk.vkCreateInstance(&ici, null, &instance), "vkCreateInstance");
+        logInfo("vk: instance up (surface=%d)", .{@as(c_int, @intFromBool(want_surface))});
 
         // ---- physical device + queue family --------------------------------
         var ndev: u32 = 0;
@@ -254,6 +269,7 @@ pub const Gpu = struct {
         try check(vk.vkCreateDevice(phys, &dci, null, &device), "vkCreateDevice");
         var queue: vk.VkQueue = null;
         vk.vkGetDeviceQueue(device, qfam, 0, &queue);
+        logInfo("vk: device up (%s), qfam=%u align=%u", .{ @as([*:0]const u8, @ptrCast(&lim.deviceName)), qfam, uni_align });
 
         var g = Gpu{
             .instance = instance,
@@ -281,7 +297,7 @@ pub const Gpu = struct {
                 g.width = @intCast(ww);
                 g.height = @intCast(wh);
             }
-            // pick the surface's colour format (prefer RGBA8)
+            // pick the surface's colour format (prefer RGBA8) + ITS colorspace
             var nfmt: u32 = 0;
             _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(phys, g.surface, &nfmt, null);
             var fmts: [32]vk.VkSurfaceFormatKHR = undefined;
@@ -289,9 +305,11 @@ pub const Gpu = struct {
             _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(phys, g.surface, &nfmt, &fmts);
             if (nfmt > 0) {
                 g.color_format = fmts[0].format;
+                g.color_space = fmts[0].colorSpace;
                 for (fmts[0..nfmt]) |f| {
                     if (f.format == vk.VK_FORMAT_R8G8B8A8_UNORM) {
                         g.color_format = f.format;
+                        g.color_space = f.colorSpace;
                         break;
                     }
                 }
@@ -306,10 +324,13 @@ pub const Gpu = struct {
 
         // ---- fixed objects ---------------------------------------------------
         try g.createDescriptorInfra();
+        logInfo("vk: descriptors up", .{});
         try g.createRenderPasses();
         try g.createPipelines();
+        logInfo("vk: pipelines up (fmt=%d msaa=%d)", .{ @as(c_int, @intCast(g.color_format)), @as(c_int, @intFromBool(g.msaa_used)) });
         try g.createCommandInfra();
         if (g.surface != null) try g.createSwapchain() else try g.ensureOffscreenTargets();
+        logInfo("vk: ready %ux%u (sc=%u)", .{ g.width, g.height, g.sc_count });
         return g;
     }
 
@@ -540,11 +561,11 @@ pub const Gpu = struct {
     }
 
     // ---- pipelines ---------------------------------------------------------------
-    fn makeShaderModule(self: *Gpu, spv: []const u8) !vk.VkShaderModule {
+    fn makeShaderModule(self: *Gpu, spv: []const u32) !vk.VkShaderModule {
         var ci = std.mem.zeroes(vk.VkShaderModuleCreateInfo);
         ci.sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        ci.codeSize = spv.len;
-        ci.pCode = @ptrCast(@alignCast(spv.ptr));
+        ci.codeSize = spv.len * 4;
+        ci.pCode = spv.ptr;
         var m: vk.VkShaderModule = null;
         try check(vk.vkCreateShaderModule(self.device, &ci, null, &m), "vkCreateShaderModule");
         return m;
@@ -574,7 +595,7 @@ pub const Gpu = struct {
         .{ .loc = 7, .format = vk.VK_FORMAT_R32_SFLOAT, .offset = 40 },
     };
 
-    fn buildPipeline(self: *Gpu, vspv: []const u8, fspv: []const u8, stride: u32, attrs: []const VAttr) !vk.VkPipeline {
+    fn buildPipeline(self: *Gpu, vspv: []const u32, fspv: []const u32, stride: u32, attrs: []const VAttr) !vk.VkPipeline {
         const vmod = try self.makeShaderModule(vspv);
         defer vk.vkDestroyShaderModule(self.device, vmod, null);
         const fmod = try self.makeShaderModule(fspv);
@@ -723,7 +744,7 @@ pub const Gpu = struct {
         sci.surface = self.surface;
         sci.minImageCount = count;
         sci.imageFormat = self.color_format;
-        sci.imageColorSpace = vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        sci.imageColorSpace = self.color_space;
         sci.imageExtent = extent;
         sci.imageArrayLayers = 1;
         sci.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;

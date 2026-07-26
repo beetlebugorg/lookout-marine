@@ -1,9 +1,23 @@
 //! C ABI for lookout-core (see include/lookout.h). A thin, 1:1 wrapper over the
 //! Zig `Lookout` widget. Uses the C allocator so C hosts need no allocator.
 const std = @import("std");
+const builtin = @import("builtin");
 
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
+
+// On Android, native stderr goes nowhere — a Zig panic (Debug safety check,
+// unreachable, …) would die as a bare SIGABRT with no message in logcat. Route
+// the panic message through the android log first, then abort as usual.
+extern "c" fn __android_log_print(prio: c_int, tag: [*:0]const u8, fmt: [*:0]const u8, ...) c_int;
+fn androidPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    _ = __android_log_print(6, "lookout", "PANIC: %.*s (ra=0x%zx)", @as(c_int, @intCast(@min(msg.len, 512))), msg.ptr, first_trace_addr orelse 0);
+    std.process.abort();
+}
+pub const panic = if (builtin.abi.isAndroid())
+    std.debug.FullPanic(androidPanic)
+else
+    std.debug.FullPanic(std.debug.defaultPanic);
 
 const gpa = std.heap.c_allocator;
 
