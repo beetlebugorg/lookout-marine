@@ -70,16 +70,25 @@ pub fn build(b: *std.Build) void {
     // standardOptimizeOption, which would keep the no-flag default at Debug.)
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse .ReleaseFast;
 
-    // Renderer backend: Metal on Apple, SDL_GPU (Vulkan/D3D12/Metal) everywhere
-    // else. Default by platform; `-Dbackend=sdl` also works on macOS to test the
-    // SDL path natively (SDL_GPU -> Metal there). See src/gpu.zig.
-    const Backend = enum { metal, sdl };
+    // Renderer backend: native on mobile, SDL on extended platforms —
+    //   * metal: Apple (macOS / iOS), direct Metal
+    //   * vk:    Android, direct Vulkan onto an ANativeWindow (the Java shell
+    //            owns the Activity/Surface; no SDL, no SDLActivity)
+    //   * sdl:   Windows / Linux (SDL_GPU: D3D12/Vulkan), also `-Dbackend=sdl`
+    //            on macOS to exercise that path natively (SDL_GPU -> Metal)
+    // Default by platform; see src/gpu.zig.
+    const Backend = enum { metal, sdl, vk };
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
-    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl") orelse
-        (if (is_apple) Backend.metal else Backend.sdl);
+    const target_android = target.result.abi == .android or target.result.abi == .androideabi;
+    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk") orelse
+        (if (is_apple) Backend.metal else if (target_android) Backend.vk else Backend.sdl);
     const use_sdl = backend == .sdl;
+    const use_vk = backend == .vk;
+    if (use_vk and !target_android)
+        @panic("-Dbackend=vk is Android-only (ANativeWindow surface); use sdl or metal here");
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "gpu_sdl", use_sdl);
+    build_opts.addOption(bool, "gpu_vk", use_vk);
     const build_opts_mod = build_opts.createModule();
 
     // Android cross-compile (mirrors tile57's -Dandroid-ndk): the C deps need the
@@ -115,6 +124,7 @@ pub fn build(b: *std.Build) void {
         tile57_inc: std.Build.LazyPath,
         tile57_lib: std.Build.LazyPath,
         use_sdl: bool,
+        use_vk: bool,
         android: bool,
         sdl_include: ?[]const u8,
         build_opts_mod: *std.Build.Module,
@@ -162,7 +172,12 @@ pub fn build(b: *std.Build) void {
                     // Native: pkg-config gives include + link.
                     mod.linkSystemLibrary("SDL3", .{});
                 }
+            }
+            if (self.use_sdl or self.use_vk) {
                 // Precompiled SPIR-V, embedded (no runtime shader toolchain).
+                // Shared by both Vulkan-flavoured backends: the raw-vk pipeline
+                // layout mirrors SDL_GPU's set numbering (vtx UBO set 1, frag
+                // sampler set 2, frag UBO set 3), so one .spv set serves both.
                 const spv = [_][2][]const u8{
                     .{ "chart_vert_spv", "shaders/vk/chart.vert.spv" },
                     .{ "chart_frag_spv", "shaders/vk/chart.frag.spv" },
@@ -173,7 +188,8 @@ pub fn build(b: *std.Build) void {
                     .{ "pattern_frag_spv", "shaders/vk/pattern.frag.spv" },
                 };
                 for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = bb.path(e[1]) });
-            } else {
+            }
+            if (!self.use_sdl and !self.use_vk) {
                 // The Metal transport (ObjC behind a C face). Manual
                 // retain/release on purpose — objects live in C structs.
                 mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
@@ -182,7 +198,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .use_sdl = use_sdl, .android = is_android, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .use_sdl = use_sdl, .use_vk = use_vk, .android = is_android, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{

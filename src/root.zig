@@ -17,12 +17,12 @@ const png = @import("png.zig");
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
-// The async build stages the GPU scene (SDL_AcquireGPUCommandBuffer + a copy
-// pass + submit) on the worker thread. Metal tolerates that; SDL_GPU/Vulkan does
-// not — concurrent command buffers on the same device race the render thread and
-// the rebuilt scene swaps in blank. On SDL, build inline on the render thread so
-// the upload is submitted before the draw that reads it.
-const async_build = !@import("build_options").gpu_sdl;
+// The async build stages the GPU scene (command-buffer upload + submit) on the
+// worker thread. Metal tolerates that; the Vulkan-flavoured backends do not —
+// queue submission is externally synchronized, so a worker-thread submit races
+// the render thread's and the rebuilt scene swaps in blank. There, build inline
+// on the render thread so the upload is submitted before the draw that reads it.
+const async_build = !(@import("build_options").gpu_sdl or @import("build_options").gpu_vk);
 
 const MAX_SCHEMES = 3; // day / dusk / night
 

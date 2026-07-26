@@ -95,12 +95,13 @@ export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque,
 }
 
 /// Reject unknown kind values from stale hosts instead of trusting the int.
+/// Kinds beyond the Apple pair exist only in the superset enums of the
+/// SDL/Vulkan backends — gate on the field so the Metal build still compiles.
 fn nativeKind(kind: c_int) ?lk.NativeKind {
-    return switch (kind) {
-        0 => .none,
-        1 => .metal_layer,
-        else => null,
-    };
+    if (kind == 0) return .none;
+    if (kind == 1) return .metal_layer;
+    if (@hasField(lk.NativeKind, "android_window") and kind == 7) return .android_window;
+    return null;
 }
 
 export fn lookout_close(h: ?*lookout) void {
@@ -331,4 +332,7 @@ export fn lookout_scale_denominator(h: ?*lookout) f64 {
 
 comptime {
     _ = lookout_open;
+    // The Android Java shell's JNI natives ride in the same archive on vk
+    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout).
+    if (@import("build_options").gpu_vk) _ = @import("jni_android.zig");
 }

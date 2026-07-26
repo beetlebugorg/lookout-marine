@@ -480,7 +480,6 @@ pub const Gpu = struct {
             out.qbuf = try self.uploadBuffer(sdl.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads[0..s.quad_count]));
         }
         if (s.range_count > 0) out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
-        sdl.SDL_Log("makeScene: verts=%d idx=%d quads=%d ranges=%d", @as(c_int, @intCast(s.vertex_count)), @as(c_int, @intCast(s.index_count)), @as(c_int, @intCast(s.quad_count)), @as(c_int, @intCast(s.range_count)));
         if (s.pattern_count > 0) {
             out.patterns = try alloc.alloc(PatternTex, s.pattern_count);
             for (out.patterns) |*p| p.* = .{};
@@ -549,10 +548,7 @@ pub const Gpu = struct {
         const scis = sdl.SDL_Rect{ .x = 0, .y = 0, .w = @intCast(self.width), .h = @intCast(self.height) };
         sdl.SDL_SetGPUScissor(pass, &scis);
 
-        const s = if (self.scene) |*sc| sc else {
-            sdl.SDL_Log("recordDraws: no scene (blank frame)");
-            return;
-        };
+        const s = if (self.scene) |*sc| sc else return;
         const vbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
 
