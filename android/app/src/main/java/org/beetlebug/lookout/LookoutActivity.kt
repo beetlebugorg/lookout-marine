@@ -21,8 +21,10 @@ import java.io.FileOutputStream
  * the HUD, the controls and the settings sheet — the analogue of HUDOverlay
  * and SettingsView sitting over the Metal layer.
  *
- * The chart ships in the APK assets and is copied to internal storage once
- * (tile57 opens it by path / mmap, which can't read an APK asset directly).
+ * Charts come from one of two places (see [resolveChart]): a chart pushed into
+ * the app's external files dir, else the one baked into the APK assets, copied
+ * to internal storage once (tile57 opens charts by path / mmap, which can't read
+ * an APK asset directly).
  */
 class LookoutActivity : ComponentActivity() {
     private var chartView: LookoutView? = null
@@ -33,9 +35,9 @@ class LookoutActivity : ComponentActivity() {
         // Chart under the system bars; the Compose chrome insets itself.
         enableEdgeToEdge()
 
-        val chart = extractAsset(CHART_ASSET, CHART_NAME)
+        val chart = resolveChart()
         if (chart == null) {
-            Log.e(TAG, "chart asset extraction failed")
+            Log.e(TAG, "no chart: nothing pushed, and asset extraction failed")
             finish()
             return
         }
@@ -71,6 +73,45 @@ class LookoutActivity : ComponentActivity() {
     override fun onGenericMotionEvent(e: MotionEvent): Boolean =
         chartView?.handleScroll(e) == true || super.onGenericMotionEvent(e)
 
+    /**
+     * The chart to open: a pushed one if there is one, else the baked-in demo
+     * cell. Pushed charts win so a chart can be swapped without rebuilding the
+     * APK — bake on the host, then, with no permissions and no root:
+     *
+     *     adb push tiles/ /sdcard/Android/data/org.beetlebug.lookout/files/charts/
+     *
+     * The engine opens ONE chart per handle, so of several pushed cells the
+     * first by path wins; the Charts tab (not built yet) is where picking among
+     * them belongs, and composing them needs a lookout_open_charts binding.
+     */
+    private fun resolveChart(): String? = pushedChart() ?: extractAsset(CHART_ASSET, CHART_NAME)
+
+    /**
+     * The first *.pmtiles under `<externalFilesDir>/charts`, or null. Searched
+     * recursively: `tile57 bake_tree` mirrors the ENC tree (REGION/CELL.pmtiles),
+     * so a pushed library is nested, not flat. The directory is created here so
+     * that a first run leaves an obvious target to push into.
+     */
+    private fun pushedChart(): String? {
+        val dir = File(getExternalFilesDir(null) ?: return null, CHART_DIR)
+        if (!dir.isDirectory && !dir.mkdirs()) {
+            Log.w(TAG, "could not create $dir")
+            return null
+        }
+        val charts = dir.walkTopDown()
+            .filter { it.isFile && it.extension == "pmtiles" }
+            .sortedBy { it.path }
+            .toList()
+        if (charts.isEmpty()) {
+            Log.i(TAG, "no pushed charts in $dir; using the bundled chart")
+            return null
+        }
+        val chart = charts.first()
+        Log.i(TAG, "pushed chart -> $chart (${chart.length()} bytes)" +
+            if (charts.size > 1) ", ${charts.size - 1} other(s) ignored" else "")
+        return chart.absolutePath
+    }
+
     /** Copy an APK asset to internal storage (skipped when already current). */
     private fun extractAsset(asset: String, outName: String): String? {
         val out = File(filesDir, outName)
@@ -93,5 +134,7 @@ class LookoutActivity : ComponentActivity() {
         const val TAG = "lookout"
         const val CHART_ASSET = "charts/US5MD1MC.pmtiles"
         const val CHART_NAME = "US5MD1MC.pmtiles"
+        /** Push target, under the app's external files dir. */
+        const val CHART_DIR = "charts"
     }
 }
