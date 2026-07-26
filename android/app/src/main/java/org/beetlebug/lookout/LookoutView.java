@@ -258,6 +258,9 @@ public final class LookoutView extends SurfaceView
         if (lk == null) {
             lk = Lookout.openCharts(chartPaths, holder.getSurface(), wPx, hPx, wPts, hPts, true);
             if (lk == null) return;
+            // Before the first build: the surface's own extent lags a rotation,
+            // so the engine must be told the scale rather than infer it.
+            lk.setDensity(density);
             lastFrameNs = 0;
             // Before the render thread starts: attach restores the mariner's
             // saved settings, and they must be in place for the FIRST build or
@@ -272,7 +275,10 @@ public final class LookoutView extends SurfaceView
             // vsync callbacks (and every render) land there.
             engine.post(() -> Choreographer.getInstance().postFrameCallback(this));
         } else {
-            lk.resize(wPts, hPts);
+            // Onto the render thread: a resize rebuilds the swapchain, and the
+            // api lock it takes is held for a whole frame — parking the UI
+            // thread here is how a rotation turns into an input-dispatch ANR.
+            onEngine(() -> lk.resize(wPts, hPts));
         }
     }
 

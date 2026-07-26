@@ -8,6 +8,7 @@
 //!   open/close · fitChart/setView/view/resize · pan/zoom/screen<->geo ·
 //!   getMariner/setMariner (ALL S-52 settings) · render/snapshot · pick.
 const std = @import("std");
+const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const gpu = @import("gpu.zig");
 const camera = @import("camera.zig");
@@ -51,14 +52,41 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
     return m;
 }
 
-/// The app's atlas cache directory: `$HOME/Library/Caches/lookout/v<version>`
-/// — writable in the macOS and iOS sandboxes alike, purgeable by the OS (it's
-/// a rebuildable cache). Created here; owned by `alloc`. Null if HOME is unset.
+/// A cache root the host handed us. Android exports neither HOME nor
+/// XDG_CACHE_HOME, so there this is the ONLY way to a writable cache — the path
+/// exists solely as Context.getCacheDir(). Owned here; set before opening.
+var cache_root: ?[]u8 = null;
+
+/// Adopt `path` as the cache root, replacing any previous one.
+pub fn setCacheRoot(path: []const u8) void {
+    const a = std.heap.c_allocator;
+    const dup = a.dupe(u8, path) catch return;
+    if (cache_root) |old| a.free(old);
+    cache_root = dup;
+}
+
+/// `<root>/lookout/v<version>`: the host's root if it gave one, else
+/// XDG_CACHE_HOME, else the platform default under HOME.
+fn cacheDirPath(alloc: std.mem.Allocator, ver: []const u8) ?[]u8 {
+    if (cache_root) |root| return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ root, ver }) catch null;
+    if (std.c.getenv("XDG_CACHE_HOME")) |x| {
+        const s = std.mem.span(x);
+        if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ s, ver }) catch null;
+    }
+    const home = std.mem.span(std.c.getenv("HOME") orelse return null);
+    if (home.len == 0) return null;
+    return switch (builtin.os.tag) {
+        .macos, .ios => std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch null,
+        else => std.fmt.allocPrint(alloc, "{s}/.cache/lookout/v{s}", .{ home, ver }) catch null,
+    };
+}
+
+/// The app's atlas cache directory — purgeable by the OS (it's a rebuildable
+/// cache). Created here; owned by `alloc`. Null if no root can be resolved.
 /// Keyed by tile57 version so a catalogue/engine change invalidates old atlases.
 pub fn atlasCacheDir(alloc: std.mem.Allocator) ?[]u8 {
-    const home = std.c.getenv("HOME") orelse return null;
     const ver = std.mem.span(cc.tile57_version());
-    const dir = std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch return null;
+    const dir = cacheDirPath(alloc, ver) orelse return null;
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
     return dir;
@@ -832,6 +860,12 @@ pub const Lookout = struct {
     }
     pub fn pixelDensity(self: *Lookout) f32 {
         return self.g.pixel_density;
+    }
+
+    /// Declare the host's scale factor instead of letting the backend infer it
+    /// from the surface. Set before the first build.
+    pub fn setPixelDensity(self: *Lookout, d: f32) void {
+        self.g.setPixelDensity(d);
     }
 
     // ---- interaction --------------------------------------------------------

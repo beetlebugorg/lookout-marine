@@ -189,6 +189,7 @@ pub const Gpu = struct {
     host_pt_h: f32 = 0,
     size_changed_ms: i64 = -100000,
     pixel_density: f32 = 1.0,
+    host_density: f32 = 0, // host-declared scale; 0 = derive from the swapchain
     pattern_scale: f32 = 1,
 
     clear: Color = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
@@ -866,19 +867,35 @@ pub const Gpu = struct {
     pub fn resize(self: *Gpu, width_pts: u32, height_pts: u32) !void {
         self.host_pt_w = @floatFromInt(width_pts);
         self.host_pt_h = @floatFromInt(height_pts);
-        if (self.host_pt_w > 0 and self.width > 0) {
+        if (self.surface == null) {
+            // offscreen-only: logical == pixel
+            if (width_pts != self.width or height_pts != self.height) {
+                _ = vk.vkDeviceWaitIdle(self.device);
+                self.releaseOffscreen();
+                self.releaseMsaa();
+                self.width = width_pts;
+                self.height = height_pts;
+                try self.ensureOffscreenTargets();
+            }
+        }
+        // Only when the host hasn't told us outright. Across a rotation the
+        // swapchain extent lags the new logical size — the surface keeps
+        // reporting the OLD currentExtent until an acquire returns OUT_OF_DATE
+        // — so this pairs a stale pixel width with a fresh point width and
+        // lands ~0.67 where the display's real scale is 1.125.
+        if (self.host_density == 0 and self.host_pt_w > 0 and self.width > 0) {
             const d = @as(f32, @floatFromInt(self.width)) / self.host_pt_w;
             if (d > 0.2 and d < 8.0) self.pixel_density = d;
         }
-        if (self.surface == null) {
-            // offscreen-only: logical == pixel
-            if (width_pts == self.width and height_pts == self.height) return;
-            _ = vk.vkDeviceWaitIdle(self.device);
-            self.releaseOffscreen();
-            self.releaseMsaa();
-            self.width = width_pts;
-            self.height = height_pts;
-            try self.ensureOffscreenTargets();
+    }
+
+    /// The host's own scale factor (Android's DisplayMetrics.density), which is
+    /// constant across rotations — unlike anything derivable from the swapchain.
+    /// Set once at open; it then wins over the derived value above.
+    pub fn setPixelDensity(self: *Gpu, d: f32) void {
+        if (d > 0.2 and d < 8.0) {
+            self.host_density = d;
+            self.pixel_density = d;
         }
     }
 
