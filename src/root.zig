@@ -254,6 +254,11 @@ pub const Lookout = struct {
     last_fail_ms: i64 = 0,
     prefetched_level: i32 = -1, // the round-zoom level last prefetched (fire once per approach)
     cam: camera.Camera,
+    /// The host's declared logical viewport, and authoritative over anything
+    /// derived from the surface: across a rotation a swapchain keeps reporting
+    /// the OLD extent, which inverts the aspect and skews every rotated frame.
+    host_pt_w: f32 = 0,
+    host_pt_h: f32 = 0,
     schemes: [MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
 
@@ -842,6 +847,8 @@ pub const Lookout = struct {
 
     /// Resize the render surface (points; HiDPI density is applied internally).
     pub fn resize(self: *Lookout, width: u32, height: u32) !void {
+        self.host_pt_w = @floatFromInt(width);
+        self.host_pt_h = @floatFromInt(height);
         try self.g.resize(width, height);
         const lw, const lh = self.logicalSize();
         self.cam.vw = lw;
@@ -855,6 +862,7 @@ pub const Lookout = struct {
     /// across the whole framebuffer, so density is handled ONCE, in the
     /// projection, and never multiplied into a size again.
     fn logicalSize(self: *const Lookout) struct { f32, f32 } {
+        if (self.host_pt_w > 0 and self.host_pt_h > 0) return .{ self.host_pt_w, self.host_pt_h };
         const d = if (self.g.pixel_density > 0) self.g.pixel_density else 1.0;
         return .{ @as(f32, @floatFromInt(self.g.width)) / d, @as(f32, @floatFromInt(self.g.height)) / d };
     }
