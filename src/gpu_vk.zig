@@ -256,15 +256,16 @@ pub const Gpu = struct {
         qci.queueFamilyIndex = qfam;
         qci.queueCount = 1;
         qci.pQueuePriorities = &prio;
-        const dev_exts = [_][*:0]const u8{"VK_KHR_swapchain"};
+        // maintenance1: negative-height viewport for the Y flip (see
+        // recordDraws). Core since 1.1; universally shipped on 1.0 drivers.
+        // swapchain only when presenting.
+        const dev_exts = [_][*:0]const u8{ "VK_KHR_maintenance1", "VK_KHR_swapchain" };
         var dci = std.mem.zeroes(vk.VkDeviceCreateInfo);
         dci.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
-        if (want_surface) {
-            dci.enabledExtensionCount = dev_exts.len;
-            dci.ppEnabledExtensionNames = @ptrCast(&dev_exts);
-        }
+        dci.enabledExtensionCount = if (want_surface) dev_exts.len else 1;
+        dci.ppEnabledExtensionNames = @ptrCast(&dev_exts);
         var device: vk.VkDevice = null;
         try check(vk.vkCreateDevice(phys, &dci, null, &device), "vkCreateDevice");
         var queue: vk.VkQueue = null;
@@ -1055,7 +1056,12 @@ pub const Gpu = struct {
         rbi.pClearValues = &clears;
         vk.vkCmdBeginRenderPass(cmd, &rbi, vk.VK_SUBPASS_CONTENTS_INLINE);
         defer vk.vkCmdEndRenderPass(cmd);
-        const vp = vk.VkViewport{ .x = 0, .y = 0, .width = @floatFromInt(self.width), .height = @floatFromInt(self.height), .minDepth = 0, .maxDepth = 1 };
+        // NEGATIVE-height viewport (VK_KHR_maintenance1): Vulkan NDC is Y-down,
+        // but the shaders/uniforms are shared with the Metal and SDL_GPU
+        // backends, whose NDC is Y-up (SDL_GPU does this same flip internally
+        // on its Vulkan path). Without it the chart renders upside down.
+        const fh: f32 = @floatFromInt(self.height);
+        const vp = vk.VkViewport{ .x = 0, .y = fh, .width = @floatFromInt(self.width), .height = -fh, .minDepth = 0, .maxDepth = 1 };
         vk.vkCmdSetViewport(cmd, 0, 1, &vp);
         const scis = vk.VkRect2D{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = self.width, .height = self.height } };
         vk.vkCmdSetScissor(cmd, 0, 1, &scis);

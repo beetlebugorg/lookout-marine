@@ -74,13 +74,62 @@ public final class LookoutView extends SurfaceView
         });
     }
 
+    // Two-finger tap = zoom OUT one level (the double-tap mirror; Maps does
+    // the same). GestureDetector has no such gesture, so track it here: two
+    // pointers down and up again quickly without wandering.
+    private long twoDownMs;
+    private float twoMidX, twoMidY;
+    private boolean twoTap;
+
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+        switch (e.getActionMasked()) {
+            case MotionEvent.ACTION_POINTER_DOWN:
+                if (e.getPointerCount() == 2) {
+                    twoTap = true;
+                    twoDownMs = e.getEventTime();
+                    twoMidX = (e.getX(0) + e.getX(1)) * 0.5f;
+                    twoMidY = (e.getY(0) + e.getY(1)) * 0.5f;
+                } else {
+                    twoTap = false; // third finger: not a two-finger tap
+                }
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (twoTap && e.getPointerCount() >= 2) {
+                    float mx = (e.getX(0) + e.getX(1)) * 0.5f;
+                    float my = (e.getY(0) + e.getY(1)) * 0.5f;
+                    if (Math.hypot(mx - twoMidX, my - twoMidY) > 24f * density) twoTap = false;
+                }
+                break;
+            case MotionEvent.ACTION_UP:
+                if (twoTap && lk != null && e.getEventTime() - twoDownMs < 300) {
+                    lk.zoomAt(-1.0, twoMidX / density, twoMidY / density);
+                }
+                twoTap = false;
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                twoTap = false;
+                break;
+        }
         // Both detectors see every event: pinch zooms while its focal-point
         // drift still pans (the Google-Maps feel).
         scaler.onTouchEvent(e);
         gestures.onTouchEvent(e);
         return true;
+    }
+
+    /** Mouse / trackpad: the scroll wheel zooms about the cursor (the natural
+     *  zoom on the emulator, where pinch needs a modifier key). */
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_SCROLL && lk != null) {
+            float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            if (v != 0) {
+                lk.zoomAt(v * 0.5, e.getX() / density, e.getY() / density);
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(e);
     }
 
     // ---- surface lifecycle --------------------------------------------------
