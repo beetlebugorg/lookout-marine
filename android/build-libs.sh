@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Cross-compile the Zig core (lookout + tile57 + SDL backend) for Android and
-# drop the archives where the gradle/CMake build links them
-# (app/jni/prebuilt/<abi>/). Run this before ./gradlew whenever the core changes.
+# Cross-compile the Zig core (lookout + tile57, raw-Vulkan backend + JNI
+# natives) for Android and drop the archives where the gradle/CMake build links
+# them (app/jni/prebuilt/<abi>/). Gradle's buildZigCore task runs this
+# automatically; run by hand only to cross-build outside gradle.
 #
-# Needs: the Android NDK (ANDROID_NDK or the default sdkmanager path) and the SDL
-# submodule (git submodule update --init). liblookout_marine.a already contains
-# the tile57 engine objects, so CMake links just that one archive.
+# Needs: the Android NDK (ANDROID_NDK or the default sdkmanager path).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 core="$(cd "$here/.." && pwd)"
@@ -37,8 +36,6 @@ NDK="$(find_ndk)" || {
     exit 1
 }
 echo "using NDK: $NDK"
-SDL_INC="$here/app/jni/SDL/include"
-[ -f "$SDL_INC/SDL3/SDL.h" ] || { echo "error: SDL submodule missing — run: git submodule update --init $here/app/jni/SDL" >&2; exit 1; }
 
 # ABIs to build (space-separated). macOS ships bash 3.2 — no associative arrays.
 ABIS="${ABIS:-arm64-v8a}"
@@ -61,7 +58,8 @@ abi_triple() {
 for abi in $ABIS; do
     triple="$(abi_triple "$abi")"
     echo ">> building core for $abi ($triple) [$OPT]"
-    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" -Dsdl-include="$SDL_INC" )
+    # backend defaults to vk on *-linux-android (raw Vulkan; no SDL anywhere)
+    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" )
     dest="$here/app/jni/prebuilt/$abi"
     mkdir -p "$dest"
     # On android liblookout doesn't embed tile57 (nested .a breaks ld.lld), so
