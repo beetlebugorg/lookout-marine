@@ -142,6 +142,14 @@ export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
     defer l.apiUnlock();
     out.* = fromView(l.fitChart());
 }
+/// The view to open with when the host has NOTHING saved: the library framed,
+/// pulled back to an overview zoom. Pair with lookout_set_view; a host that has
+/// a saved pose should restore that instead.
+export fn lookout_default_view(h: ?*lookout, out: *lookout_view) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    out.* = fromView(l.defaultView());
+}
 export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();

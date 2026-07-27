@@ -64,10 +64,13 @@ class ChartController(private val appContext: Context) {
     // ---- lifecycle (called by LookoutView) ---------------------------------
 
     /**
-     * Called on the main thread right after the engine opens and BEFORE the
-     * render thread starts, so the mariner's saved settings are in place before
-     * the first tessellation — otherwise the chart builds once at defaults and
-     * immediately rebuilds.
+     * Called ON THE RENDER THREAD right after the engine opens and before the
+     * frame loop starts, so the mariner's saved settings and the saved view are
+     * in place before the first tessellation — otherwise the chart builds once
+     * at defaults and immediately rebuilds.
+     *
+     * The native calls and the prefs read belong here; only the form state has
+     * to hop to main, Compose state being main-thread-only.
      */
     fun attach(l: Lookout, queue: Handler) {
         lk = l
@@ -77,8 +80,23 @@ class ChartController(private val appContext: Context) {
         var date = l.getMarinerDate()
         MarinerState.applySavedOverlay(appContext, v)?.let { date = it }
         l.setMariner(v, date)
-        mariner.loadFrom(v, date)
         lastPushed = null
+        restoreView(l)
+        val loaded = date
+        main.post { mariner.loadFrom(v, loaded) }
+    }
+
+    /**
+     * Put the camera back where it was left. Runs before the render thread
+     * starts, like the mariner state above, so the first tessellation is
+     * already at the restored pose instead of building the opening view and
+     * immediately rebuilding. With nothing saved, the opening view is the
+     * engine's own — the same policy every host gets from lookout_default_view.
+     */
+    private fun restoreView(l: Lookout) {
+        val saved = ViewState.load(appContext)
+        if (saved != null) l.setView(saved.lon, saved.lat, saved.zoom, saved.rotationDeg)
+        else l.defaultView()
     }
 
     /**
@@ -90,15 +108,23 @@ class ChartController(private val appContext: Context) {
      */
     fun detach(l: Lookout?) {
         if (l != null && lk !== l) return
+        saveView() // last known pose; the handle is about to close
         engine = null
         lk = null
         identify = emptyList()
+    }
+
+    /** Persist the last sampled pose. No native call — [lastPushed] has it. */
+    private fun saveView() {
+        val r = lastPushed ?: return
+        ViewState.save(appContext, r.lon, r.lat, r.zoom, r.rotationDeg)
     }
 
     // ---- readouts (render thread) ------------------------------------------
 
     @Volatile private var lastPushed: Readouts? = null
     private var lastPushNs = 0L
+    private var lastSaveNs = 0L
 
     /**
      * Sample the engine for the HUD. Throttled and change-gated: the frame loop
@@ -122,6 +148,12 @@ class ChartController(private val appContext: Context) {
         if (r == lastPushed) return
         lastPushed = r
         main.post { readouts = r }
+        // Persist periodically as well: a swipe-away or a low-memory kill never
+        // reaches detach().
+        if (frameTimeNanos - lastSaveNs >= SAVE_INTERVAL_NS) {
+            lastSaveNs = frameTimeNanos
+            saveView()
+        }
     }
 
     // ---- mariner -----------------------------------------------------------
@@ -202,5 +234,8 @@ class ChartController(private val appContext: Context) {
     private companion object {
         /** ~10 Hz: fast enough to feel live, slow enough not to drive layout. */
         const val PUSH_INTERVAL_NS = 100_000_000L
+
+        /** Cheap (an async prefs write), but there is no point doing it often. */
+        const val SAVE_INTERVAL_NS = 3_000_000_000L
     }
 }

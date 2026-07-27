@@ -7,6 +7,7 @@ import android.view.Choreographer;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
@@ -265,32 +266,38 @@ public final class LookoutView extends SurfaceView
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int wPx, int hPx) {
-        int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
-        if (lk == null) {
-            lk = Lookout.openCharts(chartPaths, holder.getSurface(), wPx, hPx, wPts, hPts, true);
-            if (lk == null) return;
-            // Before the first build: the surface's own extent lags a rotation,
-            // so the engine must be told the scale rather than infer it.
-            lk.setDensity(density);
-            lastFrameNs = 0;
-            // Before the render thread starts: attach restores the mariner's
-            // saved settings, and they must be in place for the FIRST build or
-            // the chart tessellates once at defaults and immediately again.
-            renderThread = new HandlerThread("lookout-render");
-            renderThread.start();
-            engine = new Handler(renderThread.getLooper());
-            // Same queue for the chrome. Inline natives are safe here: no frame
-            // runs until the callback below is posted.
-            controller.attach(lk, engine);
-            // Choreographer is per-thread: fetch it ON the render thread so the
-            // vsync callbacks (and every render) land there.
-            engine.post(() -> Choreographer.getInstance().postFrameCallback(this));
-        } else {
+        final int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
+        if (lk != null) {
             // Onto the render thread: a resize rebuilds the swapchain, and the
             // api lock it takes is held for a whole frame — parking the UI
             // thread here is how a rotation turns into an input-dispatch ANR.
             onEngine(() -> lk.resize(wPts, hPts));
+            return;
         }
+        // The open is tens of seconds on a real library — one tile57_chart_open
+        // per cell (7000+), the atlas bake, Vulkan bring-up — and it scales with
+        // the library, so on the UI thread it is an ANR on every launch.
+        // Start the render thread FIRST and open there.
+        final Surface surface = holder.getSurface();
+        lastFrameNs = 0;
+        renderThread = new HandlerThread("lookout-render");
+        renderThread.start();
+        final Handler h = new Handler(renderThread.getLooper());
+        engine = h;
+        h.post(() -> {
+            Lookout l = Lookout.openCharts(chartPaths, surface, wPx, hPx, wPts, hPts, true);
+            if (l == null) return;
+            // The surface's own extent lags a rotation, so the engine is TOLD
+            // the scale rather than left to infer it — before the first build.
+            l.setDensity(density);
+            // Also before the first build: the mariner's saved settings and the
+            // saved view, or the chart tessellates once at defaults and again
+            // immediately. Safe inline — no frame runs until lk is published.
+            controller.attach(l, h);
+            lk = l; // published LAST: onEngine and doFrame both gate on it
+            // Choreographer is per-thread; this already IS the render thread.
+            Choreographer.getInstance().postFrameCallback(this);
+        });
     }
 
     @Override

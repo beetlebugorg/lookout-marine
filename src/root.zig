@@ -273,6 +273,7 @@ pub const Lookout = struct {
     /// device's max texture dimension (loadSpriteAtlas). Scene builds must pass
     /// THIS ratio so sprite UVs index the atlas we uploaded.
     atlas_scale: f32 = 1.0,
+    atlases_ready: bool = false, // see ensureAtlases: loaded at first use, not at open
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
@@ -371,6 +372,22 @@ pub const Lookout = struct {
         // first render.
         self.assets_root = atlasCacheDir(self.alloc);
         self.loadNodataColors();
+        // NOT the atlases: they bake at the display density, and nothing has
+        // told us what that is yet — the host cannot call resize() or
+        // setPixelDensity() until this returns a handle. Baking here pinned
+        // every symbol and glyph at 1.00x and then sampled it upscaled. See
+        // ensureAtlases, which runs once the density is known.
+        return self;
+    }
+
+    /// Load the symbol + glyph atlases, once, at the first build or draw — by
+    /// which point the host has declared its density. Both are keyed on that
+    /// density, so loading any earlier bakes the wrong sheet.
+    fn ensureAtlases(self: *Lookout) void {
+        if (self.atlases_ready) return;
+        self.atlases_ready = true;
+        const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
+        var t = gpu.ticksMs();
         self.loadSpriteAtlas();
         if (dbg) {
             std.debug.print("  loadSpriteAtlas {d} ms\n", .{gpu.ticksMs() - t});
@@ -378,7 +395,6 @@ pub const Lookout = struct {
         }
         self.loadGlyphAtlas();
         if (dbg) std.debug.print("  loadGlyphAtlas {d} ms\n", .{gpu.ticksMs() - t});
-        return self;
     }
 
     /// Read `<cache>/<name>` (the app's own atlas cache), or null on any miss.
@@ -777,6 +793,19 @@ pub const Lookout = struct {
     /// the first alphabetically: a US ENC's first cell is usually a tiny-scale
     /// EEZ overview (e.g. US1EEZ1M) that opens as an empty ocean rectangle. A
     /// harbour/approach cell lands the user on actual chart content instead.
+    /// The pose a host should open with when it has nothing saved. fitChart
+    /// alone lands on the smallest bounded CELL, which in a 2500-cell library
+    /// is an arbitrary harbour; keep that centre but pull back to an overview.
+    /// Hosts persist the pose themselves (each has its own store) — this is
+    /// the one piece of the policy worth having in a single place.
+    const DEFAULT_VIEW_ZOOM = 5.0;
+    pub fn defaultView(self: *Lookout) View {
+        var v = self.fitChart();
+        v.zoom = std.math.clamp(DEFAULT_VIEW_ZOOM, self.cam.min_zoom, self.cam.max_zoom);
+        v.rotation_deg = 0;
+        return v;
+    }
+
     pub fn fitChart(self: *Lookout) View {
         var west: f64 = 0;
         var south: f64 = 0;
@@ -1203,6 +1232,7 @@ pub const Lookout = struct {
     // Synchronous build (snapshots, and the very first frame so there is
     // something to draw immediately).
     fn buildGpuScene(self: *Lookout) void {
+        self.ensureAtlases(); // runJob reads atlas_scale for the sprite UVs
         const job = self.jobFor(self.cam.center, self.buildZoom(), false);
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         const ok = self.runJob(job, &cs);
@@ -1303,6 +1333,7 @@ pub const Lookout = struct {
     }
 
     fn tickBuild(self: *Lookout) void {
+        self.ensureAtlases(); // before any worker reads atlas_scale
         self.pollBuild();
         if (self.build_active) return;
         if (self.trim_requested) {
@@ -1368,6 +1399,7 @@ pub const Lookout = struct {
 
     /// Render one frame to the window and present.
     pub fn render(self: *Lookout) !bool {
+        self.ensureAtlases();
         if (self.loading) {
             self.pollCompose(false);
             if (self.loading) {

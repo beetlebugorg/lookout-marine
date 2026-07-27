@@ -70,6 +70,7 @@ int lookout_atlas_cache_ready(void);
 
 /* ---- view -------------------------------------------------------------- */
 void lookout_fit_chart(lookout *h, lookout_view *out); /* fit the whole cell */
+void lookout_default_view(lookout *h, lookout_view *out); /* opening view, no saved pose */
 void lookout_set_view(lookout *h, const lookout_view *v);
 void lookout_get_view(lookout *h, lookout_view *out);
 int  lookout_resize(lookout *h, uint32_t width, uint32_t height); /* points */

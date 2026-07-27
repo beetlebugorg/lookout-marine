@@ -32,6 +32,7 @@ extern fn lookout_close(h: ?*anyopaque) void;
 extern fn lookout_set_cache_dir(path: [*:0]const u8) void;
 extern fn lookout_resize(h: ?*anyopaque, width: u32, height: u32) c_int;
 extern fn lookout_fit_chart(h: ?*anyopaque, v: *lookout_view) c_int;
+extern fn lookout_default_view(h: ?*anyopaque, v: *lookout_view) void;
 extern fn lookout_set_view(h: ?*anyopaque, v: *const lookout_view) void;
 extern fn lookout_get_view(h: ?*anyopaque, v: *lookout_view) void;
 extern fn lookout_pan_logical(h: ?*anyopaque, dx_pt: f32, dy_pt: f32) void;
@@ -189,6 +190,17 @@ export fn Java_org_beetlebug_lookout_Lookout_nFitChart(env: [*c]j.JNIEnv, cls: j
     const h = fromLong(hl) orelse return;
     var v: lookout_view = undefined;
     if (lookout_fit_chart(h.l, &v) == 0) lookout_set_view(h.l, &v);
+}
+
+/// Frame the library at overview zoom — the opening view when the host has no
+/// saved pose. Computed and applied in one crossing, like nFitChart.
+export fn Java_org_beetlebug_lookout_Lookout_nDefaultView(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    var v: lookout_view = undefined;
+    lookout_default_view(h.l, &v);
+    lookout_set_view(h.l, &v);
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nPan(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, dx_pt: j.jfloat, dy_pt: j.jfloat) void {

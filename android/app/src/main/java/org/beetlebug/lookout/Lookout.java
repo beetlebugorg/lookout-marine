@@ -69,6 +69,8 @@ public final class Lookout implements AutoCloseable {
     /** DisplayMetrics.density; set before the first build. */
     public void setDensity(float d)              { if (h != 0) nSetDensity(h, d); }
     public void fitChart()                       { if (h != 0) nFitChart(h); }
+    /** The opening view when nothing was saved: library framed, overview zoom. */
+    public void defaultView()                    { if (h != 0) nDefaultView(h); }
     /** Drag the chart with the finger: positive = finger delta, logical pts. */
     public void pan(float dxPts, float dyPts)    { if (h != 0) nPan(h, dxPts, dyPts); }
     /** Zoom by dz levels about a point (logical pts); eases via tickAnim. */
@@ -163,6 +165,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nResize(long h, int wPts, int hPts);
     private static native void nSetDensity(long h, float d);
     private static native void nFitChart(long h);
+    private static native void nDefaultView(long h);
     private static native void nPan(long h, float dxPts, float dyPts);
     private static native void nZoomAt(long h, double dz, float xPts, float yPts);
     private static native boolean nRender(long h);
