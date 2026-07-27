@@ -305,7 +305,7 @@ pub const Lookout = struct {
         const self = try create(alloc, opts);
         errdefer self.close();
         const t0 = gpu.ticksMs();
-        for (paths) |p| self.addChartPath(p);
+        self.openChartPaths(paths);
         const t1 = gpu.ticksMs();
         try self.finishOpen();
         const t2 = gpu.ticksMs();
@@ -636,6 +636,52 @@ pub const Lookout = struct {
             const scheme_obj = (root_obj.get(name) orelse continue).object;
             const hex = (scheme_obj.get("NODTA") orelse continue).string;
             if (hexColor(hex)) |c| self.nodata[i] = c;
+        }
+    }
+
+    /// Open every path, in parallel. A real library is thousands of cells and
+    /// each open is an openat + stat + mmap and a metadata/coverage decode —
+    /// mostly waiting on the filesystem (charts usually sit on Android's
+    /// FUSE-backed storage), so serially this dominates the whole open.
+    /// Charts land in their path's slot, so the composed order is the caller's
+    /// regardless of which worker got there first.
+    fn openChartPaths(self: *Lookout, paths: []const [:0]const u8) void {
+        if (paths.len <= 1) {
+            for (paths) |p| self.addChartPath(p);
+            return;
+        }
+        const slots = self.alloc.alloc(?*cc.tile57_chart, paths.len) catch {
+            for (paths) |p| self.addChartPath(p); // no room for the slots: serial
+            return;
+        };
+        defer self.alloc.free(slots);
+        @memset(slots, null);
+
+        const W = struct {
+            fn run(ps: []const [:0]const u8, out: []?*cc.tile57_chart, next: *std.atomic.Value(usize)) void {
+                while (true) {
+                    const i = next.fetchAdd(1, .monotonic); // claim, don't partition: cells vary in size
+                    if (i >= ps.len) return;
+                    var err: cc.tile57_error = undefined;
+                    var chart: ?*cc.tile57_chart = null;
+                    if (cc.tile57_chart_open(ps[i].ptr, &chart, &err) == cc.TILE57_OK) out[i] = chart;
+                }
+            }
+        };
+
+        var next = std.atomic.Value(usize).init(0);
+        const cpus = std.Thread.getCpuCount() catch 1;
+        var threads: [8]std.Thread = undefined;
+        const want = @min(@max(cpus, 1), threads.len + 1) - 1; // this thread works too
+        var spawned: usize = 0;
+        while (spawned < want) : (spawned += 1) {
+            threads[spawned] = std.Thread.spawn(.{}, W.run, .{ paths, slots, &next }) catch break;
+        }
+        W.run(paths, slots, &next);
+        for (threads[0..spawned]) |t| t.join();
+
+        for (slots, paths) |c, p| {
+            if (c) |ch| self.charts.append(self.alloc, ch) catch {} else std.debug.print("skip '{s}'\n", .{p});
         }
     }
 
