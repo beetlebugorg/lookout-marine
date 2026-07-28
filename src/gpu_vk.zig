@@ -1108,6 +1108,72 @@ pub const Gpu = struct {
         var bound_tex: vk.VkDescriptorSet = null;
         const zero: u64 = 0;
 
+        // CONTIGUOUS ranges with the same draw spec (pipeline, texture, uniform
+        // payload) collapse into ONE vkCmdDraw, exactly as the Metal backend does.
+        // Colour rides in the vertices, so a whole paint band of differently
+        // coloured fills is one spec; assemble() already re-lays the vertex and
+        // quad streams in sorted range order precisely so a host can do this. A
+        // coastal view carries ~5,000 ranges, i.e. ~10,000 command calls a frame
+        // before merging — recordDraws was 21% of native time on device. A skipped
+        // range breaks contiguity, so merging can never draw gated-off content,
+        // and merged primitives rasterize in the same order they would have.
+        const Run = struct {
+            active: bool = false,
+            tri: bool = false,
+            pipe: vk.VkPipeline = null,
+            tex: vk.VkDescriptorSet = null,
+            first: u32 = 0,
+            count: u32 = 0,
+            uu: Uniforms = undefined,
+            halo: bool = false, // glyph run: also push the frag (halo) uniform
+        };
+        var run = Run{};
+        var draws: u32 = 0;
+        const flush = struct {
+            fn go(g: *Gpu, cmd2: vk.VkCommandBuffer, sc: *const Scene, rn: *Run, bp: *vk.VkPipeline, bt: *vk.VkDescriptorSet, z0: *const u64, n: *u32) void {
+                if (!rn.active or rn.count == 0) return;
+                rn.active = false;
+                if (rn.pipe != bp.*) {
+                    vk.vkCmdBindPipeline(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, rn.pipe);
+                    bp.* = rn.pipe;
+                    const vb = if (rn.tri) &sc.vbuf.buf else &sc.qbuf.buf;
+                    vk.vkCmdBindVertexBuffers(cmd2, 0, 1, vb, z0);
+                }
+                if (rn.tex != null and rn.tex != bt.*) {
+                    var ds = rn.tex;
+                    vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 2, 1, &ds, 0, null);
+                    bt.* = rn.tex;
+                }
+                var uu2 = rn.uu;
+                const voff = g.pushUniform(&uu2) orelse return;
+                vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 1, 1, &g.vtx_uni_set, 1, &voff);
+                if (rn.halo) {
+                    // SDF halo renders in the palette background colour (sdf.frag,
+                    // set 3): a hardcoded white halo glared at night.
+                    uu2.color = .{ g.clear.r, g.clear.g, g.clear.b, 1 };
+                    const foff = g.pushUniform(&uu2) orelse return;
+                    vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 3, 1, &g.frag_uni_set, 1, &foff);
+                }
+                vk.vkCmdDraw(cmd2, rn.count, 1, rn.first, 0);
+                n.* += 1;
+            }
+        }.go;
+        // A run only extends when EVERY bit of its draw spec matches and the
+        // primitives abut; otherwise the pending run is flushed and a new one opens.
+        const emit = struct {
+            fn go(g: *Gpu, cmd2: vk.VkCommandBuffer, sc: *const Scene, rn: *Run, bp: *vk.VkPipeline, bt: *vk.VkDescriptorSet, z0: *const u64, n: *u32, fl: anytype, tri: bool, pipe: vk.VkPipeline, tex: vk.VkDescriptorSet, first: u32, count: u32, uu: Uniforms, halo: bool) void {
+                if (rn.active and rn.tri == tri and rn.pipe == pipe and rn.tex == tex and rn.halo == halo and
+                    rn.first + rn.count == first and
+                    std.mem.eql(u8, std.mem.asBytes(&rn.uu), std.mem.asBytes(&uu)))
+                {
+                    rn.count += count;
+                    return;
+                }
+                fl(g, cmd2, sc, rn, bp, bt, z0, n);
+                rn.* = .{ .active = true, .tri = tri, .pipe = pipe, .tex = tex, .first = first, .count = count, .uu = uu, .halo = halo };
+            }
+        }.go;
+
         for (s.ranges) |r| {
             switch (r.kind) {
                 cc.TILE57_GPU_TEXT => if (!text_on) continue,
@@ -1129,18 +1195,7 @@ pub const Gpu = struct {
                 } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
                     continue; // pattern with no cell texture: the fill under it already drew
                 }
-                if (pipe != bound_pipe) {
-                    vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-                    bound_pipe = pipe;
-                    vk.vkCmdBindVertexBuffers(cmd, 0, 1, &s.vbuf.buf, &zero);
-                }
-                if (tex_set != null and tex_set != bound_tex) {
-                    vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 2, 1, &tex_set, 0, null);
-                    bound_tex = tex_set;
-                }
-                const off = self.pushUniform(&uu) orelse continue;
-                vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &off);
-                vk.vkCmdDraw(cmd, r.count, 1, r.first, 0);
+                emit(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws, flush, true, pipe, tex_set, r.first, r.count, uu, false);
             } else { // QUADS
                 if (s.qbuf.buf == null) continue;
                 const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
@@ -1152,28 +1207,10 @@ pub const Gpu = struct {
                 };
                 const pipe = if (is_glyph) self.sdf_pipeline else self.sprite_pipeline;
                 if (tex == null or pipe == null) continue;
-                if (pipe != bound_pipe) {
-                    vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-                    bound_pipe = pipe;
-                    vk.vkCmdBindVertexBuffers(cmd, 0, 1, &s.qbuf.buf, &zero);
-                }
-                if (tex.?.dset != bound_tex) {
-                    var ds = tex.?.dset;
-                    vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 2, 1, &ds, 0, null);
-                    bound_tex = tex.?.dset;
-                }
-                const voff = self.pushUniform(&uu) orelse continue;
-                vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &voff);
-                if (is_glyph) {
-                    // SDF halo renders in the palette background colour (sdf.frag,
-                    // set 3): a hardcoded white halo glared at night.
-                    uu.color = .{ self.clear.r, self.clear.g, self.clear.b, 1 };
-                    const foff = self.pushUniform(&uu) orelse continue;
-                    vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 3, 1, &self.frag_uni_set, 1, &foff);
-                }
-                vk.vkCmdDraw(cmd, r.count, 1, r.first, 0);
+                emit(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws, flush, false, pipe, tex.?.dset, r.first, r.count, uu, is_glyph);
             }
         }
+        flush(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws);
     }
 
     /// Render one frame to the window and present. Returns false if no window.
