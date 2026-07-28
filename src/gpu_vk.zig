@@ -188,6 +188,7 @@ pub const Gpu = struct {
     host_pt_w: f32 = 0,
     host_pt_h: f32 = 0,
     size_changed_ms: i64 = -100000,
+    sc_retry_ms: i64 = -100000, // rate-limits the stale-extent rebuild below
     pixel_density: f32 = 1.0,
     host_density: f32 = 0, // host-declared scale; 0 = derive from the swapchain
     pattern_scale: f32 = 1,
@@ -907,6 +908,14 @@ pub const Gpu = struct {
             const d = @as(f32, @floatFromInt(self.width)) / self.host_pt_w;
             if (d > 0.2 and d < 8.0) self.pixel_density = d;
         }
+        // A rotation is a resize the DRIVER may never complain about: Android is
+        // happy to scale a portrait-shaped swapchain into a landscape surface, so
+        // acquire/present keep returning SUCCESS while SurfaceFlinger resamples
+        // every pixel (measured after one rotation round trip: an 1340x800 layer
+        // squeezed into an 800x1340 display, the whole chart soft while the
+        // Compose HUD above it stayed sharp). The host's declared viewport is the
+        // authority, so rebuild on it rather than waiting to be told.
+        if (self.surface != null and self.swapchain != null and self.extentStale()) self.recreateSwapchain();
     }
 
     /// The host's own scale factor (Android's DisplayMetrics.density), which is
@@ -1218,6 +1227,15 @@ pub const Gpu = struct {
         if (self.surface == null) return false;
         if (self.swapchain == null) {
             self.recreateSwapchain(); // was minimized at init
+            if (self.swapchain == null) return true;
+        }
+        // The surface can still report its OLD currentExtent when resize() runs,
+        // in which case that rebuild picked the stale size — so re-check here and
+        // try again, rate-limited so a mismatch we can never satisfy costs a few
+        // rebuilds a second instead of one per frame.
+        if (self.extentStale() and ticksMs() - self.sc_retry_ms > 250) {
+            self.sc_retry_ms = ticksMs();
+            self.recreateSwapchain();
             if (self.swapchain == null) return true;
         }
         _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
