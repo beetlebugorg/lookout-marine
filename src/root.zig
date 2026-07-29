@@ -144,7 +144,6 @@ pub const OpenOptions = struct {
 };
 
 pub const NativeKind = gpu.NativeKind;
-pub const DmabufFrame = gpu.DmabufFrame;
 
 // A kernel-blocking lock for api_mu / engine_mu (NOT a spin). On Darwin that's
 // os_unfair_lock — Zig 0.16's std.Thread.Mutex spins there, and this layer takes
@@ -1515,24 +1514,6 @@ pub const Lookout = struct {
         // pending content still needs a successful present.
         if (ok) self.view_dirty = false;
         return ok;
-    }
-
-    /// Render into an exportable image and describe it, instead of presenting.
-    /// Same scene/pipelines/resolution; only the destination differs.
-    pub fn renderDmabuf(self: *Lookout, out: *gpu.DmabufFrame) !void {
-        self.ensureAtlases();
-        if (self.loadingPulse()) {
-            try self.g.renderDmabuf(self.uniforms(), false, false, out);
-            return;
-        }
-        self.prepareFrame();
-        try self.g.renderDmabuf(self.uniforms(), self.text_on, self.sound_on, out);
-        // No skipped-frame case here: there is no swapchain to saturate.
-        self.view_dirty = false;
-    }
-
-    pub fn dmabufSupported(self: *Lookout) bool {
-        return self.g.dmabufSupported();
     }
 
     /// True while the view needs another frame (state changed, building, loading).

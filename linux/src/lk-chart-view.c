@@ -1,7 +1,6 @@
 #include "lk-chart-view.h"
 
 #include "lk-app-model.h"
-#include "lk-chart-texture.h"
 #include "lk-hud.h"
 
 /* S-52 NODATA, day scheme — what lookout's first frame clears to. */
@@ -20,13 +19,11 @@ struct _LkChartView {
   LkAppModel        *model;      /* not owned */
   LkChartController *controller; /* not owned; lives on the model */
 
-  LkNativeSurface *surface;   /* fallback path only */
-  GdkTexture      *texture;   /* texture path: the last frame */
+  LkNativeSurface *surface;   /* the chart's presentation surface */
   gboolean         did_auto_open;
   guint            auto_open_id;
 
-  double   last_scale; /* fractional surface scale, not the integer factor */
-  int      last_width, last_height;
+  int      last_scale, last_width, last_height;
   gboolean presented; /* lookout has shown a frame; the surface may map */
 
   /* drag state */
@@ -68,19 +65,6 @@ lk_chart_view_get_point_size (LkChartView *self, int *width, int *height)
     *height = h > 1 ? h : 800;
 }
 
-double
-lk_chart_view_get_scale (LkChartView *self)
-{
-  GtkNative *native = gtk_widget_get_native (GTK_WIDGET (self));
-  GdkSurface *surface = native != NULL ? gtk_native_get_surface (native) : NULL;
-  double scale = surface != NULL ? gdk_surface_get_scale (surface) : 0.0;
-
-  /* Before the surface exists, fall back to the integer factor. */
-  if (scale <= 0.0)
-    scale = gtk_widget_get_scale_factor (GTK_WIDGET (self));
-  return scale;
-}
-
 /* Where the surface sits inside the toplevel's GdkSurface. The native's offset
  * within the GdkSurface is non-zero whenever CSD reserves a shadow. */
 static gboolean
@@ -111,11 +95,9 @@ lk_chart_view_sync_surface (LkChartView *self)
   if (!lk_chart_view_compute_surface_rect (self, &x, &y, &width, &height))
     return;
 
-  int scale_i = gtk_widget_get_scale_factor (GTK_WIDGET (self)); /* integer buffer scale */
-  double scale = lk_chart_view_get_scale (self);                 /* fractional texture density */
-  /* Texture mode has no surface to move, but the size still has to reach lookout. */
+  int scale = gtk_widget_get_scale_factor (GTK_WIDGET (self));
   gboolean resized = self->surface != NULL
-                         ? lk_native_surface_move_resize (self->surface, x, y, width, height, scale_i)
+                         ? lk_native_surface_move_resize (self->surface, x, y, width, height, scale)
                          : (width != self->last_width || height != self->last_height);
   self->last_width = width;
   self->last_height = height;
@@ -123,8 +105,8 @@ lk_chart_view_sync_surface (LkChartView *self)
   if (scale != self->last_scale)
     {
       self->last_scale = scale;
-      lk_chart_controller_set_scale (self->controller, scale_i);
-      resized = TRUE; /* pixel extent = points × density, so re-derive it */
+      lk_chart_controller_set_scale (self->controller, scale);
+      resized = TRUE;
     }
 
   if (resized)
@@ -197,7 +179,7 @@ lk_chart_view_realize (GtkWidget *widget)
       return;
     }
 
-  self->last_scale = lk_chart_view_get_scale (LK_CHART_VIEW (widget));
+  self->last_scale = gtk_widget_get_scale_factor (widget);
 
   /* No surface yet: the texture path needs none, and the path is chosen at open. */
   lk_chart_controller_attach_view (self->controller, widget);
@@ -240,23 +222,10 @@ lk_chart_view_can_overlay (LkChartView *self)
 {
   g_return_val_if_fail (LK_IS_CHART_VIEW (self), FALSE);
 
-  /* Asked before any chart is open, so it goes on what GTK advertises; a display
-   * with no import formats cannot take our frames whatever the driver says. */
-  if (g_getenv ("LOOKOUT_NO_DMABUF") != NULL)
-    return FALSE;
-
-  GdkDisplay *display = gtk_widget_get_display (GTK_WIDGET (self));
-  GdkDmabufFormats *formats = gdk_display_get_dmabuf_formats (display);
-  return formats != NULL && gdk_dmabuf_formats_get_n_formats (formats) > 0;
-}
-
-void
-lk_chart_view_set_texture (LkChartView *self, GdkTexture *texture)
-{
-  g_return_if_fail (LK_IS_CHART_VIEW (self));
-
-  g_set_object (&self->texture, texture);
-  gtk_widget_queue_draw (GTK_WIDGET (self));
+  /* Both paths float now: the texture path is a node in GTK's scene graph, and
+   * the native path presents into a subsurface placed BELOW a transparent hole
+   * in the window — so the chrome composites over the chart either way. */
+  return TRUE;
 }
 
 static void
@@ -313,84 +282,20 @@ lk_chart_view_size_allocate (GtkWidget *widget, int width, int height, int basel
     lk_chart_view_maybe_auto_open (self);
 }
 
-/* The rect and filter for a device-pixel-exact blit. The texture is rendered at
- * an integer multiple k of the surface's fractional scale (k=1 native, k=2
- * supersampled). Snap the origin to the device grid (the widget can sit on a
- * half-pixel) and size so each device pixel covers exactly k×k texels. Filter is
- * NEAREST at k=1 (bit-exact), LINEAR at k=2 (an exact 2:1 box downsample). */
-static graphene_rect_t
-lk_chart_view_texture_rect (LkChartView       *self,
-                            const graphene_rect_t *bounds,
-                            GskScalingFilter  *filter)
-{
-  double scale = lk_chart_view_get_scale (self);
-  int tex_w = gdk_texture_get_width (self->texture);
-  int tex_h = gdk_texture_get_height (self->texture);
-
-  *filter = GSK_SCALING_FILTER_NEAREST;
-  if (scale <= 0)
-    return *bounds;
-
-  /* How many texels per device pixel this frame was rendered at. */
-  double dev_w = bounds->size.width * scale;
-  int k = (int) round (tex_w / MAX (dev_w, 1.0));
-  if (k < 1)
-    k = 1;
-
-  /* A frame caught mid-resize isn't this widget's size; stretch it for one frame. */
-  if (fabs (tex_w / (double) k - bounds->size.width * scale) > 1.5 ||
-      fabs (tex_h / (double) k - bounds->size.height * scale) > 1.5)
-    {
-      *filter = GSK_SCALING_FILTER_LINEAR;
-      return *bounds;
-    }
-
-  if (k > 1)
-    *filter = GSK_SCALING_FILTER_LINEAR;
-
-  GtkNative *native = gtk_widget_get_native (GTK_WIDGET (self));
-  graphene_rect_t abs;
-  if (native == NULL ||
-      !gtk_widget_compute_bounds (GTK_WIDGET (self), GTK_WIDGET (native), &abs))
-    return *bounds;
-
-  double nx = 0, ny = 0;
-  gtk_native_get_surface_transform (native, &nx, &ny);
-
-  /* Where the widget's origin lands in the window buffer, in device pixels. */
-  double dev_x = (nx + abs.origin.x) * scale;
-  double dev_y = (ny + abs.origin.y) * scale;
-
-  return GRAPHENE_RECT_INIT ((float) ((round (dev_x) - dev_x) / scale),
-                             (float) ((round (dev_y) - dev_y) / scale),
-                             (float) (tex_w / (k * scale)),
-                             (float) (tex_h / (k * scale)));
-}
-
 static void
 lk_chart_view_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 {
   LkChartView *self = LK_CHART_VIEW (widget);
-  graphene_rect_t bounds = GRAPHENE_RECT_INIT (0, 0,
-                                               gtk_widget_get_width (widget),
-                                               gtk_widget_get_height (widget));
 
-  /* Shows until lookout's first frame: S-52 NODATA, not a white flash. */
-  gtk_snapshot_append_color (snapshot, &LK_NODATA_COLOR, &bounds);
-
-  if (self->texture != NULL)
+  /* Once the chart is presenting, paint NOTHING: a transparent hole the
+   * subsurface BELOW shows through, with the chrome floating over it. Until the
+   * first frame lands, fill NODATA so the desktop doesn't flash through. */
+  if (!(self->surface != NULL && self->presented))
     {
-      GskScalingFilter filter;
-      graphene_rect_t tex_rect = lk_chart_view_texture_rect (self, &bounds, &filter);
-
-      /* $LOOKOUT_FILTER=nearest|linear|trilinear overrides, for eyeballing. */
-      const char *forced = g_getenv ("LOOKOUT_FILTER");
-      if (forced != NULL)
-        filter = g_str_equal (forced, "nearest")   ? GSK_SCALING_FILTER_NEAREST
-                 : g_str_equal (forced, "trilinear") ? GSK_SCALING_FILTER_TRILINEAR
-                                                     : GSK_SCALING_FILTER_LINEAR;
-
-      gtk_snapshot_append_scaled_texture (snapshot, self->texture, filter, &tex_rect);
+      graphene_rect_t bounds = GRAPHENE_RECT_INIT (0, 0,
+                                                   gtk_widget_get_width (widget),
+                                                   gtk_widget_get_height (widget));
+      gtk_snapshot_append_color (snapshot, &LK_NODATA_COLOR, &bounds);
     }
 
   GTK_WIDGET_CLASS (lk_chart_view_parent_class)->snapshot (widget, snapshot);
@@ -642,6 +547,8 @@ lk_chart_view_surface_ready (LkChartView *self)
   self->presented = TRUE;
   if (gtk_widget_get_mapped (GTK_WIDGET (self)))
     lk_native_surface_set_visible (self->surface, TRUE);
+  /* Re-snapshot: the widget goes transparent now the subsurface is showing. */
+  gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
 /* ---- identify popover --------------------------------------------------- */
@@ -679,7 +586,6 @@ lk_chart_view_dispose (GObject *object)
   LkChartView *self = LK_CHART_VIEW (object);
 
   g_clear_handle_id (&self->auto_open_id, g_source_remove);
-  g_clear_object (&self->texture);
   g_clear_pointer (&self->identify_popover, gtk_widget_unparent);
   g_clear_pointer (&self->surface, lk_native_surface_free);
 

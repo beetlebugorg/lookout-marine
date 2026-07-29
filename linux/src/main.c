@@ -13,6 +13,9 @@
 
 /* A little chrome the stock stylesheet has no class for. */
 static const char *LK_CSS =
+    /* The chart window is transparent where the chart-view widget paints nothing,
+     * so the below subsurface shows through and the chrome floats over it. */
+    ".lk-chart-window { background: transparent; }"
     ".lk-card {"
     "  background: alpha(currentColor, 0.06);"
     "  border-radius: 16px;"

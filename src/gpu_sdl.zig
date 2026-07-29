@@ -45,18 +45,6 @@ pub fn ticksUs() i64 {
 /// How to interpret Options.native_handle. Superset across backends (the Metal
 /// backend's is a subset) so root/capi share one ABI; the SDL backend wraps the
 /// non-Apple kinds and treats metal_layer/none as "no host window".
-/// dmabuf export is a Linux/Vulkan facility; declared here too for one shared ABI.
-pub const DmabufFrame = extern struct {
-    fd: c_int = -1,
-    fourcc: u32 = 0,
-    modifier: u64 = 0,
-    n_planes: u32 = 0,
-    offset: [4]u32 = @splat(0),
-    stride: [4]u32 = @splat(0),
-    width: u32 = 0,
-    height: u32 = 0,
-};
-
 pub const NativeKind = enum(c_int) {
     none = 0,
     metal_layer = 1, // Apple CAMetalLayer* — capi/root ABI parity only
@@ -729,20 +717,6 @@ pub const Gpu = struct {
         const pixels = try self.renderOffscreen(alloc, u, text_on, sound_on);
         defer alloc.free(pixels);
         try png.write(alloc, path, pixels, self.width, self.height);
-    }
-
-    /// No dmabuf export on this backend — the host presents to a surface.
-    pub fn renderDmabuf(self: *Gpu, u: Uniforms, text_on: bool, sound_on: bool, out: *DmabufFrame) !void {
-        _ = self;
-        _ = u;
-        _ = text_on;
-        _ = sound_on;
-        _ = out;
-        return error.Unsupported;
-    }
-    pub fn dmabufSupported(self: *Gpu) bool {
-        _ = self;
-        return false;
     }
 
     pub fn deinit(self: *Gpu) void {

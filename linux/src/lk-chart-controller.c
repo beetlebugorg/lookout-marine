@@ -1,9 +1,6 @@
 #include "lk-chart-controller.h"
 
-#include <math.h>
-
 #include "lk-app-model.h"
-#include "lk-chart-texture.h"
 #include "lk-chart-view.h"
 #include "lk-store.h"
 
@@ -14,7 +11,6 @@ struct _LkChartController {
   char    *chart_path; /* the path (or directory) currently open, for the title */
 
   GtkWidget  *view;  /* the chart widget we render for; not owned */
-  gboolean    texture_mode; /* chart is a GdkTexture, not a native surface */
   LkAppModel *model; /* pushed live readouts; not owned */
 
   guint    tick_id;
@@ -150,20 +146,8 @@ lk_chart_controller_tick (GtkWidget     *widget,
 
   if (animating || lookout_needs_redraw (self->handle) != 0)
     {
-      if (self->texture_mode)
-        {
-          GdkTexture *tex = lk_chart_texture_render (gtk_widget_get_display (self->view),
-                                                     self->handle);
-          if (tex != NULL)
-            {
-              lk_chart_view_set_texture (LK_CHART_VIEW (self->view), tex);
-              g_object_unref (tex);
-            }
-        }
-      else if (lookout_render (self->handle))
-        {
-          lk_chart_view_surface_ready (LK_CHART_VIEW (self->view));
-        }
+      if (lookout_render (self->handle))
+        lk_chart_view_surface_ready (LK_CHART_VIEW (self->view));
       lk_chart_controller_push_readouts (self);
       self->idle_ticks = 0;
     }
@@ -220,37 +204,7 @@ lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view)
     self->view = view;
 }
 
-/* The density lookout renders the TEXTURE at. Integer scale renders 1:1; a
- * fractional scale renders at 2× the device grid so the view can box-downsample
- * it 2:1 — supersampling for cleaner hairlines and small text. */
-static float
-lk_texture_density (double scale)
-{
-  /* $LOOKOUT_DENSITY=<float> pins the render density, for eyeballing. */
-  const char *forced = g_getenv ("LOOKOUT_DENSITY");
-  if (forced != NULL)
-    {
-      double d = g_ascii_strtod (forced, NULL);
-      if (d > 0.2 && d < 8.0)
-        return (float) d;
-    }
-
-  if (scale == floor (scale))
-    return (float) scale;
-  return (float) (2.0 * scale);
-}
-
-static float
-lk_chart_controller_density (LkChartController *self)
-{
-  if (self->view == NULL)
-    return 1.0f;
-  if (self->texture_mode)
-    return lk_texture_density (lk_chart_view_get_scale (LK_CHART_VIEW (self->view)));
-  return (float) gtk_widget_get_scale_factor (self->view);
-}
-
-/* One open call for both paths; they differ only in the native kind. */
+/* One open call, given the native surface kind + handle. */
 static lookout *
 lk_chart_controller_open_handle (const char *const *paths, guint n,
                                  int kind, void *native, int width, int height)
@@ -280,64 +234,28 @@ lk_chart_controller_open (LkChartController *self,
 
   int width, height;
   lk_chart_view_get_point_size (LK_CHART_VIEW (view), &width, &height);
-  int scale = gtk_widget_get_scale_factor (view);
-  GdkDisplay *display = gtk_widget_get_display (view);
 
-  /* Prefer the TEXTURE path (lets the chrome be drawn over the chart); fall back
-   * to a native child surface when either end can't. GTK's side is free to
-   * check, so check it first; the driver's side costs one wasted open if it fails. */
-  lookout *handle = NULL;
-  self->texture_mode = FALSE;
-
-  GdkDmabufFormats *formats = gdk_display_get_dmabuf_formats (display);
-  if (formats != NULL && gdk_dmabuf_formats_get_n_formats (formats) > 0)
+  /* The chart presents into a native subsurface placed BELOW a transparent hole
+   * in the window, so the compositor draws it crisply and the chrome floats over. */
+  if (!lk_chart_view_ensure_native_surface (LK_CHART_VIEW (view)))
     {
-      handle = lk_chart_controller_open_handle (paths, n, LOOKOUT_NATIVE_NONE, NULL,
-                                                width, height);
-      /* Density before probing: the probe bakes the sprite atlas, low-res at the
-       * default 1.0. */
-      if (handle != NULL)
-        {
-          lookout_set_pixel_density (handle,
-                                     lk_texture_density (lk_chart_view_get_scale (LK_CHART_VIEW (view))));
-          lookout_resize (handle, width, height);
-        }
-      if (handle != NULL && lk_chart_texture_available (display, handle))
-        {
-          self->texture_mode = TRUE;
-          g_message ("opening %u chart(s) as a %d×%d pt texture (scale %d): %s",
-                     n, width, height, scale, paths[0]);
-        }
-      else if (handle != NULL)
-        {
-          lookout_close (handle);
-          handle = NULL;
-        }
+      g_warning ("open FAILED — no native surface");
+      if (self->model != NULL)
+        lk_app_model_set_open_error (self->model, "The chart view has no drawing surface.");
+      return FALSE;
     }
 
-  if (!self->texture_mode)
-    {
-      if (!lk_chart_view_ensure_native_surface (LK_CHART_VIEW (view)))
-        {
-          g_warning ("open FAILED — no texture path and no native surface");
-          if (self->model != NULL)
-            lk_app_model_set_open_error (self->model, "The chart view has no drawing surface.");
-          return FALSE;
-        }
-
-      LkNativeSurface *surface = lk_chart_view_get_native_surface (LK_CHART_VIEW (view));
-      g_message ("opening %u chart(s) into a %d×%d pt %s surface: %s",
-                 n, width, height, lk_native_surface_backend (surface), paths[0]);
-      handle = lk_chart_controller_open_handle (paths, n,
-                                                lk_native_surface_kind (surface),
-                                                lk_native_surface_handle (surface),
-                                                width, height);
-    }
+  LkNativeSurface *surface = lk_chart_view_get_native_surface (LK_CHART_VIEW (view));
+  g_message ("opening %u chart(s) into a %d×%d pt %s surface: %s",
+             n, width, height, lk_native_surface_backend (surface), paths[0]);
+  lookout *handle = lk_chart_controller_open_handle (paths, n,
+                                                     lk_native_surface_kind (surface),
+                                                     lk_native_surface_handle (surface),
+                                                     width, height);
 
   if (handle == NULL)
     {
       g_warning ("open FAILED (lookout_open_in_window returned NULL — Vulkan device or chart file?)");
-      self->texture_mode = FALSE;
       if (self->model != NULL)
         lk_app_model_set_open_error (self->model,
                                      "Couldn't open the chart.\n"
@@ -352,8 +270,7 @@ lk_chart_controller_open (LkChartController *self,
   g_free (self->chart_path);
   self->chart_path = n == 1 ? g_strdup (paths[0]) : g_path_get_dirname (paths[0]);
 
-  /* Density (already set before the probe on the texture path). */
-  lookout_set_pixel_density (handle, lk_chart_controller_density (self));
+  lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
   /* Reopen where we left off, or the engine's default view when nothing is saved. */
@@ -488,7 +405,7 @@ lk_chart_controller_set_scale (LkChartController *self, int scale)
 
   if (self->handle == NULL || scale <= 0)
     return;
-  lookout_set_pixel_density (self->handle, lk_chart_controller_density (self));
+  lookout_set_pixel_density (self->handle, (float) scale);
   lk_chart_controller_sync_device_scale (self);
   lk_chart_controller_kick (self);
 }

@@ -256,26 +256,6 @@ export fn lookout_needs_redraw(h: ?*lookout) c_int {
     defer l.apiUnlock();
     return if (l.needsRedraw()) 1 else 0;
 }
-/// One exported frame. `fd` stays owned by lookout until the next resize or
-/// lookout_close — dup it to hand ownership on.
-pub const lookout_dmabuf_frame = lk.DmabufFrame;
-
-/// 1 when this build and driver can hand frames over as dmabuf textures.
-export fn lookout_dmabuf_supported(h: ?*lookout) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    return if (l.dmabufSupported()) 1 else 0;
-}
-
-/// Render one frame into an exportable image and describe it. 1 on success, 0 if
-/// this driver cannot export (host should fall back to a surface).
-export fn lookout_render_dmabuf(h: ?*lookout, out: *lookout_dmabuf_frame) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    l.renderDmabuf(out) catch return 0;
-    return 1;
-}
-
 export fn lookout_snapshot_png(h: ?*lookout, path: [*:0]const u8) c_int {
     const l = locked(h);
     defer l.apiUnlock();
