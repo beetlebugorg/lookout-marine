@@ -123,6 +123,10 @@ pub fn build(b: *std.Build) void {
         b: *std.Build,
         tile57_inc: std.Build.LazyPath,
         tile57_lib: std.Build.LazyPath,
+        // The shaders come from the engine too (tile57 shaders/): they read the
+        // vertex/quad/uniform layouts it defines, so it owns them. Two hand-synced
+        // copies here — one per shading language — had already drifted.
+        tile57_dep: *std.Build.Dependency,
         use_sdl: bool,
         use_vk: bool,
         android: bool,
@@ -187,18 +191,18 @@ pub fn build(b: *std.Build) void {
                     .{ "pattern_vert_spv", "shaders/vk/pattern.vert.spv" },
                     .{ "pattern_frag_spv", "shaders/vk/pattern.frag.spv" },
                 };
-                for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = bb.path(e[1]) });
+                for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = self.tile57_dep.path(e[1]) });
             }
             if (!self.use_sdl and !self.use_vk) {
                 // The Metal transport (ObjC behind a C face). Manual
                 // retain/release on purpose — objects live in C structs.
                 mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
                 // Metal shader source, compiled by the shim at runtime.
-                mod.addAnonymousImport("metal_src", .{ .root_source_file = bb.path("shaders/lookout.metal") });
+                mod.addAnonymousImport("metal_src", .{ .root_source_file = self.tile57_dep.path("shaders/lookout.metal") });
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .use_sdl = use_sdl, .use_vk = use_vk, .android = is_android, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .android = is_android, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
