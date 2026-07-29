@@ -75,6 +75,70 @@ Line Tools into `macos/build/`.
 
 ---
 
+## How we use AI
+
+Cross-platform UI usually forces a choice. Use one toolkit everywhere and the app
+feels slightly wrong on every platform — the scrolling, the menu placement, the
+settings panel. Or write a native front end per platform and maintain several
+codebases that drift apart the moment one gains a feature first.
+
+We're testing a third option: a genuinely native shell for every platform, written
+with AI — and, the open question, kept in step that way too. Below is the method as
+it stands, including the parts we haven't proven.
+
+**The core owns what gets drawn, and has no opinion about the UI.** Everything
+portable — S-57 decode, S-52 portrayal, tessellation, camera, GPU scene — sits in a
+Zig core behind one C ABI (`include/lookout.h`). Nothing in it knows a widget
+exists, and it says nothing about menus, HUD layout or gestures. A shell may only
+reach the core through that header, so no shell can couple to another and there's no
+shared widget layer to regress.
+
+**The Apple shell is the source of record for behaviour.** SwiftUI on Mac and iPad
+came first and is the most complete, so it's the reference the others are written
+against. The Linux and Android shells say so in their own source: the GTK
+accelerators mirror the macOS menu bar with Ctrl for Command, its display menu
+follows the macOS Chart menu, and its render loop mirrors the macOS display link.
+When two shells disagree about how something should behave, macOS is right by
+default.
+
+**A change should start as prose, not as a diff — this part is still unproven.** The
+intent is to describe the behaviour once, or point at what the Apple shell already
+does, then write each shell separately to express it in its own platform's idiom:
+GTK4 in C on Linux, Java on Android. So far the shells have been built one at a time,
+by hand-carrying the behaviour across. Whether AI can keep several native shells in
+step from one description is the part of this experiment still to be tested.
+
+**We write real platform code, not a themed abstraction.** Each shell uses its
+toolkit the way that toolkit's own documentation says to — `GtkOverlay` and
+`GAction` on Linux, SwiftUI idioms on Apple. That's the whole point. A common
+abstraction with platform skins would put us back in the compromise we're trying to
+avoid.
+
+**We let AI try several designs and throw most of them away.** Getting the chart on
+screen under GTK took three: Vulkan into a child surface, then a dmabuf texture in
+GTK's scene graph, then a subsurface below a transparent hole in the window. Only
+the third is both sharp and able to float the chrome. Writing all three was cheap,
+and that's what made it affordable to be wrong twice.
+
+**The hardware decides, not the reasoning.** That dmabuf design read correctly and
+was still soft on a fractional-scale display, for reasons no amount of argument
+about render density fixed. We found the answer by running it and looking. So we run
+the app, capture it, and compare — [docs/screenshots.md](docs/screenshots.md) fixes
+the chart, camera and window size every host captures, so platforms can be compared
+frame to frame instead of by impression.
+
+**Verification is the bottleneck now, not writing code.** A plausible native shell
+is the easy part. Knowing it draws correctly — the right GPU on a dual-GPU machine,
+the right scale on a fractional display, the chrome where it belongs — is the work,
+and it's where the review effort goes.
+
+**Contributors send requirements or prototypes, not patches.** Describe what you
+want, or build a rough version that shows it. That's the most useful input to this
+workflow.
+
+For the architecture of each host, and the faults each one exposed, see
+[Linux/GTK4](docs/hosts-linux.md), `macos/README.md`, and `android/README.md`.
+
 ## Under the hood
 
 Lookout is a thin native app over a shared **chart core written in Zig**. The
@@ -91,10 +155,11 @@ toolchain).
 The **app shells** are each platform-native around that one core: `macos/` is
 SwiftUI (menu bar, HUD, zoom controls, the mariner settings panel, search) with
 Mac and iOS/iPadOS sharing the Swift sources; `android/` is a Java shell over a
-`SurfaceView`; `linux/` is GTK4 in C, presenting into an X11 child window or a
-Wayland subsurface. Each drives the same `lookout.h` C ABI. See
-`macos/README.md`, `android/README.md` and `linux/README.md` for the per-shell
-architecture and gotchas.
+`SurfaceView`; `linux/` is GTK4 in C, presenting Vulkan into a subsurface below a
+transparent hole in the window so the chrome floats over the chart. Each drives
+the same `lookout.h` C ABI. See [docs/architecture.md](docs/architecture.md),
+[docs/hosts-linux.md](docs/hosts-linux.md), `macos/README.md` and
+`android/README.md` for the per-shell architecture and gotchas.
 
 The heavy lifting — S-57 decoding, S-101 portrayal (embedded Lua rules),
 tessellation, sprite/SDF atlases, tile compositing — lives in the **[tile57]**
@@ -139,13 +204,15 @@ build.zig, build.zig.zon   build + the tile57 dependency pin
 include/lookout.h          C ABI (the Swift<->Zig bridge)
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
 src/root.zig               Lookout: scene lifecycle, worker-thread rebuilds
-src/gpu.zig                Metal transport: pipelines, buffers, per-frame render
-src/metal_shim.{h,m}       the ObjC Metal/CAMetalLayer shim behind a C face
+src/gpu.zig                backend switch (metal | vk | sdl)
+src/gpu_vk.zig             Vulkan transport (Linux/Android): pipelines, swapchain
+src/gpu_metal.zig          Metal transport  (+ src/metal_shim.{h,m}, the ObjC shim)
 src/atlas.zig, src/png.zig sprite/SDF atlas load, PNG encode
 src/capi.zig, src/main.zig C ABI wrapper; the headless demo
+docs/                      architecture, per-host notes, screenshot protocol
 macos/                     the SwiftUI app (macOS + iOS/iPadOS), XcodeGen spec
 android/                   the Java shell (Vulkan onto a SurfaceView)
-linux/                     the GTK4 app (Vulkan onto a child surface), meson
+linux/                     the GTK4 app (Vulkan into a subsurface), meson
 vendor/stb                 stb_image (atlas PNG decode)
 ```
 
@@ -156,11 +223,14 @@ embeds them straight from the dependency.
 The SDL3/`SDL_GPU`/Vulkan/MoltenVK predecessor of this renderer — and every
 driver workaround it accumulated — lives at the `sdl-gpu` git tag.
 
-## AI-First Development
+## Contributing
 
-This project is built with AI assistance. We encourage contributors to use AI tools for
-development and to contribute by providing clear requirements and/or a prototype of what
-they'd like rather than code.
+This project is built with AI assistance — see [How we use AI](#how-we-use-ai). Use
+AI tools freely. The most useful contribution is a clear set of requirements, or a
+rough prototype of what you want, rather than a patch.
+
+[docs/](docs/) has the architecture, the per-host notes, and the screenshot protocol
+used to compare hosts.
 
 ## License
 
