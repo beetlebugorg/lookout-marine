@@ -29,11 +29,30 @@ typedef struct { double lon, lat, zoom, rotation_deg; } lookout_view;
  *     layerClass on iOS), rendered via Metal.
  *   - Android: an ANativeWindow* (ANativeWindow_fromSurface of a SurfaceView's
  *     Surface), rendered via Vulkan. Builds with -Dbackend=vk only.
- * Values 2..6 are reserved (SDL-hosted desktop windows; see gpu_sdl.zig). */
+ *   - Windows / Linux: one of the small structs below, rendered via Vulkan
+ *     (-Dbackend=vk). They exist because these window systems need TWO values
+ *     to identify a surface, and native_handle is one pointer: fill one in and
+ *     pass its address. It is read during the open call and not retained.
+ * Values 2, 3 and 6 are reserved (SDL-hosted desktop windows; see gpu_sdl.zig). */
+
+/* HWND to present on. `hinstance` may be NULL — the loader then uses the module
+ * the window belongs to. */
+typedef struct { void *hinstance; void *hwnd; } lookout_win32_window;
+
+/* Xlib Display* and the Window XID to present on. For a toolkit host, this is
+ * the CHILD window created for the chart, not the toplevel. */
+typedef struct { void *display; unsigned long window; } lookout_x11_window;
+
+/* wl_display* and the wl_surface* to present on. For a toolkit host, this is
+ * the subsurface created for the chart, not the toplevel's surface. */
+typedef struct { void *display; void *surface; } lookout_wayland_surface;
 typedef enum {
     LOOKOUT_NATIVE_NONE = 0,           /* offscreen only (snapshot) */
     LOOKOUT_NATIVE_METAL_LAYER = 1,    /* CAMetalLayer* (macOS & iOS) */
-    LOOKOUT_NATIVE_ANDROID_WINDOW = 7  /* ANativeWindow* (Android, vk backend) */
+    LOOKOUT_NATIVE_WIN32_HWND = 4,     /* lookout_win32_window*   (vk backend) */
+    LOOKOUT_NATIVE_X11_WINDOW = 5,     /* lookout_x11_window*     (vk backend) */
+    LOOKOUT_NATIVE_ANDROID_WINDOW = 7, /* ANativeWindow* (Android, vk backend) */
+    LOOKOUT_NATIVE_WAYLAND_SURFACE = 8 /* lookout_wayland_surface* (vk backend) */
 } lookout_native_kind;
 
 /* ---- lifecycle --------------------------------------------------------- */
@@ -68,6 +87,11 @@ void lookout_close(lookout *h);
  * show a "preparing chart symbols" indicator only on the first run. */
 int lookout_atlas_cache_ready(void);
 
+/* Point the atlas cache at a host-owned writable directory, BEFORE opening.
+ * Desktop hosts can skip this (XDG_CACHE_HOME / the platform default under HOME
+ * apply); Android must call it, having no cache path in its environment. */
+void lookout_set_cache_dir(const char *path);
+
 /* ---- view -------------------------------------------------------------- */
 void lookout_fit_chart(lookout *h, lookout_view *out); /* fit the whole cell */
 void lookout_default_view(lookout *h, lookout_view *out); /* opening view, no saved pose */
@@ -75,6 +99,12 @@ void lookout_set_view(lookout *h, const lookout_view *v);
 void lookout_get_view(lookout *h, lookout_view *out);
 int  lookout_resize(lookout *h, uint32_t width, uint32_t height); /* points */
 float lookout_pixel_density(lookout *h);                          /* HiDPI px/pt */
+/* Declare the host's scale factor (Android DisplayMetrics.density, GTK's
+ * gtk_widget_get_scale_factor, …) instead of letting the backend infer it from
+ * surface pixels / declared points. Optional, but state it whenever the host
+ * knows: inference is a division that a mid-resize or mid-rotation frame can
+ * catch between the two values. */
+void lookout_set_pixel_density(lookout *h, float density);
 
 /* ---- interaction (pixel coords; *_logical scale by pixel density) ------- */
 void lookout_pan(lookout *h, float dx_px, float dy_px);
@@ -101,6 +131,37 @@ int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=h
  * view left coverage). When 0 the chart is static — block on events, no CPU.
  * Render on demand: call lookout_render only when this returns 1. */
 int lookout_needs_redraw(lookout *h);
+/* ---- frames as a texture (dmabuf) --------------------------------------- *
+ * The alternative to presenting into a native surface, for hosts whose toolkit
+ * wants the chart as a TEXTURE in its own scene graph — which is what lets the
+ * toolkit draw its own chrome OVER the chart. (GTK4 puts every widget through
+ * one toplevel surface, so a surface of our own composites above the whole
+ * widget tree and nothing can be drawn on top of it.)
+ *
+ * Same scene, same pipelines, same resolution as the surface path — only the
+ * destination differs. Render at the host's exact pixel size and draw the
+ * result 1:1, or the frame gets resampled and the chart goes soft.
+ *
+ * `fd` is owned by lookout and is valid until the next resize or close. Dup it
+ * if you must pass ownership on (GdkDmabufTexture, for one, takes ownership of
+ * what it is given). Frames rotate through a small ring, so the host is never
+ * reading the image the next render is writing. */
+typedef struct {
+    int      fd;
+    uint32_t fourcc;        /* DRM fourcc, e.g. DRM_FORMAT_ARGB8888 */
+    uint64_t modifier;      /* DRM format modifier the driver chose */
+    uint32_t n_planes;
+    uint32_t offset[4];
+    uint32_t stride[4];
+    uint32_t width, height; /* PIXELS */
+} lookout_dmabuf_frame;
+
+/* 1 when this build and driver can export frames this way. Check before use;
+ * hosts should keep a native-surface fallback for drivers that cannot. */
+int lookout_dmabuf_supported(lookout *h);
+/* Render one frame into an exportable image and describe it. 1 on success. */
+int lookout_render_dmabuf(lookout *h, lookout_dmabuf_frame *out);
+
 int lookout_snapshot_png(lookout *h, const char *path);
 int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
 

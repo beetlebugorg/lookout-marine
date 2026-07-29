@@ -178,7 +178,7 @@ private struct DepthsSections: View {
         } header: {
             Text("Contours (\(unit))")
         } footer: {
-            Text("Safety depth bolds soundings at or shoaler than it; it does not shade water.").captionFooter()
+            Text("Safety depth bolds soundings at or shallower than it; it does not shade water.").captionFooter()
         }
     }
 }
