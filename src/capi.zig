@@ -129,11 +129,26 @@ export fn lookout_atlas_cache_ready() c_int {
     return if (lk.atlasCacheReady(gpa)) 1 else 0;
 }
 
+/// Point the atlas cache at a host-owned writable directory, before opening.
+/// Desktop hosts can skip this (XDG_CACHE_HOME / the platform default under
+/// HOME apply); Android MUST call it, having no cache path in the environment.
+export fn lookout_set_cache_dir(path: [*:0]const u8) void {
+    lk.setCacheRoot(std.mem.span(path));
+}
+
 // ---- view ------------------------------------------------------------------
 export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
     out.* = fromView(l.fitChart());
+}
+/// The view to open with when the host has NOTHING saved: the library framed,
+/// pulled back to an overview zoom. Pair with lookout_set_view; a host that has
+/// a saved pose should restore that instead.
+export fn lookout_default_view(h: ?*lookout, out: *lookout_view) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    out.* = fromView(l.defaultView());
 }
 export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
     const l = locked(h);
@@ -150,6 +165,14 @@ export fn lookout_resize(h: ?*lookout, width: u32, height: u32) c_int {
     defer l.apiUnlock();
     l.resize(width, height) catch return -1;
     return 0;
+}
+/// Declare the host's scale factor (Android DisplayMetrics.density, and any
+/// host whose surface cannot be trusted to report it across a rotation).
+/// Optional: without it the backend infers density from the surface.
+export fn lookout_set_pixel_density(h: ?*lookout, d: f32) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setPixelDensity(d);
 }
 export fn lookout_pixel_density(h: ?*lookout) f32 {
     const l = locked(h);

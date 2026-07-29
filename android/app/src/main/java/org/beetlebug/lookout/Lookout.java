@@ -26,6 +26,15 @@ public final class Lookout implements AutoCloseable {
         this.h = h;
     }
 
+    /**
+     * Point the engine's atlas cache at a writable directory, before any open.
+     * Android has no cache path in the environment, so without this the symbol
+     * and glyph atlases are re-rasterized on every launch.
+     */
+    public static void setCacheDir(String path) {
+        nSetCacheDir(path);
+    }
+
     /** Open a baked chart onto a Surface. Returns null on failure. */
     public static Lookout open(String chartPath, Surface surface,
                                int widthPx, int heightPx,
@@ -57,7 +66,11 @@ public final class Lookout implements AutoCloseable {
     public boolean isOpen()                      { return h != 0; }
     /** Logical points (px / density). */
     public void resize(int wPts, int hPts)       { if (h != 0) nResize(h, wPts, hPts); }
+    /** DisplayMetrics.density; set before the first build. */
+    public void setDensity(float d)              { if (h != 0) nSetDensity(h, d); }
     public void fitChart()                       { if (h != 0) nFitChart(h); }
+    /** The opening view when nothing was saved: library framed, overview zoom. */
+    public void defaultView()                    { if (h != 0) nDefaultView(h); }
     /** Drag the chart with the finger: positive = finger delta, logical pts. */
     public void pan(float dxPts, float dyPts)    { if (h != 0) nPan(h, dxPts, dyPts); }
     /** Zoom by dz levels about a point (logical pts); eases via tickAnim. */
@@ -147,9 +160,12 @@ public final class Lookout implements AutoCloseable {
     private static native long nOpenCharts(String[] chartPaths, Surface surface,
                                            int widthPx, int heightPx,
                                            int widthPts, int heightPts, boolean msaa);
+    private static native void nSetCacheDir(String path);
     private static native void nClose(long h);
     private static native void nResize(long h, int wPts, int hPts);
+    private static native void nSetDensity(long h, float d);
     private static native void nFitChart(long h);
+    private static native void nDefaultView(long h);
     private static native void nPan(long h, float dxPts, float dyPts);
     private static native void nZoomAt(long h, double dz, float xPts, float yPts);
     private static native boolean nRender(long h);

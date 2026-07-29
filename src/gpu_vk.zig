@@ -188,7 +188,9 @@ pub const Gpu = struct {
     host_pt_w: f32 = 0,
     host_pt_h: f32 = 0,
     size_changed_ms: i64 = -100000,
+    sc_retry_ms: i64 = -100000, // rate-limits the stale-extent rebuild below
     pixel_density: f32 = 1.0,
+    host_density: f32 = 0, // host-declared scale; 0 = derive from the swapchain
     pattern_scale: f32 = 1,
 
     clear: Color = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
@@ -750,7 +752,15 @@ pub const Gpu = struct {
         sci.imageArrayLayers = 1;
         sci.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         sci.imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        sci.preTransform = caps.currentTransform;
+        // Declaring currentTransform promises the presentation engine that the
+        // frame is ALREADY rotated into the display's orientation. We never
+        // pre-rotate, so on a device reporting ROTATE_90 the map stays put
+        // while the screen turns and lands squeezed into the new aspect. Ask
+        // for identity and let the compositor rotate.
+        sci.preTransform = if (caps.supportedTransforms & vk.VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR != 0)
+            @as(u32, vk.VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        else
+            caps.currentTransform;
         sci.compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         sci.presentMode = vk.VK_PRESENT_MODE_FIFO_KHR; // vsync; always available
         sci.clipped = vk.VK_TRUE;
@@ -802,6 +812,17 @@ pub const Gpu = struct {
         self.sc_count = 0;
     }
 
+    /// True when the swapchain no longer matches the host's declared viewport
+    /// (a rotation): host points x density is the pixel extent we should have.
+    fn extentStale(self: *const Gpu) bool {
+        if (self.host_pt_w <= 0 or self.host_pt_h <= 0 or self.pixel_density <= 0) return false;
+        const w: u32 = @intFromFloat(@round(self.host_pt_w * self.pixel_density));
+        const h: u32 = @intFromFloat(@round(self.host_pt_h * self.pixel_density));
+        const dw = if (w > self.width) w - self.width else self.width - w;
+        const dh = if (h > self.height) h - self.height else self.height - h;
+        return dw > 2 or dh > 2; // slack for the points->pixels rounding
+    }
+
     fn recreateSwapchain(self: *Gpu) void {
         _ = vk.vkDeviceWaitIdle(self.device);
         self.destroySwapchainViews();
@@ -810,6 +831,7 @@ pub const Gpu = struct {
             logErr("swapchain recreate failed: %d", .{@as(c_int, @intFromError(e))});
             return;
         };
+        logInfo("vk: swapchain now %ux%u (host pts %ux%u)", .{ self.width, self.height, @as(u32, @intFromFloat(self.host_pt_w)), @as(u32, @intFromFloat(self.host_pt_h)) });
         self.size_changed_ms = ticksMs();
     }
 
@@ -866,19 +888,43 @@ pub const Gpu = struct {
     pub fn resize(self: *Gpu, width_pts: u32, height_pts: u32) !void {
         self.host_pt_w = @floatFromInt(width_pts);
         self.host_pt_h = @floatFromInt(height_pts);
-        if (self.host_pt_w > 0 and self.width > 0) {
+        if (self.surface == null) {
+            // offscreen-only: logical == pixel
+            if (width_pts != self.width or height_pts != self.height) {
+                _ = vk.vkDeviceWaitIdle(self.device);
+                self.releaseOffscreen();
+                self.releaseMsaa();
+                self.width = width_pts;
+                self.height = height_pts;
+                try self.ensureOffscreenTargets();
+            }
+        }
+        // Only when the host hasn't told us outright. Across a rotation the
+        // swapchain extent lags the new logical size — the surface keeps
+        // reporting the OLD currentExtent until an acquire returns OUT_OF_DATE
+        // — so this pairs a stale pixel width with a fresh point width and
+        // lands ~0.67 where the display's real scale is 1.125.
+        if (self.host_density == 0 and self.host_pt_w > 0 and self.width > 0) {
             const d = @as(f32, @floatFromInt(self.width)) / self.host_pt_w;
             if (d > 0.2 and d < 8.0) self.pixel_density = d;
         }
-        if (self.surface == null) {
-            // offscreen-only: logical == pixel
-            if (width_pts == self.width and height_pts == self.height) return;
-            _ = vk.vkDeviceWaitIdle(self.device);
-            self.releaseOffscreen();
-            self.releaseMsaa();
-            self.width = width_pts;
-            self.height = height_pts;
-            try self.ensureOffscreenTargets();
+        // A rotation is a resize the DRIVER may never complain about: Android is
+        // happy to scale a portrait-shaped swapchain into a landscape surface, so
+        // acquire/present keep returning SUCCESS while SurfaceFlinger resamples
+        // every pixel (measured after one rotation round trip: an 1340x800 layer
+        // squeezed into an 800x1340 display, the whole chart soft while the
+        // Compose HUD above it stayed sharp). The host's declared viewport is the
+        // authority, so rebuild on it rather than waiting to be told.
+        if (self.surface != null and self.swapchain != null and self.extentStale()) self.recreateSwapchain();
+    }
+
+    /// The host's own scale factor (Android's DisplayMetrics.density), which is
+    /// constant across rotations — unlike anything derivable from the swapchain.
+    /// Set once at open; it then wins over the derived value above.
+    pub fn setPixelDensity(self: *Gpu, d: f32) void {
+        if (d > 0.2 and d < 8.0) {
+            self.host_density = d;
+            self.pixel_density = d;
         }
     }
 
@@ -1071,6 +1117,72 @@ pub const Gpu = struct {
         var bound_tex: vk.VkDescriptorSet = null;
         const zero: u64 = 0;
 
+        // CONTIGUOUS ranges with the same draw spec (pipeline, texture, uniform
+        // payload) collapse into ONE vkCmdDraw, exactly as the Metal backend does.
+        // Colour rides in the vertices, so a whole paint band of differently
+        // coloured fills is one spec; assemble() already re-lays the vertex and
+        // quad streams in sorted range order precisely so a host can do this. A
+        // coastal view carries ~5,000 ranges, i.e. ~10,000 command calls a frame
+        // before merging — recordDraws was 21% of native time on device. A skipped
+        // range breaks contiguity, so merging can never draw gated-off content,
+        // and merged primitives rasterize in the same order they would have.
+        const Run = struct {
+            active: bool = false,
+            tri: bool = false,
+            pipe: vk.VkPipeline = null,
+            tex: vk.VkDescriptorSet = null,
+            first: u32 = 0,
+            count: u32 = 0,
+            uu: Uniforms = undefined,
+            halo: bool = false, // glyph run: also push the frag (halo) uniform
+        };
+        var run = Run{};
+        var draws: u32 = 0;
+        const flush = struct {
+            fn go(g: *Gpu, cmd2: vk.VkCommandBuffer, sc: *const Scene, rn: *Run, bp: *vk.VkPipeline, bt: *vk.VkDescriptorSet, z0: *const u64, n: *u32) void {
+                if (!rn.active or rn.count == 0) return;
+                rn.active = false;
+                if (rn.pipe != bp.*) {
+                    vk.vkCmdBindPipeline(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, rn.pipe);
+                    bp.* = rn.pipe;
+                    const vb = if (rn.tri) &sc.vbuf.buf else &sc.qbuf.buf;
+                    vk.vkCmdBindVertexBuffers(cmd2, 0, 1, vb, z0);
+                }
+                if (rn.tex != null and rn.tex != bt.*) {
+                    var ds = rn.tex;
+                    vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 2, 1, &ds, 0, null);
+                    bt.* = rn.tex;
+                }
+                var uu2 = rn.uu;
+                const voff = g.pushUniform(&uu2) orelse return;
+                vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 1, 1, &g.vtx_uni_set, 1, &voff);
+                if (rn.halo) {
+                    // SDF halo renders in the palette background colour (sdf.frag,
+                    // set 3): a hardcoded white halo glared at night.
+                    uu2.color = .{ g.clear.r, g.clear.g, g.clear.b, 1 };
+                    const foff = g.pushUniform(&uu2) orelse return;
+                    vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 3, 1, &g.frag_uni_set, 1, &foff);
+                }
+                vk.vkCmdDraw(cmd2, rn.count, 1, rn.first, 0);
+                n.* += 1;
+            }
+        }.go;
+        // A run only extends when EVERY bit of its draw spec matches and the
+        // primitives abut; otherwise the pending run is flushed and a new one opens.
+        const emit = struct {
+            fn go(g: *Gpu, cmd2: vk.VkCommandBuffer, sc: *const Scene, rn: *Run, bp: *vk.VkPipeline, bt: *vk.VkDescriptorSet, z0: *const u64, n: *u32, fl: anytype, tri: bool, pipe: vk.VkPipeline, tex: vk.VkDescriptorSet, first: u32, count: u32, uu: Uniforms, halo: bool) void {
+                if (rn.active and rn.tri == tri and rn.pipe == pipe and rn.tex == tex and rn.halo == halo and
+                    rn.first + rn.count == first and
+                    std.mem.eql(u8, std.mem.asBytes(&rn.uu), std.mem.asBytes(&uu)))
+                {
+                    rn.count += count;
+                    return;
+                }
+                fl(g, cmd2, sc, rn, bp, bt, z0, n);
+                rn.* = .{ .active = true, .tri = tri, .pipe = pipe, .tex = tex, .first = first, .count = count, .uu = uu, .halo = halo };
+            }
+        }.go;
+
         for (s.ranges) |r| {
             switch (r.kind) {
                 cc.TILE57_GPU_TEXT => if (!text_on) continue,
@@ -1092,18 +1204,7 @@ pub const Gpu = struct {
                 } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
                     continue; // pattern with no cell texture: the fill under it already drew
                 }
-                if (pipe != bound_pipe) {
-                    vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-                    bound_pipe = pipe;
-                    vk.vkCmdBindVertexBuffers(cmd, 0, 1, &s.vbuf.buf, &zero);
-                }
-                if (tex_set != null and tex_set != bound_tex) {
-                    vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 2, 1, &tex_set, 0, null);
-                    bound_tex = tex_set;
-                }
-                const off = self.pushUniform(&uu) orelse continue;
-                vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &off);
-                vk.vkCmdDraw(cmd, r.count, 1, r.first, 0);
+                emit(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws, flush, true, pipe, tex_set, r.first, r.count, uu, false);
             } else { // QUADS
                 if (s.qbuf.buf == null) continue;
                 const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
@@ -1115,28 +1216,10 @@ pub const Gpu = struct {
                 };
                 const pipe = if (is_glyph) self.sdf_pipeline else self.sprite_pipeline;
                 if (tex == null or pipe == null) continue;
-                if (pipe != bound_pipe) {
-                    vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-                    bound_pipe = pipe;
-                    vk.vkCmdBindVertexBuffers(cmd, 0, 1, &s.qbuf.buf, &zero);
-                }
-                if (tex.?.dset != bound_tex) {
-                    var ds = tex.?.dset;
-                    vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 2, 1, &ds, 0, null);
-                    bound_tex = tex.?.dset;
-                }
-                const voff = self.pushUniform(&uu) orelse continue;
-                vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &voff);
-                if (is_glyph) {
-                    // SDF halo renders in the palette background colour (sdf.frag,
-                    // set 3): a hardcoded white halo glared at night.
-                    uu.color = .{ self.clear.r, self.clear.g, self.clear.b, 1 };
-                    const foff = self.pushUniform(&uu) orelse continue;
-                    vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 3, 1, &self.frag_uni_set, 1, &foff);
-                }
-                vk.vkCmdDraw(cmd, r.count, 1, r.first, 0);
+                emit(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws, flush, false, pipe, tex.?.dset, r.first, r.count, uu, is_glyph);
             }
         }
+        flush(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws);
     }
 
     /// Render one frame to the window and present. Returns false if no window.
@@ -1144,6 +1227,15 @@ pub const Gpu = struct {
         if (self.surface == null) return false;
         if (self.swapchain == null) {
             self.recreateSwapchain(); // was minimized at init
+            if (self.swapchain == null) return true;
+        }
+        // The surface can still report its OLD currentExtent when resize() runs,
+        // in which case that rebuild picked the stale size — so re-check here and
+        // try again, rate-limited so a mismatch we can never satisfy costs a few
+        // rebuilds a second instead of one per frame.
+        if (self.extentStale() and ticksMs() - self.sc_retry_ms > 250) {
+            self.sc_retry_ms = ticksMs();
+            self.recreateSwapchain();
             if (self.swapchain == null) return true;
         }
         _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
@@ -1185,7 +1277,14 @@ pub const Gpu = struct {
         pi.pSwapchains = &self.swapchain;
         pi.pImageIndices = &image_index;
         const pr = vk.vkQueuePresentKHR(self.queue, &pi);
-        if (pr == vk.VK_ERROR_OUT_OF_DATE_KHR or pr == vk.VK_SUBOPTIMAL_KHR) self.recreateSwapchain();
+        // Asking for an identity preTransform on a display whose
+        // currentTransform is a rotation makes SUBOPTIMAL the PERMANENT steady
+        // state, so it alone is no reason to rebuild — that recreates the
+        // swapchain every frame. Rebuild on it only when the extent actually
+        // disagrees with the viewport the host declared.
+        if (pr == vk.VK_ERROR_OUT_OF_DATE_KHR or (pr == vk.VK_SUBOPTIMAL_KHR and self.extentStale())) {
+            self.recreateSwapchain();
+        }
         return true;
     }
 

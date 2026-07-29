@@ -7,6 +7,7 @@ import android.view.Choreographer;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
@@ -32,6 +33,46 @@ public final class LookoutView extends SurfaceView
     // render thread — the C ABI's api lock serializes the actual native calls.
     private volatile Lookout lk;
     private long lastFrameNs;
+
+    // ---- touch track (input resampling) -------------------------------------
+    // Pan is NOT applied when the touch lands. MotionEvents are delivered on the
+    // UI thread against ITS vsync while frames run on the render thread against
+    // a different one, so handing the raw event delta straight to the camera made
+    // the per-frame step wobble ±25% at a dead-steady drag (measured: 1.50 px one
+    // frame, 1.87 the next). Presentation is a clean 60 Hz and every frame is
+    // individually crisp, so that wobble is the whole artifact: the eye tracks the
+    // chart smoothly and uneven steps smear into fuzz — worst at a slow pan, where
+    // the step is a couple of pixels and the jitter is a large fraction of it.
+    //
+    // Instead the UI thread records a position-vs-time track and each frame samples
+    // it at the FRAME's own timestamp, so a frame moves by exactly the distance the
+    // finger covered over that frame. Same idea as the platform's own resampler,
+    // aimed at the clock that actually matters here.
+    private static final int TRACK_N = 16;
+    // Sample slightly in the past so there is usually a real sample on both sides
+    // to interpolate between, and predict only a little past the newest one — the
+    // values the platform resampler uses.
+    private static final long RESAMPLE_LAG_NS = 5_000_000L;
+    private static final long MAX_PREDICT_NS = 8_000_000L;
+    // Two samples further apart than this are not a velocity worth extrapolating.
+    private static final long MAX_PREDICT_BASE_NS = 32_000_000L;
+
+    private final Object trackLock = new Object();
+    private final float[] trackX = new float[TRACK_N];
+    private final float[] trackY = new float[TRACK_N];
+    private final long[] trackT = new long[TRACK_N]; // event time, ns
+    private int trackHead = -1, trackCount;
+    // Bumped whenever the focus point jumps discontinuously (a finger joins or
+    // leaves): the next frame re-bases on the new track instead of panning across
+    // the jump.
+    private int trackEpoch;
+    private boolean dragging;
+    private float downX, downY;
+    private final int touchSlop;
+    // Render-thread only: the last position this loop resampled to.
+    private float lastFx, lastFy;
+    private int lastEpoch = -1;
+    private boolean haveLast;
     private final GestureDetector gestures;
     private final ScaleGestureDetector scaler;
     // Frames run on a dedicated render thread (the C ABI's intended shape:
@@ -56,6 +97,7 @@ public final class LookoutView extends SurfaceView
         this.controller = controller;
         float d = context.getResources().getDisplayMetrics().density;
         this.density = d > 0 ? d : 1f;
+        this.touchSlop = android.view.ViewConfiguration.get(context).getScaledTouchSlop();
         getHolder().addCallback(this);
         // Scroll/rotary events need a focus target; without this they dispatch
         // to the Activity (handled there too, but keep the direct path alive).
@@ -64,13 +106,6 @@ public final class LookoutView extends SurfaceView
         requestFocus();
 
         gestures = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
-            @Override
-            public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
-                // distance is previous-minus-current; the chart drags WITH the finger
-                onEngine(() -> lk.pan(-dx / density, -dy / density));
-                return true;
-            }
-
             @Override
             public boolean onDoubleTap(MotionEvent e) {
                 final float x = e.getX() / density, y = e.getY() / density;
@@ -138,7 +173,14 @@ public final class LookoutView extends SurfaceView
     // event), but only ENGAGES past a threshold: almost no two-finger pinch is
     // perfectly twist-free, and rotating the chart a degree per zoom would make
     // north drift for no reason.
-    private static final float ROTATE_ENGAGE_DEG = 10f;
+    private static final float ROTATE_ENGAGE_DEG = 18f;
+    // atan2 of the vector BETWEEN the fingers is mostly noise when they are
+    // close: a 2px tremor is 0.4 deg at 300px of separation but 2.3 deg at
+    // 50px — and a pinch drives them together, so the twist gets loudest
+    // exactly while zooming. Below this span it is not a signal.
+    private static final float MIN_TWIST_SPAN_DP = 96f;
+    // Engaged, a held-still pinch should not creep.
+    private static final float TWIST_DEADBAND_DEG = 0.25f;
     private boolean rotating;
     private float twistPrevDeg, twistAccumDeg;
 
@@ -147,9 +189,65 @@ public final class LookoutView extends SurfaceView
         return (float) Math.toDegrees(Math.atan2(e.getY(1) - e.getY(0), e.getX(1) - e.getX(0)));
     }
 
+    /** Mean of the active pointers — GestureDetector's own scroll focus, so a
+     *  two-finger pinch still pans by its focal drift. `h` < 0 = the current
+     *  sample, else the h'th batched historical one. */
+    private static float focus(MotionEvent e, int h, boolean yAxis) {
+        final int n = e.getPointerCount();
+        float s = 0;
+        for (int i = 0; i < n; i++) {
+            if (yAxis) s += (h < 0) ? e.getY(i) : e.getHistoricalY(i, h);
+            else s += (h < 0) ? e.getX(i) : e.getHistoricalX(i, h);
+        }
+        return s / n;
+    }
+
+    private void addSample(float x, float y, long tNs) {
+        synchronized (trackLock) {
+            // Batched samples can repeat a timestamp; a zero-length span would
+            // divide by zero when interpolating, so overwrite rather than push.
+            if (trackCount > 0 && tNs <= trackT[trackHead]) {
+                trackX[trackHead] = x;
+                trackY[trackHead] = y;
+                return;
+            }
+            trackHead = (trackHead + 1) % TRACK_N;
+            trackX[trackHead] = x;
+            trackY[trackHead] = y;
+            trackT[trackHead] = tNs;
+            if (trackCount < TRACK_N) trackCount++;
+        }
+    }
+
+    /** The focus jumped (a finger joined or left) or a new gesture began: drop the
+     *  track so the next frame re-bases instead of panning across the jump. */
+    private void breakTrack() {
+        synchronized (trackLock) {
+            trackCount = 0;
+            trackHead = -1;
+            trackEpoch++;
+        }
+    }
+
+    /** Record this event's samples, batched history first (they carry their own
+     *  timestamps and are the finer-grained motion the resampler wants). */
+    private void recordTouch(MotionEvent e) {
+        final int hn = e.getHistorySize();
+        for (int h = 0; h < hn; h++) {
+            addSample(focus(e, h, false), focus(e, h, true), e.getHistoricalEventTime(h) * 1_000_000L);
+        }
+        addSample(focus(e, -1, false), focus(e, -1, true), e.getEventTime() * 1_000_000L);
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         switch (e.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                breakTrack();
+                dragging = false;
+                downX = e.getX();
+                downY = e.getY();
+                break;
             case MotionEvent.ACTION_POINTER_DOWN:
                 if (e.getPointerCount() == 2) {
                     twoTap = true;
@@ -162,8 +260,17 @@ public final class LookoutView extends SurfaceView
                 } else {
                     twoTap = false; // third finger: not a two-finger tap
                 }
+                breakTrack(); // the focus moves to the mean of one more finger
                 break;
             case MotionEvent.ACTION_MOVE:
+                if (dragging) {
+                    recordTouch(e);
+                } else if (Math.hypot(e.getX() - downX, e.getY() - downY) > touchSlop) {
+                    // Past the slop: start the track HERE, so the pan doesn't
+                    // begin with a jump of the slop distance.
+                    dragging = true;
+                    recordTouch(e);
+                }
                 if (twoTap && e.getPointerCount() >= 2) {
                     float mx = (e.getX(0) + e.getX(1)) * 0.5f;
                     float my = (e.getY(0) + e.getY(1)) * 0.5f;
@@ -178,13 +285,16 @@ public final class LookoutView extends SurfaceView
                 }
                 twoTap = false;
                 rotating = false;
+                dragging = false; // the fling, if any, takes it from here
                 break;
             case MotionEvent.ACTION_POINTER_UP:
                 rotating = false; // down to one finger: the twist is over
+                breakTrack(); // and the focus jumps back onto that finger
                 break;
             case MotionEvent.ACTION_CANCEL:
                 twoTap = false;
                 rotating = false;
+                dragging = false;
                 break;
         }
         // Both detectors see every event: pinch zooms while its focal-point
@@ -205,13 +315,17 @@ public final class LookoutView extends SurfaceView
         float d = now - twistPrevDeg;
         while (d > 180f) d -= 360f;   // shortest way round the wrap
         while (d < -180f) d += 360f;
-        twistPrevDeg = now;
+        twistPrevDeg = now; // always, so re-entering never replays a stale sweep
+
+        final float span = (float) Math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0));
+        if (span < MIN_TWIST_SPAN_DP * density) return;
 
         if (!rotating) {
             twistAccumDeg += d;
             if (Math.abs(twistAccumDeg) < ROTATE_ENGAGE_DEG) return;
             rotating = true; // engaged: from here the twist tracks 1:1
         }
+        if (Math.abs(d) < TWIST_DEADBAND_DEG) return;
         final float cx = getWidth() * 0.5f / density, cy = getHeight() * 0.5f / density;
         final double r = Math.toRadians(d);
         // A unit vector before and after the sweep, offset from the centre.
@@ -254,26 +368,38 @@ public final class LookoutView extends SurfaceView
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int wPx, int hPx) {
-        int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
-        if (lk == null) {
-            lk = Lookout.openCharts(chartPaths, holder.getSurface(), wPx, hPx, wPts, hPts, true);
-            if (lk == null) return;
-            lastFrameNs = 0;
-            // Before the render thread starts: attach restores the mariner's
-            // saved settings, and they must be in place for the FIRST build or
-            // the chart tessellates once at defaults and immediately again.
-            renderThread = new HandlerThread("lookout-render");
-            renderThread.start();
-            engine = new Handler(renderThread.getLooper());
-            // Same queue for the chrome. Inline natives are safe here: no frame
-            // runs until the callback below is posted.
-            controller.attach(lk, engine);
-            // Choreographer is per-thread: fetch it ON the render thread so the
-            // vsync callbacks (and every render) land there.
-            engine.post(() -> Choreographer.getInstance().postFrameCallback(this));
-        } else {
-            lk.resize(wPts, hPts);
+        final int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
+        if (lk != null) {
+            // Onto the render thread: a resize rebuilds the swapchain, and the
+            // api lock it takes is held for a whole frame — parking the UI
+            // thread here is how a rotation turns into an input-dispatch ANR.
+            onEngine(() -> lk.resize(wPts, hPts));
+            return;
         }
+        // The open is tens of seconds on a real library — one tile57_chart_open
+        // per cell (7000+), the atlas bake, Vulkan bring-up — and it scales with
+        // the library, so on the UI thread it is an ANR on every launch.
+        // Start the render thread FIRST and open there.
+        final Surface surface = holder.getSurface();
+        lastFrameNs = 0;
+        renderThread = new HandlerThread("lookout-render");
+        renderThread.start();
+        final Handler h = new Handler(renderThread.getLooper());
+        engine = h;
+        h.post(() -> {
+            Lookout l = Lookout.openCharts(chartPaths, surface, wPx, hPx, wPts, hPts, true);
+            if (l == null) return;
+            // The surface's own extent lags a rotation, so the engine is TOLD
+            // the scale rather than left to infer it — before the first build.
+            l.setDensity(density);
+            // Also before the first build: the mariner's saved settings and the
+            // saved view, or the chart tessellates once at defaults and again
+            // immediately. Safe inline — no frame runs until lk is published.
+            controller.attach(l, h);
+            lk = l; // published LAST: onEngine and doFrame both gate on it
+            // Choreographer is per-thread; this already IS the render thread.
+            Choreographer.getInstance().postFrameCallback(this);
+        });
     }
 
     @Override
@@ -302,6 +428,66 @@ public final class LookoutView extends SurfaceView
     }
 
     // ---- frame loop (render thread) -----------------------------------------
+    /**
+     * Pan by however far the touch focus travelled between the last frame and
+     * this one, read off the track at each frame's own timestamp. Interpolates
+     * between the two samples bracketing that instant; past the newest sample it
+     * extrapolates the last leg's velocity a little, which is what keeps a steady
+     * drag stepping evenly when a touch report happens to land just after a frame.
+     * A held-still finger extrapolates a zero velocity, so nothing creeps.
+     */
+    private void applyPan(Lookout l, long frameTimeNanos) {
+        final long t = frameTimeNanos - RESAMPLE_LAG_NS;
+        float x, y;
+        final int epoch;
+        synchronized (trackLock) {
+            if (trackCount == 0) return;
+            epoch = trackEpoch;
+            final int head = trackHead;
+            if (t >= trackT[head]) {
+                x = trackX[head];
+                y = trackY[head];
+                if (trackCount >= 2) {
+                    final int prev = (head - 1 + TRACK_N) % TRACK_N;
+                    final long span = trackT[head] - trackT[prev];
+                    if (span > 0 && span <= MAX_PREDICT_BASE_NS) {
+                        final float f = Math.min(t - trackT[head], MAX_PREDICT_NS) / (float) span;
+                        x += (trackX[head] - trackX[prev]) * f;
+                        y += (trackY[head] - trackY[prev]) * f;
+                    }
+                }
+            } else {
+                // Walk back to the newest sample at or before t; anything older
+                // than the whole track clamps to its oldest sample.
+                int hi = head, n = 1;
+                while (n < trackCount && trackT[hi] > t) {
+                    hi = (hi - 1 + TRACK_N) % TRACK_N;
+                    n++;
+                }
+                final int lo = hi;
+                final int up = (hi + 1) % TRACK_N;
+                if (trackT[lo] >= t || n >= trackCount) {
+                    x = trackX[lo];
+                    y = trackY[lo];
+                } else {
+                    final long span = trackT[up] - trackT[lo];
+                    final float f = span > 0 ? (t - trackT[lo]) / (float) span : 0f;
+                    x = trackX[lo] + (trackX[up] - trackX[lo]) * f;
+                    y = trackY[lo] + (trackY[up] - trackY[lo]) * f;
+                }
+            }
+        }
+        if (haveLast && epoch == lastEpoch) {
+            final float dx = x - lastFx, dy = y - lastFy;
+            // The chart drags WITH the finger, so the camera pans by the focus delta.
+            if (dx != 0f || dy != 0f) l.pan(dx / density, dy / density);
+        }
+        lastFx = x;
+        lastFy = y;
+        lastEpoch = epoch;
+        haveLast = true;
+    }
+
     @Override
     public void doFrame(long frameTimeNanos) {
         Lookout l = lk;
@@ -309,6 +495,8 @@ public final class LookoutView extends SurfaceView
         double dt = lastFrameNs == 0 ? 0.0 : (frameTimeNanos - lastFrameNs) / 1e9;
         lastFrameNs = frameTimeNanos;
         if (dt > 0.1) dt = 0.1; // resumed from pause: don't lurch the ease
+        // Before anything reads the camera: this frame's share of the drag.
+        applyPan(l, frameTimeNanos);
         boolean animating = l.animating();
         if (animating && dt > 0) l.tickAnim(dt);
         if (animating || l.needsRedraw()) l.render();

@@ -106,6 +106,9 @@ pub const Gpu = struct {
     host_pt_h: f32 = 0,
     size_changed_ms: i64 = -100000,
     pixel_density: f32 = 1.0,
+    /// Non-zero once the host DECLARED its scale factor (setPixelDensity); it
+    /// then wins over anything derived from the window.
+    host_density: f32 = 0,
     pattern_scale: f32 = 1,
 
     msaa_tex: ?*sdl.SDL_GPUTexture = null,
@@ -230,6 +233,15 @@ pub const Gpu = struct {
             tb.usage = sdl.SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
             tb.size = self.width * self.height * 4;
             self.download_tb = try checkPtr(sdl.SDL_CreateGPUTransferBuffer(self.device, &tb), "CreateDownloadTB");
+        }
+    }
+
+    /// The host's own scale factor, declared rather than derived — the same C ABI
+    /// entry every backend offers. Wins over SDL_GetWindowPixelDensity.
+    pub fn setPixelDensity(self: *Gpu, d: f32) void {
+        if (d > 0.2 and d < 8.0) {
+            self.host_density = d;
+            self.pixel_density = d;
         }
     }
 

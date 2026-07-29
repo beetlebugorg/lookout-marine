@@ -29,8 +29,10 @@ const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg
 extern fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_close(h: ?*anyopaque) void;
+extern fn lookout_set_cache_dir(path: [*:0]const u8) void;
 extern fn lookout_resize(h: ?*anyopaque, width: u32, height: u32) c_int;
 extern fn lookout_fit_chart(h: ?*anyopaque, v: *lookout_view) c_int;
+extern fn lookout_default_view(h: ?*anyopaque, v: *lookout_view) void;
 extern fn lookout_set_view(h: ?*anyopaque, v: *const lookout_view) void;
 extern fn lookout_get_view(h: ?*anyopaque, v: *lookout_view) void;
 extern fn lookout_pan_logical(h: ?*anyopaque, dx_pt: f32, dy_pt: f32) void;
@@ -41,6 +43,7 @@ extern fn lookout_animating(h: ?*anyopaque) c_int;
 extern fn lookout_tick_anim(h: ?*anyopaque, dt: f64) void;
 extern fn lookout_cycle_scheme(h: ?*anyopaque) void;
 extern fn lookout_pixel_density(h: ?*anyopaque) f32;
+extern fn lookout_set_pixel_density(h: ?*anyopaque, d: f32) void;
 extern fn lookout_screen_to_geo(h: ?*anyopaque, x_px: f32, y_px: f32, lon: *f64, lat: *f64) void;
 extern fn lookout_overscale(h: ?*anyopaque) f64;
 extern fn lookout_scale_denominator(h: ?*anyopaque) f64;
@@ -75,6 +78,15 @@ fn fromLong(h: j.jlong) ?*Handle {
 }
 fn toLong(h: *Handle) j.jlong {
     return @bitCast(@as(u64, @intFromPtr(h)));
+}
+
+/// void nSetCacheDir(String path) -- Context.getCacheDir(). Before any open:
+/// the atlas cache has no other way to find a writable directory here.
+export fn Java_org_beetlebug_lookout_Lookout_nSetCacheDir(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring) void {
+    _ = cls;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    lookout_set_cache_dir(@ptrCast(cpath));
 }
 
 /// long nOpen(String chartPath, Surface surface, int widthPx, int heightPx,
@@ -163,12 +175,32 @@ export fn Java_org_beetlebug_lookout_Lookout_nResize(env: [*c]j.JNIEnv, cls: j.j
     _ = lookout_resize(h.l, @intCast(w_pts), @intCast(h_pts));
 }
 
+/// DisplayMetrics.density. The surface cannot be trusted for this on Android:
+/// across a rotation its extent lags the new logical size by a frame.
+export fn Java_org_beetlebug_lookout_Lookout_nSetDensity(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, d: j.jfloat) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_set_pixel_density(h.l, d);
+}
+
 export fn Java_org_beetlebug_lookout_Lookout_nFitChart(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
     _ = env;
     _ = cls;
     const h = fromLong(hl) orelse return;
     var v: lookout_view = undefined;
     if (lookout_fit_chart(h.l, &v) == 0) lookout_set_view(h.l, &v);
+}
+
+/// Frame the library at overview zoom — the opening view when the host has no
+/// saved pose. Computed and applied in one crossing, like nFitChart.
+export fn Java_org_beetlebug_lookout_Lookout_nDefaultView(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    var v: lookout_view = undefined;
+    lookout_default_view(h.l, &v);
+    lookout_set_view(h.l, &v);
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nPan(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, dx_pt: j.jfloat, dy_pt: j.jfloat) void {
