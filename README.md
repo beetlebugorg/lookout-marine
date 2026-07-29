@@ -147,6 +147,12 @@ vendor/stb                 stb_image (atlas PNG decode)
 The SDL3/`SDL_GPU`/Vulkan/MoltenVK predecessor of this renderer — and every
 driver workaround it accumulated — lives at the `sdl-gpu` git tag.
 
+## AI-First Development
+
+This project is built with AI assistance. We encourage contributors to use AI tools for
+development and to contribute by providing clear requirements and/or a prototype of what
+they'd like rather than code.
+
 ## License
 
 MIT — see `LICENSE`.
