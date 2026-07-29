@@ -1,9 +1,9 @@
 # Lookout Marine
 
 **A fast, native chartplotter for Mac, iPad, iPhone, Android and Linux.** It draws
-real electronic nautical charts with the official IHO portrayal rules, straight to
-the GPU with Metal or Vulkan, and holds **60 fps** while you pan, pinch-zoom, rotate
-and switch between day and night.
+official ENC charts with the IHO portrayal rules, straight to the GPU with Metal or
+Vulkan, and holds **60 fps** while you pan, pinch-zoom, rotate and switch between day
+and night.
 
 > **Not for navigation.** This is a prototype. It is not pixel-perfect and it makes
 > no claim of ECDIS conformance.
@@ -21,10 +21,11 @@ and switch between day and night.
 - **The UI is native on every platform.** SwiftUI on Mac, iPad and iPhone. GTK4 on
   Linux. Java on Android. Each app uses its own toolkit directly. None of them is a
   cross-platform toolkit with a theme, and none of them is a web view.
-- **The charts are real, and the portrayal is official.** The engine runs the IHO
-  **S-101 Portrayal Catalogue** to decide how to draw each feature. You get depth
-  areas and contours, buoys and beacons with correct symbols, lights with sector
-  lines, soundings, anchorage and restricted areas, and place names.
+- **The portrayal is official, not an imitation.** The engine runs the IHO **S-101
+  Portrayal Catalogue** against the feature records in the cell. The chart is not a
+  pre-rendered raster image, and no symbol is a look-alike. You get depth areas and
+  contours, buoys and beacons with correct symbols, lights with sector lines,
+  soundings, anchorage and restricted areas, and place names.
 - **It opens a whole coastline.** Point it at a folder of cells. A 1,700-cell library
   opens in about 15 ms, and the first scene appears in less than a second. The app
   does not freeze while it composes the library.
