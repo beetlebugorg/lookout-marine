@@ -119,8 +119,8 @@ gesture's sign (flagged in `ChartUIView.onRotate`).
 
 ## Rendering (Metal)
 
-The core renders via Metal directly (`src/metal_shim.m` + runtime-compiled
-`shaders/lookout.metal`): the host passes its `CAMetalLayer`
+The core renders via Metal directly (`src/metal_shim.m` + the engine's
+runtime-compiled `shaders/lookout.metal`): the host passes its `CAMetalLayer`
 (`LOOKOUT_NATIVE_METAL_LAYER`) and lookout attaches a device, four pipelines
 (chart / sprite / SDF / pattern) and presents drawables into it. Offscreen
 snapshots render to a shared-storage texture and read back. This replaced the
