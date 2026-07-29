@@ -12,24 +12,13 @@ const mc = @import("c_metal.zig").c;
 const png = @import("png.zig");
 const msl_source = @embedFile("metal_src");
 
-/// Vertex-shader uniform block (128 bytes). Matches `struct U` in
-/// shaders/lookout.metal. Colour is per-RANGE (one draw = one colour), so it
-/// rides the uniform; `anchor_px`/`cell_px` drive the pattern tiling.
-pub const Uniforms = extern struct {
-    mvp: [16]f32,
-    px_to_clip: [2]f32,
-    size_scale: f32,
-    current_scale: f32,
-    cat_mask: u32,
-    /// Camera center world-x: the vertex shaders wrap each vertex to the world
-    /// instance (x, x±1) nearest this, making the antimeridian seamless.
-    wrap_x: f32 = 0.5,
-    rot_sin: f32,
-    rot_cos: f32,
-    color: [4]f32 = .{ 0, 0, 0, 1 }, // per-range flat colour (triangles), straight alpha
-    anchor_px: [2]f32 = .{ 0, 0 }, // pattern: framebuffer px of the scene's phase origin
-    cell_px: [2]f32 = .{ 1, 1 }, // pattern: cell period in framebuffer px
-};
+/// Vertex-shader uniform block (128 bytes), matching `struct U` in
+/// shaders/lookout.metal. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig
+/// Uniforms, mirrored as tile57_gpu_uniforms) — all three backends declared
+/// their own copy, and this one's `color` comment had gone stale claiming a
+/// per-range flat colour; the shader only ever reads it as the SDF halo
+/// background. Field docs live in the engine; root.zig's ABI gate catches skew.
+pub const Uniforms = cc.tile57_gpu_uniforms;
 
 /// RGBA colour 0..1 (drop-in for the old SDL_FColor uses).
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
