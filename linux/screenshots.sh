@@ -13,7 +13,7 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 app=$here/build/lookout-marine
-outdir=$here/../docs
+outdir=$here/../docs/docs/img
 shot=${1:-all}
 [ "${2:-}" = "-o" ] && outdir=$3
 

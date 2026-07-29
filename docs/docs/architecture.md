@@ -70,7 +70,7 @@ it is not available, the build gets the commit that `build.zig.zon` specifies.
 ## Why the structure is correct
 
 The ABI is the reason that many shells stay easy to maintain. Refer to
-[the experiment](../README.md#how-we-use-ai).
+[the experiment](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai).
 A shell can use only `lookout.h` to reach the core. This limit gives three results:
 
 - **One shell cannot depend on another shell.** There is no shared widget layer.
