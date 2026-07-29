@@ -17,8 +17,10 @@
 //! Single frame in flight: the chart renders on demand, not at a locked 60 fps,
 //! so simplicity wins over frame overlap.
 const std = @import("std");
+const builtin = @import("builtin");
 const cc = @import("c.zig").c; // tile57 + stb (shared; matches root's scene types)
-const vk = @import("c_vk.zig").c; // Vulkan + ANativeWindow + android log
+const c_vk = @import("c_vk.zig");
+const vk = c_vk.c; // Vulkan (+ ANativeWindow and the android log sink on Android)
 
 // Precompiled SPIR-V (see build.zig: -Dbackend=vk embeds these), converted to
 // u32 words at comptime: @embedFile data carries NO alignment guarantee, and
@@ -62,25 +64,98 @@ pub fn ticksMs() i64 {
     return @divTrunc(ticksUs(), 1000);
 }
 
+// Logging: logcat on Android, stderr elsewhere; both take a printf format.
+extern "c" fn fprintf(stream: *anyopaque, fmt: [*:0]const u8, ...) c_int;
+extern "c" fn fputc(ch: c_int, stream: *anyopaque) c_int;
+// `stderr` is a FILE* variable, so @extern gives its address — deref for the stream (else segfault).
+const stderr_var: *const *anyopaque = @extern(*const *anyopaque, .{ .name = "stderr" });
+
+fn logAt(comptime prio: c_int, comptime fmt: [*:0]const u8, args: anytype) void {
+    if (c_vk.android) {
+        _ = @call(.auto, vk.__android_log_print, .{ prio, @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+    } else {
+        const stream = stderr_var.*;
+        _ = @call(.auto, fprintf, .{ stream, fmt } ++ args);
+        _ = fputc('\n', stream);
+    }
+}
 fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
-    _ = @call(.auto, vk.__android_log_print, .{ @as(c_int, vk.ANDROID_LOG_ERROR), @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+    logAt(if (c_vk.android) vk.ANDROID_LOG_ERROR else 0, fmt, args);
 }
 fn logInfo(comptime fmt: [*:0]const u8, args: anytype) void {
-    _ = @call(.auto, vk.__android_log_print, .{ @as(c_int, vk.ANDROID_LOG_INFO), @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+    logAt(if (c_vk.android) vk.ANDROID_LOG_INFO else 0, fmt, args);
+}
+
+/// True for _SRGB formats, whose write-time linear->sRGB encode would double up the already-sRGB palette.
+fn isSrgbFormat(fmt: u32) bool {
+    return fmt == vk.VK_FORMAT_R8G8B8A8_SRGB or
+        fmt == vk.VK_FORMAT_B8G8R8A8_SRGB or
+        fmt == vk.VK_FORMAT_A8B8G8R8_SRGB_PACK32;
 }
 
 /// How to interpret Options.native_handle. Superset across backends so
-/// root/capi share one ABI; this backend only accepts android_window.
+/// root/capi share one ABI.
 pub const NativeKind = enum(c_int) {
     none = 0,
     metal_layer = 1, // Apple CAMetalLayer* — capi/root ABI parity only
     cocoa_window = 2,
     cocoa_view = 3,
-    win32_hwnd = 4,
-    x11_window = 5,
+    win32_hwnd = 4, // *const Win32Window
+    x11_window = 5, // *const X11Window
     uikit_windowscene = 6,
     android_window = 7, // ANativeWindow* (from the Java Surface via JNI)
+    wayland_surface = 8, // *const WaylandSurface
 };
+
+// ---- WSI, hand-declared ----------------------------------------------------
+//
+// Mirrors of the create-info structs from vulkan_win32.h / _xlib.h / _wayland.h,
+// declared here so this core needs no X11/Wayland/Windows SDK (see c_vk.zig);
+// their ABI is frozen and the sTypes come from the vendored vulkan_core.h. The
+// functions load via vkGetInstanceProcAddr, so nothing links against them either.
+
+/// A host's Win32 window. `hinstance` may be null — the loader falls back to
+/// the module the window belongs to.
+pub const Win32Window = extern struct { hinstance: ?*anyopaque, hwnd: ?*anyopaque };
+/// A host's X11 window: an Xlib `Display*` and the `Window` XID.
+pub const X11Window = extern struct { display: ?*anyopaque, window: c_ulong };
+/// A host's Wayland surface: `wl_display*` and the `wl_surface*` to present on
+/// — for a GTK4 host, the subsurface it created for the chart, not the toplevel.
+pub const WaylandSurface = extern struct { display: ?*anyopaque, surface: ?*anyopaque };
+
+const VkWin32SurfaceCreateInfoKHR = extern struct {
+    sType: c_int,
+    pNext: ?*const anyopaque = null,
+    flags: u32 = 0,
+    hinstance: ?*anyopaque,
+    hwnd: ?*anyopaque,
+};
+const VkXlibSurfaceCreateInfoKHR = extern struct {
+    sType: c_int,
+    pNext: ?*const anyopaque = null,
+    flags: u32 = 0,
+    dpy: ?*anyopaque,
+    window: c_ulong,
+};
+const VkWaylandSurfaceCreateInfoKHR = extern struct {
+    sType: c_int,
+    pNext: ?*const anyopaque = null,
+    flags: u32 = 0,
+    display: ?*anyopaque,
+    surface: ?*anyopaque,
+};
+
+/// The instance extension each surface kind needs alongside VK_KHR_surface, and
+/// the entry point that creates it. Null kind = no window (offscreen only).
+fn surfaceExtension(kind: NativeKind) ?[*:0]const u8 {
+    return switch (kind) {
+        .android_window => "VK_KHR_android_surface",
+        .win32_hwnd => "VK_KHR_win32_surface",
+        .x11_window => "VK_KHR_xlib_surface",
+        .wayland_surface => "VK_KHR_wayland_surface",
+        else => null,
+    };
+}
 
 pub const Options = struct {
     width: u32,
@@ -172,7 +247,9 @@ pub const Gpu = struct {
     off_fb: vk.VkFramebuffer = null,
     download: Buffer = .{},
 
-    window: ?*vk.ANativeWindow = null,
+    /// The ANativeWindow we present on — Android only; every other window
+    /// system's handle is consumed by createSurface and never held.
+    window: if (c_vk.android) ?*vk.ANativeWindow else ?*anyopaque = null,
     width: u32,
     height: u32,
     external_window: bool = false,
@@ -198,14 +275,23 @@ pub const Gpu = struct {
         app.sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "lookout marine";
         app.apiVersion = vk.VK_API_VERSION_1_0;
-        const inst_exts = [_][*:0]const u8{ "VK_KHR_surface", "VK_KHR_android_surface" };
         var ici = std.mem.zeroes(vk.VkInstanceCreateInfo);
         ici.sType = vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &app;
-        const want_surface = opts.native_kind == .android_window and opts.native_handle != null;
+        const platform_ext = if (opts.native_handle != null) surfaceExtension(opts.native_kind) else null;
+        const want_surface = platform_ext != null;
+
+        var inst_ext_buf: [4][*:0]const u8 = undefined;
+        var inst_ext_n: u32 = 0;
         if (want_surface) {
-            ici.enabledExtensionCount = inst_exts.len;
-            ici.ppEnabledExtensionNames = @ptrCast(&inst_exts);
+            inst_ext_buf[inst_ext_n] = "VK_KHR_surface";
+            inst_ext_n += 1;
+            inst_ext_buf[inst_ext_n] = platform_ext.?;
+            inst_ext_n += 1;
+        }
+        if (inst_ext_n > 0) {
+            ici.enabledExtensionCount = inst_ext_n;
+            ici.ppEnabledExtensionNames = &inst_ext_buf;
         }
         var instance: vk.VkInstance = null;
         try check(vk.vkCreateInstance(&ici, null, &instance), "vkCreateInstance");
@@ -218,7 +304,20 @@ pub const Gpu = struct {
         var devs: [8]vk.VkPhysicalDevice = @splat(null);
         if (ndev > devs.len) ndev = devs.len;
         _ = vk.vkEnumeratePhysicalDevices(instance, &ndev, &devs);
-        const phys = devs[0];
+        // Prefer a discrete GPU for the offscreen (snapshot) path; the surface
+        // path keeps devs[0] (the presentable GPU).
+        var phys = devs[0];
+        if (!want_surface) {
+            for (devs[0..ndev]) |cand| {
+                if (cand == null) continue;
+                var cp: vk.VkPhysicalDeviceProperties = undefined;
+                vk.vkGetPhysicalDeviceProperties(cand, &cp);
+                if (cp.deviceType == vk.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                    phys = cand;
+                    break;
+                }
+            }
+        }
         var nq: u32 = 0;
         vk.vkGetPhysicalDeviceQueueFamilyProperties(phys, &nq, null);
         var qprops: [16]vk.VkQueueFamilyProperties = undefined;
@@ -252,13 +351,20 @@ pub const Gpu = struct {
         // maintenance1: negative-height viewport for the Y flip (see
         // recordDraws). Core since 1.1; universally shipped on 1.0 drivers.
         // swapchain only when presenting.
-        const dev_exts = [_][*:0]const u8{ "VK_KHR_maintenance1", "VK_KHR_swapchain" };
+        var dev_ext_buf: [8][*:0]const u8 = undefined;
+        var dev_ext_n: u32 = 0;
+        dev_ext_buf[dev_ext_n] = "VK_KHR_maintenance1";
+        dev_ext_n += 1;
+        if (want_surface) {
+            dev_ext_buf[dev_ext_n] = "VK_KHR_swapchain";
+            dev_ext_n += 1;
+        }
         var dci = std.mem.zeroes(vk.VkDeviceCreateInfo);
         dci.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
-        dci.enabledExtensionCount = if (want_surface) dev_exts.len else 1;
-        dci.ppEnabledExtensionNames = @ptrCast(&dev_exts);
+        dci.enabledExtensionCount = dev_ext_n;
+        dci.ppEnabledExtensionNames = &dev_ext_buf;
         var device: vk.VkDevice = null;
         try check(vk.vkCreateDevice(phys, &dci, null, &device), "vkCreateDevice");
         var queue: vk.VkQueue = null;
@@ -280,18 +386,15 @@ pub const Gpu = struct {
 
         // ---- surface + real size -------------------------------------------
         if (want_surface) {
-            g.window = @ptrCast(opts.native_handle);
-            var sci = std.mem.zeroes(vk.VkAndroidSurfaceCreateInfoKHR);
-            sci.sType = vk.VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-            sci.window = g.window;
-            try check(vk.vkCreateAndroidSurfaceKHR(instance, &sci, null, &g.surface), "vkCreateAndroidSurfaceKHR");
-            const ww = vk.ANativeWindow_getWidth(g.window);
-            const wh = vk.ANativeWindow_getHeight(g.window);
-            if (ww > 0 and wh > 0) {
-                g.width = @intCast(ww);
-                g.height = @intCast(wh);
-            }
-            // pick the surface's colour format (prefer RGBA8) + ITS colorspace
+            try g.createSurface(instance, opts);
+            // Pick the surface's colour format + ITS colorspace. It MUST be a
+            // UNORM one: the palette hands the shader colours that are already
+            // sRGB, and an _SRGB swapchain would encode them a second time on
+            // write — every colour comes out pale (measured: S-52 NODATA
+            // 147,174,187 presenting as 200,215,222). Prefer either 8-bit UNORM
+            // ordering, then anything that isn't _SRGB, and only take an _SRGB
+            // format if the surface offers nothing else — saying so, because
+            // the chart will be visibly washed out.
             var nfmt: u32 = 0;
             _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(phys, g.surface, &nfmt, null);
             var fmts: [32]vk.VkSurfaceFormatKHR = undefined;
@@ -300,15 +403,32 @@ pub const Gpu = struct {
             if (nfmt > 0) {
                 g.color_format = fmts[0].format;
                 g.color_space = fmts[0].colorSpace;
+                var picked = false;
                 for (fmts[0..nfmt]) |f| {
-                    if (f.format == vk.VK_FORMAT_R8G8B8A8_UNORM) {
+                    if (f.format == vk.VK_FORMAT_R8G8B8A8_UNORM or
+                        f.format == vk.VK_FORMAT_B8G8R8A8_UNORM)
+                    {
                         g.color_format = f.format;
                         g.color_space = f.colorSpace;
+                        picked = true;
                         break;
                     }
                 }
+                if (!picked) for (fmts[0..nfmt]) |f| {
+                    if (!isSrgbFormat(f.format)) {
+                        g.color_format = f.format;
+                        g.color_space = f.colorSpace;
+                        picked = true;
+                        break;
+                    }
+                };
+                if (!picked)
+                    logErr("vk: surface offers only sRGB formats (fmt=%d) — colours will be over-bright", .{@as(c_int, @intCast(g.color_format))});
             }
         }
+
+        // With no surface, nothing dictates a colour format; the default RGBA
+        // UNORM is what the snapshot readback expects.
 
         // ---- MSAA 4x if the format supports it ------------------------------
         if (opts.want_msaa and std.c.getenv("LOOKOUT_NO_MSAA") == null) {
@@ -726,7 +846,22 @@ pub const Gpu = struct {
         var caps: vk.VkSurfaceCapabilitiesKHR = undefined;
         try check(vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.phys, self.surface, &caps), "surface caps");
         var extent = caps.currentExtent;
-        if (extent.width == 0xFFFFFFFF) extent = .{ .width = self.width, .height = self.height };
+        if (extent.width == 0xFFFFFFFF) {
+            // Wayland: the surface has no size of its own — the client names one.
+            // The host's declared viewport is the authority here, exactly as in
+            // extentStale(). Reusing self.width instead would pin the swapchain
+            // to whatever it was first created at: every later resize would find
+            // it stale, recreate it at the SAME extent, and find it stale again.
+            extent = if (self.host_pt_w > 0 and self.host_pt_h > 0 and self.pixel_density > 0)
+                .{
+                    .width = @intFromFloat(@round(self.host_pt_w * self.pixel_density)),
+                    .height = @intFromFloat(@round(self.host_pt_h * self.pixel_density)),
+                }
+            else
+                .{ .width = self.width, .height = self.height };
+            extent.width = std.math.clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+            extent.height = std.math.clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+        }
         if (extent.width == 0 or extent.height == 0) return; // minimized; retry later
         self.width = extent.width;
         self.height = extent.height;
@@ -861,6 +996,7 @@ pub const Gpu = struct {
         if (self.download.buf == null)
             self.download = try self.createBuffer(@as(u64, self.width) * self.height * 4, vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
     }
+
     fn releaseOffscreen(self: *Gpu) void {
         if (self.off_fb != null) vk.vkDestroyFramebuffer(self.device, self.off_fb, null);
         if (self.off_view != null) vk.vkDestroyImageView(self.device, self.off_view, null);
@@ -873,6 +1009,73 @@ pub const Gpu = struct {
         self.destroyBuffer(&self.download);
     }
 
+    /// Create the presentation surface from the host's native handle, and adopt
+    /// whatever size that handle already has. Android reads it off the
+    /// ANativeWindow; the desktop window systems do not carry one on the handle,
+    /// so the size stays as the host declared it and the swapchain's
+    /// currentExtent settles it at createSwapchain.
+    fn createSurface(self: *Gpu, instance: vk.VkInstance, opts: Options) !void {
+        const handle = opts.native_handle.?;
+        switch (opts.native_kind) {
+            .android_window => {
+                if (!c_vk.android) return error.VulkanFailure;
+                self.window = @ptrCast(handle);
+                var sci = std.mem.zeroes(vk.VkAndroidSurfaceCreateInfoKHR);
+                sci.sType = vk.VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+                sci.window = self.window;
+                try check(vk.vkCreateAndroidSurfaceKHR(instance, &sci, null, &self.surface), "vkCreateAndroidSurfaceKHR");
+                const ww = vk.ANativeWindow_getWidth(self.window);
+                const wh = vk.ANativeWindow_getHeight(self.window);
+                if (ww > 0 and wh > 0) {
+                    self.width = @intCast(ww);
+                    self.height = @intCast(wh);
+                }
+            },
+            .win32_hwnd => {
+                const w: *const Win32Window = @ptrCast(@alignCast(handle));
+                const ci = VkWin32SurfaceCreateInfoKHR{
+                    .sType = vk.VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+                    .hinstance = w.hinstance,
+                    .hwnd = w.hwnd,
+                };
+                try self.createSurfaceVia(instance, "vkCreateWin32SurfaceKHR", VkWin32SurfaceCreateInfoKHR, &ci);
+            },
+            .x11_window => {
+                const w: *const X11Window = @ptrCast(@alignCast(handle));
+                const ci = VkXlibSurfaceCreateInfoKHR{
+                    .sType = vk.VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
+                    .dpy = w.display,
+                    .window = w.window,
+                };
+                try self.createSurfaceVia(instance, "vkCreateXlibSurfaceKHR", VkXlibSurfaceCreateInfoKHR, &ci);
+            },
+            .wayland_surface => {
+                const w: *const WaylandSurface = @ptrCast(@alignCast(handle));
+                const ci = VkWaylandSurfaceCreateInfoKHR{
+                    .sType = vk.VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+                    .display = w.display,
+                    .surface = w.surface,
+                };
+                try self.createSurfaceVia(instance, "vkCreateWaylandSurfaceKHR", VkWaylandSurfaceCreateInfoKHR, &ci);
+            },
+            else => return error.VulkanFailure,
+        }
+    }
+
+    /// Load a vkCreate*SurfaceKHR by name and call it. Loading rather than
+    /// linking is what lets this file know about four window systems while
+    /// depending on none of their headers or libraries — a driver missing the
+    /// extension returns null here and fails with a name, not a link error.
+    fn createSurfaceVia(self: *Gpu, instance: vk.VkInstance, comptime name: [*:0]const u8, comptime CI: type, ci: *const CI) !void {
+        const Fn = *const fn (vk.VkInstance, *const CI, ?*const vk.VkAllocationCallbacks, *vk.VkSurfaceKHR) callconv(.c) vk.VkResult;
+        const raw = vk.vkGetInstanceProcAddr(instance, name) orelse {
+            logErr("vk: %s unavailable (driver lacks the surface extension)", .{name});
+            return error.VulkanFailure;
+        };
+        const create: Fn = @ptrCast(raw);
+        try check(create(instance, ci, null, &self.surface), std.mem.span(name));
+    }
+
     /// Resize the render surface. width/height are logical points from the host
     /// (Java) view; the pixel size follows the swapchain. Their ratio is the
     /// pixel density (the camera's HiDPI denominator).
@@ -880,13 +1083,20 @@ pub const Gpu = struct {
         self.host_pt_w = @floatFromInt(width_pts);
         self.host_pt_h = @floatFromInt(height_pts);
         if (self.surface == null) {
-            // offscreen-only: logical == pixel
-            if (width_pts != self.width or height_pts != self.height) {
+            // No swapchain to adopt a size from, so the target IS the host's
+            // declared viewport scaled by the density it declared. resize()
+            // means POINTS on every path, offscreen included — the texture host
+            // wants a pixel-exact frame and would otherwise have to know that
+            // this one path counted differently.
+            const d = if (self.pixel_density > 0) self.pixel_density else 1.0;
+            const w: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(width_pts)) * d));
+            const h: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(height_pts)) * d));
+            if (w != self.width or h != self.height) {
                 _ = vk.vkDeviceWaitIdle(self.device);
                 self.releaseOffscreen();
                 self.releaseMsaa();
-                self.width = width_pts;
-                self.height = height_pts;
+                self.width = w;
+                self.height = h;
                 try self.ensureOffscreenTargets();
             }
         }
