@@ -10,7 +10,7 @@ and night.
 
 | macOS · iPadOS · iOS | Linux |
 |:---:|:---:|
-| <img src="docs/ipad-day.png" width="430" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/linux-day.png" width="430" alt="Annapolis Harbor on Linux, day scheme"> |
+| <img src="docs/docs/img/ipad-day.png" width="430" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/docs/img/linux-day.png" width="430" alt="Annapolis Harbor on Linux, day scheme"> |
 | SwiftUI | GTK4 |
 
 ## Why it is different
@@ -71,8 +71,8 @@ Lookout is built for the destination, not for the present:
   `38 58.5N 76 28.9W`.
 
 <p align="center">
-  <img src="docs/ipad-night.png" width="430" alt="The same view in the night scheme">
-  <img src="docs/linux-settings.png" width="430" alt="The mariner panel above the chart on Linux">
+  <img src="docs/docs/img/ipad-night.png" width="430" alt="The same view in the night scheme">
+  <img src="docs/docs/img/linux-settings.png" width="430" alt="The mariner panel above the chart on Linux">
 </p>
 
 ## Loading charts
@@ -143,8 +143,8 @@ dependency. A sibling `../tile57` checkout wins when it is present. If it is abs
 the build gets the commit that `build.zig.zon` specifies and compiles `libtile57.a`
 from source.
 
-For more detail, refer to [docs/architecture.md](docs/architecture.md),
-[docs/hosts-linux.md](docs/hosts-linux.md), `macos/README.md` and
+For more detail, refer to [the architecture](docs/docs/architecture.md),
+[the Linux host](docs/docs/hosts-linux.md), `macos/README.md` and
 `android/README.md`.
 
 [tile57]: https://github.com/beetlebugorg/tile57
@@ -195,7 +195,7 @@ that's what made it affordable to be wrong twice.
 **The hardware decides, not the reasoning.** That dmabuf design read correctly and was
 still soft on a fractional-scale display, for reasons no amount of argument about
 render density fixed. We found the answer by running it and looking. So we run the
-app, capture it, and compare — [docs/screenshots.md](docs/screenshots.md) fixes the
+app, capture it, and compare — [the screenshot protocol](docs/docs/screenshots.md) fixes the
 chart, camera and window size every host captures, so platforms can be compared frame
 to frame instead of by impression.
 
@@ -228,7 +228,7 @@ renders a chart to day, night and zoomed PNG files, then exits.
 
 Two variables help while you iterate. `LOOKOUT_OPEN=<chart|dir>` opens something at
 startup. `LOOKOUT_VIEW=lon,lat,zoom[,rot]` selects the first camera position. The
-screenshots above use both — refer to [docs/screenshots.md](docs/screenshots.md).
+screenshots above use both — refer to [the screenshot protocol](docs/docs/screenshots.md).
 
 ### Layout
 
@@ -262,7 +262,7 @@ This project is built with AI assistance — refer to [How we use AI](#how-we-us
 Use AI tools freely. The most useful contribution is a clear set of requirements, or a
 rough prototype of what you want, rather than a patch.
 
-[docs/](docs/) has the architecture, the host notes, and the screenshot protocol that
+[docs/](docs/docs/) has the architecture, the host notes, and the screenshot protocol that
 compares the hosts.
 
 ## License

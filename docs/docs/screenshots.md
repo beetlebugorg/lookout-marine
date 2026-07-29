@@ -12,7 +12,7 @@ chart, the camera, the window size, and the capture method are the same. This pa
 gives that specification.
 
 Verification is the difficult part of
-[the experiment](../README.md#how-we-use-ai),
+[the experiment](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai),
 not generation. A shell can look correct alone, but it can still be soft, or the
 wrong size, or it can lose its chrome. The same frame on each host makes these
 faults easy to see.
@@ -27,7 +27,7 @@ faults easy to see.
 | **Logical size** | 1400 x 900 points |
 | **Scale** | 2, which gives **2800 x 1800 px** |
 | **Frames** | `day` (the chart and the floating chrome) and `settings` (the mariner panel above the chart) |
-| **File names** | `docs/<host>-<shot>.png`, for example `linux-day.png` or `macos-day.png` |
+| **File names** | `docs/docs/img/<host>-<shot>.png`, for example `linux-day.png` or `macos-day.png` |
 
 Two environment variables make the camera the same on each host:
 
@@ -44,7 +44,7 @@ On iOS and iPadOS, `simctl launch` sends them as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 ```sh
 cd linux
 ninja -C build
-./screenshots.sh all            # writes docs/linux-day.png and docs/linux-settings.png
+./screenshots.sh all            # writes docs/docs/img/linux-day.png and docs/docs/img/linux-settings.png
 ```
 
 The script starts the app in an **off-screen sway session**. Then it captures the
@@ -80,7 +80,7 @@ desktop.
 
 ```sh
 # one window only, no shadow, written to the specified file name
-screencapture -o -l"$(GetWindowID LookoutMarine)" docs/macos-day.png
+screencapture -o -l"$(GetWindowID LookoutMarine)" docs/docs/img/macos-day.png
 ```
 
 `-o` removes the window shadow. `-l<windowid>` captures one window. Together they
@@ -96,7 +96,7 @@ On the simulator:
 ```sh
 xcrun simctl launch --console booted org.beetlebug.LookoutMarine \
   SIMCTL_CHILD_LOOKOUT_OPEN=<chart> SIMCTL_CHILD_LOOKOUT_VIEW=-76.482,38.976,13.7
-xcrun simctl io booted screenshot docs/ipad-day.png
+xcrun simctl io booted screenshot docs/docs/img/ipad-day.png
 ```
 
 ## How to examine a frame

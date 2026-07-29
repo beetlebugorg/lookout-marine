@@ -12,7 +12,7 @@ shows that surface. This host is the equivalent of the SwiftUI shell on Apple
 platforms and the Java shell on Android. All three hosts use the same core, the
 same C ABI, and give the same behavior.
 
-![Annapolis Harbor and the Naval Academy, day scheme](linux-day.png)
+![Annapolis Harbor and the Naval Academy, day scheme](./img/linux-day.png)
 
 The left side of the headerbar has the open control, the recents list, the zoom
 controls, the fit control, and the north-up control. The right side has the search
@@ -27,7 +27,7 @@ The full mariner panel is a separate window. Press **Ctrl+,** to open it. The
 panel is not modal, and the chart stays usable while the panel is open. The panel
 applies each edit after a short delay, and it keeps each value.
 
-![The mariner settings panel above the chart](linux-settings.png)
+![The mariner settings panel above the chart](./img/linux-settings.png)
 
 ## How the chart gets onto the screen
 
