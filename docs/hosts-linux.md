@@ -23,7 +23,7 @@ or the coordinate of the center. It also shows an amber overscale badge when the
 view is finer than the data permits, then the scale, the zoom, and the scheme. The
 zoom buttons and the compass are above the corners of the chart.
 
-The full S-52 mariner panel is a separate window. Press **Ctrl+,** to open it. The
+The full mariner panel is a separate window. Press **Ctrl+,** to open it. The
 panel is not modal, and the chart stays usable while the panel is open. The panel
 applies each edit after a short delay, and it keeps each value.
 
@@ -169,7 +169,7 @@ the most recent chart. Then it looks for
 | `src/lk-hud.c` | The status-bar readouts, the identify panel, and the DMS format |
 | `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The S-52 mariner panel (Display, Depths, Text, Charts, Advanced) |
+| `src/lk-settings-window.c` | The mariner panel (Display, Depths, Text, Charts, Advanced) |
 | `src/lk-store.c` | The camera position, the recents, and the settings in one XDG keyfile |
 | `build-core.sh` | It builds the Zig core where meson expects the outputs. |
 | `screenshots.sh` | It makes the documentation screenshots. Refer to [the protocol](screenshots.md). |

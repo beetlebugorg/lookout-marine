@@ -1,63 +1,95 @@
 # Lookout Marine
 
-A native **chartplotter app for Mac, iPad, iPhone, Android and Linux**. It draws
-real S-52 electronic nautical charts (NOAA ENC / S-57) directly with Metal on
-Apple and Vulkan elsewhere, and stays fluid at **60 fps** — pan, pinch-zoom,
-rotate, and day/night switching never stutter and never wait on a rebuild.
+**A fast, native chartplotter for Mac, iPad, iPhone, Android and Linux.** It draws
+real electronic nautical charts with the official IHO portrayal rules, straight to
+the GPU with Metal or Vulkan, and holds **60 fps** while you pan, pinch-zoom, rotate
+and switch between day and night.
 
-> **Not for navigation.** This is a prototype / proof-of-concept. It is not
-> S-52 pixel-perfect and makes no claim of ECDIS correctness.
+> **Not for navigation.** This is a prototype. It is not pixel-perfect and it makes
+> no claim of ECDIS conformance.
 
-![Annapolis Harbor on iPad, day scheme](docs/ipad-day.png)
+| macOS · iPadOS · iOS | Linux |
+|:---:|:---:|
+| <img src="docs/ipad-day.png" width="430" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/linux-day.png" width="430" alt="Annapolis Harbor on Linux, day scheme"> |
+| SwiftUI | GTK4 |
+
+## Why it is different
+
+- **It stays at 60 fps.** The chart is tessellated one time. Each frame after that is
+  a single uniform update. Therefore a pan, a zoom, a rotate, or a day-to-night
+  change never waits for a rebuild. An idle chart uses no CPU time.
+- **The UI is native on every platform.** SwiftUI on Mac, iPad and iPhone. GTK4 on
+  Linux. Java on Android. Each app uses its own toolkit directly. None of them is a
+  cross-platform toolkit with a theme, and none of them is a web view.
+- **The charts are real, and the portrayal is official.** The engine runs the IHO
+  **S-101 Portrayal Catalogue** to decide how to draw each feature. You get depth
+  areas and contours, buoys and beacons with correct symbols, lights with sector
+  lines, soundings, anchorage and restricted areas, and place names.
+- **It opens a whole coastline.** Point it at a folder of cells. A 1,700-cell library
+  opens in about 15 ms, and the first scene appears in less than a second. The app
+  does not freeze while it composes the library.
+- **It is vector all the way to the GPU.** The app caches no bitmap of the chart. It
+  draws with 4x MSAA at the full resolution of the display.
+
+## Built for S-101
+
+The world is moving from **S-57** to **S-101**, the ENC format in the IHO S-100
+framework. Hydrographic offices have started to publish S-101, and the transition
+will take years. Lookout is built for the destination, not for the present:
+
+- **S-101 is the native path.** The engine reads a native S-101 dataset directly into
+  the portrayal model. It then draws it with the official S-101 Portrayal Catalogue.
+- **S-57 is the interim path.** Today almost all public charts are S-57. The engine
+  converts an S-57 cell into the S-101 data model first, then draws it with the same
+  catalogue. The conversion is best-effort, because S-57 has no perfect translation
+  to S-101.
+- **Nothing above the conversion changes.** The portrayal, the tessellation, the
+  renderer and the apps see S-101 features only. When an office publishes S-101 for
+  your area, you use the native path and drop the conversion step. The apps need no
+  change.
 
 ## What you can do with it
 
-- **Read real charts, properly drawn.** Depth areas and contours, buoys and
-  beacons with correct symbology, lights with sector lines, soundings, anchorage
-  and restricted areas, place names — full **S-52 portrayal** of stock NOAA ENC
-  cells, straight from the source data.
-- **Move around like a chartplotter should.** One-finger pan with fling, pinch
-  zoom anchored under your fingers, two-finger rotate, double-tap to zoom, and
-  tap-to-identify any feature. On iPad and Mac, pointer/trackpad and cursor
-  readouts too.
-- **Open a whole coastline, not just one chart.** Point it at a folder — or drop
-  cells into the app on iPhone/iPad — and Lookout stitches them into one seamless
-  chart, from a single harbor to a 7,000-cell coastline, without ever freezing.
-- **Flip between day, dusk, and night** instantly — the scheme changes the moment
-  you tap it, with no reload.
-- **Tune the chart to your eye.** The full S-52 mariner panel: safety, shallow,
-  and deep contours, safety depth, two- or four-shade water, display categories,
-  sounding and text toggles, symbol sizing, date-dependent features — applied
-  live as you change them.
-- **Jump to a position** by typing coordinates into search
-  ("38 58.5N 76 28.9W" and friends).
+- **Move like a chartplotter.** One-finger pan with fling, pinch-zoom anchored below
+  your fingers, two-finger rotate, double-tap to zoom, and tap to identify a feature.
+  Mac, iPad and Linux add pointer control and cursor readouts.
+- **Switch between day, dusk and night.** The scheme changes immediately, because a
+  new palette needs no rebuild.
+- **Tune the chart to your eye.** The mariner panel controls the safety contour, the
+  shallow and deep contours, the safety depth, two-shade or four-shade water, the
+  display categories, the sounding and text switches, symbol size, and date-dependent
+  features. Each edit applies live.
+- **Go to a position.** Type a coordinate into search, for example
+  `38 58.5N 76 28.9W`.
 
-![Same view, night scheme — an instant colour swap, not a rebuild](docs/ipad-night.png)
+<p align="center">
+  <img src="docs/ipad-night.png" width="430" alt="The same view in the night scheme">
+  <img src="docs/linux-settings.png" width="430" alt="The mariner panel above the chart on Linux">
+</p>
 
 ## Loading charts
 
-Lookout opens **chart archives** baked from the S-57 ENC cells that hydrographic
-offices give away for free — for the US, the entire NOAA ENC catalogue is one
-download.
+Lookout opens **chart archives**. You bake them from the ENC cells that hydrographic
+offices give away at no cost. For the United States, the full NOAA ENC catalogue is
+one download.
 
-- **On Mac:** **File ▸ Open Chart…** opens a single chart or a whole folder of
-  them.
-- **On Linux:** **Open** in the headerbar takes a chart or a folder of cells.
-- **On iPhone / iPad:** import cells through the Files picker; everything in the
-  app's Documents folder is composed into your chart library at launch.
+- **On Mac:** **File ▸ Open Chart…** takes one chart or a folder.
+- **On Linux:** **Open** in the headerbar takes a folder of cells.
+- **On iPhone and iPad:** import cells with the Files picker. The app composes
+  everything in its Documents folder at launch.
 
-Charts are baked with the [tile57] engine's command-line tool:
+Bake the charts with the command-line tool of the [tile57] engine:
 
 ```sh
 tile57 bake CELL.000 -o out/      # one cell
-tile57 bake ENC_ROOT -o out/      # a whole ENC_ROOT -> a ready chart library
+tile57 bake ENC_ROOT -o out/      # a full ENC_ROOT -> a chart library
 ```
 
 ## Getting the app
 
-There's no App Store build yet — you build it from source with **Xcode**
-(macOS 14+ SDK; iOS deployment floor 15.0). You'll also need **Zig 0.16**
-(`brew install zig`) and **XcodeGen** (`brew install xcodegen`).
+There is no App Store build yet. Build it from source with **Xcode** (macOS 14+ SDK;
+the iOS floor is 15.0). You also need **Zig 0.16** (`brew install zig`) and
+**XcodeGen** (`brew install xcodegen`).
 
 ```sh
 cd macos
@@ -65,15 +97,49 @@ xcodegen generate          # writes LookoutMarine.xcodeproj from project.yml
 open LookoutMarine.xcodeproj
 ```
 
-Pick the **LookoutMarine** (Mac) or **LookoutMarine-iOS** target and Run. The
-pre-build phase runs `zig build`, which pulls in the chart engine and installs
-everything the app links against — nothing needs to be pre-built. For a fully
-non-debug app, use Xcode's Release configuration.
+Select the **LookoutMarine** (Mac) or **LookoutMarine-iOS** target, then Run. The
+pre-build phase runs `zig build`. That step gets the chart engine and installs
+everything the app links against, so you pre-build nothing. Use the Release
+configuration of Xcode for a non-debug app.
 
-No Xcode? `macos/build-dev.sh --zig` builds the Mac app with just the Command
+If you have no Xcode, `macos/build-dev.sh --zig` builds the Mac app with the Command
 Line Tools into `macos/build/`.
 
+On Linux — refer to [linux/README.md](linux/README.md):
+
+```sh
+cd linux && meson setup build && ninja -C build && ./build/lookout-marine
+```
+
 ---
+
+## Under the hood
+
+Lookout is a thin native app above a shared **chart core in Zig**. The core opens a
+chart or a library. It asks the engine for a **GPU scene**: vertices, quads, the paint
+order, and a color buffer for each scheme. The core uploads that scene one time. To
+draw a frame, the core then writes one uniform block. The vertex shader applies the
+camera, the palette, the display-category gates and the SCAMIN limits. This is the
+reason that a pan and a scheme change never tessellate the chart again.
+
+The **app shells** are each native above that one core. `macos/` is SwiftUI, and the
+Mac and iOS targets share the Swift sources. `android/` is a Java shell above a
+`SurfaceView`. `linux/` is GTK4 in C, and it presents Vulkan into a subsurface below a
+transparent hole in the window, so the chrome floats above the chart. Each shell
+drives the same `lookout.h` C ABI.
+
+The largest tasks are in the **[tile57]** engine: ISO 8211 and S-57 decode, the
+S-57-to-S-101 conversion, S-101 portrayal with embedded Lua, tessellation, sprite and
+SDF atlases, and tile composition. The build uses the engine as a Zig package
+dependency. A sibling `../tile57` checkout wins when it is present. If it is absent,
+the build gets the commit that `build.zig.zon` specifies and compiles `libtile57.a`
+from source.
+
+For more detail, refer to [docs/architecture.md](docs/architecture.md),
+[docs/hosts-linux.md](docs/hosts-linux.md), `macos/README.md` and
+`android/README.md`.
+
+[tile57]: https://github.com/beetlebugorg/tile57
 
 ## How we use AI
 
@@ -83,155 +149,114 @@ settings panel. Or write a native front end per platform and maintain several
 codebases that drift apart the moment one gains a feature first.
 
 We're testing a third option: a genuinely native shell for every platform, written
-with AI — and, the open question, kept in step that way too. Below is the method as
-it stands, including the parts we haven't proven.
+with AI — and, the open question, kept in step that way too. Below is the method as it
+stands, including the parts we haven't proven.
 
 **The core owns what gets drawn, and has no opinion about the UI.** Everything
-portable — S-57 decode, S-52 portrayal, tessellation, camera, GPU scene — sits in a
-Zig core behind one C ABI (`include/lookout.h`). Nothing in it knows a widget
-exists, and it says nothing about menus, HUD layout or gestures. A shell may only
-reach the core through that header, so no shell can couple to another and there's no
-shared widget layer to regress.
+portable — S-57 decode, S-101 portrayal, tessellation, camera, GPU scene — sits in a
+Zig core behind one C ABI (`include/lookout.h`). Nothing in it knows a widget exists,
+and it says nothing about menus, HUD layout or gestures. A shell may only reach the
+core through that header, so no shell can couple to another and there's no shared
+widget layer to regress.
 
 **The Apple shell is the source of record for behaviour.** SwiftUI on Mac and iPad
 came first and is the most complete, so it's the reference the others are written
-against. The Linux and Android shells say so in their own source: the GTK
-accelerators mirror the macOS menu bar with Ctrl for Command, its display menu
-follows the macOS Chart menu, and its render loop mirrors the macOS display link.
-When two shells disagree about how something should behave, macOS is right by
-default.
+against. The Linux and Android shells say so in their own source: the GTK accelerators
+mirror the macOS menu bar with Ctrl for Command, its display menu follows the macOS
+Chart menu, and its render loop mirrors the macOS display link. When two shells
+disagree about how something should behave, macOS is right by default.
 
 **A change should start as prose, not as a diff — this part is still unproven.** The
 intent is to describe the behaviour once, or point at what the Apple shell already
-does, then write each shell separately to express it in its own platform's idiom:
-GTK4 in C on Linux, Java on Android. So far the shells have been built one at a time,
-by hand-carrying the behaviour across. Whether AI can keep several native shells in
-step from one description is the part of this experiment still to be tested.
+does, then write each shell separately to express it in its own platform's idiom: GTK4
+in C on Linux, Java on Android. So far the shells have been built one at a time, by
+hand-carrying the behaviour across. Whether AI can keep several native shells in step
+from one description is the part of this experiment still to be tested.
 
-**We write real platform code, not a themed abstraction.** Each shell uses its
-toolkit the way that toolkit's own documentation says to — `GtkOverlay` and
-`GAction` on Linux, SwiftUI idioms on Apple. That's the whole point. A common
-abstraction with platform skins would put us back in the compromise we're trying to
-avoid.
+**We write real platform code, not a themed abstraction.** Each shell uses its toolkit
+the way that toolkit's own documentation says to — `GtkOverlay` and `GAction` on
+Linux, SwiftUI idioms on Apple. That's the whole point. A common abstraction with
+platform skins would put us back in the compromise we're trying to avoid.
 
 **We let AI try several designs and throw most of them away.** Getting the chart on
 screen under GTK took three: Vulkan into a child surface, then a dmabuf texture in
-GTK's scene graph, then a subsurface below a transparent hole in the window. Only
-the third is both sharp and able to float the chrome. Writing all three was cheap,
-and that's what made it affordable to be wrong twice.
+GTK's scene graph, then a subsurface below a transparent hole in the window. Only the
+third is both sharp and able to float the chrome. Writing all three was cheap, and
+that's what made it affordable to be wrong twice.
 
-**The hardware decides, not the reasoning.** That dmabuf design read correctly and
-was still soft on a fractional-scale display, for reasons no amount of argument
-about render density fixed. We found the answer by running it and looking. So we run
-the app, capture it, and compare — [docs/screenshots.md](docs/screenshots.md) fixes
-the chart, camera and window size every host captures, so platforms can be compared
-frame to frame instead of by impression.
+**The hardware decides, not the reasoning.** That dmabuf design read correctly and was
+still soft on a fractional-scale display, for reasons no amount of argument about
+render density fixed. We found the answer by running it and looking. So we run the
+app, capture it, and compare — [docs/screenshots.md](docs/screenshots.md) fixes the
+chart, camera and window size every host captures, so platforms can be compared frame
+to frame instead of by impression.
 
-**Verification is the bottleneck now, not writing code.** A plausible native shell
-is the easy part. Knowing it draws correctly — the right GPU on a dual-GPU machine,
-the right scale on a fractional display, the chrome where it belongs — is the work,
-and it's where the review effort goes.
+**Verification is the bottleneck now, not writing code.** A plausible native shell is
+the easy part. Knowing it draws correctly — the right GPU on a dual-GPU machine, the
+right scale on a fractional display, the chrome where it belongs — is the work, and
+it's where the review effort goes.
 
-**Contributors send requirements or prototypes, not patches.** Describe what you
-want, or build a rough version that shows it. That's the most useful input to this
-workflow.
+## For developers: building and embedding the core
 
-For the architecture of each host, and the faults each one exposed, see
-[Linux/GTK4](docs/hosts-linux.md), `macos/README.md`, and `android/README.md`.
-
-## Under the hood
-
-Lookout is a thin native app over a shared **chart core written in Zig**. The
-core opens a baked chart or library, asks the engine for a **draw-ready GPU
-scene** (vertices, quads, paint order, per-scheme colour buffers), uploads it
-once, and then renders every frame by updating a single uniform block — camera,
-palette, display-category gates, and SCAMIN culling all happen in the vertex
-shader. That's why panning and day/night switching never re-tessellate: the work
-is done once, and each frame is a uniform update. Rendering is direct Metal
-(`src/metal_shim.m` owns the device and pipelines; the engine's
-`shaders/lookout.metal` is compiled at runtime, so there's no offline shader
-toolchain).
-
-The **app shells** are each platform-native around that one core: `macos/` is
-SwiftUI (menu bar, HUD, zoom controls, the mariner settings panel, search) with
-Mac and iOS/iPadOS sharing the Swift sources; `android/` is a Java shell over a
-`SurfaceView`; `linux/` is GTK4 in C, presenting Vulkan into a subsurface below a
-transparent hole in the window so the chrome floats over the chart. Each drives
-the same `lookout.h` C ABI. See [docs/architecture.md](docs/architecture.md),
-[docs/hosts-linux.md](docs/hosts-linux.md), `macos/README.md` and
-`android/README.md` for the per-shell architecture and gotchas.
-
-The heavy lifting — S-57 decoding, S-101 portrayal (embedded Lua rules),
-tessellation, sprite/SDF atlases, tile compositing — lives in the **[tile57]**
-engine, consumed here as a Zig package dependency: a sibling `../tile57` checkout
-is used when present, otherwise the commit pinned in `build.zig.zon` is fetched
-automatically, and `libtile57.a` is built from source inside `zig build`.
-
-[tile57]: https://github.com/beetlebugorg/tile57
-
-## For developers: building & embedding the core
-
-The chart core builds and runs on its own, and is embeddable in any native app:
+The chart core builds and runs alone. You can embed it in any native app:
 
 ```sh
 zig build                  # ReleaseFast by default; -Doptimize=Debug to develop
 zig build test             # unit tests
 ```
 
-`zig build` installs `liblookout_marine.a`, `libtile57.a`, `lookout.h`, and
-`tile57.h` into `zig-out/`. To embed: create a native view, hand its
-`CAMetalLayer` to `lookout_open_in_window(LOOKOUT_NATIVE_METAL_LAYER, …)`, and
-drive it with `lookout_render` / `lookout_pan` / `lookout_zoom_at` /
-`lookout_set_mariner` etc. — see `include/lookout.h`. Headless consumers can skip
-the window and pull frames with `lookout_snapshot_rgba`.
+`zig build` installs `liblookout_marine.a`, `libtile57.a`, `lookout.h` and `tile57.h`
+into `zig-out/`. To embed the core, make a native view, give its surface to
+`lookout_open_in_window`, then drive it with `lookout_render`, `lookout_pan`,
+`lookout_zoom_at` and `lookout_set_mariner`. Refer to `include/lookout.h`. A headless
+program needs no window and gets each frame with `lookout_snapshot_rgba`.
 
-`zig-out/bin/lookout-marine-demo` is the render-parity and smoke-test harness
-(not the app): it renders a chart to day / night / zoomed PNGs and exits.
+`zig-out/bin/lookout-marine-demo` is the parity and smoke-test tool, not the app. It
+renders a chart to day, night and zoomed PNG files, then exits.
 
 ```sh
 ./zig-out/bin/lookout-marine-demo chart.pmtiles [--png out.png] [--lon L --lat L --zoom Z]
 ```
 
-Two launch-time conveniences help when iterating: `LOOKOUT_OPEN=<chart|dir>`
-opens something at startup, and `LOOKOUT_VIEW=lon,lat,zoom[,rot]` pins the
-opening camera (both forwarded by `simctl launch` as `SIMCTL_CHILD_*` — how the
-screenshots above were captured).
+Two variables help while you iterate. `LOOKOUT_OPEN=<chart|dir>` opens something at
+startup. `LOOKOUT_VIEW=lon,lat,zoom[,rot]` selects the first camera position. The
+screenshots above use both — refer to [docs/screenshots.md](docs/screenshots.md).
 
 ### Layout
 
 ```
-build.zig, build.zig.zon   build + the tile57 dependency pin
-include/lookout.h          C ABI (the Swift<->Zig bridge)
+build.zig, build.zig.zon   the build and the tile57 dependency pin
+include/lookout.h          the C ABI (the shell-to-core contract)
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
-src/root.zig               Lookout: scene lifecycle, worker-thread rebuilds
-src/gpu.zig                backend switch (metal | vk | sdl)
-src/gpu_vk.zig             Vulkan transport (Linux/Android): pipelines, swapchain
-src/gpu_metal.zig          Metal transport  (+ src/metal_shim.{h,m}, the ObjC shim)
-src/atlas.zig, src/png.zig sprite/SDF atlas load, PNG encode
-src/capi.zig, src/main.zig C ABI wrapper; the headless demo
-docs/                      architecture, per-host notes, screenshot protocol
-macos/                     the SwiftUI app (macOS + iOS/iPadOS), XcodeGen spec
-android/                   the Java shell (Vulkan onto a SurfaceView)
+src/root.zig               Lookout: the scene lifecycle and worker-thread rebuilds
+src/gpu.zig                the backend switch (metal | vk | sdl)
+src/gpu_vk.zig             the Vulkan transport (Linux and Android)
+src/gpu_metal.zig          the Metal transport (with src/metal_shim.{h,m})
+src/atlas.zig, src/png.zig sprite and SDF atlas load; PNG encode
+src/capi.zig, src/main.zig the C ABI wrapper; the headless demo
+docs/                      architecture, host notes, the screenshot protocol
+macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
+android/                   the Java shell (Vulkan into a SurfaceView)
 linux/                     the GTK4 app (Vulkan into a subsurface), meson
-vendor/stb                 stb_image (atlas PNG decode)
+vendor/stb                 stb_image (it decodes the atlas PNG files)
 ```
 
-The shaders are not here: they read the vertex, quad and uniform layouts the
-engine defines, so they live with those, in tile57's `shaders/`. This build
-embeds them straight from the dependency.
+The shaders are not here. They read the vertex, quad and uniform layouts that the
+engine defines, so they stay with those layouts in the `shaders/` directory of tile57.
+This build embeds them from the dependency.
 
-The SDL3/`SDL_GPU`/Vulkan/MoltenVK predecessor of this renderer — and every
-driver workaround it accumulated — lives at the `sdl-gpu` git tag.
+The SDL3, `SDL_GPU`, Vulkan and MoltenVK version of this renderer is at the `sdl-gpu`
+git tag, with every driver workaround that it needed.
 
 ## Contributing
 
-This project is built with AI assistance — see [How we use AI](#how-we-use-ai). Use
-AI tools freely. The most useful contribution is a clear set of requirements, or a
+This project is built with AI assistance — refer to [How we use AI](#how-we-use-ai).
+Use AI tools freely. The most useful contribution is a clear set of requirements, or a
 rough prototype of what you want, rather than a patch.
 
-[docs/](docs/) has the architecture, the per-host notes, and the screenshot protocol
-used to compare hosts.
+[docs/](docs/) has the architecture, the host notes, and the screenshot protocol that
+compares the hosts.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT — refer to `LICENSE`.
