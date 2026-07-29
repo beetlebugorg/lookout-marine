@@ -6,8 +6,7 @@
 //!     `-Dbackend=sdl` on macOS to exercise that path via SDL_GPU -> Metal)
 //! The build picks one via `-Dbackend` (see build.zig -> build_options); the
 //! default is native on mobile, SDL on extended platforms. All expose: Gpu (+
-//! its Scene), Uniforms, Options, NativeKind, DmabufFrame, Color, ticksMs,
-//! ticksUs.
+//! its Scene), Uniforms, Options, NativeKind, Color, ticksMs, ticksUs.
 const bo = @import("build_options");
 const impl = if (bo.gpu_vk)
     @import("gpu_vk.zig")
@@ -20,7 +19,6 @@ pub const Gpu = impl.Gpu;
 pub const Uniforms = impl.Uniforms;
 pub const Options = impl.Options;
 pub const NativeKind = impl.NativeKind;
-pub const DmabufFrame = impl.DmabufFrame;
 pub const Color = impl.Color;
 pub const ticksMs = impl.ticksMs;
 pub const ticksUs = impl.ticksUs;

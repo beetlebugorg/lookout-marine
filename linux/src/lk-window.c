@@ -430,6 +430,7 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   LkWindow *self = g_new0 (LkWindow, 1);
   self->model = model;
   self->window = gtk_application_window_new (app);
+  gtk_widget_add_css_class (self->window, "lk-chart-window");
   g_object_set_data_full (G_OBJECT (self->window), "lk-window", self, lk_window_free);
 
   gtk_window_set_default_size (GTK_WINDOW (self->window), 1280, 800);

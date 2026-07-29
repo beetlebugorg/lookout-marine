@@ -72,7 +72,6 @@ sources = files(
   'src/main.c',
   'src/lk-app-model.c',
   'src/lk-chart-controller.c',
-  'src/lk-chart-texture.c',
   'src/lk-chart-view.c',
   'src/lk-hud.c',
   'src/lk-mariner.c',

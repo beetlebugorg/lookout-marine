@@ -183,6 +183,11 @@ lk_native_surface_init_wayland (LkNativeSurface *self, GdkSurface *parent, GErro
   self->wl_subsurface = wl_subcompositor_get_subsurface (self->wl_subcompositor,
                                                          self->wl_surface, wl_parent);
 
+  /* Below the toplevel: the chart shows through a transparent hole in the GTK
+   * window, so the chrome (HUD, zoom bubbles) composites OVER it. Applied on the
+   * parent's next commit, which GTK does when it paints. */
+  wl_subsurface_place_below (self->wl_subsurface, wl_parent);
+
   /* EMPTY input region: the default (whole buffer) would swallow every event over
    * the chart; empty passes them to the parent, where GDK routes them to the
    * chart widget. The Wayland spelling of the X11 event_mask=0 trick above. */
