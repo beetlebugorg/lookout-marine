@@ -1,0 +1,8 @@
+option('x11', type: 'feature', value: 'auto',
+       description: 'X11 chart surface (a child window of the GTK toplevel)')
+option('wayland', type: 'feature', value: 'auto',
+       description: 'Wayland chart surface (a subsurface of the GTK toplevel)')
+option('core-optimize', type: 'combo',
+       choices: ['ReleaseFast', 'ReleaseSafe', 'ReleaseSmall', 'Debug'],
+       value: 'ReleaseFast',
+       description: 'Zig optimize mode for the chart core (a Debug core visibly drops frames)')

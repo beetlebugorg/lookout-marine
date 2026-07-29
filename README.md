@@ -1,9 +1,9 @@
 # Lookout Marine
 
-A native **chartplotter app for Mac, iPad, and iPhone**. It draws real S-52
-electronic nautical charts (NOAA ENC / S-57) directly with Metal and stays fluid
-at **60 fps** — pan, pinch-zoom, rotate, and day/night switching never stutter
-and never wait on a rebuild.
+A native **chartplotter app for Mac, iPad, iPhone, Android and Linux**. It draws
+real S-52 electronic nautical charts (NOAA ENC / S-57) directly with Metal on
+Apple and Vulkan elsewhere, and stays fluid at **60 fps** — pan, pinch-zoom,
+rotate, and day/night switching never stutter and never wait on a rebuild.
 
 > **Not for navigation.** This is a prototype / proof-of-concept. It is not
 > S-52 pixel-perfect and makes no claim of ECDIS correctness.
@@ -42,6 +42,7 @@ download.
 
 - **On Mac:** **File ▸ Open Chart…** opens a single chart or a whole folder of
   them.
+- **On Linux:** **Open** in the headerbar takes a chart or a folder of cells.
 - **On iPhone / iPad:** import cells through the Files picker; everything in the
   app's Documents folder is composed into your chart library at launch.
 
@@ -87,11 +88,13 @@ is done once, and each frame is a uniform update. Rendering is direct Metal
 `shaders/lookout.metal` is compiled at runtime, so there's no offline shader
 toolchain).
 
-The **app shell** (`macos/`) is SwiftUI — menu bar, HUD, zoom controls, the
-mariner settings panel, search — wrapped around one GPU-rendered chart view and
-driven through the core's C ABI. Mac and iOS/iPadOS share the Swift sources; iOS
-adds a UIKit gesture surface under a pass-through chrome window. See
-`macos/README.md` for the app architecture and gotchas.
+The **app shells** are each platform-native around that one core: `macos/` is
+SwiftUI (menu bar, HUD, zoom controls, the mariner settings panel, search) with
+Mac and iOS/iPadOS sharing the Swift sources; `android/` is a Java shell over a
+`SurfaceView`; `linux/` is GTK4 in C, presenting into an X11 child window or a
+Wayland subsurface. Each drives the same `lookout.h` C ABI. See
+`macos/README.md`, `android/README.md` and `linux/README.md` for the per-shell
+architecture and gotchas.
 
 The heavy lifting — S-57 decoding, S-101 portrayal (embedded Lua rules),
 tessellation, sprite/SDF atlases, tile compositing — lives in the **[tile57]**
@@ -141,6 +144,8 @@ src/metal_shim.{h,m}       the ObjC Metal/CAMetalLayer shim behind a C face
 src/atlas.zig, src/png.zig sprite/SDF atlas load, PNG encode
 src/capi.zig, src/main.zig C ABI wrapper; the headless demo
 macos/                     the SwiftUI app (macOS + iOS/iPadOS), XcodeGen spec
+android/                   the Java shell (Vulkan onto a SurfaceView)
+linux/                     the GTK4 app (Vulkan onto a child surface), meson
 vendor/stb                 stb_image (atlas PNG decode)
 ```
 

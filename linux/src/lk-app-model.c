@@ -1,0 +1,705 @@
+#include "lk-app-model.h"
+
+#include "lk-store.h"
+
+#include <math.h>
+
+struct _LkAppModel {
+  GObject parent_instance;
+
+  LkChartController *controller;
+
+  gboolean has_chart;
+  char    *chart_path;
+  char    *open_error;
+  GStrv    recents;
+
+  gboolean is_opening;
+  gboolean preparing_symbols;
+  gboolean first_build_done;
+
+  gboolean cursor_valid;
+  double   cursor_lon, cursor_lat;
+  double   center_lon, center_lat;
+  double   zoom;
+  double   rotation_deg;
+  double   overscale;
+  double   scale_denominator;
+  int      scheme;
+  gboolean building;
+  gboolean use_dms;
+
+  GPtrArray *pick_results;
+};
+
+enum {
+  PROP_0,
+  PROP_HAS_CHART,
+  PROP_CHART_PATH,
+  PROP_OPEN_ERROR,
+  PROP_RECENTS,
+  PROP_SHOW_STARTUP_LOADER,
+  PROP_CURSOR_VALID,
+  PROP_CURSOR_LON,
+  PROP_CURSOR_LAT,
+  PROP_CENTER_LON,
+  PROP_CENTER_LAT,
+  PROP_ZOOM,
+  PROP_ROTATION,
+  PROP_OVERSCALE,
+  PROP_SCALE_DENOMINATOR,
+  PROP_SCHEME,
+  PROP_BUILDING,
+  PROP_USE_DMS,
+  N_PROPS
+};
+
+enum {
+  SIGNAL_PICK_RESULTS,
+  N_SIGNALS
+};
+
+static GParamSpec *properties[N_PROPS];
+static guint signals[N_SIGNALS];
+
+G_DEFINE_FINAL_TYPE (LkAppModel, lk_app_model, G_TYPE_OBJECT)
+
+/* ---- GObject ------------------------------------------------------------ */
+
+static void
+lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
+{
+  LkAppModel *self = LK_APP_MODEL (object);
+
+  switch (prop_id)
+    {
+    case PROP_HAS_CHART:           g_value_set_boolean (value, self->has_chart); break;
+    case PROP_CHART_PATH:          g_value_set_string (value, self->chart_path); break;
+    case PROP_OPEN_ERROR:          g_value_set_string (value, self->open_error); break;
+    case PROP_RECENTS:             g_value_set_boxed (value, self->recents); break;
+    case PROP_SHOW_STARTUP_LOADER: g_value_set_boolean (value, lk_app_model_get_show_startup_loader (self)); break;
+    case PROP_CURSOR_VALID:        g_value_set_boolean (value, self->cursor_valid); break;
+    case PROP_CURSOR_LON:          g_value_set_double (value, self->cursor_lon); break;
+    case PROP_CURSOR_LAT:          g_value_set_double (value, self->cursor_lat); break;
+    case PROP_CENTER_LON:          g_value_set_double (value, self->center_lon); break;
+    case PROP_CENTER_LAT:          g_value_set_double (value, self->center_lat); break;
+    case PROP_ZOOM:                g_value_set_double (value, self->zoom); break;
+    case PROP_ROTATION:            g_value_set_double (value, self->rotation_deg); break;
+    case PROP_OVERSCALE:           g_value_set_double (value, self->overscale); break;
+    case PROP_SCALE_DENOMINATOR:   g_value_set_double (value, self->scale_denominator); break;
+    case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
+    case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
+    case PROP_USE_DMS:             g_value_set_boolean (value, self->use_dms); break;
+    default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+    }
+}
+
+static void
+lk_app_model_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
+{
+  LkAppModel *self = LK_APP_MODEL (object);
+
+  switch (prop_id)
+    {
+    case PROP_USE_DMS: lk_app_model_set_use_dms (self, g_value_get_boolean (value)); break;
+    default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+    }
+}
+
+static void
+lk_app_model_dispose (GObject *object)
+{
+  LkAppModel *self = LK_APP_MODEL (object);
+
+  g_clear_object (&self->controller);
+  g_clear_pointer (&self->chart_path, g_free);
+  g_clear_pointer (&self->open_error, g_free);
+  g_clear_pointer (&self->recents, g_strfreev);
+  g_clear_pointer (&self->pick_results, g_ptr_array_unref);
+
+  G_OBJECT_CLASS (lk_app_model_parent_class)->dispose (object);
+}
+
+static void
+lk_app_model_class_init (LkAppModelClass *klass)
+{
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+
+  object_class->get_property = lk_app_model_get_property;
+  object_class->set_property = lk_app_model_set_property;
+  object_class->dispose = lk_app_model_dispose;
+
+#define RO  (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)
+#define RW  (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
+
+  properties[PROP_HAS_CHART] = g_param_spec_boolean ("has-chart", NULL, NULL, FALSE, RO);
+  properties[PROP_CHART_PATH] = g_param_spec_string ("chart-path", NULL, NULL, NULL, RO);
+  properties[PROP_OPEN_ERROR] = g_param_spec_string ("open-error", NULL, NULL, NULL, RO);
+  properties[PROP_RECENTS] = g_param_spec_boxed ("recents", NULL, NULL, G_TYPE_STRV, RO);
+  properties[PROP_SHOW_STARTUP_LOADER] = g_param_spec_boolean ("show-startup-loader", NULL, NULL, FALSE, RO);
+  properties[PROP_CURSOR_VALID] = g_param_spec_boolean ("cursor-valid", NULL, NULL, FALSE, RO);
+  properties[PROP_CURSOR_LON] = g_param_spec_double ("cursor-lon", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_CURSOR_LAT] = g_param_spec_double ("cursor-lat", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_CENTER_LON] = g_param_spec_double ("center-lon", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_CENTER_LAT] = g_param_spec_double ("center-lat", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_ZOOM] = g_param_spec_double ("zoom", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_ROTATION] = g_param_spec_double ("rotation", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_OVERSCALE] = g_param_spec_double ("overscale", NULL, NULL, 0, G_MAXDOUBLE, 1.0, RO);
+  properties[PROP_SCALE_DENOMINATOR] = g_param_spec_double ("scale-denominator", NULL, NULL, 0, G_MAXDOUBLE, 0, RO);
+  properties[PROP_SCHEME] = g_param_spec_int ("scheme", NULL, NULL, 0, 2, 0, RO);
+  properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
+  properties[PROP_USE_DMS] = g_param_spec_boolean ("use-dms", NULL, NULL, FALSE, RW);
+
+#undef RO
+#undef RW
+
+  g_object_class_install_properties (object_class, N_PROPS, properties);
+
+  /* Carries nothing; the panel reads results back via lk_app_model_get_pick_results. */
+  signals[SIGNAL_PICK_RESULTS] =
+      g_signal_new ("pick-results", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
+                    0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+}
+
+static void
+lk_app_model_init (LkAppModel *self)
+{
+  self->controller = lk_chart_controller_new ();
+  lk_chart_controller_set_model (self->controller, self);
+
+  self->recents = lk_store_load_recents ();
+  self->use_dms = lk_store_load_use_dms ();
+  self->overscale = 1.0;
+  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
+}
+
+LkAppModel *
+lk_app_model_new (void)
+{
+  return g_object_new (LK_TYPE_APP_MODEL, NULL);
+}
+
+LkChartController *
+lk_app_model_get_controller (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->controller;
+}
+
+/* ---- opening charts ----------------------------------------------------- */
+
+static void
+lk_collect_cells (const char *dir, GPtrArray *out)
+{
+  g_autoptr (GDir) handle = g_dir_open (dir, 0, NULL);
+
+  if (handle == NULL)
+    return;
+
+  const char *name;
+  while ((name = g_dir_read_name (handle)) != NULL)
+    {
+      g_autofree char *path = g_build_filename (dir, name, NULL);
+
+      if (g_file_test (path, G_FILE_TEST_IS_DIR))
+        lk_collect_cells (path, out);
+      else if (g_str_has_suffix (name, ".pmtiles"))
+        g_ptr_array_add (out, g_steal_pointer (&path));
+    }
+}
+
+static int
+lk_strcmp_sort (gconstpointer a, gconstpointer b)
+{
+  return g_strcmp0 (*(const char *const *) a, *(const char *const *) b);
+}
+
+char **
+lk_app_model_chart_paths_in_dir (const char *dir)
+{
+  g_autoptr (GPtrArray) paths = g_ptr_array_new_with_free_func (g_free);
+
+  g_return_val_if_fail (dir != NULL, g_new0 (char *, 1));
+
+  lk_collect_cells (dir, paths);
+  g_ptr_array_sort (paths, lk_strcmp_sort);
+  g_ptr_array_add (paths, NULL);
+  return (char **) g_ptr_array_free (g_steal_pointer (&paths), FALSE);
+}
+
+/* Target to cell list: a folder expands to its cells, a file is itself, a
+ * dangling path is empty (callers fall through to the next candidate). */
+static char **
+lk_cell_paths_for (const char *target)
+{
+  if (target == NULL || !g_file_test (target, G_FILE_TEST_EXISTS))
+    return g_new0 (char *, 1);
+
+  if (g_file_test (target, G_FILE_TEST_IS_DIR))
+    return lk_app_model_chart_paths_in_dir (target);
+
+  char **one = g_new0 (char *, 2);
+  one[0] = g_strdup (target);
+  return one;
+}
+
+char **
+lk_app_model_initial_chart_paths (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
+
+  const char *env = g_getenv ("LOOKOUT_OPEN");
+  if (env != NULL)
+    {
+      char **cells = lk_cell_paths_for (env);
+      if (g_strv_length (cells) > 0)
+        return cells;
+      g_strfreev (cells);
+    }
+
+  if (self->recents != NULL && self->recents[0] != NULL)
+    {
+      char **cells = lk_cell_paths_for (self->recents[0]);
+      if (g_strv_length (cells) > 0)
+        return cells;
+      g_strfreev (cells);
+    }
+
+  /* The Zig demo's built-in default, if present. */
+  g_autofree char *demo = g_build_filename (g_get_home_dir (), ".cache", "chartplotter",
+                                            "NOAA", "tiles", "d5", "US5MD1MC.pmtiles", NULL);
+  if (g_file_test (demo, G_FILE_TEST_EXISTS))
+    {
+      char **one = g_new0 (char *, 2);
+      one[0] = g_steal_pointer (&demo);
+      return one;
+    }
+
+  return g_new0 (char *, 1);
+}
+
+/* `recent` is what the USER opened (folder or single cell), not the expanded
+ * cells — else the next launch would reopen one cell, not the whole library. */
+static void
+lk_app_model_request_open (LkAppModel *self, char **paths, const char *recent)
+{
+  if (paths == NULL || g_strv_length (paths) == 0)
+    return;
+
+  lk_store_note_recent (recent);
+  g_clear_pointer (&self->recents, g_strfreev);
+  self->recents = lk_store_load_recents ();
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_RECENTS]);
+
+  lk_chart_controller_reopen (self->controller, (const char *const *) paths);
+}
+
+void
+lk_app_model_open_chart (LkAppModel *self, const char *path)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (path == NULL || !g_file_test (path, G_FILE_TEST_EXISTS))
+    return;
+
+  if (g_file_test (path, G_FILE_TEST_IS_DIR))
+    {
+      lk_app_model_open_chart_directory (self, path);
+      return;
+    }
+
+  g_auto (GStrv) one = g_new0 (char *, 2);
+  one[0] = g_strdup (path);
+  lk_app_model_request_open (self, one, path);
+}
+
+void
+lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  g_auto (GStrv) paths = lk_app_model_chart_paths_in_dir (dir);
+  if (g_strv_length (paths) > 0)
+    lk_app_model_request_open (self, paths, dir);
+  else
+    lk_app_model_set_open_error (self, "That folder contains no baked .pmtiles cells.");
+}
+
+const char *const *
+lk_app_model_get_recents (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return (const char *const *) self->recents;
+}
+
+/* ---- commands ----------------------------------------------------------- */
+
+void
+lk_app_model_zoom_in (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_zoom_centered (self->controller, 1.0);
+}
+
+void
+lk_app_model_zoom_out (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_zoom_centered (self->controller, -1.0);
+}
+
+void
+lk_app_model_zoom_to_fit (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_fit_chart (self->controller);
+}
+
+void
+lk_app_model_north_up (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_reset_rotation (self->controller);
+}
+
+/* A menu scheme change must persist just like one from the settings form. */
+void
+lk_app_model_cycle_scheme (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  lk_chart_controller_cycle_scheme (self->controller);
+  tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
+  lk_store_save_mariner (&mariner);
+}
+
+void
+lk_app_model_set_scheme (LkAppModel *self, int scheme)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
+  mariner.scheme = (tile57_scheme) scheme;
+  lk_chart_controller_set_mariner (self->controller, mariner);
+  lk_store_save_mariner (&mariner);
+}
+
+void
+lk_app_model_toggle_text (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_toggle_text (self->controller);
+}
+
+void
+lk_app_model_toggle_soundings (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_toggle_soundings (self->controller);
+}
+
+void
+lk_app_model_toggle_other_category (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_controller_toggle_other_category (self->controller);
+}
+
+/* ---- search: coordinate go-to ------------------------------------------- */
+
+static gboolean
+lk_parse_hemispheres (const char *text, double *out_lat, double *out_lon)
+{
+  /* deg [min [sec]] hemisphere — minutes and seconds both optional. */
+  static const char *pattern =
+      "(\\d+(?:\\.\\d+)?)\\s*[°\\s]\\s*"
+      "(?:(\\d+(?:\\.\\d+)?)\\s*['′\\s]\\s*)?"
+      "(?:(\\d+(?:\\.\\d+)?)\\s*[\"″\\s]\\s*)?"
+      "([NSEWnsew])";
+
+  g_autoptr (GRegex) regex = g_regex_new (pattern, G_REGEX_CASELESS, 0, NULL);
+  if (regex == NULL)
+    return FALSE;
+
+  g_autoptr (GMatchInfo) match = NULL;
+  if (!g_regex_match (regex, text, 0, &match))
+    return FALSE;
+
+  gboolean have_lat = FALSE, have_lon = FALSE;
+
+  while (g_match_info_matches (match))
+    {
+      g_autofree char *deg_s = g_match_info_fetch (match, 1);
+      g_autofree char *min_s = g_match_info_fetch (match, 2);
+      g_autofree char *sec_s = g_match_info_fetch (match, 3);
+      g_autofree char *hemi_s = g_match_info_fetch (match, 4);
+
+      if (deg_s != NULL && deg_s[0] != '\0' && hemi_s != NULL && hemi_s[0] != '\0')
+        {
+          double value = g_ascii_strtod (deg_s, NULL);
+          if (min_s != NULL && min_s[0] != '\0')
+            value += g_ascii_strtod (min_s, NULL) / 60.0;
+          if (sec_s != NULL && sec_s[0] != '\0')
+            value += g_ascii_strtod (sec_s, NULL) / 3600.0;
+
+          char hemi = g_ascii_toupper (hemi_s[0]);
+          if (hemi == 'S' || hemi == 'W')
+            value = -value;
+
+          if (hemi == 'N' || hemi == 'S')
+            {
+              *out_lat = value;
+              have_lat = TRUE;
+            }
+          else
+            {
+              *out_lon = value;
+              have_lon = TRUE;
+            }
+        }
+
+      g_match_info_next (match, NULL);
+    }
+
+  return have_lat && have_lon;
+}
+
+gboolean
+lk_coordinate_parse (const char *text, double *out_lat, double *out_lon)
+{
+  g_return_val_if_fail (out_lat != NULL && out_lon != NULL, FALSE);
+
+  if (text == NULL)
+    return FALSE;
+
+  g_autofree char *trimmed = g_strstrip (g_strdup (text));
+  if (trimmed[0] == '\0')
+    return FALSE;
+
+  if (strpbrk (trimmed, "NSEWnsew") != NULL)
+    return lk_parse_hemispheres (trimmed, out_lat, out_lon);
+
+  /* A decimal pair, comma- or whitespace-separated, latitude first. */
+  g_auto (GStrv) parts = g_strsplit_set (trimmed, ", \t", -1);
+  g_autoptr (GPtrArray) numbers = g_ptr_array_new ();
+  for (guint i = 0; parts[i] != NULL; i++)
+    {
+      if (parts[i][0] != '\0')
+        g_ptr_array_add (numbers, parts[i]);
+    }
+
+  if (numbers->len < 2)
+    return FALSE;
+
+  char *end_lat = NULL, *end_lon = NULL;
+  double lat = g_ascii_strtod (g_ptr_array_index (numbers, 0), &end_lat);
+  double lon = g_ascii_strtod (g_ptr_array_index (numbers, 1), &end_lon);
+
+  if (end_lat == g_ptr_array_index (numbers, 0) || *end_lat != '\0')
+    return FALSE;
+  if (end_lon == g_ptr_array_index (numbers, 1) || *end_lon != '\0')
+    return FALSE;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180)
+    return FALSE;
+
+  *out_lat = lat;
+  *out_lon = lon;
+  return TRUE;
+}
+
+gboolean
+lk_app_model_go_to_coordinate (LkAppModel *self, const char *text)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  double lat, lon;
+  if (!lk_coordinate_parse (text, &lat, &lon))
+    return FALSE;
+
+  lookout_view current = lk_chart_controller_get_view (self->controller);
+  lookout_view target = {
+    .lon = lon,
+    .lat = lat,
+    /* Keep current zoom/rotation; a chart-less view gets a harbour-ish default. */
+    .zoom = current.zoom > 0 ? current.zoom : 12.0,
+    .rotation_deg = current.rotation_deg,
+  };
+  lk_chart_controller_set_view (self->controller, target);
+  return TRUE;
+}
+
+/* ---- readouts ----------------------------------------------------------- */
+
+#define NOTIFY_IF_CHANGED(field, value, prop)                     \
+  G_STMT_START {                                                   \
+    if ((field) != (value))                                        \
+      {                                                            \
+        (field) = (value);                                         \
+        g_object_notify_by_pspec (G_OBJECT (self), properties[prop]); \
+      }                                                            \
+  } G_STMT_END
+
+void
+lk_app_model_set_cursor_geo (LkAppModel *self, gboolean valid, double lon, double lat)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  NOTIFY_IF_CHANGED (self->cursor_valid, valid, PROP_CURSOR_VALID);
+  NOTIFY_IF_CHANGED (self->cursor_lon, lon, PROP_CURSOR_LON);
+  NOTIFY_IF_CHANGED (self->cursor_lat, lat, PROP_CURSOR_LAT);
+}
+
+void
+lk_app_model_push_readouts (LkAppModel *self,
+                            lookout_view view,
+                            double scale_denominator,
+                            double overscale,
+                            int scheme)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  NOTIFY_IF_CHANGED (self->center_lon, view.lon, PROP_CENTER_LON);
+  NOTIFY_IF_CHANGED (self->center_lat, view.lat, PROP_CENTER_LAT);
+  NOTIFY_IF_CHANGED (self->zoom, view.zoom, PROP_ZOOM);
+  NOTIFY_IF_CHANGED (self->rotation_deg, view.rotation_deg, PROP_ROTATION);
+  NOTIFY_IF_CHANGED (self->scale_denominator, scale_denominator, PROP_SCALE_DENOMINATOR);
+  NOTIFY_IF_CHANGED (self->overscale, overscale, PROP_OVERSCALE);
+  NOTIFY_IF_CHANGED (self->scheme, scheme, PROP_SCHEME);
+}
+
+void
+lk_app_model_set_building (LkAppModel *self, gboolean building)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  NOTIFY_IF_CHANGED (self->building, building, PROP_BUILDING);
+}
+
+void
+lk_app_model_set_first_build_done (LkAppModel *self, gboolean done)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (self->first_build_done == done)
+    return;
+  self->first_build_done = done;
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SHOW_STARTUP_LOADER]);
+}
+
+void
+lk_app_model_set_opening (LkAppModel *self, gboolean opening, gboolean preparing_symbols)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  self->preparing_symbols = preparing_symbols;
+  if (self->is_opening == opening)
+    return;
+  self->is_opening = opening;
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SHOW_STARTUP_LOADER]);
+}
+
+gboolean
+lk_app_model_get_show_startup_loader (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+  return self->is_opening || (self->has_chart && !self->first_build_done);
+}
+
+gboolean
+lk_app_model_get_preparing_symbols (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+  return self->preparing_symbols;
+}
+
+void
+lk_app_model_set_chart_open (LkAppModel *self, gboolean open, const char *path)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (g_strcmp0 (self->chart_path, path) != 0)
+    {
+      g_free (self->chart_path);
+      self->chart_path = g_strdup (path);
+      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_CHART_PATH]);
+    }
+
+  if (self->has_chart != open)
+    {
+      self->has_chart = open;
+      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_HAS_CHART]);
+      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SHOW_STARTUP_LOADER]);
+    }
+}
+
+void
+lk_app_model_set_open_error (LkAppModel *self, const char *message)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (g_strcmp0 (self->open_error, message) == 0)
+    return;
+  g_free (self->open_error);
+  self->open_error = g_strdup (message);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_OPEN_ERROR]);
+}
+
+void
+lk_app_model_set_pick_results (LkAppModel *self, GPtrArray *results)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  g_clear_pointer (&self->pick_results, g_ptr_array_unref);
+  self->pick_results = results;
+  g_signal_emit (self, signals[SIGNAL_PICK_RESULTS], 0);
+}
+
+GPtrArray *
+lk_app_model_get_pick_results (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->pick_results;
+}
+
+/* ---- accessors ---------------------------------------------------------- */
+
+gboolean    lk_app_model_get_has_chart (LkAppModel *self)         { return self->has_chart; }
+const char *lk_app_model_get_chart_path (LkAppModel *self)        { return self->chart_path; }
+gboolean    lk_app_model_get_cursor_valid (LkAppModel *self)      { return self->cursor_valid; }
+double      lk_app_model_get_cursor_lon (LkAppModel *self)        { return self->cursor_lon; }
+double      lk_app_model_get_cursor_lat (LkAppModel *self)        { return self->cursor_lat; }
+double      lk_app_model_get_center_lon (LkAppModel *self)        { return self->center_lon; }
+double      lk_app_model_get_center_lat (LkAppModel *self)        { return self->center_lat; }
+double      lk_app_model_get_zoom (LkAppModel *self)              { return self->zoom; }
+double      lk_app_model_get_rotation (LkAppModel *self)          { return self->rotation_deg; }
+double      lk_app_model_get_overscale (LkAppModel *self)         { return self->overscale; }
+double      lk_app_model_get_scale_denominator (LkAppModel *self) { return self->scale_denominator; }
+int         lk_app_model_get_scheme (LkAppModel *self)            { return self->scheme; }
+gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
+gboolean    lk_app_model_get_use_dms (LkAppModel *self)           { return self->use_dms; }
+
+const char *
+lk_app_model_get_scheme_name (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), "Day");
+
+  switch (self->scheme)
+    {
+    case 1:  return "Dusk";
+    case 2:  return "Night";
+    default: return "Day";
+    }
+}
+
+void
+lk_app_model_set_use_dms (LkAppModel *self, gboolean use_dms)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (self->use_dms == use_dms)
+    return;
+  self->use_dms = use_dms;
+  lk_store_save_use_dms (use_dms);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_USE_DMS]);
+}
+
+#undef NOTIFY_IF_CHANGED
