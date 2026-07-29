@@ -322,12 +322,13 @@ pub const Lookout = struct {
         // old to export this fails at LINK time, which is better still.
         const want: u32 = @as(u32, @sizeOf(cc.tile57_gpu_vertex)) |
             (@as(u32, @sizeOf(cc.tile57_gpu_quad)) << 8) |
-            (@as(u32, @sizeOf(cc.tile57_gpu_range)) << 16);
+            (@as(u32, @sizeOf(cc.tile57_gpu_range)) << 16) |
+            (@as(u32, @sizeOf(cc.tile57_gpu_uniforms)) << 24);
         const got = cc.tile57_abi_gpu_layout();
         if (got != want) {
-            std.debug.print("FATAL: tile57 GPU ABI mismatch — header says vertex/quad/range = {d}/{d}/{d} B, linked engine says {d}/{d}/{d} B. Rebuild BOTH repos at matching commits.\n", .{
-                @sizeOf(cc.tile57_gpu_vertex), @sizeOf(cc.tile57_gpu_quad), @sizeOf(cc.tile57_gpu_range),
-                got & 0xff,                    (got >> 8) & 0xff,           (got >> 16) & 0xff,
+            std.debug.print("FATAL: tile57 GPU ABI mismatch — header says vertex/quad/range/uniforms = {d}/{d}/{d}/{d} B, linked engine says {d}/{d}/{d}/{d} B. Rebuild BOTH repos at matching commits.\n", .{
+                @sizeOf(cc.tile57_gpu_vertex), @sizeOf(cc.tile57_gpu_quad), @sizeOf(cc.tile57_gpu_range), @sizeOf(cc.tile57_gpu_uniforms),
+                got & 0xff,                    (got >> 8) & 0xff,           (got >> 16) & 0xff,           (got >> 24) & 0xff,
             });
             return error.EngineAbiMismatch;
         }
@@ -1430,6 +1431,9 @@ pub const Lookout = struct {
         const rsc = self.cam.rotSinCos();
         const d = self.g.pixel_density;
         const a = self.cam.worldToScreen(self.cov_origin);
+        // Every field spelled out: the block is the engine's C type now, and a C
+        // struct carries no Zig defaults — an omitted field would be undefined,
+        // not the zero it used to be.
         return .{
             .mvp = self.cam.mvpOrigin(.{ .x = 0, .y = 0 }),
             .px_to_clip = self.cam.pxToClip(),
@@ -1439,7 +1443,9 @@ pub const Lookout = struct {
             .wrap_x = @floatCast(self.cam.center.x),
             .rot_sin = rsc[0],
             .rot_cos = rsc[1],
+            .color = .{ 0, 0, 0, 1 }, // per-SDF-range; the backends overwrite it
             .anchor_px = .{ @as(f32, @floatCast(a.x)) * d, @as(f32, @floatCast(a.y)) * d },
+            .cell_px = .{ 1, 1 }, // per-pattern-range, likewise
         };
     }
 
