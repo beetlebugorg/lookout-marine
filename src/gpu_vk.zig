@@ -39,21 +39,12 @@ const sdf_frag_spv = spvWords(@embedFile("sdf_frag_spv"));
 const pattern_vert_spv = spvWords(@embedFile("pattern_vert_spv"));
 const pattern_frag_spv = spvWords(@embedFile("pattern_frag_spv"));
 
-/// Vertex/fragment uniform block (128 bytes). Byte-identical to `struct U` in
-/// shaders/vk/*.
-pub const Uniforms = extern struct {
-    mvp: [16]f32,
-    px_to_clip: [2]f32,
-    size_scale: f32,
-    current_scale: f32,
-    cat_mask: u32,
-    wrap_x: f32 = 0.5,
-    rot_sin: f32,
-    rot_cos: f32,
-    color: [4]f32 = .{ 0, 0, 0, 1 }, // SDF halo bg (palette NODATA); chart uses per-vertex colour
-    anchor_px: [2]f32 = .{ 0, 0 },
-    cell_px: [2]f32 = .{ 1, 1 },
-};
+/// Vertex/fragment uniform block (128 bytes), byte-identical to `struct U` in
+/// shaders/vk/*. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig Uniforms,
+/// mirrored as tile57_gpu_uniforms) — all three backends declared their own
+/// copy until they disagreed about what `color` was for. Field docs live there;
+/// the ABI gate in root.zig catches a skew at open.
+pub const Uniforms = cc.tile57_gpu_uniforms;
 
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
