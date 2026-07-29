@@ -1,6 +1,6 @@
 # Lookout Marine — the app (Linux / GTK4)
 
-A native **GTK4** S-52 chartplotter around the Zig chart core, which renders **raw
+A native **GTK4** chartplotter around the Zig chart core, which renders **raw
 Vulkan** (`src/gpu_vk.zig`) into a subsurface the compositor presents, placed below
 a transparent hole in the window so the chrome floats over the chart. The Linux
 counterpart of the SwiftUI shell on macOS/iOS and the Java shell on Android: same
@@ -66,7 +66,7 @@ recent, then `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 | `src/lk-hud.c` | Status-bar readouts, identify panel, DMS formatting |
 | `src/lk-search.c` | Coordinate go-to (feature search stubbed) |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The S-52 mariner panel (Display / Depths / Text / Charts / Advanced) |
+| `src/lk-settings-window.c` | The mariner panel (Display / Depths / Text / Charts / Advanced) |
 | `src/lk-store.c` | Camera pose, recents and settings in one XDG keyfile |
 | `build-core.sh` | Builds the Zig core where meson expects its outputs |
 | `screenshots.sh` | The documentation screenshots, headless |

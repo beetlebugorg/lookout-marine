@@ -29,7 +29,7 @@ their own idiom.
                     │  GPU transport   │       Metal · Vulkan
                     └────────┬─────────┘
                              ▼
-                        tile57 engine          S-57 decode, S-52 portrayal,
+                        tile57 engine          S-57 decode, S-101 portrayal,
                                                tessellation, atlases, tiles
 ```
 
