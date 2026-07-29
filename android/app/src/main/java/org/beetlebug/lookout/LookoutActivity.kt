@@ -41,6 +41,10 @@ class LookoutActivity : ComponentActivity() {
         // Chart under the system bars; the Compose chrome insets itself.
         enableEdgeToEdge()
 
+        // Before any open: without a root the engine re-bakes both atlases on
+        // every launch (~1s), having no cache path in the environment.
+        Lookout.setCacheDir(cacheDir.absolutePath)
+
         // The bundled cell is the last resort, extracted once; the model prefers
         // a chosen library, then anything pushed into our external files dir.
         charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))

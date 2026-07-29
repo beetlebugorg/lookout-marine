@@ -115,9 +115,15 @@ final class ChartController: NSObject {
             ? paths[0]
             : ((paths[0] as NSString).deletingLastPathComponent)
 
-        // Fit the whole cell/library as the initial view.
+        // Reopen where we left off. With nothing saved the opening view is the
+        // engine's own (lookout_default_view) — the same policy every host gets,
+        // rather than each shell inventing its own idea of "the initial view".
         var v = lookout_view()
-        lookout_fit_chart(h, &v)
+        if let saved = ViewState.load() {
+            v = saved
+        } else {
+            lookout_default_view(h, &v)
+        }
         lookout_set_view(h, &v)
 
         // Dev hook, mirroring $LOOKOUT_OPEN: $LOOKOUT_VIEW="lon,lat,zoom[,rot]"
@@ -179,7 +185,12 @@ final class ChartController: NSObject {
         let h = handle
         handle = nil
         renderQueue.sync {}
-        if let h { lookout_close(h) }
+        if let h {
+            var v = lookout_view()
+            lookout_get_view(h, &v) // the pose to reopen on, before the handle dies
+            ViewState.save(v)
+            lookout_close(h)
+        }
     }
 
     // MARK: - Render loop (on-demand)
@@ -408,6 +419,7 @@ final class ChartController: NSObject {
     // MARK: - Push live readouts to the UI
 
     private var lastReadoutsAt: TimeInterval = 0
+    private var lastViewSavedAt: TimeInterval = 0
     private func pushReadouts() {
         guard let model, let h = handle else { return }
         // @Published fires objectWillChange on ASSIGNMENT, changed or not — an
@@ -424,6 +436,11 @@ final class ChartController: NSObject {
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
         if model.centerLat != v.lat { model.centerLat = v.lat }
         if model.centerLon != v.lon { model.centerLon = v.lon }
+        // Persist periodically too: a crash or a force-quit never reaches close().
+        if now - lastViewSavedAt >= 3 {
+            lastViewSavedAt = now
+            ViewState.save(v)
+        }
         let ov = lookout_overscale(h)
         if model.overscale != ov { model.overscale = ov }
         let sd = lookout_scale_denominator(h)

@@ -85,6 +85,9 @@ pub const Gpu = struct {
     size_changed_ms: i64 = -100000,
     /// pixels per logical point (Retina/HiDPI = 2.0/3.0).
     pixel_density: f32 = 1.0,
+    /// Non-zero once the host DECLARED its scale factor (setPixelDensity); it
+    /// then wins over the drawable/point ratio derived below.
+    host_density: f32 = 0,
 
     /// background = S-52 NODATA for the active palette (set by Lookout).
     clear: Color = .{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 },
@@ -161,6 +164,17 @@ pub const Gpu = struct {
             }
         }
         return g;
+    }
+
+    /// The host's own scale factor, declared rather than derived. Apple hosts
+    /// normally need not call this — the layer carries contentsScale — but the
+    /// C ABI offers it on every backend, and a declared value must not then be
+    /// overwritten by the per-frame drawable/point ratio.
+    pub fn setPixelDensity(self: *Gpu, d: f32) void {
+        if (d > 0.2 and d < 8.0) {
+            self.host_density = d;
+            self.pixel_density = d;
+        }
     }
 
     /// Resize the render surface. width/height are in logical points. With a
@@ -622,7 +636,7 @@ pub const Gpu = struct {
         // Density is recomputed every frame: during an animated transition the
         // point size briefly lags the drawable, and a ratio captured at that
         // moment would otherwise stick forever.
-        if (self.host_pt_w > 0) {
+        if (self.host_density == 0 and self.host_pt_w > 0) {
             const d = @as(f32, @floatFromInt(w)) / self.host_pt_w;
             if (d > 0.25 and d < 8 and @abs(d - self.pixel_density) > 0.001) {
                 std.debug.print("pixel density {d:.2} -> {d:.2}\n", .{ self.pixel_density, d });

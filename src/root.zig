@@ -8,6 +8,7 @@
 //!   open/close · fitChart/setView/view/resize · pan/zoom/screen<->geo ·
 //!   getMariner/setMariner (ALL S-52 settings) · render/snapshot · pick.
 const std = @import("std");
+const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const gpu = @import("gpu.zig");
 const camera = @import("camera.zig");
@@ -51,14 +52,41 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
     return m;
 }
 
-/// The app's atlas cache directory: `$HOME/Library/Caches/lookout/v<version>`
-/// — writable in the macOS and iOS sandboxes alike, purgeable by the OS (it's
-/// a rebuildable cache). Created here; owned by `alloc`. Null if HOME is unset.
+/// A cache root the host handed us. Android exports neither HOME nor
+/// XDG_CACHE_HOME, so there this is the ONLY way to a writable cache — the path
+/// exists solely as Context.getCacheDir(). Owned here; set before opening.
+var cache_root: ?[]u8 = null;
+
+/// Adopt `path` as the cache root, replacing any previous one.
+pub fn setCacheRoot(path: []const u8) void {
+    const a = std.heap.c_allocator;
+    const dup = a.dupe(u8, path) catch return;
+    if (cache_root) |old| a.free(old);
+    cache_root = dup;
+}
+
+/// `<root>/lookout/v<version>`: the host's root if it gave one, else
+/// XDG_CACHE_HOME, else the platform default under HOME.
+fn cacheDirPath(alloc: std.mem.Allocator, ver: []const u8) ?[]u8 {
+    if (cache_root) |root| return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ root, ver }) catch null;
+    if (std.c.getenv("XDG_CACHE_HOME")) |x| {
+        const s = std.mem.span(x);
+        if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ s, ver }) catch null;
+    }
+    const home = std.mem.span(std.c.getenv("HOME") orelse return null);
+    if (home.len == 0) return null;
+    return switch (builtin.os.tag) {
+        .macos, .ios => std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch null,
+        else => std.fmt.allocPrint(alloc, "{s}/.cache/lookout/v{s}", .{ home, ver }) catch null,
+    };
+}
+
+/// The app's atlas cache directory — purgeable by the OS (it's a rebuildable
+/// cache). Created here; owned by `alloc`. Null if no root can be resolved.
 /// Keyed by tile57 version so a catalogue/engine change invalidates old atlases.
 pub fn atlasCacheDir(alloc: std.mem.Allocator) ?[]u8 {
-    const home = std.c.getenv("HOME") orelse return null;
     const ver = std.mem.span(cc.tile57_version());
-    const dir = std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch return null;
+    const dir = cacheDirPath(alloc, ver) orelse return null;
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
     return dir;
@@ -226,6 +254,11 @@ pub const Lookout = struct {
     last_fail_ms: i64 = 0,
     prefetched_level: i32 = -1, // the round-zoom level last prefetched (fire once per approach)
     cam: camera.Camera,
+    /// The host's declared logical viewport, and authoritative over anything
+    /// derived from the surface: across a rotation a swapchain keeps reporting
+    /// the OLD extent, which inverts the aspect and skews every rotated frame.
+    host_pt_w: f32 = 0,
+    host_pt_h: f32 = 0,
     schemes: [MAX_SCHEMES]Scheme = undefined,
     n_schemes: usize = 0,
 
@@ -240,6 +273,7 @@ pub const Lookout = struct {
     /// device's max texture dimension (loadSpriteAtlas). Scene builds must pass
     /// THIS ratio so sprite UVs index the atlas we uploaded.
     atlas_scale: f32 = 1.0,
+    atlases_ready: bool = false, // see ensureAtlases: loaded at first use, not at open
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
@@ -271,7 +305,7 @@ pub const Lookout = struct {
         const self = try create(alloc, opts);
         errdefer self.close();
         const t0 = gpu.ticksMs();
-        for (paths) |p| self.addChartPath(p);
+        self.openChartPaths(paths);
         const t1 = gpu.ticksMs();
         try self.finishOpen();
         const t2 = gpu.ticksMs();
@@ -338,6 +372,22 @@ pub const Lookout = struct {
         // first render.
         self.assets_root = atlasCacheDir(self.alloc);
         self.loadNodataColors();
+        // NOT the atlases: they bake at the display density, and nothing has
+        // told us what that is yet — the host cannot call resize() or
+        // setPixelDensity() until this returns a handle. Baking here pinned
+        // every symbol and glyph at 1.00x and then sampled it upscaled. See
+        // ensureAtlases, which runs once the density is known.
+        return self;
+    }
+
+    /// Load the symbol + glyph atlases, once, at the first build or draw — by
+    /// which point the host has declared its density. Both are keyed on that
+    /// density, so loading any earlier bakes the wrong sheet.
+    fn ensureAtlases(self: *Lookout) void {
+        if (self.atlases_ready) return;
+        self.atlases_ready = true;
+        const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
+        var t = gpu.ticksMs();
         self.loadSpriteAtlas();
         if (dbg) {
             std.debug.print("  loadSpriteAtlas {d} ms\n", .{gpu.ticksMs() - t});
@@ -345,7 +395,6 @@ pub const Lookout = struct {
         }
         self.loadGlyphAtlas();
         if (dbg) std.debug.print("  loadGlyphAtlas {d} ms\n", .{gpu.ticksMs() - t});
-        return self;
     }
 
     /// Read `<cache>/<name>` (the app's own atlas cache), or null on any miss.
@@ -590,6 +639,52 @@ pub const Lookout = struct {
         }
     }
 
+    /// Open every path, in parallel. A real library is thousands of cells and
+    /// each open is an openat + stat + mmap and a metadata/coverage decode —
+    /// mostly waiting on the filesystem (charts usually sit on Android's
+    /// FUSE-backed storage), so serially this dominates the whole open.
+    /// Charts land in their path's slot, so the composed order is the caller's
+    /// regardless of which worker got there first.
+    fn openChartPaths(self: *Lookout, paths: []const [:0]const u8) void {
+        if (paths.len <= 1) {
+            for (paths) |p| self.addChartPath(p);
+            return;
+        }
+        const slots = self.alloc.alloc(?*cc.tile57_chart, paths.len) catch {
+            for (paths) |p| self.addChartPath(p); // no room for the slots: serial
+            return;
+        };
+        defer self.alloc.free(slots);
+        @memset(slots, null);
+
+        const W = struct {
+            fn run(ps: []const [:0]const u8, out: []?*cc.tile57_chart, next: *std.atomic.Value(usize)) void {
+                while (true) {
+                    const i = next.fetchAdd(1, .monotonic); // claim, don't partition: cells vary in size
+                    if (i >= ps.len) return;
+                    var err: cc.tile57_error = undefined;
+                    var chart: ?*cc.tile57_chart = null;
+                    if (cc.tile57_chart_open(ps[i].ptr, &chart, &err) == cc.TILE57_OK) out[i] = chart;
+                }
+            }
+        };
+
+        var next = std.atomic.Value(usize).init(0);
+        const cpus = std.Thread.getCpuCount() catch 1;
+        var threads: [8]std.Thread = undefined;
+        const want = @min(@max(cpus, 1), threads.len + 1) - 1; // this thread works too
+        var spawned: usize = 0;
+        while (spawned < want) : (spawned += 1) {
+            threads[spawned] = std.Thread.spawn(.{}, W.run, .{ paths, slots, &next }) catch break;
+        }
+        W.run(paths, slots, &next);
+        for (threads[0..spawned]) |t| t.join();
+
+        for (slots, paths) |c, p| {
+            if (c) |ch| self.charts.append(self.alloc, ch) catch {} else std.debug.print("skip '{s}'\n", .{p});
+        }
+    }
+
     fn addChartPath(self: *Lookout, path: [:0]const u8) void {
         var err: cc.tile57_error = undefined;
         var chart: ?*cc.tile57_chart = null;
@@ -744,6 +839,19 @@ pub const Lookout = struct {
     /// the first alphabetically: a US ENC's first cell is usually a tiny-scale
     /// EEZ overview (e.g. US1EEZ1M) that opens as an empty ocean rectangle. A
     /// harbour/approach cell lands the user on actual chart content instead.
+    /// The pose a host should open with when it has nothing saved. fitChart
+    /// alone lands on the smallest bounded CELL, which in a 2500-cell library
+    /// is an arbitrary harbour; keep that centre but pull back to an overview.
+    /// Hosts persist the pose themselves (each has its own store) — this is
+    /// the one piece of the policy worth having in a single place.
+    const DEFAULT_VIEW_ZOOM = 5.0;
+    pub fn defaultView(self: *Lookout) View {
+        var v = self.fitChart();
+        v.zoom = std.math.clamp(DEFAULT_VIEW_ZOOM, self.cam.min_zoom, self.cam.max_zoom);
+        v.rotation_deg = 0;
+        return v;
+    }
+
     pub fn fitChart(self: *Lookout) View {
         var west: f64 = 0;
         var south: f64 = 0;
@@ -814,6 +922,8 @@ pub const Lookout = struct {
 
     /// Resize the render surface (points; HiDPI density is applied internally).
     pub fn resize(self: *Lookout, width: u32, height: u32) !void {
+        self.host_pt_w = @floatFromInt(width);
+        self.host_pt_h = @floatFromInt(height);
         try self.g.resize(width, height);
         const lw, const lh = self.logicalSize();
         self.cam.vw = lw;
@@ -827,11 +937,18 @@ pub const Lookout = struct {
     /// across the whole framebuffer, so density is handled ONCE, in the
     /// projection, and never multiplied into a size again.
     fn logicalSize(self: *const Lookout) struct { f32, f32 } {
+        if (self.host_pt_w > 0 and self.host_pt_h > 0) return .{ self.host_pt_w, self.host_pt_h };
         const d = if (self.g.pixel_density > 0) self.g.pixel_density else 1.0;
         return .{ @as(f32, @floatFromInt(self.g.width)) / d, @as(f32, @floatFromInt(self.g.height)) / d };
     }
     pub fn pixelDensity(self: *Lookout) f32 {
         return self.g.pixel_density;
+    }
+
+    /// Declare the host's scale factor instead of letting the backend infer it
+    /// from the surface. Set before the first build.
+    pub fn setPixelDensity(self: *Lookout, d: f32) void {
+        self.g.setPixelDensity(d);
     }
 
     // ---- interaction --------------------------------------------------------
@@ -1161,6 +1278,7 @@ pub const Lookout = struct {
     // Synchronous build (snapshots, and the very first frame so there is
     // something to draw immediately).
     fn buildGpuScene(self: *Lookout) void {
+        self.ensureAtlases(); // runJob reads atlas_scale for the sprite UVs
         const job = self.jobFor(self.cam.center, self.buildZoom(), false);
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
         const ok = self.runJob(job, &cs);
@@ -1261,6 +1379,7 @@ pub const Lookout = struct {
     }
 
     fn tickBuild(self: *Lookout) void {
+        self.ensureAtlases(); // before any worker reads atlas_scale
         self.pollBuild();
         if (self.build_active) return;
         if (self.trim_requested) {
@@ -1326,6 +1445,7 @@ pub const Lookout = struct {
 
     /// Render one frame to the window and present.
     pub fn render(self: *Lookout) !bool {
+        self.ensureAtlases();
         if (self.loading) {
             self.pollCompose(false);
             if (self.loading) {
