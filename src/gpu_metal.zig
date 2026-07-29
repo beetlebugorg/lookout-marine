@@ -40,6 +40,18 @@ pub fn ticksUs() i64 {
 /// How to interpret Options.native_handle. Apple-only: the host hands us its
 /// CAMetalLayer (an NSView's backing layer on macOS, a UIView's layerClass on
 /// iOS) and keeps its own toolkit and event loop.
+/// dmabuf export is a Linux/Vulkan facility; declared here too for one shared ABI.
+pub const DmabufFrame = extern struct {
+    fd: c_int = -1,
+    fourcc: u32 = 0,
+    modifier: u64 = 0,
+    n_planes: u32 = 0,
+    offset: [4]u32 = @splat(0),
+    stride: [4]u32 = @splat(0),
+    width: u32 = 0,
+    height: u32 = 0,
+};
+
 pub const NativeKind = enum(c_int) {
     none = 0,
     metal_layer = 1, // CAMetalLayer* (macOS & iOS)
@@ -709,6 +721,20 @@ pub const Gpu = struct {
         const pixels = try self.renderOffscreen(alloc, u, text_on, sound_on);
         defer alloc.free(pixels);
         try png.write(alloc, path, pixels, self.width, self.height);
+    }
+
+    /// No dmabuf export on this backend — the host presents to a surface.
+    pub fn renderDmabuf(self: *Gpu, u: Uniforms, text_on: bool, sound_on: bool, out: *DmabufFrame) !void {
+        _ = self;
+        _ = u;
+        _ = text_on;
+        _ = sound_on;
+        _ = out;
+        return error.Unsupported;
+    }
+    pub fn dmabufSupported(self: *Gpu) bool {
+        _ = self;
+        return false;
     }
 
     pub fn deinit(self: *Gpu) void {

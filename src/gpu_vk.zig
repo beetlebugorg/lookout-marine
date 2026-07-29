@@ -17,8 +17,10 @@
 //! Single frame in flight: the chart renders on demand, not at a locked 60 fps,
 //! so simplicity wins over frame overlap.
 const std = @import("std");
+const builtin = @import("builtin");
 const cc = @import("c.zig").c; // tile57 + stb (shared; matches root's scene types)
-const vk = @import("c_vk.zig").c; // Vulkan + ANativeWindow + android log
+const c_vk = @import("c_vk.zig");
+const vk = c_vk.c; // Vulkan (+ ANativeWindow and the android log sink on Android)
 
 // Precompiled SPIR-V (see build.zig: -Dbackend=vk embeds these), converted to
 // u32 words at comptime: @embedFile data carries NO alignment guarantee, and
@@ -62,25 +64,149 @@ pub fn ticksMs() i64 {
     return @divTrunc(ticksUs(), 1000);
 }
 
+// Logging: logcat on Android, stderr elsewhere; both take a printf format.
+extern "c" fn fprintf(stream: *anyopaque, fmt: [*:0]const u8, ...) c_int;
+extern "c" fn fputc(ch: c_int, stream: *anyopaque) c_int;
+// `stderr` is a FILE* variable, so @extern gives its address — deref for the stream (else segfault).
+const stderr_var: *const *anyopaque = @extern(*const *anyopaque, .{ .name = "stderr" });
+
+fn logAt(comptime prio: c_int, comptime fmt: [*:0]const u8, args: anytype) void {
+    if (c_vk.android) {
+        _ = @call(.auto, vk.__android_log_print, .{ prio, @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+    } else {
+        const stream = stderr_var.*;
+        _ = @call(.auto, fprintf, .{ stream, fmt } ++ args);
+        _ = fputc('\n', stream);
+    }
+}
 fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
-    _ = @call(.auto, vk.__android_log_print, .{ @as(c_int, vk.ANDROID_LOG_ERROR), @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+    logAt(if (c_vk.android) vk.ANDROID_LOG_ERROR else 0, fmt, args);
 }
 fn logInfo(comptime fmt: [*:0]const u8, args: anytype) void {
-    _ = @call(.auto, vk.__android_log_print, .{ @as(c_int, vk.ANDROID_LOG_INFO), @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
+    logAt(if (c_vk.android) vk.ANDROID_LOG_INFO else 0, fmt, args);
+}
+
+/// One exported frame; mirrors lookout_dmabuf_frame in include/lookout.h. `fd`
+/// stays owned by the core until the next resize or close — dup it to hand it on.
+pub const DmabufFrame = extern struct {
+    fd: c_int = -1,
+    fourcc: u32 = 0,
+    modifier: u64 = 0,
+    n_planes: u32 = 0,
+    offset: [4]u32 = @splat(0),
+    stride: [4]u32 = @splat(0),
+    width: u32 = 0,
+    height: u32 = 0,
+};
+
+/// One image in the export ring: a colour target the host can import directly.
+const DmabufTarget = struct {
+    img: vk.VkImage = null,
+    mem: vk.VkDeviceMemory = null,
+    view: vk.VkImageView = null,
+    fb: vk.VkFramebuffer = null,
+    fd: c_int = -1,
+    modifier: u64 = 0,
+    n_planes: u32 = 0,
+    offsets: [4]u32 = @splat(0),
+    strides: [4]u32 = @splat(0),
+};
+
+/// The fourccs matching our two UNORM swapchain formats, named on import.
+const DRM_FORMAT_ARGB8888: u32 = 0x34325241; // 'AR24' — BGRA bytes in memory
+const DRM_FORMAT_ABGR8888: u32 = 0x34324241; // 'AB24' — RGBA bytes in memory
+
+/// The DRM fourcc naming the same byte order as a Vulkan format; null if unexportable.
+fn drmFourcc(fmt: u32) ?u32 {
+    return switch (fmt) {
+        vk.VK_FORMAT_B8G8R8A8_UNORM => DRM_FORMAT_ARGB8888,
+        vk.VK_FORMAT_R8G8B8A8_UNORM => DRM_FORMAT_ABGR8888,
+        else => null,
+    };
+}
+
+/// How many DRM format modifiers this device will export `fmt` with (0 = unexportable).
+fn drmModifierCount(get: vk.PFN_vkGetPhysicalDeviceFormatProperties2KHR, phys: vk.VkPhysicalDevice, fmt: u32) u32 {
+    if (get == null) return 0;
+    var list = std.mem.zeroes(vk.VkDrmFormatModifierPropertiesListEXT);
+    list.sType = vk.VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT;
+    var fp2 = std.mem.zeroes(vk.VkFormatProperties2);
+    fp2.sType = vk.VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+    fp2.pNext = &list;
+    get.?(phys, fmt, &fp2);
+    return list.drmFormatModifierCount;
+}
+
+/// True for _SRGB formats, whose write-time linear->sRGB encode would double up the already-sRGB palette.
+fn isSrgbFormat(fmt: u32) bool {
+    return fmt == vk.VK_FORMAT_R8G8B8A8_SRGB or
+        fmt == vk.VK_FORMAT_B8G8R8A8_SRGB or
+        fmt == vk.VK_FORMAT_A8B8G8R8_SRGB_PACK32;
 }
 
 /// How to interpret Options.native_handle. Superset across backends so
-/// root/capi share one ABI; this backend only accepts android_window.
+/// root/capi share one ABI.
 pub const NativeKind = enum(c_int) {
     none = 0,
     metal_layer = 1, // Apple CAMetalLayer* — capi/root ABI parity only
     cocoa_window = 2,
     cocoa_view = 3,
-    win32_hwnd = 4,
-    x11_window = 5,
+    win32_hwnd = 4, // *const Win32Window
+    x11_window = 5, // *const X11Window
     uikit_windowscene = 6,
     android_window = 7, // ANativeWindow* (from the Java Surface via JNI)
+    wayland_surface = 8, // *const WaylandSurface
 };
+
+// ---- WSI, hand-declared ----------------------------------------------------
+//
+// Mirrors of the create-info structs from vulkan_win32.h / _xlib.h / _wayland.h,
+// declared here so this core needs no X11/Wayland/Windows SDK (see c_vk.zig);
+// their ABI is frozen and the sTypes come from the vendored vulkan_core.h. The
+// functions load via vkGetInstanceProcAddr, so nothing links against them either.
+
+/// A host's Win32 window. `hinstance` may be null — the loader falls back to
+/// the module the window belongs to.
+pub const Win32Window = extern struct { hinstance: ?*anyopaque, hwnd: ?*anyopaque };
+/// A host's X11 window: an Xlib `Display*` and the `Window` XID.
+pub const X11Window = extern struct { display: ?*anyopaque, window: c_ulong };
+/// A host's Wayland surface: `wl_display*` and the `wl_surface*` to present on
+/// — for a GTK4 host, the subsurface it created for the chart, not the toplevel.
+pub const WaylandSurface = extern struct { display: ?*anyopaque, surface: ?*anyopaque };
+
+const VkWin32SurfaceCreateInfoKHR = extern struct {
+    sType: c_int,
+    pNext: ?*const anyopaque = null,
+    flags: u32 = 0,
+    hinstance: ?*anyopaque,
+    hwnd: ?*anyopaque,
+};
+const VkXlibSurfaceCreateInfoKHR = extern struct {
+    sType: c_int,
+    pNext: ?*const anyopaque = null,
+    flags: u32 = 0,
+    dpy: ?*anyopaque,
+    window: c_ulong,
+};
+const VkWaylandSurfaceCreateInfoKHR = extern struct {
+    sType: c_int,
+    pNext: ?*const anyopaque = null,
+    flags: u32 = 0,
+    display: ?*anyopaque,
+    surface: ?*anyopaque,
+};
+
+/// The instance extension each surface kind needs alongside VK_KHR_surface, and
+/// the entry point that creates it. Null kind = no window (offscreen only).
+fn surfaceExtension(kind: NativeKind) ?[*:0]const u8 {
+    return switch (kind) {
+        .android_window => "VK_KHR_android_surface",
+        .win32_hwnd => "VK_KHR_win32_surface",
+        .x11_window => "VK_KHR_xlib_surface",
+        .wayland_surface => "VK_KHR_wayland_surface",
+        else => null,
+    };
+}
 
 pub const Options = struct {
     width: u32,
@@ -172,7 +298,21 @@ pub const Gpu = struct {
     off_fb: vk.VkFramebuffer = null,
     download: Buffer = .{},
 
-    window: ?*vk.ANativeWindow = null,
+    // dmabuf export: the path a toolkit host uses when it wants the chart as a
+    // TEXTURE in its own scene graph rather than a surface composited over its
+    // widgets. A ring, so the host is never reading the image we are writing.
+    dmabuf_ok: bool = false,
+    get_fmt_props2: vk.PFN_vkGetPhysicalDeviceFormatProperties2KHR = null,
+    dmabuf_pass: vk.VkRenderPass = null,
+    dmabuf_ring: [3]DmabufTarget = @splat(.{}),
+    dmabuf_count: u32 = 0,
+    dmabuf_next: u32 = 0,
+    dmabuf_w: u32 = 0,
+    dmabuf_h: u32 = 0,
+
+    /// The ANativeWindow we present on — Android only; every other window
+    /// system's handle is consumed by createSurface and never held.
+    window: if (c_vk.android) ?*vk.ANativeWindow else ?*anyopaque = null,
     width: u32,
     height: u32,
     external_window: bool = false,
@@ -198,14 +338,44 @@ pub const Gpu = struct {
         app.sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "lookout marine";
         app.apiVersion = vk.VK_API_VERSION_1_0;
-        const inst_exts = [_][*:0]const u8{ "VK_KHR_surface", "VK_KHR_android_surface" };
         var ici = std.mem.zeroes(vk.VkInstanceCreateInfo);
         ici.sType = vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &app;
-        const want_surface = opts.native_kind == .android_window and opts.native_handle != null;
+        const platform_ext = if (opts.native_handle != null) surfaceExtension(opts.native_kind) else null;
+        const want_surface = platform_ext != null;
+
+        // The DRM-modifier queries dmabuf export needs are Vulkan 1.1 core, and
+        // this instance is deliberately 1.0 (Android's floor). Ask for the 1.0
+        // extension that provides them instead of raising the baseline.
+        const props2_ext = "VK_KHR_get_physical_device_properties2";
+        var ninst: u32 = 0;
+        _ = vk.vkEnumerateInstanceExtensionProperties(null, &ninst, null);
+        var instprops: [256]vk.VkExtensionProperties = undefined;
+        if (ninst > instprops.len) ninst = instprops.len;
+        _ = vk.vkEnumerateInstanceExtensionProperties(null, &ninst, &instprops);
+        var have_props2 = false;
+        for (instprops[0..ninst]) |e| {
+            if (std.mem.orderZ(u8, @ptrCast(&e.extensionName), props2_ext) == .eq) {
+                have_props2 = true;
+                break;
+            }
+        }
+
+        var inst_ext_buf: [4][*:0]const u8 = undefined;
+        var inst_ext_n: u32 = 0;
         if (want_surface) {
-            ici.enabledExtensionCount = inst_exts.len;
-            ici.ppEnabledExtensionNames = @ptrCast(&inst_exts);
+            inst_ext_buf[inst_ext_n] = "VK_KHR_surface";
+            inst_ext_n += 1;
+            inst_ext_buf[inst_ext_n] = platform_ext.?;
+            inst_ext_n += 1;
+        }
+        if (have_props2) {
+            inst_ext_buf[inst_ext_n] = props2_ext;
+            inst_ext_n += 1;
+        }
+        if (inst_ext_n > 0) {
+            ici.enabledExtensionCount = inst_ext_n;
+            ici.ppEnabledExtensionNames = &inst_ext_buf;
         }
         var instance: vk.VkInstance = null;
         try check(vk.vkCreateInstance(&ici, null, &instance), "vkCreateInstance");
@@ -218,7 +388,22 @@ pub const Gpu = struct {
         var devs: [8]vk.VkPhysicalDevice = @splat(null);
         if (ndev > devs.len) ndev = devs.len;
         _ = vk.vkEnumeratePhysicalDevices(instance, &ndev, &devs);
-        const phys = devs[0];
+        // The offscreen texture/dmabuf frame is imported by the compositor on the
+        // discrete card driving the display; exporting from the loader's default
+        // iGPU yields a cross-GPU buffer it can't read. Prefer a discrete GPU
+        // offscreen; the surface path keeps devs[0] (the presentable GPU).
+        var phys = devs[0];
+        if (!want_surface) {
+            for (devs[0..ndev]) |cand| {
+                if (cand == null) continue;
+                var cp: vk.VkPhysicalDeviceProperties = undefined;
+                vk.vkGetPhysicalDeviceProperties(cand, &cp);
+                if (cp.deviceType == vk.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                    phys = cand;
+                    break;
+                }
+            }
+        }
         var nq: u32 = 0;
         vk.vkGetPhysicalDeviceQueueFamilyProperties(phys, &nq, null);
         var qprops: [16]vk.VkQueueFamilyProperties = undefined;
@@ -252,13 +437,53 @@ pub const Gpu = struct {
         // maintenance1: negative-height viewport for the Y flip (see
         // recordDraws). Core since 1.1; universally shipped on 1.0 drivers.
         // swapchain only when presenting.
-        const dev_exts = [_][*:0]const u8{ "VK_KHR_maintenance1", "VK_KHR_swapchain" };
+        // The dmabuf export trio is OPTIONAL: probe it, and only ask for it when
+        // the driver has all three. A host that wants the chart as a texture
+        // needs them; one presenting to a surface does not, and Android has no
+        // use for them at all.
+        var next: u32 = 0;
+        _ = vk.vkEnumerateDeviceExtensionProperties(phys, null, &next, null);
+        var extprops: [512]vk.VkExtensionProperties = undefined;
+        if (next > extprops.len) next = extprops.len;
+        _ = vk.vkEnumerateDeviceExtensionProperties(phys, null, &next, &extprops);
+        const dmabuf_exts = [_][*:0]const u8{
+            "VK_KHR_external_memory_fd",
+            "VK_EXT_external_memory_dma_buf",
+            "VK_EXT_image_drm_format_modifier",
+        };
+        var have_dmabuf = have_props2; // the modifier queries ride on it
+        if (have_dmabuf) for (dmabuf_exts) |want| {
+            var seen = false;
+            for (extprops[0..next]) |have| {
+                if (std.mem.orderZ(u8, @ptrCast(&have.extensionName), want) == .eq) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                have_dmabuf = false;
+                break;
+            }
+        };
+
+        var dev_ext_buf: [8][*:0]const u8 = undefined;
+        var dev_ext_n: u32 = 0;
+        dev_ext_buf[dev_ext_n] = "VK_KHR_maintenance1";
+        dev_ext_n += 1;
+        if (want_surface) {
+            dev_ext_buf[dev_ext_n] = "VK_KHR_swapchain";
+            dev_ext_n += 1;
+        }
+        if (have_dmabuf) for (dmabuf_exts) |e| {
+            dev_ext_buf[dev_ext_n] = e;
+            dev_ext_n += 1;
+        };
         var dci = std.mem.zeroes(vk.VkDeviceCreateInfo);
         dci.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
-        dci.enabledExtensionCount = if (want_surface) dev_exts.len else 1;
-        dci.ppEnabledExtensionNames = @ptrCast(&dev_exts);
+        dci.enabledExtensionCount = dev_ext_n;
+        dci.ppEnabledExtensionNames = &dev_ext_buf;
         var device: vk.VkDevice = null;
         try check(vk.vkCreateDevice(phys, &dci, null, &device), "vkCreateDevice");
         var queue: vk.VkQueue = null;
@@ -276,22 +501,21 @@ pub const Gpu = struct {
             .height = opts.height,
             .external_window = want_surface,
             .uni_align = uni_align,
+            .dmabuf_ok = have_dmabuf,
+            .get_fmt_props2 = @ptrCast(vk.vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFormatProperties2KHR")),
         };
 
         // ---- surface + real size -------------------------------------------
         if (want_surface) {
-            g.window = @ptrCast(opts.native_handle);
-            var sci = std.mem.zeroes(vk.VkAndroidSurfaceCreateInfoKHR);
-            sci.sType = vk.VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-            sci.window = g.window;
-            try check(vk.vkCreateAndroidSurfaceKHR(instance, &sci, null, &g.surface), "vkCreateAndroidSurfaceKHR");
-            const ww = vk.ANativeWindow_getWidth(g.window);
-            const wh = vk.ANativeWindow_getHeight(g.window);
-            if (ww > 0 and wh > 0) {
-                g.width = @intCast(ww);
-                g.height = @intCast(wh);
-            }
-            // pick the surface's colour format (prefer RGBA8) + ITS colorspace
+            try g.createSurface(instance, opts);
+            // Pick the surface's colour format + ITS colorspace. It MUST be a
+            // UNORM one: the palette hands the shader colours that are already
+            // sRGB, and an _SRGB swapchain would encode them a second time on
+            // write — every colour comes out pale (measured: S-52 NODATA
+            // 147,174,187 presenting as 200,215,222). Prefer either 8-bit UNORM
+            // ordering, then anything that isn't _SRGB, and only take an _SRGB
+            // format if the surface offers nothing else — saying so, because
+            // the chart will be visibly washed out.
             var nfmt: u32 = 0;
             _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(phys, g.surface, &nfmt, null);
             var fmts: [32]vk.VkSurfaceFormatKHR = undefined;
@@ -300,12 +524,41 @@ pub const Gpu = struct {
             if (nfmt > 0) {
                 g.color_format = fmts[0].format;
                 g.color_space = fmts[0].colorSpace;
+                var picked = false;
                 for (fmts[0..nfmt]) |f| {
-                    if (f.format == vk.VK_FORMAT_R8G8B8A8_UNORM) {
+                    if (f.format == vk.VK_FORMAT_R8G8B8A8_UNORM or
+                        f.format == vk.VK_FORMAT_B8G8R8A8_UNORM)
+                    {
                         g.color_format = f.format;
                         g.color_space = f.colorSpace;
+                        picked = true;
                         break;
                     }
+                }
+                if (!picked) for (fmts[0..nfmt]) |f| {
+                    if (!isSrgbFormat(f.format)) {
+                        g.color_format = f.format;
+                        g.color_space = f.colorSpace;
+                        picked = true;
+                        break;
+                    }
+                };
+                if (!picked)
+                    logErr("vk: surface offers only sRGB formats (fmt=%d) — colours will be over-bright", .{@as(c_int, @intCast(g.color_format))});
+            }
+        }
+
+        // With no surface, nothing has dictated a colour format — and if the host
+        // is going to import our frames, the choice is not free: a format the
+        // driver exposes no DRM modifiers for cannot be exported at all. Pick
+        // an exportable ordering while the pipelines are still unbuilt, rather
+        // than discovering it at the first export and having to rebuild them.
+        if (!want_surface and have_dmabuf) {
+            const orderings = [_]u32{ vk.VK_FORMAT_B8G8R8A8_UNORM, vk.VK_FORMAT_R8G8B8A8_UNORM };
+            for (orderings) |fmt| {
+                if (drmModifierCount(g.get_fmt_props2, phys, fmt) > 0) {
+                    g.color_format = fmt;
+                    break;
                 }
             }
         }
@@ -726,7 +979,22 @@ pub const Gpu = struct {
         var caps: vk.VkSurfaceCapabilitiesKHR = undefined;
         try check(vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.phys, self.surface, &caps), "surface caps");
         var extent = caps.currentExtent;
-        if (extent.width == 0xFFFFFFFF) extent = .{ .width = self.width, .height = self.height };
+        if (extent.width == 0xFFFFFFFF) {
+            // Wayland: the surface has no size of its own — the client names one.
+            // The host's declared viewport is the authority here, exactly as in
+            // extentStale(). Reusing self.width instead would pin the swapchain
+            // to whatever it was first created at: every later resize would find
+            // it stale, recreate it at the SAME extent, and find it stale again.
+            extent = if (self.host_pt_w > 0 and self.host_pt_h > 0 and self.pixel_density > 0)
+                .{
+                    .width = @intFromFloat(@round(self.host_pt_w * self.pixel_density)),
+                    .height = @intFromFloat(@round(self.host_pt_h * self.pixel_density)),
+                }
+            else
+                .{ .width = self.width, .height = self.height };
+            extent.width = std.math.clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+            extent.height = std.math.clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+        }
         if (extent.width == 0 or extent.height == 0) return; // minimized; retry later
         self.width = extent.width;
         self.height = extent.height;
@@ -861,6 +1129,239 @@ pub const Gpu = struct {
         if (self.download.buf == null)
             self.download = try self.createBuffer(@as(u64, self.width) * self.height * 4, vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
     }
+    // ---- dmabuf export ------------------------------------------------------
+    //
+    // The chart as a TEXTURE the host imports, instead of a surface composited
+    // over its widgets. This is what lets a toolkit draw its own chrome ON TOP
+    // of the chart: GTK4, for one, puts every widget through GSK into the
+    // toplevel's one surface, so anything presented to a surface of our own
+    // stacks above the whole widget tree and nothing can be drawn over it.
+    //
+    // Nothing about the chart's rendering changes — same pipelines, same
+    // tessellated vertex buffers, same per-frame uniform update, rasterized at
+    // the same resolution. Only the destination changes.
+
+    /// Create (or resize) the export ring at the current pixel size. Images
+    /// carry a DRM format modifier and dedicated exportable memory; the fd is
+    /// exported ONCE here and owned by us for the life of the target.
+    fn ensureDmabufTargets(self: *Gpu) !void {
+        if (!self.dmabuf_ok) return error.VulkanFailure;
+        if (drmFourcc(self.color_format) == null) {
+            logErr("vk: colour format %d has no DRM fourcc — cannot export", .{@as(c_int, @intCast(self.color_format))});
+            return error.VulkanFailure;
+        }
+        if (self.dmabuf_count > 0 and self.dmabuf_w == self.width and self.dmabuf_h == self.height)
+            return;
+
+        _ = vk.vkDeviceWaitIdle(self.device);
+        self.releaseDmabufTargets();
+
+        if (self.dmabuf_pass == null)
+            // GENERAL, not PRESENT_SRC: the consumer is an importing API, not a
+            // presentation engine.
+            self.dmabuf_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_GENERAL);
+
+        // Every modifier the driver will accept for this format; it picks one.
+        var modlist = std.mem.zeroes(vk.VkDrmFormatModifierPropertiesListEXT);
+        modlist.sType = vk.VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT;
+        var fp2 = std.mem.zeroes(vk.VkFormatProperties2);
+        fp2.sType = vk.VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+        fp2.pNext = &modlist;
+        modlist.drmFormatModifierCount = drmModifierCount(self.get_fmt_props2, self.phys, self.color_format);
+        var mods: [64]vk.VkDrmFormatModifierPropertiesEXT = undefined;
+        if (modlist.drmFormatModifierCount > mods.len) modlist.drmFormatModifierCount = mods.len;
+        modlist.pDrmFormatModifierProperties = &mods;
+        if (self.get_fmt_props2 == null) return error.VulkanFailure;
+        self.get_fmt_props2.?(self.phys, self.color_format, &fp2);
+        const nmod = modlist.drmFormatModifierCount;
+        if (nmod == 0) {
+            logErr("vk: no DRM format modifiers for the colour format — cannot export", .{});
+            return error.VulkanFailure;
+        }
+        var modvals: [64]u64 = undefined;
+        for (0..nmod) |i| modvals[i] = mods[i].drmFormatModifier;
+
+        const get_mod_props: vk.PFN_vkGetImageDrmFormatModifierPropertiesEXT =
+            @ptrCast(vk.vkGetDeviceProcAddr(self.device, "vkGetImageDrmFormatModifierPropertiesEXT"));
+        const get_fd: vk.PFN_vkGetMemoryFdKHR =
+            @ptrCast(vk.vkGetDeviceProcAddr(self.device, "vkGetMemoryFdKHR"));
+        if (get_mod_props == null or get_fd == null) return error.VulkanFailure;
+
+        for (&self.dmabuf_ring) |*t| {
+            var emici = std.mem.zeroes(vk.VkExternalMemoryImageCreateInfo);
+            emici.sType = vk.VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+            emici.handleTypes = vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+            var modci = std.mem.zeroes(vk.VkImageDrmFormatModifierListCreateInfoEXT);
+            modci.sType = vk.VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT;
+            modci.pNext = &emici;
+            modci.drmFormatModifierCount = nmod;
+            modci.pDrmFormatModifiers = &modvals;
+
+            var ii = std.mem.zeroes(vk.VkImageCreateInfo);
+            ii.sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ii.pNext = &modci;
+            ii.imageType = vk.VK_IMAGE_TYPE_2D;
+            ii.format = self.color_format;
+            ii.extent = .{ .width = self.width, .height = self.height, .depth = 1 };
+            ii.mipLevels = 1;
+            ii.arrayLayers = 1;
+            ii.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+            ii.tiling = vk.VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+            ii.usage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            ii.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+            ii.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+            try check(vk.vkCreateImage(self.device, &ii, null, &t.img), "vkCreateImage(dmabuf)");
+
+            var req: vk.VkMemoryRequirements = undefined;
+            vk.vkGetImageMemoryRequirements(self.device, t.img, &req);
+            var emai = std.mem.zeroes(vk.VkExportMemoryAllocateInfo);
+            emai.sType = vk.VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+            emai.handleTypes = vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+            // Dedicated: an exported image must own its allocation outright.
+            var mdai = std.mem.zeroes(vk.VkMemoryDedicatedAllocateInfo);
+            mdai.sType = vk.VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+            mdai.pNext = &emai;
+            mdai.image = t.img;
+            var ai = std.mem.zeroes(vk.VkMemoryAllocateInfo);
+            ai.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.pNext = &mdai;
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = try self.memType(req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            try check(vk.vkAllocateMemory(self.device, &ai, null, &t.mem), "vkAllocateMemory(dmabuf)");
+            try check(vk.vkBindImageMemory(self.device, t.img, t.mem, 0), "vkBindImageMemory(dmabuf)");
+
+            var vi = std.mem.zeroes(vk.VkImageViewCreateInfo);
+            vi.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = t.img;
+            vi.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = self.color_format;
+            vi.subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+            try check(vk.vkCreateImageView(self.device, &vi, null, &t.view), "vkCreateImageView(dmabuf)");
+
+            // Which modifier did it actually choose, and how many planes does
+            // that imply — the host needs both to import.
+            var dmp = std.mem.zeroes(vk.VkImageDrmFormatModifierPropertiesEXT);
+            dmp.sType = vk.VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT;
+            try check(get_mod_props.?(self.device, t.img, &dmp), "vkGetImageDrmFormatModifierPropertiesEXT");
+            t.modifier = dmp.drmFormatModifier;
+            t.n_planes = 1;
+            for (0..nmod) |i| {
+                if (mods[i].drmFormatModifier == t.modifier) {
+                    t.n_planes = mods[i].drmFormatModifierPlaneCount;
+                    break;
+                }
+            }
+            if (t.n_planes > 4) t.n_planes = 4;
+
+            const plane_aspect = [4]vk.VkImageAspectFlags{
+                vk.VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, vk.VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT,
+                vk.VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT, vk.VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT,
+            };
+            for (0..t.n_planes) |i| {
+                var sub = std.mem.zeroes(vk.VkImageSubresource);
+                sub.aspectMask = plane_aspect[i];
+                var layout: vk.VkSubresourceLayout = undefined;
+                vk.vkGetImageSubresourceLayout(self.device, t.img, &sub, &layout);
+                t.offsets[i] = @intCast(layout.offset);
+                t.strides[i] = @intCast(layout.rowPitch);
+            }
+
+            var gfi = std.mem.zeroes(vk.VkMemoryGetFdInfoKHR);
+            gfi.sType = vk.VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+            gfi.memory = t.mem;
+            gfi.handleType = vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+            try check(get_fd.?(self.device, &gfi, &t.fd), "vkGetMemoryFdKHR");
+
+            const atts = if (self.msaa_used)
+                [2]vk.VkImageView{ self.msaa_view, t.view }
+            else
+                [2]vk.VkImageView{ t.view, null };
+            var fb = std.mem.zeroes(vk.VkFramebufferCreateInfo);
+            fb.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fb.renderPass = self.dmabuf_pass;
+            fb.attachmentCount = if (self.msaa_used) 2 else 1;
+            fb.pAttachments = &atts;
+            fb.width = self.width;
+            fb.height = self.height;
+            fb.layers = 1;
+            try check(vk.vkCreateFramebuffer(self.device, &fb, null, &t.fb), "dmabuf fb");
+        }
+
+        self.dmabuf_count = self.dmabuf_ring.len;
+        self.dmabuf_next = 0;
+        self.dmabuf_w = self.width;
+        self.dmabuf_h = self.height;
+        logInfo("vk: dmabuf ring %ux %ux%u modifier 0x%llx", .{
+            self.dmabuf_count, self.width, self.height,
+            @as(c_ulonglong, self.dmabuf_ring[0].modifier),
+        });
+    }
+
+    pub fn dmabufSupported(self: *Gpu) bool {
+        return self.dmabuf_ok and
+            drmFourcc(self.color_format) != null and
+            drmModifierCount(self.get_fmt_props2, self.phys, self.color_format) > 0;
+    }
+
+    fn releaseDmabufTargets(self: *Gpu) void {
+        for (&self.dmabuf_ring) |*t| {
+            if (t.fb != null) vk.vkDestroyFramebuffer(self.device, t.fb, null);
+            if (t.view != null) vk.vkDestroyImageView(self.device, t.view, null);
+            if (t.img != null) vk.vkDestroyImage(self.device, t.img, null);
+            if (t.mem != null) vk.vkFreeMemory(self.device, t.mem, null);
+            // dmabuf is a POSIX-fd facility; on Windows the ring is never
+            // allocated (no export extensions there) and there is nothing to
+            // close, but this still has to compile for the cross build.
+            if (t.fd >= 0 and builtin.os.tag != .windows) _ = std.c.close(t.fd);
+            t.* = .{};
+        }
+        self.dmabuf_count = 0;
+        self.dmabuf_w = 0;
+        self.dmabuf_h = 0;
+    }
+
+    /// Render one frame into the next ring image and describe it for import.
+    ///
+    /// Sync is a fence wait: the frame is complete before the host is told about
+    /// it. That costs the pipelining a semaphore hand-off would keep, and is the
+    /// obvious thing to revisit if a profile ever shows the stall — but it is
+    /// correct against any importer, where implicit-sync behaviour across
+    /// drivers is not.
+    pub fn renderDmabuf(self: *Gpu, u: Uniforms, text_on: bool, sound_on: bool, out: *DmabufFrame) !void {
+        try self.ensureDmabufTargets();
+
+        const t = &self.dmabuf_ring[self.dmabuf_next];
+        self.dmabuf_next = (self.dmabuf_next + 1) % self.dmabuf_count;
+
+        _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
+        _ = vk.vkResetFences(self.device, 1, &self.fence);
+        try check(vk.vkResetCommandBuffer(self.cmd, 0), "reset cmd");
+        var bi = std.mem.zeroes(vk.VkCommandBufferBeginInfo);
+        bi.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        try check(vk.vkBeginCommandBuffer(self.cmd, &bi), "begin cmd");
+        self.recordDraws(self.cmd, self.dmabuf_pass, t.fb, u, text_on, sound_on);
+        try check(vk.vkEndCommandBuffer(self.cmd), "end cmd");
+
+        var si = std.mem.zeroes(vk.VkSubmitInfo);
+        si.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &self.cmd;
+        try check(vk.vkQueueSubmit(self.queue, 1, &si, self.fence), "submit dmabuf");
+        _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
+
+        out.* = .{
+            .fd = t.fd,
+            .fourcc = drmFourcc(self.color_format) orelse return error.VulkanFailure,
+            .modifier = t.modifier,
+            .n_planes = t.n_planes,
+            .offset = t.offsets,
+            .stride = t.strides,
+            .width = self.width,
+            .height = self.height,
+        };
+    }
+
     fn releaseOffscreen(self: *Gpu) void {
         if (self.off_fb != null) vk.vkDestroyFramebuffer(self.device, self.off_fb, null);
         if (self.off_view != null) vk.vkDestroyImageView(self.device, self.off_view, null);
@@ -873,6 +1374,73 @@ pub const Gpu = struct {
         self.destroyBuffer(&self.download);
     }
 
+    /// Create the presentation surface from the host's native handle, and adopt
+    /// whatever size that handle already has. Android reads it off the
+    /// ANativeWindow; the desktop window systems do not carry one on the handle,
+    /// so the size stays as the host declared it and the swapchain's
+    /// currentExtent settles it at createSwapchain.
+    fn createSurface(self: *Gpu, instance: vk.VkInstance, opts: Options) !void {
+        const handle = opts.native_handle.?;
+        switch (opts.native_kind) {
+            .android_window => {
+                if (!c_vk.android) return error.VulkanFailure;
+                self.window = @ptrCast(handle);
+                var sci = std.mem.zeroes(vk.VkAndroidSurfaceCreateInfoKHR);
+                sci.sType = vk.VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+                sci.window = self.window;
+                try check(vk.vkCreateAndroidSurfaceKHR(instance, &sci, null, &self.surface), "vkCreateAndroidSurfaceKHR");
+                const ww = vk.ANativeWindow_getWidth(self.window);
+                const wh = vk.ANativeWindow_getHeight(self.window);
+                if (ww > 0 and wh > 0) {
+                    self.width = @intCast(ww);
+                    self.height = @intCast(wh);
+                }
+            },
+            .win32_hwnd => {
+                const w: *const Win32Window = @ptrCast(@alignCast(handle));
+                const ci = VkWin32SurfaceCreateInfoKHR{
+                    .sType = vk.VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+                    .hinstance = w.hinstance,
+                    .hwnd = w.hwnd,
+                };
+                try self.createSurfaceVia(instance, "vkCreateWin32SurfaceKHR", VkWin32SurfaceCreateInfoKHR, &ci);
+            },
+            .x11_window => {
+                const w: *const X11Window = @ptrCast(@alignCast(handle));
+                const ci = VkXlibSurfaceCreateInfoKHR{
+                    .sType = vk.VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
+                    .dpy = w.display,
+                    .window = w.window,
+                };
+                try self.createSurfaceVia(instance, "vkCreateXlibSurfaceKHR", VkXlibSurfaceCreateInfoKHR, &ci);
+            },
+            .wayland_surface => {
+                const w: *const WaylandSurface = @ptrCast(@alignCast(handle));
+                const ci = VkWaylandSurfaceCreateInfoKHR{
+                    .sType = vk.VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+                    .display = w.display,
+                    .surface = w.surface,
+                };
+                try self.createSurfaceVia(instance, "vkCreateWaylandSurfaceKHR", VkWaylandSurfaceCreateInfoKHR, &ci);
+            },
+            else => return error.VulkanFailure,
+        }
+    }
+
+    /// Load a vkCreate*SurfaceKHR by name and call it. Loading rather than
+    /// linking is what lets this file know about four window systems while
+    /// depending on none of their headers or libraries — a driver missing the
+    /// extension returns null here and fails with a name, not a link error.
+    fn createSurfaceVia(self: *Gpu, instance: vk.VkInstance, comptime name: [*:0]const u8, comptime CI: type, ci: *const CI) !void {
+        const Fn = *const fn (vk.VkInstance, *const CI, ?*const vk.VkAllocationCallbacks, *vk.VkSurfaceKHR) callconv(.c) vk.VkResult;
+        const raw = vk.vkGetInstanceProcAddr(instance, name) orelse {
+            logErr("vk: %s unavailable (driver lacks the surface extension)", .{name});
+            return error.VulkanFailure;
+        };
+        const create: Fn = @ptrCast(raw);
+        try check(create(instance, ci, null, &self.surface), std.mem.span(name));
+    }
+
     /// Resize the render surface. width/height are logical points from the host
     /// (Java) view; the pixel size follows the swapchain. Their ratio is the
     /// pixel density (the camera's HiDPI denominator).
@@ -880,13 +1448,20 @@ pub const Gpu = struct {
         self.host_pt_w = @floatFromInt(width_pts);
         self.host_pt_h = @floatFromInt(height_pts);
         if (self.surface == null) {
-            // offscreen-only: logical == pixel
-            if (width_pts != self.width or height_pts != self.height) {
+            // No swapchain to adopt a size from, so the target IS the host's
+            // declared viewport scaled by the density it declared. resize()
+            // means POINTS on every path, offscreen included — the texture host
+            // wants a pixel-exact frame and would otherwise have to know that
+            // this one path counted differently.
+            const d = if (self.pixel_density > 0) self.pixel_density else 1.0;
+            const w: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(width_pts)) * d));
+            const h: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(height_pts)) * d));
+            if (w != self.width or h != self.height) {
                 _ = vk.vkDeviceWaitIdle(self.device);
                 self.releaseOffscreen();
                 self.releaseMsaa();
-                self.width = width_pts;
-                self.height = height_pts;
+                self.width = w;
+                self.height = h;
                 try self.ensureOffscreenTargets();
             }
         }

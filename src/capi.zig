@@ -111,10 +111,14 @@ export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque,
 /// Reject unknown kind values from stale hosts instead of trusting the int.
 /// Kinds beyond the Apple pair exist only in the superset enums of the
 /// SDL/Vulkan backends — gate on the field so the Metal build still compiles.
+/// The desktop kinds (win32/x11/wayland) each pass a struct lookout.h declares.
 fn nativeKind(kind: c_int) ?lk.NativeKind {
     if (kind == 0) return .none;
     if (kind == 1) return .metal_layer;
+    if (@hasField(lk.NativeKind, "win32_hwnd") and kind == 4) return .win32_hwnd;
+    if (@hasField(lk.NativeKind, "x11_window") and kind == 5) return .x11_window;
     if (@hasField(lk.NativeKind, "android_window") and kind == 7) return .android_window;
+    if (@hasField(lk.NativeKind, "wayland_surface") and kind == 8) return .wayland_surface;
     return null;
 }
 
@@ -252,6 +256,26 @@ export fn lookout_needs_redraw(h: ?*lookout) c_int {
     defer l.apiUnlock();
     return if (l.needsRedraw()) 1 else 0;
 }
+/// One exported frame. `fd` stays owned by lookout until the next resize or
+/// lookout_close — dup it to hand ownership on.
+pub const lookout_dmabuf_frame = lk.DmabufFrame;
+
+/// 1 when this build and driver can hand frames over as dmabuf textures.
+export fn lookout_dmabuf_supported(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.dmabufSupported()) 1 else 0;
+}
+
+/// Render one frame into an exportable image and describe it. 1 on success, 0 if
+/// this driver cannot export (host should fall back to a surface).
+export fn lookout_render_dmabuf(h: ?*lookout, out: *lookout_dmabuf_frame) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.renderDmabuf(out) catch return 0;
+    return 1;
+}
+
 export fn lookout_snapshot_png(h: ?*lookout, path: [*:0]const u8) c_int {
     const l = locked(h);
     defer l.apiUnlock();
@@ -370,6 +394,9 @@ export fn lookout_scale_denominator(h: ?*lookout) f64 {
 comptime {
     _ = lookout_open;
     // The Android Java shell's JNI natives ride in the same archive on vk
-    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout).
-    if (@import("build_options").gpu_vk) _ = @import("jni_android.zig");
+    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout). Gate on
+    // the platform too: vk also serves desktop shells, which have no <jni.h>.
+    const t = @import("builtin").target;
+    const android = t.abi == .android or t.abi == .androideabi;
+    if (@import("build_options").gpu_vk and android) _ = @import("jni_android.zig");
 }

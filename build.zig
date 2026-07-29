@@ -84,8 +84,9 @@ pub fn build(b: *std.Build) void {
         (if (is_apple) Backend.metal else if (target_android) Backend.vk else Backend.sdl);
     const use_sdl = backend == .sdl;
     const use_vk = backend == .vk;
-    if (use_vk and !target_android)
-        @panic("-Dbackend=vk is Android-only (ANativeWindow surface); use sdl or metal here");
+    // vk serves Android and the desktop shells; Apple stays on metal.
+    if (use_vk and is_apple)
+        @panic("-Dbackend=vk targets Android, Linux and Windows; use metal on Apple");
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "gpu_sdl", use_sdl);
     build_opts.addOption(bool, "gpu_vk", use_vk);
@@ -130,9 +131,13 @@ pub fn build(b: *std.Build) void {
         use_sdl: bool,
         use_vk: bool,
         android: bool,
+        apple: bool,
+        windows: bool,
         sdl_include: ?[]const u8,
         build_opts_mod: *std.Build.Module,
-        fn apply(self: @This(), mod: *std.Build.Module) void {
+        /// `link_tile57` adds the engine archive: always for an exe, but for a
+        /// static lib only where the linker copes with it (see addObjectFile below).
+        fn apply(self: @This(), mod: *std.Build.Module, link_tile57: bool) void {
             const bb = self.b;
             mod.addImport("build_options", self.build_opts_mod); // src/gpu.zig backend switch
             if (self.android) {
@@ -162,11 +167,11 @@ pub fn build(b: *std.Build) void {
             // stdlib.h `_Nonnull`-on-array declarations error; gnu99 accepts them
             // (matches tile57's C flags). Harmless for stb elsewhere.
             mod.addCSourceFile(.{ .file = bb.path("vendor/stb/stb_image_impl.c"), .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined" } });
-            // Embed tile57 into liblookout_marine.a so Apple/native consumers link
-            // one archive. NOT on android: Zig embeds it as a NESTED .a member,
-            // which ld.lld rejects ("neither ET_REL nor LLVM bitcode") — there the
-            // gradle/CMake build links libtile57.a alongside liblookout_marine.a.
-            if (!self.android) mod.addObjectFile(self.tile57_lib);
+            // Embedding an archive into a static lib nests it as a .a member: ld64
+            // unpacks it (one-archive convenience on Apple), but ELF/COFF linkers
+            // reject it, so off Apple the host links libtile57.a alongside (both
+            // are installed to <prefix>/lib below). Exes always link it.
+            if (link_tile57) mod.addObjectFile(self.tile57_lib);
             if (self.use_sdl) {
                 if (self.android) {
                     // Android: the gradle/CMake build links SDL3; here we only need
@@ -193,6 +198,10 @@ pub fn build(b: *std.Build) void {
                 };
                 for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = self.tile57_dep.path(e[1]) });
             }
+            if (self.use_vk and !self.android) {
+                // Vendored headers only (the exe links the loader); Android uses the NDK sysroot.
+                mod.addIncludePath(bb.path("vendor/vulkan/include"));
+            }
             if (!self.use_sdl and !self.use_vk) {
                 // The Metal transport (ObjC behind a C face). Manual
                 // retain/release on purpose — objects live in C structs.
@@ -202,7 +211,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .android = is_android, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .android = is_android, .apple = is_apple, .windows = target.result.os.tag == .windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -216,7 +225,7 @@ pub fn build(b: *std.Build) void {
         // export — strip so the panic path never pulls it in.
         .strip = target.result.os.tag == .ios,
     });
-    cfg.apply(lib_mod);
+    cfg.apply(lib_mod, is_apple);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
     if (android_libc) |libc| lib.setLibCFile(libc); // NDK sysroot for the C deps
 
@@ -229,6 +238,11 @@ pub fn build(b: *std.Build) void {
     // pair from one <prefix>/lib (after the ld64 loose-object repack — see
     // macos/project.yml).
     b.getInstallStep().dependOn(&b.addInstallLibFile(tile57_lib, "libtile57.a").step);
+    // Archive + headers, no demo exe: what a native shell links, and all that's
+    // buildable when the target's Vulkan loader isn't on this machine.
+    const lib_step = b.step("lib", "Build the static core + headers only");
+    lib_step.dependOn(&b.addInstallArtifact(lib, .{}).step);
+    lib_step.dependOn(&b.addInstallLibFile(tile57_lib, "libtile57.a").step);
 
     // ---- the demo executable + tests (host platforms only: an iOS cross-build
     // `-Dtarget=aarch64-ios` produces just the static libs for the app to link) ----
@@ -242,8 +256,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    cfg.apply(exe_mod);
-    if (!use_sdl) {
+    cfg.apply(exe_mod, true);
+    // An executable resolves the Vulkan loader; the static lib leaves it open.
+    if (use_vk) exe_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
+    // Metal only — `!use_sdl` now also catches vk, which wants no frameworks.
+    if (!use_sdl and !use_vk) {
         exe_mod.linkFramework("Metal", .{});
         exe_mod.linkFramework("QuartzCore", .{});
         exe_mod.linkFramework("Foundation", .{});
@@ -263,8 +280,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    cfg.apply(test_mod);
-    if (!use_sdl) {
+    cfg.apply(test_mod, true);
+    if (use_vk) test_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
+    if (!use_sdl and !use_vk) {
         test_mod.linkFramework("Metal", .{});
         test_mod.linkFramework("QuartzCore", .{});
         test_mod.linkFramework("Foundation", .{});
