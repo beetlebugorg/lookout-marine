@@ -1003,8 +1003,48 @@ pub const Gpu = struct {
         index_count: u32 = 0, // vertices in vbuf (== the engine's index count)
         ranges: []cc.tile57_gpu_range = &.{},
         patterns: []PatternTex = &.{},
+        /// Scratch for the engine's batch (tile57_gpu_batch). Sized to the range
+        /// count, which is the ceiling — draws only ever merge, never split — so
+        /// a frame never allocates and a batch never truncates.
+        draws: []cc.tile57_gpu_draw = &.{},
         alloc: std.mem.Allocator,
     };
+
+    /// Which atlases we actually uploaded, as the bitmask the batcher wants.
+    /// A missing bold/italic tier falls back to the regular glyph atlas there.
+    fn atlasHave(self: *const Gpu) u8 {
+        var m: u8 = 0;
+        if (self.sprite_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_SPRITE;
+        if (self.glyph_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH;
+        if (self.glyph_bold_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH_BOLD;
+        if (self.glyph_italic_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
+        return m;
+    }
+
+    fn atlasTexture(self: *const Gpu, atlas: u8) ?Tex {
+        return switch (atlas) {
+            cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
+            cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex,
+            cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex,
+            else => self.sprite_tex,
+        };
+    }
+
+    /// Ask the engine which draws this scene needs. Returns an empty slice if
+    /// the batch somehow exceeds the buffer, since a truncated batch is missing
+    /// chart rather than merely slow.
+    fn batchScene(self: *const Gpu, s: *const Scene, text_on: bool, sound_on: bool) []const cc.tile57_gpu_draw {
+        if (s.ranges.len == 0 or s.draws.len == 0) return &.{};
+        const opts = cc.tile57_gpu_batch_opts{
+            .text_on = text_on,
+            .sound_on = sound_on,
+            .exclude_opaque_tris = false,
+            .atlas_have = self.atlasHave(),
+            .halo = .{ self.clear.r, self.clear.g, self.clear.b, 1 },
+        };
+        const n = cc.tile57_gpu_batch(s.ranges.ptr, s.ranges.len, &opts, s.draws.ptr, s.draws.len);
+        return if (n > s.draws.len) &.{} else s.draws[0..n];
+    }
 
     pub fn makeScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !Scene {
         var out = Scene{ .alloc = alloc };
@@ -1022,7 +1062,10 @@ pub const Gpu = struct {
             out.qbuf = try self.createBuffer(bytes.len, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
             @memcpy(out.qbuf.mapped.?[0..bytes.len], bytes);
         }
-        if (s.range_count > 0) out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+        if (s.range_count > 0) {
+            out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+            out.draws = try alloc.alloc(cc.tile57_gpu_draw, s.range_count);
+        }
         if (s.pattern_count > 0) {
             out.patterns = try alloc.alloc(PatternTex, s.pattern_count);
             for (out.patterns) |*p| p.* = .{};
@@ -1059,6 +1102,7 @@ pub const Gpu = struct {
             self.destroyTexture(&v);
         };
         if (s.ranges.len > 0) s.alloc.free(s.ranges);
+        if (s.draws.len > 0) s.alloc.free(s.draws);
         if (s.patterns.len > 0) s.alloc.free(s.patterns);
         s.* = .{ .alloc = s.alloc };
     }
@@ -1108,109 +1152,63 @@ pub const Gpu = struct {
         var bound_tex: vk.VkDescriptorSet = null;
         const zero: u64 = 0;
 
-        // CONTIGUOUS ranges with the same draw spec (pipeline, texture, uniform
-        // payload) collapse into ONE vkCmdDraw, exactly as the Metal backend does.
-        // Colour rides in the vertices, so a whole paint band of differently
-        // coloured fills is one spec; assemble() already re-lays the vertex and
-        // quad streams in sorted range order precisely so a host can do this. A
+        // The engine decides what each range draws and folds contiguous ranges
+        // sharing a spec into one call (tile57_gpu_batch). That matters here: a
         // coastal view carries ~5,000 ranges, i.e. ~10,000 command calls a frame
-        // before merging — recordDraws was 21% of native time on device. A skipped
-        // range breaks contiguity, so merging can never draw gated-off content,
-        // and merged primitives rasterize in the same order they would have.
-        const Run = struct {
-            active: bool = false,
-            tri: bool = false,
-            pipe: vk.VkPipeline = null,
-            tex: vk.VkDescriptorSet = null,
-            first: u32 = 0,
-            count: u32 = 0,
-            uu: Uniforms = undefined,
-            halo: bool = false, // glyph run: also push the frag (halo) uniform
-        };
-        var run = Run{};
-        var draws: u32 = 0;
-        const flush = struct {
-            fn go(g: *Gpu, cmd2: vk.VkCommandBuffer, sc: *const Scene, rn: *Run, bp: *vk.VkPipeline, bt: *vk.VkDescriptorSet, z0: *const u64, n: *u32) void {
-                if (!rn.active or rn.count == 0) return;
-                rn.active = false;
-                if (rn.pipe != bp.*) {
-                    vk.vkCmdBindPipeline(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, rn.pipe);
-                    bp.* = rn.pipe;
-                    const vb = if (rn.tri) &sc.vbuf.buf else &sc.qbuf.buf;
-                    vk.vkCmdBindVertexBuffers(cmd2, 0, 1, vb, z0);
-                }
-                if (rn.tex != null and rn.tex != bt.*) {
-                    var ds = rn.tex;
-                    vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 2, 1, &ds, 0, null);
-                    bt.* = rn.tex;
-                }
-                var uu2 = rn.uu;
-                const voff = g.pushUniform(&uu2) orelse return;
-                vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 1, 1, &g.vtx_uni_set, 1, &voff);
-                if (rn.halo) {
-                    // SDF halo renders in the palette background colour (sdf.frag,
-                    // set 3): a hardcoded white halo glared at night.
-                    uu2.color = .{ g.clear.r, g.clear.g, g.clear.b, 1 };
-                    const foff = g.pushUniform(&uu2) orelse return;
-                    vk.vkCmdBindDescriptorSets(cmd2, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipe_layout, 3, 1, &g.frag_uni_set, 1, &foff);
-                }
-                vk.vkCmdDraw(cmd2, rn.count, 1, rn.first, 0);
-                n.* += 1;
-            }
-        }.go;
-        // A run only extends when EVERY bit of its draw spec matches and the
-        // primitives abut; otherwise the pending run is flushed and a new one opens.
-        const emit = struct {
-            fn go(g: *Gpu, cmd2: vk.VkCommandBuffer, sc: *const Scene, rn: *Run, bp: *vk.VkPipeline, bt: *vk.VkDescriptorSet, z0: *const u64, n: *u32, fl: anytype, tri: bool, pipe: vk.VkPipeline, tex: vk.VkDescriptorSet, first: u32, count: u32, uu: Uniforms, halo: bool) void {
-                if (rn.active and rn.tri == tri and rn.pipe == pipe and rn.tex == tex and rn.halo == halo and
-                    rn.first + rn.count == first and
-                    std.mem.eql(u8, std.mem.asBytes(&rn.uu), std.mem.asBytes(&uu)))
-                {
-                    rn.count += count;
-                    return;
-                }
-                fl(g, cmd2, sc, rn, bp, bt, z0, n);
-                rn.* = .{ .active = true, .tri = tri, .pipe = pipe, .tex = tex, .first = first, .count = count, .uu = uu, .halo = halo };
-            }
-        }.go;
-
-        for (s.ranges) |r| {
-            switch (r.kind) {
-                cc.TILE57_GPU_TEXT => if (!text_on) continue,
-                cc.TILE57_GPU_SOUNDING => if (!sound_on) continue,
-                else => {},
-            }
+        // unmerged, and recordDraws was 21% of native time on device. This loop
+        // binds and draws what it is handed, and nothing else.
+        for (self.batchScene(s, text_on, sound_on)) |d| {
+            const tri = d.prim == cc.TILE57_GPU_TRIANGLES;
             var uu = u;
-            if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
-            if (r.prim == cc.TILE57_GPU_TRIANGLES) {
+            uu.cat_mask |= d.cat_mask_or;
+            var pipe: vk.VkPipeline = null;
+            var tex_set: vk.VkDescriptorSet = null;
+            const halo = d.pipeline == cc.TILE57_GPU_PIPE_SDF;
+            if (tri) {
                 if (s.vbuf.buf == null) continue;
-                var pipe = self.pipeline;
-                var tex_set: vk.VkDescriptorSet = null;
-                if (r.pattern != cc.TILE57_GPU_NO_PATTERN and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
-                    const pt = s.patterns[r.pattern];
+                pipe = self.pipeline;
+                if (d.pipeline == cc.TILE57_GPU_PIPE_PATTERN) {
+                    // Whether a cell rasterized is ours to know; without one the
+                    // fill under it already drew, so this draws nothing.
+                    if (d.pattern >= s.patterns.len) continue;
+                    const pt = s.patterns[d.pattern];
+                    const t = pt.tex orelse continue;
+                    // Scale the cell with the zoom so it tracks the geometry (which
+                    // the MVP scales) rather than swimming during a zoom animation.
                     const cs = self.pixel_density * self.pattern_scale;
                     uu.cell_px = .{ pt.w * cs, pt.h * cs };
                     pipe = self.pattern_pipeline;
-                    tex_set = pt.tex.?.dset;
-                } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
-                    continue; // pattern with no cell texture: the fill under it already drew
+                    tex_set = t.dset;
                 }
-                emit(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws, flush, true, pipe, tex_set, r.first, r.count, uu, false);
-            } else { // QUADS
+            } else {
                 if (s.qbuf.buf == null) continue;
-                const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
-                const tex: ?Tex = switch (r.atlas) {
-                    cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
-                    cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
-                    cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
-                    else => self.sprite_tex,
-                };
-                const pipe = if (is_glyph) self.sdf_pipeline else self.sprite_pipeline;
-                if (tex == null or pipe == null) continue;
-                emit(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws, flush, false, pipe, tex.?.dset, r.first, r.count, uu, is_glyph);
+                const tex = self.atlasTexture(d.atlas) orelse continue;
+                pipe = if (halo) self.sdf_pipeline else self.sprite_pipeline;
+                if (pipe == null) continue;
+                tex_set = tex.dset;
             }
+            if (pipe != bound_pipe) {
+                vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+                bound_pipe = pipe;
+                const vb = if (tri) &s.vbuf.buf else &s.qbuf.buf;
+                vk.vkCmdBindVertexBuffers(cmd, 0, 1, vb, &zero);
+            }
+            if (tex_set != null and tex_set != bound_tex) {
+                var ds = tex_set;
+                vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 2, 1, &ds, 0, null);
+                bound_tex = tex_set;
+            }
+            const voff = self.pushUniform(&uu) orelse continue;
+            vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &voff);
+            if (halo) {
+                // The SDF halo renders in the palette background colour (sdf.frag,
+                // set 3): a hardcoded white halo glared at night.
+                uu.color = d.color;
+                const foff = self.pushUniform(&uu) orelse continue;
+                vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 3, 1, &self.frag_uni_set, 1, &foff);
+            }
+            vk.vkCmdDraw(cmd, d.count, 1, d.first, 0);
         }
-        flush(self, cmd, s, &run, &bound_pipe, &bound_tex, &zero, &draws);
     }
 
     /// Render one frame to the window and present. Returns false if no window.
