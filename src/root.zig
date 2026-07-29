@@ -949,6 +949,8 @@ pub const Lookout = struct {
     /// Declare the host's scale factor instead of letting the backend infer it
     /// from the surface. Set before the first build.
     pub fn setPixelDensity(self: *Lookout, d: f32) void {
+        // Density-baked sprite atlas must rebake on a late density change (else it aliases).
+        if (self.atlases_ready and d != self.g.pixel_density) self.atlases_ready = false;
         self.g.setPixelDensity(d);
     }
 
@@ -1450,18 +1452,21 @@ pub const Lookout = struct {
     }
 
     /// Render one frame to the window and present.
-    pub fn render(self: *Lookout) !bool {
-        self.ensureAtlases();
-        if (self.loading) {
-            self.pollCompose(false);
-            if (self.loading) {
-                const ph = @as(f32, @floatFromInt(@mod(gpu.ticksMs(), 1600))) / 1600.0;
-                const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
-                self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
-                self.g.freeScene();
-                return self.g.renderWindow(self.uniforms(), false, false);
-            }
-        }
+    /// The pulse drawn while a chart library is opening; true means still loading.
+    fn loadingPulse(self: *Lookout) bool {
+        if (!self.loading) return false;
+        self.pollCompose(false);
+        if (!self.loading) return false;
+        const ph = @as(f32, @floatFromInt(@mod(gpu.ticksMs(), 1600))) / 1600.0;
+        const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
+        self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
+        self.g.freeScene();
+        return true;
+    }
+
+    /// Per-frame setup before the draw (drawable size, zoom clamps, scene,
+    /// pattern scale). Shared by the surface and texture paths.
+    fn prepareFrame(self: *Lookout) void {
         // The GPU layer adopts the real swapchain drawable size at acquire (a
         // wrapped native view can be laid out or rescaled behind our back) —
         // follow it here so the camera's logical viewport always matches what
@@ -1498,6 +1503,12 @@ pub const Lookout = struct {
         // at cov_zoom; the MVP renders it at cam.zoom): scale the cell by the same
         // factor so a constant-screen fill doesn't swim mid-zoom.
         self.g.pattern_scale = @floatCast(std.math.pow(f64, 2.0, self.cam.zoom - self.cov_zoom));
+    }
+
+    pub fn render(self: *Lookout) !bool {
+        self.ensureAtlases();
+        if (self.loadingPulse()) return self.g.renderWindow(self.uniforms(), false, false);
+        self.prepareFrame();
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
         // A SKIPPED frame (swapchain saturated) must not clear the flag: the
         // pending content still needs a successful present.

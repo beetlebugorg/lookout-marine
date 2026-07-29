@@ -181,7 +181,7 @@ private fun DepthsSection(m: MarinerState) {
         DepthRow("Deep contour", m.deepContour, unit, feet) { m.deepContour = it }
     }
     DepthRow("Safety depth", m.safetyDepth, unit, feet) { m.safetyDepth = it }
-    Footer("Safety depth bolds soundings at or shoaler than it; it does not shade water.")
+    Footer("Safety depth bolds soundings at or shallower than it; it does not shade water.")
 }
 
 /**
