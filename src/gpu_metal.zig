@@ -12,24 +12,13 @@ const mc = @import("c_metal.zig").c;
 const png = @import("png.zig");
 const msl_source = @embedFile("metal_src");
 
-/// Vertex-shader uniform block (128 bytes). Matches `struct U` in
-/// shaders/lookout.metal. Colour is per-RANGE (one draw = one colour), so it
-/// rides the uniform; `anchor_px`/`cell_px` drive the pattern tiling.
-pub const Uniforms = extern struct {
-    mvp: [16]f32,
-    px_to_clip: [2]f32,
-    size_scale: f32,
-    current_scale: f32,
-    cat_mask: u32,
-    /// Camera center world-x: the vertex shaders wrap each vertex to the world
-    /// instance (x, x±1) nearest this, making the antimeridian seamless.
-    wrap_x: f32 = 0.5,
-    rot_sin: f32,
-    rot_cos: f32,
-    color: [4]f32 = .{ 0, 0, 0, 1 }, // per-range flat colour (triangles), straight alpha
-    anchor_px: [2]f32 = .{ 0, 0 }, // pattern: framebuffer px of the scene's phase origin
-    cell_px: [2]f32 = .{ 1, 1 }, // pattern: cell period in framebuffer px
-};
+/// Vertex-shader uniform block (128 bytes), matching `struct U` in
+/// shaders/lookout.metal. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig
+/// Uniforms, mirrored as tile57_gpu_uniforms) — all three backends declared
+/// their own copy, and this one's `color` comment had gone stale claiming a
+/// per-range flat colour; the shader only ever reads it as the SDF halo
+/// background. Field docs live in the engine; root.zig's ABI gate catches skew.
+pub const Uniforms = cc.tile57_gpu_uniforms;
 
 /// RGBA colour 0..1 (drop-in for the old SDL_FColor uses).
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
@@ -225,8 +214,49 @@ pub const Gpu = struct {
         index_count: u32 = 0, // entries in ibuf (== the engine's index count)
         ranges: []cc.tile57_gpu_range = &.{},
         patterns: []PatternTex = &.{},
+        /// Scratch for the engine's batch (tile57_gpu_batch). Sized to the range
+        /// count, which is the ceiling — draws only ever merge, never split — so
+        /// a frame never allocates and a batch never truncates.
+        draws: []cc.tile57_gpu_draw = &.{},
         alloc: std.mem.Allocator,
     };
+
+    /// Which atlases we actually uploaded, as the bitmask the batcher wants.
+    /// A missing bold/italic tier falls back to the regular glyph atlas there.
+    fn atlasHave(self: *const Gpu) u8 {
+        var m: u8 = 0;
+        if (self.sprite_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_SPRITE;
+        if (self.glyph_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH;
+        if (self.glyph_bold_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH_BOLD;
+        if (self.glyph_italic_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
+        return m;
+    }
+
+    fn atlasTexture(self: *const Gpu, atlas: u8) ?*mc.lkm_tex {
+        return switch (atlas) {
+            cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
+            cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex,
+            cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex,
+            else => self.sprite_tex,
+        };
+    }
+
+    /// Ask the engine which draws this scene needs. `two_phase` excludes the
+    /// opaque triangles phase A already drew. Returns an empty slice if the
+    /// batch somehow exceeds the buffer, since a truncated batch is missing
+    /// chart rather than merely slow.
+    fn batchScene(self: *const Gpu, s: *const Scene, text_on: bool, sound_on: bool, two_phase: bool) []const cc.tile57_gpu_draw {
+        if (s.ranges.len == 0 or s.draws.len == 0) return &.{};
+        const opts = cc.tile57_gpu_batch_opts{
+            .text_on = text_on,
+            .sound_on = sound_on,
+            .exclude_opaque_tris = two_phase,
+            .atlas_have = self.atlasHave(),
+            .halo = .{ self.clear.r, self.clear.g, self.clear.b, 1 },
+        };
+        const n = cc.tile57_gpu_batch(s.ranges.ptr, s.ranges.len, &opts, s.draws.ptr, s.draws.len);
+        return if (n > s.draws.len) &.{} else s.draws[0..n];
+    }
 
     /// Upload a `tile57_gpu_scene` into GPU buffers + pattern textures and adopt
     /// it as the current scene (freeing any previous one). The C scene's pointers
@@ -282,6 +312,7 @@ pub const Gpu = struct {
         }
         if (s.range_count > 0) {
             out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+            out.draws = try alloc.alloc(cc.tile57_gpu_draw, s.range_count);
             // DEPTH AUDIT (diagnostic, env-gated): paint-order depth must strictly decrease
             // across triangle ranges, or the depth-tested opaque pass inverts.
             if (std.c.getenv("LOOKOUT_DEPTH_AUDIT") != null and s.index_count > 0) {
@@ -349,6 +380,7 @@ pub const Gpu = struct {
         if (s.qbuf) |b| mc.lkm_free_buffer(b);
         for (s.patterns) |p| if (p.tex) |t| mc.lkm_free_texture(t);
         if (s.ranges.len > 0) s.alloc.free(s.ranges);
+        if (s.draws.len > 0) s.alloc.free(s.draws);
         if (s.patterns.len > 0) s.alloc.free(s.patterns);
         s.* = .{ .alloc = s.alloc };
     }
@@ -398,22 +430,17 @@ pub const Gpu = struct {
         self.labelDebug(s);
         var drawn: u32 = 0; // DRAW CALLS issued (after merging), not ranges
         var ranges_drawn: u32 = 0;
-        var sk_text: u32 = 0;
-        var sk_sound: u32 = 0;
         var sk_patt: u32 = 0;
         var sk_nobuf: u32 = 0;
         var sk_noatlas: u32 = 0;
         var last_u: ?Uniforms = null;
         var usets: u32 = 0;
 
-        // CONTIGUOUS ranges with the same draw spec (pipeline, texture,
-        // uniform payload) collapse into ONE draw call. Colour lives in the
-        // vertices, so a whole band of differently-coloured fills is a single
-        // spec — at coastal zooms this turns thousands of per-range draws
-        // (measured as the phone's frame-rate cap) into a handful. A skipped
-        // range breaks index contiguity, so merging can never draw gated-off
-        // content. Paint order is preserved: merged triangles rasterize in
-        // index order, exactly as they did as separate draws.
+        // One draw call, already merged. The engine collapses contiguous ranges
+        // sharing a draw spec into one of these (tile57_gpu_batch): colour lives
+        // in the vertices, so a whole band of differently-coloured fills is a
+        // single spec, and at coastal zooms that turns thousands of per-range
+        // draws (measured as the phone's frame-rate cap) into a handful.
         const Run = struct {
             active: bool = false,
             prim: @TypeOf(s.ranges[0].prim) = undefined,
@@ -423,7 +450,6 @@ pub const Gpu = struct {
             count: u32 = 0,
             uu: Uniforms = undefined,
         };
-        var run = Run{};
         var opq_runs: u32 = 0;
         const Flush = struct {
             fn go(f2: *mc.lkm_frame, sc: *const Scene, rn: *const Run, lu: *?Uniforms, us: *u32, dr: *u32) void {
@@ -498,46 +524,35 @@ pub const Gpu = struct {
 
         // PHASE B — everything else in paint order, depth test only: content
         // UNDER an opaque surface is culled by the phase-A depth, everything
-        // else blends exactly as painter's order always did.
+        // else blends exactly as painter's order always did. The engine decides
+        // what each range draws and merges contiguous ranges sharing a spec
+        // (tile57_gpu_batch); phase A's ranges are excluded there rather than
+        // re-skipped here.
         mc.lkm_set_depth_mode(f, 0);
-        for (s.ranges) |r| {
-            switch (r.kind) {
-                cc.TILE57_GPU_TEXT => if (!text_on) {
-                    sk_text += 1;
-                    continue;
-                },
-                cc.TILE57_GPU_SOUNDING => if (!sound_on) {
-                    sk_sound += 1;
-                    continue;
-                },
-                else => {},
-            }
-            if (two_phase and (r.flags & 1) != 0 and r.prim == cc.TILE57_GPU_TRIANGLES and r.pattern == cc.TILE57_GPU_NO_PATTERN) continue; // drew in phase A
+        for (self.batchScene(s, text_on, sound_on, two_phase)) |d| {
             var uu = u;
-            // Soundings ride the mariner's show_soundings switch (the sound_on gate
-            // above), NOT the OTHER display category — S-52 files SOUNDG under OTHER,
-            // but a mariner asking for soundings isn't asking for seabed and cables.
-            // The engine tags them disp_cat=OTHER, so force the OTHER bit on for this
-            // range only; SCAMIN still culls them (disp_cat != base).
-            if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
+            uu.cat_mask |= d.cat_mask_or;
             var pipe: c_int = undefined;
             var tex: ?*mc.lkm_tex = null;
-            if (r.prim == cc.TILE57_GPU_TRIANGLES) {
+            if (d.prim == cc.TILE57_GPU_TRIANGLES) {
                 if (s.vbuf == null or s.ibuf == null) {
                     sk_nobuf += 1;
                     continue;
                 }
-                if (r.pattern != cc.TILE57_GPU_NO_PATTERN and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
-                    const pt = s.patterns[r.pattern];
+                if (d.pipeline == cc.TILE57_GPU_PIPE_PATTERN) {
+                    // Whether a cell rasterized is ours to know; without one the
+                    // fill under it already drew, so this draws nothing.
+                    if (d.pattern >= s.patterns.len or s.patterns[d.pattern].tex == null) {
+                        sk_patt += 1;
+                        continue;
+                    }
+                    const pt = s.patterns[d.pattern];
                     // Scale the cell with the zoom so it tracks the geometry (which
                     // the MVP scales) rather than swimming during a zoom animation.
                     const cs = self.pixel_density * self.pattern_scale;
                     uu.cell_px = .{ pt.w * cs, pt.h * cs };
                     pipe = mc.LKM_PIPE_PATTERN;
                     tex = pt.tex;
-                } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
-                    sk_patt += 1;
-                    continue; // a pattern with no cell texture: the fill under it already drew
                 } else {
                     // Colour rides the VERTICES (see tile57_gpu_vertex.color).
                     pipe = mc.LKM_PIPE_CHART;
@@ -547,43 +562,26 @@ pub const Gpu = struct {
                     sk_nobuf += 1;
                     continue;
                 }
-                const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or
-                    r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or
-                    r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
-                tex = switch (r.atlas) {
-                    cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
-                    cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
-                    cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
-                    else => self.sprite_tex,
-                } orelse {
+                const is_glyph = d.pipeline == cc.TILE57_GPU_PIPE_SDF;
+                tex = self.atlasTexture(d.atlas) orelse {
                     sk_noatlas += 1;
                     continue;
                 };
                 pipe = if (is_glyph) mc.LKM_PIPE_SDF else mc.LKM_PIPE_SPRITE;
                 // Text halos render in the PALETTE background colour (see
                 // sdf_frag): night text was unreadable inside a hardcoded
-                // white halo. Part of the run spec, so runs split on it.
-                if (is_glyph) uu.color = .{ self.clear.r, self.clear.g, self.clear.b, 1 };
+                // white halo. Part of the draw spec, so the batch splits on it.
+                if (is_glyph) uu.color = d.color;
             }
             ranges_drawn += 1;
-            if (run.active and run.prim == r.prim and run.pipe == pipe and run.tex == tex and
-                run.first + run.count == r.first and
-                std.mem.eql(u8, std.mem.asBytes(&run.uu), std.mem.asBytes(&uu)))
-            {
-                run.count += r.count;
-                continue;
-            }
-            if (run.active) Flush.go(f, s, &run, &last_u, &usets, &drawn);
-            run = .{ .active = true, .prim = r.prim, .pipe = pipe, .tex = tex, .first = r.first, .count = r.count, .uu = uu };
+            const one = Run{ .active = true, .prim = d.prim, .pipe = pipe, .tex = tex, .first = d.first, .count = d.count, .uu = uu };
+            Flush.go(f, s, &one, &last_u, &usets, &drawn);
         }
-        if (run.active) Flush.go(f, s, &run, &last_u, &usets, &drawn);
         // One line per DISTINCT draw outcome (not per frame): what the GPU was
         // actually asked to draw for this scene, and everything withheld, with
         // reasons. The scene said what exists; this says what made it to Metal.
         var h = std.hash.Wyhash.init(0);
         h.update(std.mem.asBytes(&drawn));
-        h.update(std.mem.asBytes(&sk_text));
-        h.update(std.mem.asBytes(&sk_sound));
         h.update(std.mem.asBytes(&sk_patt));
         h.update(std.mem.asBytes(&sk_nobuf));
         h.update(std.mem.asBytes(&sk_noatlas));
@@ -591,7 +589,7 @@ pub const Gpu = struct {
         const sig = h.final();
         if (sig != self.last_draw_log) {
             self.last_draw_log = sig;
-            std.debug.print("draw: {d}/{d} ranges in {d} draws ({d} uniform sends) (skipped: text={d} sound={d} pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ ranges_drawn, s.ranges.len, drawn, usets, sk_text, sk_sound, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
+            std.debug.print("draw: {d}/{d} ranges in {d} draws ({d} uniform sends) (skipped: pattern={d} nobuf={d} noatlas={d}) verts={d} drawable={d}x{d} density={d:.2}\n", .{ ranges_drawn, s.ranges.len, drawn, usets, sk_patt, sk_nobuf, sk_noatlas, s.index_count, self.width, self.height, self.pixel_density });
         }
     }
 

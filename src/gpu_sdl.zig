@@ -24,21 +24,12 @@ const sdf_frag_spv: []const u8 = @embedFile("sdf_frag_spv");
 const pattern_vert_spv: []const u8 = @embedFile("pattern_vert_spv");
 const pattern_frag_spv: []const u8 = @embedFile("pattern_frag_spv");
 
-/// Vertex/fragment uniform block (128 bytes). Byte-identical to `struct U` in
-/// shaders/vk/*.
-pub const Uniforms = extern struct {
-    mvp: [16]f32,
-    px_to_clip: [2]f32,
-    size_scale: f32,
-    current_scale: f32,
-    cat_mask: u32,
-    wrap_x: f32 = 0.5,
-    rot_sin: f32,
-    rot_cos: f32,
-    color: [4]f32 = .{ 0, 0, 0, 1 }, // SDF halo bg (palette NODATA); chart uses per-vertex colour
-    anchor_px: [2]f32 = .{ 0, 0 },
-    cell_px: [2]f32 = .{ 1, 1 },
-};
+/// Vertex/fragment uniform block (128 bytes), byte-identical to `struct U` in
+/// shaders/vk/*. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig Uniforms,
+/// mirrored as tile57_gpu_uniforms) — all three backends declared their own
+/// copy until they disagreed about what `color` was for. Field docs live there;
+/// the ABI gate in root.zig catches a skew at open.
+pub const Uniforms = cc.tile57_gpu_uniforms;
 
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
@@ -472,8 +463,48 @@ pub const Gpu = struct {
         index_count: u32 = 0, // vertices in vbuf (== the engine's index count)
         ranges: []cc.tile57_gpu_range = &.{},
         patterns: []PatternTex = &.{},
+        /// Scratch for the engine's batch (tile57_gpu_batch). Sized to the range
+        /// count, which is the ceiling — draws only ever merge, never split — so
+        /// a frame never allocates and a batch never truncates.
+        draws: []cc.tile57_gpu_draw = &.{},
         alloc: std.mem.Allocator,
     };
+
+    /// Which atlases we actually uploaded, as the bitmask the batcher wants.
+    /// A missing bold/italic tier falls back to the regular glyph atlas there.
+    fn atlasHave(self: *const Gpu) u8 {
+        var m: u8 = 0;
+        if (self.sprite_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_SPRITE;
+        if (self.glyph_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH;
+        if (self.glyph_bold_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH_BOLD;
+        if (self.glyph_italic_tex != null) m |= 1 << cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
+        return m;
+    }
+
+    fn atlasTexture(self: *const Gpu, atlas: u8) ?*sdl.SDL_GPUTexture {
+        return switch (atlas) {
+            cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
+            cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex,
+            cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex,
+            else => self.sprite_tex,
+        };
+    }
+
+    /// Ask the engine which draws this scene needs. Returns an empty slice if
+    /// the batch somehow exceeds the buffer, since a truncated batch is missing
+    /// chart rather than merely slow.
+    fn batchScene(self: *const Gpu, s: *const Scene, text_on: bool, sound_on: bool) []const cc.tile57_gpu_draw {
+        if (s.ranges.len == 0 or s.draws.len == 0) return &.{};
+        const opts = cc.tile57_gpu_batch_opts{
+            .text_on = text_on,
+            .sound_on = sound_on,
+            .exclude_opaque_tris = false,
+            .atlas_have = self.atlasHave(),
+            .halo = .{ self.clear.r, self.clear.g, self.clear.b, 1 },
+        };
+        const n = cc.tile57_gpu_batch(s.ranges.ptr, s.ranges.len, &opts, s.draws.ptr, s.draws.len);
+        return if (n > s.draws.len) &.{} else s.draws[0..n];
+    }
 
     /// Build a GPU-resident Scene from the engine's C scene WITHOUT installing it.
     pub fn makeScene(self: *Gpu, alloc: std.mem.Allocator, s: *const cc.tile57_gpu_scene) !Scene {
@@ -491,7 +522,10 @@ pub const Gpu = struct {
         if (s.quad_count > 0) {
             out.qbuf = try self.uploadBuffer(sdl.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(s.quads[0..s.quad_count]));
         }
-        if (s.range_count > 0) out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+        if (s.range_count > 0) {
+            out.ranges = try alloc.dupe(cc.tile57_gpu_range, s.ranges[0..s.range_count]);
+            out.draws = try alloc.alloc(cc.tile57_gpu_draw, s.range_count);
+        }
         if (s.pattern_count > 0) {
             out.patterns = try alloc.alloc(PatternTex, s.pattern_count);
             for (out.patterns) |*p| p.* = .{};
@@ -524,6 +558,7 @@ pub const Gpu = struct {
         if (s.qbuf) |b| sdl.SDL_ReleaseGPUBuffer(d, b);
         for (s.patterns) |p| if (p.tex) |t| sdl.SDL_ReleaseGPUTexture(d, t);
         if (s.ranges.len > 0) s.alloc.free(s.ranges);
+        if (s.draws.len > 0) s.alloc.free(s.draws);
         if (s.patterns.len > 0) s.alloc.free(s.patterns);
         s.* = .{ .alloc = s.alloc };
     }
@@ -564,42 +599,41 @@ pub const Gpu = struct {
         const vbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
 
-        for (s.ranges) |r| {
-            switch (r.kind) {
-                cc.TILE57_GPU_TEXT => if (!text_on) continue,
-                cc.TILE57_GPU_SOUNDING => if (!sound_on) continue,
-                else => {},
-            }
+        // The engine batches: which pipeline, which atlas, what the uniform says,
+        // and which neighbours fold into one call. This loop only binds and draws.
+        // (Before, this backend never merged — a draw per range where Metal and
+        // Vulkan already issued one per run.)
+        const draws = self.batchScene(s, text_on, sound_on);
+        for (draws) |d| {
             var uu = u;
-            if (r.kind == cc.TILE57_GPU_SOUNDING) uu.cat_mask |= @as(u32, 1) << 2;
-            if (r.prim == cc.TILE57_GPU_TRIANGLES) {
+            uu.cat_mask |= d.cat_mask_or;
+            if (d.prim == cc.TILE57_GPU_TRIANGLES) {
                 if (s.vbuf == null) continue;
                 sdl.SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
-                if (r.pattern != cc.TILE57_GPU_NO_PATTERN and self.pattern_pipeline != null and r.pattern < s.patterns.len and s.patterns[r.pattern].tex != null) {
-                    const pt = s.patterns[r.pattern];
+                if (d.pipeline == cc.TILE57_GPU_PIPE_PATTERN) {
+                    // Whether a cell rasterized is ours to know; a pattern
+                    // without one draws nothing, since the fill under it already did.
+                    if (self.pattern_pipeline == null or d.pattern >= s.patterns.len) continue;
+                    const pt = s.patterns[d.pattern];
+                    if (pt.tex == null) continue;
+                    // Scale the cell with the zoom so it tracks the geometry (which
+                    // the MVP scales) rather than swimming during a zoom animation.
                     const cs = self.pixel_density * self.pattern_scale;
                     uu.cell_px = .{ pt.w * cs, pt.h * cs };
                     sdl.SDL_BindGPUGraphicsPipeline(pass, self.pattern_pipeline);
                     const samp = [_]sdl.SDL_GPUTextureSamplerBinding{.{ .texture = pt.tex, .sampler = self.sampler }};
                     sdl.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
-                } else if (r.pattern != cc.TILE57_GPU_NO_PATTERN) {
-                    continue; // pattern with no cell texture: the fill under it already drew
                 } else {
                     sdl.SDL_BindGPUGraphicsPipeline(pass, self.pipeline); // colour rides the vertices
                 }
                 sdl.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
-                sdl.SDL_DrawGPUPrimitives(pass, r.count, 1, r.first, 0);
+                sdl.SDL_DrawGPUPrimitives(pass, d.count, 1, d.first, 0);
             } else { // QUADS
                 if (s.qbuf == null) continue;
-                const is_glyph = r.atlas == cc.TILE57_GPU_ATLAS_GLYPH or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_BOLD or r.atlas == cc.TILE57_GPU_ATLAS_GLYPH_ITALIC;
-                const tex = switch (r.atlas) {
-                    cc.TILE57_GPU_ATLAS_GLYPH => self.glyph_tex,
-                    cc.TILE57_GPU_ATLAS_GLYPH_BOLD => self.glyph_bold_tex orelse self.glyph_tex,
-                    cc.TILE57_GPU_ATLAS_GLYPH_ITALIC => self.glyph_italic_tex orelse self.glyph_tex,
-                    else => self.sprite_tex,
-                };
+                const is_glyph = d.pipeline == cc.TILE57_GPU_PIPE_SDF;
+                const tex = self.atlasTexture(d.atlas) orelse continue;
                 const pipe = if (is_glyph) self.sdf_pipeline else self.sprite_pipeline;
-                if (tex == null or pipe == null) continue;
+                if (pipe == null) continue;
                 sdl.SDL_BindGPUGraphicsPipeline(pass, pipe);
                 sdl.SDL_BindGPUVertexBuffers(pass, 0, &qbind, 1);
                 const samp = [_]sdl.SDL_GPUTextureSamplerBinding{.{ .texture = tex, .sampler = self.sampler }};
@@ -608,10 +642,10 @@ pub const Gpu = struct {
                 if (is_glyph) {
                     // SDF halo renders in the palette background colour (sdf.frag,
                     // fragment uniform set 3): a hardcoded white halo glared at night.
-                    uu.color = .{ self.clear.r, self.clear.g, self.clear.b, 1 };
+                    uu.color = d.color;
                     sdl.SDL_PushGPUFragmentUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
                 }
-                sdl.SDL_DrawGPUPrimitives(pass, r.count, 1, r.first, 0);
+                sdl.SDL_DrawGPUPrimitives(pass, d.count, 1, d.first, 0);
             }
         }
     }

@@ -83,8 +83,9 @@ once, and then renders every frame by updating a single uniform block — camera
 palette, display-category gates, and SCAMIN culling all happen in the vertex
 shader. That's why panning and day/night switching never re-tessellate: the work
 is done once, and each frame is a uniform update. Rendering is direct Metal
-(`src/metal_shim.m` owns the device and pipelines; `shaders/lookout.metal` is
-compiled at runtime, so there's no offline shader toolchain).
+(`src/metal_shim.m` owns the device and pipelines; the engine's
+`shaders/lookout.metal` is compiled at runtime, so there's no offline shader
+toolchain).
 
 The **app shell** (`macos/`) is SwiftUI — menu bar, HUD, zoom controls, the
 mariner settings panel, search — wrapped around one GPU-rendered chart view and
@@ -133,7 +134,6 @@ screenshots above were captured).
 ```
 build.zig, build.zig.zon   build + the tile57 dependency pin
 include/lookout.h          C ABI (the Swift<->Zig bridge)
-shaders/lookout.metal      all four pipelines, compiled at runtime
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
 src/root.zig               Lookout: scene lifecycle, worker-thread rebuilds
 src/gpu.zig                Metal transport: pipelines, buffers, per-frame render
@@ -143,6 +143,10 @@ src/capi.zig, src/main.zig C ABI wrapper; the headless demo
 macos/                     the SwiftUI app (macOS + iOS/iPadOS), XcodeGen spec
 vendor/stb                 stb_image (atlas PNG decode)
 ```
+
+The shaders are not here: they read the vertex, quad and uniform layouts the
+engine defines, so they live with those, in tile57's `shaders/`. This build
+embeds them straight from the dependency.
 
 The SDL3/`SDL_GPU`/Vulkan/MoltenVK predecessor of this renderer — and every
 driver workaround it accumulated — lives at the `sdl-gpu` git tag.
