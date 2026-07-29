@@ -34,8 +34,15 @@ and switch between day and night.
 ## Built for S-101
 
 The world is moving from **S-57** to **S-101**, the ENC format in the IHO S-100
-framework. Hydrographic offices have started to publish S-101, and the transition
-will take years. Lookout is built for the destination, not for the present:
+framework. The Phase 1 S-100 product specifications came into force in January 2026,
+and S-100 ECDIS became legal to use on the same date. Hydrographic offices build
+S-101 coverage from 2026. Every new ECDIS installation must meet the updated IMO
+performance standards from 1 January 2029. Offices must publish S-57 and S-101
+together through a "dual fuel" period, and the IHO expects that period to last
+approximately a decade. Refer to the
+[IHO S-100 implementation strategy](https://iho.int/en/s-100-implementation-strategy).
+
+Lookout is built for the destination, not for the present:
 
 - **S-101 is the native path.** The engine reads a native S-101 dataset directly into
   the portrayal model. It then draws it with the official S-101 Portrayal Catalogue.
