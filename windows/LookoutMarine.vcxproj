@@ -60,16 +60,9 @@
 
   <PropertyGroup>
     <GenerateManifest>true</GenerateManifest>
-    <!-- The chart core + tile57 + Vulkan loader, built by windows\build-core.ps1
-         into ..\zig-out. -->
+    <!-- The chart core + tile57, built by windows\build-core.ps1 into ..\zig-out. -->
     <LookoutCoreLibDir>$(MSBuildThisFileDirectory)..\zig-out\lib</LookoutCoreLibDir>
     <LookoutCoreIncDir>$(MSBuildThisFileDirectory)..\zig-out\include</LookoutCoreIncDir>
-    <VulkanSdkDir Condition="'$(VULKAN_SDK)' != ''">$(VULKAN_SDK)</VulkanSdkDir>
-    <VulkanSdkDir Condition="'$(VULKAN_SDK)' == ''">C:\VulkanSDK\1.4.350.0</VulkanSdkDir>
-    <!-- x86 keeps its import libs in Lib32; x64/ARM64 in Lib. (x86 is a planned
-         target; the core must also be rebuilt for that arch — see build-core.ps1.) -->
-    <VulkanLibSubdir Condition="'$(Platform)'=='Win32'">Lib32</VulkanLibSubdir>
-    <VulkanLibSubdir Condition="'$(Platform)'!='Win32'">Lib</VulkanLibSubdir>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -79,7 +72,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <!-- $(IntDir)(+ui): the WinUI markup passes write <Name>.xaml.g.h there,
            mirroring the source layout. The project root carries pch.h. -->
-      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)ui;$(MSBuildThisFileDirectory);$(MSBuildThisFileDirectory)ui;$(MSBuildThisFileDirectory)src;$(LookoutCoreIncDir);$(VulkanSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)ui;$(MSBuildThisFileDirectory);$(MSBuildThisFileDirectory)ui;$(MSBuildThisFileDirectory)src;$(LookoutCoreIncDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
       <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
@@ -89,8 +82,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(LookoutCoreLibDir);$(VulkanSdkDir)\$(VulkanLibSubdir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>lookout_marine.lib;tile57.lib;vulkan-1.lib;ntdll.lib;gdi32.lib;shell32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(LookoutCoreLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -114,7 +107,6 @@
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
     <ClCompile Include="ui\MainWindow.Open.cpp" />
-    <ClCompile Include="ui\MainWindow.ChartHost.cpp" />
     <ClCompile Include="ui\MainWindow.Input.cpp" />
     <ClCompile Include="ui\MainWindow.Hud.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
@@ -131,9 +123,6 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\lk_coord.c">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\lk_d3d.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="ui\MainWindow.xaml.cpp">

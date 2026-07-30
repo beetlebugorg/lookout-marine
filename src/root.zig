@@ -1533,23 +1533,10 @@ pub const Lookout = struct {
         return ok;
     }
 
-    /// Render into the host's imported D3D12 buffer (vk backend, Windows).
-    pub fn renderDxgi(self: *Lookout, index: u32, wait_value: u64, signal_value: u64) !bool {
-        if (!@hasDecl(gpu.Gpu, "renderDxgi")) return false;
-        self.ensureAtlases();
-        if (self.loadingPulse()) return self.g.renderDxgi(self.uniforms(), false, false, index, wait_value, signal_value);
-        self.prepareFrame();
-        const ok = try self.g.renderDxgi(self.uniforms(), self.text_on, self.sound_on, index, wait_value, signal_value);
-        if (ok) self.view_dirty = false;
-        return ok;
-    }
-
-    /// Swap to new shared D3D12 textures after the host resizes its swapchain.
-    pub fn retargetDxgi(self: *Lookout, target: *const anyopaque) !void {
-        if (!@hasDecl(gpu.Gpu, "retargetDxgi")) return error.Unsupported;
-        try self.g.retargetDxgi(@ptrCast(@alignCast(target)));
-        self.dirty = true;
-        self.markDirty();
+    /// The core-owned composition swapchain (d3d12 backend; null elsewhere).
+    pub fn d3d12Swapchain(self: *Lookout) ?*anyopaque {
+        if (!@hasDecl(gpu.Gpu, "swapchainPtr")) return null;
+        return self.g.swapchainPtr();
     }
 
     /// True while the view needs another frame (state changed, building, loading).

@@ -1,6 +1,6 @@
 // The window shell: construction, chrome wiring, and the render thread. The
-// other concerns are split per file: MainWindow.Open.cpp, .ChartHost.cpp,
-// .Input.cpp, .Hud.cpp, .Settings.cpp.
+// other concerns are split per file: MainWindow.Open.cpp, .Input.cpp,
+// .Hud.cpp, .Settings.cpp.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 #if __has_include("MainWindow.g.cpp")
@@ -34,11 +34,9 @@ namespace winrt::LookoutMarine::implementation
         WireChrome();
 
         rendering_token = Media::CompositionTarget::Rendering({ this, &MainWindow::OnRendering });
-        this->SizeChanged([this](auto &&, auto &&) { SyncChartBounds(); });
-        Root().LayoutUpdated([this](auto &&, auto &&) {
-            if (mode == Mode::Hwnd)
-                UpdateChromeRegion();
-        });
+        // The ROOT ELEMENT's SizeChanged, not the window's: the element fires
+        // after layout, when ActualWidth/Height already hold the new size.
+        Root().SizeChanged([this](auto &&, auto &&) { SyncChartBounds(); });
         this->Closed([this](auto &&, auto &&) {
             if (rendering_token)
             {
@@ -48,7 +46,6 @@ namespace winrt::LookoutMarine::implementation
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
-            d3d.destroy();
         });
     }
 
@@ -57,7 +54,6 @@ namespace winrt::LookoutMarine::implementation
         StopRenderThread();
         lk_controller_free(controller);
         controller = nullptr;
-        d3d.destroy();
     }
 
     double MainWindow::Density()
@@ -240,27 +236,26 @@ namespace winrt::LookoutMarine::implementation
                     warmup_frames.store(w - 1);
                     lk_controller_invalidate(controller);
                 }
-                if (mode == Mode::Dxgi)
-                {
-                    lk_controller_tick_anim(controller, dt);
-                    if (lk_controller_needs_frame(controller))
-                    {
-                        UINT idx = frame_index++ % 2;
-                        UINT64 wait = d3d.copy_done[idx];
-                        UINT64 signal = ++d3d.next_value;
-                        if (lk_controller_render_dxgi(controller, idx, wait, signal))
-                        {
-                            d3d.present(idx, signal);
-                            drew = true;
-                        }
-                    }
-                }
-                else if (mode == Mode::Hwnd)
-                {
-                    drew = lk_controller_tick(controller, dt) != 0;
-                }
+                drew = lk_controller_tick(controller, dt) != 0;
             }
             Sleep(drew ? 1 : 8);
         }
+    }
+
+    // The core owns the swapchain: a resize is set_density + resize (the core
+    // resizes its buffers), plus the panel's inverse composition scale so one
+    // swapchain pixel lands on one device pixel.
+    void MainWindow::SyncChartBounds()
+    {
+        if (controller == nullptr || !lk_controller_is_open(controller))
+            return;
+        StopRenderThread(); // resize swaps the frame targets under the renderer
+        double density = Density();
+        double w = Root().ActualWidth(), h = Root().ActualHeight();
+        lk_controller_set_density(controller, (float)density);
+        lk_controller_resize(controller, (unsigned)(w < 1 ? 1 : w), (unsigned)(h < 1 ? 1 : h));
+        ApplyPanelScale();
+        warmup_frames.store(30);
+        StartRenderThread();
     }
 }

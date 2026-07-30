@@ -1,8 +1,8 @@
 /* lk_controller — the one lookout* handle and the on-demand render loop.
  *
  * Host-agnostic C (no WinUI, no GTK): the C++/WinRT shell owns the window, the
- * child HWND, the per-frame pacemaker and input; it drives this each frame with
- * lk_controller_tick() and forwards gestures to the lk_controller_* calls.
+ * SwapChainPanel, the per-frame pacemaker and input; it drives this each frame
+ * with lk_controller_tick() and forwards gestures to the lk_controller_* calls.
  * Mirrors linux/src/lk-chart-controller.c, minus GObject/GTK. */
 #ifndef LK_CONTROLLER_H
 #define LK_CONTROLLER_H
@@ -36,25 +36,15 @@ typedef struct {
 lk_controller *lk_controller_new(void);
 void           lk_controller_free(lk_controller *self);
 
-/* Open n baked cells (1 = single, >1 = composed library) into a Win32 HWND.
- * width/height are device pixels; density is the DPI scale (dpi/96). 1 on ok. */
-int  lk_controller_open(lk_controller *self, void *hinstance, void *hwnd,
-                        const char *const *paths, int n,
-                        unsigned width_px, unsigned height_px, float density);
-/* Open into a D3D12 composition target (SwapChainPanel host). Fails (0) when
- * the device lacks Vulkan/D3D12 interop — fall back to lk_controller_open. */
-int  lk_controller_open_dxgi(lk_controller *self, const lookout_dxgi_target *target,
-                             const char *const *paths, int n,
-                             unsigned width_pt, unsigned height_pt, float density);
-/* Advance animation + periodic persistence without rendering (dxgi mode). */
-void lk_controller_tick_anim(lk_controller *self, double dt);
+/* Open n baked cells (1 = single, >1 = composed library). The core makes its
+ * own D3D12 device and composition swapchain (lk_controller_swapchain).
+ * width/height are logical points; density is the DPI scale (dpi/96). 1 on ok. */
+int  lk_controller_open(lk_controller *self, const char *const *paths, int n,
+                        unsigned width_pt, unsigned height_pt, float density);
+/* The core-owned IDXGISwapChain* for ISwapChainPanelNative::SetSwapChain. */
+void *lk_controller_swapchain(lk_controller *self);
 /* Mark the view dirty so the next tick renders (window newly visible, etc.). */
 void lk_controller_invalidate(lk_controller *self);
-/* 1 when a frame should be rendered now. */
-int  lk_controller_needs_frame(lk_controller *self);
-int  lk_controller_render_dxgi(lk_controller *self, unsigned index,
-                               unsigned long long wait_value, unsigned long long signal_value);
-int  lk_controller_retarget_dxgi(lk_controller *self, const lookout_dxgi_target *target);
 void lk_controller_close(lk_controller *self);
 int  lk_controller_is_open(lk_controller *self);
 
@@ -64,7 +54,7 @@ int  lk_controller_tick(lk_controller *self, double dt);
 /* 1 while the host should keep ticking (animating / needs redraw / building). */
 int  lk_controller_needs_tick(lk_controller *self);
 
-void lk_controller_resize(lk_controller *self, unsigned width_px, unsigned height_px);
+void lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt);
 void lk_controller_set_density(lk_controller *self, float density);
 
 /* Interaction — logical points, origin top-left (see lookout.h). */
