@@ -147,6 +147,21 @@ int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
 /* ---- pick (S-52 cursor pick at a geo point) ---------------------------- */
 void lookout_pick(lookout *h, double lon, double lat, const tile57_query_cb *cb);
 
+/* The pick a chartplotter should SHOW, through the same callback: the features
+ * worth reporting, best first. The engine reports in draw order, which puts the
+ * land area before the light that was tapped, so the core applies three rules
+ * every shell would otherwise re-invent:
+ *
+ *   - a meta object stays only when it carries something to read (M_NPUB holds
+ *     the chart's cautions; M_QUAL answers every pick and says nothing),
+ *   - a feature the cell gave no attributes never leads,
+ *   - the most specific object wins: point, then line, then area, and what the
+ *     object is decides within that.
+ *
+ * Use this for a pick report; use lookout_pick when you want the engine's own
+ * list untouched. */
+void lookout_pick_ranked(lookout *h, double lon, double lat, const tile57_query_cb *cb);
+
 /* A file a picked feature points at, rather than carries: TXTDSC and NTXTDS name
  * a text file, PICREP names a picture, and S-101 puts the same in a
  * fileReference. `cell` is the chart name the pick reported; `name` is the value

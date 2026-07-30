@@ -284,6 +284,15 @@ export fn lookout_pick(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_qu
     l.pick(lon, lat, cb);
 }
 
+/// The cursor pick a shell should show: the objects worth reporting, best
+/// first. Same callback as lookout_pick; the core decides what is reported and
+/// in what order, so every shell shows the same thing. See lookout.h.
+export fn lookout_pick_ranked(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.pickRanked(lon, lat, cb);
+}
+
 /// A file a picked feature points at, by the cell it came from and the name it
 /// carries (TXTDSC, NTXTDS, PICREP, or an S-101 fileReference). *bytes is NULL
 /// with 0 length when the chart carries no such file. The bytes belong to the
