@@ -1,0 +1,64 @@
+---
+id: intro
+title: Lookout Marine
+slug: /
+sidebar_position: 0
+---
+
+import macosDay from './img/macos-day.png';
+import linuxDay from './img/linux-day.png';
+import windowsDay from './img/windows-day.png';
+import ipadDay from './img/ipad-day.png';
+import iphoneDay from './img/iphone-day.png';
+
+
+# Lookout Marine
+
+A fast, native chartplotter for Mac, iPad, iPhone, Windows, Android and Linux. It
+draws official ENC charts with the IHO portrayal rules, straight to the GPU with
+Metal, Vulkan or Direct3D 12, and holds 60 fps.
+
+:::warning Not for navigation
+This is a prototype. It is not pixel-perfect and it makes no claim of ECDIS
+conformance.
+:::
+
+<table>
+  <tr valign="top">
+    <td align="center"><b>macOS</b> · SwiftUI<br /><img src={macosDay} width="300" alt="Annapolis Harbor on macOS, day scheme" /></td>
+    <td align="center"><b>Linux</b> · GTK4<br /><img src={linuxDay} width="300" alt="Annapolis Harbor on Linux, day scheme" /></td>
+    <td align="center"><b>Windows</b> · WinUI 3<br /><img src={windowsDay} width="300" alt="Annapolis Harbor on Windows, day scheme" /></td>
+  </tr>
+</table>
+
+<table>
+  <tr valign="top">
+    <td align="center"><b>iPadOS</b> · SwiftUI<br /><img src={ipadDay} width="230" alt="Annapolis Harbor on iPad, day scheme" /></td>
+    <td align="center"><b>iOS</b> · SwiftUI<br /><img src={iphoneDay} width="160" alt="Annapolis Harbor on iPhone, day scheme" /></td>
+  </tr>
+</table>
+
+## Guides
+
+**User guide** — how to use the app.
+
+- **[Getting started](user-guide/getting-started.md)** — get charts, bake them, open them.
+- **[Chart window](user-guide/chart-window.md)** — what each readout and control states.
+- **[Moving the chart](user-guide/moving-the-chart.md)** — gestures, keys, rotation, and going to a scale.
+- **[Mariner settings](user-guide/mariner-settings.md)** — colour scheme, display category, depths, text.
+
+**Developer guide** — how it is built.
+
+- **[Architecture](developer-guide/architecture.md)** — the shared Zig core, the C ABI, the GPU backends, and how each shell connects to them.
+- **[Building](developer-guide/building.md)** — the core and each shell.
+- **[Linux host (GTK4)](developer-guide/hosts-linux.md)** — how that host composites the chart under floating chrome, and the two designs that failed.
+- **[Screenshot protocol](developer-guide/screenshots.md)** — the chart, the camera and the window size each host must use, so the frames compare.
+
+**[Roadmap](roadmap.md)** — own ship, NMEA 0183, AIS, tracks and instruments.
+
+The chart engine has its own documentation at
+[tile57](https://github.com/beetlebugorg/tile57).
+
+To learn why the project has this structure — one core and several native shells
+written by AI — refer to
+[the README](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai).

@@ -48,6 +48,10 @@ struct SearchField: View {
                     .panelSurface()
             }
         }
+        // The chrome is white in every appearance. Without this, the system
+        // draws the placeholder, the caret and the selection for a dark
+        // background, and the placeholder is invisible on the white field.
+        .environment(\.colorScheme, .light)
         .onAppear { focused = true }
     }
 

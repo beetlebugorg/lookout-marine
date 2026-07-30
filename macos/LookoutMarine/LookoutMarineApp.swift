@@ -141,11 +141,17 @@ struct ContentView: View {
                 Text(model.openError ?? "")
             }
             #if os(macOS)
-            // Dev hook, as LOOKOUT_OPEN_SETTINGS in the WinUI 3 shell: open the
-            // mariner form for the settings screenshot.
+            // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings,scale,
+            // search opens that chrome once the chart is up.
             .onAppear {
-                guard ProcessInfo.processInfo.environment["LOOKOUT_OPEN_SETTINGS"] != nil else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { model.openSettings() }
+                guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
+                let want = Set(show.lowercased().split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) })
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if want.contains("settings") { model.openSettings() }
+                    if want.contains("scale") { model.beginScaleEntry() }
+                    if want.contains("search") { model.searchOpen = true }
+                }
             }
             #endif
     }

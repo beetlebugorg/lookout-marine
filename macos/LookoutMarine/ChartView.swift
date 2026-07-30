@@ -30,7 +30,6 @@ import UIKit
 /// readout capsule at the bottom center.
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
-    @State private var searchOpen = false
 
     /// Below this width the capsule and the corner chrome cannot share the
     /// bottom row. The corner chrome then moves above the capsule.
@@ -47,12 +46,12 @@ struct OverlayLayer: View {
                 // Top left: the search bubble opens the search field.
                 .overlay(alignment: .topLeading) {
                     HStack(alignment: .top, spacing: Chrome.gap) {
-                        ChromeBubble(system: searchOpen ? "xmark" : "magnifyingglass",
+                        ChromeBubble(system: model.searchOpen ? "xmark" : "magnifyingglass",
                                      help: "Go to coordinate") {
-                            withAnimation(.easeInOut(duration: 0.18)) { searchOpen.toggle() }
+                            withAnimation(.easeInOut(duration: 0.18)) { model.searchOpen.toggle() }
                         }
                         .chromeHitRegion("search-bubble")
-                        if searchOpen {
+                        if model.searchOpen {
                             SearchField(model: model)
                                 .transition(.move(edge: .leading).combined(with: .opacity))
                                 .chromeHitRegion("search-field")
@@ -90,7 +89,9 @@ struct OverlayLayer: View {
                             IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
                                 .chromeHitRegion("identify")
                         }
-                        ScaleBarView(scaleDenominator: model.scaleDenominator)
+                        if model.hasChart {
+                            ScaleBarView(scaleDenominator: model.scaleDenominator)
+                        }
                     }
                     .padding(.leading, Chrome.margin)
                     .padding(.bottom, corner)
@@ -104,9 +105,11 @@ struct OverlayLayer: View {
                                 .chromeHitRegion("scale-entry")
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
-                        ReadoutsCapsule(model: model, compact: compact) {
-                            if model.showScaleEntry { model.showScaleEntry = false }
-                            else { model.beginScaleEntry() }
+                        if model.hasChart {
+                            ReadoutsCapsule(model: model, compact: compact) {
+                                if model.showScaleEntry { model.showScaleEntry = false }
+                                else { model.beginScaleEntry() }
+                            }
                         }
                     }
                     .padding(.bottom, Chrome.margin)
@@ -125,6 +128,7 @@ struct OverlayLayer: View {
                 .animation(.default, value: model.pickResults)
                 .animation(.default, value: model.isBuilding)
                 .animation(.easeInOut(duration: 0.18), value: model.showScaleEntry)
+                .animation(.easeInOut(duration: 0.18), value: model.searchOpen)
                 .animation(.easeInOut(duration: 0.25), value: model.showStartupLoader)
         }
         // chromeHitRegion writes the control frames in this space.

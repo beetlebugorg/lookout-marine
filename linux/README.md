@@ -6,7 +6,7 @@ a transparent hole in the window so the chrome floats over the chart. The Linux
 counterpart of the SwiftUI shell on macOS/iOS and the Java shell on Android: same
 core, same C ABI, same behaviour.
 
-**Architecture, design history and gotchas: [docs/hosts-linux.md](../docs/docs/hosts-linux.md).**
+**Architecture, design history and gotchas: [docs/hosts-linux.md](../docs/docs/developer-guide/hosts-linux.md).**
 
 ![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/linux-day.png)
 
@@ -51,7 +51,7 @@ recent, then `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 - **Render parity / smoke:** `zig-out/bin/lookout-marine-demo <chart.pmtiles>`.
 - **Screenshots:** `./screenshots.sh all` — runs the app in an off-screen sway
   session and writes `../docs/docs/img/linux-*.png`. Needs `sway` + `grim`; see
-  [the protocol](../docs/docs/screenshots.md).
+  [the protocol](../docs/docs/developer-guide/screenshots.md).
 
 ## What's in here
 
