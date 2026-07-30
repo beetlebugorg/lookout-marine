@@ -24,17 +24,17 @@ struct SettingsView: View {
 
     @ViewBuilder private var content: some View {
         // The presenting sheet (iOS) supplies the Done button.
-        TabView {
+        TabView(selection: $model.settingsTab) {
             Form { DisplaySections(m: m) }.groupedForm()
-                .tabItem { Label("Display", systemImage: "paintpalette") }
+                .tabItem { Label("Display", systemImage: "paintpalette") }.tag(0)
             Form { DepthsSections(m: m) }.groupedForm()
-                .tabItem { Label("Depths", systemImage: "water.waves") }
+                .tabItem { Label("Depths", systemImage: "water.waves") }.tag(1)
             Form { SymbolsSections(m: m) }.groupedForm()
-                .tabItem { Label("Text", systemImage: "textformat") }
+                .tabItem { Label("Text", systemImage: "textformat") }.tag(2)
             Form { ChartsSections(model: model) }.groupedForm()
-                .tabItem { Label("Charts", systemImage: "map") }
+                .tabItem { Label("Charts", systemImage: "map") }.tag(3)
             Form { AdvancedSections(m: m) }.groupedForm()
-                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }.tag(4)
         }
         #if os(macOS)
         // The five tab labels need this width. In a narrower window macOS

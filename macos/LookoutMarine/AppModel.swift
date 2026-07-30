@@ -88,6 +88,9 @@ final class AppModel: ObservableObject {
     // panel and Settings scene are AppKit-native)
     @Published var showImporter = false
     @Published var showSettings = false
+    /// Which settings tab shows: 0 Display, 1 Depths, 2 Text, 3 Charts,
+    /// 4 Advanced. The screenshot hook sets it.
+    @Published var settingsTab = 0
 
     // MARK: Search
     @Published var searchOpen = false
@@ -273,6 +276,13 @@ final class AppModel: ObservableObject {
         controller.setView(lookout_view(lon: coord.lon, lat: coord.lat,
                                         zoom: zoom, rotation_deg: cur.rotation_deg))
         return true
+    }
+
+    /// Identify the features at the view centre. A tap on the chart runs the
+    /// same pick; the screenshot hook has no cursor to tap with.
+    func identifyAtCentre() {
+        guard let controller else { return }
+        pickResults = controller.pick(lon: centerLon, lat: centerLat)
     }
 
     var schemeName: String {

@@ -9,9 +9,9 @@ sidebar_position: 4
 The gear opens the settings. ⌘, (Ctrl+,) does the same. Every change applies to
 the chart at once and is kept for the next time.
 
-![Mariner settings on macOS](../img/macos-settings.png)
-
 ## Display
+
+![The Display tab](../img/settings-display.png)
 
 **Colour scheme** — day, dusk or night. Night dims the whole palette for a dark
 wheelhouse. ⌘L steps through the three.
@@ -31,6 +31,8 @@ Other.
 **Soundings** — spot depths, on or off, whatever the category. ⌘⇧S.
 
 ## Depths
+
+![The Depths tab](../img/settings-depths.png)
 
 **Depth unit** — metres, feet or fathoms. It changes the numbers you type below,
 and the soundings.
@@ -59,6 +61,8 @@ water; it only marks the numbers.
 
 ## Text
 
+![The Text tab](../img/settings-text.png)
+
 Feature names, light descriptions and other text can each be switched off when
 the chart gets busy. ⌘T switches all text.
 
@@ -72,9 +76,13 @@ a short leader. Useful on approach, noisy in a crowded harbour.
 
 ## Charts
 
+![The Charts tab](../img/settings-charts.png)
+
 The open library, the recent ones, and the button to add more.
 
 ## Advanced
+
+![The Advanced tab](../img/settings-advanced.png)
 
 **Data quality overlay** — the zones of confidence, so you can see which surveys
 are old or sparse.

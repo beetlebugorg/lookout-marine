@@ -147,10 +147,20 @@ struct ContentView: View {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespaces) })
+                let tabs = ["display": 0, "depths": 1, "text": 2, "charts": 3, "advanced": 4]
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    if want.contains("settings") { model.openSettings() }
-                    if want.contains("scale") { model.beginScaleEntry() }
-                    if want.contains("search") { model.searchOpen = true }
+                    for item in want {
+                        let part = item.split(separator: ":", maxSplits: 1).map(String.init)
+                        switch part[0] {
+                        case "settings":
+                            model.settingsTab = part.count > 1 ? (tabs[part[1]] ?? 0) : 0
+                            model.openSettings()
+                        case "scale": model.beginScaleEntry()
+                        case "search": model.searchOpen = true
+                        case "identify": model.identifyAtCentre()
+                        default: break
+                        }
+                    }
                 }
             }
             #endif

@@ -1,10 +1,10 @@
 ---
-id: hosts-linux
-title: Linux host (GTK4)
+id: linux
+title: Linux
 sidebar_position: 3
 ---
 
-# Linux host (GTK4)
+# Linux
 
 A native **GTK4** shell in C around the Zig chart core. The core draws with **raw
 Vulkan** (`src/gpu_vk.zig`) into a surface that the compositor shows. It is the
