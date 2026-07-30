@@ -7,3 +7,5 @@ build/
 vendor/
 *.user
 xamlbuild.txt
+XamlMetaDataProvider.cpp
+XamlMetaDataProvider.idl
