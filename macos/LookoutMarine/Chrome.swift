@@ -47,16 +47,6 @@ enum Chrome {
 }
 
 extension View {
-    /// The WinUI 3 `Bubble` style: an opaque 48pt white circle. Apply it to the
-    /// glyph. The tap target is the full circle.
-    func bubbleSurface() -> some View {
-        frame(width: Chrome.bubble, height: Chrome.bubble)
-            .contentShape(Circle())
-            .background(Chrome.surface, in: Circle())
-            .overlay(Circle().strokeBorder(Chrome.edge.opacity(0.35), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-    }
-
     /// The WinUI 3 floating panel style: identify, empty state, and loader.
     func panelSurface(cornerRadius r: CGFloat = 8) -> some View {
         background(Chrome.panel.opacity(0.95),
@@ -64,6 +54,80 @@ extension View {
             .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
                 .strokeBorder(Chrome.edge, lineWidth: 1))
             .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+    }
+}
+
+/// The WinUI 3 `Bubble` style: an opaque 48pt white circle that answers the
+/// pointer. A plain button style draws no hover and no pressed state, which
+/// makes a control look like a painted shape. WinUI tints its bubbles the same
+/// way, so the states are parity, not decoration.
+struct ChromeButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Bubble(configuration: configuration)
+    }
+
+    private struct Bubble: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .frame(width: Chrome.bubble, height: Chrome.bubble)
+                .contentShape(Circle())
+                .background(fill, in: Circle())
+                .overlay(Circle().strokeBorder(Chrome.edge.opacity(hovering ? 0.5 : 0.35),
+                                               lineWidth: 0.5))
+                .shadow(color: .black.opacity(configuration.isPressed ? 0.10 : 0.18),
+                        radius: configuration.isPressed ? 3 : 5,
+                        y: configuration.isPressed ? 1 : 2)
+                .scaleEffect(configuration.isPressed ? 0.94 : 1)
+                .opacity(isEnabled ? 1 : 0.45)
+                .onHover { hovering = $0 && isEnabled }
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+        }
+
+        private var fill: Color {
+            if configuration.isPressed { return Color(white: 0.87) }
+            return hovering ? Color(white: 0.95) : Chrome.surface
+        }
+    }
+}
+
+/// A flat chrome control: a preset chip, a close button, or the scale readout.
+/// It answers the pointer like the bubbles do.
+struct ChromeFlatStyle: ButtonStyle {
+    var resting: Color = .clear
+    var cornerRadius: CGFloat = 8
+
+    func makeBody(configuration: Configuration) -> some View {
+        Flat(configuration: configuration, resting: resting, cornerRadius: cornerRadius)
+    }
+
+    private struct Flat: View {
+        let configuration: ButtonStyleConfiguration
+        let resting: Color
+        let cornerRadius: CGFloat
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            configuration.label
+                .contentShape(shape)
+                .background(fill, in: shape)
+                .opacity(isEnabled ? 1 : 0.45)
+                .onHover { hovering = $0 && isEnabled }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        }
+
+        private var fill: Color {
+            if configuration.isPressed { return Chrome.ink.opacity(0.16) }
+            if hovering { return Chrome.ink.opacity(0.10) }
+            return resting
+        }
     }
 }
 
@@ -79,11 +143,9 @@ struct ChromeBubble: View {
             Image(systemName: system)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(Chrome.ink)
-                .bubbleSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChromeButtonStyle())
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.45)
         .help(help)
         .accessibilityLabel(help)
     }
@@ -103,9 +165,8 @@ struct NorthBubble: View {
             }
             .foregroundStyle(Chrome.ink)
             .rotationEffect(.degrees(-rotationDeg))
-            .bubbleSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChromeButtonStyle())
         .help("Reset to north-up")
         .accessibilityLabel("Reset to north-up")
     }
