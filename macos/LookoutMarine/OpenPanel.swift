@@ -12,6 +12,9 @@
 import AppKit
 
 extension AppModel {
+    /// Open the mariner form. The gear bubble and ⌘, both come here.
+    func openSettings() { SettingsWindowController.shared.show(model: self) }
+
     /// Present the Open panel; open the chosen `.pmtiles` file or a folder of cells.
     func presentOpenPanel() {
         let panel = NSOpenPanel()
@@ -33,6 +36,9 @@ extension AppModel {
 import Foundation
 
 extension AppModel {
+    /// Open the mariner form. On iOS it is a sheet, so the flag is enough.
+    func openSettings() { showSettings = true }
+
     /// Import a picked chart (or folder of cells) into the app container, then
     /// open the copy. Copying sidesteps security-scope lifetime: the engine
     /// mmaps the cells for as long as the chart stays open, but the picker's

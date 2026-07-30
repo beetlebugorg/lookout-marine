@@ -5,7 +5,6 @@
 #define LK_GROUP_VIEW    "view"
 #define LK_GROUP_RECENTS "recents"
 #define LK_GROUP_MARINER "mariner.v1"
-#define LK_GROUP_HUD     "hud"
 
 #define LK_MAX_RECENTS 10
 
@@ -238,21 +237,4 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
       memset (m->date_view, 0, sizeof m->date_view);
       g_strlcpy (m->date_view, date, sizeof m->date_view);
     }
-}
-
-/* ---- HUD ---------------------------------------------------------------- */
-
-gboolean
-lk_store_load_use_dms (void)
-{
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  return g_key_file_get_boolean (keyfile, LK_GROUP_HUD, "use_dms", NULL);
-}
-
-void
-lk_store_save_use_dms (gboolean use_dms)
-{
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  g_key_file_set_boolean (keyfile, LK_GROUP_HUD, "use_dms", use_dms);
-  lk_store_flush (keyfile);
 }

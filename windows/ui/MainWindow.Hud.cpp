@@ -18,7 +18,7 @@ namespace winrt::LookoutMarine::implementation
         lk_readout r{};
         lk_controller_readout(controller, &r);
 
-        HudCoord().Text(lkw::FormatCoord(r.lat, r.lon, use_dms));
+        HudCoord().Text(lkw::FormatCoord(r.lat, r.lon));
         HudScale().Text(lkw::FormatScale(r.scale_denom));
         HudBand().Text(lkw::BandForDenom(r.scale_denom));
         wchar_t z[16];
@@ -49,7 +49,11 @@ namespace winrt::LookoutMarine::implementation
         }
         ScaleBar().Visibility(Visibility::Visible);
 
-        double m_per_pt = denom * 0.0254 / 96.0; // real metres per logical point
+        // Ground metres per logical point. The engine gives the OGC/WMTS
+        // denominator: metres per camera pixel divided by 0.00028, the standard
+        // 0.28 mm pixel. One camera pixel is one logical point. A 96 dpi value
+        // here made the bar 5% too long for its label.
+        double m_per_pt = denom * 0.00028;
         static constexpr double nice[] = { 10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
                                            10000, 20000, 50000, 100000, 200000, 500000 };
         double target = 140.0 * m_per_pt;

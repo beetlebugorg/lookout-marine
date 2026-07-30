@@ -72,31 +72,66 @@ gdbus call --session -d org.beetlebug.LookoutMarine \
   -m org.gtk.Actions.Activate settings '@av []' '@a{sv} {}'
 ```
 
-## macOS and iPadOS
+## macOS
 
 Use the same four values: the chart, the camera, the day scheme, and 1400 x 900 at
 scale 2. Capture only the window. Do not capture the screen, and do not include the
 desktop.
 
 ```sh
+open -n --env LOOKOUT_OPEN=<chart|folder> \
+        --env LOOKOUT_VIEW=-76.482,38.976,13.7 \
+        --env LOOKOUT_WINDOW=1400x900 \
+        build/Debug/LookoutMarine.app
 # one window only, no shadow, written to the specified file name
 screencapture -o -l"$(GetWindowID LookoutMarine)" docs/docs/img/macos-day.png
 ```
+
+`LOOKOUT_WINDOW=WIDTHxHEIGHT` sets the content size, so the frame is the same on
+each Mac. The window must fit on the display: a 1400 x 900 window needs a display
+of more than 1400 x 930 points.
 
 `-o` removes the window shadow. `-l<windowid>` captures one window. Together they
 give the same result as the sway and grim method on Linux. A Retina display gives
 scale 2 automatically. A display with scale 1 gives a 1400 x 900 frame. Label such a
 frame correctly. Do not make it larger.
 
-To make the settings frame, press **Command+,** to open the mariner panel. Then
-capture the panel above the chart. The frame must agree with `linux-settings.png`.
+To make the settings frame, press **Command+,** or click the gear bubble to open the
+mariner window. `LOOKOUT_OPEN_SETTINGS=1` opens it at start. Then capture the window
+above the chart. The frame must agree with `linux-settings.png`.
 
-On the simulator:
+## iPadOS and iOS
+
+The simulator writes the frame itself, so no screen permission is necessary. The
+`SIMCTL_CHILD_` variables must be in the environment of `simctl`. They are not
+launch arguments.
 
 ```sh
-xcrun simctl launch --console booted org.beetlebug.LookoutMarine \
-  SIMCTL_CHILD_LOOKOUT_OPEN=<chart> SIMCTL_CHILD_LOOKOUT_VIEW=-76.482,38.976,13.7
+xcrun simctl boot "iPad Pro 11-inch (M5)"
+xcrun simctl install booted <path>/LookoutMarine.app
+xcrun simctl status_bar booted override --time 9:41 \
+  --batteryState charged --batteryLevel 100 --wifiMode active
+SIMCTL_CHILD_LOOKOUT_OPEN=<chart|folder> \
+SIMCTL_CHILD_LOOKOUT_VIEW=-76.482,38.976,13.7 \
+  xcrun simctl launch booted org.beetlebug.lookout-marine-ios
+sleep 60   # a 7,000-cell library takes about a minute to map and draw
 xcrun simctl io booted screenshot docs/docs/img/ipad-day.png
+```
+
+Use the same steps on an iPhone device for `iphone-day-raw.png`. Both frames are
+portrait: `simctl` cannot rotate a device. To make a landscape frame, run the
+`testFrameForScreenshot` UI test with `TEST_RUNNER_LOOKOUT_FRAME=1`, which turns the
+device and then holds while you capture.
+
+The simulator writes the screen only. Add a device body, so that a tablet and a
+phone read as devices beside the desktop windows. The `-raw` file keeps the
+capture; the plain name holds the framed image.
+
+```sh
+swift macos/frame-device.swift docs/docs/img/ipad-day-raw.png \
+  docs/docs/img/ipad-day.png 60 150 90 1        # bezel, body radius, screen radius, camera
+swift macos/frame-device.swift docs/docs/img/iphone-day-raw.png \
+  docs/docs/img/iphone-day.png 45 210 165 0     # the phone camera is in the screen
 ```
 
 ## How to examine a frame

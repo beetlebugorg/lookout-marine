@@ -18,9 +18,15 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<!-- Empty dict = a plain system launch screen (no storyboard needed). -->
+	<!-- No storyboard. The launch screen is a flat fill in the NODATA blue of
+	     the chart (Assets.xcassets/LaunchBackground). The Metal layer clears to
+	     that color and StartupLoader paints it. The launch screen, the loader
+	     and the first frame are therefore one surface. -->
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 	<!-- UIKit scene lifecycle with our SceneDelegate (it builds the chart /
 	     input / chrome window stack — see LookoutMarineApp.swift). -->
 	<key>UIApplicationSceneManifest</key>

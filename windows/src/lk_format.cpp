@@ -33,18 +33,29 @@ namespace lkw
         return L"Overview";
     }
 
-    winrt::hstring FormatCoord(double lat, double lon, bool dms)
+    // Degrees, minutes and seconds with a hemisphere. The longitude has three
+    // degree digits, so a pair keeps its column width.
+    static void SplitDMS(double value, int *deg, int *min, double *sec)
     {
+        double a = std::abs(value);
+        *deg = (int)a;
+        *min = (int)((a - *deg) * 60.0);
+        *sec = ((a - *deg) * 60.0 - *min) * 60.0;
+        // Carry the rounding. 59.96" prints as 60.0", which is the next minute.
+        if (std::llround(*sec * 10.0) >= 600) { *sec = 0.0; (*min)++; }
+        if (*min >= 60) { *min = 0; (*deg)++; }
+    }
+
+    winrt::hstring FormatCoord(double lat, double lon)
+    {
+        int lat_d, lat_m, lon_d, lon_m;
+        double lat_s, lon_s;
+        SplitDMS(lat, &lat_d, &lat_m, &lat_s);
+        SplitDMS(lon, &lon_d, &lon_m, &lon_s);
         wchar_t buf[64];
-        if (dms)
-        {
-            double alat = std::abs(lat), alon = std::abs(lon);
-            swprintf_s(buf, L"%d\x00B0%04.1f'%c %03d\x00B0%04.1f'%c",
-                       (int)alat, (alat - (int)alat) * 60.0, lat < 0 ? L'S' : L'N',
-                       (int)alon, (alon - (int)alon) * 60.0, lon < 0 ? L'W' : L'E');
-            return buf;
-        }
-        swprintf_s(buf, L"%.5f, %.5f", lat, lon);
+        swprintf_s(buf, L"%02d\x00B0%02d'%04.1f\"%c %03d\x00B0%02d'%04.1f\"%c",
+                   lat_d, lat_m, lat_s, lat < 0 ? L'S' : L'N',
+                   lon_d, lon_m, lon_s, lon < 0 ? L'W' : L'E');
         return buf;
     }
 }
