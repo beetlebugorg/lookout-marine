@@ -292,13 +292,17 @@ final class AppModel: ObservableObject {
     /// and the depth area before the light that was tapped. The report opens on
     /// the object that matters, so the list is ranked first.
     func showPick(_ results: [PickFeature], at point: CGPoint) {
-        pickResults = results.enumerated()
+        // Meta objects describe the survey, not the water: M_QUAL covers the
+        // whole cell, so it answers every pick and tells the mariner nothing
+        // about what was tapped. The data quality overlay shows it instead.
+        let features = results.filter { !$0.cls.hasPrefix("M_") && !$0.cls.hasPrefix("C_") }
+        pickResults = features.enumerated()
             .sorted { a, b in
                 let ra = PickRank.of(a.element.cls), rb = PickRank.of(b.element.cls)
                 return ra == rb ? a.offset < b.offset : ra < rb
             }
             .map(\.element)
-        pickPoint = results.isEmpty ? nil : point
+        pickPoint = features.isEmpty ? nil : point
         pickIndex = 0
     }
 
@@ -325,12 +329,7 @@ final class AppModel: ObservableObject {
             return map
         }()
 
-        static func of(_ cls: String) -> Int {
-            if let r = rank[cls] { return r }
-            // Meta and collection objects describe the data, not the water.
-            if cls.hasPrefix("M_") || cls.hasPrefix("C_") { return order.count + 1 }
-            return order.count
-        }
+        static func of(_ cls: String) -> Int { rank[cls] ?? order.count }
     }
 
     func closePick() {
