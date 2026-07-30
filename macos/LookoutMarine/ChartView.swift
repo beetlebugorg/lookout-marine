@@ -23,91 +23,132 @@ import UIKit
 /// platforms: macOS hosts it in an AppKit overlay above the chart's Metal layer;
 /// iOS composes it in plain SwiftUI (the whole chrome window sits above the
 /// chart window, so no layer trickery is needed).
+///
+/// The layout is the layout of the WinUI 3 shell (windows/ui/MainWindow.xaml):
+/// search at the top left, north at the top right, zoom above charts and
+/// settings at the bottom right, the scale bar at the bottom left, and the
+/// readout capsule at the bottom center.
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
     @State private var searchOpen = false
 
+    /// Below this width the capsule and the corner chrome cannot share the
+    /// bottom row. The corner chrome then moves above the capsule.
+    private static let compactWidth: CGFloat = 700
+
     var body: some View {
-        Color.clear
-            .allowsHitTesting(false)
-            // HUD: a full-width bar flush with the bottom edge.
-            .overlay(alignment: .bottom) {
-                ReadoutsBadge(model: model)
-            }
-            // Chartplotter-style bubbles, top-right: search (expands to the
-            // field), settings, and the compass when rotated. Pinned to the
-            // PHYSICAL trailing edge — in landscape the side safe-area inset
-            // left them floating toward the middle.
-            .overlay(alignment: .topTrailing) {
-                VStack(alignment: .trailing, spacing: 10) {
-                    HStack(alignment: .top, spacing: 10) {
-                        if searchOpen {
-                            SearchField(model: model)
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                                .chromeHitRegion("search-field")
-                        }
+        GeometryReader { geo in
+            let compact = geo.size.width < Self.compactWidth
+            // The bottom inset of the corner chrome. It clears the capsule in a
+            // narrow window.
+            let corner = compact ? Chrome.margin + Chrome.capsule + Chrome.gap : Chrome.margin
+            Color.clear
+                .allowsHitTesting(false)
+                // Top left: the search bubble opens the search field.
+                .overlay(alignment: .topLeading) {
+                    HStack(alignment: .top, spacing: Chrome.gap) {
                         ChromeBubble(system: searchOpen ? "xmark" : "magnifyingglass",
                                      help: "Go to coordinate") {
-                            withAnimation(.snappy) { searchOpen.toggle() }
+                            withAnimation(.easeInOut(duration: 0.18)) { searchOpen.toggle() }
                         }
                         .chromeHitRegion("search-bubble")
+                        if searchOpen {
+                            SearchField(model: model)
+                                .transition(.move(edge: .leading).combined(with: .opacity))
+                                .chromeHitRegion("search-field")
+                        }
+                    }
+                    .padding(Chrome.margin)
+                }
+                // Top right: north. It is always visible. It stays at the
+                // physical trailing edge, because in landscape the safe-area
+                // inset moves it toward the middle.
+                .overlay(alignment: .topTrailing) {
+                    NorthBubble(rotationDeg: model.rotationDeg) { model.northUp() }
+                        .chromeHitRegion("compass")
+                        .padding(Chrome.margin)
+                        .ignoresSafeArea(.container, edges: .trailing)
+                }
+                // Bottom right: zoom above settings. The charts live in the
+                // Charts tab of the settings.
+                .overlay(alignment: .bottomTrailing) {
+                    VStack(alignment: .trailing, spacing: Chrome.gap) {
+                        ZoomControls(model: model)
                         ChromeBubble(system: "gearshape", help: "Mariner settings") {
-                            model.showSettings = true
+                            model.openSettings()
                         }
                         .chromeHitRegion("settings-bubble")
                     }
-                    if abs(model.rotationDeg) >= 0.5 {
-                        CompassBadge(rotationDeg: model.rotationDeg) { model.northUp() }
-                            .chromeHitRegion("compass")
+                    .padding(.trailing, Chrome.margin)
+                    .padding(.bottom, corner)
+                    .ignoresSafeArea(.container, edges: .trailing)
+                }
+                // Bottom left: identify results above the scale bar.
+                .overlay(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: Chrome.gap) {
+                        if !model.pickResults.isEmpty {
+                            IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
+                                .chromeHitRegion("identify")
+                        }
+                        ScaleBarView(scaleDenominator: model.scaleDenominator)
+                    }
+                    .padding(.leading, Chrome.margin)
+                    .padding(.bottom, corner)
+                }
+                // Bottom center: the readout capsule. The scale entry opens
+                // above it.
+                .overlay(alignment: .bottom) {
+                    VStack(spacing: Chrome.gap) {
+                        if model.showScaleEntry {
+                            ScaleEntryPanel(model: model)
+                                .chromeHitRegion("scale-entry")
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+                        ReadoutsCapsule(model: model, compact: compact) {
+                            if model.showScaleEntry { model.showScaleEntry = false }
+                            else { model.beginScaleEntry() }
+                        }
+                    }
+                    .padding(.bottom, Chrome.margin)
+                }
+                .overlay(alignment: .top) {
+                    if model.isBuilding { BuildingPill().padding(.top, 10) }
+                }
+                .overlay {
+                    if model.showStartupLoader {
+                        StartupLoader(phase: model.loadingPhase)
+                            .transition(.opacity)
+                    } else if !model.hasChart {
+                        EmptyChartState(model: model).chromeHitRegion("empty-state")
                     }
                 }
-                .padding(12)
-                .ignoresSafeArea(.container, edges: .trailing)
-            }
-            // Zoom bubbles sit ABOVE the HUD bar, never overlapping it, pinned
-            // to the physical trailing edge like the top bubbles.
-            .overlay(alignment: .bottomTrailing) {
-                ZoomControls(model: model)
-                    .chromeHitRegion("zoom")
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 52)
-                    .ignoresSafeArea(.container, edges: .trailing)
-            }
-            .overlay(alignment: .bottomLeading) {
-                if !model.pickResults.isEmpty {
-                    IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
-                        .chromeHitRegion("identify")
-                        .padding(.leading, 12)
-                        .padding(.bottom, 52)
-                }
-            }
-            .overlay(alignment: .top) {
-                if model.isBuilding { BuildingPill().padding(.top, 10) }
-            }
-            .overlay {
-                if model.showStartupLoader { StartupLoader(preparing: model.preparingSymbols) }
-                else if !model.hasChart { EmptyChartState(model: model).chromeHitRegion("empty-state") }
-            }
-            .animation(.default, value: model.pickResults)
-            .animation(.default, value: model.isBuilding)
+                .animation(.default, value: model.pickResults)
+                .animation(.default, value: model.isBuilding)
+                .animation(.easeInOut(duration: 0.18), value: model.showScaleEntry)
+                .animation(.easeInOut(duration: 0.25), value: model.showStartupLoader)
+        }
+        // chromeHitRegion writes the control frames in this space.
+        // The pass-through hosts hit-test against it.
+        .coordinateSpace(name: Chrome.space)
     }
 }
 
-#if os(iOS)
-/// Publish this view's GLOBAL frame as tappable chrome (see ChromeHitMap):
-/// PassThroughWindow keeps touches inside these frames, everything else falls
-/// through to the chart. The chrome window is full-scene, so SwiftUI's .global
-/// space and the window's hit-test coordinates coincide.
+/// Write this view's frame to ChromeHitMap. The pass-through host keeps the
+/// clicks in these frames and lets all other clicks reach the chart. Both
+/// platforms need this, because a SwiftUI control has no view of its own and
+/// hit-tests as the hosting view, like empty space.
 private struct ChromeHitRegion: ViewModifier {
     let id: String
     func body(content: Content) -> some View {
         content.background {
             GeometryReader { g in
                 Color.clear
-                    .onAppear { ChromeHitMap.shared.set(id, g.frame(in: .global)) }
+                    .onAppear { ChromeHitMap.shared.set(id, g.frame(in: .named(Chrome.space))) }
                     // One-parameter onChange: the iOS 17 (of:initial:_:) form
                     // is unavailable on the iOS 15 floor.
-                    .onChange(of: g.frame(in: .global)) { f in ChromeHitMap.shared.set(id, f) }
+                    .onChange(of: g.frame(in: .named(Chrome.space))) { f in
+                        ChromeHitMap.shared.set(id, f)
+                    }
                     .onDisappear { ChromeHitMap.shared.remove(id) }
             }
         }
@@ -115,32 +156,6 @@ private struct ChromeHitRegion: ViewModifier {
 }
 extension View {
     func chromeHitRegion(_ id: String) -> some View { modifier(ChromeHitRegion(id: id)) }
-}
-#else
-extension View {
-    func chromeHitRegion(_ id: String) -> some View { self }
-}
-#endif
-
-/// One floating circular chrome button (chartplotter-style bubble).
-struct ChromeBubble: View {
-    let system: String
-    let help: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: system)
-                .font(.system(size: 17, weight: .medium))
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .background(.regularMaterial, in: Circle())
-        .overlay(Circle().strokeBorder(.hairline.opacity(0.5)))
-        .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
-        .help(help)
-    }
 }
 
 #if os(macOS)
@@ -181,10 +196,20 @@ struct ChartView: NSViewRepresentable {
 /// A hosting view that lets clicks fall through its empty (non-interactive)
 /// regions to the chart below (its superview), so panning/zooming still work
 /// everywhere the floating controls aren't.
+///
+/// AppKit cannot make that decision alone. SwiftUI draws its controls without
+/// backing views, so a bubble and empty space both hit-test as this view. The
+/// rule "hit === self, return nil" therefore sent every chrome click to the
+/// chart. ChromeHitMap holds the frames of the controls and makes the decision,
+/// as on iOS.
 final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        return hit === self ? nil : hit
+        guard hit === self else { return hit } // a subview, such as a text field
+        // AppKit gives the point in the superview space. The map uses
+        // Chrome.space, which is the coordinate space of this view.
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return ChromeHitMap.shared.contains(local) ? self : nil
     }
 }
 
@@ -259,6 +284,7 @@ final class ChartNSView: NSView {
         super.viewDidMoveToWindow()
         guard let window else { return }
         window.acceptsMouseMovedEvents = true
+        applyWindowSizeHook()
         // The full-screen transition swaps the drawable at its very END — often
         // after our last setFrameSize, when the render loop may already be idle.
         // Without a fresh frame the window keeps a blank drawable, so kick a
@@ -273,6 +299,24 @@ final class ChartNSView: NSView {
             }
         }
         maybeAutoOpen()
+    }
+
+    /// Dev hook, as LOOKOUT_OPEN and LOOKOUT_VIEW: LOOKOUT_WINDOW="1400x900"
+    /// sets the content size, so a screenshot frame is the same on any Mac.
+    /// It runs after the scene has sized the window, which is why it defers.
+    private func applyWindowSizeHook() {
+        guard let spec = ProcessInfo.processInfo.environment["LOOKOUT_WINDOW"] else { return }
+        let size = spec.lowercased().split(separator: "x").compactMap { Double($0) }
+        guard size.count == 2, size[0] > 100, size[1] > 100 else {
+            lkLog("ignoring malformed LOOKOUT_WINDOW '\(spec)' (want WIDTHxHEIGHT)")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let window = self?.window else { return }
+            window.setContentSize(NSSize(width: size[0], height: size[1]))
+            window.center()
+            lkLog("LOOKOUT_WINDOW: content size \(Int(size[0]))x\(Int(size[1]))pt")
+        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -316,6 +360,7 @@ final class ChartNSView: NSView {
         // recents, and the fromServer frame restore is exactly the mid-load
         // resize the deferral above is dodging.
         window?.isRestorable = false
+        model?.openingCells = paths.count
         model?.isOpening = true // loader up before the (synchronous) open runs
         model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
@@ -560,6 +605,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
+        model?.openingCells = paths.count
         model?.isOpening = true // loader up before the (synchronous) open runs
         model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
