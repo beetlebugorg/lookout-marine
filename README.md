@@ -151,58 +151,47 @@ For more detail, refer to [the architecture](docs/docs/architecture.md),
 
 ## How we use AI
 
-Cross-platform UI usually forces a choice. Use one toolkit everywhere and the app
-feels slightly wrong on every platform — the scrolling, the menu placement, the
-settings panel. Or write a native front end per platform and maintain several
-codebases that drift apart the moment one gains a feature first.
+Cross-platform UI forces a choice. One toolkit everywhere feels slightly wrong on
+every platform: the scrolling, the menu placement, the settings panel. Separate
+native front ends drift apart as soon as one gains a feature first.
 
-We're testing a third option: a genuinely native shell for every platform, written
-with AI — and, the open question, kept in step that way too. Below is the method as it
-stands, including the parts we haven't proven.
+We take a third option: a native shell for every platform, written with AI and
+kept in step with AI. This is the process:
 
-**The core owns what gets drawn, and has no opinion about the UI.** Everything
-portable — S-57 decode, S-101 portrayal, tessellation, camera, GPU scene — sits in a
-Zig core behind one C ABI (`include/lookout.h`). Nothing in it knows a widget exists,
-and it says nothing about menus, HUD layout or gestures. A shell may only reach the
-core through that header, so no shell can couple to another and there's no shared
-widget layer to regress.
+**The core owns what gets drawn.** Everything portable sits in a Zig core behind
+one C ABI (`include/lookout.h`): S-57 decode, S-101 portrayal, tessellation,
+camera, GPU scene. The core knows nothing about widgets, menus, or gestures. A
+shell can only reach the core through that header, so shells cannot couple to
+each other.
 
-**The Apple shell is the source of record for behaviour.** SwiftUI on Mac and iPad
-came first and is the most complete, so it's the reference the others are written
-against. The Linux and Android shells say so in their own source: the GTK accelerators
-mirror the macOS menu bar with Ctrl for Command, its display menu follows the macOS
-Chart menu, and its render loop mirrors the macOS display link. When two shells
-disagree about how something should behave, macOS is right by default.
+**The Apple shell is the reference for behavior.** SwiftUI on Mac and iPad came
+first and is the most complete. The other shells follow it and say so in their
+own source. The GTK accelerators mirror the macOS menu bar with Ctrl for
+Command, and the GTK render loop mirrors the macOS display link. When two shells
+disagree, macOS is right by default.
 
-**A change should start as prose, not as a diff — this part is still unproven.** The
-intent is to describe the behaviour once, or point at what the Apple shell already
-does, then write each shell separately to express it in its own platform's idiom: GTK4
-in C on Linux, Java on Android. So far the shells have been built one at a time, by
-hand-carrying the behaviour across. Whether AI can keep several native shells in step
-from one description is the part of this experiment still to be tested.
+**A change starts as prose, not as a diff.** We describe a behavior once, or
+point at what the Apple shell does, then write it into each shell in that
+platform's idiom: SwiftUI on Apple, GTK4 in C on Linux, Java on Android, WinUI 3
+in C++ on Windows.
 
-**We write real platform code, not a themed abstraction.** Each shell uses its toolkit
-the way that toolkit's own documentation says to — `GtkOverlay` and `GAction` on
-Linux, SwiftUI idioms on Apple. That's the whole point. A common abstraction with
-platform skins would put us back in the compromise we're trying to avoid.
+**We write real platform code, not a themed abstraction.** Each shell uses its
+toolkit the way the toolkit's documentation says to: `GtkOverlay` and `GAction`
+on Linux, SwiftUI idioms on Apple, `SwapChainPanel` on Windows. A common
+abstraction with platform skins would recreate the compromise we want to avoid.
 
-**We let AI try several designs and throw most of them away.** Getting the chart on
-screen under GTK took three: Vulkan into a child surface, then a dmabuf texture in
-GTK's scene graph, then a subsurface below a transparent hole in the window. Only the
-third is both sharp and able to float the chrome. Writing all three was cheap, and
-that's what made it affordable to be wrong twice.
+**We use AI to explore several designs and keep the best one.** The chart on
+screen under GTK took three designs; the subsurface below a transparent hole in
+the window won. Each design is cheap to write, so the hardware picks the winner.
 
-**The hardware decides, not the reasoning.** That dmabuf design read correctly and was
-still soft on a fractional-scale display, for reasons no amount of argument about
-render density fixed. We found the answer by running it and looking. So we run the
-app, capture it, and compare — [the screenshot protocol](docs/docs/screenshots.md) fixes the
-chart, camera and window size every host captures, so platforms can be compared frame
-to frame instead of by impression.
+**The hardware decides, not the reasoning.** We run the app, capture it, and
+compare. [The screenshot protocol](docs/docs/screenshots.md) fixes the chart,
+camera, and window size every host captures, so we compare platforms frame to
+frame instead of by impression.
 
-**Verification is the bottleneck now, not writing code.** A plausible native shell is
-the easy part. Knowing it draws correctly — the right GPU on a dual-GPU machine, the
-right scale on a fractional display, the chrome where it belongs — is the work, and
-it's where the review effort goes.
+**Verification gets the most effort.** The work is proof that the app draws
+correctly: the right GPU on a dual-GPU machine, the right scale on a fractional
+display, the chrome where it belongs. That is where the review goes.
 
 ## For developers: building and embedding the core
 
