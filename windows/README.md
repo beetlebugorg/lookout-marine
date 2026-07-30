@@ -68,7 +68,6 @@ mariner pane at startup (screenshots).
 | `src/lk_coord.*` | Coordinate go-to parser and DMS formatting |
 | `src/lk_paths.*`, `src/lk_format.*`, `src/lk_backdrop.*` | Chart discovery, HUD formatting, the transparent backdrop |
 | `build-core.ps1` | Builds the Zig core where the vcxproj expects its outputs |
-| `tools/stage0.c` | Pure-Win32 smoke test for the core (no WinUI) |
 
 Notes:
 
