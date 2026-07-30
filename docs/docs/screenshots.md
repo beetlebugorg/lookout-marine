@@ -118,10 +118,21 @@ sleep 60   # a 7,000-cell library takes about a minute to map and draw
 xcrun simctl io booted screenshot docs/docs/img/ipad-day.png
 ```
 
-Use the same steps on an iPhone device for `iphone-day.png`. Both frames are
+Use the same steps on an iPhone device for `iphone-day-raw.png`. Both frames are
 portrait: `simctl` cannot rotate a device. To make a landscape frame, run the
 `testFrameForScreenshot` UI test with `TEST_RUNNER_LOOKOUT_FRAME=1`, which turns the
 device and then holds while you capture.
+
+The simulator writes the screen only. Add a device body, so that a tablet and a
+phone read as devices beside the desktop windows. The `-raw` file keeps the
+capture; the plain name holds the framed image.
+
+```sh
+swift macos/frame-device.swift docs/docs/img/ipad-day-raw.png \
+  docs/docs/img/ipad-day.png 60 150 90 1        # bezel, body radius, screen radius, camera
+swift macos/frame-device.swift docs/docs/img/iphone-day-raw.png \
+  docs/docs/img/iphone-day.png 45 210 165 0     # the phone camera is in the screen
+```
 
 ## How to examine a frame
 

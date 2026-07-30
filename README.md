@@ -8,10 +8,20 @@ and switch between day and night.
 > **Not for navigation.** This is a prototype. It is not pixel-perfect and it makes
 > no claim of ECDIS conformance.
 
-| macOS · iPadOS · iOS | Linux | Windows |
-|:---:|:---:|:---:|
-| <img src="docs/docs/img/macos-day.png" width="290" alt="Annapolis Harbor on macOS, day scheme"><br><img src="docs/docs/img/ipad-day.png" width="290" alt="Annapolis Harbor on iPad, day scheme"><br><img src="docs/docs/img/iphone-day.png" width="290" alt="Annapolis Harbor on iPhone, day scheme"> | <img src="docs/docs/img/linux-day.png" width="290" alt="Annapolis Harbor on Linux, day scheme"> | <img src="docs/docs/img/windows-day.png" width="290" alt="Annapolis Harbor on Windows, day scheme"> |
-| SwiftUI | GTK4 | WinUI 3 |
+<table>
+  <tr valign="top">
+    <td align="center"><b>macOS</b> · SwiftUI<br><img src="docs/docs/img/macos-day.png" width="300" alt="Annapolis Harbor on macOS, day scheme"></td>
+    <td align="center"><b>Linux</b> · GTK4<br><img src="docs/docs/img/linux-day.png" width="300" alt="Annapolis Harbor on Linux, day scheme"></td>
+    <td align="center"><b>Windows</b> · WinUI 3<br><img src="docs/docs/img/windows-day.png" width="300" alt="Annapolis Harbor on Windows, day scheme"></td>
+  </tr>
+</table>
+
+<table>
+  <tr valign="top">
+    <td align="center"><b>iPadOS</b> · SwiftUI<br><img src="docs/docs/img/ipad-day.png" width="230" alt="Annapolis Harbor on iPad, day scheme"></td>
+    <td align="center"><b>iOS</b> · SwiftUI<br><img src="docs/docs/img/iphone-day.png" width="160" alt="Annapolis Harbor on iPhone, day scheme"></td>
+  </tr>
+</table>
 
 ## Why it is different
 
