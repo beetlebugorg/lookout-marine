@@ -24,7 +24,7 @@ GtkWidget *lk_compass_new (LkAppModel *model);
 /* One line per feature under the last tap: object class + source cell. */
 GtkWidget *lk_identify_panel_new (GPtrArray *results);
 
-/* Lat/lon as degrees-decimal-minutes. */
+/* One half of a position, in degrees, minutes and seconds: 38°58'34.8"N. */
 char *lk_coord_format_dms (double value, gboolean is_lat);
 
 G_END_DECLS

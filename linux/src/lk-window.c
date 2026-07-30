@@ -134,16 +134,6 @@ lk_action_set_scheme (GSimpleAction *action, GVariant *parameter, gpointer user_
 }
 
 static void
-lk_action_use_dms (GSimpleAction *action, GVariant *parameter, gpointer user_data)
-{
-  LkWindow *self = user_data;
-  gboolean value = !lk_app_model_get_use_dms (self->model);
-
-  lk_app_model_set_use_dms (self->model, value);
-  g_simple_action_set_state (action, g_variant_new_boolean (value));
-}
-
-static void
 lk_action_search (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   LkWindow *self = user_data;
@@ -181,7 +171,6 @@ static const GActionEntry lk_window_actions[] = {
   { "search",           lk_action_search },
   { "settings",         lk_action_settings },
   { "set-scheme",       lk_action_set_scheme, "i", "0" },
-  { "use-dms",          lk_action_use_dms, NULL, "false" },
 };
 
 /* ---- model-driven chrome ------------------------------------------------ */
@@ -400,7 +389,6 @@ lk_window_build_header (LkWindow *self)
   g_menu_append (toggles, "Text", "win.toggle-text");
   g_menu_append (toggles, "Soundings", "win.toggle-soundings");
   g_menu_append (toggles, "Other Category", "win.toggle-other");
-  g_menu_append (toggles, "Coordinates as DMS", "win.use-dms");
   g_menu_append_section (menu, "Show", G_MENU_MODEL (toggles));
   g_object_unref (toggles);
 

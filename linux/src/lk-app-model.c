@@ -27,7 +27,6 @@ struct _LkAppModel {
   double   scale_denominator;
   int      scheme;
   gboolean building;
-  gboolean use_dms;
 
   GPtrArray *pick_results;
 };
@@ -50,7 +49,6 @@ enum {
   PROP_SCALE_DENOMINATOR,
   PROP_SCHEME,
   PROP_BUILDING,
-  PROP_USE_DMS,
   N_PROPS
 };
 
@@ -89,7 +87,6 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCALE_DENOMINATOR:   g_value_set_double (value, self->scale_denominator); break;
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
-    case PROP_USE_DMS:             g_value_set_boolean (value, self->use_dms); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
@@ -101,7 +98,6 @@ lk_app_model_set_property (GObject *object, guint prop_id, const GValue *value, 
 
   switch (prop_id)
     {
-    case PROP_USE_DMS: lk_app_model_set_use_dms (self, g_value_get_boolean (value)); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
@@ -148,7 +144,6 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_SCALE_DENOMINATOR] = g_param_spec_double ("scale-denominator", NULL, NULL, 0, G_MAXDOUBLE, 0, RO);
   properties[PROP_SCHEME] = g_param_spec_int ("scheme", NULL, NULL, 0, 2, 0, RO);
   properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
-  properties[PROP_USE_DMS] = g_param_spec_boolean ("use-dms", NULL, NULL, FALSE, RW);
 
 #undef RO
 #undef RW
@@ -168,7 +163,6 @@ lk_app_model_init (LkAppModel *self)
   lk_chart_controller_set_model (self->controller, self);
 
   self->recents = lk_store_load_recents ();
-  self->use_dms = lk_store_load_use_dms ();
   self->overscale = 1.0;
   self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
 }
@@ -675,7 +669,6 @@ double      lk_app_model_get_overscale (LkAppModel *self)         { return self-
 double      lk_app_model_get_scale_denominator (LkAppModel *self) { return self->scale_denominator; }
 int         lk_app_model_get_scheme (LkAppModel *self)            { return self->scheme; }
 gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
-gboolean    lk_app_model_get_use_dms (LkAppModel *self)           { return self->use_dms; }
 
 const char *
 lk_app_model_get_scheme_name (LkAppModel *self)
@@ -688,18 +681,6 @@ lk_app_model_get_scheme_name (LkAppModel *self)
     case 2:  return "Night";
     default: return "Day";
     }
-}
-
-void
-lk_app_model_set_use_dms (LkAppModel *self, gboolean use_dms)
-{
-  g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  if (self->use_dms == use_dms)
-    return;
-  self->use_dms = use_dms;
-  lk_store_save_use_dms (use_dms);
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_USE_DMS]);
 }
 
 #undef NOTIFY_IF_CHANGED

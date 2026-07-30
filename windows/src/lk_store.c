@@ -11,7 +11,6 @@
 #define LK_GROUP_VIEW    "view"
 #define LK_GROUP_RECENTS "recents"
 #define LK_GROUP_MARINER "mariner.v1"
-#define LK_GROUP_HUD     "hud"
 
 #define LK_MAX_RECENTS 10
 
@@ -293,19 +292,3 @@ lk_store_apply_saved_mariner(tile57_mariner *m)
 #undef APPLY_BOOL
 #undef APPLY_DBL
 #undef APPLY_SCALE
-
-/* ---- HUD ----------------------------------------------------------------- */
-
-int
-lk_store_load_use_dms(void)
-{
-    int v = 0;
-    get_int(LK_GROUP_HUD, "use_dms", &v);
-    return v ? 1 : 0;
-}
-
-void
-lk_store_save_use_dms(int use_dms)
-{
-    set_int(LK_GROUP_HUD, "use_dms", use_dms ? 1 : 0);
-}
