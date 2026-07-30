@@ -211,6 +211,12 @@ final class ChartController: NSObject {
         displayLink = nil
     }
 
+    /// A pick report belongs to the view it was taken in. Any camera move
+    /// retires it, so the report never floats over water it does not describe.
+    private func retirePickReport() {
+        if model?.pickPoint != nil { model?.closePick() }
+    }
+
     /// Resume ticking after any state change (mutating calls funnel through here).
     private func kick() {
         idleTicks = 0
@@ -274,6 +280,7 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         var vv = v
         lookout_set_view(h, &vv)
+        retirePickReport()
         kick(); pushReadouts()
     }
 
@@ -302,12 +309,14 @@ final class ChartController: NSObject {
     func pan(dxPt: CGFloat, dyPt: CGFloat) {
         guard let h = handle else { return }
         lookout_pan_logical(h, Float(dxPt), Float(dyPt))
+        retirePickReport()
         kick()
     }
 
     func zoom(_ dz: Double, atPt pt: CGPoint) {
         guard let h = handle else { return }
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))
+        retirePickReport()
         kick()
     }
 
@@ -321,6 +330,7 @@ final class ChartController: NSObject {
     func rotateDrag(from a: CGPoint, to b: CGPoint) {
         guard let h = handle else { return }
         lookout_rotate_drag_logical(h, Float(a.x), Float(a.y), Float(b.x), Float(b.y))
+        retirePickReport()
         kick(); pushReadouts()
     }
 
