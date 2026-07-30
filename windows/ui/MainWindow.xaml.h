@@ -2,7 +2,6 @@
 #include "MainWindow.g.h"
 
 #include "lk_controller.h"
-#include "lk_d3d.h"
 
 #include <atomic>
 #include <string>
@@ -16,28 +15,24 @@ namespace winrt::LookoutMarine::implementation
         MainWindow();
         ~MainWindow();
 
-        // Chart input, called from XAML handlers and the fallback wndproc.
+        // Chart input, called from the XAML pointer handlers.
         void GesturePress(double x_pt, double y_pt, bool rotate);
         void GestureMove(double x_pt, double y_pt);
         void GestureRelease(double x_pt, double y_pt);
         void GestureWheel(double delta_notches, double x_pt, double y_pt);
         void GestureDoubleTap(double x_pt, double y_pt);
-        void Command(char cmd); // keyboard commands, shared by both input paths
+        void Command(char cmd); // keyboard commands (accelerators)
 
     private:
-        enum class Mode { None, Dxgi, Hwnd };
-
         void WireChrome();
         void ToggleSettings();
         void LoadSettings();      // reads the live mariner state, shows the current tab
         void BuildSettingsPage(); // rebuilds the rows for the selected tab
         void ScheduleApply();     // 60 ms debounce, then set + save
         void TryOpen();
-        bool OpenDxgi(std::vector<std::string> const &paths);
-        bool OpenHwnd(std::vector<std::string> const &paths);
-        void EnsureChartHost();
+        bool OpenChart(std::vector<std::string> const &paths);
         void SyncChartBounds();
-        void UpdateChromeRegion();
+        void ApplyPanelScale();
         void StartRenderThread();
         void StopRenderThread();
         void RenderLoop();
@@ -54,26 +49,19 @@ namespace winrt::LookoutMarine::implementation
                          Windows::Foundation::IInspectable const &);
 
         HWND top_hwnd{ nullptr };
-        HWND bridge_hwnd{ nullptr };
-        HWND chart_hwnd{ nullptr };
-        Mode mode{ Mode::None };
-        // Created only when the DXGI path opens; a markup panel would blank the
-        // fallback (external content, even when empty).
+        // Created in code when a chart opens; carries the core's composition
+        // swapchain under the XAML chrome.
         Microsoft::UI::Xaml::Controls::SwapChainPanel chart_panel{ nullptr };
         lk_controller *controller{ nullptr };
-        LkD3d d3d{};
-        lookout_dxgi_target target{};
-        unsigned frame_index{ 0 };
 
         winrt::event_token rendering_token{};
-        // Software Vulkan takes 100+ ms a frame: rendering runs on its own
-        // thread (the core locks internally), never on the UI thread.
+        // Software (WARP) frames can take tens of ms: rendering runs on its
+        // own thread (the core locks internally), never on the UI thread.
         std::thread render_thread;
         std::atomic<bool> render_run{ false };
         std::atomic<int> warmup_frames{ 0 }; // force presents while DWM starts composing us
         long long last_tick_qpc{ 0 };
         long long last_readout_qpc{ 0 };
-        std::vector<RECT> last_pieces;
         double scalebar_pt{ 0 }, scalebar_m{ 0 };
         bool open_attempted{ false };
         bool use_dms{ false };

@@ -9,7 +9,7 @@
 
 struct lk_controller {
     lookout *handle;          /* NULL until a chart is open */
-    unsigned width, height;   /* device pixels */
+    unsigned width, height;   /* logical points */
     unsigned long long last_view_saved_ms;
 };
 
@@ -52,33 +52,28 @@ lk_controller_is_open(lk_controller *self)
 /* ---- lifecycle ---------------------------------------------------------- */
 
 int
-lk_controller_open(lk_controller *self, void *hinstance, void *hwnd,
-                   const char *const *paths, int n,
-                   unsigned width_px, unsigned height_px, float density)
+lk_controller_open(lk_controller *self, const char *const *paths, int n,
+                   unsigned width_pt, unsigned height_pt, float density)
 {
-    if (self == NULL || paths == NULL || n <= 0 || hwnd == NULL)
+    if (self == NULL || paths == NULL || n <= 0)
         return 0;
 
     lk_controller_close(self);
 
-    lookout_win32_window native;
-    native.hinstance = hinstance;
-    native.hwnd = hwnd;
-
     lookout *h = (n == 1)
-        ? lookout_open_in_window(LOOKOUT_NATIVE_WIN32_HWND, &native, paths[0],
-                                 width_px, height_px, 1)
-        : lookout_open_charts_in_window(LOOKOUT_NATIVE_WIN32_HWND, &native, paths, (size_t)n,
-                                        width_px, height_px, 1);
+        ? lookout_open_in_window(LOOKOUT_NATIVE_D3D12_PANEL, NULL, paths[0],
+                                 width_pt, height_pt, 1)
+        : lookout_open_charts_in_window(LOOKOUT_NATIVE_D3D12_PANEL, NULL, paths, (size_t)n,
+                                        width_pt, height_pt, 1);
     if (h == NULL)
         return 0;
 
     self->handle = h;
-    self->width = width_px;
-    self->height = height_px;
+    self->width = width_pt;
+    self->height = height_pt;
 
     lookout_set_pixel_density(h, density);
-    lookout_resize(h, width_px, height_px);
+    lookout_resize(h, width_pt, height_pt);
 
     /* Reopen where we left off; a first run (no saved pose) frames the opened
      * chart, so the user sees their cells and not a world-zoom speck. */
@@ -100,64 +95,12 @@ lk_controller_open(lk_controller *self, void *hinstance, void *hwnd,
     return 1;
 }
 
-int
-lk_controller_open_dxgi(lk_controller *self, const lookout_dxgi_target *target,
-                        const char *const *paths, int n,
-                        unsigned width_pt, unsigned height_pt, float density)
-{
-    if (self == NULL || target == NULL || paths == NULL || n <= 0)
-        return 0;
-
-    lk_controller_close(self);
-
-    lookout *h = (n == 1)
-        ? lookout_open_in_window(LOOKOUT_NATIVE_DXGI_TARGET, (void *)target, paths[0],
-                                 width_pt, height_pt, 1)
-        : lookout_open_charts_in_window(LOOKOUT_NATIVE_DXGI_TARGET, (void *)target, paths, (size_t)n,
-                                        width_pt, height_pt, 1);
-    if (h == NULL)
-        return 0;
-
-    self->handle = h;
-    self->width = width_pt;
-    self->height = height_pt;
-
-    lookout_set_pixel_density(h, density);
-    lookout_resize(h, width_pt, height_pt);
-
-    lookout_view v;
-    if (!lk_store_load_view(&v))
-        lookout_fit_chart(h, &v);
-    lookout_set_view(h, &v);
-    apply_env_view(h);
-
-    tile57_mariner m;
-    lookout_get_mariner(h, &m);
-    m.device_scale = density;
-    lk_store_apply_saved_mariner(&m);
-    lookout_set_mariner(h, &m);
-
-    self->last_view_saved_ms = GetTickCount64();
-    return 1;
-}
-
-void
-lk_controller_tick_anim(lk_controller *self, double dt)
+void *
+lk_controller_swapchain(lk_controller *self)
 {
     if (!lk_controller_is_open(self))
-        return;
-    if (dt > 0.05)
-        dt = 0.05;
-    if (lookout_animating(self->handle))
-        lookout_tick_anim(self->handle, dt);
-
-    unsigned long long now = GetTickCount64();
-    if (now - self->last_view_saved_ms >= 3000) {
-        self->last_view_saved_ms = now;
-        lookout_view v;
-        lookout_get_view(self->handle, &v);
-        lk_store_save_view(&v);
-    }
+        return NULL;
+    return lookout_d3d12_swapchain(self->handle);
 }
 
 void
@@ -168,31 +111,6 @@ lk_controller_invalidate(lk_controller *self)
     lookout_view v;
     lookout_get_view(self->handle, &v);
     lookout_set_view(self->handle, &v); /* marks the view dirty */
-}
-
-int
-lk_controller_needs_frame(lk_controller *self)
-{
-    if (!lk_controller_is_open(self))
-        return 0;
-    return lookout_animating(self->handle) || lookout_needs_redraw(self->handle);
-}
-
-int
-lk_controller_render_dxgi(lk_controller *self, unsigned index,
-                          unsigned long long wait_value, unsigned long long signal_value)
-{
-    if (!lk_controller_is_open(self))
-        return 0;
-    return lookout_render_dxgi(self->handle, index, wait_value, signal_value);
-}
-
-int
-lk_controller_retarget_dxgi(lk_controller *self, const lookout_dxgi_target *target)
-{
-    if (!lk_controller_is_open(self) || target == NULL)
-        return 0;
-    return lookout_retarget_dxgi(self->handle, target);
 }
 
 void
@@ -251,13 +169,13 @@ lk_controller_tick(lk_controller *self, double dt)
 }
 
 void
-lk_controller_resize(lk_controller *self, unsigned width_px, unsigned height_px)
+lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt)
 {
-    if (!lk_controller_is_open(self) || width_px == 0 || height_px == 0)
+    if (!lk_controller_is_open(self) || width_pt == 0 || height_pt == 0)
         return;
-    self->width = width_px;
-    self->height = height_px;
-    lookout_resize(self->handle, width_px, height_px);
+    self->width = width_pt;
+    self->height = height_pt;
+    lookout_resize(self->handle, width_pt, height_pt);
 }
 
 void

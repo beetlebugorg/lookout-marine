@@ -1,4 +1,4 @@
-// Open flow: initial open, the layers flyout, the pickers, both present paths.
+// Open flow: initial open, the layers flyout, the pickers, the chart panel.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
@@ -7,6 +7,7 @@
 #else
 #error "microsoft.ui.xaml.media.dxinterop.h missing (ISwapChainPanelNative)"
 #endif
+#include <dxgi1_3.h>
 #include <shobjidl.h>
 
 #include <filesystem>
@@ -89,7 +90,6 @@ namespace winrt::LookoutMarine::implementation
 
         StopRenderThread();
         lk_controller_close(controller);
-        d3d.destroy();
         if (chart_panel != nullptr)
         {
             uint32_t idx;
@@ -97,13 +97,11 @@ namespace winrt::LookoutMarine::implementation
                 Root().Children().RemoveAt(idx);
             chart_panel = nullptr;
         }
-        mode = Mode::None;
 
-        bool force_hwnd = GetEnvironmentVariableA("LOOKOUT_FORCE_HWND", nullptr, 0) > 0;
-        if ((!force_hwnd && OpenDxgi(paths)) || OpenHwnd(paths))
+        if (OpenChart(paths))
         {
             EmptyState().Visibility(Visibility::Collapsed);
-            warmup_frames.store(180);
+            warmup_frames.store(30);
             StartRenderThread();
             UpdateReadouts(true);
             if (GetEnvironmentVariableA("LOOKOUT_OPEN_SETTINGS", nullptr, 0) > 0)
@@ -115,64 +113,51 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    bool MainWindow::OpenDxgi(std::vector<std::string> const &paths)
+    // The core makes its own D3D12 device and composition swapchain; the shell
+    // only attaches that swapchain to a SwapChainPanel under the XAML chrome.
+    bool MainWindow::OpenChart(std::vector<std::string> const &paths)
     {
         double density = Density();
-        UINT wpx = (UINT)std::max(1.0, Root().ActualWidth() * density);
-        UINT hpx = (UINT)std::max(1.0, Root().ActualHeight() * density);
-        if (!d3d.init(wpx, hpx))
-        {
-            d3d.destroy();
-            return false;
-        }
-        d3d.fill_target(&target);
+        unsigned wpt = (unsigned)std::max(1.0, Root().ActualWidth());
+        unsigned hpt = (unsigned)std::max(1.0, Root().ActualHeight());
 
         std::vector<const char *> cps;
         for (auto const &p : paths)
             cps.push_back(p.c_str());
-        if (!lk_controller_open_dxgi(controller, &target, cps.data(), (int)cps.size(),
-                                     (unsigned)(wpx / density), (unsigned)(hpx / density),
-                                     (float)density))
+        if (!lk_controller_open(controller, cps.data(), (int)cps.size(), wpt, hpt, (float)density))
+            return false;
+
+        auto *sc = (IDXGISwapChain *)lk_controller_swapchain(controller);
+        if (sc == nullptr)
         {
-            d3d.destroy();
-            fprintf(stderr, "shell: no DXGI interop, falling back to HWND\n");
+            lk_controller_close(controller);
             return false;
         }
-
         chart_panel = Controls::SwapChainPanel{};
         Root().Children().InsertAt(0, chart_panel);
         auto panel_native = chart_panel.as<ISwapChainPanelNative>();
-        winrt::check_hresult(panel_native->SetSwapChain(d3d.swapchain));
-        if (chart_hwnd != nullptr)
-            ShowWindow(chart_hwnd, SW_HIDE);
-        mode = Mode::Dxgi;
-        fprintf(stderr, "shell: DXGI composition path up (%ux%u)\n", wpx, hpx);
+        winrt::check_hresult(panel_native->SetSwapChain(sc));
+        ApplyPanelScale();
+        fprintf(stderr, "shell: D3D12 swapchain up (%u x %u pt @ %.2f)\n", wpt, hpt, density);
         return true;
     }
 
-    bool MainWindow::OpenHwnd(std::vector<std::string> const &paths)
+    // The panel's visual is scaled by the composition scale; the swapchain is
+    // already in device pixels, so present it through the inverse.
+    void MainWindow::ApplyPanelScale()
     {
-        EnsureChartHost();
-        if (chart_hwnd == nullptr)
-            return false;
-        ShowWindow(chart_hwnd, SW_SHOW);
-
-        RECT rc{};
-        GetClientRect(top_hwnd, &rc);
-        double density = Density();
-        std::vector<const char *> cps;
-        for (auto const &p : paths)
-            cps.push_back(p.c_str());
-        if (!lk_controller_open(controller, GetModuleHandleW(nullptr), chart_hwnd,
-                                cps.data(), (int)cps.size(),
-                                (unsigned)(rc.right / density), (unsigned)(rc.bottom / density),
-                                (float)density))
-            return false;
-        // Above the XAML bridge; the inverse region cuts the chrome holes.
-        SetWindowPos(chart_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        mode = Mode::Hwnd;
-        last_pieces.clear();
-        return true;
+        if (controller == nullptr)
+            return;
+        auto *unk = (IUnknown *)lk_controller_swapchain(controller);
+        if (unk == nullptr)
+            return;
+        winrt::com_ptr<IDXGISwapChain2> sc2;
+        if (SUCCEEDED(unk->QueryInterface(__uuidof(IDXGISwapChain2), sc2.put_void())))
+        {
+            float inv = (float)(1.0 / Density());
+            DXGI_MATRIX_3X2_F m{ inv, 0.0f, 0.0f, inv, 0.0f, 0.0f };
+            sc2->SetMatrixTransform(&m);
+        }
     }
 
     fire_and_forget MainWindow::PickChartFile()

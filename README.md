@@ -1,9 +1,9 @@
 # Lookout Marine
 
-**A fast, native chartplotter for Mac, iPad, iPhone, Android and Linux.** It draws
-official ENC charts with the IHO portrayal rules, straight to the GPU with Metal or
-Vulkan, and holds **60 fps** while you pan, pinch-zoom, rotate and switch between day
-and night.
+**A fast, native chartplotter for Mac, iPad, iPhone, Windows, Android and Linux.**
+It draws official ENC charts with the IHO portrayal rules, straight to the GPU with
+Metal, Vulkan or Direct3D 12, and holds **60 fps** while you pan, pinch-zoom, rotate
+and switch between day and night.
 
 > **Not for navigation.** This is a prototype. It is not pixel-perfect and it makes
 > no claim of ECDIS conformance.
@@ -133,8 +133,10 @@ reason that a pan and a scheme change never tessellate the chart again.
 The **app shells** are each native above that one core. `macos/` is SwiftUI, and the
 Mac and iOS targets share the Swift sources. `android/` is a Java shell above a
 `SurfaceView`. `linux/` is GTK4 in C, and it presents Vulkan into a subsurface below a
-transparent hole in the window, so the chrome floats above the chart. Each shell
-drives the same `lookout.h` C ABI.
+transparent hole in the window, so the chrome floats above the chart. `windows/` is
+WinUI 3 in C++/WinRT, and the core presents Direct3D 12 through a composition
+swapchain on a `SwapChainPanel` below the chrome. Each shell drives the same
+`lookout.h` C ABI.
 
 The largest tasks are in the **[tile57]** engine: ISO 8211 and S-57 decode, the
 S-57-to-S-101 conversion, S-101 portrayal with embedded Lua, tessellation, sprite and
@@ -226,15 +228,17 @@ build.zig, build.zig.zon   the build and the tile57 dependency pin
 include/lookout.h          the C ABI (the shell-to-core contract)
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
 src/root.zig               Lookout: the scene lifecycle and worker-thread rebuilds
-src/gpu.zig                the backend switch (metal | vk | sdl)
+src/gpu.zig                the backend switch (metal | vk | d3d12 | sdl)
 src/gpu_vk.zig             the Vulkan transport (Linux and Android)
 src/gpu_metal.zig          the Metal transport (with src/metal_shim.{h,m})
+src/gpu_d3d12.zig          the Direct3D 12 transport (with src/d3d12_shim.{h,c})
 src/atlas.zig, src/png.zig sprite and SDF atlas load; PNG encode
 src/capi.zig, src/main.zig the C ABI wrapper; the headless demo
 docs/                      architecture, host notes, the screenshot protocol
 macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
 android/                   the Java shell (Vulkan into a SurfaceView)
 linux/                     the GTK4 app (Vulkan into a subsurface), meson
+windows/                   the WinUI 3 app (D3D12 into a SwapChainPanel)
 vendor/stb                 stb_image (it decodes the atlas PNG files)
 ```
 

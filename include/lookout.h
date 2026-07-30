@@ -47,21 +47,6 @@ typedef struct { void *display; unsigned long window; } lookout_x11_window;
  * the subsurface created for the chart, not the toplevel's surface. */
 typedef struct { void *display; void *surface; } lookout_wayland_surface;
 
-/* Windows composition target (a WinUI/XAML SwapChainPanel host). The host owns
- * a D3D12 device + queue and shares render textures and one timeline fence
- * (NT handles from ID3D12Device::CreateSharedHandle). The core imports them,
- * renders into buffers[i] on lookout_render_dxgi, and signals the fence; the
- * host GPU-waits, copies to its swapchain back buffer, and presents. */
-typedef struct {
-    void    *buffers[4];       /* shared texture handles */
-    uint32_t buffer_count;
-    void    *fence;            /* shared D3D12 fence handle */
-    uint32_t dxgi_format;      /* DXGI_FORMAT (87 = B8G8R8A8_UNORM) */
-    uint32_t width, height;    /* pixels */
-    uint32_t adapter_luid_low; /* the D3D12 adapter LUID; the core matches it */
-    int32_t  adapter_luid_high;
-} lookout_dxgi_target;
-
 typedef enum {
     LOOKOUT_NATIVE_NONE = 0,           /* offscreen only (snapshot) */
     LOOKOUT_NATIVE_METAL_LAYER = 1,    /* CAMetalLayer* (macOS & iOS) */
@@ -69,7 +54,9 @@ typedef enum {
     LOOKOUT_NATIVE_X11_WINDOW = 5,     /* lookout_x11_window*     (vk backend) */
     LOOKOUT_NATIVE_ANDROID_WINDOW = 7, /* ANativeWindow* (Android, vk backend) */
     LOOKOUT_NATIVE_WAYLAND_SURFACE = 8,/* lookout_wayland_surface* (vk backend) */
-    LOOKOUT_NATIVE_DXGI_TARGET = 9     /* lookout_dxgi_target*    (vk backend) */
+    LOOKOUT_NATIVE_D3D12_PANEL = 10    /* no handle (d3d12 backend): the core
+                                        * makes a composition swapchain; fetch
+                                        * it with lookout_d3d12_swapchain */
 } lookout_native_kind;
 
 /* ---- lifecycle --------------------------------------------------------- */
@@ -149,11 +136,10 @@ int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=h
  * Render on demand: call lookout_render only when this returns 1. */
 int lookout_needs_redraw(lookout *h);
 
-/* DXGI-target mode only. Render into buffers[index]: wait the shared fence at
- * wait_value (0 = none), signal it at signal_value. 1 = submitted. */
-int lookout_render_dxgi(lookout *h, uint32_t index, uint64_t wait_value, uint64_t signal_value);
-/* DXGI-target mode only. Swap to new shared textures after a host resize. */
-int lookout_retarget_dxgi(lookout *h, const lookout_dxgi_target *target);
+/* D3D12-panel mode only. The core-owned IDXGISwapChain* for
+ * ISwapChainPanelNative::SetSwapChain; NULL on any other kind or backend.
+ * The core keeps ownership and resizes it on lookout_resize. */
+void *lookout_d3d12_swapchain(lookout *h);
 
 int lookout_snapshot_png(lookout *h, const char *path);
 int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
