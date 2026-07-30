@@ -95,9 +95,10 @@ give the same result as the sway and grim method on Linux. A Retina display give
 scale 2 automatically. A display with scale 1 gives a 1400 x 900 frame. Label such a
 frame correctly. Do not make it larger.
 
-To make the settings frame, press **Command+,** or click the gear bubble to open the
-mariner window. `LOOKOUT_OPEN_SETTINGS=1` opens it at start. Then capture the window
-above the chart. The frame must agree with `linux-settings.png`.
+`LOOKOUT_SHOW` opens chrome at start, so a frame needs no synthetic input:
+`settings`, `scale`, `search`, or a comma-separated list of them. The WinUI 3 shell
+uses `LOOKOUT_OPEN_SETTINGS=1` for the settings frame. A settings frame must agree
+with `linux-settings.png`.
 
 ## iPadOS and iOS
 

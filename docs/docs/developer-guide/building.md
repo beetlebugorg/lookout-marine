@@ -58,6 +58,7 @@ Three environment variables help dev runs and screenshots:
 | `LOOKOUT_OPEN` | Open this chart or folder at start |
 | `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` — the opening camera |
 | `LOOKOUT_WINDOW` | `WIDTHxHEIGHT` — the window content size (macOS) |
+| `LOOKOUT_SHOW` | `settings`, `scale`, `search` — open that chrome at start (macOS) |
 
 `simctl` forwards the first two as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 `SIMCTL_CHILD_LOOKOUT_VIEW`.
