@@ -13,3 +13,6 @@ zig-pkg/
 # build-iosdev, DerivedData, …) — never tracked.
 macos/build*/
 macos/DerivedData/
+# Docusaurus build output
+docs/build/
+docs/.docusaurus/

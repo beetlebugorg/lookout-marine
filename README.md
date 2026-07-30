@@ -69,9 +69,10 @@ Lookout is built for the destination, not for the present:
 
 ## Loading charts
 
-Lookout opens **chart archives**. You bake them from the ENC cells that hydrographic
-offices give away at no cost. For the United States, the full NOAA ENC catalogue is
-one download.
+Lookout opens **chart archives**, which you bake from ENC cells. NOAA publishes the
+cells of United States waters at no cost, and the full catalogue is one download.
+Most other hydrographic offices sell theirs, usually encrypted with S-63, which the
+app cannot read yet. Any unencrypted S-57 cell works.
 
 - **On Mac:** **File ▸ Open Chart…** takes one chart or a folder.
 - **On Linux:** **Open** in the headerbar takes a folder of cells.
@@ -137,8 +138,8 @@ dependency. A sibling `../tile57` checkout wins when it is present. If it is abs
 the build gets the commit that `build.zig.zon` specifies and compiles `libtile57.a`
 from source.
 
-For more detail, refer to [the architecture](docs/docs/architecture.md),
-[the Linux host](docs/docs/hosts-linux.md), `macos/README.md` and
+For more detail, refer to [the architecture](docs/docs/developer-guide/architecture.md),
+[the Linux host](docs/docs/developer-guide/linux.md), `macos/README.md` and
 `android/README.md`.
 
 [tile57]: https://github.com/beetlebugorg/tile57
@@ -179,7 +180,7 @@ screen under GTK took three designs; the subsurface below a transparent hole in
 the window won. Each design is cheap to write, so the hardware picks the winner.
 
 **The hardware decides, not the reasoning.** We run the app, capture it, and
-compare. [The screenshot protocol](docs/docs/screenshots.md) fixes the chart,
+compare. [The screenshot protocol](docs/docs/developer-guide/screenshots.md) fixes the chart,
 camera, and window size every host captures, so we compare platforms frame to
 frame instead of by impression.
 
@@ -211,7 +212,7 @@ renders a chart to day, night and zoomed PNG files, then exits.
 
 Two variables help while you iterate. `LOOKOUT_OPEN=<chart|dir>` opens something at
 startup. `LOOKOUT_VIEW=lon,lat,zoom[,rot]` selects the first camera position. The
-screenshots above use both — refer to [the screenshot protocol](docs/docs/screenshots.md).
+screenshots above use both — refer to [the screenshot protocol](docs/docs/developer-guide/screenshots.md).
 
 ### Layout
 

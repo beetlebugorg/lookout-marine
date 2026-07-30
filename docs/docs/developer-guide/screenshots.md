@@ -1,7 +1,7 @@
 ---
 id: screenshots
 title: Screenshot protocol
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Screenshot protocol
@@ -13,11 +13,10 @@ gives that specification.
 
 Verification is the difficult part of
 [the experiment](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai),
-not generation. A shell can look correct alone, but it can still be soft, or the
-wrong size, or it can lose its chrome. The same frame on each host makes these
-faults easy to see.
+not generation. A shell can look correct alone and still be soft, the wrong size,
+or missing its chrome. The same frame on each host makes those faults obvious.
 
-## The specified frame
+## Specified frame
 
 | Item | Value |
 |---|---|
@@ -60,7 +59,7 @@ output with `grim`. This method gives three advantages:
 - **The GPU path is the same as in normal use.** sway is a true Wayland compositor
   and it uses the true GPU. Therefore the compositor shows the chart through the
   same subsurface path that a user gets. It does not use a software fallback. Refer
-  to [the Linux host](hosts-linux.md).
+  to [the Linux host](linux.md).
 
 The script does not send synthetic input to open the mariner panel. It activates the
 window action through D-Bus. `GtkApplicationWindow` publishes the `win.*` actions on
@@ -96,9 +95,10 @@ give the same result as the sway and grim method on Linux. A Retina display give
 scale 2 automatically. A display with scale 1 gives a 1400 x 900 frame. Label such a
 frame correctly. Do not make it larger.
 
-To make the settings frame, press **Command+,** or click the gear bubble to open the
-mariner window. `LOOKOUT_OPEN_SETTINGS=1` opens it at start. Then capture the window
-above the chart. The frame must agree with `linux-settings.png`.
+`LOOKOUT_SHOW` opens chrome at start, so a frame needs no synthetic input:
+`settings`, `scale`, `search`, or a comma-separated list of them. The WinUI 3 shell
+uses `LOOKOUT_OPEN_SETTINGS=1` for the settings frame. A settings frame must agree
+with `linux-settings.png`.
 
 ## iPadOS and iOS
 

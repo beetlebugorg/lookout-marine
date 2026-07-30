@@ -1,18 +1,17 @@
 ---
-id: hosts-linux
-title: The Linux host (GTK4)
-sidebar_position: 2
+id: linux
+title: Linux
+sidebar_position: 3
 ---
 
-# The Linux host (GTK4)
+# Linux
 
-This host is a native **GTK4** shell in C. It contains the Zig chart core. The core
-uses **raw Vulkan** (`src/gpu_vk.zig`) to draw into a surface, and the compositor
-shows that surface. This host is the equivalent of the SwiftUI shell on Apple
-platforms and the Java shell on Android. All three hosts use the same core, the
-same C ABI, and give the same behavior.
+A native **GTK4** shell in C around the Zig chart core. The core draws with **raw
+Vulkan** (`src/gpu_vk.zig`) into a surface that the compositor shows. It is the
+equivalent of the SwiftUI shell and the Java shell: same core, same C ABI, same
+behaviour.
 
-![Annapolis Harbor and the Naval Academy, day scheme](./img/linux-day.png)
+![Annapolis Harbor and the Naval Academy, day scheme](../img/linux-day.png)
 
 The left side of the headerbar has the open control, the recents list, the zoom
 controls, the fit control, and the north-up control. The right side has the search
@@ -27,12 +26,11 @@ The full mariner panel is a separate window. Press **Ctrl+,** to open it. The
 panel is not modal, and the chart stays usable while the panel is open. The panel
 applies each edit after a short delay, and it keeps each value.
 
-![The mariner settings panel above the chart](./img/linux-settings.png)
+![The mariner settings panel above the chart](../img/linux-settings.png)
 
 ## How the chart gets onto the screen
 
-This part of the host is different from the other hosts. Three designs were
-necessary to get a correct result.
+This part is unlike the other hosts. Three designs were necessary.
 
 GTK does not draw the chart. Vulkan draws the chart into its own Wayland
 subsurface. The host puts that subsurface **below** the GTK window. The chart
@@ -63,17 +61,16 @@ This design gives two results:
   The HUD, the zoom buttons, and the compass are overlays above it. This is normal
   GTK behavior.
 
-Input needs no special code on this path. The hole is still part of the GTK window.
-Therefore the compositor sends the pointer events and the key events to the window.
+Input needs no special code. The hole is still part of the GTK window, so the
+compositor sends the pointer and key events to it.
 GTK sends them to the gesture controllers of the chart widget. The controllers then
 call the core (`lookout_pan`, `lookout_zoom_at_logical`, and others). The core
 returns its readouts through the controller to the app model, and the HUD shows
 them.
 
-### The two earlier designs
+### Two earlier designs
 
-Both of the earlier designs worked. Each one failed one of the two requirements
-above.
+Both worked. Each failed one of the two requirements above.
 
 **Design 1: the subsurface above the window.** This design put the subsurface above
 the GTK window. The chart was sharp. However, a subsurface composites above the
@@ -156,7 +153,7 @@ the most recent chart. Then it looks for
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`. Set
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` to select the first camera position.
 
-## The files
+## Files
 
 | File | Function |
 |------|----------|
@@ -166,7 +163,7 @@ the most recent chart. Then it looks for
 | `src/lk-chart-controller.c` | The one `lookout*` handle, every `lookout_*` call, and the render loop |
 | `src/lk-native-surface.c` | The X11 child window or the Wayland subsurface that the chart draws into |
 | `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate parser |
-| `src/lk-hud.c` | The status-bar readouts, the identify panel, and the DMS format |
+| `src/lk-hud.c` | The status-bar readouts, the pick report, and the DMS format |
 | `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
 | `src/lk-settings-window.c` | The mariner panel (Display, Depths, Text, Charts, Advanced) |
@@ -192,7 +189,7 @@ the most recent chart. Then it looks for
   would look too pale. Therefore the core selects a UNORM order first, then any
   format that is not `_SRGB`.
 
-## Work that is not complete
+## Not complete yet
 
 - **Feature search and place-name search.** The coordinate go-to function works.
   Name search is not complete, and the control shows "coming soon". It needs a name
@@ -200,5 +197,5 @@ the most recent chart. Then it looks for
 - **The desktop entry, the icon, and the packages.** The build installs only the
   executable.
 - **Automatic input tests on Wayland.** No tool here can send events to a
-  compositor. The fling gesture, the rotate gesture, the identify function, and an
+  compositor. The fling gesture, the rotate gesture, the cursor pick, and an
   integer scale above 2 also have no automatic tests.
