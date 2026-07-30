@@ -82,12 +82,12 @@ struct OverlayLayer: View {
                     .padding(.bottom, corner)
                     .ignoresSafeArea(.container, edges: .trailing)
                 }
-                // Bottom left: identify results above the scale bar.
+                // Bottom left: the pick report above the scale bar.
                 .overlay(alignment: .bottomLeading) {
                     VStack(alignment: .leading, spacing: Chrome.gap) {
                         if !model.pickResults.isEmpty {
-                            IdentifyPanel(results: model.pickResults) { model.pickResults = [] }
-                                .chromeHitRegion("identify")
+                            PickReportPanel(results: model.pickResults) { model.pickResults = [] }
+                                .chromeHitRegion("pick-report")
                         }
                         if model.hasChart {
                             ScaleBarView(scaleDenominator: model.scaleDenominator)
@@ -448,7 +448,7 @@ final class ChartNSView: NSView {
         if rotating { return }
         let moved = hypot(p.x - downPoint.x, p.y - downPoint.y)
         if moved <= 4 {
-            tapPick(at: p)          // a tap: identify
+            tapPick(at: p)          // a tap: cursor pick
         } else {
             controller?.flingStart(vx: vx, vy: vy) // a throw: momentum
         }

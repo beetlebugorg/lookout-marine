@@ -163,7 +163,7 @@ the most recent chart. Then it looks for
 | `src/lk-chart-controller.c` | The one `lookout*` handle, every `lookout_*` call, and the render loop |
 | `src/lk-native-surface.c` | The X11 child window or the Wayland subsurface that the chart draws into |
 | `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate parser |
-| `src/lk-hud.c` | The status-bar readouts, the identify panel, and the DMS format |
+| `src/lk-hud.c` | The status-bar readouts, the pick report, and the DMS format |
 | `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
 | `src/lk-settings-window.c` | The mariner panel (Display, Depths, Text, Charts, Advanced) |
@@ -197,5 +197,5 @@ the most recent chart. Then it looks for
 - **The desktop entry, the icon, and the packages.** The build installs only the
   executable.
 - **Automatic input tests on Wayland.** No tool here can send events to a
-  compositor. The fling gesture, the rotate gesture, the identify function, and an
+  compositor. The fling gesture, the rotate gesture, the cursor pick, and an
   integer scale above 2 also have no automatic tests.

@@ -141,8 +141,8 @@ struct ContentView: View {
                 Text(model.openError ?? "")
             }
             #if os(macOS)
-            // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings,scale,
-            // search opens that chrome once the chart is up.
+            // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
+            // scale, search, pick opens that chrome once the chart is up.
             .onAppear {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
@@ -157,7 +157,7 @@ struct ContentView: View {
                             model.openSettings()
                         case "scale": model.beginScaleEntry()
                         case "search": model.searchOpen = true
-                        case "identify": model.identifyAtCentre()
+                        case "pick": model.pickAtCentre()
                         default: break
                         }
                     }

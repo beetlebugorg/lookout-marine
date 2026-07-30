@@ -67,7 +67,7 @@ copies it to internal storage at the first launch. Bake your own with
 | `LookoutActivity.kt` | The Activity: chart assets, then the Compose chrome over the view |
 | `ChartScreen.kt` | The chrome layout |
 | `ChartController.kt` | The one handle and every call into it |
-| `Hud.kt` | The readouts, the compass and the identify panel |
+| `Hud.kt` | The readouts, the compass and the pick report |
 | `SettingsSheet.kt` | The mariner form |
 | `app/jni/src/CMakeLists.txt` | `liblookout_jni.so`: the two Zig archives plus vulkan, log and android |
 | `build-libs.sh` | Cross-compiles the core into `app/jni/prebuilt/<abi>/` |

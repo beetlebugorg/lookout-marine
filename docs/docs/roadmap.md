@@ -57,6 +57,11 @@ Where you have been, and where you are going.
 
 ## 0.5 — Working tools
 
+- **Full pick report.** The report lists the objects under the cursor and the
+  cell each came from. The engine already returns every S-57 attribute, so the
+  report should state them: light character, period, height and range; the
+  depths of a depth area; the category and colour of a buoy. With the object
+  names spelled out, not the six-letter acronyms.
 - **Electronic bearing line** and **variable range marker**.
 - **Tides and currents** from the harmonic stations in the cell.
 - **Signal K** as one network source for the boat.
