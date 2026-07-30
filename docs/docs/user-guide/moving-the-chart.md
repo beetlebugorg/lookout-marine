@@ -6,31 +6,6 @@ sidebar_position: 3
 
 # Moving the chart
 
-## Mouse and trackpad
-
-| Action | Result |
-|---|---|
-| Drag | Pan. Throw it and the chart coasts to a stop. |
-| **Shift + drag** | Turn the chart about the centre. It follows the drag. |
-| Wheel, or two-finger scroll | Zoom at the pointer. |
-| Pinch on a trackpad | Zoom at the pointer. |
-| Click | Pick report for what is under the cursor. |
-| Double-click (Windows) | Zoom in at the pointer. |
-
-## Touch
-
-| Action | Result |
-|---|---|
-| Drag one finger | Pan. Throw it and the chart coasts to a stop. |
-| Pinch | Zoom between the fingers. |
-| Twist two fingers | Turn the chart. |
-| Tap | Pick report for what is under your finger. |
-| Double tap | Zoom in. |
-| Two finger tap (iPad and iPhone) | Zoom out. |
-
-The twist waits until you have turned about 18 degrees. Two fingers never pinch
-without some twist, and without the pause every zoom would also spin the chart.
-
 ## Turning the chart, and squaring it up
 
 Shift + drag with a mouse, or twist two fingers on a touch screen. The chart
@@ -42,6 +17,10 @@ The north bubble in the top right corner points north the whole time. Click or
 tap it, or press ⌘↑ (Ctrl+↑), and the chart returns to north-up.
 
 ![The north bubble on a turned chart](../img/detail/north-bubble.png)
+
+On a touch screen the twist waits until you have turned about 18 degrees. Two
+fingers never pinch without some twist, and without the pause every zoom would
+also spin the chart.
 
 ## Go to a scale
 
@@ -86,3 +65,25 @@ Mac uses Command. Windows and Linux use Control.
 | ⌘D | Full detail on or off |
 | ⌘, | Mariner settings |
 | Ctrl+F | Search (Windows and Linux) |
+
+## Mouse and trackpad
+
+| Action | Result |
+|---|---|
+| Drag | Pan. Throw it and the chart coasts to a stop. |
+| **Shift + drag** | Turn the chart about the centre. It follows the drag. |
+| Wheel, or two-finger scroll | Zoom at the pointer. |
+| Pinch on a trackpad | Zoom at the pointer. |
+| Click | Pick report for what is under the cursor. |
+| Double-click (Windows) | Zoom in at the pointer. |
+
+## Touch
+
+| Action | Result |
+|---|---|
+| Drag one finger | Pan. Throw it and the chart coasts to a stop. |
+| Pinch | Zoom between the fingers. |
+| Twist two fingers | Turn the chart. |
+| Tap | Pick report for what is under your finger. |
+| Double tap | Zoom in. |
+| Two finger tap (iPad and iPhone) | Zoom out. |
