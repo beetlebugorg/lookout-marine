@@ -55,12 +55,18 @@ mariner pane at startup (screenshots).
 
 | File | Role |
 |------|------|
-| `App.xaml*`, `MainWindow.xaml*` | The WinUI shell: window, chrome, input, both present paths |
-| `winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
+| `ui/MainWindow.xaml.cpp` | Window construction, chrome wiring, the render thread |
+| `ui/MainWindow.Open.cpp` | Open flow, layers flyout, pickers, both present paths |
+| `ui/MainWindow.ChartHost.cpp` | Fallback child HWND, inverse region, Win32 chart input |
+| `ui/MainWindow.Input.cpp` | Gestures, commands, pick, coordinate search |
+| `ui/MainWindow.Hud.cpp` | Readout capsule and the scale bar |
+| `ui/MainWindow.Settings.cpp` | The mariner pane: tabbed pages, debounced apply |
+| `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
 | `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |
 | `src/lk_d3d.*` | D3D12 device, composition swapchain, shared textures + fence |
 | `src/lk_store.*` | Camera pose, recents and mariner settings in `%APPDATA%\lookout-marine\settings.ini` |
 | `src/lk_coord.*` | Coordinate go-to parser and DMS formatting |
+| `src/lk_paths.*`, `src/lk_format.*`, `src/lk_backdrop.*` | Chart discovery, HUD formatting, the transparent backdrop |
 | `build-core.ps1` | Builds the Zig core where the vcxproj expects its outputs |
 | `tools/stage0.c` | Pure-Win32 smoke test for the core (no WinUI) |
 
