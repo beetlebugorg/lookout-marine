@@ -1,0 +1,9 @@
+ARM64/
+x64/
+Win32/
+LookoutMarine/
+obj/
+build/
+vendor/
+*.user
+xamlbuild.txt

@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="LookoutMarine.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <!-- The chart presents into a native child HWND below the XAML bridge. The
+         bridge window is clipped to the chrome rects, so the chart shows and
+         gets input everywhere else. -->
+    <Grid x:Name="Root" Background="Transparent">
+        <Grid.Resources>
+            <Style x:Key="Bubble" TargetType="Button">
+                <Setter Property="Width" Value="48" />
+                <Setter Property="Height" Value="48" />
+                <Setter Property="CornerRadius" Value="24" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="White" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Foreground" Value="#1A1A1A" />
+            </Style>
+        </Grid.Resources>
+
+        <!-- DXGI mode inserts a SwapChainPanel here at index 0 in code. A panel
+             in markup would exist in BOTH modes, and even an empty panel is
+             external content that blanks the window over the fallback chart. -->
+
+        <!-- top-left: search -->
+        <StackPanel x:Name="SearchCluster" Orientation="Horizontal" Spacing="10"
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16">
+            <Button x:Name="SearchBtn" Style="{StaticResource Bubble}">
+                <FontIcon x:Name="SearchIcon" Glyph="&#xE721;" FontSize="18" />
+            </Button>
+            <TextBox x:Name="SearchBox" Width="320" Height="48" CornerRadius="24"
+                     VerticalAlignment="Center" Visibility="Collapsed"
+                     PlaceholderText="Go to coordinate  (e.g. 38.978, -76.492)" />
+        </StackPanel>
+
+        <!-- top-right: north -->
+        <Button x:Name="NorthBtn" Style="{StaticResource Bubble}"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16">
+            <StackPanel Orientation="Vertical" HorizontalAlignment="Center"
+                        VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                <StackPanel.RenderTransform>
+                    <RotateTransform x:Name="NorthRotate" />
+                </StackPanel.RenderTransform>
+                <FontIcon Glyph="&#xEDDB;" FontSize="9" HorizontalAlignment="Center" />
+                <TextBlock Text="N" FontSize="14" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" Margin="0,-1,0,0" />
+            </StackPanel>
+        </Button>
+
+        <!-- bottom-right: zoom above layers + settings -->
+        <StackPanel x:Name="ZoomStack" Orientation="Vertical" Spacing="10"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,74">
+            <Button x:Name="ZoomInBtn" Style="{StaticResource Bubble}">
+                <FontIcon Glyph="&#xE710;" FontSize="18" />
+            </Button>
+            <Button x:Name="ZoomOutBtn" Style="{StaticResource Bubble}">
+                <FontIcon Glyph="&#xE738;" FontSize="18" />
+            </Button>
+        </StackPanel>
+        <StackPanel x:Name="RightBubbles" Orientation="Horizontal" Spacing="10"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16">
+            <Button x:Name="LayersBtn" Style="{StaticResource Bubble}">
+                <FontIcon Glyph="&#xE81E;" FontSize="18" />
+            </Button>
+            <Button x:Name="SettingsBtn" Style="{StaticResource Bubble}">
+                <FontIcon Glyph="&#xE713;" FontSize="18" />
+            </Button>
+        </StackPanel>
+
+        <!-- bottom-left: scale bar -->
+        <StackPanel x:Name="ScaleBar" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    Margin="16,0,0,16" Spacing="3">
+            <TextBlock x:Name="ScaleBarLabel" FontSize="12" FontWeight="SemiBold" Text="" />
+            <StackPanel x:Name="ScaleBarSegs" Orientation="Horizontal" Height="6" />
+        </StackPanel>
+
+        <!-- top-center: build progress -->
+        <Border x:Name="BuildingPill" CornerRadius="14" Padding="12,6"
+                Background="#E6F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,10,0,0"
+                Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <ProgressRing IsActive="True" Width="16" Height="16" />
+                <TextBlock Text="Building chart…" FontSize="13" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <!-- bottom-left: identify results -->
+        <Border x:Name="IdentifyPanel" CornerRadius="8" Padding="10"
+                Background="#F2F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                Margin="12,0,0,52" MaxWidth="360" Visibility="Collapsed">
+            <StackPanel Spacing="6">
+                <Grid>
+                    <TextBlock Text="Features" FontWeight="SemiBold" FontSize="13" />
+                    <Button x:Name="IdentifyClose" HorizontalAlignment="Right"
+                            Padding="4" Background="Transparent" BorderThickness="0">
+                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                    </Button>
+                </Grid>
+                <ItemsControl x:Name="IdentifyList" />
+            </StackPanel>
+        </Border>
+
+        <!-- empty state -->
+        <Border x:Name="EmptyState" CornerRadius="12" Padding="24"
+                Background="#F2F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Visibility="Collapsed">
+            <StackPanel Spacing="10" HorizontalAlignment="Center">
+                <TextBlock Text="No chart open" FontSize="18" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="Open a baked chart (.pmtiles) or a folder of cells."
+                           FontSize="13" Opacity="0.7" HorizontalAlignment="Center" />
+                <Button x:Name="EmptyOpenBtn" Content="Open Charts…" HorizontalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <!-- right: mariner settings pane -->
+        <Border x:Name="SettingsPane" Width="380" CornerRadius="8" Padding="16"
+                Background="#F5F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                Margin="0,68,12,48" Visibility="Collapsed">
+            <Grid RowSpacing="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <TextBlock Text="Mariner Settings" FontSize="16" FontWeight="SemiBold" />
+                    <Button x:Name="SettingsClose" HorizontalAlignment="Right" Padding="4"
+                            Background="Transparent" BorderThickness="0">
+                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                    </Button>
+                </Grid>
+                <!-- tab buttons are added in code -->
+                <StackPanel x:Name="SettingsTabs" Grid.Row="1" Orientation="Horizontal" Spacing="4" />
+                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                    <!-- rows are added in code per tab -->
+                    <StackPanel x:Name="SettingsContent" Spacing="10" />
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- bottom-center: readout capsule -->
+        <Border x:Name="HudPill" Height="44" CornerRadius="22" Background="White"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,16" Padding="18,0">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <Ellipse Width="10" Height="10" Fill="#F59E0B" VerticalAlignment="Center" />
+                <TextBlock x:Name="HudBand" FontSize="14" FontWeight="SemiBold"
+                           Foreground="#1A1A1A" VerticalAlignment="Center" Text="—" />
+                <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
+                <TextBlock x:Name="HudScale" FontSize="14" FontWeight="SemiBold"
+                           Foreground="#1B49C4" VerticalAlignment="Center" Text="1:—" />
+                <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
+                <TextBlock x:Name="HudZoom" FontSize="14" Foreground="#6B6B6B"
+                           VerticalAlignment="Center" Text="z—" />
+                <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
+                <TextBlock x:Name="HudCoord" FontSize="14" Foreground="#1A1A1A"
+                           VerticalAlignment="Center" Text="—" />
+                <Border x:Name="HudOverscale" CornerRadius="8" Padding="6,2"
+                        Background="#33D83B01" VerticalAlignment="Center"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="HudOverscaleText" FontSize="12" Text="×1.0" />
+                </Border>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>
