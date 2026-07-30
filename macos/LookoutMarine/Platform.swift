@@ -34,14 +34,16 @@ func lkLog(_ message: String) {
     NSLog("[lookout] %@", message)
 }
 
-#if os(iOS)
-/// The interactive chrome's SCREEN-SPACE footprint, published by the SwiftUI
-/// side (chromeHitRegion modifier) and consulted by PassThroughWindow. The
-/// accessibility-tree scan below remains as a FALLBACK, but it cannot be the
-/// primary mechanism: without an active accessibility client (VoiceOver, UI
-/// tests) SwiftUI materializes that tree lazily or not at all — chrome taps
-/// worked under XCUITest and DIED on a bare device (iPad, first field report).
-/// Frames are plain data written at layout time: deterministic everywhere.
+/// The frames of the chrome controls, in the `Chrome.space` coordinate space.
+/// The chromeHitRegion modifier writes them. The pass-through hosts of both
+/// platforms read them.
+///
+/// The map is necessary because SwiftUI draws its controls without backing
+/// views. A Button hit-tests as the hosting view, like empty space, so the host
+/// cannot tell a control from the chart. On iOS, the accessibility scan below is
+/// only a fallback: without an accessibility client, SwiftUI can build that tree
+/// late or not at all. Chrome taps worked in XCUITest and failed on an iPad. The
+/// frames are data written at layout time and are always available.
 final class ChromeHitMap {
     static let shared = ChromeHitMap()
     private var rects: [String: CGRect] = [:]
@@ -60,6 +62,7 @@ final class ChromeHitMap {
     }
 }
 
+#if os(iOS)
 /// The chrome window: SwiftUI controls stay interactive, but touches on empty
 /// chrome fall through (hitTest nil) to the input window below.
 ///

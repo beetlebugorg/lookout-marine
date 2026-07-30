@@ -12,6 +12,13 @@ struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
+        // The app owns the settings window (SettingsWindowController), so ⌘,
+        // takes the same route as the gear bubble.
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { model.openSettings() }
+                .keyboardShortcut(",", modifiers: .command)
+        }
+
         // File → Open Chart… / Open Recent
         CommandGroup(replacing: .newItem) {
             Button("Open Chart…") { model.presentOpenPanel() }
@@ -46,8 +53,6 @@ struct AppCommands: Commands {
             Button("Toggle Text")           { model.toggleText() }.keyboardShortcut("t", modifiers: .command)
             Button("Toggle Soundings")      { model.toggleSoundings() }.keyboardShortcut("s", modifiers: [.command, .shift])
             Button("Toggle Other Category") { model.toggleOtherCategory() }.keyboardShortcut("d", modifiers: .command)
-            Divider()
-            Toggle("Coordinates as DMS", isOn: $model.useDMS)
         }
     }
 }

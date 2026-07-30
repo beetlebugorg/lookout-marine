@@ -37,7 +37,9 @@ struct SettingsView: View {
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
         #if os(macOS)
-        .frame(width: 480, height: 480)
+        // The five tab labels need this width. In a narrower window macOS
+        // collapses the tab bar into an overflow menu.
+        .frame(minWidth: 660, minHeight: 560)
         #endif
     }
 }

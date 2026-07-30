@@ -37,6 +37,40 @@ final class AppModel: ObservableObject {
     @Published var firstBuildDone = false
     var showStartupLoader: Bool { isOpening || (hasChart && !firstBuildDone) }
 
+    /// The number of cells the open is mapping. The loader states it.
+    @Published var openingCells = 0
+
+    /// The phase the startup loader shows. Each phase is a different wait: the
+    /// first-run atlas bake, the library open, and the first tessellation.
+    enum LoadPhase: Equatable {
+        case bakingAtlas
+        case mapping(cells: Int)
+        case tessellating
+
+        var title: String {
+            switch self {
+            case .bakingAtlas:
+                return "Baking the symbol atlas"
+            case .mapping(let cells):
+                return cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart"
+            case .tessellating:
+                return "Tessellating the first scene"
+            }
+        }
+
+        var note: String? {
+            switch self {
+            case .bakingAtlas: return "First launch only. The atlas is cached."
+            default: return nil
+            }
+        }
+    }
+
+    var loadingPhase: LoadPhase {
+        if preparingSymbols { return .bakingAtlas }
+        return isOpening ? .mapping(cells: openingCells) : .tessellating
+    }
+
     // MARK: Live HUD readouts (pushed by ChartController / the chart view)
     @Published var cursorLon: Double?
     @Published var cursorLat: Double?
@@ -50,11 +84,6 @@ final class AppModel: ObservableObject {
     @Published var pickResults: [PickFeature] = []
     @Published var isBuilding = false         // a background tessellation is filling in
 
-    // MARK: Preferences
-    @Published var useDMS = UserDefaults.standard.bool(forKey: "hud.useDMS") {
-        didSet { UserDefaults.standard.set(useDMS, forKey: "hud.useDMS") }
-    } // HUD coordinate format
-
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
     // panel and Settings scene are AppKit-native)
     @Published var showImporter = false
@@ -62,6 +91,10 @@ final class AppModel: ObservableObject {
 
     // MARK: Search
     @Published var searchText = ""
+
+    // MARK: Scale entry (tapping the 1:N readout)
+    @Published var showScaleEntry = false
+    @Published var scaleEntryText = ""
 
     /// The single chart controller (owned by ChartView; referenced for commands).
     weak var controller: ChartController?
@@ -155,6 +188,7 @@ final class AppModel: ObservableObject {
         noteRecent(recent)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
         // runs: flag now, open on the next runloop turn so SwiftUI paints.
+        openingCells = paths.count
         isOpening = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -175,6 +209,17 @@ final class AppModel: ObservableObject {
         recents.insert(path, at: 0)
         if recents.count > 10 { recents = Array(recents.prefix(10)) }
         UserDefaults.standard.set(recents, forKey: recentsKey)
+    }
+
+    /// Show the chart picker: the AppKit open panel on macOS, the document
+    /// importer on iOS. The charts bubble, the empty state and the File menu all
+    /// use it.
+    func requestOpenPicker() {
+        #if os(macOS)
+        presentOpenPanel()
+        #else
+        showImporter = true
+        #endif
     }
 
     /// "Add charts" from the SETTINGS sheet (iOS): the importer and the sheet
@@ -231,6 +276,54 @@ final class AppModel: ObservableObject {
 
     var schemeName: String {
         switch scheme { case 1: return "Dusk"; case 2: return "Night"; default: return "Day" }
+    }
+
+    // MARK: - Go to a scale (tap the 1:N readout)
+
+    /// Open the scale entry. The field starts at the current scale.
+    func beginScaleEntry() {
+        scaleEntryText = scaleDenominator > 0 ? String(Int(scaleDenominator.rounded())) : ""
+        showScaleEntry = true
+    }
+
+    var scaleEntryIsValid: Bool { ScaleParser.parse(scaleEntryText) != nil }
+
+    /// Apply the scale in the field. Returns false if the text is not a scale.
+    @discardableResult
+    func submitScaleEntry() -> Bool {
+        guard let denominator = ScaleParser.parse(scaleEntryText) else { return false }
+        zoomToScale(denominator)
+        showScaleEntry = false
+        return true
+    }
+
+    /// Zoom to a 1:N display scale, about the view centre.
+    ///
+    /// At one latitude the denominator is C·cos(lat)/2^zoom. A scale is
+    /// therefore a zoom delta, and the engine zoom can do the work. The engine
+    /// keeps its zoom limits and eases the movement.
+    func zoomToScale(_ denominator: Double) {
+        guard let controller, denominator > 0, scaleDenominator > 0 else { return }
+        controller.zoomCentered(log2(scaleDenominator / denominator))
+    }
+}
+
+/// The scale parser. It accepts "25000", "25,000", "1:25000", "25k" and
+/// "1:2.5M".
+enum ScaleParser {
+    static func parse(_ raw: String) -> Double? {
+        var s = raw.lowercased().trimmingCharacters(in: .whitespaces)
+        // In "1:25k", the text before the colon is the 1.
+        if let colon = s.lastIndex(of: ":") { s = String(s[s.index(after: colon)...]) }
+        s = s.filter { !$0.isWhitespace && $0 != "," }
+        var multiplier = 1.0
+        if s.hasSuffix("k") { multiplier = 1_000; s.removeLast() }
+        else if s.hasSuffix("m") { multiplier = 1_000_000; s.removeLast() }
+        guard let n = Double(s), n.isFinite else { return nil }
+        let denominator = n * multiplier
+        // A value outside this range is not a chart scale.
+        guard denominator >= 100, denominator <= 100_000_000 else { return nil }
+        return denominator
     }
 }
 
