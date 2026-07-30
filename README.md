@@ -69,9 +69,10 @@ Lookout is built for the destination, not for the present:
 
 ## Loading charts
 
-Lookout opens **chart archives**. You bake them from the ENC cells that hydrographic
-offices give away at no cost. For the United States, the full NOAA ENC catalogue is
-one download.
+Lookout opens **chart archives**, which you bake from ENC cells. NOAA publishes the
+cells of United States waters at no cost, and the full catalogue is one download.
+Most other hydrographic offices sell theirs, usually encrypted with S-63, which the
+app cannot read yet. Any unencrypted S-57 cell works.
 
 - **On Mac:** **File ▸ Open Chart…** takes one chart or a folder.
 - **On Linux:** **Open** in the headerbar takes a folder of cells.

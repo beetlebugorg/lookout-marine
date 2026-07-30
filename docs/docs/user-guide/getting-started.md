@@ -10,14 +10,16 @@ sidebar_position: 1
 This is a prototype. Keep your official charts and your paper backup.
 :::
 
-![A first start, with no chart open](../img/macos-empty.png)
-
 ## Get your charts
 
-The app does not come with charts. Hydrographic offices give the cells away at
-no cost. In the United States, download the ENC set, or the cells of your area,
-from the [NOAA chart downloader](https://charts.noaa.gov/InteractiveCatalog/nrnc.shtml).
+The app does not come with charts. NOAA publishes the ENC cells of United States
+waters at no cost: download the whole set, or the cells of your area, from the
+[NOAA chart downloader](https://charts.noaa.gov/InteractiveCatalog/nrnc.shtml).
 Each cell is a file such as `US5MD1MC.000`.
+
+Most other hydrographic offices sell their ENCs, and most sell them encrypted
+with S-63, which the app cannot read yet. Any unencrypted S-57 cell works,
+whoever published it.
 
 Prepare them one time with the tile57 tool:
 
@@ -39,6 +41,10 @@ works: the harbour chart where you have one, the coastal chart around it.
 - **iPad and iPhone**: the gear, then **Charts ▸ Add Charts…**. You can also
   drop the folder into the app with Files or the Finder.
 - **Android**: the **Charts** tab of the settings.
+
+With nothing open yet, the same picker sits in the middle of the window:
+
+![A first start, with no chart open](../img/macos-empty.png)
 
 The app opens where you left it the last time.
 
