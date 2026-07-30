@@ -1,7 +1,7 @@
 ---
 id: screenshots
 title: Screenshot protocol
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Screenshot protocol
@@ -13,11 +13,10 @@ gives that specification.
 
 Verification is the difficult part of
 [the experiment](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai),
-not generation. A shell can look correct alone, but it can still be soft, or the
-wrong size, or it can lose its chrome. The same frame on each host makes these
-faults easy to see.
+not generation. A shell can look correct alone and still be soft, the wrong size,
+or missing its chrome. The same frame on each host makes those faults obvious.
 
-## The specified frame
+## Specified frame
 
 | Item | Value |
 |---|---|

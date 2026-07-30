@@ -90,6 +90,7 @@ final class AppModel: ObservableObject {
     @Published var showSettings = false
 
     // MARK: Search
+    @Published var searchOpen = false
     @Published var searchText = ""
 
     // MARK: Scale entry (tapping the 1:N readout)

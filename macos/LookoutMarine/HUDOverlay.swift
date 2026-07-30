@@ -169,6 +169,8 @@ struct ScaleEntryPanel: View {
         .padding(14)
         .frame(width: 340)
         .panelSurface(cornerRadius: 12)
+        // The panel is white in every appearance; see SearchField.
+        .environment(\.colorScheme, .light)
         .onAppear { focused = true }
         #if os(macOS)
         .onExitCommand { model.showScaleEntry = false }
