@@ -26,9 +26,10 @@ and switch between day and night.
   pre-rendered raster image, and no symbol is a look-alike. You get depth areas and
   contours, buoys and beacons with correct symbols, lights with sector lines,
   soundings, anchorage and restricted areas, and place names.
-- **It opens a whole coastline.** Point it at a folder of cells. A 1,700-cell library
-  opens in about 15 ms, and the first scene appears in less than a second. The app
-  does not freeze while it composes the library.
+- **It opens a whole coastline.** Point it at a folder of cells. The app maps each
+  cell instead of loading it, so even a 1,700-cell library opens in milliseconds and
+  is never fully resident. Tessellation runs on a worker thread, so the app stays
+  responsive while the first scene fills in.
 - **It is vector all the way to the GPU.** The app caches no bitmap of the chart. It
   draws with 4x MSAA at the full resolution of the display.
 
@@ -55,25 +56,6 @@ Lookout is built for the destination, not for the present:
   renderer and the apps see S-101 features only. When an office publishes S-101 for
   your area, you use the native path and drop the conversion step. The apps need no
   change.
-
-## What you can do with it
-
-- **Move like a chartplotter.** One-finger pan with fling, pinch-zoom anchored below
-  your fingers, two-finger rotate, double-tap to zoom, and tap to identify a feature.
-  Mac, iPad and Linux add pointer control and cursor readouts.
-- **Switch between day, dusk and night.** The scheme changes immediately, because a
-  new palette needs no rebuild.
-- **Tune the chart to your eye.** The mariner panel controls the safety contour, the
-  shallow and deep contours, the safety depth, two-shade or four-shade water, the
-  display categories, the sounding and text switches, symbol size, and date-dependent
-  features. Each edit applies live.
-- **Go to a position.** Type a coordinate into search, for example
-  `38 58.5N 76 28.9W`.
-
-<p align="center">
-  <img src="docs/docs/img/ipad-night.png" width="430" alt="The same view in the night scheme">
-  <img src="docs/docs/img/linux-settings.png" width="430" alt="The mariner panel above the chart on Linux">
-</p>
 
 ## Loading charts
 
