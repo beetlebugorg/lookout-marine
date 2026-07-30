@@ -36,9 +36,10 @@ struct ReadoutsCapsule: View {
                 Text(CoordFormat.scale(model.scaleDenominator))
                     .fontWeight(.semibold)
                     .foregroundStyle(Chrome.accent)
-                    .contentShape(Rectangle())
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
             .help("Zoom to a scale…")
             .accessibilityLabel("Scale \(CoordFormat.scale(model.scaleDenominator)). Zoom to a scale.")
             .chromeHitRegion("scale-readout")
@@ -118,9 +119,8 @@ struct ScaleEntryPanel: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
                         .padding(5)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
                 .foregroundStyle(Chrome.muted)
                 .accessibilityLabel("Close scale entry")
             }
@@ -195,12 +195,11 @@ struct ScaleEntryPanel: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeFlatStyle(
+                    resting: current == p.band ? Chrome.accent.opacity(0.14) : Chrome.ink.opacity(0.06),
+                    cornerRadius: 10))
                 .foregroundStyle(Chrome.ink)
-                .background(current == p.band ? Chrome.accent.opacity(0.14) : Chrome.ink.opacity(0.06),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(current == p.band ? Chrome.accent.opacity(0.5) : .clear, lineWidth: 1))
                 .help("Zoom to \(p.short)")
@@ -228,9 +227,8 @@ struct IdentifyPanel: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
                         .padding(4)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
                 .foregroundStyle(Chrome.muted)
                 .accessibilityLabel("Dismiss features")
             }
