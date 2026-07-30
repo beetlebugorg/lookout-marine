@@ -1146,11 +1146,15 @@ pub const Lookout = struct {
         var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
         m0.size_scale = self.render_size_scale;
         m0.device_scale = 1.0; // camera is in LOGICAL px; density lives in the projection
+        // The scene is built axis-aligned in world space and the camera turns
+        // it at draw time. A turned view therefore needs the box that HOLDS it:
+        // a build of the plain width and height leaves the corners empty.
+        const ext = camera.rotatedExtent(lw, lh, self.cam.rotation);
         return .{
             .origin = origin,
             .zoom = zoom,
-            .ow = @intFromFloat(@max(1.0, lw * OVERSCAN)),
-            .oh = @intFromFloat(@max(1.0, lh * OVERSCAN)),
+            .ow = @intFromFloat(@max(1.0, ext[0] * OVERSCAN)),
+            .oh = @intFromFloat(@max(1.0, ext[1] * OVERSCAN)),
             .mariner = m0,
             .prefetch = prefetch,
         };
