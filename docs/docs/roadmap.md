@@ -14,10 +14,24 @@ No release here has a date.
 
 ## 0.1 — Chart
 
-Shipped. S-57 cells, S-101 portrayal, a composed library, mariner settings, and
-a native shell on macOS, iPadOS, iOS, Windows, Linux and Android.
+Shipped. Native S-101 datasets, S-57 cells converted into the same model, the
+official S-101 Portrayal Catalogue, a composed library, mariner settings, and a
+native shell on macOS, iPadOS, iOS, Windows, Linux and Android.
 
-## 0.2 — Own ship
+## 0.2 — Reading the chart
+
+What the chart itself still owes a mariner. It comes before own ship, because
+the chart is the product.
+
+- **Full pick report.** The report lists the objects under the cursor and the
+  cell each came from. The engine already returns every S-57 attribute, so the
+  report should state them: light character, period, height and range; the
+  depths of a depth area; the category and colour of a buoy. With the object
+  names spelled out, not the six-letter acronyms.
+- **Feature and place-name search.** The search field goes to a position today.
+  Names need an index in tile57 and a query in the C ABI.
+
+## 0.3 — Own ship
 
 The boat on the chart, and the numbers that come with it.
 
@@ -32,7 +46,7 @@ The boat on the chart, and the numbers that come with it.
   view beside the chart and as a strip on a phone. Each value states when it
   goes stale.
 
-## 0.3 — Traffic
+## 0.4 — Traffic
 
 Other vessels, and the warnings that matter.
 
@@ -43,7 +57,7 @@ Other vessels, and the warnings that matter.
 - **Target list**, sorted by range or by closest approach.
 - **Guard zone** with an alarm.
 
-## 0.4 — Voyage
+## 0.5 — Voyage
 
 Where you have been, and where you are going.
 
@@ -55,13 +69,8 @@ Where you have been, and where you are going.
 - **Man overboard**: one control drops a mark and starts a bearing and range to
   it.
 
-## 0.5 — Working tools
+## 0.6 — Working tools
 
-- **Full pick report.** The report lists the objects under the cursor and the
-  cell each came from. The engine already returns every S-57 attribute, so the
-  report should state them: light character, period, height and range; the
-  depths of a depth area; the category and colour of a buoy. With the object
-  names spelled out, not the six-letter acronyms.
 - **Electronic bearing line** and **variable range marker**.
 - **Tides and currents** from the harmonic stations in the cell.
 - **Signal K** as one network source for the boat.
@@ -69,8 +78,6 @@ Where you have been, and where you are going.
 ## Not scheduled
 
 - **S-63** encrypted commercial cells.
-- **S-101 native cells.** The engine portrays S-101 already; this is the reader
-  for the format as hydrographic offices publish it.
 - **Radar overlay**, where a platform gives a usable feed.
 - **Weather (GRIB)**.
 
