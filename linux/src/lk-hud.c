@@ -244,7 +244,7 @@ lk_identify_panel_new (GPtrArray *results)
   gtk_widget_set_margin_top (box, 8);
   gtk_widget_set_margin_bottom (box, 8);
 
-  GtkWidget *title = gtk_label_new ("Identify");
+  GtkWidget *title = gtk_label_new ("Pick report");
   gtk_widget_add_css_class (title, "heading");
   gtk_widget_set_halign (title, GTK_ALIGN_START);
   gtk_box_append (GTK_BOX (box), title);

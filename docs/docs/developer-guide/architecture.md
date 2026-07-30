@@ -33,10 +33,10 @@ their own idiom.
                                                tessellation, atlases, tiles
 ```
 
-## The two parts
+## Parts
 
-**The core** is in `src/`. The core opens a baked chart or a chart library. Then
-the core asks the engine for a GPU scene. The scene contains vertices, quads, the
+**The core** is in `src/`. It opens a baked chart or a chart library, then asks
+the engine for a GPU scene. The scene contains vertices, quads, the
 paint order, and a color buffer for each scheme. The core uploads the scene one
 time.
 
@@ -67,11 +67,11 @@ dependency. If a sibling `../tile57` checkout is available, the build uses it. I
 it is not available, the build gets the commit that `build.zig.zon` specifies.
 `zig build` then compiles the engine from source.
 
-## Why the structure is correct
+## Why one ABI
 
-The ABI is the reason that many shells stay easy to maintain. Refer to
-[the experiment](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai).
-A shell can use only `lookout.h` to reach the core. This limit gives three results:
+A shell reaches the core through `lookout.h` and nothing else. That limit is what
+keeps many shells maintainable (see
+[the experiment](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai)):
 
 - **One shell cannot depend on another shell.** There is no shared widget layer.
   A change to the GTK window cannot break SwiftUI.
@@ -102,14 +102,36 @@ A headless program does not need a window. It gets each frame with
 `lookout_snapshot_rgba`. `lookout-marine-demo` uses this function to write parity
 PNG files.
 
-## The hosts
+## Build the core
 
-| Host | Toolkit | Notes |
+The core needs **Zig 0.16**. The tile57 engine is a Zig package dependency: the
+build uses a sibling `../tile57` checkout when there is one, and otherwise
+fetches the commit that `build.zig.zon` pins.
+
+```sh
+zig build                       # the host default backend -> zig-out/
+zig build lib -Dbackend=vk      # one backend only
+zig build test                  # the camera and geometry tests
+```
+
+`zig build` installs `liblookout_marine.a`, `libtile57.a`, `lookout.h` and
+`tile57.h` into `zig-out/`. A cross build installs into `zig-out-<platform>/`.
+
+`lookout-marine-demo` renders without a window. It is the parity and smoke-test
+tool, not the app:
+
+```sh
+./zig-out/bin/lookout-marine-demo chart.pmtiles [--png out.png] [--lon L --lat L --zoom Z]
+```
+
+## Hosts
+
+| Host | Toolkit | Page |
 |---|---|---|
-| macOS / iPadOS / iOS | SwiftUI | **The reference for behavior.** Mac and iOS share the Swift sources. Refer to `macos/README.md`. |
-| [Linux](hosts-linux.md) | GTK4, C | A Vulkan subsurface below a transparent hole. The chrome floats above the chart. |
-| Android | Java | Vulkan draws into a `SurfaceView`. The Java shell owns the Activity. Refer to `android/README.md`. |
-| Windows | WinUI 3, C++/WinRT | The core's D3D12 composition swapchain on a `SwapChainPanel`; the XAML chrome floats above. Refer to `windows/README.md`. |
+| macOS, iPadOS, iOS | SwiftUI | [macOS, iPadOS and iOS](macos.md) — the reference for behaviour |
+| Linux | GTK4, C | [Linux](linux.md) |
+| Windows | WinUI 3, C++/WinRT | [Windows](windows.md) |
+| Android | Java and Compose | [Android](android.md) |
 
 Each host captures its screenshots to one specification. You can then compare the
 hosts frame by frame. Refer to [the screenshot protocol](screenshots.md).

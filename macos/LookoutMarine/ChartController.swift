@@ -392,7 +392,7 @@ final class ChartController: NSObject {
         return lookout_scale_denominator(h)
     }
 
-    // MARK: - Pick (tap-to-identify)
+    // MARK: - Cursor pick
 
     func pick(lon: Double, lat: Double) -> [PickFeature] {
         guard let h = handle else { return [] }

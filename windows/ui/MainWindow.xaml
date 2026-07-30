@@ -96,7 +96,7 @@
                 Margin="12,0,0,52" MaxWidth="360" Visibility="Collapsed">
             <StackPanel Spacing="6">
                 <Grid>
-                    <TextBlock Text="Features" FontWeight="SemiBold" FontSize="13" />
+                    <TextBlock Text="Pick report" FontWeight="SemiBold" FontSize="13" />
                     <Button x:Name="IdentifyClose" HorizontalAlignment="Right"
                             Padding="4" Background="Transparent" BorderThickness="0">
                         <FontIcon Glyph="&#xE711;" FontSize="12" />

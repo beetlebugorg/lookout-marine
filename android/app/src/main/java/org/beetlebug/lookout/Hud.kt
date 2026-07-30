@@ -178,7 +178,7 @@ fun IdentifyPanel(
         Column(Modifier.padding(start = 12.dp, top = 6.dp, end = 4.dp, bottom = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Identify",
+                    "Pick report",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                 )

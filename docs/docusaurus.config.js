@@ -68,9 +68,11 @@ const config = {
             title: 'Docs',
             items: [
               {label: 'Introduction', to: '/'},
-              {label: 'Architecture', to: '/architecture'},
-              {label: 'The Linux host', to: '/hosts-linux'},
-              {label: 'Screenshot protocol', to: '/screenshots'},
+              {label: 'Getting started', to: '/user-guide/getting-started'},
+              {label: 'Chart window', to: '/user-guide/chart-window'},
+              {label: 'Architecture', to: '/developer-guide/architecture'},
+              {label: 'Building', to: '/developer-guide/macos'},
+              {label: 'Roadmap', to: '/roadmap'},
             ],
           },
           {

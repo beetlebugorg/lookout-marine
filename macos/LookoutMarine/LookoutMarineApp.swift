@@ -141,11 +141,27 @@ struct ContentView: View {
                 Text(model.openError ?? "")
             }
             #if os(macOS)
-            // Dev hook, as LOOKOUT_OPEN_SETTINGS in the WinUI 3 shell: open the
-            // mariner form for the settings screenshot.
+            // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
+            // scale, search, pick opens that chrome once the chart is up.
             .onAppear {
-                guard ProcessInfo.processInfo.environment["LOOKOUT_OPEN_SETTINGS"] != nil else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { model.openSettings() }
+                guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
+                let want = Set(show.lowercased().split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) })
+                let tabs = ["display": 0, "depths": 1, "text": 2, "charts": 3, "advanced": 4]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    for item in want {
+                        let part = item.split(separator: ":", maxSplits: 1).map(String.init)
+                        switch part[0] {
+                        case "settings":
+                            model.settingsTab = part.count > 1 ? (tabs[part[1]] ?? 0) : 0
+                            model.openSettings()
+                        case "scale": model.beginScaleEntry()
+                        case "search": model.searchOpen = true
+                        case "pick": model.pickAtCentre()
+                        default: break
+                        }
+                    }
+                }
             }
             #endif
     }
