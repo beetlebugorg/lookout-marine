@@ -30,6 +30,11 @@ the chart is the product.
   names spelled out, not the six-letter acronyms.
 - **Feature and place-name search.** The search field goes to a position today.
   Names need an index in tile57 and a query in the C ABI.
+- **Outline the picked object.** The report marks the point that was picked. To
+  ring a point object where it stands, or trace the outline of a line or an
+  area, the pick has to return the geometry. `tile57_query_cb` hands over the
+  class, the attributes and the cell, so this is a change in the engine and in
+  the C ABI before it is one in a shell.
 
 ## 0.3 — Own ship
 

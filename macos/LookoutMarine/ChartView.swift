@@ -101,7 +101,14 @@ struct OverlayLayer: View {
                             .padding(.bottom, corner)
                     }
                 }
-                // The pick report opens beside the pick.
+                // The mark on what was picked, then the report beside it.
+                .overlay(alignment: .topLeading) {
+                    if let point = model.pickPoint {
+                        PickMarker()
+                            .offset(x: point.x - PickMarker.size / 2,
+                                    y: point.y - PickMarker.size / 2)
+                    }
+                }
                 .overlay(alignment: .topLeading) {
                     if let point = model.pickPoint {
                         PickReportPanel(model: model)
