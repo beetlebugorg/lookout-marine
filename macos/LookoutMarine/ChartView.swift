@@ -40,7 +40,8 @@ struct OverlayLayer: View {
     /// Put the report beside the pick, and keep it on screen: it flips to the
     /// other side of the point when it would leave the window. The report's
     /// MEASURED size decides that. Its scroll cap flipped a report that fits.
-    static func reportOffset(from point: CGPoint, size report: CGSize, in view: CGSize) -> CGSize {
+    static func reportOffset(from point: CGPoint, size report: CGSize, in view: CGSize,
+                            drag: CGSize) -> CGSize {
         var x = point.x + Chrome.gap
         var y = point.y + Chrome.gap
         if x + report.width > view.width - Chrome.margin {
@@ -49,6 +50,9 @@ struct OverlayLayer: View {
         if y + report.height > view.height - Chrome.margin {
             y = max(Chrome.margin, point.y - report.height - Chrome.gap)
         }
+        // A drag beats the placement, but the header stays reachable.
+        x = min(max(0, x + drag.width), max(0, view.width - 80))
+        y = min(max(0, y + drag.height), max(0, view.height - 40))
         return CGSize(width: x, height: y)
     }
 
@@ -117,12 +121,19 @@ struct OverlayLayer: View {
                 }
                 .overlay(alignment: .topLeading) {
                     if let point = model.pickPoint {
+                        let at = Self.reportOffset(from: point, size: reportSize,
+                                                   in: geo.size, drag: model.pickDrag)
                         PickReportPanel(model: model)
-                            .chromeHitRegion("pick-report")
                             .background(GeometryReader { g in
                                 Color.clear.preference(key: ReportSize.self, value: g.size)
                             })
-                            .offset(Self.reportOffset(from: point, size: reportSize, in: geo.size))
+                            // Placed with padding, not an offset: an offset moves
+                            // the drawing and not the layout, so the frame the
+                            // chrome publishes stayed at the top left and every
+                            // click on the report reached the chart underneath.
+                            .chromeHitRegion("pick-report")
+                            .padding(.leading, at.width)
+                            .padding(.top, at.height)
                             .onPreferenceChange(ReportSize.self) { reportSize = $0 }
                     }
                 }

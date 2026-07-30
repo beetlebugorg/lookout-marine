@@ -224,14 +224,13 @@ struct ScaleEntryPanel: View {
 /// which is how a chart problem gets reported.
 struct PickReportPanel: View {
     @ObservedObject var model: AppModel
-    /// Where the report has been dragged since it opened.
-    @State private var drag = CGSize.zero
-    @State private var base = CGSize.zero
+    /// The drag starts from wherever the report already sits.
+    @State private var dragBase: CGSize?
     /// The height of the rows, so the report hugs them and scrolls only when
     /// they pass maxHeight.
     @State private var rowsHeight: CGFloat = 0
 
-    static let width: CGFloat = 360
+    static let width: CGFloat = 420
     static let maxHeight: CGFloat = 460
 
     private var feature: PickFeature? {
@@ -249,7 +248,6 @@ struct PickReportPanel: View {
             .frame(width: Self.width)
             .panelSurface(cornerRadius: 12, opaque: true)
             .environment(\.colorScheme, .light)
-            .offset(drag)
             #if os(macOS)
             .onExitCommand { model.closePick() }
             #endif
@@ -259,10 +257,6 @@ struct PickReportPanel: View {
     private func header(_ feature: PickFeature) -> some View {
         HStack(alignment: .top, spacing: 10) {
             DragDots()
-                .gesture(DragGesture()
-                    .onChanged { drag = CGSize(width: base.width + $0.translation.width,
-                                               height: base.height + $0.translation.height) }
-                    .onEnded { _ in base = drag })
             VStack(alignment: .leading, spacing: 5) {
                 Text(feature.cls)
                     .font(.system(size: 16, weight: .bold))
@@ -279,6 +273,20 @@ struct PickReportPanel: View {
             controls
         }
         .padding(16)
+        .contentShape(Rectangle())
+        // The whole header drags, not just the dots: a report that grew past
+        // the window has to be movable by whatever part of it you can reach.
+        // Measured in the chrome's space, not the header's. The header moves as
+        // it is dragged, so a local translation is measured against a frame that
+        // the previous update just moved, and the report shakes.
+        .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named(Chrome.space))
+            .onChanged { g in
+                let base = dragBase ?? model.pickDrag
+                dragBase = base
+                model.pickDrag = CGSize(width: base.width + g.translation.width,
+                                        height: base.height + g.translation.height)
+            }
+            .onEnded { _ in dragBase = nil })
     }
 
     private var controls: some View {
@@ -413,7 +421,9 @@ struct AuxFileView: View {
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity, maxHeight: 200)
+                        // A chart picture is a diagram or a note: 200pt made it
+                        // unreadable. Click it for the full size.
+                        .frame(maxWidth: .infinity, maxHeight: 340)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .strokeBorder(Chrome.edge.opacity(0.3), lineWidth: 0.5))

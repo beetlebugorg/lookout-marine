@@ -86,6 +86,8 @@ final class AppModel: ObservableObject {
     @Published var pickResults: [PickFeature] = []
     @Published var pickPoint: CGPoint?
     @Published var pickIndex = 0
+    /// Where the report has been dragged from where it opened.
+    @Published var pickDrag = CGSize.zero
     /// Where a hook-driven pick should anchor its report. The chart view sets it
     /// to the centre of its bounds.
     var pickCentreHint: CGPoint?
@@ -309,12 +311,18 @@ final class AppModel: ObservableObject {
         }
         pickResults = features.enumerated()
             .sorted { a, b in
+                // A feature the cell gave no attributes cannot be the answer to
+                // a pick, whatever it is: an empty land area loses to a note.
+                let ea = S57.attributes(of: a.element.s57).isEmpty
+                let eb = S57.attributes(of: b.element.s57).isEmpty
+                if ea != eb { return eb }
                 let ra = PickRank.of(a.element.cls), rb = PickRank.of(b.element.cls)
                 return ra == rb ? a.offset < b.offset : ra < rb
             }
             .map(\.element)
         pickPoint = features.isEmpty ? nil : point
         pickIndex = 0
+        pickDrag = .zero
     }
 
     /// The order the report pages through the pick, best first.
@@ -378,6 +386,7 @@ final class AppModel: ObservableObject {
         pickResults = []
         pickPoint = nil
         pickIndex = 0
+        pickDrag = .zero
     }
 
     /// Run a cursor pick at the view centre. A tap on the chart runs the same
