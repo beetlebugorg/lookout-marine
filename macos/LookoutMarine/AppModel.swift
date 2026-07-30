@@ -306,30 +306,58 @@ final class AppModel: ObservableObject {
         pickIndex = 0
     }
 
-    /// How much a picked object matters, lowest first. Aids to navigation and
-    /// dangers come before the water they sit in, and the meta objects that
-    /// describe the survey come last.
+    /// The order the report pages through the pick, best first.
+    ///
+    /// The most SPECIFIC object wins: a sounding is a point the mariner aimed
+    /// at, while the depth area under it is water they are merely inside. So
+    /// the primitive decides first — point, then line, then area — and what the
+    /// object is decides within that.
     enum PickRank {
-        private static let order: [[String]] = [
-            ["LIGHTS", "LITVES", "LITFLT"],
-            ["BOYLAT", "BOYCAR", "BOYSAW", "BOYISD", "BOYSPP", "BOYINB",
-             "BCNLAT", "BCNCAR", "BCNSAW", "BCNISD", "BCNSPP", "DAYMAR", "TOPMAR"],
-            ["WRECKS", "OBSTRN", "UWTROC", "ROCKS", "MORFAC", "PILPNT"],
-            ["SOUNDG", "DEPCNT", "DEPARE", "DRGARE", "SBDARE"],
-            ["ACHARE", "RESARE", "TSSLPT", "TSELNE", "FAIRWY", "NAVLNE", "RECTRC",
-             "CBLARE", "PIPARE", "CBLSUB", "PIPSOL", "DWRTPT", "MIPARE"],
-            ["COALNE", "SLCONS", "PONTON", "HRBFAC", "BERTHS", "LNDMRK", "BUISGL"],
-            ["LNDARE", "BUAARE", "SEAARE", "LNDRGN", "VEGATN"],
+        private enum Primitive: Int { case point = 0, line = 1, area = 2 }
+
+        private static let lines: Set<String> = [
+            "DEPCNT", "COALNE", "SLCONS", "NAVLNE", "RECTRC", "CBLSUB", "PIPSOL",
+            "TSELNE", "RIVERS", "FERYRT", "DWRTCL", "LNDELV", "CANALS",
         ]
-        private static let rank: [String: Int] = {
+        private static let areas: Set<String> = [
+            "DEPARE", "DRGARE", "SBDARE", "LNDARE", "BUAARE", "SEAARE", "ACHARE",
+            "RESARE", "FAIRWY", "CBLARE", "PIPARE", "MIPARE", "DWRTPT", "TSSLPT",
+            "UNSARE", "LNDRGN", "VEGATN", "HRBFAC", "BERTHS", "ADMARE", "CTNARE",
+            "OSPARE", "SPLARE", "MARCUL", "DMPGRD",
+        ]
+
+        /// What the object is, lowest first: what you steer by, then what can
+        /// hurt you, then the water, then the background.
+        private static let kind: [String: Int] = {
+            let groups: [[String]] = [
+                ["LIGHTS", "LITVES", "LITFLT"],
+                ["BOYLAT", "BOYCAR", "BOYSAW", "BOYISD", "BOYSPP", "BOYINB",
+                 "BCNLAT", "BCNCAR", "BCNSAW", "BCNISD", "BCNSPP", "DAYMAR", "TOPMAR"],
+                ["WRECKS", "OBSTRN", "UWTROC", "ROCKS", "MORFAC", "PILPNT"],
+                ["SOUNDG", "DEPCNT", "DEPARE", "DRGARE", "SBDARE"],
+                ["ACHARE", "RESARE", "TSSLPT", "TSELNE", "FAIRWY", "NAVLNE", "RECTRC",
+                 "CBLARE", "PIPARE", "CBLSUB", "PIPSOL", "DWRTPT", "MIPARE"],
+                ["COALNE", "SLCONS", "PONTON", "HRBFAC", "BERTHS", "LNDMRK", "BUISGL"],
+                ["LNDARE", "BUAARE", "SEAARE", "LNDRGN", "VEGATN"],
+            ]
             var map: [String: Int] = [:]
-            for (i, group) in order.enumerated() {
+            for (i, group) in groups.enumerated() {
                 for cls in group { map[cls] = i }
             }
             return map
         }()
 
-        static func of(_ cls: String) -> Int { rank[cls] ?? order.count }
+        private static func primitive(of cls: String) -> Primitive {
+            if lines.contains(cls) { return .line }
+            if areas.contains(cls) { return .area }
+            // An unlisted class that ends in ARE is an area by convention.
+            if cls.hasSuffix("ARE") { return .area }
+            return .point
+        }
+
+        static func of(_ cls: String) -> Int {
+            primitive(of: cls).rawValue * 100 + (kind[cls] ?? 8)
+        }
     }
 
     func closePick() {

@@ -30,20 +30,26 @@ import UIKit
 /// readout capsule at the bottom center.
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
+    /// The measured size of the pick report, which places it by the pick.
+    @State private var reportSize = CGSize(width: PickReportPanel.width, height: 180)
 
     /// Below this width the capsule and the corner chrome cannot share the
     /// bottom row. The corner chrome then moves above the capsule.
     private static let compactWidth: CGFloat = 700
 
     /// Put the report beside the pick, and keep it on screen: it flips to the
-    /// other side of the point when it would leave the window.
-    static func reportOffset(from point: CGPoint, in size: CGSize) -> CGSize {
-        let w = PickReportPanel.width, h = PickReportPanel.maxHeight
+    /// other side of the point when it would leave the window. The report's
+    /// MEASURED size decides that. Its scroll cap flipped a report that fits.
+    static func reportOffset(from point: CGPoint, size report: CGSize, in view: CGSize) -> CGSize {
         var x = point.x + Chrome.gap
         var y = point.y + Chrome.gap
-        if x + w > size.width - Chrome.margin { x = point.x - w - Chrome.gap }
-        if y + h > size.height - Chrome.margin { y = point.y - h - Chrome.gap }
-        return CGSize(width: max(Chrome.margin, x), height: max(Chrome.margin, y))
+        if x + report.width > view.width - Chrome.margin {
+            x = max(Chrome.margin, point.x - report.width - Chrome.gap)
+        }
+        if y + report.height > view.height - Chrome.margin {
+            y = max(Chrome.margin, point.y - report.height - Chrome.gap)
+        }
+        return CGSize(width: x, height: y)
     }
 
     var body: some View {
@@ -113,7 +119,11 @@ struct OverlayLayer: View {
                     if let point = model.pickPoint {
                         PickReportPanel(model: model)
                             .chromeHitRegion("pick-report")
-                            .offset(Self.reportOffset(from: point, in: geo.size))
+                            .background(GeometryReader { g in
+                                Color.clear.preference(key: ReportSize.self, value: g.size)
+                            })
+                            .offset(Self.reportOffset(from: point, size: reportSize, in: geo.size))
+                            .onPreferenceChange(ReportSize.self) { reportSize = $0 }
                     }
                 }
                 // Bottom center: the readout capsule. The scale entry opens
@@ -155,6 +165,12 @@ struct OverlayLayer: View {
         // The pass-through hosts hit-test against it.
         .coordinateSpace(name: Chrome.space)
     }
+}
+
+/// The measured size of the pick report.
+private struct ReportSize: PreferenceKey {
+    static var defaultValue = CGSize(width: PickReportPanel.width, height: 180)
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 /// Write this view's frame to ChromeHitMap. The pass-through host keeps the
