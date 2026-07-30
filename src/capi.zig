@@ -114,12 +114,20 @@ export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque,
 /// The desktop kinds (win32/x11/wayland) each pass a struct lookout.h declares.
 fn nativeKind(kind: c_int) ?lk.NativeKind {
     if (kind == 0) return .none;
-    if (kind == 1) return .metal_layer;
+    if (@hasField(lk.NativeKind, "metal_layer") and kind == 1) return .metal_layer;
     if (@hasField(lk.NativeKind, "win32_hwnd") and kind == 4) return .win32_hwnd;
     if (@hasField(lk.NativeKind, "x11_window") and kind == 5) return .x11_window;
     if (@hasField(lk.NativeKind, "android_window") and kind == 7) return .android_window;
     if (@hasField(lk.NativeKind, "wayland_surface") and kind == 8) return .wayland_surface;
+    if (@hasField(lk.NativeKind, "d3d12_panel") and kind == 10) return .d3d12_panel;
     return null;
+}
+
+/// The core-owned IDXGISwapChain* for the host's SwapChainPanel
+/// (LOOKOUT_NATIVE_D3D12_PANEL only; NULL on any other kind or backend).
+export fn lookout_d3d12_swapchain(h: ?*lookout) ?*anyopaque {
+    const x = cast(h orelse return null);
+    return x.d3d12Swapchain();
 }
 
 export fn lookout_close(h: ?*lookout) void {

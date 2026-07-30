@@ -84,14 +84,15 @@ A shell can use only `lookout.h` to reach the core. This limit gives three resul
 
 ## GPU backends
 
-The core has one design and three GPU transports. You select the transport when
+The core has one design and four GPU transports. You select the transport when
 you build the core with `-Dbackend=`.
 
 | Backend | Platforms | Surface |
 |---|---|---|
 | `metal` | macOS, iOS/iPadOS | `CAMetalLayer` (`src/metal_shim.m`; the shim compiles the shaders at run time) |
 | `vk` | Linux, Android | Wayland surface, X11 window, or `ANativeWindow`; precompiled SPIR-V |
-| `sdl` | Windows, or any platform for comparison | `SDL_GPU` |
+| `d3d12` | Windows | A composition swapchain the host attaches to a `SwapChainPanel` (`src/d3d12_shim.c`; the shim compiles the HLSL at run time; WARP when there is no GPU driver) |
+| `sdl` | Any platform for comparison | `SDL_GPU` |
 
 The shaders are not in this repository. The shaders read the vertex, quad, and
 uniform layouts that tile57 defines. Therefore the shaders stay with those layouts,
@@ -108,6 +109,7 @@ PNG files.
 | macOS / iPadOS / iOS | SwiftUI | **The reference for behavior.** Mac and iOS share the Swift sources. Refer to `macos/README.md`. |
 | [Linux](hosts-linux.md) | GTK4, C | A Vulkan subsurface below a transparent hole. The chrome floats above the chart. |
 | Android | Java | Vulkan draws into a `SurfaceView`. The Java shell owns the Activity. Refer to `android/README.md`. |
+| Windows | WinUI 3, C++/WinRT | The core's D3D12 composition swapchain on a `SwapChainPanel`; the XAML chrome floats above. Refer to `windows/README.md`. |
 
 Each host captures its screenshots to one specification. You can then compare the
 hosts frame by frame. Refer to [the screenshot protocol](screenshots.md).
@@ -120,14 +122,16 @@ include/lookout.h          the C ABI — the full shell-to-core contract
 src/root.zig               Lookout: the scene lifecycle and worker-thread rebuilds
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
 src/gpu.zig                the backend switch
-src/gpu_vk.zig             the Vulkan transport (desktop and Android)
+src/gpu_vk.zig             the Vulkan transport (Linux and Android)
 src/gpu_metal.zig          the Metal transport (with src/metal_shim.{h,m})
+src/gpu_d3d12.zig          the Direct3D 12 transport (with src/d3d12_shim.{h,c})
 src/gpu_sdl.zig            the SDL_GPU transport
 src/capi.zig               the C ABI wrapper
 src/main.zig               the headless render and parity demo
 macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
 linux/                     the GTK4 app, meson
 android/                   the Java shell, gradle
+windows/                   the WinUI 3 app, msbuild
 vendor/stb                 stb_image (it decodes the atlas PNG files)
 ```
 

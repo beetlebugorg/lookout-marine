@@ -1,0 +1,8 @@
+// Deliberately empty (matches the official WinUI 3 C++ template): App is NOT a
+// MIDL-projected runtimeclass. The XAML markup compiler generates its whole
+// AppT base into App.xaml.g.h/.hpp, and wWinMain creates it directly — no
+// activation factory. Projecting App through MIDL breaks the generated
+// composing constructor for Application-derived classes.
+namespace LookoutMarine
+{
+}

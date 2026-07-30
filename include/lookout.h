@@ -46,13 +46,17 @@ typedef struct { void *display; unsigned long window; } lookout_x11_window;
 /* wl_display* and the wl_surface* to present on. For a toolkit host, this is
  * the subsurface created for the chart, not the toplevel's surface. */
 typedef struct { void *display; void *surface; } lookout_wayland_surface;
+
 typedef enum {
     LOOKOUT_NATIVE_NONE = 0,           /* offscreen only (snapshot) */
     LOOKOUT_NATIVE_METAL_LAYER = 1,    /* CAMetalLayer* (macOS & iOS) */
     LOOKOUT_NATIVE_WIN32_HWND = 4,     /* lookout_win32_window*   (vk backend) */
     LOOKOUT_NATIVE_X11_WINDOW = 5,     /* lookout_x11_window*     (vk backend) */
     LOOKOUT_NATIVE_ANDROID_WINDOW = 7, /* ANativeWindow* (Android, vk backend) */
-    LOOKOUT_NATIVE_WAYLAND_SURFACE = 8 /* lookout_wayland_surface* (vk backend) */
+    LOOKOUT_NATIVE_WAYLAND_SURFACE = 8,/* lookout_wayland_surface* (vk backend) */
+    LOOKOUT_NATIVE_D3D12_PANEL = 10    /* no handle (d3d12 backend): the core
+                                        * makes a composition swapchain; fetch
+                                        * it with lookout_d3d12_swapchain */
 } lookout_native_kind;
 
 /* ---- lifecycle --------------------------------------------------------- */
@@ -131,6 +135,11 @@ int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=h
  * view left coverage). When 0 the chart is static — block on events, no CPU.
  * Render on demand: call lookout_render only when this returns 1. */
 int lookout_needs_redraw(lookout *h);
+
+/* D3D12-panel mode only. The core-owned IDXGISwapChain* for
+ * ISwapChainPanelNative::SetSwapChain; NULL on any other kind or backend.
+ * The core keeps ownership and resizes it on lookout_resize. */
+void *lookout_d3d12_swapchain(lookout *h);
 
 int lookout_snapshot_png(lookout *h, const char *path);
 int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
