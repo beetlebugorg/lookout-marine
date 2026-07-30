@@ -64,7 +64,6 @@ namespace winrt::LookoutMarine::implementation
         long long last_readout_qpc{ 0 };
         double scalebar_pt{ 0 }, scalebar_m{ 0 };
         bool open_attempted{ false };
-        bool use_dms{ false };
 
         // settings form
         tile57_mariner pending{};

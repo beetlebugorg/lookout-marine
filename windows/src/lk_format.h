@@ -9,6 +9,6 @@ namespace lkw
     winrt::hstring FormatScale(double denom);
     /* S-57 usage band by compilation scale ("Harbor", "Coastal", …). */
     wchar_t const *BandForDenom(double denom);
-    /* dms: 38°59.0'N 076°28.9'W; else decimal "lat, lon". */
-    winrt::hstring FormatCoord(double lat, double lon, bool dms);
+    /* Degrees, minutes and seconds: 38°58'34.8"N 076°28'55.2"W. */
+    winrt::hstring FormatCoord(double lat, double lon);
 }

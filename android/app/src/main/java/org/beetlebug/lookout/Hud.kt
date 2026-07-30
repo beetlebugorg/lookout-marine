@@ -25,10 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -51,14 +47,12 @@ import kotlin.math.abs
 private const val OVERSCALE_VISIBLE_AT = 1.05
 
 /**
- * Lat/lon, 1:N scale and zoom in one row pinned to the bottom of the chart,
- * with the overscale badge when the view is zoomed past the data. Tapping the
- * coordinates swaps degrees-minutes for decimal degrees.
+ * Lat/lon, 1:N scale and zoom in one row at the bottom of the chart. The
+ * overscale badge shows when the view is zoomed past the data. The position is
+ * in degrees, minutes and seconds, the format that each host uses.
  */
 @Composable
 fun ReadoutsBar(readouts: Readouts, modifier: Modifier = Modifier) {
-    var useDms by remember { mutableStateOf(true) }
-
     // A full-width BAR, not a floating capsule: the surface runs under the
     // navigation bar so the chart never peeks out below it.
     Surface(
@@ -83,11 +77,10 @@ fun ReadoutsBar(readouts: Readouts, modifier: Modifier = Modifier) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                text = coordString(readouts.lat, readouts.lon, useDms),
+                text = coordString(readouts.lat, readouts.lon),
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
-                modifier = Modifier.clickable { useDms = !useDms },
             )
             if (readouts.overscale > OVERSCALE_VISIBLE_AT) {
                 OverscaleBadge(readouts.overscale)
@@ -227,17 +220,32 @@ fun IdentifyPanel(
 
 // ---- formatting -------------------------------------------------------------
 
-private fun coordString(lat: Double, lon: Double, useDms: Boolean): String =
-    if (useDms) "${dms(lat, true)}  ${dms(lon, false)}"
-    else String.format(Locale.US, "%.5f, %.5f", lat, lon)
+private fun coordString(lat: Double, lon: Double): String =
+    "${dms(lat, true)} ${dms(lon, false)}"
 
-/** Degrees-decimal-minutes, the way a chart is read. */
+/**
+ * Degrees, minutes and seconds with a hemisphere. The longitude has three degree
+ * digits, so a pair keeps its column width. It agrees with CoordFormat.dms
+ * (macOS and iOS), lkw::FormatCoord (Windows) and lk_coord_format_dms (Linux).
+ * Each host prints the same string.
+ */
 private fun dms(value: Double, isLat: Boolean): String {
     val hemi = if (isLat) (if (value >= 0) "N" else "S") else (if (value >= 0) "E" else "W")
     val a = abs(value)
-    val deg = a.toInt()
-    val minutes = (a - deg) * 60
-    return String.format(Locale.US, "%d°%05.2f'%s", deg, minutes, hemi)
+    var deg = a.toInt()
+    var minutes = ((a - deg) * 60).toInt()
+    var seconds = ((a - deg) * 60 - minutes) * 60
+    // Carry the rounding. 59.96" prints as 60.0", which is the next minute.
+    if (Math.round(seconds * 10) >= 600) {
+        seconds = 0.0
+        minutes++
+    }
+    if (minutes >= 60) {
+        minutes = 0
+        deg++
+    }
+    val pattern = if (isLat) "%02d\u00B0%02d'%04.1f\"%s" else "%03d\u00B0%02d'%04.1f\"%s"
+    return String.format(Locale.US, pattern, deg, minutes, seconds, hemi)
 }
 
 /** Compact 1:N — "1:24k" / "1:2.1M": the HUD is a glance, not a survey. */

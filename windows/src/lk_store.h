@@ -28,10 +28,6 @@ void   lk_store_free_recents(char **recents);
 void lk_store_save_mariner(const tile57_mariner *m);
 void lk_store_apply_saved_mariner(tile57_mariner *m);
 
-/* HUD "coordinates as DMS" pref. */
-int  lk_store_load_use_dms(void);
-void lk_store_save_use_dms(int use_dms);
-
 #ifdef __cplusplus
 }
 #endif
