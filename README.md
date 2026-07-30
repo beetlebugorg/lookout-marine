@@ -1,17 +1,17 @@
 # Lookout Marine
 
-**A fast, native chartplotter for Mac, iPad, iPhone, Android and Linux.** It draws
-official ENC charts with the IHO portrayal rules, straight to the GPU with Metal or
-Vulkan, and holds **60 fps** while you pan, pinch-zoom, rotate and switch between day
-and night.
+**A fast, native chartplotter for Mac, iPad, iPhone, Windows, Android and Linux.**
+It draws official ENC charts with the IHO portrayal rules, straight to the GPU with
+Metal, Vulkan or Direct3D 12, and holds **60 fps** while you pan, pinch-zoom, rotate
+and switch between day and night.
 
 > **Not for navigation.** This is a prototype. It is not pixel-perfect and it makes
 > no claim of ECDIS conformance.
 
-| macOS · iPadOS · iOS | Linux |
-|:---:|:---:|
-| <img src="docs/docs/img/ipad-day.png" width="430" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/docs/img/linux-day.png" width="430" alt="Annapolis Harbor on Linux, day scheme"> |
-| SwiftUI | GTK4 |
+| macOS · iPadOS · iOS | Linux | Windows |
+|:---:|:---:|:---:|
+| <img src="docs/docs/img/ipad-day.png" width="290" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/docs/img/linux-day.png" width="290" alt="Annapolis Harbor on Linux, day scheme"> | <img src="docs/docs/img/windows-day.png" width="290" alt="Annapolis Harbor on Windows, day scheme"> |
+| SwiftUI | GTK4 | WinUI 3 |
 
 ## Why it is different
 
@@ -26,9 +26,10 @@ and night.
   pre-rendered raster image, and no symbol is a look-alike. You get depth areas and
   contours, buoys and beacons with correct symbols, lights with sector lines,
   soundings, anchorage and restricted areas, and place names.
-- **It opens a whole coastline.** Point it at a folder of cells. A 1,700-cell library
-  opens in about 15 ms, and the first scene appears in less than a second. The app
-  does not freeze while it composes the library.
+- **It opens a whole coastline.** Point it at a folder of cells. The app maps each
+  cell instead of loading it, so even a 1,700-cell library opens in milliseconds and
+  is never fully resident. Tessellation runs on a worker thread, so the app stays
+  responsive while the first scene fills in.
 - **It is vector all the way to the GPU.** The app caches no bitmap of the chart. It
   draws with 4x MSAA at the full resolution of the display.
 
@@ -55,25 +56,6 @@ Lookout is built for the destination, not for the present:
   renderer and the apps see S-101 features only. When an office publishes S-101 for
   your area, you use the native path and drop the conversion step. The apps need no
   change.
-
-## What you can do with it
-
-- **Move like a chartplotter.** One-finger pan with fling, pinch-zoom anchored below
-  your fingers, two-finger rotate, double-tap to zoom, and tap to identify a feature.
-  Mac, iPad and Linux add pointer control and cursor readouts.
-- **Switch between day, dusk and night.** The scheme changes immediately, because a
-  new palette needs no rebuild.
-- **Tune the chart to your eye.** The mariner panel controls the safety contour, the
-  shallow and deep contours, the safety depth, two-shade or four-shade water, the
-  display categories, the sounding and text switches, symbol size, and date-dependent
-  features. Each edit applies live.
-- **Go to a position.** Type a coordinate into search, for example
-  `38 58.5N 76 28.9W`.
-
-<p align="center">
-  <img src="docs/docs/img/ipad-night.png" width="430" alt="The same view in the night scheme">
-  <img src="docs/docs/img/linux-settings.png" width="430" alt="The mariner panel above the chart on Linux">
-</p>
 
 ## Loading charts
 
@@ -133,8 +115,10 @@ reason that a pan and a scheme change never tessellate the chart again.
 The **app shells** are each native above that one core. `macos/` is SwiftUI, and the
 Mac and iOS targets share the Swift sources. `android/` is a Java shell above a
 `SurfaceView`. `linux/` is GTK4 in C, and it presents Vulkan into a subsurface below a
-transparent hole in the window, so the chrome floats above the chart. Each shell
-drives the same `lookout.h` C ABI.
+transparent hole in the window, so the chrome floats above the chart. `windows/` is
+WinUI 3 in C++/WinRT, and the core presents Direct3D 12 through a composition
+swapchain on a `SwapChainPanel` below the chrome. Each shell drives the same
+`lookout.h` C ABI.
 
 The largest tasks are in the **[tile57]** engine: ISO 8211 and S-57 decode, the
 S-57-to-S-101 conversion, S-101 portrayal with embedded Lua, tessellation, sprite and
@@ -151,58 +135,47 @@ For more detail, refer to [the architecture](docs/docs/architecture.md),
 
 ## How we use AI
 
-Cross-platform UI usually forces a choice. Use one toolkit everywhere and the app
-feels slightly wrong on every platform — the scrolling, the menu placement, the
-settings panel. Or write a native front end per platform and maintain several
-codebases that drift apart the moment one gains a feature first.
+Cross-platform UI forces a choice. One toolkit everywhere feels slightly wrong on
+every platform: the scrolling, the menu placement, the settings panel. Separate
+native front ends drift apart as soon as one gains a feature first.
 
-We're testing a third option: a genuinely native shell for every platform, written
-with AI — and, the open question, kept in step that way too. Below is the method as it
-stands, including the parts we haven't proven.
+We take a third option: a native shell for every platform, written with AI and
+kept in step with AI. This is the process:
 
-**The core owns what gets drawn, and has no opinion about the UI.** Everything
-portable — S-57 decode, S-101 portrayal, tessellation, camera, GPU scene — sits in a
-Zig core behind one C ABI (`include/lookout.h`). Nothing in it knows a widget exists,
-and it says nothing about menus, HUD layout or gestures. A shell may only reach the
-core through that header, so no shell can couple to another and there's no shared
-widget layer to regress.
+**The core owns what gets drawn.** Everything portable sits in a Zig core behind
+one C ABI (`include/lookout.h`): S-57 decode, S-101 portrayal, tessellation,
+camera, GPU scene. The core knows nothing about widgets, menus, or gestures. A
+shell can only reach the core through that header, so shells cannot couple to
+each other.
 
-**The Apple shell is the source of record for behaviour.** SwiftUI on Mac and iPad
-came first and is the most complete, so it's the reference the others are written
-against. The Linux and Android shells say so in their own source: the GTK accelerators
-mirror the macOS menu bar with Ctrl for Command, its display menu follows the macOS
-Chart menu, and its render loop mirrors the macOS display link. When two shells
-disagree about how something should behave, macOS is right by default.
+**The Apple shell is the reference for behavior.** SwiftUI on Mac and iPad came
+first and is the most complete. The other shells follow it and say so in their
+own source. The GTK accelerators mirror the macOS menu bar with Ctrl for
+Command, and the GTK render loop mirrors the macOS display link. When two shells
+disagree, macOS is right by default.
 
-**A change should start as prose, not as a diff — this part is still unproven.** The
-intent is to describe the behaviour once, or point at what the Apple shell already
-does, then write each shell separately to express it in its own platform's idiom: GTK4
-in C on Linux, Java on Android. So far the shells have been built one at a time, by
-hand-carrying the behaviour across. Whether AI can keep several native shells in step
-from one description is the part of this experiment still to be tested.
+**A change starts as prose, not as a diff.** We describe a behavior once, or
+point at what the Apple shell does, then write it into each shell in that
+platform's idiom: SwiftUI on Apple, GTK4 in C on Linux, Java on Android, WinUI 3
+in C++ on Windows.
 
-**We write real platform code, not a themed abstraction.** Each shell uses its toolkit
-the way that toolkit's own documentation says to — `GtkOverlay` and `GAction` on
-Linux, SwiftUI idioms on Apple. That's the whole point. A common abstraction with
-platform skins would put us back in the compromise we're trying to avoid.
+**We write real platform code, not a themed abstraction.** Each shell uses its
+toolkit the way the toolkit's documentation says to: `GtkOverlay` and `GAction`
+on Linux, SwiftUI idioms on Apple, `SwapChainPanel` on Windows. A common
+abstraction with platform skins would recreate the compromise we want to avoid.
 
-**We let AI try several designs and throw most of them away.** Getting the chart on
-screen under GTK took three: Vulkan into a child surface, then a dmabuf texture in
-GTK's scene graph, then a subsurface below a transparent hole in the window. Only the
-third is both sharp and able to float the chrome. Writing all three was cheap, and
-that's what made it affordable to be wrong twice.
+**We use AI to explore several designs and keep the best one.** The chart on
+screen under GTK took three designs; the subsurface below a transparent hole in
+the window won. Each design is cheap to write, so the hardware picks the winner.
 
-**The hardware decides, not the reasoning.** That dmabuf design read correctly and was
-still soft on a fractional-scale display, for reasons no amount of argument about
-render density fixed. We found the answer by running it and looking. So we run the
-app, capture it, and compare — [the screenshot protocol](docs/docs/screenshots.md) fixes the
-chart, camera and window size every host captures, so platforms can be compared frame
-to frame instead of by impression.
+**The hardware decides, not the reasoning.** We run the app, capture it, and
+compare. [The screenshot protocol](docs/docs/screenshots.md) fixes the chart,
+camera, and window size every host captures, so we compare platforms frame to
+frame instead of by impression.
 
-**Verification is the bottleneck now, not writing code.** A plausible native shell is
-the easy part. Knowing it draws correctly — the right GPU on a dual-GPU machine, the
-right scale on a fractional display, the chrome where it belongs — is the work, and
-it's where the review effort goes.
+**Verification gets the most effort.** The work is proof that the app draws
+correctly: the right GPU on a dual-GPU machine, the right scale on a fractional
+display, the chrome where it belongs. That is where the review goes.
 
 ## For developers: building and embedding the core
 
@@ -237,15 +210,17 @@ build.zig, build.zig.zon   the build and the tile57 dependency pin
 include/lookout.h          the C ABI (the shell-to-core contract)
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
 src/root.zig               Lookout: the scene lifecycle and worker-thread rebuilds
-src/gpu.zig                the backend switch (metal | vk | sdl)
+src/gpu.zig                the backend switch (metal | vk | d3d12 | sdl)
 src/gpu_vk.zig             the Vulkan transport (Linux and Android)
 src/gpu_metal.zig          the Metal transport (with src/metal_shim.{h,m})
+src/gpu_d3d12.zig          the Direct3D 12 transport (with src/d3d12_shim.{h,c})
 src/atlas.zig, src/png.zig sprite and SDF atlas load; PNG encode
 src/capi.zig, src/main.zig the C ABI wrapper; the headless demo
 docs/                      architecture, host notes, the screenshot protocol
 macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
 android/                   the Java shell (Vulkan into a SurfaceView)
 linux/                     the GTK4 app (Vulkan into a subsurface), meson
+windows/                   the WinUI 3 app (D3D12 into a SwapChainPanel)
 vendor/stb                 stb_image (it decodes the atlas PNG files)
 ```
 

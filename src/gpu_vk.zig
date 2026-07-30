@@ -51,14 +51,38 @@ pub const Uniforms = cc.tile57_gpu_uniforms;
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
-// Monotonic clock straight from libc (bionic): the backends' shared timing ABI.
-const Timespec = extern struct { sec: c_long, nsec: c_long };
-extern "c" fn clock_gettime(clk: c_int, ts: *Timespec) c_int;
-const CLOCK_MONOTONIC: c_int = 1;
+// Monotonic clock: the backends' shared timing ABI. Comptime-selected impl (as
+// with root.zig's Lock) so only one platform's externs ever link —
+// clock_gettime on Linux/Android (bionic), QueryPerformanceCounter on Windows
+// (the MSVC CRT has no clock_gettime).
+const clock = if (builtin.os.tag == .windows)
+    struct {
+        // WINAPI convention (stdcall on x86, C on x64/aarch64) for a correct x86 build.
+        extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) c_int;
+        extern "kernel32" fn QueryPerformanceFrequency(freq: *i64) callconv(.winapi) c_int;
+        fn us() i64 {
+            var ctr: i64 = 0;
+            var freq: i64 = 0;
+            _ = QueryPerformanceCounter(&ctr);
+            _ = QueryPerformanceFrequency(&freq);
+            if (freq == 0) return 0;
+            // Split the divide so a large counter × 1e6 can't overflow i64.
+            return @divTrunc(ctr, freq) * 1_000_000 + @divTrunc(@rem(ctr, freq) * 1_000_000, freq);
+        }
+    }
+else
+    struct {
+        const Timespec = extern struct { sec: c_long, nsec: c_long };
+        extern "c" fn clock_gettime(clk: c_int, ts: *Timespec) c_int;
+        const CLOCK_MONOTONIC: c_int = 1;
+        fn us() i64 {
+            var ts: Timespec = .{ .sec = 0, .nsec = 0 };
+            _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+            return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1000);
+        }
+    };
 pub fn ticksUs() i64 {
-    var ts: Timespec = .{ .sec = 0, .nsec = 0 };
-    _ = clock_gettime(CLOCK_MONOTONIC, &ts);
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1000);
+    return clock.us();
 }
 pub fn ticksMs() i64 {
     return @divTrunc(ticksUs(), 1000);
@@ -67,14 +91,30 @@ pub fn ticksMs() i64 {
 // Logging: logcat on Android, stderr elsewhere; both take a printf format.
 extern "c" fn fprintf(stream: *anyopaque, fmt: [*:0]const u8, ...) c_int;
 extern "c" fn fputc(ch: c_int, stream: *anyopaque) c_int;
-// `stderr` is a FILE* variable, so @extern gives its address — deref for the stream (else segfault).
-const stderr_var: *const *anyopaque = @extern(*const *anyopaque, .{ .name = "stderr" });
+// The stderr FILE*: a real exported symbol on glibc/bionic, but the MSVC UCRT
+// has none — `stderr` is a macro over __acrt_iob_func(2). Comptime-selected so
+// only the target's own accessor links.
+const stderr_stream = if (builtin.os.tag == .windows)
+    struct {
+        extern "c" fn __acrt_iob_func(idx: c_uint) *anyopaque;
+        fn get() *anyopaque {
+            return __acrt_iob_func(2);
+        }
+    }
+else
+    struct {
+        // A FILE* variable, so @extern gives its address — deref for the stream.
+        const v: *const *anyopaque = @extern(*const *anyopaque, .{ .name = "stderr" });
+        fn get() *anyopaque {
+            return v.*;
+        }
+    };
 
 fn logAt(comptime prio: c_int, comptime fmt: [*:0]const u8, args: anytype) void {
     if (c_vk.android) {
         _ = @call(.auto, vk.__android_log_print, .{ prio, @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
     } else {
-        const stream = stderr_var.*;
+        const stream = stderr_stream.get();
         _ = @call(.auto, fprintf, .{ stream, fmt } ++ args);
         _ = fputc('\n', stream);
     }
@@ -87,7 +127,7 @@ fn logInfo(comptime fmt: [*:0]const u8, args: anytype) void {
 }
 
 /// True for _SRGB formats, whose write-time linear->sRGB encode would double up the already-sRGB palette.
-fn isSrgbFormat(fmt: u32) bool {
+fn isSrgbFormat(fmt: vk.VkFormat) bool {
     return fmt == vk.VK_FORMAT_R8G8B8A8_SRGB or
         fmt == vk.VK_FORMAT_B8G8R8A8_SRGB or
         fmt == vk.VK_FORMAT_A8B8G8R8_SRGB_PACK32;
@@ -144,7 +184,6 @@ const VkWaylandSurfaceCreateInfoKHR = extern struct {
     display: ?*anyopaque,
     surface: ?*anyopaque,
 };
-
 /// The instance extension each surface kind needs alongside VK_KHR_surface, and
 /// the entry point that creates it. Null kind = no window (offscreen only).
 fn surfaceExtension(kind: NativeKind) ?[*:0]const u8 {
@@ -443,7 +482,10 @@ pub const Gpu = struct {
         try g.createPipelines();
         logInfo("vk: pipelines up (fmt=%d msaa=%d)", .{ @as(c_int, @intCast(g.color_format)), @as(c_int, @intFromBool(g.msaa_used)) });
         try g.createCommandInfra();
-        if (g.surface != null) try g.createSwapchain() else try g.ensureOffscreenTargets();
+        if (g.surface != null)
+            try g.createSwapchain()
+        else
+            try g.ensureOffscreenTargets();
         logInfo("vk: ready %ux%u (sc=%u)", .{ g.width, g.height, g.sc_count });
         return g;
     }
@@ -670,7 +712,9 @@ pub const Gpu = struct {
     }
 
     fn createRenderPasses(self: *Gpu) !void {
-        if (self.surface != null) self.render_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        // PRESENT_SRC needs VK_KHR_swapchain.
+        if (self.surface != null)
+            self.render_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         self.off_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     }
 
@@ -718,7 +762,7 @@ pub const Gpu = struct {
         for (&stages, [_]vk.VkShaderModule{ vmod, fmod }, [_]c_uint{ vk.VK_SHADER_STAGE_VERTEX_BIT, vk.VK_SHADER_STAGE_FRAGMENT_BIT }) |*s, m, st| {
             s.* = std.mem.zeroes(vk.VkPipelineShaderStageCreateInfo);
             s.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            s.stage = st;
+            s.stage = @intCast(st);
             s.module = m;
             s.pName = "main";
         }
