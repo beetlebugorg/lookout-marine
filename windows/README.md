@@ -5,6 +5,8 @@ chart core. The Windows counterpart of the SwiftUI shell on macOS/iOS, the GTK4
 shell on Linux, and the Java shell on Android: same core, same C ABI, same
 behaviour.
 
+![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/windows-day.png)
+
 The chart presents through one of two paths. The app selects the path at open:
 
 1. **DXGI composition (default).** The shell owns a D3D12 device and a

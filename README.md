@@ -8,10 +8,10 @@ and night.
 > **Not for navigation.** This is a prototype. It is not pixel-perfect and it makes
 > no claim of ECDIS conformance.
 
-| macOS · iPadOS · iOS | Linux |
-|:---:|:---:|
-| <img src="docs/docs/img/ipad-day.png" width="430" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/docs/img/linux-day.png" width="430" alt="Annapolis Harbor on Linux, day scheme"> |
-| SwiftUI | GTK4 |
+| macOS · iPadOS · iOS | Linux | Windows |
+|:---:|:---:|:---:|
+| <img src="docs/docs/img/ipad-day.png" width="290" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/docs/img/linux-day.png" width="290" alt="Annapolis Harbor on Linux, day scheme"> | <img src="docs/docs/img/windows-day.png" width="290" alt="Annapolis Harbor on Windows, day scheme"> |
+| SwiftUI | GTK4 | WinUI 3 |
 
 ## Why it is different
 
