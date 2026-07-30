@@ -119,7 +119,21 @@ fn nativeKind(kind: c_int) ?lk.NativeKind {
     if (@hasField(lk.NativeKind, "x11_window") and kind == 5) return .x11_window;
     if (@hasField(lk.NativeKind, "android_window") and kind == 7) return .android_window;
     if (@hasField(lk.NativeKind, "wayland_surface") and kind == 8) return .wayland_surface;
+    if (@hasField(lk.NativeKind, "dxgi_target") and kind == 9) return .dxgi_target;
     return null;
+}
+
+/// Render into imported D3D12 buffer `index` (LOOKOUT_NATIVE_DXGI_TARGET only).
+export fn lookout_render_dxgi(h: ?*lookout, index: u32, wait_value: u64, signal_value: u64) c_int {
+    const x = cast(h orelse return 0);
+    return @intFromBool(x.renderDxgi(index, wait_value, signal_value) catch false);
+}
+
+/// Swap to new shared textures after the host resizes (lookout_dxgi_target*).
+export fn lookout_retarget_dxgi(h: ?*lookout, target: ?*const anyopaque) c_int {
+    const x = cast(h orelse return 0);
+    x.retargetDxgi(target orelse return 0) catch return 0;
+    return 1;
 }
 
 export fn lookout_close(h: ?*lookout) void {

@@ -163,6 +163,23 @@ const Lock = if (@import("builtin").os.tag.isDarwin())
             os_unfair_lock_unlock(&self.h);
         }
     }
+else if (builtin.os.tag == .windows)
+    struct {
+        // No pthread in the MSVC CRT. SRWLOCK is the direct analog: a single
+        // pointer that zero-inits to SRWLOCK_INIT (no init call, like the zeroed
+        // pthread_mutex_t below), kernel-blocking, non-recursive.
+        // WINAPI convention (stdcall on x86, C on x64/aarch64) — required for a
+        // correct x86 build.
+        extern "kernel32" fn AcquireSRWLockExclusive(srw: *?*anyopaque) callconv(.winapi) void;
+        extern "kernel32" fn ReleaseSRWLockExclusive(srw: *?*anyopaque) callconv(.winapi) void;
+        m: ?*anyopaque = null, // SRWLOCK; null == SRWLOCK_INIT
+        fn lock(self: *@This()) void {
+            AcquireSRWLockExclusive(&self.m);
+        }
+        fn unlock(self: *@This()) void {
+            ReleaseSRWLockExclusive(&self.m);
+        }
+    }
 else
     struct {
         // Zig 0.16 has no std.Thread.Mutex (it moved behind an Io this layer
@@ -1514,6 +1531,25 @@ pub const Lookout = struct {
         // pending content still needs a successful present.
         if (ok) self.view_dirty = false;
         return ok;
+    }
+
+    /// Render into the host's imported D3D12 buffer (vk backend, Windows).
+    pub fn renderDxgi(self: *Lookout, index: u32, wait_value: u64, signal_value: u64) !bool {
+        if (!@hasDecl(gpu.Gpu, "renderDxgi")) return false;
+        self.ensureAtlases();
+        if (self.loadingPulse()) return self.g.renderDxgi(self.uniforms(), false, false, index, wait_value, signal_value);
+        self.prepareFrame();
+        const ok = try self.g.renderDxgi(self.uniforms(), self.text_on, self.sound_on, index, wait_value, signal_value);
+        if (ok) self.view_dirty = false;
+        return ok;
+    }
+
+    /// Swap to new shared D3D12 textures after the host resizes its swapchain.
+    pub fn retargetDxgi(self: *Lookout, target: *const anyopaque) !void {
+        if (!@hasDecl(gpu.Gpu, "retargetDxgi")) return error.Unsupported;
+        try self.g.retargetDxgi(@ptrCast(@alignCast(target)));
+        self.dirty = true;
+        self.markDirty();
     }
 
     /// True while the view needs another frame (state changed, building, loading).

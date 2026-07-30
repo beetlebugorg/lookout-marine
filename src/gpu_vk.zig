@@ -51,14 +51,38 @@ pub const Uniforms = cc.tile57_gpu_uniforms;
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
-// Monotonic clock straight from libc (bionic): the backends' shared timing ABI.
-const Timespec = extern struct { sec: c_long, nsec: c_long };
-extern "c" fn clock_gettime(clk: c_int, ts: *Timespec) c_int;
-const CLOCK_MONOTONIC: c_int = 1;
+// Monotonic clock: the backends' shared timing ABI. Comptime-selected impl (as
+// with root.zig's Lock) so only one platform's externs ever link —
+// clock_gettime on Linux/Android (bionic), QueryPerformanceCounter on Windows
+// (the MSVC CRT has no clock_gettime).
+const clock = if (builtin.os.tag == .windows)
+    struct {
+        // WINAPI convention (stdcall on x86, C on x64/aarch64) for a correct x86 build.
+        extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) c_int;
+        extern "kernel32" fn QueryPerformanceFrequency(freq: *i64) callconv(.winapi) c_int;
+        fn us() i64 {
+            var ctr: i64 = 0;
+            var freq: i64 = 0;
+            _ = QueryPerformanceCounter(&ctr);
+            _ = QueryPerformanceFrequency(&freq);
+            if (freq == 0) return 0;
+            // Split the divide so a large counter × 1e6 can't overflow i64.
+            return @divTrunc(ctr, freq) * 1_000_000 + @divTrunc(@rem(ctr, freq) * 1_000_000, freq);
+        }
+    }
+else
+    struct {
+        const Timespec = extern struct { sec: c_long, nsec: c_long };
+        extern "c" fn clock_gettime(clk: c_int, ts: *Timespec) c_int;
+        const CLOCK_MONOTONIC: c_int = 1;
+        fn us() i64 {
+            var ts: Timespec = .{ .sec = 0, .nsec = 0 };
+            _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+            return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1000);
+        }
+    };
 pub fn ticksUs() i64 {
-    var ts: Timespec = .{ .sec = 0, .nsec = 0 };
-    _ = clock_gettime(CLOCK_MONOTONIC, &ts);
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1000);
+    return clock.us();
 }
 pub fn ticksMs() i64 {
     return @divTrunc(ticksUs(), 1000);
@@ -67,14 +91,30 @@ pub fn ticksMs() i64 {
 // Logging: logcat on Android, stderr elsewhere; both take a printf format.
 extern "c" fn fprintf(stream: *anyopaque, fmt: [*:0]const u8, ...) c_int;
 extern "c" fn fputc(ch: c_int, stream: *anyopaque) c_int;
-// `stderr` is a FILE* variable, so @extern gives its address — deref for the stream (else segfault).
-const stderr_var: *const *anyopaque = @extern(*const *anyopaque, .{ .name = "stderr" });
+// The stderr FILE*: a real exported symbol on glibc/bionic, but the MSVC UCRT
+// has none — `stderr` is a macro over __acrt_iob_func(2). Comptime-selected so
+// only the target's own accessor links.
+const stderr_stream = if (builtin.os.tag == .windows)
+    struct {
+        extern "c" fn __acrt_iob_func(idx: c_uint) *anyopaque;
+        fn get() *anyopaque {
+            return __acrt_iob_func(2);
+        }
+    }
+else
+    struct {
+        // A FILE* variable, so @extern gives its address — deref for the stream.
+        const v: *const *anyopaque = @extern(*const *anyopaque, .{ .name = "stderr" });
+        fn get() *anyopaque {
+            return v.*;
+        }
+    };
 
 fn logAt(comptime prio: c_int, comptime fmt: [*:0]const u8, args: anytype) void {
     if (c_vk.android) {
         _ = @call(.auto, vk.__android_log_print, .{ prio, @as([*:0]const u8, "lookout") } ++ .{fmt} ++ args);
     } else {
-        const stream = stderr_var.*;
+        const stream = stderr_stream.get();
         _ = @call(.auto, fprintf, .{ stream, fmt } ++ args);
         _ = fputc('\n', stream);
     }
@@ -87,7 +127,7 @@ fn logInfo(comptime fmt: [*:0]const u8, args: anytype) void {
 }
 
 /// True for _SRGB formats, whose write-time linear->sRGB encode would double up the already-sRGB palette.
-fn isSrgbFormat(fmt: u32) bool {
+fn isSrgbFormat(fmt: vk.VkFormat) bool {
     return fmt == vk.VK_FORMAT_R8G8B8A8_SRGB or
         fmt == vk.VK_FORMAT_B8G8R8A8_SRGB or
         fmt == vk.VK_FORMAT_A8B8G8R8_SRGB_PACK32;
@@ -105,6 +145,7 @@ pub const NativeKind = enum(c_int) {
     uikit_windowscene = 6,
     android_window = 7, // ANativeWindow* (from the Java Surface via JNI)
     wayland_surface = 8, // *const WaylandSurface
+    dxgi_target = 9, // *const DxgiTarget (Windows composition swapchain)
 };
 
 // ---- WSI, hand-declared ----------------------------------------------------
@@ -122,6 +163,20 @@ pub const X11Window = extern struct { display: ?*anyopaque, window: c_ulong };
 /// A host's Wayland surface: `wl_display*` and the `wl_surface*` to present on
 /// — for a GTK4 host, the subsurface it created for the chart, not the toplevel.
 pub const WaylandSurface = extern struct { display: ?*anyopaque, surface: ?*anyopaque };
+/// A host's D3D12 composition target: shared render textures + one shared
+/// timeline fence (NT handles from ID3D12Device::CreateSharedHandle). The core
+/// imports them, renders into buffers[i], and signals the fence; the host waits
+/// on its D3D12 queue, copies to the swapchain back buffer, and presents.
+pub const DxgiTarget = extern struct {
+    buffers: [4]?*anyopaque,
+    buffer_count: u32,
+    fence: ?*anyopaque,
+    dxgi_format: u32, // DXGI_FORMAT of the buffers (87 = B8G8R8A8_UNORM, 28 = R8G8B8A8_UNORM)
+    width: u32,
+    height: u32,
+    adapter_luid_low: u32, // the D3D12 device's adapter LUID — the core must pick the same GPU
+    adapter_luid_high: i32,
+};
 
 const VkWin32SurfaceCreateInfoKHR = extern struct {
     sType: c_int,
@@ -144,6 +199,25 @@ const VkWaylandSurfaceCreateInfoKHR = extern struct {
     display: ?*anyopaque,
     surface: ?*anyopaque,
 };
+// vulkan_win32.h mirrors for the external-handle imports (ABI frozen; the
+// sTypes and handle-type bits are in the vendored vulkan_core.h).
+const VkImportMemoryWin32HandleInfoKHR = extern struct {
+    sType: c_int = vk.VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR,
+    pNext: ?*const anyopaque = null,
+    handleType: c_uint = 0,
+    handle: ?*anyopaque = null,
+    name: ?[*:0]const u16 = null,
+};
+const VkImportSemaphoreWin32HandleInfoKHR = extern struct {
+    sType: c_int = vk.VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR,
+    pNext: ?*const anyopaque = null,
+    semaphore: vk.VkSemaphore = null,
+    flags: u32 = 0,
+    handleType: c_uint = 0,
+    handle: ?*anyopaque = null,
+    name: ?[*:0]const u16 = null,
+};
+const PFN_vkImportSemaphoreWin32HandleKHR = *const fn (vk.VkDevice, *const VkImportSemaphoreWin32HandleInfoKHR) callconv(.c) vk.VkResult;
 
 /// The instance extension each surface kind needs alongside VK_KHR_surface, and
 /// the entry point that creates it. Null kind = no window (offscreen only).
@@ -205,6 +279,11 @@ pub const Gpu = struct {
     sc_views: [8]vk.VkImageView = @splat(null),
     sc_fbs: [8]vk.VkFramebuffer = @splat(null),
     sc_count: u32 = 0,
+    // DXGI composition target: imported D3D12 textures stand in for the
+    // swapchain images; the host presents.
+    dxgi_mode: bool = false,
+    sc_mems: [8]vk.VkDeviceMemory = @splat(null),
+    ext_timeline: vk.VkSemaphore = null, // imported D3D12 fence
     color_format: vk.VkFormat = vk.VK_FORMAT_R8G8B8A8_UNORM,
     color_space: vk.VkColorSpaceKHR = vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
 
@@ -280,6 +359,10 @@ pub const Gpu = struct {
         ici.pApplicationInfo = &app;
         const platform_ext = if (opts.native_handle != null) surfaceExtension(opts.native_kind) else null;
         const want_surface = platform_ext != null;
+        const dxgi_target: ?*const DxgiTarget = if (opts.native_kind == .dxgi_target and opts.native_handle != null)
+            @ptrCast(@alignCast(opts.native_handle.?))
+        else
+            null;
 
         var inst_ext_buf: [4][*:0]const u8 = undefined;
         var inst_ext_n: u32 = 0;
@@ -288,6 +371,12 @@ pub const Gpu = struct {
             inst_ext_n += 1;
             inst_ext_buf[inst_ext_n] = platform_ext.?;
             inst_ext_n += 1;
+        }
+        if (dxgi_target != null) {
+            inst_ext_buf[0] = "VK_KHR_get_physical_device_properties2";
+            inst_ext_buf[1] = "VK_KHR_external_memory_capabilities";
+            inst_ext_buf[2] = "VK_KHR_external_semaphore_capabilities";
+            inst_ext_n = 3;
         }
         if (inst_ext_n > 0) {
             ici.enabledExtensionCount = inst_ext_n;
@@ -305,9 +394,37 @@ pub const Gpu = struct {
         if (ndev > devs.len) ndev = devs.len;
         _ = vk.vkEnumeratePhysicalDevices(instance, &ndev, &devs);
         // Prefer a discrete GPU for the offscreen (snapshot) path; the surface
-        // path keeps devs[0] (the presentable GPU).
+        // path keeps devs[0] (the presentable GPU). The DXGI path must use the
+        // SAME adapter as the host's D3D12 device — match by LUID.
         var phys = devs[0];
-        if (!want_surface) {
+        if (dxgi_target) |t| {
+            const getProps2: ?*const fn (vk.VkPhysicalDevice, *vk.VkPhysicalDeviceProperties2) callconv(.c) void =
+                @ptrCast(vk.vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2KHR") orelse
+                    vk.vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2"));
+            if (getProps2 == null) return error.VulkanFailure;
+            var matched = false;
+            for (devs[0..ndev]) |cand| {
+                if (cand == null) continue;
+                var idp = std.mem.zeroes(vk.VkPhysicalDeviceIDProperties);
+                idp.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+                var p2 = std.mem.zeroes(vk.VkPhysicalDeviceProperties2);
+                p2.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                p2.pNext = &idp;
+                getProps2.?(cand, &p2);
+                if (idp.deviceLUIDValid == vk.VK_FALSE) continue;
+                const luid = std.mem.readInt(u64, idp.deviceLUID[0..8], .little);
+                const want_luid = (@as(u64, @bitCast(@as(i64, t.adapter_luid_high))) << 32) | t.adapter_luid_low;
+                if (luid == want_luid) {
+                    phys = cand;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                logErr("vk: no physical device matches the D3D12 adapter LUID", .{});
+                return error.VulkanFailure;
+            }
+        } else if (!want_surface) {
             for (devs[0..ndev]) |cand| {
                 if (cand == null) continue;
                 var cp: vk.VkPhysicalDeviceProperties = undefined;
@@ -359,8 +476,45 @@ pub const Gpu = struct {
             dev_ext_buf[dev_ext_n] = "VK_KHR_swapchain";
             dev_ext_n += 1;
         }
+        if (dxgi_target != null) {
+            const interop_exts = [_][*:0]const u8{
+                "VK_KHR_external_memory",
+                "VK_KHR_external_memory_win32",
+                "VK_KHR_external_semaphore",
+                "VK_KHR_external_semaphore_win32",
+                "VK_KHR_timeline_semaphore",
+                "VK_KHR_get_memory_requirements2",
+                "VK_KHR_dedicated_allocation",
+            };
+            // Fail before device creation when the driver lacks the interop set,
+            // so the host can fall back to the HWND path.
+            var next: u32 = 0;
+            _ = vk.vkEnumerateDeviceExtensionProperties(phys, null, &next, null);
+            var eprops: [512]vk.VkExtensionProperties = undefined;
+            if (next > eprops.len) next = eprops.len;
+            _ = vk.vkEnumerateDeviceExtensionProperties(phys, null, &next, &eprops);
+            for (interop_exts) |want| {
+                var have = false;
+                for (eprops[0..next]) |e| {
+                    if (std.mem.orderZ(u8, @ptrCast(&e.extensionName), want) == .eq) {
+                        have = true;
+                        break;
+                    }
+                }
+                if (!have) {
+                    logErr("vk: device lacks %s — no DXGI interop", .{want});
+                    return error.VulkanFailure;
+                }
+                dev_ext_buf[dev_ext_n] = want;
+                dev_ext_n += 1;
+            }
+        }
+        var timeline_feat = std.mem.zeroes(vk.VkPhysicalDeviceTimelineSemaphoreFeatures);
+        timeline_feat.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+        timeline_feat.timelineSemaphore = vk.VK_TRUE;
         var dci = std.mem.zeroes(vk.VkDeviceCreateInfo);
         dci.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        if (dxgi_target != null) dci.pNext = &timeline_feat;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = dev_ext_n;
@@ -430,6 +584,33 @@ pub const Gpu = struct {
         // With no surface, nothing dictates a colour format; the default RGBA
         // UNORM is what the snapshot readback expects.
 
+        if (dxgi_target) |t| {
+            g.dxgi_mode = true;
+            g.width = t.width;
+            g.height = t.height;
+            g.color_format = switch (t.dxgi_format) {
+                87 => vk.VK_FORMAT_B8G8R8A8_UNORM,
+                28 => vk.VK_FORMAT_R8G8B8A8_UNORM,
+                else => return error.VulkanFailure,
+            };
+            var type_ci = std.mem.zeroes(vk.VkSemaphoreTypeCreateInfo);
+            type_ci.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+            type_ci.semaphoreType = vk.VK_SEMAPHORE_TYPE_TIMELINE;
+            var sem_ci = std.mem.zeroes(vk.VkSemaphoreCreateInfo);
+            sem_ci.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            sem_ci.pNext = &type_ci;
+            try check(vk.vkCreateSemaphore(device, &sem_ci, null, &g.ext_timeline), "timeline semaphore");
+            const importSem: ?PFN_vkImportSemaphoreWin32HandleKHR =
+                @ptrCast(vk.vkGetDeviceProcAddr(device, "vkImportSemaphoreWin32HandleKHR"));
+            if (importSem == null) return error.VulkanFailure;
+            const isi = VkImportSemaphoreWin32HandleInfoKHR{
+                .semaphore = g.ext_timeline,
+                .handleType = vk.VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
+                .handle = t.fence,
+            };
+            try check(importSem.?(device, &isi), "import D3D12 fence");
+        }
+
         // ---- MSAA 4x if the format supports it ------------------------------
         if (opts.want_msaa and std.c.getenv("LOOKOUT_NO_MSAA") == null) {
             const counts = lim.limits.framebufferColorSampleCounts;
@@ -443,8 +624,13 @@ pub const Gpu = struct {
         try g.createPipelines();
         logInfo("vk: pipelines up (fmt=%d msaa=%d)", .{ @as(c_int, @intCast(g.color_format)), @as(c_int, @intFromBool(g.msaa_used)) });
         try g.createCommandInfra();
-        if (g.surface != null) try g.createSwapchain() else try g.ensureOffscreenTargets();
-        logInfo("vk: ready %ux%u (sc=%u)", .{ g.width, g.height, g.sc_count });
+        if (g.surface != null)
+            try g.createSwapchain()
+        else if (dxgi_target) |t|
+            try g.importDxgiTarget(t)
+        else
+            try g.ensureOffscreenTargets();
+        logInfo("vk: ready %ux%u (sc=%u dxgi=%d)", .{ g.width, g.height, g.sc_count, @as(c_int, @intFromBool(g.dxgi_mode)) });
         return g;
     }
 
@@ -670,7 +856,12 @@ pub const Gpu = struct {
     }
 
     fn createRenderPasses(self: *Gpu) !void {
-        if (self.surface != null) self.render_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        // PRESENT_SRC needs VK_KHR_swapchain; the DXGI path hands the image to
+        // D3D12, which reads it in GENERAL.
+        if (self.surface != null)
+            self.render_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+        else if (self.dxgi_mode)
+            self.render_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_GENERAL);
         self.off_pass = try self.makePass(vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     }
 
@@ -718,7 +909,7 @@ pub const Gpu = struct {
         for (&stages, [_]vk.VkShaderModule{ vmod, fmod }, [_]c_uint{ vk.VK_SHADER_STAGE_VERTEX_BIT, vk.VK_SHADER_STAGE_FRAGMENT_BIT }) |*s, m, st| {
             s.* = std.mem.zeroes(vk.VkPipelineShaderStageCreateInfo);
             s.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            s.stage = st;
+            s.stage = @intCast(st);
             s.module = m;
             s.pName = "main";
         }
@@ -936,6 +1127,139 @@ pub const Gpu = struct {
             self.sc_views[i] = null;
         }
         self.sc_count = 0;
+    }
+
+    // ---- DXGI composition target ----------------------------------------------
+    /// Import the host's shared D3D12 textures as the frame targets.
+    fn importDxgiTarget(self: *Gpu, t: *const DxgiTarget) !void {
+        if (t.width == 0 or t.height == 0) return error.VulkanFailure;
+        self.width = t.width;
+        self.height = t.height;
+        try self.ensureMsaa();
+        const n: u32 = @min(t.buffer_count, 4);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            var emi = std.mem.zeroes(vk.VkExternalMemoryImageCreateInfo);
+            emi.sType = vk.VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+            emi.handleTypes = vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+            var ici = std.mem.zeroes(vk.VkImageCreateInfo);
+            ici.sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.pNext = &emi;
+            ici.imageType = vk.VK_IMAGE_TYPE_2D;
+            ici.format = self.color_format;
+            ici.extent = .{ .width = self.width, .height = self.height, .depth = 1 };
+            ici.mipLevels = 1;
+            ici.arrayLayers = 1;
+            ici.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling = vk.VK_IMAGE_TILING_OPTIMAL;
+            ici.usage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            ici.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+            try check(vk.vkCreateImage(self.device, &ici, null, &self.sc_images[i]), "dxgi image");
+
+            var req: vk.VkMemoryRequirements = undefined;
+            vk.vkGetImageMemoryRequirements(self.device, self.sc_images[i], &req);
+            var ded = std.mem.zeroes(vk.VkMemoryDedicatedAllocateInfo);
+            ded.sType = vk.VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+            ded.image = self.sc_images[i];
+            const imp = VkImportMemoryWin32HandleInfoKHR{
+                .pNext = &ded,
+                .handleType = vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT,
+                .handle = t.buffers[i],
+            };
+            var mai = std.mem.zeroes(vk.VkMemoryAllocateInfo);
+            mai.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            mai.pNext = &imp;
+            mai.allocationSize = req.size;
+            mai.memoryTypeIndex = try self.memType(req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            try check(vk.vkAllocateMemory(self.device, &mai, null, &self.sc_mems[i]), "dxgi import mem");
+            try check(vk.vkBindImageMemory(self.device, self.sc_images[i], self.sc_mems[i], 0), "dxgi bind");
+
+            var vi = std.mem.zeroes(vk.VkImageViewCreateInfo);
+            vi.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = self.sc_images[i];
+            vi.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = self.color_format;
+            vi.subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+            try check(vk.vkCreateImageView(self.device, &vi, null, &self.sc_views[i]), "dxgi view");
+            const atts = if (self.msaa_used)
+                [2]vk.VkImageView{ self.msaa_view, self.sc_views[i] }
+            else
+                [2]vk.VkImageView{ self.sc_views[i], null };
+            var fb = std.mem.zeroes(vk.VkFramebufferCreateInfo);
+            fb.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fb.renderPass = self.render_pass;
+            fb.attachmentCount = if (self.msaa_used) 2 else 1;
+            fb.pAttachments = &atts;
+            fb.width = self.width;
+            fb.height = self.height;
+            fb.layers = 1;
+            try check(vk.vkCreateFramebuffer(self.device, &fb, null, &self.sc_fbs[i]), "dxgi fb");
+        }
+        self.sc_count = n;
+    }
+
+    fn destroyDxgiImages(self: *Gpu) void {
+        const n = self.sc_count;
+        self.destroySwapchainViews();
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            if (self.sc_images[i] != null) vk.vkDestroyImage(self.device, self.sc_images[i], null);
+            if (self.sc_mems[i] != null) vk.vkFreeMemory(self.device, self.sc_mems[i], null);
+            self.sc_images[i] = null;
+            self.sc_mems[i] = null;
+        }
+    }
+
+    /// Swap to the host's new shared textures after a resize.
+    pub fn retargetDxgi(self: *Gpu, t: *const DxgiTarget) !void {
+        if (!self.dxgi_mode) return error.VulkanFailure;
+        _ = vk.vkDeviceWaitIdle(self.device);
+        self.destroyDxgiImages();
+        self.releaseMsaa();
+        try self.importDxgiTarget(t);
+        self.size_changed_ms = ticksMs();
+        logInfo("vk: dxgi target now %ux%u", .{ self.width, self.height });
+    }
+
+    /// Render one frame into imported buffer `index`. Waits the shared fence at
+    /// `wait_value` (0 = none) and signals it at `signal_value`; the host then
+    /// waits on its D3D12 queue, copies to the back buffer, and presents.
+    pub fn renderDxgi(self: *Gpu, u: Uniforms, text_on: bool, sound_on: bool, index: u32, wait_value: u64, signal_value: u64) !bool {
+        if (!self.dxgi_mode or index >= self.sc_count) return false;
+        _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
+        _ = vk.vkResetFences(self.device, 1, &self.fence);
+        try check(vk.vkResetCommandBuffer(self.cmd, 0), "reset cmd");
+        var bi = std.mem.zeroes(vk.VkCommandBufferBeginInfo);
+        bi.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        try check(vk.vkBeginCommandBuffer(self.cmd, &bi), "begin cmd");
+        self.recordDraws(self.cmd, self.render_pass, self.sc_fbs[index], u, text_on, sound_on);
+        try check(vk.vkEndCommandBuffer(self.cmd), "end cmd");
+
+        const wait_values = [_]u64{wait_value};
+        const signal_values = [_]u64{signal_value};
+        var tsi = std.mem.zeroes(vk.VkTimelineSemaphoreSubmitInfo);
+        tsi.sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        tsi.waitSemaphoreValueCount = if (wait_value > 0) 1 else 0;
+        tsi.pWaitSemaphoreValues = &wait_values;
+        tsi.signalSemaphoreValueCount = 1;
+        tsi.pSignalSemaphoreValues = &signal_values;
+        const wait_stage: vk.VkPipelineStageFlags = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        var si = std.mem.zeroes(vk.VkSubmitInfo);
+        si.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.pNext = &tsi;
+        if (wait_value > 0) {
+            si.waitSemaphoreCount = 1;
+            si.pWaitSemaphores = &self.ext_timeline;
+            si.pWaitDstStageMask = &wait_stage;
+        }
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &self.cmd;
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores = &self.ext_timeline;
+        try check(vk.vkQueueSubmit(self.queue, 1, &si, self.fence), "submit dxgi frame");
+        return true;
     }
 
     /// True when the swapchain no longer matches the host's declared viewport
@@ -1528,8 +1852,9 @@ pub const Gpu = struct {
         if (self.glyph_bold_tex) |*t| self.destroyTexture(t);
         if (self.glyph_italic_tex) |*t| self.destroyTexture(t);
         self.releaseOffscreen();
-        self.destroySwapchainViews();
+        if (self.dxgi_mode) self.destroyDxgiImages() else self.destroySwapchainViews();
         if (self.swapchain != null) vk.vkDestroySwapchainKHR(self.device, self.swapchain, null);
+        if (self.ext_timeline != null) vk.vkDestroySemaphore(self.device, self.ext_timeline, null);
         self.releaseMsaa();
         self.destroyBuffer(&self.ring);
         if (self.acquire_sem != null) vk.vkDestroySemaphore(self.device, self.acquire_sem, null);
