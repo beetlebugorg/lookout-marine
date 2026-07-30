@@ -297,89 +297,13 @@ final class AppModel: ObservableObject {
     /// Show a pick report for `results` at `point`. An empty result closes it:
     /// a tap on bare water is how a mariner dismisses the report.
     ///
-    /// The engine returns the features in draw order, which puts the land area
-    /// and the depth area before the light that was tapped. The report opens on
-    /// the object that matters, so the list is ranked first.
+    /// The order and the filtering belong to the core (lookout_pick_ranked), so
+    /// the shells cannot drift apart on what a pick reports.
     func showPick(_ results: [PickFeature], at point: CGPoint) {
-        // A meta object describes the survey, not the water. M_QUAL covers the
-        // whole cell, so it answers every pick and says nothing about what was
-        // tapped. But M_NPUB carries the chart's caution notes, so a meta object
-        // stays when it has something to read.
-        let features = results.filter { f in
-            guard f.cls.hasPrefix("M_") || f.cls.hasPrefix("C_") else { return true }
-            return S57.carriesInformation(f.s57)
-        }
-        pickResults = features.enumerated()
-            .sorted { a, b in
-                // A feature the cell gave no attributes cannot be the answer to
-                // a pick, whatever it is: an empty land area loses to a note.
-                let ea = S57.attributes(of: a.element.s57).isEmpty
-                let eb = S57.attributes(of: b.element.s57).isEmpty
-                if ea != eb { return eb }
-                let ra = PickRank.of(a.element.cls), rb = PickRank.of(b.element.cls)
-                return ra == rb ? a.offset < b.offset : ra < rb
-            }
-            .map(\.element)
-        pickPoint = features.isEmpty ? nil : point
+        pickResults = results
+        pickPoint = results.isEmpty ? nil : point
         pickIndex = 0
         pickDrag = .zero
-    }
-
-    /// The order the report pages through the pick, best first.
-    ///
-    /// The most SPECIFIC object wins: a sounding is a point the mariner aimed
-    /// at, while the depth area under it is water they are merely inside. So
-    /// the primitive decides first — point, then line, then area — and what the
-    /// object is decides within that.
-    enum PickRank {
-        private enum Primitive: Int { case point = 0, line = 1, area = 2 }
-
-        private static let lines: Set<String> = [
-            "DEPCNT", "COALNE", "SLCONS", "NAVLNE", "RECTRC", "CBLSUB", "PIPSOL",
-            "TSELNE", "RIVERS", "FERYRT", "DWRTCL", "LNDELV", "CANALS",
-        ]
-        private static let areas: Set<String> = [
-            "DEPARE", "DRGARE", "SBDARE", "LNDARE", "BUAARE", "SEAARE", "ACHARE",
-            "RESARE", "FAIRWY", "CBLARE", "PIPARE", "MIPARE", "DWRTPT", "TSSLPT",
-            "UNSARE", "LNDRGN", "VEGATN", "HRBFAC", "BERTHS", "ADMARE", "CTNARE",
-            "OSPARE", "SPLARE", "MARCUL", "DMPGRD",
-        ]
-
-        /// What the object is, lowest first: what you steer by, then what can
-        /// hurt you, then the water, then the background.
-        private static let kind: [String: Int] = {
-            let groups: [[String]] = [
-                ["LIGHTS", "LITVES", "LITFLT"],
-                ["BOYLAT", "BOYCAR", "BOYSAW", "BOYISD", "BOYSPP", "BOYINB",
-                 "BCNLAT", "BCNCAR", "BCNSAW", "BCNISD", "BCNSPP", "DAYMAR", "TOPMAR"],
-                ["WRECKS", "OBSTRN", "UWTROC", "ROCKS", "MORFAC", "PILPNT"],
-                ["SOUNDG", "DEPCNT", "DEPARE", "DRGARE", "SBDARE"],
-                ["ACHARE", "RESARE", "TSSLPT", "TSELNE", "FAIRWY", "NAVLNE", "RECTRC",
-                 "CBLARE", "PIPARE", "CBLSUB", "PIPSOL", "DWRTPT", "MIPARE"],
-                ["COALNE", "SLCONS", "PONTON", "HRBFAC", "BERTHS", "LNDMRK", "BUISGL"],
-                ["LNDARE", "BUAARE", "SEAARE", "LNDRGN", "VEGATN"],
-            ]
-            var map: [String: Int] = [:]
-            for (i, group) in groups.enumerated() {
-                for cls in group { map[cls] = i }
-            }
-            return map
-        }()
-
-        private static func primitive(of cls: String) -> Primitive {
-            if lines.contains(cls) { return .line }
-            if areas.contains(cls) { return .area }
-            // An unlisted class that ends in ARE is an area by convention.
-            if cls.hasSuffix("ARE") { return .area }
-            return .point
-        }
-
-        static func of(_ cls: String) -> Int {
-            // A meta object that survived the filter has a note worth reading,
-            // but it is still not what the mariner aimed at.
-            if cls.hasPrefix("M_") || cls.hasPrefix("C_") { return 900 }
-            return primitive(of: cls).rawValue * 100 + (kind[cls] ?? 8)
-        }
     }
 
     func closePick() {

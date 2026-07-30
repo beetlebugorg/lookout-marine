@@ -435,7 +435,9 @@ final class ChartController: NSObject {
                                                    chart: str(chart, chartLen),
                                                    s57: str(s57, s57Len)))
                 })
-            lookout_pick(h, lon, lat, &cb)
+            // The core decides what a pick reports and in what order (pick.zig),
+            // so every shell shows the same thing.
+            lookout_pick_ranked(h, lon, lat, &cb)
         }
         return results
     }

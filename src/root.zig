@@ -12,6 +12,7 @@ const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const gpu = @import("gpu.zig");
 const camera = @import("camera.zig");
+const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 const atlas = @import("atlas.zig");
 const png = @import("png.zig");
 
@@ -1670,6 +1671,52 @@ pub const Lookout = struct {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);
         } else {
             _ = cc.tile57_chart_query(self.charts.items[0], lon, lat, self.cam.zoom, cb, &err);
+        }
+    }
+
+    /// The pick a shell should show: the objects worth reporting, best first
+    /// (see pick.zig). Collected, ranked, then replayed through `cb` in order,
+    /// so a host reads the same callback it already has.
+    pub fn pickRanked(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        var collected = std.ArrayList(pick_rules.Feature).empty;
+        const Collect = struct {
+            list: *std.ArrayList(pick_rules.Feature),
+            alloc: std.mem.Allocator,
+
+            fn feature(ctx: ?*anyopaque, cls: [*c]const u8, cls_len: usize, s57: [*c]const u8, s57_len: usize, chart: [*c]const u8, chart_len: usize) callconv(.c) void {
+                const self_: *@This() = @ptrCast(@alignCast(ctx orelse return));
+                const dup = struct {
+                    fn go(al: std.mem.Allocator, p: [*c]const u8, n: usize) []const u8 {
+                        if (p == null or n == 0) return "";
+                        return al.dupe(u8, p[0..n]) catch "";
+                    }
+                }.go;
+                self_.list.append(self_.alloc, .{
+                    .cls = dup(self_.alloc, cls, cls_len),
+                    .s57 = dup(self_.alloc, s57, s57_len),
+                    .chart = dup(self_.alloc, chart, chart_len),
+                }) catch {};
+            }
+        };
+        var collector = Collect{ .list = &collected, .alloc = a };
+        var collect_cb = cc.tile57_query_cb{ .ctx = &collector, .feature = Collect.feature };
+        self.pick(lon, lat, &collect_cb);
+
+        // Drop what a pick should not report, then order what is left.
+        var kept = std.ArrayList(pick_rules.Feature).empty;
+        for (collected.items) |f| {
+            if (pick_rules.keep(f)) kept.append(a, f) catch {};
+        }
+        pick_rules.order(kept.items);
+
+        if (cb.feature) |emit| {
+            for (kept.items) |f| {
+                emit(cb.ctx, f.cls.ptr, f.cls.len, f.s57.ptr, f.s57.len, f.chart.ptr, f.chart.len);
+            }
         }
     }
 
