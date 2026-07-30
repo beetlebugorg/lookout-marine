@@ -47,7 +47,7 @@ enum Chrome {
 }
 
 extension View {
-    /// The WinUI 3 floating panel style: identify, empty state, and loader.
+    /// The WinUI 3 floating panel style: pick report, empty state, and loader.
     func panelSurface(cornerRadius r: CGFloat = 8) -> some View {
         background(Chrome.panel.opacity(0.95),
                    in: RoundedRectangle(cornerRadius: r, style: .continuous))

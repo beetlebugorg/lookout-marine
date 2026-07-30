@@ -59,7 +59,7 @@ executable.
 | `ui/MainWindow.xaml` | The chrome: bubbles, readout capsule, scale bar, panes |
 | `ui/MainWindow.xaml.cpp` | Window construction, chrome wiring, the render thread |
 | `ui/MainWindow.Open.cpp` | The open flow, the layers flyout, the pickers, the chart panel |
-| `ui/MainWindow.Input.cpp` | Gestures, commands, pick, coordinate search |
+| `ui/MainWindow.Input.cpp` | Gestures, commands, cursor pick, coordinate search |
 | `ui/MainWindow.Hud.cpp` | The readout capsule and the scale bar |
 | `ui/MainWindow.Settings.cpp` | The mariner pane: tabbed pages, applied on a debounce |
 | `ui/winrt_glue.cpp` | Compiles the XAML-generated units that a command-line build does not register |

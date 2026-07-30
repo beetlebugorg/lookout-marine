@@ -14,7 +14,7 @@ sidebar_position: 3
 | **Shift + drag** | Turn the chart about the centre. It follows the drag. |
 | Wheel, or two-finger scroll | Zoom at the pointer. |
 | Pinch on a trackpad | Zoom at the pointer. |
-| Click | Identify what is under the cursor. |
+| Click | Pick report for what is under the cursor. |
 | Double-click (Windows) | Zoom in at the pointer. |
 
 ## Touch
@@ -24,7 +24,7 @@ sidebar_position: 3
 | Drag one finger | Pan. Throw it and the chart coasts to a stop. |
 | Pinch | Zoom between the fingers. |
 | Twist two fingers | Turn the chart. |
-| Tap | Identify what is under your finger. |
+| Tap | Pick report for what is under your finger. |
 | Double tap | Zoom in. |
 | Two finger tap (iPad and iPhone) | Zoom out. |
 

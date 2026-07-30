@@ -45,9 +45,9 @@ A phone hides the band and sets the type smaller. Position and scale always stay
 
 A round distance at the current scale, in the bottom left corner.
 
-## Identify
+## Pick report
 
-Click or tap a feature to list what is under the cursor: each object, and the
+Click or tap a feature. The report lists each object under the cursor and the
 chart cell it came from.
 
 ## Starting up

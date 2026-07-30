@@ -50,7 +50,7 @@ Tools alone: `swiftc` and a hand-made bundle.
 | `LOOKOUT_OPEN` | Open this chart or folder at start |
 | `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` — the opening camera |
 | `LOOKOUT_WINDOW` | `WIDTHxHEIGHT` — the window content size (macOS) |
-| `LOOKOUT_SHOW` | `settings[:tab]`, `scale`, `search`, `identify` — open that chrome |
+| `LOOKOUT_SHOW` | `settings[:tab]`, `scale`, `search`, `pick` — open that chrome |
 
 `simctl` forwards the first two as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 `SIMCTL_CHILD_LOOKOUT_VIEW`.
@@ -91,7 +91,7 @@ much: without it every chrome click reached the chart.
 | `ChartController.swift` | The one `lookout*` handle, every `lookout_*` call, and the display-link loop |
 | `AppModel.swift` | Shared state: open paths, recents, readouts, the coordinate and scale parsers |
 | `Chrome.swift` | The chrome vocabulary: sizes, colours, bubbles, button styles, the scale bar |
-| `HUDOverlay.swift` | The readout capsule, the scale entry, the identify panel, the formats |
+| `HUDOverlay.swift` | The readout capsule, the scale entry, the pick report, the formats |
 | `SettingsView.swift` | The mariner form, tabbed |
 | `SettingsWindow.swift` | The macOS settings window the app owns |
 | `Platform.swift` | The macOS/iOS seam and `ChromeHitMap` |

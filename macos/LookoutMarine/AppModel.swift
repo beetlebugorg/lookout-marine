@@ -278,9 +278,9 @@ final class AppModel: ObservableObject {
         return true
     }
 
-    /// Identify the features at the view centre. A tap on the chart runs the
-    /// same pick; the screenshot hook has no cursor to tap with.
-    func identifyAtCentre() {
+    /// Run a cursor pick at the view centre. A tap on the chart runs the same
+    /// pick; the screenshot hook has no cursor to tap with.
+    func pickAtCentre() {
         guard let controller else { return }
         pickResults = controller.pick(lon: centerLon, lat: centerLat)
     }

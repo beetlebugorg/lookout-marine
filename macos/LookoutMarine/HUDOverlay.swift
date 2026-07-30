@@ -213,15 +213,16 @@ struct ScaleEntryPanel: View {
     private var current: String { CoordFormat.band(model.scaleDenominator) }
 }
 
-/// One line per feature under the last tap: object class + source cell.
-struct IdentifyPanel: View {
+/// The cursor pick report: one line per feature under the last tap, with its
+/// object class and the cell it came from.
+struct PickReportPanel: View {
     let results: [PickFeature]
     let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Features")
+                Text("Pick report")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Chrome.ink)
                 Spacer(minLength: 12)
@@ -232,7 +233,7 @@ struct IdentifyPanel: View {
                 }
                 .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
                 .foregroundStyle(Chrome.muted)
-                .accessibilityLabel("Dismiss features")
+                .accessibilityLabel("Close the pick report")
             }
             ForEach(results) { f in
                 HStack(spacing: 6) {
