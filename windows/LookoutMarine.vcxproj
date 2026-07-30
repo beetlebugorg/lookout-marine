@@ -112,6 +112,14 @@
     <ClCompile Include="App.xaml.cpp">
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
+    <ClCompile Include="MainWindow.Open.cpp" />
+    <ClCompile Include="MainWindow.ChartHost.cpp" />
+    <ClCompile Include="MainWindow.Input.cpp" />
+    <ClCompile Include="MainWindow.Hud.cpp" />
+    <ClCompile Include="MainWindow.Settings.cpp" />
+    <ClCompile Include="src\lk_paths.cpp" />
+    <ClCompile Include="src\lk_format.cpp" />
+    <ClCompile Include="src\lk_backdrop.cpp" />
     <ClCompile Include="winrt_glue.cpp" />
     <!-- The host-agnostic C layer (ports of the Linux shell's controller/store/
          coord) — plain C, no PCH. -->
