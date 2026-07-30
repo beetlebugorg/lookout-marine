@@ -81,7 +81,14 @@ final class AppModel: ObservableObject {
     @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
     @Published var centerLat: Double = 0
     @Published var centerLon: Double = 0
+    /// The cursor pick: the features under the last tap, where it happened (in
+    /// the chrome's coordinate space), and which one the report is showing.
     @Published var pickResults: [PickFeature] = []
+    @Published var pickPoint: CGPoint?
+    @Published var pickIndex = 0
+    /// Where a hook-driven pick should anchor its report. The chart view sets it
+    /// to the centre of its bounds.
+    var pickCentreHint: CGPoint?
     @Published var isBuilding = false         // a background tessellation is filling in
 
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
@@ -278,11 +285,66 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    /// Show a pick report for `results` at `point`. An empty result closes it:
+    /// a tap on bare water is how a mariner dismisses the report.
+    ///
+    /// The engine returns the features in draw order, which puts the land area
+    /// and the depth area before the light that was tapped. The report opens on
+    /// the object that matters, so the list is ranked first.
+    func showPick(_ results: [PickFeature], at point: CGPoint) {
+        pickResults = results.enumerated()
+            .sorted { a, b in
+                let ra = PickRank.of(a.element.cls), rb = PickRank.of(b.element.cls)
+                return ra == rb ? a.offset < b.offset : ra < rb
+            }
+            .map(\.element)
+        pickPoint = results.isEmpty ? nil : point
+        pickIndex = 0
+    }
+
+    /// How much a picked object matters, lowest first. Aids to navigation and
+    /// dangers come before the water they sit in, and the meta objects that
+    /// describe the survey come last.
+    enum PickRank {
+        private static let order: [[String]] = [
+            ["LIGHTS", "LITVES", "LITFLT"],
+            ["BOYLAT", "BOYCAR", "BOYSAW", "BOYISD", "BOYSPP", "BOYINB",
+             "BCNLAT", "BCNCAR", "BCNSAW", "BCNISD", "BCNSPP", "DAYMAR", "TOPMAR"],
+            ["WRECKS", "OBSTRN", "UWTROC", "ROCKS", "MORFAC", "PILPNT"],
+            ["SOUNDG", "DEPCNT", "DEPARE", "DRGARE", "SBDARE"],
+            ["ACHARE", "RESARE", "TSSLPT", "TSELNE", "FAIRWY", "NAVLNE", "RECTRC",
+             "CBLARE", "PIPARE", "CBLSUB", "PIPSOL", "DWRTPT", "MIPARE"],
+            ["COALNE", "SLCONS", "PONTON", "HRBFAC", "BERTHS", "LNDMRK", "BUISGL"],
+            ["LNDARE", "BUAARE", "SEAARE", "LNDRGN", "VEGATN"],
+        ]
+        private static let rank: [String: Int] = {
+            var map: [String: Int] = [:]
+            for (i, group) in order.enumerated() {
+                for cls in group { map[cls] = i }
+            }
+            return map
+        }()
+
+        static func of(_ cls: String) -> Int {
+            if let r = rank[cls] { return r }
+            // Meta and collection objects describe the data, not the water.
+            if cls.hasPrefix("M_") || cls.hasPrefix("C_") { return order.count + 1 }
+            return order.count
+        }
+    }
+
+    func closePick() {
+        pickResults = []
+        pickPoint = nil
+        pickIndex = 0
+    }
+
     /// Run a cursor pick at the view centre. A tap on the chart runs the same
     /// pick; the screenshot hook has no cursor to tap with.
     func pickAtCentre() {
         guard let controller else { return }
-        pickResults = controller.pick(lon: centerLon, lat: centerLat)
+        guard let point = pickCentreHint else { return }
+        showPick(controller.pick(lon: centerLon, lat: centerLat), at: point)
     }
 
     var schemeName: String {

@@ -48,8 +48,10 @@ enum Chrome {
 
 extension View {
     /// The WinUI 3 floating panel style: pick report, empty state, and loader.
-    func panelSurface(cornerRadius r: CGFloat = 8) -> some View {
-        background(Chrome.panel.opacity(0.95),
+    /// A report is opaque: the chart showing through a table of numbers makes
+    /// both hard to read.
+    func panelSurface(cornerRadius r: CGFloat = 8, opaque: Bool = false) -> some View {
+        background(opaque ? Chrome.surface : Chrome.panel.opacity(0.95),
                    in: RoundedRectangle(cornerRadius: r, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
                 .strokeBorder(Chrome.edge, lineWidth: 1))

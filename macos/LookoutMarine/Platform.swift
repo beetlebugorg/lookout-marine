@@ -112,6 +112,18 @@ final class PassThroughWindow: UIWindow {
 }
 #endif
 
+/// The system clipboard, on both platforms.
+enum Pasteboard {
+    static func copy(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
+}
+
 // MARK: - iOS 15 compatibility shims
 //
 // The app floor is iOS 15 (older iPads); macOS stays 14. These cover the
