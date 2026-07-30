@@ -3,6 +3,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,20 @@ struct lk_controller {
     unsigned width, height;   /* device pixels */
     unsigned long long last_view_saved_ms;
 };
+
+/* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */
+static void
+apply_env_view(lookout *h)
+{
+    char spec[128];
+    DWORD n = GetEnvironmentVariableA("LOOKOUT_VIEW", spec, sizeof spec);
+    if (n == 0 || n >= sizeof spec)
+        return;
+    lookout_view v = { 0, 0, 0, 0 };
+    int got = sscanf_s(spec, "%lf,%lf,%lf,%lf", &v.lon, &v.lat, &v.zoom, &v.rotation_deg);
+    if (got >= 3)
+        lookout_set_view(h, &v);
+}
 
 lk_controller *
 lk_controller_new(void)
@@ -71,6 +86,7 @@ lk_controller_open(lk_controller *self, void *hinstance, void *hwnd,
     if (!lk_store_load_view(&v))
         lookout_fit_chart(h, &v);
     lookout_set_view(h, &v);
+    apply_env_view(h);
 
     /* device_scale (physical symbol/text size) is the host's to state. */
     tile57_mariner m;
@@ -113,6 +129,7 @@ lk_controller_open_dxgi(lk_controller *self, const lookout_dxgi_target *target,
     if (!lk_store_load_view(&v))
         lookout_fit_chart(h, &v);
     lookout_set_view(h, &v);
+    apply_env_view(h);
 
     tile57_mariner m;
     lookout_get_mariner(h, &m);
