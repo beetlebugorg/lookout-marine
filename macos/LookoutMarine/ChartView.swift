@@ -148,6 +148,12 @@ struct OverlayLayer: View {
                     if model.isBuilding { BuildingPill().padding(.top, 10) }
                 }
                 .overlay {
+                    if let picture = model.picture {
+                        PictureViewer(model: model, picture: picture)
+                            .chromeHitRegion("picture-viewer")
+                    }
+                }
+                .overlay {
                     if model.showStartupLoader {
                         StartupLoader(phase: model.loadingPhase)
                             .transition(.opacity)
@@ -429,9 +435,15 @@ final class ChartNSView: NSView {
     /// Escape closes the pick report. The chart view is the first responder;
     /// the SwiftUI overlay is not, so its own exit command never fires.
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53, model?.pickPoint != nil {   // 53 = Escape
-            model?.closePick()
-            return
+        if event.keyCode == 53 {   // 53 = Escape
+            if model?.picture != nil {
+                model?.picture = nil
+                return
+            }
+            if model?.pickPoint != nil {
+                model?.closePick()
+                return
+            }
         }
         super.keyDown(with: event)
     }

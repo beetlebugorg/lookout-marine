@@ -10,6 +10,12 @@
 //  magnified past the survey.
 
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Scale band, 1:N, zoom and lat/lon. The position is the cursor position, or
 /// the view centre when there is no cursor. The scale is the only control.
@@ -226,7 +232,7 @@ struct PickReportPanel: View {
     @State private var rowsHeight: CGFloat = 0
 
     static let width: CGFloat = 360
-    static let maxHeight: CGFloat = 420
+    static let maxHeight: CGFloat = 460
 
     private var feature: PickFeature? {
         guard model.pickResults.indices.contains(model.pickIndex) else { return nil }
@@ -324,13 +330,13 @@ struct PickReportPanel: View {
         } else if rowsHeight > Self.maxHeight {
             // Long enough to scroll. A short report keeps its natural height:
             // a ScrollView is greedy, and it would leave the report half empty.
-            ScrollView { table(rows) }.frame(height: Self.maxHeight)
+            ScrollView { table(rows, cell: feature.chart) }.frame(height: Self.maxHeight)
         } else {
-            table(rows)
+            table(rows, cell: feature.chart)
         }
     }
 
-    private func table(_ rows: [S57.Row]) -> some View {
+    private func table(_ rows: [S57.Row], cell: String) -> some View {
         VStack(spacing: 0) {
             ForEach(rows) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -339,20 +345,8 @@ struct PickReportPanel: View {
                         .foregroundStyle(row.value.isEmpty ? Chrome.ink : Chrome.muted)
                         .frame(width: 104 - CGFloat(row.depth) * 12, alignment: .leading)
                     if row.fileReference {
-                        HStack(spacing: 6) {
-                            Image(systemName: row.isPicture ? "photo" : "doc.text")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Chrome.accent)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(row.value)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(Chrome.ink)
-                                    .textSelection(.enabled)
-                                Text("Not carried in the baked chart")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Chrome.muted)
-                            }
-                        }
+                        AuxFileView(model: model, cell: cell, name: row.value,
+                                    isPicture: row.isPicture)
                     } else {
                         Text(row.value)
                             .font(.system(size: 14))
@@ -378,6 +372,124 @@ struct PickReportPanel: View {
     private func copyReport() {
         guard let feature else { return }
         Pasteboard.copy(S57.plainText(feature))
+    }
+}
+
+/// A file a feature points at, read through the engine and shown here: the text
+/// of a caution note, or the picture itself. The bake stores those files beside
+/// the chart; a chart baked before that carries the name alone.
+struct AuxFileView: View {
+    @ObservedObject var model: AppModel
+    let cell: String
+    let name: String
+    let isPicture: Bool
+
+    @State private var loaded: (data: Data, mime: String)?
+    @State private var tried = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: isPicture ? "photo" : "doc.text")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Chrome.accent)
+                Text(name)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Chrome.ink)
+                    .textSelection(.enabled)
+            }
+            content
+        }
+        .onAppear(perform: load)
+        .onChange(of: name) { _ in tried = false; loaded = nil; load() }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let loaded {
+            if let image = Self.image(from: loaded) {
+                Button {
+                    model.picture = .init(name: name, data: loaded.data)
+                } label: {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Chrome.edge.opacity(0.3), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Show \(name) at full size")
+                .accessibilityLabel("Show \(name) at full size")
+            } else if let text = String(data: loaded.data, encoding: .utf8)
+                        ?? String(data: loaded.data, encoding: .isoLatin1) {
+                // No scroll view here: the report itself scrolls. A note inside
+                // its own little scroller fights the one around it, and a
+                // caution is worth reading in full.
+                Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Chrome.ink)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Chrome.ink.opacity(0.05),
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        } else if tried {
+            Text("The chart does not carry this file.")
+                .font(.system(size: 10))
+                .foregroundStyle(Chrome.muted)
+        }
+    }
+
+    private func load() {
+        guard !tried else { return }
+        tried = true
+        loaded = model.controller?.auxFile(cell: cell, named: name)
+    }
+
+    /// A picture, whatever the format the cell shipped: the platform decodes
+    /// TIFF, which is what an ENC usually carries.
+    static func image(from file: (data: Data, mime: String)) -> Image? {
+        guard file.mime.hasPrefix("image/") else { return nil }
+        #if os(macOS)
+        guard let ns = NSImage(data: file.data) else { return nil }
+        return Image(nsImage: ns)
+        #else
+        guard let ui = UIImage(data: file.data) else { return nil }
+        return Image(uiImage: ui)
+        #endif
+    }
+}
+
+/// A picture from a pick report, over the chart at full size. A click anywhere,
+/// or Escape, puts it away.
+struct PictureViewer: View {
+    @ObservedObject var model: AppModel
+    let picture: AppModel.Picture
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea()
+            VStack(spacing: 10) {
+                if let image = AuxFileView.image(from: (picture.data, "image/")) {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+                }
+                Text(picture.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(40)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.picture = nil }
+        #if os(macOS)
+        .onExitCommand { model.picture = nil }
+        #endif
     }
 }
 
@@ -462,6 +574,18 @@ enum S57 {
         if let s = node as? String { return s }
         if let n = node as? NSNumber { return n.stringValue }
         return String(describing: node)
+    }
+
+    /// The attribute names that carry something to read.
+    static let informational: Set<String> = [
+        "INFORM", "NINFOM", "TXTDSC", "NTXTDS", "PICREP", "fileReference", "text",
+    ]
+
+    /// True when the payload holds a note or a reference. It is what keeps a
+    /// meta object in the report: M_NPUB carries the chart's cautions, M_QUAL
+    /// carries nothing a mariner reads.
+    static func carriesInformation(_ json: String) -> Bool {
+        attributes(of: json).contains { informational.contains($0.name) && !$0.value.isEmpty }
     }
 
     /// The report, as plain text for the clipboard.
