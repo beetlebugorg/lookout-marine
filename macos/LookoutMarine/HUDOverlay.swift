@@ -338,10 +338,27 @@ struct PickReportPanel: View {
                         .font(.system(size: 12, weight: row.value.isEmpty ? .semibold : .medium))
                         .foregroundStyle(row.value.isEmpty ? Chrome.ink : Chrome.muted)
                         .frame(width: 104 - CGFloat(row.depth) * 12, alignment: .leading)
-                    Text(row.value)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Chrome.ink)
-                        .textSelection(.enabled)
+                    if row.fileReference {
+                        HStack(spacing: 6) {
+                            Image(systemName: row.isPicture ? "photo" : "doc.text")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Chrome.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(row.value)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Chrome.ink)
+                                    .textSelection(.enabled)
+                                Text("Not carried in the baked chart")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Chrome.muted)
+                            }
+                        }
+                    } else {
+                        Text(row.value)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Chrome.ink)
+                            .textSelection(.enabled)
+                    }
                     Spacer(minLength: 0)
                 }
                 .padding(.leading, 16 + CGFloat(row.depth) * 12)
@@ -399,6 +416,20 @@ enum S57 {
         let value: String
         let depth: Int
         var id: String { "\(depth)/\(name)/\(value)" }
+
+        /// A cell can point at a text file or a picture beside it, such as
+        /// US348MDE.TXT. S-57 names it in TXTDSC, NTXTDS or PICREP; S-101 puts
+        /// it in a fileReference. The bake does not carry those files, so the
+        /// report states the reference and marks it as a file.
+        var fileReference: Bool {
+            ["TXTDSC", "NTXTDS", "PICREP", "fileReference"].contains(name)
+                && !value.isEmpty
+        }
+
+        var isPicture: Bool {
+            let lower = value.lowercased()
+            return [".tif", ".tiff", ".jpg", ".jpeg", ".png"].contains { lower.hasSuffix($0) }
+        }
     }
 
     static func attributes(of json: String) -> [Row] {
