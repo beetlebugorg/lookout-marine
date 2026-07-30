@@ -138,7 +138,7 @@ the build gets the commit that `build.zig.zon` specifies and compiles `libtile57
 from source.
 
 For more detail, refer to [the architecture](docs/docs/developer-guide/architecture.md),
-[the Linux host](docs/docs/developer-guide/hosts-linux.md), `macos/README.md` and
+[the Linux host](docs/docs/developer-guide/linux.md), `macos/README.md` and
 `android/README.md`.
 
 [tile57]: https://github.com/beetlebugorg/tile57

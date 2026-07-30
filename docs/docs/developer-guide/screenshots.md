@@ -59,7 +59,7 @@ output with `grim`. This method gives three advantages:
 - **The GPU path is the same as in normal use.** sway is a true Wayland compositor
   and it uses the true GPU. Therefore the compositor shows the chart through the
   same subsurface path that a user gets. It does not use a software fallback. Refer
-  to [the Linux host](hosts-linux.md).
+  to [the Linux host](linux.md).
 
 The script does not send synthetic input to open the mariner panel. It activates the
 window action through D-Bus. `GtkApplicationWindow` publishes the `win.*` actions on

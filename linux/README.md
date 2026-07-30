@@ -6,7 +6,7 @@ a transparent hole in the window so the chrome floats over the chart. The Linux
 counterpart of the SwiftUI shell on macOS/iOS and the Java shell on Android: same
 core, same C ABI, same behaviour.
 
-**Architecture, design history and gotchas: [docs/hosts-linux.md](../docs/docs/developer-guide/hosts-linux.md).**
+**Architecture, design history and gotchas: [docs/linux.md](../docs/docs/developer-guide/linux.md).**
 
 ![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/linux-day.png)
 

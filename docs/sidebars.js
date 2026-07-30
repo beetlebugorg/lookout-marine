@@ -21,8 +21,10 @@ const sidebars = {
       collapsed: false,
       items: [
         'developer-guide/architecture',
-        'developer-guide/building',
-        'developer-guide/hosts-linux',
+        'developer-guide/macos',
+        'developer-guide/linux',
+        'developer-guide/windows',
+        'developer-guide/android',
         'developer-guide/screenshots',
       ],
     },
