@@ -29,7 +29,6 @@ namespace winrt::LookoutMarine::implementation
         winrt::check_hresult(native->get_WindowHandle(&top_hwnd));
 
         controller = lk_controller_new();
-        use_dms = lk_store_load_use_dms() != 0;
 
         WireChrome();
 

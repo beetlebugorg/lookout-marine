@@ -137,6 +137,8 @@ targets:
         excludes:
           - "Info.plist"
           - "LookoutMarine.entitlements"
+      # The launch screen background color (UILaunchScreen/UIColorName).
+      - path: LookoutMarine-iOS/Assets.xcassets
     settings:
       base:
         PRODUCT_NAME: LookoutMarine
@@ -147,6 +149,9 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: LookoutMarine-iOS/Info.plist
         CODE_SIGN_STYLE: Automatic
+        # The catalog holds the launch screen color only. Without this, the
+        # catalog compiler looks for an "AppIcon" set and fails.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         # The Zig cores are built arm64-only (Apple Silicon simulators + all

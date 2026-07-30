@@ -2,15 +2,33 @@
 
 #include <math.h>
 
+/* Degrees, minutes and seconds with a hemisphere. The longitude has three
+ * degree digits, so a pair keeps its column width. It agrees with
+ * CoordFormat.dms (macOS and iOS), lkw::FormatCoord (Windows) and Hud.kt
+ * (Android). Each host prints the same string. */
 char *
 lk_coord_format_dms (double value, gboolean is_lat)
 {
   const char *hemi = is_lat ? (value >= 0 ? "N" : "S") : (value >= 0 ? "E" : "W");
   double magnitude = fabs (value);
   int degrees = (int) magnitude;
-  double minutes = (magnitude - degrees) * 60.0;
+  int minutes = (int) ((magnitude - degrees) * 60.0);
+  double seconds = ((magnitude - degrees) * 60.0 - minutes) * 60.0;
 
-  return g_strdup_printf ("%d°%05.2f'%s", degrees, minutes, hemi);
+  /* Carry the rounding. 59.96" prints as 60.0", which is the next minute. */
+  if (llround (seconds * 10.0) >= 600)
+    {
+      seconds = 0.0;
+      minutes++;
+    }
+  if (minutes >= 60)
+    {
+      minutes = 0;
+      degrees++;
+    }
+
+  return g_strdup_printf (is_lat ? "%02d°%02d'%04.1f\"%s" : "%03d°%02d'%04.1f\"%s",
+                          degrees, minutes, seconds, hemi);
 }
 
 /* Compact 1:N — "1:24k" / "1:2.1M". */
@@ -54,17 +72,9 @@ lk_hud_update_coord (LkHudBar *bar)
   double lon = cursor ? lk_app_model_get_cursor_lon (bar->model)
                       : lk_app_model_get_center_lon (bar->model);
 
-  g_autofree char *text = NULL;
-  if (lk_app_model_get_use_dms (bar->model))
-    {
-      g_autofree char *lat_s = lk_coord_format_dms (lat, TRUE);
-      g_autofree char *lon_s = lk_coord_format_dms (lon, FALSE);
-      text = g_strdup_printf ("%s  %s", lat_s, lon_s);
-    }
-  else
-    {
-      text = g_strdup_printf ("%.5f, %.5f", lat, lon);
-    }
+  g_autofree char *lat_s = lk_coord_format_dms (lat, TRUE);
+  g_autofree char *lon_s = lk_coord_format_dms (lon, FALSE);
+  g_autofree char *text = g_strdup_printf ("%s %s", lat_s, lon_s);
 
   gtk_label_set_text (GTK_LABEL (bar->coord_label), text);
   /* Pointer icon = following cursor; pin = view centre. */
@@ -120,7 +130,7 @@ lk_hud_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
   if (g_str_equal (name, "cursor-valid") || g_str_equal (name, "cursor-lon") ||
       g_str_equal (name, "cursor-lat") || g_str_equal (name, "center-lon") ||
-      g_str_equal (name, "center-lat") || g_str_equal (name, "use-dms"))
+      g_str_equal (name, "center-lat"))
     lk_hud_update_coord (bar);
   else if (g_str_equal (name, "overscale"))
     lk_hud_update_overscale (bar);

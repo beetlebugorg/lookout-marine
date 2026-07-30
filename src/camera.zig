@@ -216,10 +216,14 @@ pub const Camera = struct {
         self.clampY();
     }
 
-    /// Viewport half-extents in world units at the current zoom.
+    /// Viewport half-extents in world units at the current zoom. The extents
+    /// are those of the AXIS-ALIGNED box that holds the rotated viewport: a
+    /// turned view reaches past its own width and height, and a scene built to
+    /// the width and height alone leaves the corners empty.
     pub fn halfExtents(self: Camera) Vec2 {
         const wp = self.worldToPx();
-        return .{ .x = @as(f64, self.vw) * 0.5 / wp, .y = @as(f64, self.vh) * 0.5 / wp };
+        const ext = rotatedExtent(@as(f64, self.vw), @as(f64, self.vh), self.rotation);
+        return .{ .x = ext[0] * 0.5 / wp, .y = ext[1] * 0.5 / wp };
     }
 
     /// The S-52 display-scale denominator (1:N) for the current view — used to
@@ -229,6 +233,15 @@ pub const Camera = struct {
         return displayScaleAt(self.zoom, worldToLonLat(self.center).y);
     }
 };
+
+/// The width and height of the axis-aligned box that holds a `w` x `h`
+/// viewport turned by `rotation` radians. At 45 degrees a square viewport needs
+/// a box 1.41 times its side.
+pub fn rotatedExtent(w: f64, h: f64, rotation: f64) [2]f64 {
+    const c = @abs(std.math.cos(rotation));
+    const s = @abs(std.math.sin(rotation));
+    return .{ c * w + s * h, s * w + c * h };
+}
 
 /// S-52 display-scale denominator (1:N) for a zoom + latitude (degrees).
 pub fn displayScaleAt(zoom: f64, lat_deg: f64) f32 {
@@ -254,5 +267,36 @@ test "zoomAbout keeps the point under the cursor fixed" {
         // Same world point under the same screen point, to sub-pixel world units.
         try std_testing.expectApproxEqAbs(w_before.x, w_after.x, 1e-9);
         try std_testing.expectApproxEqAbs(w_before.y, w_after.y, 1e-9);
+    }
+}
+
+// A rotated view reaches past its own width and height. The scene is built
+// axis-aligned in world space, so the corners of a turned viewport fell outside
+// the build and drew as empty wedges.
+test "halfExtents holds the corners of a rotated viewport" {
+    const std_testing = std.testing;
+    const origin = lonLatToWorld(-76.48, 38.98);
+    const vw: f32 = 1264;
+    const vh: f32 = 730;
+    inline for (.{ 0.0, 30.0, 45.0, 90.0, 137.0, 215.0 }) |deg| {
+        var cam = Camera{
+            .origin = origin,
+            .center = origin,
+            .zoom = 13.7,
+            .target_zoom = 13.7,
+            .rotation = deg * std.math.pi / 180.0,
+            .vw = vw,
+            .vh = vh,
+            .min_zoom = 2,
+            .max_zoom = 22,
+        };
+        const he = cam.halfExtents();
+        inline for (.{ .{ 0.0, 0.0 }, .{ 1264.0, 0.0 }, .{ 0.0, 730.0 }, .{ 1264.0, 730.0 } }) |corner| {
+            const px: f32 = corner[0];
+            const py: f32 = corner[1];
+            const w = cam.screenToWorld(px, py);
+            try std_testing.expect(@abs(w.x - cam.center.x) <= he.x + 1e-9);
+            try std_testing.expect(@abs(w.y - cam.center.y) <= he.y + 1e-9);
+        }
     }
 }

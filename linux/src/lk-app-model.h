@@ -88,7 +88,5 @@ double   lk_app_model_get_scale_denominator (LkAppModel *self);
 int      lk_app_model_get_scheme (LkAppModel *self);
 const char *lk_app_model_get_scheme_name (LkAppModel *self);
 gboolean lk_app_model_get_building (LkAppModel *self);
-gboolean lk_app_model_get_use_dms (LkAppModel *self);
-void     lk_app_model_set_use_dms (LkAppModel *self, gboolean use_dms);
 
 G_END_DECLS

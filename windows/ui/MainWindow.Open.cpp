@@ -50,17 +50,6 @@ namespace winrt::LookoutMarine::implementation
         }
         lk_store_free_recents(recents);
 
-        fly.Items().Append(Controls::MenuFlyoutSeparator{});
-        Controls::ToggleMenuFlyoutItem dms;
-        dms.Text(L"Coordinates as DMS");
-        dms.IsChecked(use_dms);
-        dms.Click([this](auto &&, auto &&) {
-            use_dms = !use_dms;
-            lk_store_save_use_dms(use_dms ? 1 : 0);
-            UpdateReadouts(true);
-        });
-        fly.Items().Append(dms);
-
         fly.ShowAt(LayersBtn());
     }
 
