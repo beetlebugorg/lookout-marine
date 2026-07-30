@@ -20,7 +20,6 @@ namespace winrt::LookoutMarine::implementation
         void GesturePress(double x_pt, double y_pt, bool rotate);
         void GestureMove(double x_pt, double y_pt);
         void GestureRelease(double x_pt, double y_pt);
-        void GestureHover(double x_pt, double y_pt, bool inside);
         void GestureWheel(double delta_notches, double x_pt, double y_pt);
         void GestureDoubleTap(double x_pt, double y_pt);
         void Command(char cmd); // keyboard commands, shared by both input paths

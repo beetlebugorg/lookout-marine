@@ -113,8 +113,15 @@ namespace winrt::LookoutMarine::implementation
         });
 
         // Chart gestures via XAML (DXGI mode; the fallback path uses the child
-        // HWND wndproc). Root has a hit-testable transparent background.
-        Root().PointerPressed([this](auto &&, Input::PointerRoutedEventArgs const &e) {
+        // HWND wndproc). Only presses that start on the chart surface are chart
+        // gestures — capturing on a chrome press steals the button's Click.
+        auto on_chart = [this](winrt::Windows::Foundation::IInspectable const &src) {
+            auto el = src.try_as<UIElement>();
+            return el == Root() || (chart_panel != nullptr && el == chart_panel);
+        };
+        Root().PointerPressed([this, on_chart](auto &&, Input::PointerRoutedEventArgs const &e) {
+            if (!on_chart(e.OriginalSource()))
+                return;
             auto p = e.GetCurrentPoint(Root()).Position();
             bool rot = (e.KeyModifiers() & Windows::System::VirtualKeyModifiers::Shift) ==
                        Windows::System::VirtualKeyModifiers::Shift;
@@ -122,23 +129,27 @@ namespace winrt::LookoutMarine::implementation
             Root().CapturePointer(e.Pointer());
         });
         Root().PointerMoved([this](auto &&, Input::PointerRoutedEventArgs const &e) {
+            if (!dragging && !rotating)
+                return;
             auto p = e.GetCurrentPoint(Root()).Position();
-            if (dragging || rotating)
-                GestureMove(p.X, p.Y);
-            else
-                GestureHover(p.X, p.Y, true);
+            GestureMove(p.X, p.Y);
         });
         Root().PointerReleased([this](auto &&, Input::PointerRoutedEventArgs const &e) {
+            if (!dragging && !rotating)
+                return;
             auto p = e.GetCurrentPoint(Root()).Position();
             GestureRelease(p.X, p.Y);
             Root().ReleasePointerCaptures();
         });
-        Root().PointerExited([this](auto &&, auto &&) { GestureHover(0, 0, false); });
-        Root().PointerWheelChanged([this](auto &&, Input::PointerRoutedEventArgs const &e) {
+        Root().PointerWheelChanged([this, on_chart](auto &&, Input::PointerRoutedEventArgs const &e) {
+            if (!on_chart(e.OriginalSource()))
+                return;
             auto pt = e.GetCurrentPoint(Root());
             GestureWheel(pt.Properties().MouseWheelDelta() / 120.0, pt.Position().X, pt.Position().Y);
         });
-        Root().DoubleTapped([this](auto &&, Input::DoubleTappedRoutedEventArgs const &e) {
+        Root().DoubleTapped([this, on_chart](auto &&, Input::DoubleTappedRoutedEventArgs const &e) {
+            if (!on_chart(e.OriginalSource()))
+                return;
             auto p = e.GetPosition(Root());
             GestureDoubleTap(p.X, p.Y);
         });
