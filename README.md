@@ -10,7 +10,7 @@ and switch between day and night.
 
 | macOS · iPadOS · iOS | Linux | Windows |
 |:---:|:---:|:---:|
-| <img src="docs/docs/img/ipad-day.png" width="290" alt="Annapolis Harbor on iPad, day scheme"> | <img src="docs/docs/img/linux-day.png" width="290" alt="Annapolis Harbor on Linux, day scheme"> | <img src="docs/docs/img/windows-day.png" width="290" alt="Annapolis Harbor on Windows, day scheme"> |
+| <img src="docs/docs/img/macos-day.png" width="290" alt="Annapolis Harbor on macOS, day scheme"><br><img src="docs/docs/img/ipad-day.png" width="290" alt="Annapolis Harbor on iPad, day scheme"><br><img src="docs/docs/img/iphone-day.png" width="290" alt="Annapolis Harbor on iPhone, day scheme"> | <img src="docs/docs/img/linux-day.png" width="290" alt="Annapolis Harbor on Linux, day scheme"> | <img src="docs/docs/img/windows-day.png" width="290" alt="Annapolis Harbor on Windows, day scheme"> |
 | SwiftUI | GTK4 | WinUI 3 |
 
 ## Why it is different

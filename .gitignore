@@ -5,7 +5,9 @@ zig-out-*/
 # catalogue arrive here on machines without a sibling checkout).
 zig-pkg/
 *.png
-!docs/*.png
+# The documentation images are tracked. The pattern must match a nested path:
+# "!docs/*.png" left docs/docs/img/*.png ignored.
+!docs/**/*.png
 .DS_Store
 # Xcode / xcodegen build products and derived data (build, build-ios,
 # build-iosdev, DerivedData, …) — never tracked.
