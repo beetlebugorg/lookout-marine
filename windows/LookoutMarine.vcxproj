@@ -77,8 +77,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <!-- $(IntDir): the WinUI markup passes write <Name>.xaml.g.h there. -->
-      <AdditionalIncludeDirectories>$(IntDir);$(MSBuildThisFileDirectory)src;$(LookoutCoreIncDir);$(VulkanSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- $(IntDir)(+ui): the WinUI markup passes write <Name>.xaml.g.h there,
+           mirroring the source layout. The project root carries pch.h. -->
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)ui;$(MSBuildThisFileDirectory);$(MSBuildThisFileDirectory)ui;$(MSBuildThisFileDirectory)src;$(LookoutCoreIncDir);$(VulkanSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
       <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
@@ -97,10 +98,10 @@
     <ClInclude Include="pch.h" />
     <!-- DependentUpon links the code-behind to its .xaml so the WinUI markup
          compiler emits the per-page <name>.xaml.g.h stub (InitializeComponent). -->
-    <ClInclude Include="App.xaml.h">
+    <ClInclude Include="ui\App.xaml.h">
       <DependentUpon>App.xaml</DependentUpon>
     </ClInclude>
-    <ClInclude Include="MainWindow.xaml.h">
+    <ClInclude Include="ui\MainWindow.xaml.h">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClInclude>
   </ItemGroup>
@@ -109,18 +110,18 @@
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="App.xaml.cpp">
+    <ClCompile Include="ui\App.xaml.cpp">
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
-    <ClCompile Include="MainWindow.Open.cpp" />
-    <ClCompile Include="MainWindow.ChartHost.cpp" />
-    <ClCompile Include="MainWindow.Input.cpp" />
-    <ClCompile Include="MainWindow.Hud.cpp" />
-    <ClCompile Include="MainWindow.Settings.cpp" />
+    <ClCompile Include="ui\MainWindow.Open.cpp" />
+    <ClCompile Include="ui\MainWindow.ChartHost.cpp" />
+    <ClCompile Include="ui\MainWindow.Input.cpp" />
+    <ClCompile Include="ui\MainWindow.Hud.cpp" />
+    <ClCompile Include="ui\MainWindow.Settings.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_backdrop.cpp" />
-    <ClCompile Include="winrt_glue.cpp" />
+    <ClCompile Include="ui\winrt_glue.cpp" />
     <!-- The host-agnostic C layer (ports of the Linux shell's controller/store/
          coord) — plain C, no PCH. -->
     <ClCompile Include="src\lk_controller.c">
@@ -135,21 +136,21 @@
     <ClCompile Include="src\lk_d3d.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="MainWindow.xaml.cpp">
+    <ClCompile Include="ui\MainWindow.xaml.cpp">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
   </ItemGroup>
 
   <ItemGroup>
-    <Midl Include="App.idl" />
-    <Midl Include="MainWindow.idl" />
+    <Midl Include="ui\App.idl" />
+    <Midl Include="ui\MainWindow.idl" />
   </ItemGroup>
 
   <ItemGroup>
-    <ApplicationDefinition Include="App.xaml">
+    <ApplicationDefinition Include="ui\App.xaml">
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Page Include="MainWindow.xaml">
+    <Page Include="ui\MainWindow.xaml">
       <SubType>Designer</SubType>
     </Page>
   </ItemGroup>
