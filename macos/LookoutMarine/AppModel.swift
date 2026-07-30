@@ -103,6 +103,13 @@ final class AppModel: ObservableObject {
     @Published var searchOpen = false
     @Published var searchText = ""
 
+    /// A picture from the pick report, shown over the chart at full size.
+    struct Picture: Equatable {
+        let name: String
+        let data: Data
+    }
+    @Published var picture: Picture?
+
     // MARK: Scale entry (tapping the 1:N readout)
     @Published var showScaleEntry = false
     @Published var scaleEntryText = ""
@@ -292,10 +299,14 @@ final class AppModel: ObservableObject {
     /// and the depth area before the light that was tapped. The report opens on
     /// the object that matters, so the list is ranked first.
     func showPick(_ results: [PickFeature], at point: CGPoint) {
-        // Meta objects describe the survey, not the water: M_QUAL covers the
-        // whole cell, so it answers every pick and tells the mariner nothing
-        // about what was tapped. The data quality overlay shows it instead.
-        let features = results.filter { !$0.cls.hasPrefix("M_") && !$0.cls.hasPrefix("C_") }
+        // A meta object describes the survey, not the water. M_QUAL covers the
+        // whole cell, so it answers every pick and says nothing about what was
+        // tapped. But M_NPUB carries the chart's caution notes, so a meta object
+        // stays when it has something to read.
+        let features = results.filter { f in
+            guard f.cls.hasPrefix("M_") || f.cls.hasPrefix("C_") else { return true }
+            return S57.carriesInformation(f.s57)
+        }
         pickResults = features.enumerated()
             .sorted { a, b in
                 let ra = PickRank.of(a.element.cls), rb = PickRank.of(b.element.cls)
@@ -356,7 +367,10 @@ final class AppModel: ObservableObject {
         }
 
         static func of(_ cls: String) -> Int {
-            primitive(of: cls).rawValue * 100 + (kind[cls] ?? 8)
+            // A meta object that survived the filter has a note worth reading,
+            // but it is still not what the mariner aimed at.
+            if cls.hasPrefix("M_") || cls.hasPrefix("C_") { return 900 }
+            return primitive(of: cls).rawValue * 100 + (kind[cls] ?? 8)
         }
     }
 

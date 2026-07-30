@@ -402,6 +402,20 @@ final class ChartController: NSObject {
         return lookout_scale_denominator(h)
     }
 
+    /// A file a picked feature points at, by the cell it came from and the name
+    /// the attribute carries. The bytes belong to the engine and stay valid
+    /// while the chart is open, so they are copied here.
+    func auxFile(cell: String, named name: String) -> (data: Data, mime: String)? {
+        guard let h = handle else { return nil }
+        var bytes: UnsafePointer<UInt8>?
+        var len = 0
+        var mime: UnsafePointer<CChar>?
+        lookout_aux_file(h, cell, name, &bytes, &len, &mime)
+        guard let bytes, len > 0 else { return nil }
+        return (Data(bytes: bytes, count: len),
+                mime.map { String(cString: $0) } ?? "application/octet-stream")
+    }
+
     // MARK: - Cursor pick
 
     func pick(lon: Double, lat: Double) -> [PickFeature] {

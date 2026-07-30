@@ -284,6 +284,22 @@ export fn lookout_pick(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_qu
     l.pick(lon, lat, cb);
 }
 
+/// A file a picked feature points at, by the cell it came from and the name it
+/// carries (TXTDSC, NTXTDS, PICREP, or an S-101 fileReference). *bytes is NULL
+/// with 0 length when the chart carries no such file. The bytes belong to the
+/// handle and stay valid until lookout_close.
+export fn lookout_aux_file(h: ?*lookout, cell: [*:0]const u8, name: [*:0]const u8, bytes: *?[*]const u8, len: *usize, mime: *?[*:0]const u8) void {
+    bytes.* = null;
+    len.* = 0;
+    mime.* = null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const found = l.auxFile(std.mem.span(cell), std.mem.span(name)) orelse return;
+    bytes.* = found.bytes.ptr;
+    len.* = found.bytes.len;
+    mime.* = found.mime;
+}
+
 // ---- convenience live toggles ----------------------------------------------
 export fn lookout_cycle_scheme(h: ?*lookout) void {
     const l = locked(h);

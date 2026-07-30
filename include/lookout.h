@@ -147,6 +147,17 @@ int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
 /* ---- pick (S-52 cursor pick at a geo point) ---------------------------- */
 void lookout_pick(lookout *h, double lon, double lat, const tile57_query_cb *cb);
 
+/* A file a picked feature points at, rather than carries: TXTDSC and NTXTDS name
+ * a text file, PICREP names a picture, and S-101 puts the same in a
+ * fileReference. `cell` is the chart name the pick reported; `name` is the value
+ * of the attribute. The bake stores those files beside the chart, and the match
+ * ignores case.
+ *
+ * *bytes is NULL and *len is 0 when the chart carries no such file. The bytes
+ * belong to the handle and stay valid until lookout_close; *mime is static. */
+void lookout_aux_file(lookout *h, const char *cell, const char *name,
+                      const uint8_t **bytes, size_t *len, const char **mime);
+
 /* ---- convenience live toggles ------------------------------------------ */
 void lookout_cycle_scheme(lookout *h);
 void lookout_toggle_text(lookout *h);
