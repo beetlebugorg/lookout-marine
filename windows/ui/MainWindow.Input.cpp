@@ -77,18 +77,6 @@ namespace winrt::LookoutMarine::implementation
             lk_controller_fling_start(controller, vx, vy);
     }
 
-    void MainWindow::GestureHover(double x, double y, bool inside)
-    {
-        if (!inside || !lk_controller_is_open(controller))
-        {
-            UpdateReadouts(true);
-            return;
-        }
-        double lon, lat;
-        if (lk_controller_geo_at(controller, x, y, &lon, &lat))
-            HudCoord().Text(lkw::FormatCoord(lat, lon, use_dms));
-    }
-
     void MainWindow::GestureWheel(double notches, double x, double y)
     {
         if (lk_controller_is_open(controller))

@@ -33,13 +33,8 @@ namespace
             }
             return 0;
         case WM_MOUSEMOVE:
-            if (win)
-            {
-                if (wp & MK_LBUTTON)
-                    win->GestureMove(px(lp), py(lp));
-                else
-                    win->GestureHover(px(lp), py(lp), true);
-            }
+            if (win && (wp & MK_LBUTTON))
+                win->GestureMove(px(lp), py(lp));
             return 0;
         case WM_LBUTTONUP:
             if (win)
