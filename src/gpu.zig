@@ -1,14 +1,18 @@
-//! Renderer backend selector. Four backends implement the same `Gpu` API behind
+//! Renderer backend selector. Five backends implement the same `Gpu` API behind
 //! this file, so root/capi/main import `gpu` and never name a backend:
 //!   * Apple (macOS / iOS / iPadOS) -> gpu_metal.zig (direct Metal)
 //!   * Android / Linux -> gpu_vk.zig (direct Vulkan onto the shell's surface)
 //!   * Windows -> gpu_d3d12.zig (direct D3D12 into a composition swapchain)
 //!   * gpu_sdl.zig (SDL3 + SDL_GPU) remains as the portable fallback
+//!   * gpu_null.zig for a host with no GPU, which rasterizes the chart itself
+//!     through lookout_render_view_canvas (e-ink, print, PDF)
 //! The build picks one via `-Dbackend` (see build.zig -> build_options). All
 //! expose: Gpu (+ its Scene), Uniforms, Options, NativeKind, Color, ticksMs,
 //! ticksUs.
 const bo = @import("build_options");
-const impl = if (bo.gpu_vk)
+const impl = if (bo.gpu_none)
+    @import("gpu_null.zig")
+else if (bo.gpu_vk)
     @import("gpu_vk.zig")
 else if (bo.gpu_d3d12)
     @import("gpu_d3d12.zig")

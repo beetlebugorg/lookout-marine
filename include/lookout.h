@@ -144,6 +144,28 @@ void *lookout_d3d12_swapchain(lookout *h);
 int lookout_snapshot_png(lookout *h, const char *path);
 int lookout_snapshot_rgba(lookout *h, uint8_t *dst, size_t dst_len); /* w*h*4 */
 
+/* ---- host-rasterized views (a host with no GPU) ------------------------
+ * Everything above draws through a GPU device. Some hosts have none: the
+ * reMarkable's e-ink panel ships no Vulkan driver, and a print or PDF export
+ * has no device at all. Such a host draws the chart itself — the engine emits
+ * the view as pixel-space draw calls, in paint order, through tile57's canvas
+ * callbacks, and the host paints them with its own rasterizer (QPainter, Cairo,
+ * Skia). Build the core with `-Dbackend=none` for a host that never makes a
+ * device; it then links no graphics library.
+ *
+ * The view is stated outright rather than read from the camera, because a host
+ * drawing this way is usually filling a TILE PYRAMID: it wants the view centred
+ * on each tile, not the one on screen. Pass lookout_get_view's values to draw
+ * what the camera sees. Everything else comes from the handle — the chart set,
+ * the composition and the mariner state — so a canvas render and a GPU frame
+ * portray the same chart under the same settings.
+ *
+ * `cb` and the geometry it receives are valid only for the duration of the
+ * call. 0 on success, -1 if the handle has no chart or the engine failed. */
+int lookout_render_view_canvas(lookout *h, double lon, double lat, double zoom,
+                               uint32_t width, uint32_t height,
+                               const tile57_canvas_cb *cb);
+
 /* ---- pick (S-52 cursor pick at a geo point) ---------------------------- */
 void lookout_pick(lookout *h, double lon, double lat, const tile57_query_cb *cb);
 

@@ -75,16 +75,21 @@ pub fn build(b: *std.Build) void {
     //   * vk:    Android and Linux, direct Vulkan onto the shell's surface
     //   * d3d12: Windows, direct D3D12 into a composition swapchain
     //   * sdl:   the SDL_GPU fallback, `-Dbackend=sdl` anywhere
+    //   * none:  no GPU at all, for a host that rasterizes the chart itself
+    //            through lookout_render_view_canvas (the reMarkable's e-ink
+    //            panel has no Vulkan driver). Links no graphics library, so it
+    //            cross-compiles for a device that ships none.
     // Default by platform; see src/gpu.zig.
-    const Backend = enum { metal, sdl, vk, d3d12 };
+    const Backend = enum { metal, sdl, vk, d3d12, none };
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
     const is_windows = target.result.os.tag == .windows;
     const target_android = target.result.abi == .android or target.result.abi == .androideabi;
-    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk | d3d12") orelse
+    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk | d3d12 | none") orelse
         (if (is_apple) Backend.metal else if (target_android) Backend.vk else if (is_windows) Backend.d3d12 else Backend.sdl);
     const use_sdl = backend == .sdl;
     const use_vk = backend == .vk;
     const use_d3d12 = backend == .d3d12;
+    const use_none = backend == .none;
     // vk serves Android and the desktop shells; Apple stays on metal.
     if (use_vk and is_apple)
         @panic("-Dbackend=vk targets Android, Linux and Windows; use metal on Apple");
@@ -94,6 +99,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "gpu_sdl", use_sdl);
     build_opts.addOption(bool, "gpu_vk", use_vk);
     build_opts.addOption(bool, "gpu_d3d12", use_d3d12);
+    build_opts.addOption(bool, "gpu_none", use_none);
     const build_opts_mod = build_opts.createModule();
 
     // Android cross-compile (mirrors tile57's -Dandroid-ndk): the C deps need the
@@ -135,6 +141,7 @@ pub fn build(b: *std.Build) void {
         use_sdl: bool,
         use_vk: bool,
         use_d3d12: bool,
+        use_none: bool,
         android: bool,
         apple: bool,
         windows: bool,
@@ -213,7 +220,7 @@ pub fn build(b: *std.Build) void {
                 mod.addCSourceFile(.{ .file = bb.path("src/d3d12_shim.c"), .flags = &.{ "-O2", "-fno-sanitize=undefined" } });
                 mod.addAnonymousImport("hlsl_src", .{ .root_source_file = self.tile57_dep.path("shaders/lookout.hlsl") });
             }
-            if (!self.use_sdl and !self.use_vk and !self.use_d3d12) {
+            if (!self.use_sdl and !self.use_vk and !self.use_d3d12 and !self.use_none) {
                 // The Metal transport (ObjC behind a C face). Manual
                 // retain/release on purpose — objects live in C structs.
                 mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
@@ -222,7 +229,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .use_none = use_none, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{

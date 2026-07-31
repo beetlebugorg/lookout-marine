@@ -1653,6 +1653,31 @@ pub const Lookout = struct {
         @memcpy(dst[0..px.len], px);
     }
 
+    /// Hand a view to the host as pixel-space draw calls, in paint order, for a
+    /// host that has no GPU and rasterizes the chart itself. The view is stated
+    /// outright rather than taken from the camera, because the caller drawing
+    /// this way is usually filling a tile pyramid: it asks for the view centred
+    /// on each tile, not the one on screen.
+    ///
+    /// Everything else comes from the handle — the chart set, the composition
+    /// and the mariner state — so a canvas render and a GPU frame portray the
+    /// same chart under the same settings.
+    pub fn renderViewCanvas(self: *Lookout, lon: f64, lat: f64, zoom: f64, width: u32, height: u32, cb: *const cc.tile57_canvas_cb) !void {
+        // Adopt the composed set first. A GPU host reaches this through render();
+        // a canvas host never calls render at all, so without this the quilt
+        // would stay unadopted and every tile would draw chart[0] alone.
+        self.pollCompose(true);
+        if (self.charts.items.len == 0) return error.NoChart;
+        self.engine_mu.lock();
+        defer self.engine_mu.unlock();
+        var err: cc.tile57_error = undefined;
+        const st = if (self.compose) |c|
+            cc.tile57_compose_canvas(c, lon, lat, zoom, width, height, &self.mariner, cb, &err)
+        else
+            cc.tile57_chart_canvas(self.charts.items[0], lon, lat, zoom, width, height, &self.mariner, cb, &err);
+        if (st != cc.TILE57_OK) return error.CanvasRenderFailed;
+    }
+
     // ---- pick (tap-to-identify) --------------------------------------------
     /// S-52 §10.8 cursor pick at a geographic point: `cb.feature` fires once per
     /// feature under it (class acronym + full S-57 attribute JSON + source cell).

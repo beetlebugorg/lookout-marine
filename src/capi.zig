@@ -277,6 +277,16 @@ export fn lookout_snapshot_rgba(h: ?*lookout, dst: [*]u8, dst_len: usize) c_int 
     return 0;
 }
 
+/// The view as pixel-space draw calls for a host that rasterizes it itself.
+/// See lookout.h; the core supplies the chart set and the mariner state, the
+/// host supplies the rasterizer.
+export fn lookout_render_view_canvas(h: ?*lookout, lon: f64, lat: f64, zoom: f64, width: u32, height: u32, cb: *const cc.tile57_canvas_cb) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.renderViewCanvas(lon, lat, zoom, width, height, cb) catch return -1;
+    return 0;
+}
+
 // ---- pick (tap-to-identify) ------------------------------------------------
 export fn lookout_pick(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
     const l = locked(h);
