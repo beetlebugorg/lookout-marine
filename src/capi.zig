@@ -285,8 +285,9 @@ export fn lookout_pick(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_qu
 }
 
 /// The cursor pick a shell should show: the objects worth reporting, best
-/// first. Same callback as lookout_pick; the core decides what is reported and
-/// in what order, so every shell shows the same thing. See lookout.h.
+/// first, with their depths in the mariner's unit. Same callback as
+/// lookout_pick; the core decides what is reported, in what order and in which
+/// unit, so every shell shows the same thing. See lookout.h.
 export fn lookout_pick_ranked(h: ?*lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
     const l = locked(h);
     defer l.apiUnlock();

@@ -158,8 +158,14 @@ void lookout_pick(lookout *h, double lon, double lat, const tile57_query_cb *cb)
  *   - the most specific object wins: point, then line, then area, and what the
  *     object is decides within that.
  *
+ * It also states depths in the mariner's unit and prints that unit, because a
+ * cell holds only metres: VALSOU, VALDCO, DRVAL1 and DRVAL2 read "17 ft" or
+ * "5.4 m", matching the chart label digit for digit. Feet are whole feet,
+ * truncated down. Heights (VERCLR, HEIGHT, ELEVAT) stay metric — a height is a
+ * unit the mariner does not carry.
+ *
  * Use this for a pick report; use lookout_pick when you want the engine's own
- * list untouched. */
+ * list untouched, in metres. */
 void lookout_pick_ranked(lookout *h, double lon, double lat, const tile57_query_cb *cb);
 
 /* A file a picked feature points at, rather than carries: TXTDSC and NTXTDS name

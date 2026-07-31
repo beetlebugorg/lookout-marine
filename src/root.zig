@@ -1674,9 +1674,10 @@ pub const Lookout = struct {
         }
     }
 
-    /// The pick a shell should show: the objects worth reporting, best first
-    /// (see pick.zig). Collected, ranked, then replayed through `cb` in order,
-    /// so a host reads the same callback it already has.
+    /// The pick a shell should show: the objects worth reporting, best first,
+    /// with their depths in the mariner's unit (see pick.zig). Collected,
+    /// ranked, converted, then replayed through `cb` in order, so a host reads
+    /// the same callback it already has.
     pub fn pickRanked(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
         var arena = std.heap.ArenaAllocator.init(self.alloc);
         defer arena.deinit();
@@ -1719,9 +1720,14 @@ pub const Lookout = struct {
         }
         pick_rules.order(kept.items);
 
+        // Report depths in the unit the chart is drawn in. The engine states
+        // what the cell holds, which is always metres, so a foot chart would
+        // otherwise report a contour the mariner cannot match to its label.
+        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
         if (cb.feature) |emit| {
             for (kept.items) |f| {
-                emit(cb.ctx, f.cls.ptr, f.cls.len, f.s57.ptr, f.s57.len, f.chart.ptr, f.chart.len);
+                const s57 = pick_rules.depthsInUnit(a, f.s57, feet);
+                emit(cb.ctx, f.cls.ptr, f.cls.len, s57.ptr, s57.len, f.chart.ptr, f.chart.len);
             }
         }
     }
@@ -1790,6 +1796,12 @@ fn marinerNeedsRebuild(a: Mariner, b: Mariner) bool {
         a.viewing_groups_off != b.viewing_groups_off or a.viewing_groups_off_len != b.viewing_groups_off_len or
         a.scamin_filter_gate != b.scamin_filter_gate or a.show_overscale != b.show_overscale or
         a.text_size_scale != b.text_size_scale or a.sounding_size_scale != b.sounding_size_scale;
+}
+
+test {
+    // Collect the pick rules' own tests. Only pickRanked reaches pick.zig, and a
+    // test build never analyzes it, so without this the file's tests never run.
+    _ = pick_rules;
 }
 
 test "camera roundtrip" {
