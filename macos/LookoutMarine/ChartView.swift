@@ -543,8 +543,17 @@ final class ChartNSView: NSView {
 
     // MARK: Wheel / pinch zoom (cursor-anchored)
 
+    /// A wheel or pinch over the chrome belongs to the chrome. A scroll the pick
+    /// report does not use — its text already at the end, or short enough to need
+    /// no scrolling — walks the responder chain to this view, and zooming on it
+    /// closed the report the reader was scrolling.
+    private func overChrome(_ p: NSPoint) -> Bool {
+        ChromeHitMap.shared.contains(p)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if overChrome(p) { return }
         // Trackpad precise deltas are large; a classic wheel notch is ~±1 (match
         // the demo's 0.25 factor for wheels).
         let factor = event.hasPreciseScrollingDeltas ? 0.01 : 0.25
@@ -554,6 +563,7 @@ final class ChartNSView: NSView {
 
     override func magnify(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if overChrome(p) { return }
         controller?.zoom(Double(event.magnification) * 3.0, atPt: p)
     }
 }
