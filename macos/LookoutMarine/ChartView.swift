@@ -30,10 +30,31 @@ import UIKit
 /// readout capsule at the bottom center.
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
+    /// The measured size of the pick report, which places it by the pick.
+    @State private var reportSize = CGSize(width: PickReportPanel.width, height: 180)
 
     /// Below this width the capsule and the corner chrome cannot share the
     /// bottom row. The corner chrome then moves above the capsule.
     private static let compactWidth: CGFloat = 700
+
+    /// Put the report beside the pick, and keep it on screen: it flips to the
+    /// other side of the point when it would leave the window. The report's
+    /// MEASURED size decides that. Its scroll cap flipped a report that fits.
+    static func reportOffset(from point: CGPoint, size report: CGSize, in view: CGSize,
+                            drag: CGSize) -> CGSize {
+        var x = point.x + Chrome.gap
+        var y = point.y + Chrome.gap
+        if x + report.width > view.width - Chrome.margin {
+            x = max(Chrome.margin, point.x - report.width - Chrome.gap)
+        }
+        if y + report.height > view.height - Chrome.margin {
+            y = max(Chrome.margin, point.y - report.height - Chrome.gap)
+        }
+        // A drag beats the placement, but the header stays reachable.
+        x = min(max(0, x + drag.width), max(0, view.width - 80))
+        y = min(max(0, y + drag.height), max(0, view.height - 40))
+        return CGSize(width: x, height: y)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -82,19 +103,39 @@ struct OverlayLayer: View {
                     .padding(.bottom, corner)
                     .ignoresSafeArea(.container, edges: .trailing)
                 }
-                // Bottom left: the pick report above the scale bar.
+                // Bottom left: the scale bar.
                 .overlay(alignment: .bottomLeading) {
-                    VStack(alignment: .leading, spacing: Chrome.gap) {
-                        if !model.pickResults.isEmpty {
-                            PickReportPanel(results: model.pickResults) { model.pickResults = [] }
-                                .chromeHitRegion("pick-report")
-                        }
-                        if model.hasChart {
-                            ScaleBarView(scaleDenominator: model.scaleDenominator)
-                        }
+                    if model.hasChart {
+                        ScaleBarView(scaleDenominator: model.scaleDenominator)
+                            .padding(.leading, Chrome.margin)
+                            .padding(.bottom, corner)
                     }
-                    .padding(.leading, Chrome.margin)
-                    .padding(.bottom, corner)
+                }
+                // The mark on what was picked, then the report beside it.
+                .overlay(alignment: .topLeading) {
+                    if let point = model.pickPoint {
+                        PickMarker()
+                            .offset(x: point.x - PickMarker.size / 2,
+                                    y: point.y - PickMarker.size / 2)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let point = model.pickPoint {
+                        let at = Self.reportOffset(from: point, size: reportSize,
+                                                   in: geo.size, drag: model.pickDrag)
+                        PickReportPanel(model: model)
+                            .background(GeometryReader { g in
+                                Color.clear.preference(key: ReportSize.self, value: g.size)
+                            })
+                            // Placed with padding, not an offset: an offset moves
+                            // the drawing and not the layout, so the frame the
+                            // chrome publishes stayed at the top left and every
+                            // click on the report reached the chart underneath.
+                            .chromeHitRegion("pick-report")
+                            .padding(.leading, at.width)
+                            .padding(.top, at.height)
+                            .onPreferenceChange(ReportSize.self) { reportSize = $0 }
+                    }
                 }
                 // Bottom center: the readout capsule. The scale entry opens
                 // above it.
@@ -118,6 +159,12 @@ struct OverlayLayer: View {
                     if model.isBuilding { BuildingPill().padding(.top, 10) }
                 }
                 .overlay {
+                    if let picture = model.picture {
+                        PictureViewer(model: model, picture: picture)
+                            .chromeHitRegion("picture-viewer")
+                    }
+                }
+                .overlay {
                     if model.showStartupLoader {
                         StartupLoader(phase: model.loadingPhase)
                             .transition(.opacity)
@@ -135,6 +182,12 @@ struct OverlayLayer: View {
         // The pass-through hosts hit-test against it.
         .coordinateSpace(name: Chrome.space)
     }
+}
+
+/// The measured size of the pick report.
+private struct ReportSize: PreferenceKey {
+    static var defaultValue = CGSize(width: PickReportPanel.width, height: 180)
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 /// Write this view's frame to ChromeHitMap. The pass-through host keeps the
@@ -325,6 +378,7 @@ final class ChartNSView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        model?.pickCentreHint = CGPoint(x: newSize.width / 2, y: newSize.height / 2)
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes just resize.
         if !didAutoOpen { maybeAutoOpen() }
@@ -364,6 +418,7 @@ final class ChartNSView: NSView {
         // recents, and the fromServer frame restore is exactly the mid-load
         // resize the deferral above is dodging.
         window?.isRestorable = false
+        model?.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
         model?.openingCells = paths.count
         model?.isOpening = true // loader up before the (synchronous) open runs
         model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
@@ -387,6 +442,22 @@ final class ChartNSView: NSView {
     }
 
     // MARK: Hover (HUD cursor readout)
+
+    /// Escape closes the pick report. The chart view is the first responder;
+    /// the SwiftUI overlay is not, so its own exit command never fires.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {   // 53 = Escape
+            if model?.picture != nil {
+                model?.picture = nil
+                return
+            }
+            if model?.pickPoint != nil {
+                model?.closePick()
+                return
+            }
+        }
+        super.keyDown(with: event)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -467,13 +538,22 @@ final class ChartNSView: NSView {
 
     private func tapPick(at p: CGPoint) {
         guard let g = controller?.geo(atPoint: p) else { return }
-        model?.pickResults = controller?.pick(lon: g.lon, lat: g.lat) ?? []
+        model?.showPick(controller?.pick(lon: g.lon, lat: g.lat) ?? [], at: p)
     }
 
     // MARK: Wheel / pinch zoom (cursor-anchored)
 
+    /// A wheel or pinch over the chrome belongs to the chrome. A scroll the pick
+    /// report does not use — its text already at the end, or short enough to need
+    /// no scrolling — walks the responder chain to this view, and zooming on it
+    /// closed the report the reader was scrolling.
+    private func overChrome(_ p: NSPoint) -> Bool {
+        ChromeHitMap.shared.contains(p)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if overChrome(p) { return }
         // Trackpad precise deltas are large; a classic wheel notch is ~±1 (match
         // the demo's 0.25 factor for wheels).
         let factor = event.hasPreciseScrollingDeltas ? 0.01 : 0.25
@@ -483,6 +563,7 @@ final class ChartNSView: NSView {
 
     override func magnify(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if overChrome(p) { return }
         controller?.zoom(Double(event.magnification) * 3.0, atPt: p)
     }
 }
@@ -609,6 +690,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
+        model?.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
         model?.openingCells = paths.count
         model?.isOpening = true // loader up before the (synchronous) open runs
         model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
@@ -737,7 +819,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         notePointerInput("tap")
         let p = g.location(in: self)
         guard let geo = controller?.geo(atPoint: p) else { return }
-        model?.pickResults = controller?.pick(lon: geo.lon, lat: geo.lat) ?? []
+        model?.showPick(controller?.pick(lon: geo.lon, lat: geo.lat) ?? [], at: p)
     }
 
     @objc private func onDoubleTap(_ g: UITapGestureRecognizer) {

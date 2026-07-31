@@ -211,6 +211,12 @@ final class ChartController: NSObject {
         displayLink = nil
     }
 
+    /// A pick report belongs to the view it was taken in. Any camera move
+    /// retires it, so the report never floats over water it does not describe.
+    private func retirePickReport() {
+        if model?.pickPoint != nil { model?.closePick() }
+    }
+
     /// Resume ticking after any state change (mutating calls funnel through here).
     private func kick() {
         idleTicks = 0
@@ -274,6 +280,7 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         var vv = v
         lookout_set_view(h, &vv)
+        retirePickReport()
         kick(); pushReadouts()
     }
 
@@ -302,12 +309,14 @@ final class ChartController: NSObject {
     func pan(dxPt: CGFloat, dyPt: CGFloat) {
         guard let h = handle else { return }
         lookout_pan_logical(h, Float(dxPt), Float(dyPt))
+        retirePickReport()
         kick()
     }
 
     func zoom(_ dz: Double, atPt pt: CGPoint) {
         guard let h = handle else { return }
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))
+        retirePickReport()
         kick()
     }
 
@@ -321,6 +330,7 @@ final class ChartController: NSObject {
     func rotateDrag(from a: CGPoint, to b: CGPoint) {
         guard let h = handle else { return }
         lookout_rotate_drag_logical(h, Float(a.x), Float(a.y), Float(b.x), Float(b.y))
+        retirePickReport()
         kick(); pushReadouts()
     }
 
@@ -392,6 +402,20 @@ final class ChartController: NSObject {
         return lookout_scale_denominator(h)
     }
 
+    /// A file a picked feature points at, by the cell it came from and the name
+    /// the attribute carries. The bytes belong to the engine and stay valid
+    /// while the chart is open, so they are copied here.
+    func auxFile(cell: String, named name: String) -> (data: Data, mime: String)? {
+        guard let h = handle else { return nil }
+        var bytes: UnsafePointer<UInt8>?
+        var len = 0
+        var mime: UnsafePointer<CChar>?
+        lookout_aux_file(h, cell, name, &bytes, &len, &mime)
+        guard let bytes, len > 0 else { return nil }
+        return (Data(bytes: bytes, count: len),
+                mime.map { String(cString: $0) } ?? "application/octet-stream")
+    }
+
     // MARK: - Cursor pick
 
     func pick(lon: Double, lat: Double) -> [PickFeature] {
@@ -411,7 +435,9 @@ final class ChartController: NSObject {
                                                    chart: str(chart, chartLen),
                                                    s57: str(s57, s57Len)))
                 })
-            lookout_pick(h, lon, lat, &cb)
+            // The core decides what a pick reports and in what order (pick.zig),
+            // so every shell shows the same thing.
+            lookout_pick_ranked(h, lon, lat, &cb)
         }
         return results
     }

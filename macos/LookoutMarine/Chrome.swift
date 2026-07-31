@@ -25,6 +25,8 @@ enum Chrome {
     static let accent = Color(red: 0.106, green: 0.286, blue: 0.769)   // #1B49C4
     static let amber = Color(red: 0.961, green: 0.620, blue: 0.043)    // #F59E0B
     static let overscale = Color(red: 0.847, green: 0.231, blue: 0.004) // #D83B01
+    /// S-52 highlights in magenta.
+    static let magenta = Color(red: 0.858, green: 0.098, blue: 0.549)
     static let surface = Color.white
     /// Panel fill (XAML #F2F8F8F8 / #F5F8F8F8 over the chart).
     static let panel = Color(red: 0.973, green: 0.973, blue: 0.973)
@@ -48,8 +50,10 @@ enum Chrome {
 
 extension View {
     /// The WinUI 3 floating panel style: pick report, empty state, and loader.
-    func panelSurface(cornerRadius r: CGFloat = 8) -> some View {
-        background(Chrome.panel.opacity(0.95),
+    /// A report is opaque: the chart showing through a table of numbers makes
+    /// both hard to read.
+    func panelSurface(cornerRadius r: CGFloat = 8, opaque: Bool = false) -> some View {
+        background(opaque ? Chrome.surface : Chrome.panel.opacity(0.95),
                    in: RoundedRectangle(cornerRadius: r, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
                 .strokeBorder(Chrome.edge, lineWidth: 1))
@@ -169,6 +173,21 @@ struct NorthBubble: View {
         .buttonStyle(ChromeButtonStyle())
         .help("Reset to north-up")
         .accessibilityLabel("Reset to north-up")
+    }
+}
+
+/// The mark on the chart under an open pick report. S-52 highlights in
+/// magenta; the white ring under it keeps the mark visible on a night chart.
+struct PickMarker: View {
+    static let size: CGFloat = 34
+
+    var body: some View {
+        ZStack {
+            Circle().strokeBorder(.white.opacity(0.85), lineWidth: 4)
+            Circle().strokeBorder(Chrome.magenta, lineWidth: 2)
+        }
+        .frame(width: Self.size, height: Self.size)
+        .allowsHitTesting(false)
     }
 }
 

@@ -12,6 +12,7 @@ const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const gpu = @import("gpu.zig");
 const camera = @import("camera.zig");
+const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 const atlas = @import("atlas.zig");
 const png = @import("png.zig");
 
@@ -199,6 +200,12 @@ else
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
+    /// Cell name -> the directory the archive sits in. A cell's referenced text
+    /// and pictures live there (see tile57_aux_*), and a pick report names the
+    /// cell, so this is what turns that name into files.
+    chart_dirs: std.StringHashMapUnmanaged([]u8) = .empty,
+    /// The aux handles already opened, by cell name. Opened on first ask.
+    aux: std.StringHashMapUnmanaged(?*cc.tile57_aux) = .empty,
     compose: ?*cc.tile57_compose = null, // set when >1 chart (ENC_ROOT / library)
     g: gpu.Gpu,
     built: bool = false, // GPU holds a current scene
@@ -699,7 +706,10 @@ pub const Lookout = struct {
         for (threads[0..spawned]) |t| t.join();
 
         for (slots, paths) |c, p| {
-            if (c) |ch| self.charts.append(self.alloc, ch) catch {} else std.debug.print("skip '{s}'\n", .{p});
+            if (c) |ch| {
+                self.charts.append(self.alloc, ch) catch {};
+                self.noteChartDir(p);
+            } else std.debug.print("skip '{s}'\n", .{p});
         }
     }
 
@@ -711,6 +721,62 @@ pub const Lookout = struct {
             return;
         }
         self.charts.append(self.alloc, chart.?) catch {};
+        self.noteChartDir(path);
+    }
+
+    /// Record cell name -> directory for one opened archive.
+    fn noteChartDir(self: *Lookout, path: []const u8) void {
+        const base = std.fs.path.basename(path);
+        const stem = std.fs.path.stem(base);
+        const dir = std.fs.path.dirname(path) orelse ".";
+        if (self.chart_dirs.contains(stem)) return;
+        const k = self.alloc.dupe(u8, stem) catch return;
+        const v = self.alloc.dupe(u8, dir) catch {
+            self.alloc.free(k);
+            return;
+        };
+        self.chart_dirs.put(self.alloc, k, v) catch {
+            self.alloc.free(k);
+            self.alloc.free(v);
+        };
+    }
+
+    /// The bytes and MIME type of a file a feature of `cell` references, or null
+    /// when the chart carries no such file. The bytes belong to the aux handle
+    /// and stay valid until close.
+    pub fn auxFile(self: *Lookout, cell: []const u8, name: []const u8) ?struct { bytes: []const u8, mime: [*:0]const u8 } {
+        const handle = self.auxHandle(cell) orelse return null;
+        var buf: [512]u8 = undefined;
+        if (name.len >= buf.len) return null;
+        @memcpy(buf[0..name.len], name);
+        buf[name.len] = 0;
+        var bytes: [*c]const u8 = null;
+        var len: usize = 0;
+        var mime: [*c]const u8 = null;
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_aux_get(handle, @ptrCast(&buf), &bytes, &len, &mime, &err) != cc.TILE57_OK) return null;
+        if (bytes == null or len == 0) return null;
+        return .{
+            .bytes = bytes[0..len],
+            .mime = if (mime != null) @ptrCast(mime) else "application/octet-stream",
+        };
+    }
+
+    /// The aux handle for a cell, opened on the first ask. A cell with no files
+    /// caches a null so the miss costs one lookup.
+    fn auxHandle(self: *Lookout, cell: []const u8) ?*cc.tile57_aux {
+        if (self.aux.get(cell)) |cached| return cached;
+        const dir = self.chart_dirs.get(cell) orelse return null;
+        var buf: [1024]u8 = undefined;
+        if (dir.len >= buf.len) return null;
+        @memcpy(buf[0..dir.len], dir);
+        buf[dir.len] = 0;
+        var handle: ?*cc.tile57_aux = null;
+        var err: cc.tile57_error = undefined;
+        _ = cc.tile57_aux_open(@ptrCast(&buf), &handle, &err);
+        const k = self.alloc.dupe(u8, cell) catch return handle;
+        self.aux.put(self.alloc, k, handle) catch self.alloc.free(k);
+        return handle;
     }
     fn finishOpen(self: *Lookout) !void {
         if (self.charts.items.len == 0) return error.NoCharts;
@@ -840,6 +906,18 @@ pub const Lookout = struct {
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
         self.charts.deinit(self.alloc);
+        var aux_it = self.aux.iterator();
+        while (aux_it.next()) |kv| {
+            if (kv.value_ptr.*) |h| cc.tile57_aux_close(h);
+            self.alloc.free(kv.key_ptr.*);
+        }
+        self.aux.deinit(self.alloc);
+        var dir_it = self.chart_dirs.iterator();
+        while (dir_it.next()) |kv| {
+            self.alloc.free(kv.key_ptr.*);
+            self.alloc.free(kv.value_ptr.*);
+        }
+        self.chart_dirs.deinit(self.alloc);
         self.alloc.destroy(self);
     }
 
@@ -1593,6 +1671,58 @@ pub const Lookout = struct {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);
         } else {
             _ = cc.tile57_chart_query(self.charts.items[0], lon, lat, self.cam.zoom, cb, &err);
+        }
+    }
+
+    /// The pick a shell should show: the objects worth reporting, best first
+    /// (see pick.zig). Collected, ranked, then replayed through `cb` in order,
+    /// so a host reads the same callback it already has.
+    pub fn pickRanked(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        var collected = std.ArrayList(pick_rules.Feature).empty;
+        const Collect = struct {
+            list: *std.ArrayList(pick_rules.Feature),
+            alloc: std.mem.Allocator,
+
+            fn feature(ctx: ?*anyopaque, cls: [*c]const u8, cls_len: usize, s57: [*c]const u8, s57_len: usize, chart: [*c]const u8, chart_len: usize) callconv(.c) void {
+                const self_: *@This() = @ptrCast(@alignCast(ctx orelse return));
+                const dup = struct {
+                    fn go(al: std.mem.Allocator, p: [*c]const u8, n: usize) []const u8 {
+                        if (p == null or n == 0) return "";
+                        return al.dupe(u8, p[0..n]) catch "";
+                    }
+                }.go;
+                self_.list.append(self_.alloc, .{
+                    .cls = dup(self_.alloc, cls, cls_len),
+                    .s57 = dup(self_.alloc, s57, s57_len),
+                    .chart = dup(self_.alloc, chart, chart_len),
+                }) catch {};
+            }
+        };
+        var collector = Collect{ .list = &collected, .alloc = a };
+        var collect_cb = cc.tile57_query_cb{ .ctx = &collector, .feature = Collect.feature };
+        self.pick(lon, lat, &collect_cb);
+
+        // Drop what a pick should not report and what it reports twice, then
+        // order what is left.
+        var kept = std.ArrayList(pick_rules.Feature).empty;
+        for (collected.items) |f| {
+            if (!pick_rules.keep(f)) continue;
+            var seen = false;
+            for (kept.items) |k| {
+                if (pick_rules.same(k, f)) seen = true;
+            }
+            if (!seen) kept.append(a, f) catch {};
+        }
+        pick_rules.order(kept.items);
+
+        if (cb.feature) |emit| {
+            for (kept.items) |f| {
+                emit(cb.ctx, f.cls.ptr, f.cls.len, f.s57.ptr, f.s57.len, f.chart.ptr, f.chart.len);
+            }
         }
     }
 
