@@ -20,6 +20,7 @@ and switch between day and night.
   <tr valign="top">
     <td align="center"><b>iPadOS</b> · SwiftUI<br><img src="docs/docs/img/ipad-day.png" width="230" alt="Annapolis Harbor on iPad, day scheme"></td>
     <td align="center"><b>iOS</b> · SwiftUI<br><img src="docs/docs/img/iphone-day.png" width="160" alt="Annapolis Harbor on iPhone, day scheme"></td>
+    <td align="center"><b>reMarkable</b> · Qt Quick<br>e-ink, no GPU</td>
   </tr>
 </table>
 
@@ -131,6 +132,15 @@ WinUI 3 in C++/WinRT, and the core presents Direct3D 12 through a composition
 swapchain on a `SwapChainPanel` below the chrome. Each shell drives the same
 `lookout.h` C ABI.
 
+`remarkable/` is the exception that proves the ABI carries its weight. The e-ink
+tablet has **no GPU an app can reach**, so there is no surface to hand the core.
+Instead the core is built with `-Dbackend=none` — a renderer that links no
+graphics library — and the shell asks for the view as pixel-space draw calls
+through `lookout_render_view_canvas`, then paints them with `QPainter` into a
+raster tile pyramid. The core still owns the chart set, the composition, the
+camera and the mariner state, so the same header serves a host that draws the
+chart itself. A printer or a PDF export would take the same path.
+
 The largest tasks are in the **[tile57]** engine: ISO 8211 and S-57 decode, the
 S-57-to-S-101 conversion, S-101 portrayal with embedded Lua, tessellation, sprite and
 SDF atlases, and tile composition. The build uses the engine as a Zig package
@@ -225,6 +235,7 @@ src/gpu.zig                the backend switch (metal | vk | d3d12 | sdl)
 src/gpu_vk.zig             the Vulkan transport (Linux and Android)
 src/gpu_metal.zig          the Metal transport (with src/metal_shim.{h,m})
 src/gpu_d3d12.zig          the Direct3D 12 transport (with src/d3d12_shim.{h,c})
+src/gpu_null.zig           no transport at all, for a host that rasterizes itself
 src/atlas.zig, src/png.zig sprite and SDF atlas load; PNG encode
 src/capi.zig, src/main.zig the C ABI wrapper; the headless demo
 docs/                      architecture, host notes, the screenshot protocol
@@ -232,6 +243,7 @@ macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
 android/                   the Java shell (Vulkan into a SurfaceView)
 linux/                     the GTK4 app (Vulkan into a subsurface), meson
 windows/                   the WinUI 3 app (D3D12 into a SwapChainPanel)
+remarkable/                the Qt Quick app for e-ink (no GPU; QPainter tiles)
 vendor/stb                 stb_image (it decodes the atlas PNG files)
 ```
 

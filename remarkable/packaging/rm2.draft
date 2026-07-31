@@ -1,0 +1,9 @@
+# Toltec `draft` launcher entry for reMarkable 2.
+# Install: copy to /opt/etc/draft/ on the device and edit the chart path.
+#
+# draft/oxide already manage the framebuffer and pause the running app, so we
+# tell launch.sh NOT to touch xochitl itself (STOP_UI=0).
+name=Lookout Marine
+desc=Nautical charts
+call=env STOP_UI=0 /home/root/lookout-marine/launch.sh /home/root/lookout-marine/charts/US5MD1MC.pmtiles
+term=:

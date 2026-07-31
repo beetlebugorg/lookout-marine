@@ -1,0 +1,7 @@
+# Local build outputs.
+build/
+build-*-sdk/
+.cache/
+
+# Local overrides for the Makefile (host, chart path, SDK URL).
+config.mk

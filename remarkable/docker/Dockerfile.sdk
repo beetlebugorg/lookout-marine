@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: 2024-2026 Jeremy Collins <jeremy.collins@beetlebug.org>
+# SPDX-License-Identifier: MIT
+#
+# Cross-build image holding the reMarkable developer SDK — the device's own Qt 6
+# and the epaper toolchain — so the binary it produces runs on reMarkable's
+# "epaper" platform with no bundle and no rm2fb.
+#
+# There is no Zig here, unlike the viewer this shell grew out of. The chart core
+# is cross-compiled on the HOST (`make core` -> zig build lib -Dbackend=none) and
+# mounted at /core, because Zig cross-compiles without a toolchain to install and
+# the container is only needed for the SDK's Qt.
+#
+# reMarkable ships the toolchain for x86_64 AND aarch64 Linux hosts, so this
+# image follows the build `--platform`: linux/amd64 on an x86_64 host, or
+# linux/arm64 NATIVELY on an Apple Silicon Mac — no emulation. The Makefile picks
+# the matching installer for you.
+FROM debian:bookworm
+
+ARG SDK_URL
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl xz-utils file git make cmake ninja-build python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The reMarkable developer SDK: a target sysroot with Qt 6 and the epaper
+# plugin, the cross toolchain, and an environment-setup script. (Yocto
+# self-extractor: -y accepts the defaults, -d picks the install dir.)
+#
+# The installer (~400 MB) is cached in a BuildKit cache mount keyed by its
+# filename, so it downloads ONCE and is reused on every rebuild — even after the
+# image is removed, since the cache lives in BuildKit rather than in the image.
+# A cache miss re-runs only the extract, never the download.
+RUN --mount=type=cache,target=/var/cache/rmsdk \
+    test -n "${SDK_URL}" || { echo "build with --build-arg SDK_URL=<reMarkable SDK installer .sh URL>"; exit 1; }; \
+    sdk="/var/cache/rmsdk/$(basename "${SDK_URL}")"; \
+    [ -s "$sdk" ] || curl -fL "${SDK_URL}" -o "$sdk"; \
+    sh "$sdk" -y -d /opt/rm-sdk && \
+    find /opt/rm-sdk -maxdepth 3 -name 'environment-setup-*'
+
+WORKDIR /work

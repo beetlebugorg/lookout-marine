@@ -134,6 +134,39 @@ swift macos/frame-device.swift docs/docs/img/iphone-day-raw.png \
   docs/docs/img/iphone-day.png 45 210 165 0     # the phone camera is in the screen
 ```
 
+## reMarkable
+
+The shell grabs its own window, so this host needs neither a screen permission
+nor a device. Build it against a local Qt 6 (`cd remarkable && make host`) and
+run it with `LOOKOUT_SHOT`, which waits for the tiles to settle, writes the PNG
+and exits.
+
+```sh
+LOOKOUT_SIZE=1404x1872 \
+LOOKOUT_OPEN=<chart|folder> \
+LOOKOUT_VIEW=-76.482,38.976,13.7 \
+LOOKOUT_SHOT=docs/docs/img/remarkable-day.png \
+LOOKOUT_SHOT_DELAY=8000 \
+  remarkable/build/lookout-marine
+```
+
+`LOOKOUT_SIZE` is the rM2 panel, so a desktop frame matches the device. Add
+`LOOKOUT_OPEN_SETTINGS=1` for the settings frame.
+
+Two readings differ from the other hosts by design, and a frame that matches them
+exactly is wrong rather than right:
+
+- The chart is **monochrome**: the engine draws it through the ink colour profile
+  (`remarkable/assets/colorProfile.ink.xml`), not the S-52 day palette.
+- The **scale readout** is the physical ruler-on-the-glass value at 226 dpi, not
+  the engine's 96 dpi display scale. The band beside it does come from the
+  engine's, so the band must agree with the other hosts even though the 1:N does
+  not.
+
+`LOOKOUT_SHOT_DELAY` is longer here than elsewhere for a real reason: the tiles
+are rasterized on the CPU, so a first fill takes seconds rather than a frame. If
+the capture is blank or half-filled, raise it rather than assuming a fault.
+
 ## How to examine a frame
 
 Examine these four items in this sequence. Each item is a fault that this project
