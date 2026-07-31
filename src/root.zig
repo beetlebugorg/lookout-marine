@@ -1706,10 +1706,16 @@ pub const Lookout = struct {
         var collect_cb = cc.tile57_query_cb{ .ctx = &collector, .feature = Collect.feature };
         self.pick(lon, lat, &collect_cb);
 
-        // Drop what a pick should not report, then order what is left.
+        // Drop what a pick should not report and what it reports twice, then
+        // order what is left.
         var kept = std.ArrayList(pick_rules.Feature).empty;
         for (collected.items) |f| {
-            if (pick_rules.keep(f)) kept.append(a, f) catch {};
+            if (!pick_rules.keep(f)) continue;
+            var seen = false;
+            for (kept.items) |k| {
+                if (pick_rules.same(k, f)) seen = true;
+            }
+            if (!seen) kept.append(a, f) catch {};
         }
         pick_rules.order(kept.items);
 

@@ -60,6 +60,15 @@ pub fn keep(f: Feature) bool {
     return carriesInformation(f.s57);
 }
 
+/// True when two picked features read as the same object. One feature draws
+/// several times — a fill, a boundary, a symbol, the rings the pick tests — and
+/// every drawing answers, so a chart note would otherwise fill four pages.
+pub fn same(a: Feature, b: Feature) bool {
+    return std.mem.eql(u8, a.cls, b.cls) and
+        std.mem.eql(u8, a.s57, b.s57) and
+        std.mem.eql(u8, a.chart, b.chart);
+}
+
 const Primitive = enum(u32) { point = 0, line = 1, area = 2 };
 
 const lines = [_][]const u8{
@@ -141,6 +150,13 @@ test "a meta object stays only when it carries something" {
     try std.testing.expect(keep(.{ .cls = "M_NPUB", .s57 = "{\"TXTDSC\":\"A.TXT\"}", .chart = "C" }));
     try std.testing.expect(!keep(.{ .cls = "M_NPUB", .s57 = "{\"TXTDSC\":\"\"}", .chart = "C" }));
     try std.testing.expect(keep(.{ .cls = "LNDARE", .s57 = "", .chart = "C" }));
+}
+
+test "the same object twice is one report" {
+    const note = Feature{ .cls = "M_NPUB", .s57 = "{\"TXTDSC\":\"A.TXT\"}", .chart = "US5BPGFB" };
+    try std.testing.expect(same(note, note));
+    try std.testing.expect(!same(note, .{ .cls = "M_NPUB", .s57 = note.s57, .chart = "US4LA31M" }));
+    try std.testing.expect(!same(note, .{ .cls = "M_NPUB", .s57 = "{}", .chart = note.chart }));
 }
 
 test "order puts the aimed-at object first" {
