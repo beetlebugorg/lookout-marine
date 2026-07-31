@@ -1,9 +1,9 @@
-//! What a cursor pick reports, and in what order.
+//! What a cursor pick reports, in what order, and in which unit.
 //!
 //! The engine returns the features under the cursor in DRAW order, which puts
 //! the land area and the depth area before the light that was tapped. Every
-//! shell would otherwise re-invent the same three rules, so they live here and
-//! reach the shells through `lookout_pick_ranked`:
+//! shell would otherwise re-invent the same rules, so they live here and reach
+//! the shells through `lookout_pick_ranked`:
 //!
 //!   1. A meta object stays only when it carries something to read. M_QUAL
 //!      covers the whole cell and answers every pick; M_NPUB carries the
@@ -14,6 +14,7 @@
 //!      at; the depth area under it is water they are merely inside. So the
 //!      primitive decides first — point, then line, then area — and what the
 //!      object is decides within that.
+//!   4. A depth reads in the unit the chart is drawn in, and states that unit.
 
 const std = @import("std");
 
@@ -127,6 +128,108 @@ pub fn order(features: []Feature) void {
     }.lessThan);
 }
 
+// ---- depth units -----------------------------------------------------------
+//
+// A cell states every depth in metres. The chart draws them in the mariner's
+// unit, so a raw report reads `VALDCO: 5.4` beside a contour drawn `17`. The
+// core converts what it reports, because the engine's query cannot: it reports
+// what the cell states and takes no mariner. Doing it here also gives every
+// shell the same report without reimplementing the attribute list.
+
+/// The attributes that carry a depth in metres.
+///
+/// VERCLR, HEIGHT and ELEVAT are NOT in this list. They carry a height, which
+/// is a separate unit that the mariner does not have, so they stay metric. One
+/// report can therefore hold feet depths and metric heights.
+const depths = [_][]const u8{ "VALSOU", "VALDCO", "DRVAL1", "DRVAL2" };
+
+/// Metres to feet. The factor the engine draws with (tile57 sndfrm.M_TO_FT).
+const M_TO_FT: f64 = 3.280839895;
+
+fn isDepth(name: []const u8) bool {
+    for (depths) |d| if (std.mem.eql(u8, d, name)) return true;
+    return false;
+}
+
+/// One depth as the report shows it: the value, then its unit.
+///
+/// Feet are WHOLE feet, truncated DOWN, which is what the chart draws — see
+/// sndfrm.safconSyms and sndfrm.depthText in the engine — so the report and the
+/// label agree digit for digit and both err SHALLOW. A 5.4 m contour reads
+/// 17 ft, never 18. A negative value is a drying height, which the chart draws
+/// by magnitude, so the truncation applies to the magnitude and the sign stays.
+///
+/// Metres keep the cell's own text, so the report loses no digit the cell
+/// stated.
+///
+/// Null when the value is not a number. The caller then reports it unchanged.
+fn depthText(a: std.mem.Allocator, value: []const u8, feet: bool) ?[]const u8 {
+    const m = std.fmt.parseFloat(f64, value) catch return null;
+    if (!std.math.isFinite(m)) return null;
+    if (!feet) return std.fmt.allocPrint(a, "{s} m", .{value}) catch null;
+    const ft = @floor(@abs(m) * M_TO_FT + 1e-6);
+    return std.fmt.allocPrint(a, "{d} ft", .{if (m < 0) -ft else ft}) catch null;
+}
+
+/// The index just past the string that opens at `at`, or null when it never
+/// closes. A backslash escapes the character after it, so an attribute value
+/// holding a quote does not end the string early.
+fn stringEnd(s: []const u8, at: usize) ?usize {
+    var i = at + 1;
+    while (i < s.len) : (i += 1) {
+        if (s[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (s[i] == '"') return i + 1;
+    }
+    return null;
+}
+
+/// A pick payload with its depths in the mariner's unit. Everything else is
+/// copied through byte for byte, escapes included.
+///
+/// The payload is the engine's flat acronym -> value JSON. Anything that does
+/// not parse as that is returned untouched: a report must never lose an
+/// attribute to a rewrite.
+pub fn depthsInUnit(a: std.mem.Allocator, s57: []const u8, feet: bool) []const u8 {
+    if (s57.len < 2 or s57[0] != '{') return s57;
+    var out = std.ArrayList(u8).empty;
+    out.append(a, '{') catch return s57;
+
+    var i: usize = 1;
+    var n: usize = 0;
+    while (i < s57.len and s57[i] != '}') : (n += 1) {
+        if (n > 0) {
+            if (s57[i] != ',') return s57;
+            i += 1;
+            out.append(a, ',') catch return s57;
+        }
+        if (i >= s57.len or s57[i] != '"') return s57;
+        const key_end = stringEnd(s57, i) orelse return s57;
+        if (key_end >= s57.len or s57[key_end] != ':') return s57;
+        const val_at = key_end + 1;
+        if (val_at >= s57.len or s57[val_at] != '"') return s57;
+        const val_end = stringEnd(s57, val_at) orelse return s57;
+
+        // The key and its colon, then the value the report shows.
+        out.appendSlice(a, s57[i..val_at]) catch return s57;
+        const key = s57[i + 1 .. key_end - 1];
+        const shown = if (isDepth(key)) depthText(a, s57[val_at + 1 .. val_end - 1], feet) else null;
+        if (shown) |text| {
+            out.append(a, '"') catch return s57;
+            out.appendSlice(a, text) catch return s57;
+            out.append(a, '"') catch return s57;
+        } else {
+            out.appendSlice(a, s57[val_at..val_end]) catch return s57;
+        }
+        i = val_end;
+    }
+    if (i >= s57.len or s57[i] != '}') return s57;
+    out.append(a, '}') catch return s57;
+    return out.items;
+}
+
 test "a sounding beats the water it sits in" {
     const sounding = Feature{ .cls = "SOUNDG", .s57 = "{\"VALSOU\":\"5.4\"}", .chart = "C" };
     const depare = Feature{ .cls = "DEPARE", .s57 = "{\"DRVAL1\":\"5.4\"}", .chart = "C" };
@@ -157,6 +260,98 @@ test "the same object twice is one report" {
     try std.testing.expect(same(note, note));
     try std.testing.expect(!same(note, .{ .cls = "M_NPUB", .s57 = note.s57, .chart = "US4LA31M" }));
     try std.testing.expect(!same(note, .{ .cls = "M_NPUB", .s57 = "{}", .chart = note.chart }));
+}
+
+test "a depth reads in the mariner's unit, and says which" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The contour drawn 17 by SAFCON01 reports 17 ft, not 5.4 (17.71 floored).
+    try std.testing.expectEqualStrings(
+        "{\"VALDCO\":\"17 ft\"}",
+        depthsInUnit(a, "{\"VALDCO\":\"5.4\"}", true),
+    );
+    try std.testing.expectEqualStrings(
+        "{\"VALDCO\":\"5.4 m\"}",
+        depthsInUnit(a, "{\"VALDCO\":\"5.4\"}", false),
+    );
+    // Every depth attribute converts; the ones between them are untouched.
+    try std.testing.expectEqualStrings(
+        "{\"DRVAL1\":\"6 ft\",\"OBJNAM\":\"2\",\"DRVAL2\":\"32 ft\"}",
+        depthsInUnit(a, "{\"DRVAL1\":\"2\",\"OBJNAM\":\"2\",\"DRVAL2\":\"10\"}", true),
+    );
+    try std.testing.expectEqualStrings(
+        "{\"VALSOU\":\"15 ft\"}",
+        depthsInUnit(a, "{\"VALSOU\":\"4.6\"}", true),
+    );
+}
+
+test "a drying height keeps its sign, and a height stays metric" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A negative sounding dries: the chart draws the magnitude, so the report
+    // truncates the magnitude and keeps the sign.
+    try std.testing.expectEqualStrings(
+        "{\"VALSOU\":\"-4 ft\"}",
+        depthsInUnit(a, "{\"VALSOU\":\"-1.5\"}", true),
+    );
+    // VERCLR is a height. The mariner has no height unit, so it does not move.
+    try std.testing.expectEqualStrings(
+        "{\"VERCLR\":\"4.6\",\"HEIGHT\":\"12\"}",
+        depthsInUnit(a, "{\"VERCLR\":\"4.6\",\"HEIGHT\":\"12\"}", true),
+    );
+}
+
+test "a danger's depth converts, whatever class carries it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The rewrite reads the attribute, not the class, so every object that
+    // states a depth in VALSOU reports it in the mariner's unit: a wreck, an
+    // obstruction and an underwater rock as much as a sounding.
+    try std.testing.expectEqualStrings(
+        "{\"CATWRK\":\"2\",\"VALSOU\":\"18 ft\",\"WATLEV\":\"3\"}",
+        depthsInUnit(a, "{\"CATWRK\":\"2\",\"VALSOU\":\"5.5\",\"WATLEV\":\"3\"}", true),
+    );
+    try std.testing.expectEqualStrings(
+        "{\"CATOBS\":\"6\",\"VALSOU\":\"3 ft\"}",
+        depthsInUnit(a, "{\"CATOBS\":\"6\",\"VALSOU\":\"1.2\"}", true),
+    );
+    try std.testing.expectEqualStrings(
+        "{\"VALSOU\":\"2 ft\",\"QUASOU\":\"1\"}",
+        depthsInUnit(a, "{\"VALSOU\":\"0.9\",\"QUASOU\":\"1\"}", true),
+    );
+    // A wreck that shows above water carries both units in one report: the
+    // depth over it in feet, the part standing above it in metres.
+    try std.testing.expectEqualStrings(
+        "{\"VALSOU\":\"-4 ft\",\"HEIGHT\":\"2.4\"}",
+        depthsInUnit(a, "{\"VALSOU\":\"-1.5\",\"HEIGHT\":\"2.4\"}", true),
+    );
+}
+
+test "a payload that is not a depth survives the rewrite unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    for ([_][]const u8{ "", "{}", "{\"TXTDSC\":\"US238FBA.TXT\"}" }) |raw| {
+        try std.testing.expectEqualStrings(raw, depthsInUnit(a, raw, true));
+    }
+    // An escaped quote does not end the value early.
+    const escaped = "{\"INFORM\":\"a\\\"b\",\"VALSOU\":\"4.6\"}";
+    try std.testing.expectEqualStrings(
+        "{\"INFORM\":\"a\\\"b\",\"VALSOU\":\"15 ft\"}",
+        depthsInUnit(a, escaped, true),
+    );
+    // A depth the cell did not write as a number is reported as it stands.
+    try std.testing.expectEqualStrings(
+        "{\"VALSOU\":\"unknown\"}",
+        depthsInUnit(a, "{\"VALSOU\":\"unknown\"}", true),
+    );
 }
 
 test "order puts the aimed-at object first" {
