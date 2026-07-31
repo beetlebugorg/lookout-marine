@@ -81,7 +81,16 @@ final class AppModel: ObservableObject {
     @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
     @Published var centerLat: Double = 0
     @Published var centerLon: Double = 0
+    /// The cursor pick: the features under the last tap, where it happened (in
+    /// the chrome's coordinate space), and which one the report is showing.
     @Published var pickResults: [PickFeature] = []
+    @Published var pickPoint: CGPoint?
+    @Published var pickIndex = 0
+    /// Where the report has been dragged from where it opened.
+    @Published var pickDrag = CGSize.zero
+    /// Where a hook-driven pick should anchor its report. The chart view sets it
+    /// to the centre of its bounds.
+    var pickCentreHint: CGPoint?
     @Published var isBuilding = false         // a background tessellation is filling in
 
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
@@ -95,6 +104,13 @@ final class AppModel: ObservableObject {
     // MARK: Search
     @Published var searchOpen = false
     @Published var searchText = ""
+
+    /// A picture from the pick report, shown over the chart at full size.
+    struct Picture: Equatable {
+        let name: String
+        let data: Data
+    }
+    @Published var picture: Picture?
 
     // MARK: Scale entry (tapping the 1:N readout)
     @Published var showScaleEntry = false
@@ -278,11 +294,31 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    /// Show a pick report for `results` at `point`. An empty result closes it:
+    /// a tap on bare water is how a mariner dismisses the report.
+    ///
+    /// The order and the filtering belong to the core (lookout_pick_ranked), so
+    /// the shells cannot drift apart on what a pick reports.
+    func showPick(_ results: [PickFeature], at point: CGPoint) {
+        pickResults = results
+        pickPoint = results.isEmpty ? nil : point
+        pickIndex = 0
+        pickDrag = .zero
+    }
+
+    func closePick() {
+        pickResults = []
+        pickPoint = nil
+        pickIndex = 0
+        pickDrag = .zero
+    }
+
     /// Run a cursor pick at the view centre. A tap on the chart runs the same
     /// pick; the screenshot hook has no cursor to tap with.
     func pickAtCentre() {
         guard let controller else { return }
-        pickResults = controller.pick(lon: centerLon, lat: centerLat)
+        guard let point = pickCentreHint else { return }
+        showPick(controller.pick(lon: centerLon, lat: centerLat), at: point)
     }
 
     var schemeName: String {

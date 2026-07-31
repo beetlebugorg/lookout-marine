@@ -10,6 +10,12 @@
 //  magnified past the survey.
 
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Scale band, 1:N, zoom and lat/lon. The position is the cursor position, or
 /// the view centre when there is no cursor. The scale is the only control.
@@ -213,44 +219,394 @@ struct ScaleEntryPanel: View {
     private var current: String { CoordFormat.band(model.scaleDenominator) }
 }
 
-/// The cursor pick report: one line per feature under the last tap, with its
-/// object class and the cell it came from.
+/// The cursor pick report: one object at a time, with its S-57 attributes as
+/// the cell states them. The copy button puts the same text on the clipboard,
+/// which is how a chart problem gets reported.
 struct PickReportPanel: View {
-    let results: [PickFeature]
-    let onDismiss: () -> Void
+    @ObservedObject var model: AppModel
+    /// The drag starts from wherever the report already sits.
+    @State private var dragBase: CGSize?
+    /// The height of the rows, so the report hugs them and scrolls only when
+    /// they pass maxHeight.
+    @State private var rowsHeight: CGFloat = 0
+
+    static let width: CGFloat = 420
+    static let maxHeight: CGFloat = 460
+
+    private var feature: PickFeature? {
+        guard model.pickResults.indices.contains(model.pickIndex) else { return nil }
+        return model.pickResults[model.pickIndex]
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Pick report")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Chrome.ink)
-                Spacer(minLength: 12)
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(4)
-                }
-                .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
-                .foregroundStyle(Chrome.muted)
-                .accessibilityLabel("Close the pick report")
+        if let feature {
+            VStack(alignment: .leading, spacing: 0) {
+                header(feature)
+                Divider().overlay(Chrome.rule)
+                attributes(feature)
             }
-            ForEach(results) { f in
-                HStack(spacing: 6) {
-                    Text(f.cls)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Chrome.ink)
-                        .accessibilityIdentifier("identify-cls")
-                    Text(f.chart)
+            .frame(width: Self.width)
+            .panelSurface(cornerRadius: 12, opaque: true)
+            .environment(\.colorScheme, .light)
+            #if os(macOS)
+            .onExitCommand { model.closePick() }
+            #endif
+        }
+    }
+
+    private func header(_ feature: PickFeature) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            DragDots()
+            VStack(alignment: .leading, spacing: 5) {
+                Text(feature.cls)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Chrome.ink)
+                HStack(spacing: 5) {
+                    Image(systemName: "square.grid.3x3")
                         .font(.system(size: 11))
-                        .foregroundStyle(Chrome.muted)
-                        .lineLimit(1)
+                    Text(feature.chart)
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(Chrome.muted)
+            }
+            Spacer(minLength: 8)
+            controls
+        }
+        .padding(16)
+        .contentShape(Rectangle())
+        // The whole header drags, not just the dots: a report that grew past
+        // the window has to be movable by whatever part of it you can reach.
+        // Measured in the chrome's space, not the header's. The header moves as
+        // it is dragged, so a local translation is measured against a frame that
+        // the previous update just moved, and the report shakes.
+        .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named(Chrome.space))
+            .onChanged { g in
+                let base = dragBase ?? model.pickDrag
+                dragBase = base
+                model.pickDrag = CGSize(width: base.width + g.translation.width,
+                                        height: base.height + g.translation.height)
+            }
+            .onEnded { _ in dragBase = nil })
+    }
+
+    private var controls: some View {
+        HStack(spacing: 6) {
+            if model.pickResults.count > 1 {
+                pager("chevron.left", enabled: model.pickIndex > 0) { model.pickIndex -= 1 }
+                Text("\(model.pickIndex + 1) / \(model.pickResults.count)")
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(Chrome.muted)
+                    .fixedSize()
+                pager("chevron.right", enabled: model.pickIndex < model.pickResults.count - 1) {
+                    model.pickIndex += 1
+                }
+            }
+            Button { copyReport() } label: {
+                Image(systemName: "square.on.square").font(.system(size: 13)).padding(5)
+            }
+            .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
+            .foregroundStyle(Chrome.muted)
+            .help("Copy this report")
+            .accessibilityLabel("Copy this report")
+
+            Button { model.closePick() } label: {
+                Image(systemName: "xmark").font(.system(size: 13, weight: .medium)).padding(5)
+            }
+            .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
+            .foregroundStyle(Chrome.muted)
+            .accessibilityLabel("Close the pick report")
+        }
+    }
+
+    private func pager(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).padding(5)
+        }
+        .buttonStyle(ChromeFlatStyle(resting: Chrome.ink.opacity(0.06), cornerRadius: 6))
+        .foregroundStyle(Chrome.ink)
+        .disabled(!enabled)
+    }
+
+    @ViewBuilder private func attributes(_ feature: PickFeature) -> some View {
+        let rows = S57.attributes(of: feature.s57)
+        if rows.isEmpty {
+            Text("The cell carries no attributes for this object.")
+                .font(.system(size: 13))
+                .foregroundStyle(Chrome.muted)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
+        } else if rowsHeight > Self.maxHeight {
+            // Long enough to scroll. A short report keeps its natural height:
+            // a ScrollView is greedy, and it would leave the report half empty.
+            ScrollView { table(rows, cell: feature.chart) }.frame(height: Self.maxHeight)
+        } else {
+            table(rows, cell: feature.chart)
+        }
+    }
+
+    private func table(_ rows: [S57.Row], cell: String) -> some View {
+        VStack(spacing: 0) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.value.isEmpty ? row.name : "\(row.name):")
+                        .font(.system(size: 12, weight: row.value.isEmpty ? .semibold : .medium))
+                        .foregroundStyle(row.value.isEmpty ? Chrome.ink : Chrome.muted)
+                        .frame(width: 104 - CGFloat(row.depth) * 12, alignment: .leading)
+                    if row.fileReference {
+                        AuxFileView(model: model, cell: cell, name: row.value,
+                                    isPicture: row.isPicture)
+                    } else {
+                        Text(row.value)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Chrome.ink)
+                            .textSelection(.enabled)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 16 + CGFloat(row.depth) * 12)
+                .padding(.trailing, 16)
+                .padding(.vertical, 12)
+                if row.id != rows.last?.id {
+                    Divider().overlay(Chrome.rule.opacity(0.6)).padding(.leading, 16)
                 }
             }
         }
-        .padding(10)
-        .frame(maxWidth: 360, alignment: .leading)
-        .panelSurface()
+        .background(GeometryReader { g in
+            Color.clear.preference(key: RowsHeight.self, value: g.size.height)
+        })
+        .onPreferenceChange(RowsHeight.self) { rowsHeight = $0 }
+    }
+
+    private func copyReport() {
+        guard let feature else { return }
+        Pasteboard.copy(S57.plainText(feature))
+    }
+}
+
+/// A file a feature points at, read through the engine and shown here: the text
+/// of a caution note, or the picture itself. The bake stores those files beside
+/// the chart; a chart baked before that carries the name alone.
+struct AuxFileView: View {
+    @ObservedObject var model: AppModel
+    let cell: String
+    let name: String
+    let isPicture: Bool
+
+    @State private var loaded: (data: Data, mime: String)?
+    @State private var tried = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: isPicture ? "photo" : "doc.text")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Chrome.accent)
+                Text(name)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Chrome.ink)
+                    .textSelection(.enabled)
+            }
+            content
+        }
+        .onAppear(perform: load)
+        .onChange(of: name) { _ in tried = false; loaded = nil; load() }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let loaded {
+            if let image = Self.image(from: loaded) {
+                Button {
+                    model.picture = .init(name: name, data: loaded.data)
+                } label: {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        // A chart picture is a diagram or a note: 200pt made it
+                        // unreadable. Click it for the full size.
+                        .frame(maxWidth: .infinity, maxHeight: 340)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Chrome.edge.opacity(0.3), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Show \(name) at full size")
+                .accessibilityLabel("Show \(name) at full size")
+            } else if let text = String(data: loaded.data, encoding: .utf8)
+                        ?? String(data: loaded.data, encoding: .isoLatin1) {
+                // No scroll view here: the report itself scrolls. A note inside
+                // its own little scroller fights the one around it, and a
+                // caution is worth reading in full.
+                Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Chrome.ink)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Chrome.ink.opacity(0.05),
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        } else if tried {
+            Text("The chart does not carry this file.")
+                .font(.system(size: 10))
+                .foregroundStyle(Chrome.muted)
+        }
+    }
+
+    private func load() {
+        guard !tried else { return }
+        tried = true
+        loaded = model.controller?.auxFile(cell: cell, named: name)
+    }
+
+    /// A picture, whatever the format the cell shipped: the platform decodes
+    /// TIFF, which is what an ENC usually carries.
+    static func image(from file: (data: Data, mime: String)) -> Image? {
+        guard file.mime.hasPrefix("image/") else { return nil }
+        #if os(macOS)
+        guard let ns = NSImage(data: file.data) else { return nil }
+        return Image(nsImage: ns)
+        #else
+        guard let ui = UIImage(data: file.data) else { return nil }
+        return Image(uiImage: ui)
+        #endif
+    }
+}
+
+/// A picture from a pick report, over the chart at full size. A click anywhere,
+/// or Escape, puts it away.
+struct PictureViewer: View {
+    @ObservedObject var model: AppModel
+    let picture: AppModel.Picture
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea()
+            VStack(spacing: 10) {
+                if let image = AuxFileView.image(from: (picture.data, "image/")) {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+                }
+                Text(picture.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(40)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.picture = nil }
+        #if os(macOS)
+        .onExitCommand { model.picture = nil }
+        #endif
+    }
+}
+
+/// The measured height of the attribute rows.
+private struct RowsHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// The drag handle of the pick report: the six dots of the reference design.
+private struct DragDots: View {
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { _ in
+                HStack(spacing: 3) {
+                    ForEach(0..<2, id: \.self) { _ in
+                        Circle().fill(Chrome.muted.opacity(0.6)).frame(width: 3, height: 3)
+                    }
+                }
+            }
+        }
+        .padding(.top, 3)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Attribute payload helpers.
+///
+/// An S-57 cell gives a flat object of acronym and value. S-101 does not: a
+/// complex attribute carries sub-attributes, so a value can be an object or an
+/// array. The rows therefore carry a depth, and a complex attribute becomes a
+/// heading with its parts indented under it.
+enum S57 {
+    struct Row: Identifiable {
+        let name: String
+        let value: String
+        let depth: Int
+        var id: String { "\(depth)/\(name)/\(value)" }
+
+        /// A cell can point at a text file or a picture beside it, such as
+        /// US348MDE.TXT. S-57 names it in TXTDSC, NTXTDS or PICREP; S-101 puts
+        /// it in a fileReference. The bake does not carry those files, so the
+        /// report states the reference and marks it as a file.
+        var fileReference: Bool {
+            ["TXTDSC", "NTXTDS", "PICREP", "fileReference"].contains(name)
+                && !value.isEmpty
+        }
+
+        var isPicture: Bool {
+            let lower = value.lowercased()
+            return [".tif", ".tiff", ".jpg", ".jpeg", ".png"].contains { lower.hasSuffix($0) }
+        }
+    }
+
+    static func attributes(of json: String) -> [Row] {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data)
+        else { return [] }
+        var rows: [Row] = []
+        append(root, name: nil, depth: 0, into: &rows)
+        return rows
+    }
+
+    private static func append(_ node: Any, name: String?, depth: Int, into rows: inout [Row]) {
+        switch node {
+        case let object as [String: Any]:
+            if let name { rows.append(Row(name: name, value: "", depth: depth)) }
+            for key in object.keys.sorted() {
+                append(object[key] ?? "", name: key, depth: name == nil ? depth : depth + 1, into: &rows)
+            }
+        case let list as [Any]:
+            if let name { rows.append(Row(name: name, value: "", depth: depth)) }
+            for item in list {
+                append(item, name: nil, depth: depth + 1, into: &rows)
+            }
+        default:
+            rows.append(Row(name: name ?? "", value: text(of: node), depth: depth))
+        }
+    }
+
+    private static func text(of node: Any) -> String {
+        if let s = node as? String { return s }
+        if let n = node as? NSNumber { return n.stringValue }
+        return String(describing: node)
+    }
+
+    /// The attribute names that carry something to read.
+    static let informational: Set<String> = [
+        "INFORM", "NINFOM", "TXTDSC", "NTXTDS", "PICREP", "fileReference", "text",
+    ]
+
+    /// True when the payload holds a note or a reference. It is what keeps a
+    /// meta object in the report: M_NPUB carries the chart's cautions, M_QUAL
+    /// carries nothing a mariner reads.
+    static func carriesInformation(_ json: String) -> Bool {
+        attributes(of: json).contains { informational.contains($0.name) && !$0.value.isEmpty }
+    }
+
+    /// The report, as plain text for the clipboard.
+    static func plainText(_ feature: PickFeature) -> String {
+        var text = "\(feature.cls)  \(feature.chart)\n"
+        for row in attributes(of: feature.s57) {
+            let indent = String(repeating: "  ", count: row.depth)
+            text += row.value.isEmpty ? "\(indent)\(row.name):\n"
+                                      : "\(indent)\(row.name): \(row.value)\n"
+        }
+        return text
     }
 }
 
