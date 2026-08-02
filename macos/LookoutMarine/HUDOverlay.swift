@@ -224,14 +224,34 @@ struct ScaleEntryPanel: View {
 /// which is how a chart problem gets reported.
 struct PickReportPanel: View {
     @ObservedObject var model: AppModel
+    /// The space the report may fill: the chrome's view, less the margin it
+    /// keeps at each edge. The report never grows past it, so it cannot hang
+    /// off the bottom of a short window or a phone held in landscape.
+    let room: CGSize
     /// The drag starts from wherever the report already sits.
     @State private var dragBase: CGSize?
     /// The height of the rows, so the report hugs them and scrolls only when
-    /// they pass maxHeight.
+    /// they pass the cap.
     @State private var rowsHeight: CGFloat = 0
+    /// The height of the header, which is what the rows' cap is measured from.
+    /// A long class name wraps, so the header is measured and not assumed.
+    @State private var headerHeight: CGFloat = 0
 
-    static let width: CGFloat = 420
-    static let maxHeight: CGFloat = 460
+    /// The report's width where there is room for it, and the tallest its rows
+    /// ever grow: past that a report is a wall of text, not a report.
+    static let maxWidth: CGFloat = 420
+    static let maxRowsHeight: CGFloat = 460
+
+    /// The room decides the width on a narrow phone, where 420pt is wider than
+    /// the screen.
+    private var width: CGFloat { min(Self.maxWidth, max(0, room.width)) }
+
+    /// What the room leaves the rows once the header and the divider have
+    /// theirs. The rows scroll from there, so the report ends inside the view
+    /// however many attributes the object carries.
+    private var rowsCap: CGFloat {
+        min(Self.maxRowsHeight, max(0, room.height - headerHeight - 1))
+    }
 
     private var feature: PickFeature? {
         guard model.pickResults.indices.contains(model.pickIndex) else { return nil }
@@ -242,10 +262,16 @@ struct PickReportPanel: View {
         if let feature {
             VStack(alignment: .leading, spacing: 0) {
                 header(feature)
+                    .measureSize { headerHeight = $0.height }
                 Divider().overlay(Chrome.rule)
                 attributes(feature)
             }
-            .frame(width: Self.width)
+            .frame(width: width)
+            // The report keeps the height its rows ask for, whatever space the
+            // placement leaves it. Without this a report placed low is offered
+            // the little that is left, lays out into it, and reports THAT as
+            // its size — which moves it lower still.
+            .fixedSize(horizontal: false, vertical: true)
             .panelSurface(cornerRadius: 12, opaque: true)
             .environment(\.colorScheme, .light)
             #if os(macOS)
@@ -283,10 +309,19 @@ struct PickReportPanel: View {
             .onChanged { g in
                 let base = dragBase ?? model.pickDrag
                 dragBase = base
-                model.pickDrag = CGSize(width: base.width + g.translation.width,
-                                        height: base.height + g.translation.height)
+                model.pickDrag = CGSize(
+                    width: held(base.width + g.translation.width, within: room.width),
+                    height: held(base.height + g.translation.height, within: room.height))
             }
             .onEnded { _ in dragBase = nil })
+    }
+
+    /// A drag no longer than the room it moves in. The placement pins the
+    /// report to the edges of the view; without this bound, a drag carried far
+    /// past an edge would have to be dragged all the way back before the
+    /// report moved again.
+    private func held(_ value: CGFloat, within extent: CGFloat) -> CGFloat {
+        min(max(value, -extent), extent)
     }
 
     private var controls: some View {
@@ -335,10 +370,10 @@ struct PickReportPanel: View {
                 .foregroundStyle(Chrome.muted)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 18)
-        } else if rowsHeight > Self.maxHeight {
+        } else if rowsHeight > rowsCap {
             // Long enough to scroll. A short report keeps its natural height:
             // a ScrollView is greedy, and it would leave the report half empty.
-            ScrollView { table(rows, cell: feature.chart) }.frame(height: Self.maxHeight)
+            ScrollView { table(rows, cell: feature.chart) }.frame(height: rowsCap)
         } else {
             table(rows, cell: feature.chart)
         }
@@ -371,10 +406,7 @@ struct PickReportPanel: View {
                 }
             }
         }
-        .background(GeometryReader { g in
-            Color.clear.preference(key: RowsHeight.self, value: g.size.height)
-        })
-        .onPreferenceChange(RowsHeight.self) { rowsHeight = $0 }
+        .measureSize { rowsHeight = $0.height }
     }
 
     private func copyReport() {
@@ -501,12 +533,6 @@ struct PictureViewer: View {
         .onExitCommand { model.picture = nil }
         #endif
     }
-}
-
-/// The measured height of the attribute rows.
-private struct RowsHeight: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// The drag handle of the pick report: the six dots of the reference design.

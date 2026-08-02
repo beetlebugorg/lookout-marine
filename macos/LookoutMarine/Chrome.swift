@@ -49,6 +49,26 @@ enum Chrome {
 }
 
 extension View {
+    /// Report this view's laid-out size, and each later change of it.
+    ///
+    /// Not a preference: a value published with `preference` from inside a
+    /// `background` never reaches its `onPreferenceChange` here — the sink is
+    /// called once with the DEFAULT and never again, while the reader plainly
+    /// sees the real size. The pick report placed itself against that default
+    /// for as long as it has existed. This reads the geometry the way
+    /// chromeHitRegion reads its frames, which does arrive.
+    func measureSize(_ perform: @escaping (CGSize) -> Void) -> some View {
+        background {
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { perform(g.size) }
+                    // One-parameter onChange: the iOS 17 (of:initial:_:) form
+                    // is unavailable on the iOS 15 floor.
+                    .onChange(of: g.size) { perform($0) }
+            }
+        }
+    }
+
     /// The WinUI 3 floating panel style: pick report, empty state, and loader.
     /// A report is opaque: the chart showing through a table of numbers makes
     /// both hard to read.

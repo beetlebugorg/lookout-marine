@@ -31,29 +31,40 @@ import UIKit
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
     /// The measured size of the pick report, which places it by the pick.
-    @State private var reportSize = CGSize(width: PickReportPanel.width, height: 180)
+    @State private var reportSize = CGSize(width: PickReportPanel.maxWidth, height: 180)
 
     /// Below this width the capsule and the corner chrome cannot share the
     /// bottom row. The corner chrome then moves above the capsule.
     private static let compactWidth: CGFloat = 700
 
-    /// Put the report beside the pick, and keep it on screen: it flips to the
-    /// other side of the point when it would leave the window. The report's
-    /// MEASURED size decides that. Its scroll cap flipped a report that fits.
+    /// Put the report beside the pick, and keep the whole of it in the view: it
+    /// flips to the other side of the point when it would leave the window, and
+    /// the edges then hold it. The report's MEASURED size decides both — see
+    /// measureSize for why the size it was given used to be a fiction.
     static func reportOffset(from point: CGPoint, size report: CGSize, in view: CGSize,
                             drag: CGSize) -> CGSize {
         var x = point.x + Chrome.gap
         var y = point.y + Chrome.gap
         if x + report.width > view.width - Chrome.margin {
-            x = max(Chrome.margin, point.x - report.width - Chrome.gap)
+            x = point.x - report.width - Chrome.gap
         }
         if y + report.height > view.height - Chrome.margin {
-            y = max(Chrome.margin, point.y - report.height - Chrome.gap)
+            y = point.y - report.height - Chrome.gap
         }
-        // A drag beats the placement, but the header stays reachable.
-        x = min(max(0, x + drag.width), max(0, view.width - 80))
-        y = min(max(0, y + drag.height), max(0, view.height - 40))
-        return CGSize(width: x, height: y)
+        // A drag moves the report; neither the drag nor the placement may carry
+        // it past an edge. The bottom edge is the one that mattered: a tall
+        // report placed below the pick took its close button off the screen
+        // with it. The panel keeps its size within the same margins
+        // (PickReportPanel.room), so both bounds can be met at once.
+        return CGSize(width: pinned(x + drag.width, span: report.width, in: view.width),
+                      height: pinned(y + drag.height, span: report.height, in: view.height))
+    }
+
+    /// A coordinate that keeps a span of the report inside the view, with the
+    /// chrome margin at each edge. A report still larger than the view — a
+    /// window shorter than the report's own header — sits at the top left.
+    private static func pinned(_ value: CGFloat, span: CGFloat, in extent: CGFloat) -> CGFloat {
+        min(max(Chrome.margin, value), max(Chrome.margin, extent - Chrome.margin - span))
     }
 
     var body: some View {
@@ -121,12 +132,14 @@ struct OverlayLayer: View {
                 }
                 .overlay(alignment: .topLeading) {
                     if let point = model.pickPoint {
+                        // The room the report may fill: the view, less the
+                        // margin the placement keeps at each edge.
+                        let room = CGSize(width: max(0, geo.size.width - Chrome.margin * 2),
+                                          height: max(0, geo.size.height - Chrome.margin * 2))
                         let at = Self.reportOffset(from: point, size: reportSize,
                                                    in: geo.size, drag: model.pickDrag)
-                        PickReportPanel(model: model)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: ReportSize.self, value: g.size)
-                            })
+                        PickReportPanel(model: model, room: room)
+                            .measureSize { reportSize = $0 }
                             // Placed with padding, not an offset: an offset moves
                             // the drawing and not the layout, so the frame the
                             // chrome publishes stayed at the top left and every
@@ -134,7 +147,6 @@ struct OverlayLayer: View {
                             .chromeHitRegion("pick-report")
                             .padding(.leading, at.width)
                             .padding(.top, at.height)
-                            .onPreferenceChange(ReportSize.self) { reportSize = $0 }
                     }
                 }
                 // Bottom center: the readout capsule. The scale entry opens
@@ -182,12 +194,6 @@ struct OverlayLayer: View {
         // The pass-through hosts hit-test against it.
         .coordinateSpace(name: Chrome.space)
     }
-}
-
-/// The measured size of the pick report.
-private struct ReportSize: PreferenceKey {
-    static var defaultValue = CGSize(width: PickReportPanel.width, height: 180)
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 /// Write this view's frame to ChromeHitMap. The pass-through host keeps the
