@@ -825,6 +825,14 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // zero, which put the hook-driven pick's mark off its object by that
         // inset once the window settled.
         model?.pickCentreHint = inChromeSpace(CGPoint(x: bounds.midX, y: bounds.midY))
+        // The space the report is laid out in. The chrome is inset by the
+        // safe area and this view is not.
+        if let inset = chromeWindow?.safeAreaInsets {
+            model?.chromeSize = CGSize(width: bounds.width - inset.left - inset.right,
+                                       height: bounds.height - inset.top - inset.bottom)
+        } else {
+            model?.chromeSize = bounds.size
+        }
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes (rotation, split view)
         // just resize.

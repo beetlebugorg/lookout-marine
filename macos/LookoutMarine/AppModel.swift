@@ -89,6 +89,13 @@ final class AppModel: ObservableObject {
     /// Where a hook-driven pick should anchor its report. The chart view sets it
     /// to the centre of its bounds.
     var pickCentreHint: CGPoint?
+    /// The chrome's size: the view inset by the safe area. This is the space
+    /// the report is laid out in. The chart view sets it with the hint.
+    /// `showPick` reads it to find the report's body and the sheet's edge.
+    var chromeSize: CGSize = .zero
+    /// How far `showPick` lifted the chart to clear the sheet. `closePick`
+    /// puts the chart back by the same amount. Points, in the chrome's space.
+    private var pickLift: CGFloat = 0
     @Published var isBuilding = false         // a background tessellation is filling in
 
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
@@ -301,6 +308,16 @@ final class AppModel: ObservableObject {
         pickResults = results
         pickPoint = results.isEmpty ? nil : point
         pickIndex = 0
+        // A sheet covers part of the chart, so the object can fall under it.
+        // Lift the chart until the mark clears the sheet, and move the mark
+        // with it. Only a sheet needs this. A callout stands over its object
+        // and does not hide it.
+        pickLift = 0
+        if let p = pickPoint, let lift = sheetLift(for: p), lift > 0 {
+            controller?.panRevealingPick(dxPt: 0, dyPt: -lift)
+            pickPoint = CGPoint(x: p.x, y: p.y - lift)
+            pickLift = lift
+        }
         // The screenshot protocol's view of a pick: where, and what came
         // back. What a pick MISSES is diagnosed from here.
         if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
@@ -310,9 +327,31 @@ final class AppModel: ObservableObject {
     }
 
     func closePick() {
+        // Put the chart back where the mariner left it (§2.5). This undoes
+        // only the lift the app made.
+        if pickLift != 0 {
+            controller?.panRevealingPick(dxPt: 0, dyPt: pickLift)
+            pickLift = 0
+        }
         pickResults = []
         pickPoint = nil
         pickIndex = 0
+    }
+
+    /// How far the chart must rise for a mark at `point` to clear the bottom
+    /// sheet. Returns nil when the view does not use a sheet.
+    ///
+    /// The test is the report's body, not the device, because the body
+    /// decides what covers the object. The sheet is the narrow-screen body,
+    /// so this is the phone in practice. Only the iOS chart view sets
+    /// `chromeSize`, so a narrow Mac window does not move.
+    private func sheetLift(for point: CGPoint) -> CGFloat? {
+        guard chromeSize.width > 0, chromeSize.height > 0 else { return nil }
+        guard OverlayLayer.pickForm(for: chromeSize) == .bottomSheet else { return nil }
+        let sheetTop = chromeSize.height - OverlayLayer.bottomSheetSize(in: chromeSize).height
+        // The whole mark must clear the sheet's edge, not just its centre.
+        let clear = PickMarker.size / 2 + Chrome.gap
+        return max(0, (point.y + clear) - sheetTop)
     }
 
     /// A hook-driven pick at a fraction of the view — the screenshot
