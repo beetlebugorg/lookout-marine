@@ -9,8 +9,46 @@
 import XCTest
 
 final class ChartInteractionTests: XCTestCase {
+    /// A pick low on a phone falls under the bottom sheet. The chart lifts
+    /// until the mark clears the sheet (§2.2).
+    ///
+    /// The oracle is the position readout, which names the centre of the
+    /// view. The app moves the chart, so that position must change. A wide
+    /// view uses a callout and does not move.
+    func testChartLiftsToRevealAPickUnderTheSheet() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["LOOKOUT_OPEN"] =
+            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
+        app.launch()
+
+        // The position readout, which names the centre of the view.
+        let position = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS '°' AND label CONTAINS 'N'")).firstMatch
+        XCTAssertTrue(position.waitForExistence(timeout: 60), "position readout never appeared")
+        let before = position.label
+
+        // A tap low on the chart — where the sheet will stand.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82)).tap()
+        Thread.sleep(forTimeInterval: 3)
+
+        let objects = app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH 'OBJECTS'")).firstMatch
+        let sheet = objects.exists || app.buttons["Close the pick report"].exists
+        try XCTSkipUnless(sheet, "the tap found no object to report; nothing to reveal")
+
+        XCTAssertNotEqual(position.label, before,
+                          "the chart did not move to bring the object out from under the sheet")
+    }
+
     func testPinchZoomsAndDragPans() throws {
         let app = XCUIApplication()
+        // A fixed chart and view, so the pinch starts with room to zoom out.
+        // Documents can open on the z4 floor, where a pinch out is correctly
+        // a no-op and the assertion below fails for the wrong reason.
+        app.launchEnvironment["LOOKOUT_OPEN"] =
+            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launch()
 
         // The chart auto-opens from Documents; the scale readout appears with
@@ -133,6 +171,140 @@ final class ChartInteractionTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         Thread.sleep(forTimeInterval: 40)
         XCTAssertTrue(zoom.exists, "app died while holding for the screenshot")
+    }
+
+    /// The hardware keyboard drives the pick report. This test covers the
+    /// responder chain, not the actions. AppModel owns the actions.
+    ///
+    /// The oracle is the report's text. The arrows move the selection and the
+    /// detail pane follows.
+    func testHardwareKeyboardWalksThePickList() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["LOOKOUT_OPEN"] =
+            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
+        app.launchEnvironment["LOOKOUT_SHOW"] = "pick"
+        app.launch()
+
+        // The pick's object list heads the card: "N OBJECTS".
+        let objects = app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH 'OBJECTS'")).firstMatch
+        XCTAssertTrue(objects.waitForExistence(timeout: 60),
+                      "pick report never opened — nothing to drive with the keyboard")
+
+        // The whole report's text: the detail pane reads out the selected
+        // object, so the set changes when — and only when — the selection does.
+        func page() -> Set<String> {
+            Set(app.staticTexts.allElementsBoundByIndex.map { $0.label })
+        }
+        let first = page()
+
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(objects.exists, "↓ closed the report")
+        XCTAssertNotEqual(page(), first, "↓ did not move the pick's selection")
+
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(objects.exists, "↑ closed the report")
+        XCTAssertEqual(page(), first, "↑ did not walk back to the first object")
+
+        // This test does not assert Escape. XCUITest does not deliver the
+        // Escape key to the app, so the assertion would report a limit of the
+        // harness as a defect of the app. Check Escape by hand on a device
+        // with a keyboard.
+    }
+
+    /// The chrome keeps its taps while a pick report is open.
+    ///
+    /// The callout is laid out inside a full-size frame. A full-size frame
+    /// that also hit-tests takes every tap on the screen.
+    /// `testChromeButtonsStillWork` runs with no report open and cannot cover
+    /// this.
+    func testChromeButtonsWorkWithPickReportOpen() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["LOOKOUT_OPEN"] =
+            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
+        app.launchEnvironment["LOOKOUT_SHOW"] = "pick"
+        // Log which path answers each hit test; the map must be the one.
+        app.launchEnvironment["LOOKOUT_HITMAP"] = "1"
+        app.launch()
+
+        let objects = app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH 'OBJECTS'")).firstMatch
+        XCTAssertTrue(objects.waitForExistence(timeout: 60), "pick report never opened")
+
+        let zoom = app.staticTexts.matching(
+            NSPredicate(format: "label MATCHES 'z[0-9.]+'")).firstMatch
+        XCTAssertTrue(zoom.waitForExistence(timeout: 20), "zoom readout never appeared")
+
+        // The zoom bubble: a control far from the report.
+        let zoomIn = app.buttons["plus"].exists
+            ? app.buttons["plus"]
+            : app.buttons.matching(
+                NSPredicate(format: "label CONTAINS[c] 'zoom in'")).firstMatch
+        XCTAssertTrue(zoomIn.waitForExistence(timeout: 10), "zoom-in bubble not found")
+        let before = zoom.label
+        zoomIn.tap()
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertNotEqual(zoom.label, before,
+                          "the zoom bubble did nothing while a report was open — the report is swallowing chrome taps")
+
+        // The gear, which is under the report's corner of the screen.
+        let gear = app.buttons["gearshape"].exists
+            ? app.buttons["gearshape"]
+            : app.buttons.matching(
+                NSPredicate(format: "identifier CONTAINS 'gear'")).firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 10), "settings gear not found")
+        gear.tap()
+        XCTAssertTrue(app.staticTexts["Mariner Settings"].waitForExistence(timeout: 10),
+                      "settings sheet did not open while a report was open")
+    }
+
+    /// Opens the mariner form, sets the scheme to Night and then to Day, and
+    /// holds after each change. An outside `simctl io screenshot` checks that
+    /// the form follows both ways. The return to Day is the case that fails
+    /// when the form removes its colour-scheme preference instead of setting
+    /// one. Skipped unless LOOKOUT_SCHEMEHOLD=1.
+    func testSchemeHoldForScreenshot() throws {
+        guard ProcessInfo.processInfo.environment["LOOKOUT_SCHEMEHOLD"] == "1" else {
+            throw XCTSkip("set LOOKOUT_SCHEMEHOLD=1 to run the scheme hold")
+        }
+        let app = XCUIApplication()
+        app.launchEnvironment["LOOKOUT_OPEN"] =
+            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
+        app.launchEnvironment["LOOKOUT_SHOW"] = "settings"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Mariner Settings"].waitForExistence(timeout: 60),
+                      "settings sheet never opened")
+        app.buttons["Night"].tap()
+        Thread.sleep(forTimeInterval: 20)   // capture window: form must be dark
+        app.buttons["Day"].tap()
+        Thread.sleep(forTimeInterval: 25)   // capture window: form must be light AGAIN
+        XCTAssertTrue(app.staticTexts["Mariner Settings"].exists, "the form went away")
+    }
+
+    /// Holds a pick open on the CURRENT orientation so an outside
+    /// `simctl io screenshot` can check the callout stands clear of its mark.
+    /// Skipped unless LOOKOUT_PICKHOLD=1.
+    func testPickHoldForScreenshot() throws {
+        guard ProcessInfo.processInfo.environment["LOOKOUT_PICKHOLD"] == "1" else {
+            throw XCTSkip("set LOOKOUT_PICKHOLD=1 to run the pick screenshot hold")
+        }
+        let app = XCUIApplication()
+        app.launchEnvironment["LOOKOUT_OPEN"] =
+            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
+        app.launchEnvironment["LOOKOUT_SHOW"] = "pick"
+        app.launch()
+        let objects = app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH 'OBJECTS'")).firstMatch
+        XCTAssertTrue(objects.waitForExistence(timeout: 60), "pick report never opened")
+        Thread.sleep(forTimeInterval: 40)
+        XCTAssertTrue(objects.exists, "app died while holding for the screenshot")
     }
 
     /// The other half of the PassThroughWindow contract: chrome controls must
