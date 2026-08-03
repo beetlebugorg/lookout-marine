@@ -92,8 +92,31 @@ final class PassThroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         guard hit === rootViewController?.view else { return hit } // real subview (sheet, keyboard, …)
-        if ChromeHitMap.shared.contains(point) { return hit }
+        let chrome = inChromeSpace(point)
+        let inMap = ChromeHitMap.shared.contains(chrome)
+        // Which path answered. The map must answer. The accessibility
+        // fallback has a tree to walk only when a client is attached, so a
+        // control that depends on it is dead in normal use.
+        if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+            NSLog("[hitmap] tap win(%.0f, %.0f) chrome(%.0f, %.0f) map=%d",
+                  point.x, point.y, chrome.x, chrome.y, inMap ? 1 : 0)
+        }
+        if inMap { return hit }
         return hasInteractiveElement(at: point) ? hit : nil
+    }
+
+    /// This window's point in the chrome's coordinate space.
+    ///
+    /// The hosting controller's SwiftUI root is inset by the safe area.
+    /// `chromeHitRegion` writes its frames in that inset space. A touch
+    /// arrives here in window space, which is not inset. The conversion is
+    /// necessary, or every frame in the map is wrong by the inset and a tap
+    /// on a control falls outside its own rect.
+    ///
+    /// `ChartUIView.inChromeSpace` converts the pick point for the same
+    /// reason.
+    private func inChromeSpace(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x - safeAreaInsets.left, y: p.y - safeAreaInsets.top)
     }
 
     /// True when an accessibility element with interactive traits (button,
