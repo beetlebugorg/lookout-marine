@@ -1,18 +1,14 @@
 //  PickReport.swift — the cursor pick report.
 //
-//  Moved out of HUDOverlay.swift as one block. The report grew into the
-//  largest piece of chrome and earned its own file. The shared payload
-//  helpers (S57, CoordFormat) and the aux viewers stay in HUDOverlay.
+//  One object at a time, decoded for the mariner: the operative fact as the
+//  title, the attributes in chart language, and the raw S-57 rows one fold
+//  away. The copy button puts the raw text on the clipboard, which is how a
+//  chart problem gets reported.
+//
+//  The report has two bodies over one content: PickCallout stands beside the
+//  object on a wide view, and PickSheet holds an edge of a narrow one.
 
 import SwiftUI
-
-/// The cursor pick report. One object at a time, decoded for the mariner:
-/// the operative fact as the title, the attributes in chart language, and the
-/// raw S-57 rows one fold away. The copy button puts the raw text on the
-/// clipboard, which is how a chart problem gets reported.
-///
-/// The report has two bodies over one content: `PickCallout` stands beside
-/// the object on a wide view, and `PickSheet` holds an edge of a narrow one.
 
 /// What one pick result shows. The ENGINE composes the report — the core
 /// emits {"report":…,"s57":…} per feature, the decoded page beside the raw
