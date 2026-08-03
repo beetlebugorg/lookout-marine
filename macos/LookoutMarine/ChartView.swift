@@ -34,12 +34,29 @@ enum PickForm {
     case callout, bottomSheet, sideSheet
 }
 
+/// Which edge of the callout is held against the pick mark.
+enum CalloutEdge {
+    case above   // the card's floor sits over the mark
+    case below   // the card's top sits under the mark
+}
+
+/// Where a callout stands, and the height it may use.
+///
+/// `y` is the edge that `edge` names. SwiftUI places the opposite edge, so
+/// nothing measures the card to position it. `room` is a hard limit. The card
+/// sizes its columns and its scroll area to `room`, so a long report cannot
+/// grow over the mark.
+struct CalloutPlace {
+    let x: CGFloat
+    let y: CGFloat
+    let edge: CalloutEdge
+    let room: CGFloat
+}
+
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
     /// The OS appearance, which the chrome follows in the day scheme.
     @Environment(\.colorScheme) private var osScheme
-    /// The callout's measured size — the leader line needs the card's rect.
-    @State private var calloutSize = CGSize(width: PickCallout.maxWidth, height: 200)
 
     /// Below this width the capsule and the corner chrome cannot share the
     /// bottom row, and the pick report becomes a bottom sheet.
@@ -56,38 +73,28 @@ struct OverlayLayer: View {
         return .callout
     }
 
-    /// Stand the callout beside the pick — the card belongs next to the
-    /// thing it describes. Only a pick down by the HUD, with too little room
-    /// under it to read a report, sends the card up to where the room is;
-    /// the leader then carries the binding across the distance. A near card
-    /// needs no line: standing beside the mark IS the binding.
-    static func calloutLayout(point: CGPoint, width: CGFloat, in view: CGSize) -> CGPoint {
-        let clear = PickMarker.size / 2 + 20
+    /// Put the callout over the pick. The card is centred on the mark and its
+    /// floor stops clear of it.
+    ///
+    /// The card gets the room between the mark and the margin. A long report
+    /// scrolls in that room. The card goes under the mark only when the room
+    /// above is too small to read a report in.
+    static func calloutLayout(point: CGPoint, width: CGFloat, in view: CGSize) -> CalloutPlace {
+        let clear = PickMarker.size / 2 + 6
         let minX = Chrome.margin
         let maxX = max(minX, view.width - Chrome.margin - width)
-        let onLeft = point.x > view.width / 2
-        let x = min(max(onLeft ? point.x - clear - width : point.x + clear, minX), maxX)
-        let reserve: CGFloat = 340
-        let yNear = max(Chrome.margin, point.y - 48)
-        let yMax = max(Chrome.margin, view.height - Self.hudBand - reserve)
-        return CGPoint(x: x, y: min(yNear, yMax))
-    }
+        // The free area's floor. The card stops here; the HUD owns the rest.
+        let floor = max(Chrome.margin, view.height - Self.hudBand)
+        let x = min(max(point.x - width / 2, minX), maxX)
 
-    /// Where the leader meets the card: the nearest point on the card's
-    /// border, held clear of its rounded corners. nil only when the mark
-    /// stands truly under the card — a leader from a covered mark would aim
-    /// at nothing. (That a card can cover its own mark at all is the §2
-    /// problem; the chart move that reveals the object is still to build.)
-    static func leaderEnd(from p: CGPoint, to rect: CGRect) -> CGPoint? {
-        guard !rect.insetBy(dx: -4, dy: -4).contains(p) else { return nil }
-        var end = CGPoint(x: min(max(p.x, rect.minX), rect.maxX),
-                          y: min(max(p.y, rect.minY), rect.maxY))
-        if end.x > rect.minX && end.x < rect.maxX {
-            end.x = min(max(end.x, rect.minX + 14), rect.maxX - 14)
-        } else {
-            end.y = min(max(end.y, rect.minY + 14), rect.maxY - 14)
+        let over = (point.y - clear) - Chrome.margin
+        let under = floor - (point.y + clear)
+        // Use the space above unless it is too small and the space below is
+        // larger.
+        if over >= 200 || over >= under {
+            return CalloutPlace(x: x, y: point.y - clear, edge: .above, room: max(0, over))
         }
-        return end
+        return CalloutPlace(x: x, y: point.y + clear, edge: .below, room: max(0, under))
     }
 
     static func bottomSheetSize(in view: CGSize) -> CGSize {
@@ -178,47 +185,27 @@ struct OverlayLayer: View {
                         case .callout:
                             let width = PickCallout.width(for: model.pickResults.count,
                                                           in: geo.size.width)
-                            let origin = Self.calloutLayout(point: point, width: width,
-                                                            in: geo.size)
-                            ZStack(alignment: .topLeading) {
-                                // ()────[report]: the circled pick, one clear
-                                // line, the card. Drawn in the mark's colours
-                                // and under the card.
-                                // The leader draws only across a real gap —
-                                // the bottom-pick fallback. A card standing
-                                // beside its mark needs no line to say so.
-                                if let end = Self.leaderEnd(
-                                    from: point,
-                                    to: CGRect(origin: origin, size: calloutSize)) {
-                                    let d = CGPoint(x: end.x - point.x, y: end.y - point.y)
-                                    let len = max(1, (d.x * d.x + d.y * d.y).squareRoot())
-                                    let r = PickMarker.size / 2 + 2
-                                    if len - r > 56 {
-                                        let start = CGPoint(x: point.x + d.x / len * r,
-                                                            y: point.y + d.y / len * r)
-                                        // Into the card by a few points: the
-                                        // card draws over the seam.
-                                        let under = CGPoint(x: end.x + d.x / len * 5,
-                                                            y: end.y + d.y / len * 5)
-                                        PickLeader(from: start, to: under)
-                                            .fill(Chrome.surface)
-                                            .shadow(color: .black.opacity(0.18),
-                                                    radius: 4, y: 1)
-                                            .allowsHitTesting(false)
-                                        PickLeader(from: start, to: under)
-                                            .stroke(Chrome.edge, lineWidth: 1)
-                                            .allowsHitTesting(false)
-                                    }
-                                }
-                                PickCallout(
-                                    model: model, width: width,
-                                    roomBelow: max(0, geo.size.height - Self.hudBand
-                                                      - origin.y),
-                                    anchor: point)
-                                    .measureSize { calloutSize = $0 }
-                                    .chromeHitRegion("pick-report")
-                                    .padding(.leading, origin.x)
-                                    .padding(.top, origin.y)
+                            let place = Self.calloutLayout(point: point, width: width,
+                                                           in: geo.size)
+                            let card = PickCallout(model: model, width: width,
+                                                   roomBelow: place.room, anchor: point)
+                                .chromeHitRegion("pick-report")
+                                .padding(.leading, place.x)
+                            // The card holds one edge against the mark.
+                            // SwiftUI aligns the opposite edge, so the card's
+                            // height is never measured here. Use padding, not
+                            // an offset. An offset moves the drawing only and
+                            // leaves the frame, and the chrome hit region,
+                            // behind.
+                            switch place.edge {
+                            case .above:
+                                card.frame(maxWidth: .infinity, maxHeight: .infinity,
+                                           alignment: .bottomLeading)
+                                    .padding(.bottom, max(0, geo.size.height - place.y))
+                            case .below:
+                                card.frame(maxWidth: .infinity, maxHeight: .infinity,
+                                           alignment: .topLeading)
+                                    .padding(.top, place.y)
                             }
                         case .bottomSheet:
                             let size = Self.bottomSheetSize(in: geo.size)
