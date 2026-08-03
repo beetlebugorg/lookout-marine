@@ -25,15 +25,15 @@ struct SettingsView: View {
     @ViewBuilder private var content: some View {
         // The presenting sheet (iOS) supplies the Done button.
         TabView(selection: $model.settingsTab) {
-            Form { DisplaySections(m: m) }.groupedForm()
+            Form { DisplaySections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Display", systemImage: "paintpalette") }.tag(0)
-            Form { DepthsSections(m: m) }.groupedForm()
+            Form { DepthsSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Depths", systemImage: "water.waves") }.tag(1)
-            Form { SymbolsSections(m: m) }.groupedForm()
+            Form { SymbolsSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Text", systemImage: "textformat") }.tag(2)
-            Form { ChartsSections(model: model) }.groupedForm()
+            Form { ChartsSections(model: model) }.formStyle(.grouped)
                 .tabItem { Label("Charts", systemImage: "map") }.tag(3)
-            Form { AdvancedSections(m: m) }.groupedForm()
+            Form { AdvancedSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }.tag(4)
         }
         #if os(macOS)
@@ -271,7 +271,7 @@ private struct AdvancedSections: View {
         Section {
             Toggle("Date-dependent features", isOn: $m.dateDependent)
             Toggle("Highlight date-dependent", isOn: $m.highlightDateDependent)
-            LabeledRow("View date") {
+            LabeledContent("View date") {
                 TextField("YYYYMMDD", text: $m.dateView)
                     .frame(width: 110)
                     .multilineTextAlignment(.trailing)
@@ -293,7 +293,7 @@ private struct DepthRow: View {
         self.title = title; self._value = value; self.unit = unit; self.whole = whole
     }
     var body: some View {
-        LabeledRow(title) {
+        LabeledContent(title) {
             HStack(spacing: 6) {
                 TextField("", value: $value,
                           format: .number.precision(.fractionLength(whole ? 0...0 : 0...1)))

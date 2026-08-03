@@ -1720,14 +1720,29 @@ pub const Lookout = struct {
         }
         pick_rules.order(kept.items);
 
-        // Report depths in the unit the chart is drawn in. The engine states
-        // what the cell holds, which is always metres, so a foot chart would
-        // otherwise report a contour the mariner cannot match to its label.
+        // The engine composes each feature's page. The page and the raw
+        // payload travel together as {"report":...,"s57":...}: the report
+        // for the shell to render, the raw payload for the source fold and
+        // the clipboard. Depths convert before the compose, so the report
+        // reads in the mariner's unit and the source keeps the cell's
+        // metres. When the compose fails, the core emits the raw payload
+        // alone and the shell still shows the fold.
         const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
         if (cb.feature) |emit| {
             for (kept.items) |f| {
-                const s57 = pick_rules.depthsInUnit(a, f.s57, feet);
-                emit(cb.ctx, f.cls.ptr, f.cls.len, s57.ptr, s57.len, f.chart.ptr, f.chart.len);
+                const converted = pick_rules.depthsInUnit(a, f.s57, feet);
+                const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
+                var rep: ?[*]u8 = null;
+                var rep_len: usize = 0;
+                var terr: cc.tile57_error = undefined;
+                const payload: []const u8 = blk: {
+                    if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
+                        defer cc.tile57_free(rep);
+                        break :blk std.fmt.allocPrint(a, "{{\"report\":{s},\"s57\":{s}}}", .{ rep.?[0..rep_len], raw }) catch f.s57;
+                    }
+                    break :blk f.s57;
+                };
+                emit(cb.ctx, f.cls.ptr, f.cls.len, payload.ptr, payload.len, f.chart.ptr, f.chart.len);
             }
         }
     }
