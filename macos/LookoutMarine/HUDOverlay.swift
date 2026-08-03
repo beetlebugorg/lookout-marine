@@ -582,7 +582,10 @@ struct PickCallout: View {
                     // its height. One direction only — a column that also
                     // pushed back gave layout two answers, and the card
                     // flickered between them.
-                    let columnH = max(heightFloor, detailHeight, notesHeight + 96)
+                    // Every column stops at the free area's floor. The list
+                    // scrolls past it, and the height floor cannot carry a
+                    // taller value across a window resize.
+                    let columnH = min(roomBelow, max(heightFloor, detailHeight, notesHeight + 96))
                     VStack(alignment: .leading, spacing: 0) {
                         ScrollViewReader { proxy in
                             ScrollView(showsIndicators: false) {
@@ -597,7 +600,7 @@ struct PickCallout: View {
                             }
                         }
                         .frame(height: listHeight > 0
-                               ? min(listHeight, max(60, columnH - notesHeight))
+                               ? min(listHeight, max(60, min(columnH, roomBelow) - notesHeight))
                                : nil, alignment: .top)
                         // The notes hold the column's floor; the slack sits
                         // between the objects and them, not under them.
@@ -617,7 +620,8 @@ struct PickCallout: View {
             .measureSize { size in
                 if size.height > heightFloor { heightFloor = size.height }
             }
-            .frame(minHeight: heightFloor > 0 ? heightFloor : nil, alignment: .top)
+            .frame(minHeight: heightFloor > 0 ? min(heightFloor, roomBelow) : nil,
+                   alignment: .top)
             // The report keeps the height its content asks for, whatever
             // space the placement leaves it: without this a card placed low
             // lays out into what is left and reports THAT as its size.
