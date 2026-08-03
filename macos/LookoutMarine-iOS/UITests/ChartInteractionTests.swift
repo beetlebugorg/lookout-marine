@@ -119,6 +119,22 @@ final class ChartInteractionTests: XCTestCase {
         XCTAssertTrue(zoom.exists, "app died while holding for the screenshot")
     }
 
+    /// The portrait twin of the framing hold: turn upright and hold, leaving
+    /// whatever the launch environment opened (a pick, a panel) on screen.
+    /// Attach to a running app; launching here would drop its environment.
+    func testPortraitHoldForScreenshot() throws {
+        guard ProcessInfo.processInfo.environment["LOOKOUT_PORTRAIT"] == "1" else {
+            throw XCTSkip("set LOOKOUT_PORTRAIT=1 to run the portrait screenshot hold")
+        }
+        let app = XCUIApplication()
+        app.activate()
+        let zoom = app.staticTexts.matching(NSPredicate(format: "label MATCHES 'z[0-9.]+'")).firstMatch
+        XCTAssertTrue(zoom.waitForExistence(timeout: 45), "zoom readout never appeared")
+        XCUIDevice.shared.orientation = .portrait
+        Thread.sleep(forTimeInterval: 40)
+        XCTAssertTrue(zoom.exists, "app died while holding for the screenshot")
+    }
+
     /// The other half of the PassThroughWindow contract: chrome controls must
     /// KEEP their touches (only empty chrome falls through to the chart).
     func testChromeButtonsStillWork() throws {

@@ -140,9 +140,9 @@ struct ContentView: View {
             } message: {
                 Text(model.openError ?? "")
             }
-            #if os(macOS)
             // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
-            // scale, search, pick opens that chrome once the chart is up.
+            // scale, search, pick opens that chrome once the chart is up. On
+            // the simulator, pass it as SIMCTL_CHILD_LOOKOUT_SHOW.
             .onAppear {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
@@ -156,14 +156,33 @@ struct ContentView: View {
                             model.settingsTab = part.count > 1 ? (tabs[part[1]] ?? 0) : 0
                             model.openSettings()
                         case "scale": model.beginScaleEntry()
+                        // scheme:1 dusk, scheme:2 night — the chrome must
+                        // follow the chart's hours, and a screenshot proves it.
+                        case "scheme":
+                            let n = part.count > 1 ? (Int(part[1]) ?? 1) : 1
+                            for _ in 0..<n { model.controller?.cycleScheme() }
                         case "search": model.searchOpen = true
-                        case "pick": model.pickAtCentre()
+                        // pick at the centre, or at a fraction of the view:
+                        // pick:0.5x0.85 lands low in the chart. ("x", because
+                        // the comma splits the LOOKOUT_SHOW list itself.)
+                        case "pick":
+                            let f = part.count > 1
+                                ? part[1].split(separator: "x").compactMap { Double($0) } : []
+                            if f.count == 2 { model.pickAt(fx: f[0], fy: f[1]) }
+                            else { model.pickAtCentre() }
+                        // pick, then the next object's report 5s later: the
+                        // screenshot protocol's way of watching the selection.
+                        case "page":
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                                if model.pickIndex < model.pickResults.count - 1 {
+                                    model.pickIndex += 1
+                                }
+                            }
                         default: break
                         }
                     }
                 }
             }
-            #endif
     }
 }
 

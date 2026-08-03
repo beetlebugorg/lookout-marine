@@ -86,8 +86,6 @@ final class AppModel: ObservableObject {
     @Published var pickResults: [PickFeature] = []
     @Published var pickPoint: CGPoint?
     @Published var pickIndex = 0
-    /// Where the report has been dragged from where it opened.
-    @Published var pickDrag = CGSize.zero
     /// Where a hook-driven pick should anchor its report. The chart view sets it
     /// to the centre of its bounds.
     var pickCentreHint: CGPoint?
@@ -303,14 +301,28 @@ final class AppModel: ObservableObject {
         pickResults = results
         pickPoint = results.isEmpty ? nil : point
         pickIndex = 0
-        pickDrag = .zero
+        // The screenshot protocol's view of a pick: where, and what came
+        // back. What a pick MISSES is diagnosed from here.
+        if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+            let classes = results.map(\.cls).joined(separator: ",")
+            NSLog("[pick] at (%.0f, %.0f) -> [%@]", point.x, point.y, classes)
+        }
     }
 
     func closePick() {
         pickResults = []
         pickPoint = nil
         pickIndex = 0
-        pickDrag = .zero
+    }
+
+    /// A hook-driven pick at a fraction of the view — the screenshot
+    /// protocol's way of picking away from the centre:
+    /// LOOKOUT_SHOW=pick:0.5,0.85.
+    func pickAt(fx: Double, fy: Double) {
+        guard let controller, let centre = pickCentreHint else { return }
+        let p = CGPoint(x: centre.x * 2 * fx, y: centre.y * 2 * fy)
+        guard let g = controller.geo(atPoint: p) else { return }
+        showPick(controller.pick(lon: g.lon, lat: g.lat), at: p)
     }
 
     /// Run a cursor pick at the view centre. A tap on the chart runs the same
