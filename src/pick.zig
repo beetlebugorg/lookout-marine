@@ -57,6 +57,10 @@ pub fn isMeta(cls: []const u8) bool {
 
 /// True when the pick should report the feature at all.
 pub fn keep(f: Feature) bool {
+    // A sounding's depth is the figure on the chart, not an attribute. The
+    // rest of its payload is provenance. Like a meta object, it reports
+    // only when the cell attached something to read.
+    if (std.mem.eql(u8, f.cls, "SOUNDG")) return carriesInformation(f.s57);
     if (!isMeta(f.cls)) return true;
     return carriesInformation(f.s57);
 }
@@ -246,6 +250,12 @@ test "a feature with no attributes never leads" {
     const empty = Feature{ .cls = "LNDARE", .s57 = "", .chart = "C" };
     const note = Feature{ .cls = "M_NPUB", .s57 = "{\"TXTDSC\":\"US238FBA.TXT\"}", .chart = "C" };
     try std.testing.expect(rank(note) < rank(empty));
+}
+
+test "a sounding reports only when it carries a note" {
+    try std.testing.expect(!keep(.{ .cls = "SOUNDG", .s57 = "{\"SCAMIN\":\"17999\"}", .chart = "C" }));
+    try std.testing.expect(!keep(.{ .cls = "SOUNDG", .s57 = "{}", .chart = "C" }));
+    try std.testing.expect(keep(.{ .cls = "SOUNDG", .s57 = "{\"INFORM\":\"Reported 2019\"}", .chart = "C" }));
 }
 
 test "a meta object stays only when it carries something" {
