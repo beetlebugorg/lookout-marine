@@ -730,6 +730,10 @@ final class ChartNSView: NSView {
 struct ChartView: View {
     @ObservedObject var model: AppModel
     let controller: ChartController
+    /// The OS appearance, which the form follows in the day scheme. Read
+    /// here, outside OverlayLayer, so it is the real OS value and not the
+    /// chrome's own override.
+    @Environment(\.colorScheme) private var osScheme
 
     var body: some View {
         // Chrome only: the chart renders in SDL's own window and the gesture
@@ -738,6 +742,15 @@ struct ChartView: View {
         OverlayLayer(model: model)
         .sheet(isPresented: $model.showSettings) {
             NavigationStack { settingsSheetContent }
+                // The form follows the chart's scheme, like the rest of the
+                // chrome. The scheme is set here because OverlayLayer sets it
+                // inside its own body, and this sheet is attached outside
+                // that body.
+                //
+                // Always pass a value. `nil` means "no preference", and that
+                // does not remove a preference already applied to an open
+                // sheet. The OS scheme makes a return to Day a change.
+                .preferredColorScheme(model.scheme == 0 ? osScheme : .dark)
         }
         .fileImporter(isPresented: $model.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
