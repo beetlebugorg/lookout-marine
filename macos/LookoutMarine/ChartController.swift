@@ -313,6 +313,17 @@ final class ChartController: NSObject {
         kick()
     }
 
+    /// Pan without retiring the pick report.
+    ///
+    /// The app makes this move itself, to show the object that its own report
+    /// covers. `pan` retires the report, which is correct for a move by the
+    /// mariner and wrong here.
+    func panRevealingPick(dxPt: CGFloat, dyPt: CGFloat) {
+        guard let h = handle else { return }
+        lookout_pan_logical(h, Float(dxPt), Float(dyPt))
+        kick()
+    }
+
     func zoom(_ dz: Double, atPt pt: CGPoint) {
         guard let h = handle else { return }
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))

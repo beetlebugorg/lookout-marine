@@ -69,6 +69,91 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         cfg.delegateClass = SceneDelegate.self
         return cfg
     }
+
+}
+
+/// The chrome window's root controller, and the app's hardware keyboard.
+///
+/// A keyboard gets what the Mac menu bar gives: the chart commands, and
+/// Escape and the arrows for the pick report. `ChartNSView.keyDown` is the
+/// Mac equivalent. It also returns an unclaimed key to the responder chain.
+///
+/// The keys are read here because the chrome window is the key window.
+/// `ChartUIView` is in the input window below it and receives no key.
+///
+/// The arrows and the command keys arrive in `pressesBegan`. Escape does not
+/// arrive there, because a responder above this one claims it first, so
+/// Escape needs a `UIKeyCommand`.
+final class ChromeHostingController: UIHostingController<ContentView> {
+    override var canBecomeFirstResponder: Bool { true }
+
+    /// `canPerformAction` does not gate this command. The command does
+    /// nothing when no report and no picture are open.
+    override var keyCommands: [UIKeyCommand]? {
+        [UIKeyCommand(action: #selector(keyEscape), input: UIKeyCommand.inputEscape)]
+    }
+
+    @objc private func keyEscape() {
+        let model = SceneDelegate.model
+        if model.picture != nil { model.picture = nil; return }
+        if model.pickPoint != nil { model.closePick() }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder()
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unclaimed = presses.filter { !act(on: $0) }
+        // An unclaimed key goes back to the chain, so a text field keeps its
+        // caret keys and Escape still dismisses a sheet.
+        if !unclaimed.isEmpty { super.pressesBegan(Set(unclaimed), with: event) }
+    }
+
+    /// True when the key did something.
+    private func act(on press: UIPress) -> Bool {
+        guard let key = press.key else { return false }
+        let model = SceneDelegate.model
+
+        if key.modifierFlags.contains(.command) {
+            // ⌘↑ is north-up, as on the Mac.
+            if key.keyCode == .keyboardUpArrow { model.northUp(); return true }
+            switch key.charactersIgnoringModifiers.lowercased() {
+            case "+", "=": model.zoomIn()
+            case "-":      model.zoomOut()
+            case "0":      model.zoomToFit()
+            case "l":      model.cycleScheme()
+            case "t":      model.toggleText()
+            case "d":      model.toggleOtherCategory()
+            case "o":      model.requestOpenPicker()
+            case ",":      model.openSettings()
+            case "s" where key.modifierFlags.contains(.shift): model.toggleSoundings()
+            default:       return false
+            }
+            return true
+        }
+
+        // Escape by key code or by character. A simulated press can carry
+        // the character and no key code.
+        if key.keyCode == .keyboardEscape || key.charactersIgnoringModifiers == "\u{1b}" {
+            if model.picture != nil { model.picture = nil; return true }
+            if model.pickPoint != nil { model.closePick(); return true }
+            return false
+        }
+
+        switch key.keyCode {
+        // The selection in the pick's list, as 126/125 do on the Mac.
+        case .keyboardUpArrow where model.pickResults.count > 1:
+            model.pickIndex = max(0, model.pickIndex - 1)
+            return true
+        case .keyboardDownArrow where model.pickResults.count > 1:
+            model.pickIndex = min(model.pickResults.count - 1, model.pickIndex + 1)
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// The iOS window stack, bottom → top:
@@ -107,7 +192,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         inputWindow = input
 
         let chrome = PassThroughWindow(windowScene: ws)
-        chrome.rootViewController = UIHostingController(
+        chrome.rootViewController = ChromeHostingController(
             rootView: ContentView(model: model, controller: controller))
         chrome.windowLevel = .normal + 2
         chrome.isOpaque = false
@@ -140,9 +225,9 @@ struct ContentView: View {
             } message: {
                 Text(model.openError ?? "")
             }
-            #if os(macOS)
             // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
-            // scale, search, pick opens that chrome once the chart is up.
+            // scale, search, pick opens that chrome once the chart is up. On
+            // the simulator, pass it as SIMCTL_CHILD_LOOKOUT_SHOW.
             .onAppear {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
@@ -156,14 +241,33 @@ struct ContentView: View {
                             model.settingsTab = part.count > 1 ? (tabs[part[1]] ?? 0) : 0
                             model.openSettings()
                         case "scale": model.beginScaleEntry()
+                        // scheme:1 dusk, scheme:2 night — the chrome must
+                        // follow the chart's hours, and a screenshot proves it.
+                        case "scheme":
+                            let n = part.count > 1 ? (Int(part[1]) ?? 1) : 1
+                            for _ in 0..<n { model.controller?.cycleScheme() }
                         case "search": model.searchOpen = true
-                        case "pick": model.pickAtCentre()
+                        // pick at the centre, or at a fraction of the view:
+                        // pick:0.5x0.85 lands low in the chart. ("x", because
+                        // the comma splits the LOOKOUT_SHOW list itself.)
+                        case "pick":
+                            let f = part.count > 1
+                                ? part[1].split(separator: "x").compactMap { Double($0) } : []
+                            if f.count == 2 { model.pickAt(fx: f[0], fy: f[1]) }
+                            else { model.pickAtCentre() }
+                        // pick, then the next object's report 5s later: the
+                        // screenshot protocol's way of watching the selection.
+                        case "page":
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                                if model.pickIndex < model.pickResults.count - 1 {
+                                    model.pickIndex += 1
+                                }
+                            }
                         default: break
                         }
                     }
                 }
             }
-            #endif
     }
 }
 

@@ -28,40 +28,93 @@ import UIKit
 /// search at the top left, north at the top right, zoom above charts and
 /// settings at the bottom right, the scale bar at the bottom left, and the
 /// readout capsule at the bottom center.
+/// The pick report's body for a view size: a callout beside the object on a
+/// wide view, a sheet against an edge of a narrow or a short one.
+enum PickForm {
+    case callout, bottomSheet, sideSheet
+}
+
+/// Which edge of the callout is held against the pick mark.
+enum CalloutEdge {
+    case above   // the card's floor sits over the mark
+    case below   // the card's top sits under the mark
+}
+
+/// Where a callout stands, and the height it may use.
+///
+/// `y` is the edge that `edge` names. SwiftUI places the opposite edge, so
+/// nothing measures the card to position it. `room` is a hard limit. The card
+/// sizes its columns and its scroll area to `room`, so a long report cannot
+/// grow over the mark.
+struct CalloutPlace {
+    let x: CGFloat
+    let y: CGFloat
+    let edge: CalloutEdge
+    let room: CGFloat
+}
+
 struct OverlayLayer: View {
     @ObservedObject var model: AppModel
-    /// The measured size of the pick report, which places it by the pick.
-    @State private var reportSize = CGSize(width: PickReportPanel.width, height: 180)
+    /// The OS appearance, which the chrome follows in the day scheme.
+    @Environment(\.colorScheme) private var osScheme
 
     /// Below this width the capsule and the corner chrome cannot share the
-    /// bottom row. The corner chrome then moves above the capsule.
+    /// bottom row, and the pick report becomes a bottom sheet.
     private static let compactWidth: CGFloat = 700
+    /// Below this height there is no room for a callout over a chart: a phone
+    /// on its side. The report holds the leading edge instead.
+    private static let shortHeight: CGFloat = 520
+    /// The bottom band the HUD capsule owns: its height and a margin each side.
+    private static let hudBand = Chrome.margin * 2 + Chrome.capsule
 
-    /// Put the report beside the pick, and keep it on screen: it flips to the
-    /// other side of the point when it would leave the window. The report's
-    /// MEASURED size decides that. Its scroll cap flipped a report that fits.
-    static func reportOffset(from point: CGPoint, size report: CGSize, in view: CGSize,
-                            drag: CGSize) -> CGSize {
-        var x = point.x + Chrome.gap
-        var y = point.y + Chrome.gap
-        if x + report.width > view.width - Chrome.margin {
-            x = max(Chrome.margin, point.x - report.width - Chrome.gap)
-        }
-        if y + report.height > view.height - Chrome.margin {
-            y = max(Chrome.margin, point.y - report.height - Chrome.gap)
-        }
-        // A drag beats the placement, but the header stays reachable.
-        x = min(max(0, x + drag.width), max(0, view.width - 80))
-        y = min(max(0, y + drag.height), max(0, view.height - 40))
-        return CGSize(width: x, height: y)
+    static func pickForm(for size: CGSize) -> PickForm {
+        if size.width < compactWidth { return .bottomSheet }
+        if size.height < shortHeight { return .sideSheet }
+        return .callout
     }
+
+    /// Put the callout over the pick. The card is centred on the mark and its
+    /// floor stops clear of it.
+    ///
+    /// The card gets the room between the mark and the margin. A long report
+    /// scrolls in that room. The card goes under the mark only when the room
+    /// above is too small to read a report in.
+    static func calloutLayout(point: CGPoint, width: CGFloat, in view: CGSize) -> CalloutPlace {
+        let clear = PickMarker.size / 2 + 6
+        let minX = Chrome.margin
+        let maxX = max(minX, view.width - Chrome.margin - width)
+        // The free area's floor. The card stops here; the HUD owns the rest.
+        let floor = max(Chrome.margin, view.height - Self.hudBand)
+        let x = min(max(point.x - width / 2, minX), maxX)
+
+        let over = (point.y - clear) - Chrome.margin
+        let under = floor - (point.y + clear)
+        // Use the space above unless it is too small and the space below is
+        // larger.
+        if over >= 200 || over >= under {
+            return CalloutPlace(x: x, y: point.y - clear, edge: .above, room: max(0, over))
+        }
+        return CalloutPlace(x: x, y: point.y + clear, edge: .below, room: max(0, under))
+    }
+
+    static func bottomSheetSize(in view: CGSize) -> CGSize {
+        // The chart keeps the larger part of the view.
+        CGSize(width: view.width, height: min(340, (view.height * 0.48).rounded(.down)))
+    }
+    static let sideSheetWidth: CGFloat = 360
 
     var body: some View {
         GeometryReader { geo in
             let compact = geo.size.width < Self.compactWidth
-            // The bottom inset of the corner chrome. It clears the capsule in a
-            // narrow window.
-            let corner = compact ? Chrome.margin + Chrome.capsule + Chrome.gap : Chrome.margin
+            let form: PickForm? = model.pickPoint == nil ? nil : Self.pickForm(for: geo.size)
+            // A side sheet owns the leading edge; the chrome there slides
+            // inboard of it.
+            let sideInset: CGFloat = form == .sideSheet ? Self.sideSheetWidth + Chrome.gap : 0
+            // The bottom inset of the corner chrome. It clears the capsule in
+            // a narrow window, and the sheet when one is up.
+            let corner: CGFloat = form == .bottomSheet
+                ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
+                : (compact ? Chrome.margin + Chrome.capsule + Chrome.gap : Chrome.margin)
             Color.clear
                 .allowsHitTesting(false)
                 // Top left: the search bubble opens the search field.
@@ -79,6 +132,7 @@ struct OverlayLayer: View {
                         }
                     }
                     .padding(Chrome.margin)
+                    .padding(.leading, sideInset)
                 }
                 // Top right: north. It is always visible. It stays at the
                 // physical trailing edge, because in landscape the safe-area
@@ -107,7 +161,7 @@ struct OverlayLayer: View {
                 .overlay(alignment: .bottomLeading) {
                     if model.hasChart {
                         ScaleBarView(scaleDenominator: model.scaleDenominator)
-                            .padding(.leading, Chrome.margin)
+                            .padding(.leading, Chrome.margin + sideInset)
                             .padding(.bottom, corner)
                     }
                 }
@@ -119,26 +173,77 @@ struct OverlayLayer: View {
                                     y: point.y - PickMarker.size / 2)
                     }
                 }
+                // The report, in the body the view size asks for. The tail is
+                // drawn first, so its inner half hides under the panel.
+                // Everything is placed with padding, not an offset: an offset
+                // moves the drawing and not the layout, so the frame the
+                // chrome publishes would stay at the top left and every click
+                // on the report would reach the chart underneath.
                 .overlay(alignment: .topLeading) {
-                    if let point = model.pickPoint {
-                        let at = Self.reportOffset(from: point, size: reportSize,
-                                                   in: geo.size, drag: model.pickDrag)
-                        PickReportPanel(model: model)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: ReportSize.self, value: g.size)
-                            })
-                            // Placed with padding, not an offset: an offset moves
-                            // the drawing and not the layout, so the frame the
-                            // chrome publishes stayed at the top left and every
-                            // click on the report reached the chart underneath.
-                            .chromeHitRegion("pick-report")
-                            .padding(.leading, at.width)
-                            .padding(.top, at.height)
-                            .onPreferenceChange(ReportSize.self) { reportSize = $0 }
+                    if let point = model.pickPoint, let form {
+                        switch form {
+                        case .callout:
+                            let width = PickCallout.width(for: model.pickResults.count,
+                                                          in: geo.size.width)
+                            let place = Self.calloutLayout(point: point, width: width,
+                                                           in: geo.size)
+                            let card = PickCallout(model: model, width: width,
+                                                   roomBelow: place.room, anchor: point)
+                                .chromeHitRegion("pick-report")
+                                .padding(.leading, place.x)
+                            // The card holds one edge against the mark.
+                            // SwiftUI aligns the opposite edge, so the card's
+                            // height is never measured here. Use padding, not
+                            // an offset. An offset moves the drawing only and
+                            // leaves the frame, and the chrome hit region,
+                            // behind.
+                            switch place.edge {
+                            case .above:
+                                card.frame(maxWidth: .infinity, maxHeight: .infinity,
+                                           alignment: .bottomLeading)
+                                    .padding(.bottom, max(0, geo.size.height - place.y))
+                            case .below:
+                                card.frame(maxWidth: .infinity, maxHeight: .infinity,
+                                           alignment: .topLeading)
+                                    .padding(.top, place.y)
+                            }
+                        case .bottomSheet:
+                            let size = Self.bottomSheetSize(in: geo.size)
+                            ZStack(alignment: .topLeading) {
+                                if point.y < geo.size.height - size.height - PickMarker.size / 2 {
+                                    PickTail()
+                                        .padding(.leading, min(max(point.x, 30),
+                                                               geo.size.width - 30)
+                                                           - PickTail.size / 2)
+                                        .padding(.top, geo.size.height - size.height
+                                                       - PickTail.size / 2)
+                                }
+                                PickSheet(model: model, side: .bottom, sheetSize: size,
+                                          anchor: point, onScaleTap: toggleScaleEntry)
+                                    .chromeHitRegion("pick-report")
+                                    .padding(.top, geo.size.height - size.height)
+                            }
+                        case .sideSheet:
+                            let size = CGSize(width: Self.sideSheetWidth,
+                                              height: geo.size.height)
+                            ZStack(alignment: .topLeading) {
+                                if point.x > size.width + PickMarker.size / 2 {
+                                    PickTail()
+                                        .padding(.leading, size.width - PickTail.size / 2)
+                                        .padding(.top, min(max(point.y, 30),
+                                                           geo.size.height - 30)
+                                                       - PickTail.size / 2)
+                                }
+                                PickSheet(model: model, side: .leading, sheetSize: size,
+                                          anchor: point, onScaleTap: toggleScaleEntry)
+                                    .chromeHitRegion("pick-report")
+                            }
+                        }
                     }
                 }
                 // Bottom center: the readout capsule. The scale entry opens
-                // above it.
+                // above it. A sheet folds the readouts into its own footer,
+                // so the capsule stands down and the entry clears the sheet.
                 .overlay(alignment: .bottom) {
                     VStack(spacing: Chrome.gap) {
                         if model.showScaleEntry {
@@ -146,14 +251,14 @@ struct OverlayLayer: View {
                                 .chromeHitRegion("scale-entry")
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
-                        if model.hasChart {
-                            ReadoutsCapsule(model: model, compact: compact) {
-                                if model.showScaleEntry { model.showScaleEntry = false }
-                                else { model.beginScaleEntry() }
-                            }
+                        if model.hasChart, form == nil || form == .callout {
+                            ReadoutsCapsule(model: model, compact: compact,
+                                            onScaleTap: toggleScaleEntry)
                         }
                     }
-                    .padding(.bottom, Chrome.margin)
+                    .padding(.bottom, form == .bottomSheet
+                             ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
+                             : Chrome.margin)
                 }
                 .overlay(alignment: .top) {
                     if model.isBuilding { BuildingPill().padding(.top, 10) }
@@ -172,7 +277,10 @@ struct OverlayLayer: View {
                         EmptyChartState(model: model).chromeHitRegion("empty-state")
                     }
                 }
-                .animation(.default, value: model.pickResults)
+                // No .animation keyed on pickResults: it animates every layout
+                // change in the subtree, which slid each new report across the
+                // chart from the previous one's position. The report shows
+                // immediately, at its place.
                 .animation(.default, value: model.isBuilding)
                 .animation(.easeInOut(duration: 0.18), value: model.showScaleEntry)
                 .animation(.easeInOut(duration: 0.18), value: model.searchOpen)
@@ -181,13 +289,15 @@ struct OverlayLayer: View {
         // chromeHitRegion writes the control frames in this space.
         // The pass-through hosts hit-test against it.
         .coordinateSpace(name: Chrome.space)
+        // The chrome keeps the chart's hours: dusk and night wear the dark
+        // palette whatever the OS says, and the day scheme follows the OS.
+        .environment(\.colorScheme, model.scheme == 0 ? osScheme : .dark)
     }
-}
 
-/// The measured size of the pick report.
-private struct ReportSize: PreferenceKey {
-    static var defaultValue = CGSize(width: PickReportPanel.width, height: 180)
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+    private func toggleScaleEntry() {
+        if model.showScaleEntry { model.showScaleEntry = false }
+        else { model.beginScaleEntry() }
+    }
 }
 
 /// Write this view's frame to ChromeHitMap. The pass-through host keeps the
@@ -196,19 +306,16 @@ private struct ReportSize: PreferenceKey {
 /// hit-tests as the hosting view, like empty space.
 private struct ChromeHitRegion: ViewModifier {
     let id: String
+    /// Names this instance in the map, so a dying view with the same id
+    /// cannot overwrite or remove the live view's entry.
+    @State private var token = UUID()
+
     func body(content: Content) -> some View {
-        content.background {
-            GeometryReader { g in
-                Color.clear
-                    .onAppear { ChromeHitMap.shared.set(id, g.frame(in: .named(Chrome.space))) }
-                    // One-parameter onChange: the iOS 17 (of:initial:_:) form
-                    // is unavailable on the iOS 15 floor.
-                    .onChange(of: g.frame(in: .named(Chrome.space))) { f in
-                        ChromeHitMap.shared.set(id, f)
-                    }
-                    .onDisappear { ChromeHitMap.shared.remove(id) }
+        content
+            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Chrome.space)) }) {
+                ChromeHitMap.shared.set(id, token: token, $0)
             }
-        }
+            .onDisappear { ChromeHitMap.shared.remove(id, token: token) }
     }
 }
 extension View {
@@ -262,11 +369,23 @@ struct ChartView: NSViewRepresentable {
 final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        guard hit === self else { return hit } // a subview, such as a text field
+        if let hit, hit !== self { return hit } // a subview, such as a text field
         // AppKit gives the point in the superview space. The map uses
         // Chrome.space, which is the coordinate space of this view.
+        //
+        // `hit` can be nil here as well as self: linked against macOS 26,
+        // NSHostingView answers nil over SwiftUI drawing that carries no
+        // gesture — a report's text and its surface as much as empty space.
+        // Trusting that nil sent every click on the report to the chart,
+        // which picked again under it (§6.4). The map, not AppKit, decides
+        // what is chrome; anything inside a chrome frame stays here.
         let local = superview.map { convert(point, from: $0) } ?? point
-        return ChromeHitMap.shared.contains(local) ? self : nil
+        let inChrome = ChromeHitMap.shared.contains(local)
+        if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+            NSLog("[hitmap] hitTest (%.0f, %.0f) super=%@ chrome=%d",
+                  local.x, local.y, hit === self ? "self" : "nil", inChrome ? 1 : 0)
+        }
+        return inChrome ? self : nil
     }
 }
 
@@ -305,6 +424,9 @@ final class ChartNSView: NSView {
 
     // gesture state
     private var dragging = false
+    // True while a mouse series that began on the chrome runs. The whole
+    // series is dropped, not only the down (see mouseDown).
+    private var chromeClick = false
     private var rotating = false
     private var downPoint = CGPoint.zero
     private var lastDrag = CGPoint.zero
@@ -443,8 +565,9 @@ final class ChartNSView: NSView {
 
     // MARK: Hover (HUD cursor readout)
 
-    /// Escape closes the pick report. The chart view is the first responder;
-    /// the SwiftUI overlay is not, so its own exit command never fires.
+    /// Escape closes the pick report, and the arrows walk its list. The
+    /// chart view is the first responder; the SwiftUI overlay is not, so its
+    /// own exit and move commands never fire.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {   // 53 = Escape
             if model?.picture != nil {
@@ -453,6 +576,17 @@ final class ChartNSView: NSView {
             }
             if model?.pickPoint != nil {
                 model?.closePick()
+                return
+            }
+        }
+        // 126 up, 125 down: the selection in the pick's list.
+        if let model, model.pickResults.count > 1 {
+            if event.keyCode == 126 {
+                model.pickIndex = max(0, model.pickIndex - 1)
+                return
+            }
+            if event.keyCode == 125 {
+                model.pickIndex = min(model.pickResults.count - 1, model.pickIndex + 1)
                 return
             }
         }
@@ -490,6 +624,14 @@ final class ChartNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        // A click on the chrome bubbles here when SwiftUI has no control
+        // under the point. The click must not become chart input: one
+        // pixel of drag pans the chart, and a pan retires the pick
+        // report. The mouse-up then picks again under where the report
+        // was. Latch at mouse-down and drop the whole down-drag-up
+        // series; scrollWheel and magnify refuse the same way.
+        chromeClick = overChrome(p)
+        if chromeClick { return }
         downPoint = p; lastDrag = p
         vx = 0; vy = 0; lastSampleTime = 0
         controller?.flingStart(vx: 0, vy: 0) // grabbing stops any coast
@@ -501,6 +643,7 @@ final class ChartNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if chromeClick { return }
         let p = convert(event.locationInWindow, from: nil)
         if rotating {
             controller?.rotateDrag(from: lastDrag, to: p)
@@ -514,6 +657,9 @@ final class ChartNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        // The latch, not a fresh test: the report can close or move
+        // between down and up, and the up must still stay dead.
+        if chromeClick { chromeClick = false; return }
         let p = convert(event.locationInWindow, from: nil)
         defer { dragging = false; rotating = false }
         if rotating { return }
@@ -537,6 +683,17 @@ final class ChartNSView: NSView {
     }
 
     private func tapPick(at p: CGPoint) {
+        // The last line of defense for §6.2. The pass-through host should
+        // have swallowed a click on the chrome, but every routing path that
+        // assumption depends on has failed at least once. The pick itself
+        // now refuses a point inside a chrome frame: a click that slips
+        // through does nothing instead of picking under the report.
+        if ChromeHitMap.shared.contains(p) {
+            if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+                NSLog("[hitmap] tapPick refused (%.0f, %.0f): inside chrome", p.x, p.y)
+            }
+            return
+        }
         guard let g = controller?.geo(atPoint: p) else { return }
         model?.showPick(controller?.pick(lon: g.lon, lat: g.lat) ?? [], at: p)
     }
@@ -573,6 +730,10 @@ final class ChartNSView: NSView {
 struct ChartView: View {
     @ObservedObject var model: AppModel
     let controller: ChartController
+    /// The OS appearance, which the form follows in the day scheme. Read
+    /// here, outside OverlayLayer, so it is the real OS value and not the
+    /// chrome's own override.
+    @Environment(\.colorScheme) private var osScheme
 
     var body: some View {
         // Chrome only: the chart renders in SDL's own window and the gesture
@@ -580,14 +741,16 @@ struct ChartView: View {
         // them — SwiftUI never sees chart touches (see SceneDelegate).
         OverlayLayer(model: model)
         .sheet(isPresented: $model.showSettings) {
-            // NavigationStack is iOS 16+; NavigationView carries the same
-            // title + Done toolbar on the iOS 15 floor.
-            if #available(iOS 16.0, *) {
-                NavigationStack { settingsSheetContent }
-            } else {
-                NavigationView { settingsSheetContent }
-                    .navigationViewStyle(.stack)
-            }
+            NavigationStack { settingsSheetContent }
+                // The form follows the chart's scheme, like the rest of the
+                // chrome. The scheme is set here because OverlayLayer sets it
+                // inside its own body, and this sheet is attached outside
+                // that body.
+                //
+                // Always pass a value. `nil` means "no preference", and that
+                // does not remove a preference already applied to an open
+                // sheet. The OS scheme makes a return to Day a change.
+                .preferredColorScheme(model.scheme == 0 ? osScheme : .dark)
         }
         .fileImporter(isPresented: $model.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
@@ -670,6 +833,19 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         syncLayerScale()
+        // The hint follows every layout, not just the first: at auto-open time
+        // the chrome window is not wired yet and its safe-area inset reads
+        // zero, which put the hook-driven pick's mark off its object by that
+        // inset once the window settled.
+        model?.pickCentreHint = inChromeSpace(CGPoint(x: bounds.midX, y: bounds.midY))
+        // The space the report is laid out in. The chrome is inset by the
+        // safe area and this view is not.
+        if let inset = chromeWindow?.safeAreaInsets {
+            model?.chromeSize = CGSize(width: bounds.width - inset.left - inset.right,
+                                       height: bounds.height - inset.top - inset.bottom)
+        } else {
+            model?.chromeSize = bounds.size
+        }
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes (rotation, split view)
         // just resize.
@@ -690,7 +866,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
-        model?.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
         model?.openingCells = paths.count
         model?.isOpening = true // loader up before the (synchronous) open runs
         model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
@@ -739,16 +914,33 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // pointer *drag*, which then zoomed instead of panned. Pinch is the zoom
         // gesture; +/- and double-tap cover pointer users.)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(onHover(_:)))
-        [pinch, rotate].forEach { $0.delegate = self } // only these compose (see below)
+        // The pan needs a delegate too. UIKit asks both recognizers of a
+        // pair whether they may run together, and a recognizer with no
+        // delegate answers no.
+        [pan, pinch, rotate].forEach { $0.delegate = self } // these compose (see below)
         [pan, pinch, rotate, doubleTap, twoFingerTap, tap, hover].forEach(addGestureRecognizer)
+        panRecognizer = pan
     }
 
-    /// Only pinch↔rotate may run together (one two-finger manipulation). Pan is
-    /// deliberately EXCLUSIVE with them so a drag can't also zoom/rotate.
+    /// Held so a starting pinch can cancel the pan.
+    private weak var panRecognizer: UIPanGestureRecognizer?
+
+    /// Pinch and rotate run together as one two-finger manipulation. Pinch
+    /// also runs with the pan.
+    ///
+    /// Two fingers do not land on the same frame. The first finger starts the
+    /// pan, because `maximumNumberOfTouches` caps the touches a pan tracks but
+    /// does not stop it starting. Pinch must therefore be allowed to start
+    /// while the pan runs, or it never starts at all. `onPinch` cancels the
+    /// pan at once, so the two never drive the chart together.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         let pair: Set = [ObjectIdentifier(type(of: gestureRecognizer)), ObjectIdentifier(type(of: other))]
-        return pair.isSubset(of: [ObjectIdentifier(UIPinchGestureRecognizer.self), ObjectIdentifier(UIRotationGestureRecognizer.self)])
+        let manipulation: Set = [ObjectIdentifier(UIPinchGestureRecognizer.self),
+                                 ObjectIdentifier(UIRotationGestureRecognizer.self)]
+        if pair.isSubset(of: manipulation) { return true }
+        return pair.contains(ObjectIdentifier(UIPanGestureRecognizer.self))
+            && pair.contains(ObjectIdentifier(UIPinchGestureRecognizer.self))
     }
 
     @objc private func onPan(_ g: UIPanGestureRecognizer) {
@@ -778,6 +970,13 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             notePointerInput("pinch")
             lastPinchScale = g.scale
             controller?.flingStart(vx: 0, vy: 0)
+            // The first finger started a pan. That pan is half of this
+            // pinch, not a drag. Toggling `isEnabled` cancels it, so the
+            // chart zooms and does not also slide.
+            if let pan = panRecognizer, pan.state == .began || pan.state == .changed {
+                pan.isEnabled = false
+                pan.isEnabled = true
+            }
         case .changed:
             let dz = log2(Double(g.scale / lastPinchScale))
             lastPinchScale = g.scale
@@ -819,7 +1018,18 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         notePointerInput("tap")
         let p = g.location(in: self)
         guard let geo = controller?.geo(atPoint: p) else { return }
-        model?.showPick(controller?.pick(lon: geo.lon, lat: geo.lat) ?? [], at: p)
+        model?.showPick(controller?.pick(lon: geo.lon, lat: geo.lat) ?? [],
+                        at: inChromeSpace(p))
+    }
+
+    /// A point in this view, moved into the chrome's coordinate space. The
+    /// chrome window's SwiftUI content is inset by the safe area; this view
+    /// is not. Without the conversion the mark — and the report's tail, which
+    /// aims at it — stands off the object by the width of the inset. This is
+    /// defect 11.1 in the behavior spec.
+    private func inChromeSpace(_ p: CGPoint) -> CGPoint {
+        guard let inset = chromeWindow?.safeAreaInsets else { return p }
+        return CGPoint(x: p.x - inset.left, y: p.y - inset.top)
     }
 
     @objc private func onDoubleTap(_ g: UITapGestureRecognizer) {

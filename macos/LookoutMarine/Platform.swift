@@ -46,19 +46,36 @@ func lkLog(_ message: String) {
 /// frames are data written at layout time and are always available.
 final class ChromeHitMap {
     static let shared = ChromeHitMap()
-    private var rects: [String: CGRect] = [:]
+    private var rects: [String: (token: UUID, rect: CGRect)] = [:]
     private let lock = NSLock()
-    func set(_ id: String, _ rect: CGRect) {
+
+    /// Register a control's frame. Two views can hold the same id for a
+    /// moment when a pick changes: the new panel appears before SwiftUI
+    /// discards the old one. The token names the instance, and a zero
+    /// frame is a dying view's last layout, never a control — both must
+    /// not disturb a live entry.
+    func set(_ id: String, token: UUID, _ rect: CGRect) {
+        guard rect.width >= 1, rect.height >= 1 else { return }
         lock.lock(); defer { lock.unlock() }
-        rects[id] = rect
+        rects[id] = (token, rect)
+        // The screenshot protocol's view of the map. When a click on the
+        // chrome reaches the chart, the first question is what frames the
+        // map actually holds; this answers it without a debugger attached.
+        if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+            NSLog("[hitmap] %@ = (%.0f, %.0f, %.0f, %.0f)",
+                  id, rect.origin.x, rect.origin.y, rect.width, rect.height)
+        }
     }
-    func remove(_ id: String) {
+
+    /// Remove an entry, but only for the instance that owns it. A dying
+    /// view's removal must not take the live view's entry with it.
+    func remove(_ id: String, token: UUID) {
         lock.lock(); defer { lock.unlock() }
-        rects[id] = nil
+        if rects[id]?.token == token { rects[id] = nil }
     }
     func contains(_ p: CGPoint) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return rects.values.contains { $0.contains(p) }
+        return rects.values.contains { $0.rect.contains(p) }
     }
 }
 
@@ -75,8 +92,31 @@ final class PassThroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         guard hit === rootViewController?.view else { return hit } // real subview (sheet, keyboard, …)
-        if ChromeHitMap.shared.contains(point) { return hit }
+        let chrome = inChromeSpace(point)
+        let inMap = ChromeHitMap.shared.contains(chrome)
+        // Which path answered. The map must answer. The accessibility
+        // fallback has a tree to walk only when a client is attached, so a
+        // control that depends on it is dead in normal use.
+        if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+            NSLog("[hitmap] tap win(%.0f, %.0f) chrome(%.0f, %.0f) map=%d",
+                  point.x, point.y, chrome.x, chrome.y, inMap ? 1 : 0)
+        }
+        if inMap { return hit }
         return hasInteractiveElement(at: point) ? hit : nil
+    }
+
+    /// This window's point in the chrome's coordinate space.
+    ///
+    /// The hosting controller's SwiftUI root is inset by the safe area.
+    /// `chromeHitRegion` writes its frames in that inset space. A touch
+    /// arrives here in window space, which is not inset. The conversion is
+    /// necessary, or every frame in the map is wrong by the inset and a tap
+    /// on a control falls outside its own rect.
+    ///
+    /// `ChartUIView.inChromeSpace` converts the pick point for the same
+    /// reason.
+    private func inChromeSpace(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x - safeAreaInsets.left, y: p.y - safeAreaInsets.top)
     }
 
     /// True when an accessibility element with interactive traits (button,
@@ -121,58 +161,6 @@ enum Pasteboard {
         #else
         UIPasteboard.general.string = text
         #endif
-    }
-}
-
-// MARK: - iOS 15 compatibility shims
-//
-// The app floor is iOS 15 (older iPads); macOS stays 14. These cover the
-// handful of 16/17-era SwiftUI conveniences the shared UI uses.
-
-extension ShapeStyle where Self == Color {
-    /// `.separator` (the ShapeStyle) is iOS 17+ — the underlying platform
-    /// colour has been there since iOS 13 / macOS 10.14. Same leading-dot
-    /// ergonomics at the call sites.
-    static var hairline: Color {
-        #if os(macOS)
-        Color(nsColor: .separatorColor)
-        #else
-        Color(uiColor: .separator)
-        #endif
-    }
-}
-
-/// `LabeledContent` is iOS 16+. Same shape on 16+/macOS; a plain
-/// title / spacer / content row on iOS 15.
-struct LabeledRow<Content: View>: View {
-    private let title: String
-    @ViewBuilder private let content: () -> Content
-    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
-        self.content = content
-    }
-    var body: some View {
-        if #available(iOS 16.0, macOS 13.0, *) {
-            LabeledContent(title, content: content)
-        } else {
-            HStack {
-                Text(title)
-                Spacer()
-                content()
-            }
-        }
-    }
-}
-
-extension View {
-    /// `.formStyle(.grouped)` is iOS 16+. On iOS 15 a `Form` already renders
-    /// as an inset-grouped list, so the fallback is a no-op.
-    @ViewBuilder func groupedForm() -> some View {
-        if #available(iOS 16.0, macOS 13.0, *) {
-            formStyle(.grouped)
-        } else {
-            self
-        }
     }
 }
 
