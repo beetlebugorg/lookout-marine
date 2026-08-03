@@ -46,11 +46,18 @@ func lkLog(_ message: String) {
 /// frames are data written at layout time and are always available.
 final class ChromeHitMap {
     static let shared = ChromeHitMap()
-    private var rects: [String: CGRect] = [:]
+    private var rects: [String: (token: UUID, rect: CGRect)] = [:]
     private let lock = NSLock()
-    func set(_ id: String, _ rect: CGRect) {
+
+    /// Register a control's frame. Two views can hold the same id for a
+    /// moment when a pick changes: the new panel appears before SwiftUI
+    /// discards the old one. The token names the instance, and a zero
+    /// frame is a dying view's last layout, never a control — both must
+    /// not disturb a live entry.
+    func set(_ id: String, token: UUID, _ rect: CGRect) {
+        guard rect.width >= 1, rect.height >= 1 else { return }
         lock.lock(); defer { lock.unlock() }
-        rects[id] = rect
+        rects[id] = (token, rect)
         // The screenshot protocol's view of the map. When a click on the
         // chrome reaches the chart, the first question is what frames the
         // map actually holds; this answers it without a debugger attached.
@@ -59,13 +66,16 @@ final class ChromeHitMap {
                   id, rect.origin.x, rect.origin.y, rect.width, rect.height)
         }
     }
-    func remove(_ id: String) {
+
+    /// Remove an entry, but only for the instance that owns it. A dying
+    /// view's removal must not take the live view's entry with it.
+    func remove(_ id: String, token: UUID) {
         lock.lock(); defer { lock.unlock() }
-        rects[id] = nil
+        if rects[id]?.token == token { rects[id] = nil }
     }
     func contains(_ p: CGPoint) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return rects.values.contains { $0.contains(p) }
+        return rects.values.contains { $0.rect.contains(p) }
     }
 }
 

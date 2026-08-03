@@ -20,20 +20,53 @@ enum Chrome {
     /// Readout capsule height (XAML HudPill Height="44", CornerRadius 22).
     static let capsule: CGFloat = 44
 
-    static let ink = Color(red: 0.102, green: 0.102, blue: 0.102)      // #1A1A1A
-    static let muted = Color(red: 0.420, green: 0.420, blue: 0.420)    // #6B6B6B
-    static let accent = Color(red: 0.106, green: 0.286, blue: 0.769)   // #1B49C4
+    /// A colour that follows the view's colour scheme. The chrome renders in
+    /// the dark palette whenever the view's scheme is dark — which the
+    /// overlay derives from the chart's own scheme (dusk and night are dark)
+    /// and, in the day scheme, from the OS appearance.
+    private static func dyn(light: (Double, Double, Double, Double),
+                            dark: (Double, Double, Double, Double)) -> Color {
+        #if os(macOS)
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let m = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let c = m ? dark : light
+            return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: c.3)
+        })
+        #else
+        Color(uiColor: UIColor { traits in
+            let c = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: c.0, green: c.1, blue: c.2, alpha: c.3)
+        })
+        #endif
+    }
+
+    static let ink = dyn(light: (0.102, 0.102, 0.102, 1),      // #1A1A1A
+                         dark: (0.839, 0.824, 0.784, 1))       // #D6D2C8
+    static let muted = dyn(light: (0.420, 0.420, 0.420, 1),    // #6B6B6B
+                           dark: (0.561, 0.545, 0.514, 1))     // #8F8B83
+    static let accent = dyn(light: (0.106, 0.286, 0.769, 1),   // #1B49C4
+                            dark: (0.494, 0.631, 0.961, 1))    // #7EA1F5
     static let amber = Color(red: 0.961, green: 0.620, blue: 0.043)    // #F59E0B
-    static let overscale = Color(red: 0.847, green: 0.231, blue: 0.004) // #D83B01
+    static let overscale = dyn(light: (0.847, 0.231, 0.004, 1), // #D83B01
+                               dark: (0.957, 0.416, 0.204, 1))
     /// S-52 highlights in magenta.
     static let magenta = Color(red: 0.858, green: 0.098, blue: 0.549)
-    static let surface = Color.white
-    /// Panel fill (XAML #F2F8F8F8 / #F5F8F8F8 over the chart).
-    static let panel = Color(red: 0.973, green: 0.973, blue: 0.973)
+    static let surface = dyn(light: (1, 1, 1, 1),
+                             dark: (0.086, 0.094, 0.110, 1))   // #16181C
+    /// Panel fill (XAML #F2F8F8F8 over the chart; its dark twin).
+    static let panel = dyn(light: (0.973, 0.973, 0.973, 1),    // #F8F8F8
+                           dark: (0.118, 0.129, 0.149, 1))     // #1E2126
     /// Hairline separators inside the capsule (XAML #DDDDDD).
-    static let rule = Color(red: 0.867, green: 0.867, blue: 0.867)
+    static let rule = dyn(light: (0.867, 0.867, 0.867, 1),
+                          dark: (0.227, 0.239, 0.259, 1))      // #3A3D42
     /// Panel border (XAML #33000000).
-    static let edge = Color.black.opacity(0.20)
+    static let edge = dyn(light: (0, 0, 0, 0.20),
+                          dark: (1, 1, 1, 0.28))
+    /// A control's fill as the pointer finds and presses it.
+    static let hoverFill = dyn(light: (0.95, 0.95, 0.95, 1),
+                               dark: (0.165, 0.176, 0.196, 1))
+    static let pressFill = dyn(light: (0.87, 0.87, 0.87, 1),
+                               dark: (0.216, 0.227, 0.247, 1))
 
     /// The overlay coordinate space. chromeHitRegion writes the frames of the
     /// controls in this space. The pass-through hosts hit-test against it.
@@ -49,6 +82,20 @@ enum Chrome {
 }
 
 extension View {
+    /// Report this view's laid-out size, and each later change of it.
+    ///
+    /// Not a preference: a value published with `preference` from inside a
+    /// `background` never reaches its `onPreferenceChange` here — the sink is
+    /// called once with the DEFAULT and never again, while the reader plainly
+    /// sees the real size. The pick report placed itself against that default
+    /// for as long as it has existed. `onGeometryChange` also beats the old
+    /// GeometryReader-in-background route: it reports within the layout
+    /// update, initial value included, so a panel placed from a measurement
+    /// no longer spends its first frame at an estimated position.
+    func measureSize(_ perform: @escaping (CGSize) -> Void) -> some View {
+        onGeometryChange(for: CGSize.self, of: \.size) { perform($0) }
+    }
+
     /// The WinUI 3 floating panel style: pick report, empty state, and loader.
     /// A report is opaque: the chart showing through a table of numbers makes
     /// both hard to read.
@@ -93,8 +140,8 @@ struct ChromeButtonStyle: ButtonStyle {
         }
 
         private var fill: Color {
-            if configuration.isPressed { return Color(white: 0.87) }
-            return hovering ? Color(white: 0.95) : Chrome.surface
+            if configuration.isPressed { return Chrome.pressFill }
+            return hovering ? Chrome.hoverFill : Chrome.surface
         }
     }
 }
