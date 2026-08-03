@@ -659,20 +659,3 @@ struct PickTail: View {
     }
 }
 
-/// The leader that binds the mark to its report: ()────[report]. Not a line
-/// drawn OVER the chart — a thin ribbon of the card's own material, with the
-/// card's surface, hairline and shadow, so it reads as a piece of the chrome
-/// reaching out to the circle. A stroked line in any colour read as chart
-/// symbology.
-struct PickLeader: Shape {
-    var from: CGPoint
-    var to: CGPoint
-    var width: CGFloat = 7
-
-    func path(in _: CGRect) -> Path {
-        var p = Path()
-        p.move(to: from)
-        p.addLine(to: to)
-        return p.strokedPath(StrokeStyle(lineWidth: width, lineCap: .round))
-    }
-}
