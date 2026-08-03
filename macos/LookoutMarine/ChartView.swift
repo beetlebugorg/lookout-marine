@@ -893,16 +893,33 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // pointer *drag*, which then zoomed instead of panned. Pinch is the zoom
         // gesture; +/- and double-tap cover pointer users.)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(onHover(_:)))
-        [pinch, rotate].forEach { $0.delegate = self } // only these compose (see below)
+        // The pan needs a delegate too. UIKit asks both recognizers of a
+        // pair whether they may run together, and a recognizer with no
+        // delegate answers no.
+        [pan, pinch, rotate].forEach { $0.delegate = self } // these compose (see below)
         [pan, pinch, rotate, doubleTap, twoFingerTap, tap, hover].forEach(addGestureRecognizer)
+        panRecognizer = pan
     }
 
-    /// Only pinch↔rotate may run together (one two-finger manipulation). Pan is
-    /// deliberately EXCLUSIVE with them so a drag can't also zoom/rotate.
+    /// Held so a starting pinch can cancel the pan.
+    private weak var panRecognizer: UIPanGestureRecognizer?
+
+    /// Pinch and rotate run together as one two-finger manipulation. Pinch
+    /// also runs with the pan.
+    ///
+    /// Two fingers do not land on the same frame. The first finger starts the
+    /// pan, because `maximumNumberOfTouches` caps the touches a pan tracks but
+    /// does not stop it starting. Pinch must therefore be allowed to start
+    /// while the pan runs, or it never starts at all. `onPinch` cancels the
+    /// pan at once, so the two never drive the chart together.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         let pair: Set = [ObjectIdentifier(type(of: gestureRecognizer)), ObjectIdentifier(type(of: other))]
-        return pair.isSubset(of: [ObjectIdentifier(UIPinchGestureRecognizer.self), ObjectIdentifier(UIRotationGestureRecognizer.self)])
+        let manipulation: Set = [ObjectIdentifier(UIPinchGestureRecognizer.self),
+                                 ObjectIdentifier(UIRotationGestureRecognizer.self)]
+        if pair.isSubset(of: manipulation) { return true }
+        return pair.contains(ObjectIdentifier(UIPanGestureRecognizer.self))
+            && pair.contains(ObjectIdentifier(UIPinchGestureRecognizer.self))
     }
 
     @objc private func onPan(_ g: UIPanGestureRecognizer) {
@@ -932,6 +949,13 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             notePointerInput("pinch")
             lastPinchScale = g.scale
             controller?.flingStart(vx: 0, vy: 0)
+            // The first finger started a pan. That pan is half of this
+            // pinch, not a drag. Toggling `isEnabled` cancels it, so the
+            // chart zooms and does not also slide.
+            if let pan = panRecognizer, pan.state == .began || pan.state == .changed {
+                pan.isEnabled = false
+                pan.isEnabled = true
+            }
         case .changed:
             let dz = log2(Double(g.scale / lastPinchScale))
             lastPinchScale = g.scale
