@@ -437,6 +437,9 @@ final class ChartNSView: NSView {
 
     // gesture state
     private var dragging = false
+    // True while a mouse series that began on the chrome runs. The whole
+    // series is dropped, not only the down (see mouseDown).
+    private var chromeClick = false
     private var rotating = false
     private var downPoint = CGPoint.zero
     private var lastDrag = CGPoint.zero
@@ -634,6 +637,14 @@ final class ChartNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        // A click on the chrome bubbles here when SwiftUI has no control
+        // under the point. The click must not become chart input: one
+        // pixel of drag pans the chart, and a pan retires the pick
+        // report. The mouse-up then picks again under where the report
+        // was. Latch at mouse-down and drop the whole down-drag-up
+        // series; scrollWheel and magnify refuse the same way.
+        chromeClick = overChrome(p)
+        if chromeClick { return }
         downPoint = p; lastDrag = p
         vx = 0; vy = 0; lastSampleTime = 0
         controller?.flingStart(vx: 0, vy: 0) // grabbing stops any coast
@@ -645,6 +656,7 @@ final class ChartNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if chromeClick { return }
         let p = convert(event.locationInWindow, from: nil)
         if rotating {
             controller?.rotateDrag(from: lastDrag, to: p)
@@ -658,6 +670,9 @@ final class ChartNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        // The latch, not a fresh test: the report can close or move
+        // between down and up, and the up must still stay dead.
+        if chromeClick { chromeClick = false; return }
         let p = convert(event.locationInWindow, from: nil)
         defer { dragging = false; rotating = false }
         if rotating { return }
@@ -681,6 +696,17 @@ final class ChartNSView: NSView {
     }
 
     private func tapPick(at p: CGPoint) {
+        // The last line of defense for §6.2. The pass-through host should
+        // have swallowed a click on the chrome, but every routing path that
+        // assumption depends on has failed at least once. The pick itself
+        // now refuses a point inside a chrome frame: a click that slips
+        // through does nothing instead of picking under the report.
+        if ChromeHitMap.shared.contains(p) {
+            if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
+                NSLog("[hitmap] tapPick refused (%.0f, %.0f): inside chrome", p.x, p.y)
+            }
+            return
+        }
         guard let g = controller?.geo(atPoint: p) else { return }
         model?.showPick(controller?.pick(lon: g.lon, lat: g.lat) ?? [], at: p)
     }
