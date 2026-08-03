@@ -20,8 +20,8 @@ name: LookoutMarine
 options:
   bundleIdPrefix: org.beetlebug
   deploymentTarget:
-    macOS: "14.0"
-    iOS: "15.0"
+    macOS: "26.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 
 targets:
@@ -37,7 +37,7 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: LookoutMarine/Info.plist
         CODE_SIGN_ENTITLEMENTS: LookoutMarine/LookoutMarine.entitlements
@@ -77,7 +77,7 @@ targets:
           # Version the target at the DEPLOYMENT minimum: an unversioned native
           # build stamps objects with the build machine's OS and ld warns
           # "built for newer macOS version than being linked" on every object.
-          ZIG_MAC_TARGET="$(uname -m | sed s/arm64/aarch64/)-macos.${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+          ZIG_MAC_TARGET="$(uname -m | sed s/arm64/aarch64/)-macos.${MACOSX_DEPLOYMENT_TARGET:-26.0}"
           # An explicit -Dtarget makes zig a CROSS build: no automatic SDK
           # discovery, so hand it the sysroot like the iOS script does.
           MAC_SYSROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
@@ -182,7 +182,7 @@ targets:
           T57="$SRCROOT/../../tile57"
           echo "zig cores: lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f "$T57/build.zig" ] && git -C "$T57" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')"
           # Versioned at the deployment minimum — see the macOS target's note.
-          IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-15.0}"
+          IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-26.0}"
           case "$PLATFORM_NAME" in
             iphonesimulator) ZIG_TARGET="aarch64-ios.${IOS_MIN}-simulator" ;;
             *)               ZIG_TARGET="aarch64-ios.${IOS_MIN}" ;;
