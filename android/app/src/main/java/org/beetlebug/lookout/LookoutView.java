@@ -392,6 +392,10 @@ public final class LookoutView extends SurfaceView
             // The surface's own extent lags a rotation, so the engine is TOLD
             // the scale rather than left to infer it — before the first build.
             l.setDensity(density);
+            // The symbols and the text are sized for 1x until the engine is
+            // told the display's scale. Without this they draw too small and
+            // their pick geometry with them.
+            l.setDeviceScale(density);
             // Also before the first build: the mariner's saved settings and the
             // saved view, or the chart tessellates once at defaults and again
             // immediately. Safe inline — no frame runs until lk is published.
