@@ -28,7 +28,12 @@ struct _LkAppModel {
   int      scheme;
   gboolean building;
 
+  int view_width, view_height; /* the chart view, in logical points */
+
   GPtrArray *pick_results;
+  gboolean   pick_valid;
+  double     pick_x, pick_y; /* logical points in the chart view */
+  guint      pick_index;
 };
 
 enum {
@@ -49,6 +54,8 @@ enum {
   PROP_SCALE_DENOMINATOR,
   PROP_SCHEME,
   PROP_BUILDING,
+  PROP_VIEW_WIDTH,
+  PROP_VIEW_HEIGHT,
   N_PROPS
 };
 
@@ -87,6 +94,8 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCALE_DENOMINATOR:   g_value_set_double (value, self->scale_denominator); break;
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
+    case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
+    case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
@@ -144,6 +153,8 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_SCALE_DENOMINATOR] = g_param_spec_double ("scale-denominator", NULL, NULL, 0, G_MAXDOUBLE, 0, RO);
   properties[PROP_SCHEME] = g_param_spec_int ("scheme", NULL, NULL, 0, 2, 0, RO);
   properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
+  properties[PROP_VIEW_WIDTH] = g_param_spec_int ("view-width", NULL, NULL, 0, G_MAXINT, 0, RO);
+  properties[PROP_VIEW_HEIGHT] = g_param_spec_int ("view-height", NULL, NULL, 0, G_MAXINT, 0, RO);
 
 #undef RO
 #undef RW
@@ -356,6 +367,22 @@ lk_app_model_north_up (LkAppModel *self)
   lk_chart_controller_reset_rotation (self->controller);
 }
 
+/* Zoom to a 1:N scale. At one latitude the denominator is C·cos(lat)/2^zoom,
+ * so a wanted scale is a zoom delta: the engine's own zoom does the work and
+ * keeps its limits and its easing. It agrees with zoomDeltaForScale (Android)
+ * and AppModel.zoomToScale (macOS, iOS). */
+void
+lk_app_model_zoom_to_scale (LkAppModel *self, double denominator)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (denominator <= 0 || self->scale_denominator <= 0)
+    return;
+
+  lk_chart_controller_zoom_centered (self->controller,
+                                     log2 (self->scale_denominator / denominator));
+}
+
 /* A menu scheme change must persist just like one from the settings form. */
 void
 lk_app_model_cycle_scheme (LkAppModel *self)
@@ -501,6 +528,54 @@ lk_coordinate_parse (const char *text, double *out_lat, double *out_lon)
   return TRUE;
 }
 
+/* A typed scale: "25000", "25,000", "1:25000", "25k" and "1:2.5M" all mean the
+ * same thing. It accepts what ScaleParser accepts on the other shells, so a
+ * scale read off one app types into another. */
+gboolean
+lk_scale_parse (const char *text, double *out_denominator)
+{
+  g_return_val_if_fail (out_denominator != NULL, FALSE);
+
+  if (text == NULL)
+    return FALSE;
+
+  g_autofree char *lower = g_ascii_strdown (text, -1);
+  const char *body = strrchr (lower, ':'); /* in "1:25k" the 1 is before it */
+  body = body != NULL ? body + 1 : lower;
+
+  /* Group separators and spaces are how a scale is written, not part of it. */
+  g_autoptr (GString) digits = g_string_new (NULL);
+  double multiplier = 1.0;
+  for (const char *p = body; *p != '\0'; p++)
+    {
+      if (*p == ',' || g_ascii_isspace (*p))
+        continue;
+      g_string_append_c (digits, *p);
+    }
+
+  if (digits->len == 0)
+    return FALSE;
+
+  char last = digits->str[digits->len - 1];
+  if (last == 'k' || last == 'm')
+    {
+      multiplier = last == 'k' ? 1000.0 : 1000000.0;
+      g_string_truncate (digits, digits->len - 1);
+    }
+
+  char *end = NULL;
+  double value = g_ascii_strtod (digits->str, &end);
+  if (end == digits->str || *end != '\0')
+    return FALSE;
+
+  double denominator = value * multiplier;
+  if (!isfinite (denominator) || denominator <= 0)
+    return FALSE;
+
+  *out_denominator = denominator;
+  return TRUE;
+}
+
 gboolean
 lk_app_model_go_to_coordinate (LkAppModel *self, const char *text)
 {
@@ -566,6 +641,17 @@ lk_app_model_set_building (LkAppModel *self, gboolean building)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
   NOTIFY_IF_CHANGED (self->building, building, PROP_BUILDING);
+}
+
+/* The chart view's size, in logical points. The capsule reads it to decide
+ * whether it is in a narrow window, and the pick report is placed inside it. */
+void
+lk_app_model_set_view_size (LkAppModel *self, int width, int height)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  NOTIFY_IF_CHANGED (self->view_width, width, PROP_VIEW_WIDTH);
+  NOTIFY_IF_CHANGED (self->view_height, height, PROP_VIEW_HEIGHT);
 }
 
 void
@@ -638,12 +724,33 @@ lk_app_model_set_open_error (LkAppModel *self, const char *message)
 }
 
 void
-lk_app_model_set_pick_results (LkAppModel *self, GPtrArray *results)
+lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
   self->pick_results = results;
+  self->pick_valid = results != NULL && results->len > 0;
+  self->pick_x = x;
+  self->pick_y = y;
+  /* A new pick is a new set of objects: the report opens on the best one, as
+   * the engine ranked them. */
+  self->pick_index = 0;
+  g_signal_emit (self, signals[SIGNAL_PICK_RESULTS], 0);
+}
+
+void
+lk_app_model_clear_pick (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (!self->pick_valid)
+    return;
+
+  g_clear_pointer (&self->pick_results, g_ptr_array_unref);
+  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
+  self->pick_valid = FALSE;
+  self->pick_index = 0;
   g_signal_emit (self, signals[SIGNAL_PICK_RESULTS], 0);
 }
 
@@ -652,6 +759,38 @@ lk_app_model_get_pick_results (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
   return self->pick_results;
+}
+
+gboolean
+lk_app_model_get_pick_point (LkAppModel *self, double *out_x, double *out_y)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  if (!self->pick_valid)
+    return FALSE;
+
+  if (out_x != NULL)
+    *out_x = self->pick_x;
+  if (out_y != NULL)
+    *out_y = self->pick_y;
+  return TRUE;
+}
+
+guint
+lk_app_model_get_pick_index (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), 0);
+  return self->pick_index;
+}
+
+void
+lk_app_model_set_pick_index (LkAppModel *self, guint index)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  /* No signal: the card moves its own selection, and re-emitting would rebuild
+   * the card underneath the click that moved it. */
+  self->pick_index = index;
 }
 
 /* ---- accessors ---------------------------------------------------------- */
@@ -669,6 +808,8 @@ double      lk_app_model_get_overscale (LkAppModel *self)         { return self-
 double      lk_app_model_get_scale_denominator (LkAppModel *self) { return self->scale_denominator; }
 int         lk_app_model_get_scheme (LkAppModel *self)            { return self->scheme; }
 gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
+int         lk_app_model_get_view_width (LkAppModel *self)        { return self->view_width; }
+int         lk_app_model_get_view_height (LkAppModel *self)       { return self->view_height; }
 
 const char *
 lk_app_model_get_scheme_name (LkAppModel *self)
