@@ -423,6 +423,7 @@ fun calloutPlacement(
     viewWidth: Dp,
     viewHeight: Dp,
     hudBand: Dp,
+    topInset: Dp = 0.dp,
 ): CalloutPlace {
     val clear = PICK_MARKER_SIZE / 2 + 6.dp
     val minX = PICK_MARGIN
@@ -431,7 +432,10 @@ fun calloutPlacement(
     val floor = maxOf(PICK_MARGIN, viewHeight - hudBand)
     val x = minOf(maxOf(pointX - width / 2, minX), maxX)
 
-    val over = (pointY - clear) - PICK_MARGIN
+    // The ceiling is the safe area, not the view: a card that runs under the
+    // status bar is read through the clock.
+    val ceiling = topInset + PICK_MARGIN
+    val over = (pointY - clear) - ceiling
     val under = floor - (pointY + clear)
     // Use the space above unless it is too small and the space below is larger.
     return if (over >= 200.dp || over >= under) {
