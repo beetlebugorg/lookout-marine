@@ -55,6 +55,7 @@ extern fn lookout_memory_warning(h: ?*anyopaque) void;
 extern fn lookout_get_mariner(h: ?*anyopaque, out: *cc.tile57_mariner) void;
 extern fn lookout_set_mariner(h: ?*anyopaque, m: *const cc.tile57_mariner) void;
 extern fn lookout_pick(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
+extern fn lookout_pick_ranked(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
 
 const LOOKOUT_NATIVE_ANDROID_WINDOW: c_int = 7;
 
@@ -571,7 +572,11 @@ export fn Java_org_beetlebug_lookout_Lookout_nPick(env: [*c]j.JNIEnv, cls: j.jcl
         ctx.items.deinit(gpa);
     }
     const cb = cc.tile57_query_cb{ .ctx = &ctx, .feature = pickFeature };
-    lookout_pick(h.l, lon, lat, &cb);
+    // The RANKED pick, as the other shells use: it drops the objects a report
+    // must not lead with, ranks the rest, and composes the decoded report into
+    // the payload. lookout_pick is the engine's own raw pick, which emits bare
+    // attributes and no report.
+    lookout_pick_ranked(h.l, lon, lat, &cb);
     if (!ctx.ok) return null;
 
     const string_cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
