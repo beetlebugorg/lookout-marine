@@ -132,7 +132,23 @@ swift macos/frame-device.swift docs/docs/img/ipad-day-raw.png \
   docs/docs/img/ipad-day.png 60 150 90 1        # bezel, body radius, screen radius, camera
 swift macos/frame-device.swift docs/docs/img/iphone-day-raw.png \
   docs/docs/img/iphone-day.png 45 210 165 0     # the phone camera is in the screen
+swift macos/frame-device.swift docs/docs/img/android-day-raw.png \
+  docs/docs/img/android-day.png 60 150 90 1     # the tablet frame serves Android too
 ```
+
+## Android
+
+Android has no simulator here: the emulator needs hardware virtualisation that
+this machine does not give it, so the capture comes from a device over
+`adb`. The frame above is the same one the tablet uses.
+
+```sh
+adb -s <device> exec-out screencap -p > docs/docs/img/android-day-raw.png
+```
+
+Take the capture in ONE session with the taps that frame it. A relaunch
+restores the saved view, so coordinates read off an earlier capture aim at a
+view the app no longer shows.
 
 ## How to examine a frame
 
