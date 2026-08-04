@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -53,6 +54,9 @@ fun ChartScreen(
     // (the camera takes an anchor point, in logical points).
     var centreX by remember { mutableFloatStateOf(0f) }
     var centreY by remember { mutableFloatStateOf(0f) }
+    // The chart view's size in dp, which the pick report's placement needs.
+    var viewW by remember { mutableStateOf(0.dp) }
+    var viewH by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current.density
 
     // Apply-and-save on a trailing debounce, mirroring the Swift binding: a
@@ -69,6 +73,8 @@ fun ChartScreen(
             .onSizeChanged {
                 centreX = it.width * 0.5f / density
                 centreY = it.height * 0.5f / density
+                viewW = (it.width / density).dp
+                viewH = (it.height / density).dp
             },
     ) {
         // Keyed on the library generation: picking a different chart folder
@@ -113,14 +119,49 @@ fun ChartScreen(
             RoundButton(Icons.Default.Remove, "Zoom out") { controller.zoomBy(-1.0, centreX, centreY) }
         }
 
-        // ---- identify, above the readouts bar -------------------------------
-        if (controller.identify.isNotEmpty()) {
-            IdentifyPanel(
+        // ---- the pick, marked on the chart and reported over it --------------
+        val pick = controller.identifyPoint
+        if (pick != null && controller.identify.isNotEmpty()) {
+            // The mark on the object, drawn under the card.
+            PickMarker(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .offset(
+                        x = pick.x.dp - PICK_MARKER_SIZE / 2,
+                        y = pick.y.dp - PICK_MARKER_SIZE / 2,
+                    ),
+            )
+
+            val width = pickReportWidth(controller.identify.size, viewW)
+            val place = calloutPlacement(
+                pointX = pick.x.dp,
+                pointY = pick.y.dp,
+                width = width,
+                viewWidth = viewW,
+                viewHeight = viewH,
+                hudBand = HUD_BAND,
+            )
+            // The card holds one edge against the mark and the layout places
+            // the opposite edge, so the card's height is never measured here.
+            val alignment = if (place.edge == CalloutEdge.ABOVE) {
+                Alignment.BottomStart
+            } else {
+                Alignment.TopStart
+            }
+            PickReportCard(
                 results = controller.identify,
+                selected = controller.identifyIndex,
+                onSelect = { controller.identifyIndex = it },
                 onDismiss = { controller.dismissIdentify() },
+                width = width,
+                maxHeight = place.room,
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 12.dp, bottom = 72.dp),
+                    .align(alignment)
+                    .padding(
+                        start = place.x,
+                        top = if (place.edge == CalloutEdge.BELOW) place.y else 0.dp,
+                        bottom = if (place.edge == CalloutEdge.ABOVE) viewH - place.y else 0.dp,
+                    ),
             )
         }
 
@@ -163,3 +204,6 @@ private fun RoundButton(icon: ImageVector, description: String, onClick: () -> U
 
 /** Long enough to swallow a slider drag, short enough to feel immediate. */
 private const val APPLY_DEBOUNCE_MS = 80L
+
+/** The bottom band the readouts bar owns. The report stops above it. */
+private val HUD_BAND = 72.dp
