@@ -121,3 +121,48 @@ lk_coord_format_dms(double value, int is_lat, char *dst, int dst_len)
      * digits + 2 decimals (e.g. 38°58.80'N). */
     snprintf(dst, (size_t)dst_len, "%d\xc2\xb0%05.2f'%c", deg, minutes, hemi);
 }
+
+int
+lk_scale_parse(const char *text, double *out_denom)
+{
+    if (text == NULL || out_denom == NULL)
+        return 0;
+
+    /* Only what follows the last colon counts: "1:25000" and "25000" agree. */
+    const char *colon = strrchr(text, ':');
+    const char *s = colon != NULL ? colon + 1 : text;
+
+    char buf[64];
+    int n = 0;
+    for (const char *p = s; *p != '\0'; ++p) {
+        if (isspace((unsigned char)*p) || *p == ',')
+            continue;
+        if (n >= (int)sizeof buf - 1)
+            return 0;
+        buf[n++] = (char)tolower((unsigned char)*p);
+    }
+    buf[n] = '\0';
+    if (n == 0)
+        return 0;
+
+    double mult = 1.0;
+    if (buf[n - 1] == 'k') {
+        mult = 1e3;
+        buf[--n] = '\0';
+    } else if (buf[n - 1] == 'm') {
+        mult = 1e6;
+        buf[--n] = '\0';
+    }
+    if (n == 0)
+        return 0;
+
+    char *end = NULL;
+    double v = strtod(buf, &end) * mult;
+    if (end == NULL || *end != '\0' || !isfinite(v))
+        return 0;
+    /* A value outside this is not a chart scale. */
+    if (v < 100.0 || v > 100000000.0)
+        return 0;
+    *out_denom = v;
+    return 1;
+}
