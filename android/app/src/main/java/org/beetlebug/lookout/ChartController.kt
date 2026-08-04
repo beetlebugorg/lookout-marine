@@ -54,6 +54,14 @@ class ChartController(private val appContext: Context) {
     var readouts by mutableStateOf(Readouts())
         private set
 
+    /**
+     * False until the first frame has rendered. The open is tens of seconds on
+     * a real library, and until it ends the surface is bare, so the loader
+     * stands over it.
+     */
+    var rendering by mutableStateOf(false)
+        private set
+
     /** Result of the last tap-to-identify; empty hides the report. */
     var identify by mutableStateOf<List<PickFeature>>(emptyList())
 
@@ -128,6 +136,7 @@ class ChartController(private val appContext: Context) {
         saveView() // last known pose; the handle is about to close
         engine = null
         lk = null
+        rendering = false
         identify = emptyList()
     }
 
@@ -175,7 +184,10 @@ class ChartController(private val appContext: Context) {
         }
         if (r == lastPushed) return
         lastPushed = r
-        main.post { readouts = r }
+        main.post {
+            readouts = r
+            rendering = true
+        }
         // Persist periodically as well: a swipe-away or a low-memory kill never
         // reaches detach().
         if (frameTimeNanos - lastSaveNs >= SAVE_INTERVAL_NS) {
