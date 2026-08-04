@@ -273,12 +273,28 @@ lk_pick_marker_new (void)
 
 typedef struct {
   LkAppModel *model;
+  GtkWidget  *root;        /* the card itself, which the height floor holds up */
   GtkWidget  *detail_slot; /* the column rebuilt as the selection moves */
-  GtkWidget  *list;        /* GtkListBox, NULL for a single-object pick */
+  GtkWidget  *list;        /* the objects, NULL for a single-object pick */
+  GtkWidget  *notes;       /* the chart's M_* notes, NULL when the cell has none */
+  GtkWidget  *body;        /* the detail scroller, rebuilt with the selection */
+  int         width;       /* the card's width, one value for the whole pick */
   int         room;        /* the height the card may use */
+  int         ceiling;     /* …and the most of it the card may take */
+  int         floor;       /* the tallest the card has stood for this pick */
   gboolean    fold_open;   /* per pick, not per object */
   gboolean    setting_row; /* guards the list's own selection callback */
 } LkPickCard;
+
+/* The chart's own notes. An M_* object states something about the cell over
+ * its whole area — the survey behind it, the horizontal datum, the quality of
+ * the sounding data — so it is not the object under the cursor and does not
+ * belong among the objects that are. */
+static gboolean
+lk_pick_is_note (const LkPickFeature *feature)
+{
+  return feature->cls != NULL && g_str_has_prefix (feature->cls, "M_");
+}
 
 static void lk_pick_card_show (LkPickCard *card, guint index);
 
@@ -587,12 +603,13 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   /* The report takes the height its content asks for, and scrolls once that
-   * would run over the mark. */
+   * would run past the card's ceiling. */
   gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
   gtk_scrolled_window_set_max_content_height (GTK_SCROLLED_WINDOW (scroller),
-                                              MAX (80, card->room - 150));
+                                              MAX (80, card->ceiling - 150));
   gtk_widget_set_vexpand (scroller, TRUE);
   gtk_box_append (GTK_BOX (column), scroller);
+  card->body = scroller;
 
   /* ---- provenance and the fold ---- */
   gtk_box_append (GTK_BOX (column), gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
@@ -638,6 +655,43 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
   return column;
 }
 
+/* The card grows when an object needs more room and keeps that height after.
+ * A card that shrinks under the pointer moves the fold and the chart below it,
+ * so the next click lands on something else. The floor is per pick: a new pick
+ * builds a new card, and so does a window resize, where a height from the old
+ * size would be wrong. */
+static void
+lk_pick_card_hold_height (LkPickCard *card)
+{
+  int minimum = 0, natural = 0;
+
+  if (card->root == NULL)
+    return;
+
+  /* Measure the content alone, with no request of our own standing. */
+  gtk_widget_set_size_request (card->root, card->width, -1);
+  gtk_widget_measure (card->root, GTK_ORIENTATION_VERTICAL, card->width,
+                      &minimum, &natural, NULL, NULL);
+
+  /* An object that carries a lot scrolls; it does not take the window. The
+   * body gives back exactly the overshoot, which is measured rather than
+   * assumed — the header and the provenance take a different share for every
+   * object, so no fixed reserve is right for all of them. */
+  if (natural > card->ceiling && card->body != NULL)
+    {
+      GtkScrolledWindow *body = GTK_SCROLLED_WINDOW (card->body);
+      int cap = gtk_scrolled_window_get_max_content_height (body);
+
+      gtk_scrolled_window_set_max_content_height (body,
+                                                  MAX (80, cap - (natural - card->ceiling)));
+      gtk_widget_measure (card->root, GTK_ORIENTATION_VERTICAL, card->width,
+                          &minimum, &natural, NULL, NULL);
+    }
+
+  card->floor = MAX (card->floor, natural);
+  gtk_widget_set_size_request (card->root, card->width, MIN (card->floor, card->ceiling));
+}
+
 static void
 lk_pick_card_show (LkPickCard *card, guint index)
 {
@@ -652,8 +706,49 @@ lk_pick_card_show (LkPickCard *card, guint index)
 
   gtk_box_append (GTK_BOX (card->detail_slot),
                   lk_pick_detail_new (card, g_ptr_array_index (results, index)));
+  lk_pick_card_hold_height (card);
 }
 
+/* The focus goes to the list on an idle, not in the map handler. The report is
+ * built while the click that made the pick is still being delivered, and GTK
+ * gives the focus to the widget under the pointer — the chart view — once that
+ * delivery finishes. An idle runs after it, so the grab holds. */
+static gboolean
+lk_pick_focus_idle (gpointer data)
+{
+  GtkWidget *list = data;
+  GtkRoot *root = gtk_widget_get_root (list);
+  GtkListBoxRow *row = gtk_list_box_get_selected_row (GTK_LIST_BOX (list));
+  GtkWidget *target = row != NULL ? GTK_WIDGET (row) : list;
+
+  /* The focus goes to the ROW, not the box. A GtkListBox is not focusable
+   * itself, and handing the focus to it lands on the first row rather than the
+   * selected one. gtk_root_set_focus is what makes the window agree. */
+  if (root != NULL && gtk_widget_get_mapped (target))
+    {
+      gtk_widget_grab_focus (target);
+      gtk_root_set_focus (root, target);
+    }
+  return G_SOURCE_REMOVE;
+}
+
+static void
+lk_pick_focus_on_map (GtkWidget *root, gpointer data)
+{
+  g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, lk_pick_focus_idle,
+                   g_object_ref (data), g_object_unref);
+}
+
+/* The row carries the index it stands for: a box holds only the objects of its
+ * own kind, so a row's position in it is not the pick's. */
+static guint
+lk_pick_row_index (GtkListBoxRow *row)
+{
+  return GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (row), "lk-index"));
+}
+
+/* The objects and the notes are two boxes but one control, so a pick reads as
+ * one selection. Clearing the other box here is what keeps it that way. */
 static void
 lk_pick_row_selected (GtkListBox *list, GtkListBoxRow *row, gpointer user_data)
 {
@@ -662,9 +757,146 @@ lk_pick_row_selected (GtkListBox *list, GtkListBoxRow *row, gpointer user_data)
   if (row == NULL || card->setting_row)
     return;
 
-  guint index = (guint) gtk_list_box_row_get_index (row);
+  GtkWidget *other = GTK_WIDGET (list) == card->list ? card->notes : card->list;
+  if (other != NULL)
+    {
+      card->setting_row = TRUE;
+      gtk_list_box_unselect_all (GTK_LIST_BOX (other));
+      card->setting_row = FALSE;
+    }
+
+  guint index = lk_pick_row_index (row);
   lk_app_model_set_pick_index (card->model, index);
   lk_pick_card_show (card, index);
+}
+
+/* Select the row that stands for `index`, in whichever box holds it, and hand
+ * that box back so the keys go where the selection went. */
+static GtkWidget *
+lk_pick_list_select (LkPickCard *card, guint index)
+{
+  GtkWidget *boxes[] = { card->list, card->notes };
+  GtkWidget *holder = NULL;
+
+  card->setting_row = TRUE;
+  for (gsize b = 0; b < G_N_ELEMENTS (boxes); b++)
+    {
+      if (boxes[b] == NULL)
+        continue;
+
+      GtkListBox *box = GTK_LIST_BOX (boxes[b]);
+      gtk_list_box_unselect_all (box);
+
+      for (int i = 0;; i++)
+        {
+          GtkListBoxRow *row = gtk_list_box_get_row_at_index (box, i);
+
+          if (row == NULL)
+            break;
+          if (lk_pick_row_index (row) == index)
+            {
+              gtk_list_box_select_row (box, row);
+              holder = boxes[b];
+            }
+        }
+    }
+  card->setting_row = FALSE;
+  return holder;
+}
+
+/* A heading over a group of rows. The margin puts it on the same leading edge
+ * as a row's text: the row's own 9px margin plus the 11px the highlight pads
+ * by. */
+static GtkWidget *
+lk_pick_column_heading (const char *text)
+{
+  GtkWidget *label = gtk_label_new (text);
+
+  gtk_label_set_xalign (GTK_LABEL (label), 0);
+  gtk_widget_add_css_class (label, "caption-heading");
+  gtk_widget_add_css_class (label, "dim-label");
+  gtk_widget_set_margin_start (label, 20);
+  gtk_widget_set_margin_end (label, 10);
+  gtk_widget_set_margin_top (label, 14);
+  gtk_widget_set_margin_bottom (label, 6);
+  return label;
+}
+
+/* A note reads as a different kind of thing from an object: the book mark, the
+ * chip rather than the title, and no subtitle under it. */
+static GtkWidget *
+lk_pick_list_row (const LkPickFeature *feature, gboolean note)
+{
+  g_autoptr (LkPickDecoded) decoded = lk_pick_decoded_new (feature);
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 7);
+  GtkWidget *lines = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget *title = gtk_label_new (note ? decoded->chip : decoded->title);
+
+  if (note)
+    {
+      GtkWidget *icon = gtk_image_new_from_icon_name ("accessories-dictionary-symbolic");
+
+      /* The mark centres on the one line beside it. Left to fill the row it
+       * sank below the text, which is what read as crooked. */
+      gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+      gtk_widget_add_css_class (icon, "dim-label");
+      gtk_box_append (GTK_BOX (box), icon);
+    }
+
+  gtk_label_set_xalign (GTK_LABEL (title), 0);
+  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+  gtk_widget_add_css_class (title, note ? "dim-label" : "heading");
+  gtk_box_append (GTK_BOX (lines), title);
+
+  if (!note && decoded->subtitle != NULL)
+    {
+      GtkWidget *subtitle = gtk_label_new (decoded->subtitle);
+      gtk_label_set_xalign (GTK_LABEL (subtitle), 0);
+      gtk_label_set_ellipsize (GTK_LABEL (subtitle), PANGO_ELLIPSIZE_END);
+      gtk_widget_add_css_class (subtitle, "caption");
+      gtk_widget_add_css_class (subtitle, "dim-label");
+      gtk_box_append (GTK_BOX (lines), subtitle);
+    }
+
+  gtk_widget_set_valign (lines, GTK_ALIGN_CENTER);
+  gtk_widget_set_hexpand (lines, TRUE);
+  gtk_box_append (GTK_BOX (box), lines);
+  return box;
+}
+
+/* One box of the object column: the objects, or the chart's notes. NULL when
+ * the pick found none of that kind — an empty box under a rule reads as a
+ * defect. */
+static GtkWidget *
+lk_pick_list_box (LkPickCard *card, GPtrArray *results, gboolean notes)
+{
+  GtkWidget *list = gtk_list_box_new ();
+
+  gtk_list_box_set_selection_mode (GTK_LIST_BOX (list), GTK_SELECTION_SINGLE);
+  gtk_widget_add_css_class (list, "navigation-sidebar");
+
+  for (guint i = 0; i < results->len; i++)
+    {
+      const LkPickFeature *feature = g_ptr_array_index (results, i);
+
+      if (lk_pick_is_note (feature) != notes)
+        continue;
+
+      GtkWidget *row = gtk_list_box_row_new ();
+      gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), lk_pick_list_row (feature, notes));
+      g_object_set_data (G_OBJECT (row), "lk-index", GUINT_TO_POINTER (i));
+      gtk_list_box_append (GTK_LIST_BOX (list), row);
+    }
+
+  if (gtk_widget_get_first_child (list) == NULL)
+    {
+      g_object_ref_sink (list);
+      g_object_unref (list);
+      return NULL;
+    }
+
+  g_signal_connect (list, "row-selected", G_CALLBACK (lk_pick_row_selected), card);
+  return list;
 }
 
 /* The pick's objects stay in sight beside the report. There is no pager to
@@ -674,59 +906,45 @@ lk_pick_list_new (LkPickCard *card, GPtrArray *results)
 {
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   g_autofree char *heading = g_strdup_printf ("%u OBJECTS", results->len);
-  GtkWidget *heading_label = gtk_label_new (heading);
 
-  gtk_label_set_xalign (GTK_LABEL (heading_label), 0);
-  gtk_widget_add_css_class (heading_label, "caption-heading");
-  gtk_widget_add_css_class (heading_label, "dim-label");
-  gtk_widget_set_margin_start (heading_label, 14);
-  gtk_widget_set_margin_end (heading_label, 10);
-  gtk_widget_set_margin_top (heading_label, 14);
-  gtk_widget_set_margin_bottom (heading_label, 6);
-  gtk_box_append (GTK_BOX (column), heading_label);
+  gtk_box_append (GTK_BOX (column), lk_pick_column_heading (heading));
 
-  card->list = gtk_list_box_new ();
-  gtk_list_box_set_selection_mode (GTK_LIST_BOX (card->list), GTK_SELECTION_SINGLE);
-  gtk_widget_add_css_class (card->list, "navigation-sidebar");
+  card->list = lk_pick_list_box (card, results, FALSE);
+  card->notes = lk_pick_list_box (card, results, TRUE);
 
-  for (guint i = 0; i < results->len; i++)
+  if (card->list != NULL)
     {
-      g_autoptr (LkPickDecoded) decoded =
-          lk_pick_decoded_new (g_ptr_array_index (results, i));
-      GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
-      GtkWidget *title = gtk_label_new (decoded->title);
-
-      gtk_label_set_xalign (GTK_LABEL (title), 0);
-      gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
-      gtk_widget_add_css_class (title, "heading");
-      gtk_box_append (GTK_BOX (box), title);
-
-      if (decoded->subtitle != NULL)
-        {
-          GtkWidget *subtitle = gtk_label_new (decoded->subtitle);
-          gtk_label_set_xalign (GTK_LABEL (subtitle), 0);
-          gtk_label_set_ellipsize (GTK_LABEL (subtitle), PANGO_ELLIPSIZE_END);
-          gtk_widget_add_css_class (subtitle, "caption");
-          gtk_widget_add_css_class (subtitle, "dim-label");
-          gtk_box_append (GTK_BOX (box), subtitle);
-        }
-
-      gtk_list_box_append (GTK_LIST_BOX (card->list), box);
+      GtkWidget *scroller = gtk_scrolled_window_new ();
+      gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), card->list);
+      gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
+                                      GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+      gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
+      /* A long list scrolls rather than driving the card past the free area:
+       * the detail column decides the card's height, not the object count. */
+      gtk_scrolled_window_set_max_content_height (GTK_SCROLLED_WINDOW (scroller),
+                                                  MAX (80, card->ceiling - 60));
+      gtk_widget_set_vexpand (scroller, TRUE);
+      gtk_box_append (GTK_BOX (column), scroller);
     }
 
-  g_signal_connect (card->list, "row-selected", G_CALLBACK (lk_pick_row_selected), card);
+  /* The chart's notes sit at the column's floor, outside the scroller. Every
+   * pick in the cell carries the same ones, so they keep one place instead of
+   * scrolling away under a long list. */
+  if (card->notes != NULL)
+    {
+      GtkWidget *shelf = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+      GtkWidget *rule = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
 
-  GtkWidget *scroller = gtk_scrolled_window_new ();
-  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), card->list);
-  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
-                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
-  /* A long list scrolls rather than driving the card past the free area: the
-   * detail column decides the card's height, not the object count. */
-  gtk_scrolled_window_set_max_content_height (GTK_SCROLLED_WINDOW (scroller),
-                                              MAX (80, card->room - 60));
-  gtk_widget_set_vexpand (scroller, TRUE);
-  gtk_box_append (GTK_BOX (column), scroller);
+      gtk_widget_set_margin_start (rule, 9);
+      gtk_widget_set_margin_end (rule, 9);
+      gtk_widget_set_margin_bottom (rule, 5);
+      gtk_box_append (GTK_BOX (shelf), rule);
+      gtk_box_append (GTK_BOX (shelf), card->notes);
+
+      gtk_widget_set_valign (shelf, GTK_ALIGN_END);
+      gtk_widget_set_margin_bottom (shelf, 8);
+      gtk_box_append (GTK_BOX (column), shelf);
+    }
 
   gtk_widget_set_size_request (column, LK_PICK_LIST_WIDTH, -1);
   gtk_widget_add_css_class (column, "lk-object-list");
@@ -744,9 +962,25 @@ lk_pick_report_new (LkAppModel *model, int width, int room)
   LkPickCard *card = g_new0 (LkPickCard, 1);
   card->model = model;
   card->room = room;
+  card->width = width;
+  /* Half the free area is the card's share. A pick report is something the
+   * mariner reads beside the chart, not instead of it, so a content-rich
+   * object scrolls rather than growing over the view. */
+  card->ceiling = MAX (LK_PICK_MIN_HEIGHT, room / 2);
 
   GtkWidget *root = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   guint index = MIN (lk_app_model_get_pick_index (model), results->len - 1);
+
+  /* The width is the card's; the height comes from the content, capped by the
+   * room the placement left, so a long report scrolls instead of growing over
+   * the mark it stands beside. The window aligns it against the mark. Both the
+   * width and the frame are set before the first object goes in: the card
+   * measures itself as it builds, and a border it does not carry yet would
+   * make that measurement short. */
+  card->root = root;
+  gtk_widget_set_size_request (root, width, -1);
+  gtk_widget_add_css_class (root, "lk-panel");
+  gtk_widget_add_css_class (root, "lk-pick-report");
 
   if (results->len > 1)
     {
@@ -759,21 +993,15 @@ lk_pick_report_new (LkAppModel *model, int width, int room)
   gtk_box_append (GTK_BOX (root), card->detail_slot);
   lk_pick_card_show (card, index);
 
-  if (card->list != NULL)
+  GtkWidget *keyboard = lk_pick_list_select (card, index);
+  if (keyboard != NULL)
     {
-      card->setting_row = TRUE;
-      gtk_list_box_select_row (GTK_LIST_BOX (card->list),
-                               gtk_list_box_get_row_at_index (GTK_LIST_BOX (card->list),
-                                                              (int) index));
-      card->setting_row = FALSE;
+      /* The arrows walk the objects the moment the report opens. Without this
+       * the focus stays on the chart view, which answers no key at all, and
+       * the list is reachable only by a second click on it. */
+      g_signal_connect_object (root, "map", G_CALLBACK (lk_pick_focus_on_map),
+                               keyboard, 0);
     }
-
-  /* The width is the card's; the height comes from the content, capped by the
-   * room the placement left, so a long report scrolls instead of growing over
-   * the mark it stands beside. The window aligns it against the mark. */
-  gtk_widget_set_size_request (root, width, -1);
-  gtk_widget_add_css_class (root, "lk-panel");
-  gtk_widget_add_css_class (root, "lk-pick-report");
 
   /* The card's state lives as long as the widget it drives. */
   g_object_set_data_full (G_OBJECT (root), "lk-pick-card", card, g_free);
