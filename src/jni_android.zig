@@ -55,6 +55,7 @@ extern fn lookout_memory_warning(h: ?*anyopaque) void;
 extern fn lookout_get_mariner(h: ?*anyopaque, out: *cc.tile57_mariner) void;
 extern fn lookout_set_mariner(h: ?*anyopaque, m: *const cc.tile57_mariner) void;
 extern fn lookout_pick(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
+extern fn lookout_pick_ranked(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
 
 const LOOKOUT_NATIVE_ANDROID_WINDOW: c_int = 7;
 
@@ -184,6 +185,25 @@ export fn Java_org_beetlebug_lookout_Lookout_nSetDensity(env: [*c]j.JNIEnv, cls:
     lookout_set_pixel_density(h.l, d);
 }
 
+/// void nSetDeviceScale(long h, float scale) -- the display's device pixels per
+/// reference pixel.
+///
+/// It sizes the symbols and the text, and the collision box of each label with
+/// them. The engine sizes for 1x until it is told otherwise, so a surface drawn
+/// at any other density draws symbols the wrong size and decluttered a view for
+/// glyphs it did not paint. It is a property of the DISPLAY, so it is set here
+/// and not from the settings form.
+export fn Java_org_beetlebug_lookout_Lookout_nSetDeviceScale(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, scale: j.jfloat) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (scale <= 0) return;
+    var m: cc.tile57_mariner = undefined;
+    lookout_get_mariner(h.l, &m);
+    m.device_scale = scale;
+    lookout_set_mariner(h.l, &m);
+}
+
 export fn Java_org_beetlebug_lookout_Lookout_nFitChart(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
     _ = env;
     _ = cls;
@@ -291,17 +311,18 @@ export fn Java_org_beetlebug_lookout_Lookout_nSetView(env: [*c]j.JNIEnv, cls: j.
 }
 
 /// void nScreenToGeo(long h, float xPt, float yPt, double[] out) -- lon, lat.
-/// Takes LOGICAL points like every other geometry native and scales to pixels
-/// here, because the underlying C entry point is one of the few that is still
-/// pixel-only.
+///
+/// Takes LOGICAL points and passes them straight through. The camera is
+/// logical-native: its viewport is the size lookout_resize was given, in
+/// points. Scaling to pixels here moved every point away from the centre of
+/// the view by the density, so a tap answered on the object that many points
+/// down and to the right of the one under the finger.
 export fn Java_org_beetlebug_lookout_Lookout_nScreenToGeo(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, x_pt: j.jfloat, y_pt: j.jfloat, out: j.jdoubleArray) void {
     _ = cls;
     const h = fromLong(hl) orelse return;
     if (env_(env).GetArrayLength.?(env, out) < 2) return;
-    const d = lookout_pixel_density(h.l);
-    const s = if (d > 0) d else 1.0;
     var buf: [2]f64 = undefined;
-    lookout_screen_to_geo(h.l, x_pt * s, y_pt * s, &buf[0], &buf[1]);
+    lookout_screen_to_geo(h.l, x_pt, y_pt, &buf[0], &buf[1]);
     env_(env).SetDoubleArrayRegion.?(env, out, 0, 2, &buf);
 }
 
@@ -571,7 +592,11 @@ export fn Java_org_beetlebug_lookout_Lookout_nPick(env: [*c]j.JNIEnv, cls: j.jcl
         ctx.items.deinit(gpa);
     }
     const cb = cc.tile57_query_cb{ .ctx = &ctx, .feature = pickFeature };
-    lookout_pick(h.l, lon, lat, &cb);
+    // The RANKED pick, as the other shells use: it drops the objects a report
+    // must not lead with, ranks the rest, and composes the decoded report into
+    // the payload. lookout_pick is the engine's own raw pick, which emits bare
+    // attributes and no report.
+    lookout_pick_ranked(h.l, lon, lat, &cb);
     if (!ctx.ok) return null;
 
     const string_cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;

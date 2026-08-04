@@ -68,6 +68,14 @@ public final class Lookout implements AutoCloseable {
     public void resize(int wPts, int hPts)       { if (h != 0) nResize(h, wPts, hPts); }
     /** DisplayMetrics.density; set before the first build. */
     public void setDensity(float d)              { if (h != 0) nSetDensity(h, d); }
+
+    /**
+     * The display's device pixels per reference pixel. It sizes symbols, text
+     * and every label's collision box, and the engine sizes for 1x until it is
+     * told otherwise. It describes the DISPLAY, so the settings form does not
+     * carry it and setMariner preserves it.
+     */
+    public void setDeviceScale(float scale)      { if (h != 0) nSetDeviceScale(h, scale); }
     public void fitChart()                       { if (h != 0) nFitChart(h); }
     /** The opening view when nothing was saved: library framed, overview zoom. */
     public void defaultView()                    { if (h != 0) nDefaultView(h); }
@@ -164,6 +172,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nClose(long h);
     private static native void nResize(long h, int wPts, int hPts);
     private static native void nSetDensity(long h, float d);
+    private static native void nSetDeviceScale(long h, float scale);
     private static native void nFitChart(long h);
     private static native void nDefaultView(long h);
     private static native void nPan(long h, float dxPts, float dyPts);

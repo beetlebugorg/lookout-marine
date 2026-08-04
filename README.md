@@ -19,6 +19,7 @@ and switch between day and night.
 <table>
   <tr valign="top">
     <td align="center"><b>iPadOS</b> · SwiftUI<br><img src="docs/docs/img/ipad-day.png" width="230" alt="Annapolis Harbor on iPad, day scheme"></td>
+    <td align="center"><b>Android</b> · Jetpack Compose<br><img src="docs/docs/img/android-day.png" width="230" alt="Annapolis Harbor on Android, day scheme, with a pick report open"></td>
     <td align="center"><b>iOS</b> · SwiftUI<br><img src="docs/docs/img/iphone-day.png" width="160" alt="Annapolis Harbor on iPhone, day scheme"></td>
   </tr>
 </table>
