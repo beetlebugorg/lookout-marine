@@ -182,6 +182,21 @@ fun ChartScreen(
             )
         }
 
+        // The loader while the library opens, then the pill for a rebuild.
+        if (!controller.rendering) {
+            StartupLoader(
+                cells = charts.chartPaths.size,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        } else if (controller.readouts.building) {
+            BuildingPill(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(Chrome.margin),
+            )
+        }
+
         ReadoutsCapsule(
             readouts = controller.readouts,
             compact = viewW < Chrome.compactWidth,

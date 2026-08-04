@@ -21,7 +21,9 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -302,4 +304,67 @@ private fun bandString(n: Double): String = when {
     n < 300_000 -> "Coastal"
     n < 1_500_000 -> "General"
     else -> "Overview"
+}
+
+/**
+ * The startup loader. Opening a real library is one chart open per cell, the
+ * atlas bake and the GPU bring-up, which is tens of seconds; the surface is
+ * bare until the first frame. The loader says what the wait is for.
+ */
+@Composable
+fun StartupLoader(cells: Int, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
+            Text(
+                text = if (cells > 1) {
+                    String.format(Locale.US, "Mapping %,d cells", cells)
+                } else {
+                    "Mapping the chart"
+                },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "The chart draws as soon as the first scene is built.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** A later rebuild: the chart is up and filling in behind this. */
+@Composable
+fun BuildingPill(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        tonalElevation = 2.dp,
+        shadowElevation = 3.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+            Text(
+                text = "Building",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
