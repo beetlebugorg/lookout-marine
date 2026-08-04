@@ -63,19 +63,17 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::WireChrome()
     {
-        LayersBtn().Click([this](auto &&, auto &&) { RebuildOpenFlyout(); });
         EmptyOpenBtn().Click([this](auto &&, auto &&) { PickChartFolder(); });
         ZoomInBtn().Click([this](auto &&, auto &&) { Command('+'); });
         ZoomOutBtn().Click([this](auto &&, auto &&) { Command('-'); });
         NorthBtn().Click([this](auto &&, auto &&) { Command('u'); });
         SettingsBtn().Click([this](auto &&, auto &&) { Command(','); });
         SearchBtn().Click([this](auto &&, auto &&) { Command('f'); });
-        IdentifyClose().Click([this](auto &&, auto &&) {
-            IdentifyPanel().Visibility(Visibility::Collapsed);
-        });
         SettingsClose().Click([this](auto &&, auto &&) {
             SettingsPane().Visibility(Visibility::Collapsed);
         });
+        WirePick();
+        WireScale();
 
         static constexpr wchar_t const *tab_names[] = { L"Display", L"Depths", L"Text", L"Charts", L"Advanced" };
         for (int i = 0; i < 5; ++i)
@@ -148,6 +146,10 @@ namespace winrt::LookoutMarine::implementation
             auto p = e.GetPosition(Root());
             GestureDoubleTap(p.X, p.Y);
         });
+
+        // The accelerators are chart commands, not menu items: without this
+        // XAML surfaces its key-tip tooltip for them (a floating "ESC").
+        Root().KeyboardAcceleratorPlacementMode(Input::KeyboardAcceleratorPlacementMode::Hidden);
 
         struct Accel { Windows::System::VirtualKey key; bool shift; char cmd; };
         static constexpr Accel accels[] = {
@@ -256,5 +258,9 @@ namespace winrt::LookoutMarine::implementation
         ApplyPanelScale();
         warmup_frames.store(30);
         StartRenderThread();
+        // A resize keeps the pick report (only a camera move retires it) but
+        // the callout must re-fit the new window.
+        if (PickCard().Visibility() == Visibility::Visible)
+            PlacePickCard();
     }
 }

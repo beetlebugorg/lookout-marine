@@ -18,6 +18,13 @@ namespace winrt::LookoutMarine::implementation
         lk_readout r{};
         lk_controller_readout(controller, &r);
 
+        // A pick report describes the objects under one point of one view:
+        // any camera move — pan, fling, zoom, rotate — retires it.
+        if (pick_pose_valid &&
+            (r.lon != pick_pose.lon || r.lat != pick_pose.lat ||
+             r.zoom != pick_pose.zoom || r.rotation_deg != pick_pose.rotation_deg))
+            DismissPick();
+
         HudCoord().Text(lkw::FormatCoord(r.lat, r.lon));
         HudScale().Text(lkw::FormatScale(r.scale_denom));
         HudBand().Text(lkw::BandForDenom(r.scale_denom));
@@ -34,7 +41,13 @@ namespace winrt::LookoutMarine::implementation
             HudOverscaleText().Text(ov);
         }
 
-        BuildingPill().Visibility(r.building ? Visibility::Visible : Visibility::Collapsed);
+        LoaderTick(r.building);
+        if (ScalePanel().Visibility() == Visibility::Visible)
+            UpdateScalePanel(r);
+        // The pill is the loader's small successor: only background rebuilds
+        // after the first scene get it.
+        BuildingPill().Visibility(r.building && !loader_waiting ? Visibility::Visible
+                                                                : Visibility::Collapsed);
         NorthRotate().Angle(-r.rotation_deg);
         UpdateScaleBar(r.scale_denom);
     }

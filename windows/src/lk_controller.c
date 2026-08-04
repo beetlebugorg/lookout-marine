@@ -30,6 +30,15 @@ apply_env_view(lookout *h)
 lk_controller *
 lk_controller_new(void)
 {
+    /* The core's cache-dir fallbacks are XDG_CACHE_HOME then HOME — neither
+     * exists on Windows, so without this the atlas cache has nowhere to live
+     * and every launch pays the one-time bake again (the Android shell makes
+     * the same call with its Context cache dir). */
+    char local[MAX_PATH];
+    DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", local, sizeof local);
+    if (n > 0 && n < sizeof local)
+        lookout_set_cache_dir(local);
+
     lk_controller *self = (lk_controller *)calloc(1, sizeof *self);
     return self;
 }
@@ -47,6 +56,12 @@ int
 lk_controller_is_open(lk_controller *self)
 {
     return self != NULL && self->handle != NULL;
+}
+
+int
+lk_controller_atlas_ready(void)
+{
+    return lookout_atlas_cache_ready();
 }
 
 /* ---- lifecycle ---------------------------------------------------------- */
@@ -336,47 +351,101 @@ lk_controller_toggle_other_category(lk_controller *self)
 /* ---- pick --------------------------------------------------------------- */
 
 typedef struct {
-    lk_pick_feature *out;
-    int max;
-    int count;
+    lk_pick_feature *feats;
+    int count, cap;
 } pick_ctx;
+
+static char *
+pick_dup(const char *s, size_t len)
+{
+    char *out = (char *)malloc(len + 1);
+    if (out == NULL)
+        return NULL;
+    memcpy(out, s ? s : "", s ? len : 0);
+    out[s ? len : 0] = '\0';
+    return out;
+}
 
 static void
 pick_cb(void *ctx, const char *cls, size_t cls_len, const char *s57, size_t s57_len,
         const char *chart, size_t chart_len)
 {
     pick_ctx *pc = (pick_ctx *)ctx;
-    if (pc->count >= pc->max)
+    if (pc->count == pc->cap) {
+        int cap = pc->cap == 0 ? 8 : pc->cap * 2;
+        lk_pick_feature *grown =
+            (lk_pick_feature *)realloc(pc->feats, (size_t)cap * sizeof *grown);
+        if (grown == NULL)
+            return;
+        pc->feats = grown;
+        pc->cap = cap;
+    }
+    lk_pick_feature *f = &pc->feats[pc->count];
+    f->cls = pick_dup(cls, cls_len);
+    f->json = pick_dup(s57, s57_len);
+    f->chart = pick_dup(chart, chart_len);
+    if (f->cls == NULL || f->json == NULL || f->chart == NULL) {
+        free(f->cls);
+        free(f->json);
+        free(f->chart);
         return;
-    lk_pick_feature *f = &pc->out[pc->count++];
-
-    size_t n;
-    n = cls_len < sizeof f->cls - 1 ? cls_len : sizeof f->cls - 1;
-    memcpy(f->cls, cls ? cls : "", n);
-    f->cls[n] = '\0';
-    n = s57_len < sizeof f->s57 - 1 ? s57_len : sizeof f->s57 - 1;
-    memcpy(f->s57, s57 ? s57 : "", n);
-    f->s57[n] = '\0';
-    n = chart_len < sizeof f->chart - 1 ? chart_len : sizeof f->chart - 1;
-    memcpy(f->chart, chart ? chart : "", n);
-    f->chart[n] = '\0';
+    }
+    pc->count++;
 }
 
 int
-lk_controller_pick_at(lk_controller *self, double x, double y, lk_pick_feature *out, int max)
+lk_controller_pick_at(lk_controller *self, double x, double y, lk_pick_feature **out)
 {
-    if (!lk_controller_is_open(self) || out == NULL || max <= 0)
+    if (out == NULL)
+        return 0;
+    *out = NULL;
+    if (!lk_controller_is_open(self))
         return 0;
 
     double lon, lat;
     lookout_screen_to_geo(self->handle, (float)x, (float)y, &lon, &lat);
 
-    pick_ctx pc = { out, max, 0 };
+    pick_ctx pc = { NULL, 0, 0 };
     tile57_query_cb cb;
     cb.ctx = &pc;
     cb.feature = pick_cb;
-    lookout_pick(self->handle, lon, lat, &cb);
+    lookout_pick_ranked(self->handle, lon, lat, &cb);
+    if (pc.count == 0) {
+        free(pc.feats);
+        return 0;
+    }
+    *out = pc.feats;
     return pc.count;
+}
+
+void
+lk_controller_pick_free(lk_pick_feature *feats, int n)
+{
+    if (feats == NULL)
+        return;
+    for (int i = 0; i < n; ++i) {
+        free(feats[i].cls);
+        free(feats[i].json);
+        free(feats[i].chart);
+    }
+    free(feats);
+}
+
+int
+lk_controller_aux_file(lk_controller *self, const char *cell, const char *name,
+                       const unsigned char **bytes, size_t *len, const char **mime)
+{
+    if (bytes != NULL)
+        *bytes = NULL;
+    if (len != NULL)
+        *len = 0;
+    if (mime != NULL)
+        *mime = NULL;
+    if (!lk_controller_is_open(self) || cell == NULL || name == NULL ||
+        bytes == NULL || len == NULL || mime == NULL)
+        return 0;
+    lookout_aux_file(self->handle, cell, name, (const uint8_t **)bytes, len, mime);
+    return *bytes != NULL && *len > 0;
 }
 
 /* ---- readouts ----------------------------------------------------------- */
