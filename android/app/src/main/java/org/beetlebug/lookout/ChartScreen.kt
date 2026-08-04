@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -62,6 +65,7 @@ fun ChartScreen(
     var viewW by remember { mutableStateOf(0.dp) }
     var viewH by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current.density
+    val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     // Apply-and-save on a trailing debounce, mirroring the Swift binding: a
     // slider drag emits an edit per frame, and each one can mark a rebuild.
@@ -157,6 +161,7 @@ fun ChartScreen(
                 viewWidth = viewW,
                 viewHeight = viewH,
                 hudBand = HUD_BAND,
+                topInset = topInset,
             )
             // The card holds one edge against the mark and the layout places
             // the opposite edge, so the card's height is never measured here.
