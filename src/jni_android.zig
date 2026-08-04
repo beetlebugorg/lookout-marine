@@ -292,17 +292,18 @@ export fn Java_org_beetlebug_lookout_Lookout_nSetView(env: [*c]j.JNIEnv, cls: j.
 }
 
 /// void nScreenToGeo(long h, float xPt, float yPt, double[] out) -- lon, lat.
-/// Takes LOGICAL points like every other geometry native and scales to pixels
-/// here, because the underlying C entry point is one of the few that is still
-/// pixel-only.
+///
+/// Takes LOGICAL points and passes them straight through. The camera is
+/// logical-native: its viewport is the size lookout_resize was given, in
+/// points. Scaling to pixels here moved every point away from the centre of
+/// the view by the density, so a tap answered on the object that many points
+/// down and to the right of the one under the finger.
 export fn Java_org_beetlebug_lookout_Lookout_nScreenToGeo(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, x_pt: j.jfloat, y_pt: j.jfloat, out: j.jdoubleArray) void {
     _ = cls;
     const h = fromLong(hl) orelse return;
     if (env_(env).GetArrayLength.?(env, out) < 2) return;
-    const d = lookout_pixel_density(h.l);
-    const s = if (d > 0) d else 1.0;
     var buf: [2]f64 = undefined;
-    lookout_screen_to_geo(h.l, x_pt * s, y_pt * s, &buf[0], &buf[1]);
+    lookout_screen_to_geo(h.l, x_pt, y_pt, &buf[0], &buf[1]);
     env_(env).SetDoubleArrayRegion.?(env, out, 0, 2, &buf);
 }
 
