@@ -199,9 +199,10 @@ private fun DecodedRow(row: PickDecoded.ReportRow) {
             text = row.label,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // Narrow, and a long label wraps. The value owns the width,
-            // because a note or a name is the reading matter, not the label.
-            modifier = Modifier.width((104 - row.depth * 12).dp),
+            // The value owns the width, because a note or a name is the
+            // reading matter. The label still gets enough for the common ones
+            // ("Depth range minimum") to sit on one line.
+            modifier = Modifier.width((132 - row.depth * 12).dp),
         )
         Text(
             text = row.value,
