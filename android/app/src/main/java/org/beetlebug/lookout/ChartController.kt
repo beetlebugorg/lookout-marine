@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
@@ -53,8 +54,32 @@ class ChartController(private val appContext: Context) {
     var readouts by mutableStateOf(Readouts())
         private set
 
-    /** Result of the last tap-to-identify; empty hides the panel. */
+    /**
+     * False until the first frame has rendered. The open is tens of seconds on
+     * a real library, and until it ends the surface is bare, so the loader
+     * stands over it.
+     */
+    var rendering by mutableStateOf(false)
+        private set
+
+    /** Result of the last tap-to-identify; empty hides the report. */
     var identify by mutableStateOf<List<PickFeature>>(emptyList())
+
+    /** Which object of the pick the report shows. */
+    var identifyIndex by mutableStateOf(0)
+
+    /** Where the pick happened, in logical points, or null when none is open. */
+    var identifyPoint by mutableStateOf<Offset?>(null)
+
+    /**
+     * The camera pose the open report belongs to, or null when none is open.
+     *
+     * A report describes the objects under one point of one view. Any move of
+     * the chart retires it, so the report never floats over water it does not
+     * describe. Read on the render thread by [onFrameRendered], which is what
+     * sees every move: a pan runs there, not through this class.
+     */
+    @Volatile private var pickPose: Readouts? = null
 
     /** The editable S-52 mariner state the settings sheet binds to. */
     val mariner = MarinerState()
@@ -111,6 +136,7 @@ class ChartController(private val appContext: Context) {
         saveView() // last known pose; the handle is about to close
         engine = null
         lk = null
+        rendering = false
         identify = emptyList()
     }
 
@@ -145,9 +171,23 @@ class ChartController(private val appContext: Context) {
             scaleDenominator = readoutBuf[Lookout.R_SCALE_DENOM],
             building = readoutBuf[Lookout.R_BUILDING] != 0.0,
         )
+        // The chart moved under an open report, so retire the report. This
+        // covers every move, including the pan and the fling, which run on
+        // this thread and never call into this class.
+        pickPose?.let { pose ->
+            if (r.lon != pose.lon || r.lat != pose.lat ||
+                r.zoom != pose.zoom || r.rotationDeg != pose.rotationDeg
+            ) {
+                pickPose = null
+                main.post { dismissIdentify() }
+            }
+        }
         if (r == lastPushed) return
         lastPushed = r
-        main.post { readouts = r }
+        main.post {
+            readouts = r
+            rendering = true
+        }
         // Persist periodically as well: a swipe-away or a low-memory kill never
         // reaches detach().
         if (frameTimeNanos - lastSaveNs >= SAVE_INTERVAL_NS) {
@@ -205,12 +245,23 @@ class ChartController(private val appContext: Context) {
 
     fun fitChart() = onEngine { it.fitChart() }
 
+    /** Recentre on a coordinate, keeping the zoom and the rotation. */
+    fun goTo(lat: Double, lon: Double) = onEngine { l ->
+        val r = lastPushed
+        l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
+    }
+
     fun resetRotation() = onEngine { it.resetRotation() }
 
     fun memoryWarning() = onEngine { it.memoryWarning() }
 
-    /** Tap-to-identify at a point in logical points. */
+    /**
+     * Tap-to-identify at a point in logical points. A tap outside an open
+     * report picks again, there. The report's own taps never arrive here,
+     * because the card consumes them.
+     */
     fun identifyAt(xPts: Float, yPts: Float) = onEngine { l ->
+        val where = Offset(xPts, yPts)
         l.screenToGeo(xPts, yPts, geoBuf)
         val flat = l.pick(geoBuf[0], geoBuf[1])
         val found = if (flat == null || flat.isEmpty()) {
@@ -224,11 +275,20 @@ class ChartController(private val appContext: Context) {
                 )
             }
         }
-        main.post { identify = found }
+        val pose = lastPushed
+        main.post {
+            identify = found
+            identifyIndex = 0
+            identifyPoint = if (found.isEmpty()) null else where
+            pickPose = if (found.isEmpty()) null else pose
+        }
     }
 
     fun dismissIdentify() {
         identify = emptyList()
+        identifyIndex = 0
+        identifyPoint = null
+        pickPose = null
     }
 
     private companion object {

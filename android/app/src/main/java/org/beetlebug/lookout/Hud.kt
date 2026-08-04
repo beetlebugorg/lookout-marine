@@ -13,13 +13,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -52,30 +56,60 @@ private const val OVERSCALE_VISIBLE_AT = 1.05
  * in degrees, minutes and seconds, the format that each host uses.
  */
 @Composable
-fun ReadoutsBar(readouts: Readouts, modifier: Modifier = Modifier) {
-    // A full-width BAR, not a floating capsule: the surface runs under the
-    // navigation bar so the chart never peeks out below it.
+fun ReadoutsCapsule(
+    readouts: Readouts,
+    compact: Boolean,
+    onScaleTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+        modifier = modifier.height(Chrome.capsule),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                // The Surface above runs edge-to-edge; only the CONTENT insets,
-                // so the bar's material extends through the navigation bar and
-                // the chart never peeks out beneath it.
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 9.dp),
+            modifier = Modifier.padding(horizontal = if (compact) 14.dp else 18.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
         ) {
-            Icon(
-                Icons.Default.LocationOn,
-                contentDescription = null,
-                modifier = Modifier.size(14.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            Surface(
+                modifier = Modifier.size(10.dp),
+                shape = CircleShape,
+                color = Color(0xFFF59E0B),
+                content = {},
             )
+            // The band is the first thing a mariner reads, and the first thing
+            // a narrow screen gives up.
+            if (!compact) {
+                Text(
+                    text = bandString(readouts.scaleDenominator),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Separator()
+            }
+            Text(
+                text = scaleString(readouts.scaleDenominator),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onScaleTap)
+                    .padding(horizontal = 5.dp, vertical = 3.dp),
+            )
+            Separator()
+            Text(
+                text = String.format(Locale.US, "z%.1f", readouts.zoom),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Separator()
             Text(
                 text = coordString(readouts.lat, readouts.lon),
                 style = MaterialTheme.typography.bodyMedium,
@@ -85,11 +119,17 @@ fun ReadoutsBar(readouts: Readouts, modifier: Modifier = Modifier) {
             if (readouts.overscale > OVERSCALE_VISIBLE_AT) {
                 OverscaleBadge(readouts.overscale)
             }
-            Spacer(Modifier.weight(1f))
-            HudLabel(Icons.Default.Straighten, scaleString(readouts.scaleDenominator))
-            HudLabel(Icons.Default.ZoomIn, String.format(Locale.US, "z%.1f", readouts.zoom))
         }
     }
+}
+
+@Composable
+private fun Separator() {
+    Surface(
+        modifier = Modifier.size(width = 1.dp, height = 20.dp),
+        color = MaterialTheme.colorScheme.outlineVariant,
+        content = {},
+    )
 }
 
 @Composable
@@ -248,10 +288,83 @@ private fun dms(value: Double, isLat: Boolean): String {
     return String.format(Locale.US, pattern, deg, minutes, seconds, hemi)
 }
 
-/** Compact 1:N — "1:24k" / "1:2.1M": the HUD is a glance, not a survey. */
-private fun scaleString(n: Double): String = when {
-    n <= 0 -> "1:—"
-    n >= 1_000_000 -> String.format(Locale.US, "1:%.1fM", n / 1_000_000)
-    n >= 10_000 -> String.format(Locale.US, "1:%.0fk", n / 1_000)
-    else -> String.format(Locale.US, "1:%,d", n.toInt())
+/** The full 1:N with group separators: `1:13,267`, as every shell prints it. */
+private fun scaleString(n: Double): String =
+    if (n <= 0) "1:\u2014" else String.format(Locale.US, "1:%,d", Math.round(n))
+
+/**
+ * The S-52 navigational purpose band for a display scale. It agrees with
+ * CoordFormat.band (macOS and iOS) and lkw::BandForDenom (Windows).
+ */
+private fun bandString(n: Double): String = when {
+    n < 0.001 -> "\u2014"
+    n < 5_000 -> "Berthing"
+    n < 25_000 -> "Harbor"
+    n < 75_000 -> "Approach"
+    n < 300_000 -> "Coastal"
+    n < 1_500_000 -> "General"
+    else -> "Overview"
+}
+
+/**
+ * The startup loader. Opening a real library is one chart open per cell, the
+ * atlas bake and the GPU bring-up, which is tens of seconds; the surface is
+ * bare until the first frame. The loader says what the wait is for.
+ */
+@Composable
+fun StartupLoader(cells: Int, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
+            Text(
+                text = if (cells > 1) {
+                    String.format(Locale.US, "Mapping %,d cells", cells)
+                } else {
+                    "Mapping the chart"
+                },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "The chart draws as soon as the first scene is built.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** A later rebuild: the chart is up and filling in behind this. */
+@Composable
+fun BuildingPill(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        tonalElevation = 2.dp,
+        shadowElevation = 3.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+            Text(
+                text = "Building",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
