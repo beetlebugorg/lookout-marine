@@ -233,6 +233,12 @@ class ChartController(private val appContext: Context) {
 
     fun fitChart() = onEngine { it.fitChart() }
 
+    /** Recentre on a coordinate, keeping the zoom and the rotation. */
+    fun goTo(lat: Double, lon: Double) = onEngine { l ->
+        val r = lastPushed
+        l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
+    }
+
     fun resetRotation() = onEngine { it.resetRotation() }
 
     fun memoryWarning() = onEngine { it.memoryWarning() }
