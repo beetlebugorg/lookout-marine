@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +52,8 @@ fun ChartScreen(
     onViewCreated: (LookoutView) -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    var showScaleEntry by remember { mutableStateOf(false) }
     // The chart's size, tracked so the zoom buttons can zoom about its centre
     // (the camera takes an anchor point, in logical points).
     var centreX by remember { mutableFloatStateOf(0f) }
@@ -90,34 +94,47 @@ fun ChartScreen(
             )
         }
 
-        // ---- top-right controls: what used to be gesture-only ---------------
-        Column(
+        // ---- top left: search ------------------------------------------------
+        ChromeBubble(
+            icon = Icons.Default.Search,
+            description = "Go to coordinate",
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(Chrome.margin),
+        ) { showSearch = true }
+
+        // ---- top right: north ------------------------------------------------
+        NorthBubble(
+            rotationDeg = controller.readouts.rotationDeg,
+            onReset = { controller.resetRotation() },
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            RoundButton(Icons.Default.Settings, "Chart settings") { showSettings = true }
-            RoundButton(Icons.Default.Brightness4, "Day / dusk / night") { controller.cycleScheme() }
-            RoundButton(Icons.Default.CropFree, "Fit chart") { controller.fitChart() }
-            CompassBadge(
-                rotationDeg = controller.readouts.rotationDeg,
-                onReset = { controller.resetRotation() },
-            )
-        }
+                .padding(Chrome.margin),
+        )
 
-        // ---- bottom-right: zoom ---------------------------------------------
+        // ---- bottom right: zoom above settings --------------------------------
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = 72.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(end = Chrome.margin, bottom = HUD_BAND),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(Chrome.gap),
         ) {
-            RoundButton(Icons.Default.Add, "Zoom in") { controller.zoomBy(1.0, centreX, centreY) }
-            RoundButton(Icons.Default.Remove, "Zoom out") { controller.zoomBy(-1.0, centreX, centreY) }
+            ChromeBubble(Icons.Default.CropFree, "Fit chart") { controller.fitChart() }
+            ChromeBubble(Icons.Default.Add, "Zoom in") { controller.zoomBy(1.0, centreX, centreY) }
+            ChromeBubble(Icons.Default.Remove, "Zoom out") { controller.zoomBy(-1.0, centreX, centreY) }
+            ChromeBubble(Icons.Default.Settings, "Mariner settings") { showSettings = true }
         }
+
+        // ---- bottom left: the scale bar ---------------------------------------
+        ScaleBar(
+            scaleDenominator = controller.readouts.scaleDenominator,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = Chrome.margin, bottom = HUD_BAND),
+        )
 
         // ---- the pick, marked on the chart and reported over it --------------
         val pick = controller.identifyPoint
@@ -165,9 +182,35 @@ fun ChartScreen(
             )
         }
 
-        ReadoutsBar(
+        ReadoutsCapsule(
             readouts = controller.readouts,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            compact = viewW < Chrome.compactWidth,
+            onScaleTap = { showScaleEntry = true },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = Chrome.margin),
+        )
+    }
+
+    if (showSearch) {
+        GoToCoordinateDialog(
+            onDismiss = { showSearch = false },
+            onGo = { lat, lon -> controller.goTo(lat, lon) },
+        )
+    }
+
+    if (showScaleEntry) {
+        ScaleEntryDialog(
+            current = controller.readouts.scaleDenominator,
+            onDismiss = { showScaleEntry = false },
+            onZoomToScale = { wanted ->
+                controller.zoomBy(
+                    zoomDeltaForScale(controller.readouts.scaleDenominator, wanted),
+                    centreX,
+                    centreY,
+                )
+            },
         )
     }
 
@@ -205,5 +248,5 @@ private fun RoundButton(icon: ImageVector, description: String, onClick: () -> U
 /** Long enough to swallow a slider drag, short enough to feel immediate. */
 private const val APPLY_DEBOUNCE_MS = 80L
 
-/** The bottom band the readouts bar owns. The report stops above it. */
-private val HUD_BAND = 72.dp
+/** The bottom band the readouts capsule owns. The report stops above it. */
+private val HUD_BAND = Chrome.capsule + Chrome.margin * 2
