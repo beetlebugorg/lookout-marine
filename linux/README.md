@@ -40,9 +40,10 @@ build directory. The core is `ReleaseFast` in every configuration
 (`-Dcore-optimize=Debug` to develop on it) — the app chases 60 fps and a Debug core
 visibly drops frames.
 
-You need a baked `.pmtiles` chart to see anything. **Open** in the headerbar picks a
-folder of cells; on first launch the app probes `$LOOKOUT_OPEN`, then the last
-recent, then `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
+You need a baked `.pmtiles` chart to see anything. **Ctrl+O**, or **Charts** in the
+mariner settings, picks a folder of cells; on first launch the app probes
+`$LOOKOUT_OPEN`, then the last recent, then
+`~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` pins the opening camera.
 
 ## Testing
@@ -58,12 +59,14 @@ recent, then `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 | File | Role |
 |------|------|
 | `src/main.c` | `GtkApplication` entry, CSS, accelerators |
-| `src/lk-window.c` | The window: headerbar, chart, status bar, actions, open dialog |
+| `src/lk-window.c` | The window: titlebar, chart, the floating chrome, actions, open dialog |
 | `src/lk-chart-view.c` | The chart widget: owns the surface, the transparent hole, all input |
 | `src/lk-chart-controller.c` | The one `lookout*` handle; every `lookout_*` call; the render loop |
 | `src/lk-native-surface.c` | The X11 child window / Wayland subsurface the chart presents into |
-| `src/lk-app-model.c` | Shared state, recents, open paths, coordinate parser |
-| `src/lk-hud.c` | Status-bar readouts, identify panel, DMS formatting |
+| `src/lk-app-model.c` | Shared state, recents, open paths, coordinate and scale parsers |
+| `src/lk-hud.c` | The readouts capsule, scale bar, north bubble, scale entry, formatting |
+| `src/lk-pick-report.c` | The cursor pick report: the decode, the card, the callout placement |
+| `src/lk-json.c` | A small JSON reader for the engine's pick payload |
 | `src/lk-search.c` | Coordinate go-to (feature search stubbed) |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
 | `src/lk-settings-window.c` | The mariner panel (Display / Depths / Text / Charts / Advanced) |

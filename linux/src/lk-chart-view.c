@@ -44,8 +44,6 @@ struct _LkChartView {
 
   /* pinch state */
   double last_zoom_scale;
-
-  GtkWidget *identify_popover;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartView, lk_chart_view, GTK_TYPE_WIDGET)
@@ -217,17 +215,6 @@ lk_chart_view_ensure_native_surface (LkChartView *self)
   return TRUE;
 }
 
-gboolean
-lk_chart_view_can_overlay (LkChartView *self)
-{
-  g_return_val_if_fail (LK_IS_CHART_VIEW (self), FALSE);
-
-  /* Both paths float now: the texture path is a node in GTK's scene graph, and
-   * the native path presents into a subsurface placed BELOW a transparent hole
-   * in the window — so the chrome composites over the chart either way. */
-  return TRUE;
-}
-
 static void
 lk_chart_view_unrealize (GtkWidget *widget)
 {
@@ -273,8 +260,9 @@ lk_chart_view_size_allocate (GtkWidget *widget, int width, int height, int basel
 
   GTK_WIDGET_CLASS (lk_chart_view_parent_class)->size_allocate (widget, width, height, baseline);
 
-  if (self->identify_popover != NULL)
-    gtk_popover_present (GTK_POPOVER (self->identify_popover));
+  /* The chrome is laid out against this: the capsule reads it to decide
+   * whether the window is narrow, and the pick report is placed inside it. */
+  lk_app_model_set_view_size (self->model, width, height);
 
   lk_chart_view_sync_surface (self);
 
@@ -320,6 +308,8 @@ lk_chart_view_sample_velocity (LkChartView *self, double dx, double dy)
   self->last_sample_us = now;
 }
 
+/* The pick, and the point it belongs to. The window puts the mark there and
+ * stands the report beside it. */
 static void
 lk_chart_view_identify_at (LkChartView *self, double x, double y)
 {
@@ -328,13 +318,8 @@ lk_chart_view_identify_at (LkChartView *self, double x, double y)
   if (!lk_chart_controller_geo_at (self->controller, x, y, &lon, &lat))
     return;
 
-  GPtrArray *results = lk_chart_controller_pick (self->controller, lon, lat);
-  lk_app_model_set_pick_results (self->model, results);
-
-  if (results->len > 0)
-    lk_chart_view_present_identify (self, x, y);
-  else if (self->identify_popover != NULL)
-    gtk_popover_popdown (GTK_POPOVER (self->identify_popover));
+  lk_app_model_set_pick (self->model, lk_chart_controller_pick (self->controller, lon, lat),
+                         x, y);
 }
 
 static void
@@ -551,33 +536,6 @@ lk_chart_view_surface_ready (LkChartView *self)
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
-/* ---- identify popover --------------------------------------------------- */
-
-void
-lk_chart_view_present_identify (LkChartView *self, double x, double y)
-{
-  g_return_if_fail (LK_IS_CHART_VIEW (self));
-
-  GPtrArray *results = lk_app_model_get_pick_results (self->model);
-  if (results == NULL || results->len == 0)
-    return;
-
-  if (self->identify_popover == NULL)
-    {
-      self->identify_popover = gtk_popover_new ();
-      gtk_popover_set_autohide (GTK_POPOVER (self->identify_popover), TRUE);
-      gtk_popover_set_has_arrow (GTK_POPOVER (self->identify_popover), TRUE);
-      gtk_widget_set_parent (self->identify_popover, GTK_WIDGET (self));
-    }
-
-  gtk_popover_set_child (GTK_POPOVER (self->identify_popover),
-                         lk_identify_panel_new (results));
-
-  GdkRectangle rect = { (int) x, (int) y, 1, 1 };
-  gtk_popover_set_pointing_to (GTK_POPOVER (self->identify_popover), &rect);
-  gtk_popover_popup (GTK_POPOVER (self->identify_popover));
-}
-
 /* ---- construction ------------------------------------------------------- */
 
 static void
@@ -586,7 +544,6 @@ lk_chart_view_dispose (GObject *object)
   LkChartView *self = LK_CHART_VIEW (object);
 
   g_clear_handle_id (&self->auto_open_id, g_source_remove);
-  g_clear_pointer (&self->identify_popover, gtk_widget_unparent);
   g_clear_pointer (&self->surface, lk_native_surface_free);
 
   G_OBJECT_CLASS (lk_chart_view_parent_class)->dispose (object);
