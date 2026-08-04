@@ -722,12 +722,17 @@ lk_north_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
   cairo_set_source_rgb (cr, 0.898, 0.224, 0.208); /* #E53935 */
   cairo_fill (cr);
 
-  /* The letter. */
-  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
-  g_autoptr (PangoFontDescription) font = pango_font_description_from_string ("Bold 11");
+  /* The letter, in the interface font. A layout built from the cairo context
+   * carries no family, so it falls back to the fontconfig default rather than
+   * the font the rest of the chrome uses; the widget's own context carries the
+   * theme font and the display's scale. Semibold, as in Chrome.swift and
+   * Chrome.kt. */
+  g_autoptr (PangoLayout) layout = gtk_widget_create_pango_layout (GTK_WIDGET (area), "N");
+  g_autoptr (PangoFontDescription) font = pango_font_description_copy (
+      pango_context_get_font_description (gtk_widget_get_pango_context (GTK_WIDGET (area))));
   int text_width = 0, text_height = 0;
 
-  pango_layout_set_text (layout, "N", -1);
+  pango_font_description_set_weight (font, PANGO_WEIGHT_SEMIBOLD);
   pango_layout_set_font_description (layout, font);
   pango_layout_get_pixel_size (layout, &text_width, &text_height);
 

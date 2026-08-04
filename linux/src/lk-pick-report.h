@@ -82,6 +82,10 @@ GtkWidget *lk_pick_marker_new (void);
 #define LK_PICK_MARKER_SIZE 34
 #define LK_PICK_MARGIN      12
 
+/* The card takes half the free area at most, but never less than this: half of
+ * a short window is too little to read a report in. */
+#define LK_PICK_MIN_HEIGHT  320
+
 /* ---- placement ---------------------------------------------------------- */
 
 typedef enum {

@@ -420,31 +420,6 @@ lk_window_build_header (LkWindow *self)
   return header;
 }
 
-/* Scheme and the view toggles, as in the macOS Chart menu and the WinUI
- * layers bubble. */
-static GMenuModel *
-lk_window_build_display_menu (void)
-{
-  GMenu *menu = g_menu_new ();
-  GMenu *scheme = g_menu_new ();
-
-  g_menu_append (scheme, "Day", "win.set-scheme(0)");
-  g_menu_append (scheme, "Dusk", "win.set-scheme(1)");
-  g_menu_append (scheme, "Night", "win.set-scheme(2)");
-  g_menu_append (scheme, "Cycle", "win.cycle-scheme");
-  g_menu_append_section (menu, "Color Scheme", G_MENU_MODEL (scheme));
-  g_object_unref (scheme);
-
-  GMenu *toggles = g_menu_new ();
-  g_menu_append (toggles, "Text", "win.toggle-text");
-  g_menu_append (toggles, "Soundings", "win.toggle-soundings");
-  g_menu_append (toggles, "Other Category", "win.toggle-other");
-  g_menu_append_section (menu, "Show", G_MENU_MODEL (toggles));
-  g_object_unref (toggles);
-
-  return G_MENU_MODEL (menu);
-}
-
 /* ---- construction ------------------------------------------------------- */
 
 GtkWidget *
@@ -505,13 +480,10 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_set_margin_top (north, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), north);
 
-  /* Bottom right: zoom above the display menu and the settings, the whole
-   * column clear of the band the capsule owns. */
+  /* Bottom right: zoom above the settings, the whole column clear of the band
+   * the capsule owns. The scheme and the view toggles are the mariner panel's
+   * alone; they kept their accelerators. */
   GtkWidget *zoom = lk_zoom_controls_new (model);
-  g_autoptr (GMenuModel) display_menu = lk_window_build_display_menu ();
-  gtk_box_append (GTK_BOX (zoom),
-                  lk_bubble_menu_new ("display-brightness-symbolic", "Chart display",
-                                      display_menu));
   gtk_box_append (GTK_BOX (zoom),
                   lk_bubble_new ("preferences-system-symbolic", "Mariner settings",
                                  "win.settings"));

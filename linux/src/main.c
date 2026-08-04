@@ -86,6 +86,15 @@ static const char *LK_CSS =
     "  border-radius: 12px 0 0 12px;"
     "}"
     ".lk-object-list scrolledwindow, .lk-object-list list { background: none; }"
+    /* The highlight is a rounded plate, not a band across the shelf: the margin
+     * holds it clear of the shelf's edges and the padding keeps the two lines
+     * off it. The numbers are PickReport.swift's, so a row stands the same on
+     * both, and 9 + 11 puts the title under the heading above it. */
+    ".lk-object-list row {"
+    "  padding: 9px 11px;"
+    "  margin: 1px 9px;"
+    "  border-radius: 7px;"
+    "}"
     ".lk-object-list row:selected { background: alpha(@accent_color, 0.14); }"
     ".lk-object-list row:selected label { color: @accent_color; }"
     ".lk-fold { border-radius: 0 0 12px 12px; }"
