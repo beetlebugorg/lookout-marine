@@ -185,6 +185,25 @@ export fn Java_org_beetlebug_lookout_Lookout_nSetDensity(env: [*c]j.JNIEnv, cls:
     lookout_set_pixel_density(h.l, d);
 }
 
+/// void nSetDeviceScale(long h, float scale) -- the display's device pixels per
+/// reference pixel.
+///
+/// It sizes the symbols and the text, and the collision box of each label with
+/// them. The engine sizes for 1x until it is told otherwise, so a surface drawn
+/// at any other density draws symbols the wrong size and decluttered a view for
+/// glyphs it did not paint. It is a property of the DISPLAY, so it is set here
+/// and not from the settings form.
+export fn Java_org_beetlebug_lookout_Lookout_nSetDeviceScale(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, scale: j.jfloat) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (scale <= 0) return;
+    var m: cc.tile57_mariner = undefined;
+    lookout_get_mariner(h.l, &m);
+    m.device_scale = scale;
+    lookout_set_mariner(h.l, &m);
+}
+
 export fn Java_org_beetlebug_lookout_Lookout_nFitChart(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
     _ = env;
     _ = cls;
