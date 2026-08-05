@@ -63,6 +63,11 @@ const MAX_INFLIGHT: usize = 64;
 /// How many tiles decode at once.
 const WORKERS: usize = 4;
 
+/// How many sets may draw in one frame. Sets only draw together when they cover
+/// different water, so this is a count of separate cruising grounds on screen at
+/// once, not a count of charts.
+const MAX_DRAW_SETS: usize = 16;
+
 /// One open raster chart.
 pub const Source = struct {
     chart: *cc.tile57_raster_chart,
@@ -136,9 +141,15 @@ const Res = struct {
 pub const Layer = struct {
     alloc: std.mem.Allocator,
     sets: std.ArrayList(Set) = .empty,
-    /// Which set is drawn, or null for "no picture" — a position in the cycle,
-    /// so one control also reaches the full chart.
+    /// Which set WINS WHERE SETS OVERLAP, or null for "no picture" — a position
+    /// in the cycle, so one control also reaches the full chart.
+    ///
+    /// This does not mean "the only set drawn". Sets that cover different water
+    /// draw together; see `drawList`.
     active: ?usize = null,
+    /// How many sets the last `prepare` drew. Only so `wantsFrame` can tell an
+    /// underlay that owes tiles from one that is switched off.
+    drawing: usize = 0,
 
     cache: std.AutoHashMapUnmanaged(u64, Entry) = .empty,
     resident: usize = 0,
@@ -373,6 +384,84 @@ pub const Layer = struct {
         self.built_sig = 0;
     }
 
+    /// The world bounds of a set: the union of its enabled sources.
+    fn setBounds(self: *const Layer, i: usize) ?Box {
+        if (i >= self.sets.items.len) return null;
+        var out: ?Box = null;
+        for (self.sets.items[i].sources.items) |*src| {
+            if (!src.enabled) continue;
+            const b: Box = .{
+                .x0 = lonToWorldX(src.info.west),
+                .y0 = latToWorldY(src.info.north),
+                .x1 = lonToWorldX(src.info.east),
+                .y1 = latToWorldY(src.info.south),
+            };
+            if (out) |*u| {
+                u.x0 = @min(u.x0, b.x0);
+                u.y0 = @min(u.y0, b.y0);
+                u.x1 = @max(u.x1, b.x1);
+                u.y1 = @max(u.y1, b.y1);
+            } else out = b;
+        }
+        return out;
+    }
+
+    /// Do two sets cover any of the same ground?
+    ///
+    /// WHY THE WHOLE BOUNDS AND NOT THE VIEW. Two sets that meet outside the
+    /// window still compete, and testing only what is on screen would make the
+    /// pair share the screen at one pan position and fight at the next — a set
+    /// appearing and vanishing as the mariner scrolls. The answer has to hold
+    /// still, so it is a property of the charts, not of the camera.
+    fn setsOverlap(self: *const Layer, a: usize, b: usize) bool {
+        const ba = self.setBounds(a) orelse return false;
+        const bb = self.setBounds(b) orelse return false;
+        if (ba.y1 < bb.y0 or ba.y0 > bb.y1) return false;
+        // Longitude wraps, so test each world instance the spans can reach.
+        for ([_]f64{ -1, 0, 1 }) |shift| {
+            if (ba.x1 >= bb.x0 + shift and ba.x0 <= bb.x1 + shift) return true;
+        }
+        return false;
+    }
+
+    /// Which sets draw this frame, in paint order. Returns how many were written.
+    ///
+    /// SETS THAT COVER DIFFERENT WATER DRAW TOGETHER. A mariner carrying San
+    /// Francisco and the Atlantic has no choice to make between them: the two
+    /// never meet, and making one of them a mode would mean pressing a key on
+    /// every passage to get back the chart already installed. Only sets that
+    /// compete for the same ground are a choice, and `active` settles that
+    /// choice.
+    ///
+    /// `active` is null for "no picture", which is off everywhere.
+    fn drawList(self: *Layer, cam: camera.Camera, out: *[MAX_DRAW_SETS]usize) usize {
+        var n: usize = 0;
+        const act = self.active orelse return 0;
+        if (act < self.sets.items.len and self.setCoversView(act, cam)) {
+            out[n] = act;
+            n += 1;
+        }
+        for (0..self.sets.items.len) |j| {
+            if (n >= MAX_DRAW_SETS) break;
+            if (j == act) continue;
+            if (!self.setCoversView(j, cam)) continue;
+            // The active set holds the ground it shares, whether or not it is
+            // itself on screen: a set is either a competitor or it is not.
+            if (self.setsOverlap(j, act)) continue;
+            var clash = false;
+            for (out[0..n]) |k| {
+                if (self.setsOverlap(j, k)) {
+                    clash = true;
+                    break;
+                }
+            }
+            if (clash) continue;
+            out[n] = j;
+            n += 1;
+        }
+        return n;
+    }
+
     /// Step to the next set THAT IS IN VIEW, then to nothing, then round again.
     ///
     /// Only in-view sets, because the cycle is a comparison gesture: a mariner
@@ -389,25 +478,42 @@ pub const Layer = struct {
             self.built_sig = 0;
             return;
         }
-        const start: usize = if (self.active) |i| i + 1 else 0;
+        // Step from what is DRAWN HERE, which is not always `active`: sailing
+        // into San Francisco with the Atlantic set active shows San Francisco,
+        // and the key has to move that picture, not the one over the horizon.
+        const cur = self.shownSet(cam);
+        const start: usize = if (cur) |i| i + 1 else 0;
         var j = start;
         while (j < n) : (j += 1) {
-            if (self.setCoversView(j, cam)) {
-                self.active = j;
-                self.built_valid = false;
-                self.built_sig = 0;
-                return;
+            if (!self.setCoversView(j, cam)) continue;
+            // Only a set competing for this water is a step in the cycle. A set
+            // covering other ground is drawn already and is not a choice.
+            if (cur) |i| {
+                if (!self.setsOverlap(j, i)) continue;
             }
+            self.active = j;
+            self.built_valid = false;
+            self.built_sig = 0;
+            return;
         }
-        // Past the last one in view: show nothing. The next press starts over.
+        // Past the last competitor: show nothing. The next press starts over.
         self.active = null;
         self.built_valid = false;
         self.built_sig = 0;
     }
 
-    pub fn activeName(self: *const Layer) [:0]const u8 {
-        const i = self.active orelse return "";
-        return self.sets.items[i].name;
+    /// The set the mariner sees over this view — the first of the draw list.
+    /// Null when nothing is drawn here.
+    fn shownSet(self: *Layer, cam: camera.Camera) ?usize {
+        var list: [MAX_DRAW_SETS]usize = undefined;
+        const n = self.drawList(cam, &list);
+        return if (n == 0) null else list[0];
+    }
+
+    /// Which set the pill names and the list marks: what is DRAWN HERE, which is
+    /// `active` only where sets compete. Null when nothing is drawn here.
+    pub fn shownIndex(self: *Layer, cam: camera.Camera) ?usize {
+        return self.shownSet(cam);
     }
 
     pub fn setCount(self: *const Layer) usize {
@@ -422,7 +528,10 @@ pub const Layer = struct {
         self.frame +%= 1;
         self.drain(g);
 
-        const set_idx = self.active orelse {
+        var list: [MAX_DRAW_SETS]usize = undefined;
+        const n_sets = self.drawList(cam, &list);
+        self.drawing = n_sets;
+        if (n_sets == 0) {
             // Clear unconditionally. `cycle` already sets built_valid = false on
             // its way to "no picture", so a guard on that flag skipped the clear
             // and the last frame's tiles kept drawing after the mariner turned
@@ -431,9 +540,7 @@ pub const Layer = struct {
             self.built_valid = false;
             self.built_sig = 0;
             return;
-        };
-        const set = &self.sets.items[set_idx];
-        if (set.sources.items.len == 0) return;
+        }
 
         self.quads.clearRetainingCapacity();
         self.draws.clearRetainingCapacity();
@@ -448,129 +555,136 @@ pub const Layer = struct {
             self.built_valid = false;
         }
 
-        var sig: u64 = @as(u64, @intCast(set_idx)) *% 0x9E3779B97F4A7C15;
+        var sig: u64 = 0;
         var wanted: usize = 0;
 
-        for (set.sources.items, 0..) |*src, si| {
-            _ = si;
-            if (!src.enabled) continue;
-            const z = pickZoom(src.info, cam.zoom);
-            const span: f64 = @floatFromInt(@as(u64, 1) << @intCast(z));
-            const box = visibleBox(cam);
+        for (list[0..n_sets]) |set_idx| {
+            sig = sig *% 0x9E3779B97F4A7C15 ^ set_idx;
+            const set = &self.sets.items[set_idx];
+            for (set.sources.items) |*src| {
+                if (!src.enabled) continue;
+                const z = pickZoom(src.info, cam.zoom);
+                const span: f64 = @floatFromInt(@as(u64, 1) << @intCast(z));
+                const box = visibleBox(cam);
 
-            // Clamp to the source's own coverage so a view far from the chart
-            // asks for nothing at all.
-            const wx0 = @max(box.x0, lonToWorldX(src.info.west));
-            const wx1 = @min(box.x1, lonToWorldX(src.info.east));
-            const wy0 = @max(box.y0, latToWorldY(src.info.north));
-            const wy1 = @min(box.y1, latToWorldY(src.info.south));
-            if (wx1 <= wx0 or wy1 <= wy0) continue;
+                // Clamp to the source's own coverage so a view far from the chart
+                // asks for nothing at all.
+                const wx0 = @max(box.x0, lonToWorldX(src.info.west));
+                const wx1 = @min(box.x1, lonToWorldX(src.info.east));
+                const wy0 = @max(box.y0, latToWorldY(src.info.north));
+                const wy1 = @min(box.y1, latToWorldY(src.info.south));
+                if (wx1 <= wx0 or wy1 <= wy0) continue;
 
-            var ty: i64 = @intFromFloat(@floor(wy0 * span));
-            const ty1: i64 = @intFromFloat(@floor(wy1 * span));
-            const n: i64 = @intFromFloat(span);
-            while (ty <= ty1) : (ty += 1) {
-                if (ty < 0 or ty >= n) continue;
-                var tx: i64 = @intFromFloat(@floor(wx0 * span));
-                const tx1: i64 = @intFromFloat(@floor(wx1 * span));
-                while (tx <= tx1) : (tx += 1) {
-                    const wrapped_x = @mod(tx, n);
-                    const key: Key = .{
-                        .x = @intCast(wrapped_x),
-                        .y = @intCast(ty),
-                        .z = @intCast(z),
-                        .set = @intCast(set_idx),
-                    };
-                    const k = key.pack();
-                    sig = sig *% 0x100000001B3 ^ k;
-                    wanted += 1;
+                var ty: i64 = @intFromFloat(@floor(wy0 * span));
+                const ty1: i64 = @intFromFloat(@floor(wy1 * span));
+                const n: i64 = @intFromFloat(span);
+                while (ty <= ty1) : (ty += 1) {
+                    if (ty < 0 or ty >= n) continue;
+                    var tx: i64 = @intFromFloat(@floor(wx0 * span));
+                    const tx1: i64 = @intFromFloat(@floor(wx1 * span));
+                    while (tx <= tx1) : (tx += 1) {
+                        const wrapped_x = @mod(tx, n);
+                        const key: Key = .{
+                            .x = @intCast(wrapped_x),
+                            .y = @intCast(ty),
+                            .z = @intCast(z),
+                            .set = @intCast(set_idx),
+                        };
+                        const k = key.pack();
+                        sig = sig *% 0x100000001B3 ^ k;
+                        wanted += 1;
 
-                    const gop = self.cache.getOrPut(self.alloc, k) catch continue;
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = .{ .state = .pending, .used = self.frame };
-                        self.pending_now += 1;
-                        self.request(set_idx, z, @intCast(wrapped_x), @intCast(ty));
-                        continue;
-                    }
-                    gop.value_ptr.used = self.frame;
-                    if (gop.value_ptr.state == .pending) self.pending_now += 1;
-
-                    // Not here yet: stand in with a COARSER ancestor already in
-                    // the cache, magnified over this tile's ground.
-                    //
-                    // Without this a zoom shows the bare ENC for as long as the
-                    // new level takes to arrive — the picture blinks out and
-                    // fills back in, which is the one thing a comparison must
-                    // not do. A tile map has the answer already: the parent
-                    // covers the same ground at half the detail, and it is
-                    // usually still in the cache from the zoom you just left.
-                    var tex = gop.value_ptr.tex;
-                    var tu0: f32 = 0;
-                    var tv0: f32 = 0;
-                    var tu1: f32 = 1;
-                    var tv1: f32 = 1;
-                    if (gop.value_ptr.state != .ready or tex == null) {
-                        tex = null;
-                        var up: u3 = 1;
-                        while (up <= 5 and up <= z) : (up += 1) {
-                            const az: u8 = z - up;
-                            if (az < src.info.min_zoom) break;
-                            const ax = wrapped_x >> up;
-                            const ay = ty >> up;
-                            const akey: Key = .{
-                                .x = @intCast(ax),
-                                .y = @intCast(ay),
-                                .z = @intCast(az),
-                                .set = @intCast(set_idx),
-                            };
-                            const anc = self.cache.getPtr(akey.pack()) orelse continue;
-                            if (anc.state != .ready) continue;
-                            anc.used = self.frame; // keep the stand-in alive
-                            tex = anc.tex;
-                            // Which quarter (or sixteenth, …) of the ancestor
-                            // this tile is.
-                            const span_a: f32 = @floatFromInt(@as(u32, 1) << up);
-                            const mask: i64 = (@as(i64, 1) << up) - 1;
-                            tu0 = @as(f32, @floatFromInt(wrapped_x & mask)) / span_a;
-                            tv0 = @as(f32, @floatFromInt(ty & mask)) / span_a;
-                            tu1 = tu0 + 1.0 / span_a;
-                            tv1 = tv0 + 1.0 / span_a;
-                            break;
+                        const gop = self.cache.getOrPut(self.alloc, k) catch continue;
+                        if (!gop.found_existing) {
+                            gop.value_ptr.* = .{ .state = .pending, .used = self.frame };
+                            self.pending_now += 1;
+                            _ = self.request(set_idx, z, @intCast(wrapped_x), @intCast(ty));
+                            continue;
                         }
+                        gop.value_ptr.used = self.frame;
+                        if (gop.value_ptr.state == .pending) self.pending_now += 1;
+
+                        // Not here yet: stand in with a COARSER ancestor already in
+                        // the cache, magnified over this tile's ground.
+                        //
+                        // Without this a zoom shows the bare ENC for as long as the
+                        // new level takes to arrive — the picture blinks out and
+                        // fills back in, which is the one thing a comparison must
+                        // not do. A tile map has the answer already: the parent
+                        // covers the same ground at half the detail, and it is
+                        // usually still in the cache from the zoom you just left.
+                        var tex = gop.value_ptr.tex;
+                        var tu0: f32 = 0;
+                        var tv0: f32 = 0;
+                        var tu1: f32 = 1;
+                        var tv1: f32 = 1;
+                        if (gop.value_ptr.state != .ready or tex == null) {
+                            tex = null;
+                            var up: u3 = 1;
+                            while (up <= 5 and up <= z) : (up += 1) {
+                                const az: u8 = z - up;
+                                if (az < src.info.min_zoom) break;
+                                const ax = wrapped_x >> up;
+                                const ay = ty >> up;
+                                const akey: Key = .{
+                                    .x = @intCast(ax),
+                                    .y = @intCast(ay),
+                                    .z = @intCast(az),
+                                    .set = @intCast(set_idx),
+                                };
+                                const anc = self.cache.getPtr(akey.pack()) orelse continue;
+                                if (anc.state != .ready) continue;
+                                anc.used = self.frame; // keep the stand-in alive
+                                tex = anc.tex;
+                                // Which quarter (or sixteenth, …) of the ancestor
+                                // this tile is.
+                                const span_a: f32 = @floatFromInt(@as(u32, 1) << up);
+                                const mask: i64 = (@as(i64, 1) << up) - 1;
+                                tu0 = @as(f32, @floatFromInt(wrapped_x & mask)) / span_a;
+                                tv0 = @as(f32, @floatFromInt(ty & mask)) / span_a;
+                                tu1 = tu0 + 1.0 / span_a;
+                                tv1 = tv0 + 1.0 / span_a;
+                                break;
+                            }
+                        }
+                        const draw_tex = tex orelse continue;
+
+                        // The tile's world rect. `tx` stays UNwrapped here so a view
+                        // straddling the antimeridian gets a continuous span; the
+                        // vertex shader wraps each vertex to the near world instance.
+                        const x0: f32 = @floatCast(@as(f64, @floatFromInt(tx)) / span);
+                        const x1: f32 = @floatCast(@as(f64, @floatFromInt(tx + 1)) / span);
+                        const y0: f32 = @floatCast(@as(f64, @floatFromInt(ty)) / span);
+                        const y1: f32 = @floatCast(@as(f64, @floatFromInt(ty + 1)) / span);
+
+                        const first: u32 = @intCast(self.quads.items.len);
+                        self.pushQuad(x0, y0, x1, y1, tu0, tv0, tu1, tv1) catch continue;
+                        self.draws.append(self.alloc, .{
+                            .tex = draw_tex,
+                            .first = first,
+                            .count = 6,
+                        }) catch continue;
                     }
-                    const draw_tex = tex orelse continue;
-
-                    // The tile's world rect. `tx` stays UNwrapped here so a view
-                    // straddling the antimeridian gets a continuous span; the
-                    // vertex shader wraps each vertex to the near world instance.
-                    const x0: f32 = @floatCast(@as(f64, @floatFromInt(tx)) / span);
-                    const x1: f32 = @floatCast(@as(f64, @floatFromInt(tx + 1)) / span);
-                    const y0: f32 = @floatCast(@as(f64, @floatFromInt(ty)) / span);
-                    const y1: f32 = @floatCast(@as(f64, @floatFromInt(ty + 1)) / span);
-
-                    const first: u32 = @intCast(self.quads.items.len);
-                    self.pushQuad(x0, y0, x1, y1, tu0, tv0, tu1, tv1) catch continue;
-                    self.draws.append(self.alloc, .{
-                        .tex = draw_tex,
-                        .first = first,
-                        .count = 6,
-                    }) catch continue;
                 }
             }
         }
 
         if (debugOn()) {
             const box = visibleBox(cam);
-            std.debug.print("raster: set={d} srcs={d} cam=({d:.5},{d:.5}) z={d:.2} vw={d}x{d} box=({d:.5},{d:.5})-({d:.5},{d:.5}) wanted={d} pending={d} quads={d} draws={d}\n", .{
-                set_idx,        set.sources.items.len, cam.center.x, cam.center.y, cam.zoom,
-                cam.vw,         cam.vh,                box.x0,       box.y0,       box.x1,
-                box.y1,         wanted,                self.pending_now, self.quads.items.len, self.draws.items.len,
+            std.debug.print("raster: sets={d} cam=({d:.5},{d:.5}) z={d:.2} vw={d}x{d} box=({d:.5},{d:.5})-({d:.5},{d:.5}) wanted={d} pending={d} quads={d} draws={d}\n", .{
+                n_sets, cam.center.x,     cam.center.y,         cam.zoom,             cam.vw,
+                cam.vh, box.x0,           box.y0,               box.x1,               box.y1,
+                wanted, self.pending_now, self.quads.items.len, self.draws.items.len,
             });
-            for (set.sources.items) |*src| {
-                std.debug.print("  src z={d}..{d} bounds=({d:.5},{d:.5},{d:.5},{d:.5}) -> worldx {d:.5}..{d:.5} worldy {d:.5}..{d:.5}\n", .{
-                    src.info.min_zoom, src.info.max_zoom, src.info.west, src.info.south, src.info.east, src.info.north,
-                    lonToWorldX(src.info.west), lonToWorldX(src.info.east), latToWorldY(src.info.north), latToWorldY(src.info.south),
-                });
+            for (list[0..n_sets]) |set_idx| {
+                const set = &self.sets.items[set_idx];
+                std.debug.print("  set {d} {s} srcs={d}\n", .{ set_idx, set.name, set.sources.items.len });
+                for (set.sources.items) |*src| {
+                    std.debug.print("    src z={d}..{d} bounds=({d:.5},{d:.5},{d:.5},{d:.5}) -> worldx {d:.5}..{d:.5} worldy {d:.5}..{d:.5}\n", .{
+                        src.info.min_zoom,          src.info.max_zoom,          src.info.west,               src.info.south,              src.info.east, src.info.north,
+                        lonToWorldX(src.info.west), lonToWorldX(src.info.east), latToWorldY(src.info.north), latToWorldY(src.info.south),
+                    });
+                }
             }
         }
         if (sig != self.built_sig or !self.built_valid) {
@@ -597,20 +711,23 @@ pub const Layer = struct {
     /// This is the same box the tile selection uses, so the answer cannot
     /// disagree with what is drawn.
     pub fn coversView(self: *Layer, cam: camera.Camera) bool {
-        const set_idx = self.active orelse return false;
-        return self.setCoversView(set_idx, cam);
+        return self.shownSet(cam) != null;
     }
 
-    /// The name of a set whose imagery is on screen, ACTIVE OR NOT.
+    /// The name of the set drawn over this view, or "".
+    pub fn activeNameFor(self: *Layer, cam: camera.Camera) [:0]const u8 {
+        const i = self.shownSet(cam) orelse return "";
+        return self.sets.items[i].name;
+    }
+
+    /// The name of a set whose imagery is on screen, DRAWN OR NOT.
     ///
     /// This is what lets a host say "there is a picture here" while the picture
     /// is switched off. Without it the pill can only ever report what is drawn,
     /// so a mariner sailing into coverage sees no reason to touch it and never
     /// learns the raster chart they installed is under them.
     pub fn availableName(self: *Layer, cam: camera.Camera) [:0]const u8 {
-        if (self.active) |i| {
-            if (self.setCoversView(i, cam)) return self.sets.items[i].name;
-        }
+        if (self.shownSet(cam)) |i| return self.sets.items[i].name;
         for (self.sets.items, 0..) |*set, i| {
             if (self.setCoversView(i, cam)) return set.name;
         }
@@ -649,7 +766,7 @@ pub const Layer = struct {
     /// uploaded. Goes false when the view is fully covered, so an idle chart
     /// goes back to costing nothing.
     pub fn wantsFrame(self: *Layer) bool {
-        if (self.active == null) return false;
+        if (self.drawing == 0) return false;
         if (self.pending_now > 0) return true;
         self.mu.lock();
         defer self.mu.unlock();
@@ -766,11 +883,14 @@ pub const Layer = struct {
 
     // ---- the worker ------------------------------------------------------
 
-    fn request(self: *Layer, set: usize, z: u8, x: u32, y: u32) void {
+    /// Queue one tile. False when the queue is full — the caller must then leave
+    /// NO trace of the tile in the cache, or it is lost for good. See `prepare`.
+    fn request(self: *Layer, set: usize, z: u8, x: u32, y: u32) bool {
         self.mu.lock();
         defer self.mu.unlock();
-        if (self.inflight + self.reqs.items.len >= MAX_INFLIGHT) return;
-        self.reqs.append(self.alloc, .{ .set = @intCast(set), .z = z, .x = x, .y = y }) catch return;
+        if (self.inflight + self.reqs.items.len >= MAX_INFLIGHT) return false;
+        self.reqs.append(self.alloc, .{ .set = @intCast(set), .z = z, .x = x, .y = y }) catch return false;
+        return true;
     }
 
     fn ensureWorker(self: *Layer) void {
@@ -1012,16 +1132,12 @@ test "set names: a provider for a community file, the bake for a sheet" {
 
     // A BAKED SHEET belongs to its bake, not to itself. Without this the
     // OpenSeaMap West Coast bundle makes 968 sets of one sheet each.
-    try testing.expectEqualStrings("USWestCoast",
-        setNameFor("/c/USWestCoast/L14-6320-2600-16-32_14/L14-6320-2600-16-32_14.pmtiles"));
-    try testing.expectEqualStrings("USWestCoast",
-        setNameFor("/c/USWestCoast/L16-25312-10456-16-16_16/L16-25312-10456-16-16_16.pmtiles"));
+    try testing.expectEqualStrings("USWestCoast", setNameFor("/c/USWestCoast/L14-6320-2600-16-32_14/L14-6320-2600-16-32_14.pmtiles"));
+    try testing.expectEqualStrings("USWestCoast", setNameFor("/c/USWestCoast/L16-25312-10456-16-16_16/L16-25312-10456-16-16_16.pmtiles"));
     // And the bake's own name names the producer when it carries one. A sheet
     // calls itself L14-6320-2600-16-32; the bundle says who made it.
-    try testing.expectEqualStrings("OSM",
-        setNameFor("/c/OSM-OpenCPN2-KAP-USWestCoast-20260615/L14-x/L14-x.pmtiles"));
-    try testing.expectEqualStrings("OpenSeaMap",
-        setNameFor("/c/OpenSeaMap-WestCoast/L14-x/L14-x.pmtiles"));
+    try testing.expectEqualStrings("OSM", setNameFor("/c/OSM-OpenCPN2-KAP-USWestCoast-20260615/L14-x/L14-x.pmtiles"));
+    try testing.expectEqualStrings("OpenSeaMap", setNameFor("/c/OpenSeaMap-WestCoast/L14-x/L14-x.pmtiles"));
     // A .pmtiles that is NOT in the bake's layout keeps its own name.
     try testing.expectEqualStrings("loose", setNameFor("/c/somewhere/loose.pmtiles"));
 }

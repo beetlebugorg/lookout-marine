@@ -1777,9 +1777,9 @@ pub const Lookout = struct {
         self.deriveLive();
     }
 
-    /// The active set's name, or "" for no picture.
+    /// The name of the set drawn over this view, or "" for no picture.
     pub fn rasterName(self: *Lookout) [:0]const u8 {
-        return self.raster.activeName();
+        return self.raster.activeNameFor(self.cam);
     }
 
     /// Is the chart actually drawing WITHOUT its opaque fills right now? That is
@@ -1833,7 +1833,7 @@ pub const Lookout = struct {
     }
 
     pub fn rasterActiveIndex(self: *Lookout) ?usize {
-        return self.raster.activeIndex();
+        return self.raster.shownIndex(self.cam);
     }
 
     pub fn rasterSelect(self: *Lookout, i: ?usize) void {
