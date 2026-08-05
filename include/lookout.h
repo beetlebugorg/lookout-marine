@@ -110,6 +110,90 @@ float lookout_pixel_density(lookout *h);                          /* HiDPI px/pt
  * catch between the two values. */
 void lookout_set_pixel_density(lookout *h, float density);
 
+/* ---- raster underlay ---------------------------------------------------
+ *
+ * Satellite imagery and other picture charts the MARINER supplies, drawn
+ * beneath the vector chart. The app offers no catalogue and no download: it
+ * opens files that are already on the device.
+ *
+ * Sources group into SETS by provider, because the same water ships from
+ * several — ArcGIS, Bing, Google, Navionics side by side — and finding the one
+ * that shows the bottom today means flipping between them over the spot that
+ * matters. One set is drawn at a time; the cycle includes "no picture", so a
+ * single control also reaches the full chart.
+ *
+ * A step never moves the camera and never rebuilds the chart scene. That is the
+ * point: a mariner comparing two providers over a reef must not lose their fix
+ * to a flicker.
+ *
+ * Tiles stream on a worker with their own memory ceiling, so nothing here
+ * blocks a frame. Where a source has no tile — the ordinary case, since these
+ * pyramids are clipped to a coastline — the chart simply draws alone. */
+
+/* Open a raster chart (.mbtiles today) and add it to its set. 1 on success, 0
+ * when the file will not open — a bad chart never takes the app down, so a host
+ * importing a folder keeps going. */
+int lookout_raster_add(lookout *h, const char *path);
+
+/* Step to the next raster chart set, or to "no picture" after the last one. */
+void lookout_raster_cycle(lookout *h);
+
+/* The active set's name, or "" for no picture. Borrowed: valid until the set
+ * list changes. *out_len (NULL to ignore) receives the length. */
+const char *lookout_raster_active_name(lookout *h, size_t *out_len);
+
+/* 1 while the chart is drawing WITHOUT its opaque water and land fills, because
+ * a picture is beneath THIS view. NOT the same as "a set is selected": the mode
+ * engages only where imagery actually covers, so a mariner carrying a Croatian
+ * set still gets a full chart in Chesapeake Bay. A host showing "the chart is
+ * reduced" must key off THIS, not off the set name. */
+int lookout_raster_over_chart(lookout *h);
+
+/* Name set `i`, ask whether it has enabled charts in view, read which set is
+ * drawn, and draw one directly.
+ *
+ * A mariner carrying four providers for one coast has to SEE what they carry
+ * and pick one. A cycle alone cannot report what is installed. Build a menu
+ * from these: walk 0..lookout_raster_set_count, keep the sets in view, and mark
+ * the one lookout_raster_active_index reports.
+ *
+ * lookout_raster_select(h, -1) draws none. Names are borrowed and valid until
+ * the set list changes. */
+const char *lookout_raster_set_name(lookout *h, uint32_t i, size_t *out_len);
+int lookout_raster_set_in_view(lookout *h, uint32_t i);
+int32_t lookout_raster_active_index(lookout *h);
+void lookout_raster_select(lookout *h, int32_t i);
+
+/* Turn one raster chart on or off WITHOUT removing it, by the path it was added
+ * with. A mariner who carries four providers for one coast wants three of them
+ * quiet, not deleted — they are half-gigabyte downloads. Takes effect at once;
+ * every cached tile is dropped, because a change here changes which picture a
+ * given address answers with. 0 when no installed chart has that path. */
+int lookout_raster_set_enabled(lookout *h, const char *path, int enabled);
+int lookout_raster_enabled(lookout *h, const char *path);
+
+/* The name of a set that covers this view, DRAWN OR NOT, or "". Use it to tell
+ * the mariner a picture is available here while it is switched off — otherwise
+ * a mariner sailing into coverage sees no reason to turn it on, and never
+ * learns the raster chart they installed is under them. Borrowed; valid until the
+ * set list changes. */
+const char *lookout_raster_available_name(lookout *h, size_t *out_len);
+
+/* Hide the vector chart WHERE A PICTURE COVERS IT. The chart stays everywhere
+ * else, so the mariner never gives up the chart to look at the picture. The
+ * scene stays built, so this is instant and never rebuilds.
+ *
+ * Use it to compare. Hide the chart and show it again over a feature; anything
+ * that moves is a real disagreement between the chart and the picture. Your eye
+ * finds that motion far better than it finds a small offset in a blend. */
+void lookout_set_chart_hidden(lookout *h, int hidden);
+void lookout_toggle_chart(lookout *h);
+int  lookout_chart_hidden(lookout *h);
+
+/* How many sets are installed. The cycle has this many positions, plus one for
+ * "no picture". */
+uint32_t lookout_raster_set_count(lookout *h);
+
 /* ---- interaction (pixel coords; *_logical scale by pixel density) ------- */
 void lookout_pan(lookout *h, float dx_px, float dy_px);
 void lookout_zoom_at(lookout *h, double dzoom, float x_px, float y_px);

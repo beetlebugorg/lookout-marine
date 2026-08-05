@@ -231,6 +231,11 @@ const Tex = struct {
     dset: vk.VkDescriptorSet = null, // set 2 (combined image sampler)
 };
 
+/// One raster tile's texture, and one tile's draw in the underlay
+/// (src/raster.zig). Opaque to the layer, which only holds them.
+pub const RasterTex = Tex;
+pub const RasterDraw = struct { tex: RasterTex, first: u32, count: u32 };
+
 pub const Gpu = struct {
     instance: vk.VkInstance,
     phys: vk.VkPhysicalDevice,
@@ -253,6 +258,13 @@ pub const Gpu = struct {
     set_layout_empty: vk.VkDescriptorSetLayout = null, // set 0
     set_layout_ubo: vk.VkDescriptorSetLayout = null, // sets 1 & 3 (dynamic UBO)
     set_layout_tex: vk.VkDescriptorSetLayout = null, // set 2
+    /// The raster underlay: world-space textured quads drawn BEFORE the chart,
+    /// one texture per tile, through the sprite pipeline (a raster tile IS a
+    /// textured world-space quad with a tint). Replaced when the visible tile
+    /// set changes, which is far less often than once per frame.
+    raster_buf: Buffer = .{},
+    raster_draws: []RasterDraw = &.{},
+    raster_alloc: ?std.mem.Allocator = null,
     pipe_layout: vk.VkPipelineLayout = null,
     pipeline: vk.VkPipeline = null, // chart
     sprite_pipeline: vk.VkPipeline = null,
@@ -1245,6 +1257,67 @@ pub const Gpu = struct {
         t.* = .{};
     }
 
+    // ---- the raster underlay ------------------------------------------------
+
+    pub fn newRasterTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !RasterTex {
+        return self.makeTexture(rgba, w, h);
+    }
+
+    pub fn freeRasterTexture(self: *Gpu, t: RasterTex) void {
+        // The frame in flight may still sample it — the same wait freeSceneValue
+        // takes before dropping a scene's buffers.
+        _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
+        var v = t;
+        self.destroyTexture(&v);
+    }
+
+    /// Adopt this frame's raster quads + per-tile draws.
+    pub fn setRasterFrame(self: *Gpu, quads: []const cc.tile57_gpu_quad, draws: []const RasterDraw) !void {
+        self.clearRasterFrame();
+        if (quads.len == 0 or draws.len == 0) return;
+        const bytes = std.mem.sliceAsBytes(quads);
+        self.raster_buf = try self.createBuffer(bytes.len, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        @memcpy(self.raster_buf.mapped.?[0..bytes.len], bytes);
+        const a = self.raster_alloc orelse std.heap.c_allocator;
+        self.raster_alloc = a;
+        self.raster_draws = try a.dupe(RasterDraw, draws);
+    }
+
+    pub fn clearRasterFrame(self: *Gpu) void {
+        if (self.raster_buf.buf != null) {
+            _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
+            self.destroyBuffer(&self.raster_buf);
+        }
+        if (self.raster_draws.len > 0) {
+            if (self.raster_alloc) |a| a.free(self.raster_draws);
+            self.raster_draws = &.{};
+        }
+    }
+
+    /// Draw the underlay: sprite pipeline, one draw per tile (each carries its
+    /// own texture). Runs BEFORE the chart, so the chart's own fills paint over
+    /// it — which is correct, and is what chart-over-picture undoes.
+    fn recordRaster(self: *Gpu, cmd: vk.VkCommandBuffer, u: Uniforms) void {
+        if (self.raster_draws.len == 0 or self.raster_buf.buf == null) return;
+        const pipe = self.sprite_pipeline orelse return;
+        vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        const zero: u64 = 0;
+        vk.vkCmdBindVertexBuffers(cmd, 0, 1, &self.raster_buf.buf, &zero);
+        var uu = u;
+        // The underlay is BASE and never scale-gated: it is the only thing on
+        // screen where the chart has nothing, so a category filter must not take
+        // it away.
+        uu.cat_mask = 0xFFFFFFFF;
+        const voff = self.pushUniform(&uu) orelse return;
+        vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &voff);
+        for (self.raster_draws) |d| {
+            var ds = d.tex.dset;
+            if (ds == null) continue;
+            vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 2, 1, &ds, 0, null);
+            vk.vkCmdDraw(cmd, d.count, 1, d.first, 0);
+        }
+    }
+
     // ---- scene ------------------------------------------------------------------
     const PatternTex = struct { tex: ?Tex = null, w: f32 = 1, h: f32 = 1 };
 
@@ -1400,6 +1473,11 @@ pub const Gpu = struct {
         vk.vkCmdSetViewport(cmd, 0, 1, &vp);
         const scis = vk.VkRect2D{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = self.width, .height = self.height } };
         vk.vkCmdSetScissor(cmd, 0, 1, &scis);
+
+        // Before the chart, and before the early return below: where the chart
+        // has no data is exactly where the mariner most needs the picture, so a
+        // missing scene must not take the underlay away.
+        self.recordRaster(cmd, u);
 
         const s = if (self.scene) |*sc| sc else return; // no scene: clear only
         var bound_pipe: vk.VkPipeline = null;
@@ -1566,6 +1644,7 @@ pub const Gpu = struct {
 
     pub fn deinit(self: *Gpu) void {
         _ = vk.vkDeviceWaitIdle(self.device);
+        self.clearRasterFrame();
         self.freeScene();
         if (self.sprite_tex) |*t| self.destroyTexture(t);
         if (self.glyph_tex) |*t| self.destroyTexture(t);

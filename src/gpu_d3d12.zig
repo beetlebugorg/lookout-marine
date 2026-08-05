@@ -22,6 +22,11 @@ pub const Uniforms = cc.tile57_gpu_uniforms;
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
+/// One raster tile's texture, and one tile's draw in the underlay
+/// (src/raster.zig). Opaque to the layer, which only holds them.
+pub const RasterTex = *dc.lkd_tex;
+pub const RasterDraw = struct { tex: RasterTex, first: u32, count: u32 };
+
 // Monotonic clock: QueryPerformanceCounter (the MSVC CRT has no clock_gettime).
 extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) c_int;
 extern "kernel32" fn QueryPerformanceFrequency(freq: *i64) callconv(.winapi) c_int;
@@ -89,6 +94,13 @@ pub const Gpu = struct {
     // order). Uploaded once per rebuild; a frame only pushes uniforms + draws.
     scene: ?Scene = null,
 
+    /// The raster underlay (src/raster.zig): world-space textured quads drawn
+    /// BEFORE the chart, one texture per tile, through the sprite pipeline — a
+    /// raster tile IS a textured world-space quad with a tint, so no backend
+    /// carries a shader for it. Replaced when the visible tile set changes.
+    raster_buf: ?*dc.lkd_buf = null,
+    raster_draws: []RasterDraw = &.{},
+    raster_alloc: ?std.mem.Allocator = null,
     sprite_tex: ?*dc.lkd_tex = null,
     glyph_tex: ?*dc.lkd_tex = null,
     glyph_bold_tex: ?*dc.lkd_tex = null,
@@ -200,6 +212,57 @@ pub const Gpu = struct {
     fn makeAtlasTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !*dc.lkd_tex {
         if (rgba.len < @as(usize, w) * h * 4) return error.D3d12Failure;
         return dc.lkd_new_texture_rgba(self.ctx, rgba.ptr, w, h) orelse error.D3d12Failure;
+    }
+
+    // ---- the raster underlay ----------------------------------------------
+
+    pub fn newRasterTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !RasterTex {
+        return self.makeAtlasTexture(rgba, w, h);
+    }
+
+    pub fn freeRasterTexture(self: *Gpu, t: RasterTex) void {
+        _ = self;
+        dc.lkd_free_texture(t);
+    }
+
+    /// Adopt this frame's raster quads + per-tile draws.
+    pub fn setRasterFrame(self: *Gpu, quads: []const cc.tile57_gpu_quad, draws: []const RasterDraw) !void {
+        self.clearRasterFrame();
+        if (quads.len == 0 or draws.len == 0) return;
+        const a = self.raster_alloc orelse std.heap.c_allocator;
+        self.raster_alloc = a;
+        const bytes = std.mem.sliceAsBytes(quads);
+        self.raster_buf = dc.lkd_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.D3d12Failure;
+        self.raster_draws = try a.dupe(RasterDraw, draws);
+    }
+
+    pub fn clearRasterFrame(self: *Gpu) void {
+        if (self.raster_buf) |b| dc.lkd_free_buffer(b);
+        self.raster_buf = null;
+        if (self.raster_draws.len > 0) {
+            if (self.raster_alloc) |a| a.free(self.raster_draws);
+            self.raster_draws = &.{};
+        }
+    }
+
+    /// Draw the underlay: sprite pipeline, blended depth mode (no write), one
+    /// draw per tile. Runs BEFORE the chart, so the chart's own fills paint over
+    /// it — correct, and what chart-over-picture undoes.
+    fn recordRaster(self: *Gpu, f: *dc.lkd_frame, u: Uniforms) void {
+        const buf = self.raster_buf orelse return;
+        if (self.raster_draws.len == 0) return;
+        dc.lkd_set_depth_mode(f, 0);
+        dc.lkd_set_pipeline(f, dc.LKD_PIPE_SPRITE);
+        dc.lkd_bind_vbuf(f, buf);
+        var uu = u;
+        // BASE and never scale-gated: the underlay is the only thing on screen
+        // where the chart has nothing, so a category filter must not remove it.
+        uu.cat_mask = 0xFFFFFFFF;
+        dc.lkd_set_uniforms(f, &uu, @sizeOf(Uniforms));
+        for (self.raster_draws) |d| {
+            dc.lkd_bind_texture(f, d.tex);
+            dc.lkd_draw(f, d.first, d.count);
+        }
     }
 
     // ---- the draw-ready scene from tile57 ----------------------------------
@@ -377,6 +440,9 @@ pub const Gpu = struct {
     // host gates by skipping the draw). The pattern anchor + per-cell period
     // ride the uniform.
     fn recordDraws(self: *Gpu, f: *dc.lkd_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+        // Before the chart, and before any early return: where the chart has no
+        // data is exactly where the mariner most needs the picture.
+        self.recordRaster(f, u);
         const s = if (self.scene) |*sc| sc else {
             if (self.last_draw_log != 0) {
                 self.last_draw_log = 0;
@@ -622,6 +688,7 @@ pub const Gpu = struct {
     }
 
     pub fn deinit(self: *Gpu) void {
+        self.clearRasterFrame();
         self.freeScene();
         if (self.sprite_tex) |t| dc.lkd_free_texture(t);
         if (self.glyph_tex) |t| dc.lkd_free_texture(t);
