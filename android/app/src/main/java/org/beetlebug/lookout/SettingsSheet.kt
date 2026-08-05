@@ -68,6 +68,7 @@ private const val FEET_PER_METRE = 3.28084
 fun SettingsSheet(
     m: MarinerState,
     charts: ChartsModel,
+    controller: ChartController,
     onRequestAccess: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -99,7 +100,7 @@ fun SettingsSheet(
                     1 -> DepthsSection(m)
                     2 -> SymbolsSection(m)
                     3 -> AdvancedSection(m)
-                    else -> ChartsSection(charts, onRequestAccess)
+                    else -> ChartsSection(charts, controller, onRequestAccess)
                 }
             }
         }

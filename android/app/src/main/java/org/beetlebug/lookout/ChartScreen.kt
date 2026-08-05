@@ -210,6 +210,12 @@ fun ChartScreen(
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(bottom = Chrome.margin),
+            raster = controller.raster,
+            onRasterSelect = { controller.selectRasterSet(it) },
+            onToggleChart = { controller.toggleChart() },
+            // The Charts tab is where charts are added; the pill's item goes
+            // there rather than growing a second file browser.
+            onAddRasterCharts = { showSettings = true },
         )
     }
 
@@ -238,6 +244,7 @@ fun ChartScreen(
         SettingsSheet(
             m = controller.mariner,
             charts = charts,
+            controller = controller,
             onRequestAccess = onRequestFileAccess,
             onDismiss = { showSettings = false },
         )
