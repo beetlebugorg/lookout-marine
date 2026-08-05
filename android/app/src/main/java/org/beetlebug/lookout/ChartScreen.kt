@@ -122,6 +122,11 @@ fun ChartScreen(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
+                // The same inset the capsule takes. Without it the capsule
+                // rises by the navigation bar's height and this column does
+                // not, so HUD_BAND stops being the gap between them and the
+                // two meet.
+                .navigationBarsPadding()
                 .padding(end = Chrome.margin, bottom = HUD_BAND),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(Chrome.gap),
@@ -137,6 +142,7 @@ fun ChartScreen(
             scaleDenominator = controller.readouts.scaleDenominator,
             modifier = Modifier
                 .align(Alignment.BottomStart)
+                .navigationBarsPadding()
                 .padding(start = Chrome.margin, bottom = HUD_BAND),
         )
 
