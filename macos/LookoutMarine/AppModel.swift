@@ -331,7 +331,24 @@ final class AppModel: ObservableObject {
             }
         }
         UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
-        rasterName = c.rasterName()
+
+        // Read the whole state back, not just the name. The pill is built from
+        // rasterSets and rasterAvailable, and those reach it through the frame
+        // readouts — which never come while the chart sits idle behind the open
+        // panel. Without this, adding a chart over the water you are looking at
+        // appeared to do nothing at all.
+        refreshRasterState()
+
+        // Draw what was just added, if it covers this view. The mariner picked
+        // these files deliberately while looking at this water; showing them is
+        // the obvious answer, and the pill takes them back in one click.
+        if let added = paths.last(where: { rasterPaths.contains($0) }) {
+            let name = AppModel.providerLabel(added)
+            if let set = rasterSets.first(where: { $0.name == name && $0.inView }) {
+                selectRasterSet(set.id)
+            }
+        }
+
         if !failed.isEmpty {
             openError = failed.count == 1
                 ? "Couldn't open \(failed[0]).\nIt may not be a raster chart tile57 reads."
@@ -339,12 +356,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Pull every published raster field off the controller at once. Anything
+    /// that changes the set list or the selection outside a frame must call
+    /// this: the readouts only run while the chart renders.
+    func refreshRasterState() {
+        guard let c = controller else { return }
+        rasterName = c.rasterName()
+        rasterActive = c.rasterActiveIndex()
+        rasterSets = c.rasterSets()
+        rasterAvailable = c.rasterAvailableName()
+        chartHidden = c.chartHidden()
+    }
+
     /// Draw one set, or none for -1.
     func selectRasterSet(_ i: Int) {
         guard let c = controller else { return }
         c.rasterSelect(i)
-        rasterName = c.rasterName()
-        rasterActive = c.rasterActiveIndex()
+        refreshRasterState()
     }
 
     /// The installed files grouped by the provider their name gives — the same
@@ -380,12 +408,7 @@ final class AppModel: ObservableObject {
         // moves the selection, and the pill must not keep naming a chart that
         // is off. Settings can be open while the chart is idle, so this cannot
         // wait for the next frame's readouts.
-        if let c = controller {
-            rasterName = c.rasterName()
-            rasterActive = c.rasterActiveIndex()
-            rasterSets = c.rasterSets()
-            rasterAvailable = c.rasterAvailableName()
-        }
+        refreshRasterState()
     }
 
     /// Remove one source. The engine cannot drop a source from a live handle,
