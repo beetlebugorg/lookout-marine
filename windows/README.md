@@ -37,22 +37,30 @@ msbuild LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=ARM64
 Use `/p:Platform=x64` on an x64 machine. The app is unpackaged and
 self-contained: the build copies the Windows App SDK runtime next to the exe.
 
-You need a baked `.pmtiles` chart to see anything. **Open** (top-left bubble)
-takes one chart or a folder of cells. On first launch the app probes
-`$LOOKOUT_OPEN`, then the last recent, then the repo's bundled test cell.
+You need a baked `.pmtiles` chart to see anything. Open one from the empty
+state's **Open Charts…**, with **Ctrl+O**, or from **Settings ▸ Charts** (the
+recents live there too). On first launch the app probes `$LOOKOUT_OPEN`, then
+the last recent, then the repo's bundled test cell.
 
 Environment variables: `LOOKOUT_OPEN=<chart|dir>` opens at startup.
-`LOOKOUT_WARP=1` forces the software rasterizer. `LOOKOUT_OPEN_SETTINGS=1`
-opens the mariner pane at startup (screenshots).
+`LOOKOUT_VIEW=lon,lat,zoom[,rot]` pins the opening camera. `LOOKOUT_WARP=1`
+forces the software rasterizer. `LOOKOUT_OPEN_SETTINGS=1` opens the mariner
+pane at startup (screenshots). `LOOKOUT_SHOW=pick` (or `pick:0.5x0.85`, a view
+fraction) runs a cursor pick 3 s after the chart opens — the screenshot
+protocol's pick frame.
 
 ## What's in here
 
 | File | Role |
 |------|------|
 | `ui/MainWindow.xaml.cpp` | Window construction, chrome wiring, the render thread |
-| `ui/MainWindow.Open.cpp` | Open flow, layers flyout, pickers, the chart panel |
-| `ui/MainWindow.Input.cpp` | Gestures, commands, pick, coordinate search |
+| `ui/MainWindow.Open.cpp` | Open flow, pickers, the chart panel |
+| `ui/MainWindow.Input.cpp` | Gestures, commands, coordinate search |
 | `ui/MainWindow.Hud.cpp` | Readout capsule and the scale bar |
+| `ui/MainWindow.Loader.cpp` | The startup loader phases (atlas / mapping / tessellating) |
+| `ui/MainWindow.Pick.cpp` | The pick report card: ranked pick, object list, decoded rows, raw fold |
+| `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
+| `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
 | `ui/MainWindow.Settings.cpp` | The mariner pane: tabbed pages, debounced apply |
 | `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
 | `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |

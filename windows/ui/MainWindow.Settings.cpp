@@ -194,8 +194,8 @@ namespace winrt::LookoutMarine::implementation
         {
             header(L"Open");
             Controls::TextBlock open_tb;
-            open_tb.Text(lk_controller_is_open(controller)
-                ? winrt::to_hstring(std::filesystem::path(lkw::InitialPaths().front()).filename().string())
+            open_tb.Text(lk_controller_is_open(controller) && !open_chart_label.empty()
+                ? winrt::to_hstring(std::filesystem::path(open_chart_label).filename().string())
                 : L"No chart open");
             open_tb.FontSize(12);
             stack.Children().Append(open_tb);

@@ -26,15 +26,22 @@ typedef struct {
     int    building;       /* 1 while a background tessellation fills in */
 } lk_readout;
 
-/* One identified feature from a pick (class / S-57 acronym / chart id). */
+/* One identified feature from a ranked pick. Strings are malloc'd,
+ * NUL-terminated, never NULL; free the whole list with
+ * lk_controller_pick_free. `json` is the engine's report envelope
+ * {"report":{...},"s57":<raw attributes>} (see lookout_pick_ranked). */
 typedef struct {
-    char cls[128];
-    char s57[64];
-    char chart[128];
+    char *cls;   /* S-57 object-class acronym */
+    char *json;  /* report envelope */
+    char *chart; /* source cell name */
 } lk_pick_feature;
 
 lk_controller *lk_controller_new(void);
 void           lk_controller_free(lk_controller *self);
+
+/* 1 if the one-time symbol/font atlas bake is already cached; 0 means the
+ * next open pays it (~1.3s at 1x) — show the first-run loader phase. */
+int lk_controller_atlas_ready(void);
 
 /* Open n baked cells (1 = single, >1 = composed library). The core makes its
  * own D3D12 device and composition swapchain (lk_controller_swapchain).
@@ -79,9 +86,19 @@ void lk_controller_toggle_text(lk_controller *self);
 void lk_controller_toggle_soundings(lk_controller *self);
 void lk_controller_toggle_other_category(lk_controller *self);
 
-/* Pick at a screen point; writes up to max features, returns the count. */
+/* Ranked cursor pick at a screen point (lookout_pick_ranked: the features
+ * worth reporting, best first, depths in the mariner's unit). Mallocs *out
+ * (NULL when nothing was hit) and returns the count. */
 int  lk_controller_pick_at(lk_controller *self, double x, double y,
-                           lk_pick_feature *out, int max);
+                           lk_pick_feature **out);
+void lk_controller_pick_free(lk_pick_feature *feats, int n);
+
+/* A file a picked feature points at (TXTDSC / NTXTDS / PICREP /
+ * fileReference). The bytes belong to the engine and stay valid until the
+ * chart closes; *mime is static. 1 when found, 0 when the chart carries no
+ * such file. */
+int  lk_controller_aux_file(lk_controller *self, const char *cell, const char *name,
+                            const unsigned char **bytes, size_t *len, const char **mime);
 
 void lk_controller_readout(lk_controller *self, lk_readout *out);
 

@@ -20,39 +20,6 @@ using namespace Microsoft::UI::Xaml;
 
 namespace winrt::LookoutMarine::implementation
 {
-    void MainWindow::RebuildOpenFlyout()
-    {
-        Controls::MenuFlyout fly;
-        Controls::MenuFlyoutItem file;
-        file.Text(L"Open Chart…");
-        file.Click([this](auto &&, auto &&) { PickChartFile(); });
-        fly.Items().Append(file);
-        Controls::MenuFlyoutItem folder;
-        folder.Text(L"Open Folder…");
-        folder.Click([this](auto &&, auto &&) { PickChartFolder(); });
-        fly.Items().Append(folder);
-
-        char **recents = lk_store_load_recents();
-        if (recents != nullptr && recents[0] != nullptr)
-        {
-            fly.Items().Append(Controls::MenuFlyoutSeparator{});
-            for (int i = 0; recents[i] != nullptr; ++i)
-            {
-                std::string path = recents[i];
-                std::string name = std::filesystem::path(path).filename().string();
-                if (name.empty())
-                    name = path;
-                Controls::MenuFlyoutItem item;
-                item.Text(winrt::to_hstring(name));
-                item.Click([this, path](auto &&, auto &&) { OpenPaths(lkw::CellsFor(path), path); });
-                fly.Items().Append(item);
-            }
-        }
-        lk_store_free_recents(recents);
-
-        fly.ShowAt(LayersBtn());
-    }
-
     void MainWindow::TryOpen()
     {
         if (open_attempted || controller == nullptr)
@@ -70,12 +37,34 @@ namespace winrt::LookoutMarine::implementation
         OpenPaths(paths, {});
     }
 
+    // The open itself is synchronous on the UI thread (the core mmaps and
+    // builds its device), so the loader is shown first and the real open is
+    // deferred one timer tick — XAML gets a frame to paint the loader card
+    // before the thread blocks.
     void MainWindow::OpenPaths(std::vector<std::string> const &paths, std::string const &recent)
     {
-        if (paths.empty() || controller == nullptr)
+        if (paths.empty() || controller == nullptr || open_pending)
             return;
+        open_pending = true;
+        ShowStartupLoader(paths.size());
+
+        Microsoft::UI::Xaml::DispatcherTimer defer;
+        defer.Interval(std::chrono::milliseconds(50));
+        defer.Tick([this, paths, recent, defer](auto &&, auto &&) {
+            defer.Stop();
+            DoOpenPaths(paths, recent);
+            open_pending = false;
+        });
+        defer.Start();
+    }
+
+    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent)
+    {
         if (!recent.empty())
             lk_store_note_recent(recent.c_str());
+        // What Settings ▸ Charts names as open: the folder or file the user
+        // chose, else the first cell (a startup open).
+        open_chart_label = !recent.empty() ? recent : paths.front();
 
         StopRenderThread();
         lk_controller_close(controller);
@@ -90,14 +79,43 @@ namespace winrt::LookoutMarine::implementation
         if (OpenChart(paths))
         {
             EmptyState().Visibility(Visibility::Collapsed);
+            SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);
             StartRenderThread();
             UpdateReadouts(true);
             if (GetEnvironmentVariableA("LOOKOUT_OPEN_SETTINGS", nullptr, 0) > 0)
                 ToggleSettings(); // screenshot/dev hook
+
+            // The cross-host screenshot protocol's LOOKOUT_SHOW: "pick" or
+            // "pick:0.5x0.85" (a view fraction; 'x' because commas split the
+            // list elsewhere), or "scale". Applied after the first scenes
+            // settle, like the macOS shell's 3 s delay.
+            char show[64];
+            if (GetEnvironmentVariableA("LOOKOUT_SHOW", show, sizeof show) > 0)
+            {
+                bool pick = strncmp(show, "pick", 4) == 0;
+                bool scale = strcmp(show, "scale") == 0;
+                double fx = 0.5, fy = 0.5;
+                if (pick && show[4] == ':')
+                    sscanf_s(show + 5, "%lfx%lf", &fx, &fy);
+                if (pick || scale)
+                {
+                    Microsoft::UI::Xaml::DispatcherTimer timer;
+                    timer.Interval(std::chrono::milliseconds(3000));
+                    timer.Tick([this, pick, fx, fy, timer](auto &&, auto &&) {
+                        timer.Stop();
+                        if (pick)
+                            ShowPick(Root().ActualWidth() * fx, Root().ActualHeight() * fy);
+                        else
+                            ToggleScalePanel();
+                    });
+                    timer.Start();
+                }
+            }
         }
         else
         {
+            HideStartupLoader();
             EmptyState().Visibility(Visibility::Visible);
         }
     }
