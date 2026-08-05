@@ -117,7 +117,7 @@ final class ChartController: NSObject {
 
         // Re-install the mariner's raster charts. A raster chart is attached to a
         // lookout handle, and `close()` above destroyed the old one, so every
-        // open has to replay them — that is what makes imagery survive both
+        // open has to replay them — that is what makes a raster chart survive both
         // switching charts and relaunching the app.
         if let paths = model?.rasterPaths, !paths.isEmpty {
             var ok = 0

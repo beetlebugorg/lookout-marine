@@ -376,6 +376,16 @@ final class AppModel: ObservableObject {
         if on { rasterOff.remove(path) } else { rasterOff.insert(path) }
         UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
         controller?.setRasterEnabled(path, on)
+        // Read the selection back: switching off the last file of the drawn set
+        // moves the selection, and the pill must not keep naming a chart that
+        // is off. Settings can be open while the chart is idle, so this cannot
+        // wait for the next frame's readouts.
+        if let c = controller {
+            rasterName = c.rasterName()
+            rasterActive = c.rasterActiveIndex()
+            rasterSets = c.rasterSets()
+            rasterAvailable = c.rasterAvailableName()
+        }
     }
 
     /// Remove one source. The engine cannot drop a source from a live handle,
