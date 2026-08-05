@@ -2,6 +2,7 @@
 
 #include "lk-chart-view.h"
 #include "lk-hud.h"
+#include "lk-pick-report.h"
 #include "lk-search.h"
 #include "lk-settings-window.h"
 
@@ -11,18 +12,29 @@ typedef struct {
   LkAppModel *model;
   GtkWidget  *window;
   GtkWidget  *chart_view;
+  GtkWidget  *overlay;
   GtkWidget  *search_bar;
-  GtkWidget  *north_button;
-  GtkWidget  *recents_menu_button;
   GtkWidget  *loader;
   GtkWidget  *empty_state;
-  GtkWidget  *settings_window;
+  GtkWidget  *scale_bar;
+  GtkWidget  *capsule;
+
+  /* The pick: the mark on the chart and the report beside it, both rebuilt
+   * per pick and both NULL while none is open. */
+  GtkWidget *pick_marker;
+  GtkWidget *pick_report;
+  guint      place_id; /* re-places the report after a resize, off the layout */
+
+  GtkWidget *settings_window;
 } LkWindow;
 
 static void
 lk_window_free (gpointer data)
 {
-  g_free (data);
+  LkWindow *self = data;
+
+  g_clear_handle_id (&self->place_id, g_source_remove);
+  g_free (self);
 }
 
 /* ---- open dialog -------------------------------------------------------- */
@@ -143,6 +155,14 @@ lk_action_search (GSimpleAction *action, GVariant *parameter, gpointer user_data
 }
 
 static void
+lk_action_close_pick (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_app_model_clear_pick (self->model);
+}
+
+static void
 lk_action_settings (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   LkWindow *self = user_data;
@@ -169,55 +189,12 @@ static const GActionEntry lk_window_actions[] = {
   { "toggle-soundings", lk_action_toggle_soundings },
   { "toggle-other",     lk_action_toggle_other },
   { "search",           lk_action_search },
+  { "close-pick",       lk_action_close_pick },
   { "settings",         lk_action_settings },
   { "set-scheme",       lk_action_set_scheme, "i", "0" },
 };
 
 /* ---- model-driven chrome ------------------------------------------------ */
-
-static void
-lk_window_rebuild_recents (LkWindow *self)
-{
-  GMenu *menu = g_menu_new ();
-  const char *const *recents = lk_app_model_get_recents (self->model);
-
-  g_menu_append (menu, "Open Charts…", "win.open");
-
-  if (recents != NULL && recents[0] != NULL)
-    {
-      GMenu *section = g_menu_new ();
-      for (guint i = 0; recents[i] != NULL; i++)
-        {
-          g_autofree char *name = g_path_get_basename (recents[i]);
-          g_autoptr (GMenuItem) item = g_menu_item_new (name, NULL);
-          g_menu_item_set_action_and_target_value (item, "win.open-recent",
-                                                   g_variant_new_string (recents[i]));
-          g_menu_append_item (section, item);
-        }
-      g_menu_append_section (menu, "Recent", G_MENU_MODEL (section));
-      g_object_unref (section);
-    }
-
-  gtk_menu_button_set_menu_model (GTK_MENU_BUTTON (self->recents_menu_button),
-                                  G_MENU_MODEL (menu));
-  g_object_unref (menu);
-}
-
-static void
-lk_window_update_title (LkWindow *self)
-{
-  const char *path = lk_app_model_get_chart_path (self->model);
-
-  if (path != NULL)
-    {
-      g_autofree char *name = g_path_get_basename (path);
-      gtk_window_set_title (GTK_WINDOW (self->window), name);
-    }
-  else
-    {
-      gtk_window_set_title (GTK_WINDOW (self->window), "Lookout Marine");
-    }
-}
 
 static void
 lk_window_update_overlays (LkWindow *self)
@@ -227,6 +204,10 @@ lk_window_update_overlays (LkWindow *self)
 
   gtk_widget_set_visible (self->loader, loading);
   gtk_widget_set_visible (self->empty_state, !loading && !has_chart);
+  /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
+   * with nothing to report. */
+  gtk_widget_set_visible (self->capsule, has_chart);
+  gtk_widget_set_visible (self->scale_bar, has_chart);
 
   GtkWidget *label = g_object_get_data (G_OBJECT (self->loader), "lk-label");
   gtk_label_set_text (GTK_LABEL (label),
@@ -236,6 +217,96 @@ lk_window_update_overlays (LkWindow *self)
 
   GtkWidget *hint = g_object_get_data (G_OBJECT (self->loader), "lk-hint");
   gtk_widget_set_visible (hint, lk_app_model_get_preparing_symbols (self->model));
+}
+
+/* ---- the pick ----------------------------------------------------------- */
+
+static void
+lk_window_drop_pick_widgets (LkWindow *self)
+{
+  if (self->pick_marker != NULL)
+    {
+      gtk_overlay_remove_overlay (GTK_OVERLAY (self->overlay), self->pick_marker);
+      self->pick_marker = NULL;
+    }
+  if (self->pick_report != NULL)
+    {
+      gtk_overlay_remove_overlay (GTK_OVERLAY (self->overlay), self->pick_report);
+      self->pick_report = NULL;
+    }
+}
+
+/* The mark on the object, and the report standing beside it. Both are rebuilt
+ * for each pick: a pick is a new set of objects, and how many there are is
+ * what decides the card's shape. */
+static void
+lk_window_update_pick (LkWindow *self)
+{
+  double x, y;
+  int view_width = lk_app_model_get_view_width (self->model);
+  int view_height = lk_app_model_get_view_height (self->model);
+
+  lk_window_drop_pick_widgets (self);
+
+  if (!lk_app_model_get_pick_point (self->model, &x, &y))
+    return;
+  if (view_width <= 1 || view_height <= 1)
+    return;
+
+  GPtrArray *results = lk_app_model_get_pick_results (self->model);
+  int width = lk_pick_report_width (results->len, view_width);
+  LkCalloutPlace place = lk_callout_place (x, y, width, view_width, view_height, LK_HUD_BAND);
+
+  self->pick_marker = lk_pick_marker_new ();
+  gtk_widget_set_margin_start (self->pick_marker, MAX (0, (int) (x - LK_PICK_MARKER_SIZE / 2)));
+  gtk_widget_set_margin_top (self->pick_marker, MAX (0, (int) (y - LK_PICK_MARKER_SIZE / 2)));
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_marker);
+
+  /* The card holds one edge against the mark and the layout places the
+   * opposite edge, so nothing here has to measure the card's height. */
+  self->pick_report = lk_pick_report_new (self->model, width, (int) place.room);
+  gtk_widget_set_halign (self->pick_report, GTK_ALIGN_START);
+  gtk_widget_set_margin_start (self->pick_report, MAX (0, (int) place.x));
+
+  if (place.edge == LK_CALLOUT_ABOVE)
+    {
+      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_END);
+      gtk_widget_set_margin_bottom (self->pick_report, MAX (0, (int) (view_height - place.y)));
+    }
+  else
+    {
+      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_START);
+      gtk_widget_set_margin_top (self->pick_report, MAX (0, (int) place.y));
+    }
+
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_report);
+}
+
+static gboolean
+lk_window_place_pick_idle (gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  self->place_id = 0;
+  lk_window_update_pick (self);
+  return G_SOURCE_REMOVE;
+}
+
+/* The view size arrives during the chart view's allocation, and adding an
+ * overlay child there would resize a widget mid-layout. Re-place on the next
+ * idle instead. */
+static void
+lk_window_queue_place_pick (LkWindow *self)
+{
+  if (self->pick_report == NULL || self->place_id != 0)
+    return;
+  self->place_id = g_idle_add (lk_window_place_pick_idle, self);
+}
+
+static void
+lk_window_pick_changed (LkAppModel *model, gpointer user_data)
+{
+  lk_window_update_pick (user_data);
 }
 
 static void
@@ -261,15 +332,10 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   LkWindow *self = user_data;
   const char *name = g_param_spec_get_name (pspec);
 
-  if (g_str_equal (name, "recents"))
-    lk_window_rebuild_recents (self);
-  else if (g_str_equal (name, "chart-path"))
-    lk_window_update_title (self);
-  else if (g_str_equal (name, "rotation"))
-    gtk_widget_set_visible (self->north_button,
-                            fabs (lk_app_model_get_rotation (self->model)) >= 0.5);
-  else if (g_str_equal (name, "show-startup-loader") || g_str_equal (name, "has-chart"))
+  if (g_str_equal (name, "show-startup-loader") || g_str_equal (name, "has-chart"))
     lk_window_update_overlays (self);
+  else if (g_str_equal (name, "view-width") || g_str_equal (name, "view-height"))
+    lk_window_queue_place_pick (self);
   else if (g_str_equal (name, "open-error"))
     lk_window_show_open_error (self);
 }
@@ -339,72 +405,18 @@ lk_window_build_empty_state (void)
   return box;
 }
 
-/* ---- headerbar ---------------------------------------------------------- */
+/* ---- titlebar ----------------------------------------------------------- */
 
-static GtkWidget *
-lk_header_button (const char *icon_name, const char *tooltip, const char *action)
-{
-  GtkWidget *button = gtk_button_new_from_icon_name (icon_name);
-
-  gtk_widget_set_tooltip_text (button, tooltip);
-  gtk_actionable_set_action_name (GTK_ACTIONABLE (button), action);
-  return button;
-}
-
+/* The titlebar carries the chart's name and the window controls, and nothing
+ * else. Every control that acts on the chart is a bubble over the chart, where
+ * the SwiftUI, WinUI and Compose shells put it — so no control stands in two
+ * places, and the chart gets the whole window. */
 static GtkWidget *
 lk_window_build_header (LkWindow *self)
 {
   GtkWidget *header = gtk_header_bar_new ();
 
-  self->recents_menu_button = gtk_menu_button_new ();
-  gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (self->recents_menu_button), "document-open-symbolic");
-  gtk_widget_set_tooltip_text (self->recents_menu_button, "Open chart");
-  gtk_header_bar_pack_start (GTK_HEADER_BAR (header), self->recents_menu_button);
-
-  /* Linked zoom +/− pair. */
-  GtkWidget *zoom = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_widget_add_css_class (zoom, "linked");
-  gtk_box_append (GTK_BOX (zoom), lk_header_button ("zoom-out-symbolic", "Zoom out", "win.zoom-out"));
-  gtk_box_append (GTK_BOX (zoom), lk_header_button ("zoom-in-symbolic", "Zoom in", "win.zoom-in"));
-  gtk_header_bar_pack_start (GTK_HEADER_BAR (header), zoom);
-
-  gtk_header_bar_pack_start (GTK_HEADER_BAR (header),
-                             lk_header_button ("zoom-fit-best-symbolic", "Zoom to fit", "win.zoom-fit"));
-
-  self->north_button = lk_header_button ("go-up-symbolic", "Reset to north-up", "win.north-up");
-  gtk_widget_set_visible (self->north_button, FALSE);
-  gtk_header_bar_pack_start (GTK_HEADER_BAR (header), self->north_button);
-
-  /* Scheme + view toggles, as in the macOS Chart menu. */
-  GMenu *menu = g_menu_new ();
-  GMenu *scheme = g_menu_new ();
-  g_menu_append (scheme, "Day", "win.set-scheme(0)");
-  g_menu_append (scheme, "Dusk", "win.set-scheme(1)");
-  g_menu_append (scheme, "Night", "win.set-scheme(2)");
-  g_menu_append (scheme, "Cycle", "win.cycle-scheme");
-  g_menu_append_section (menu, "Color Scheme", G_MENU_MODEL (scheme));
-  g_object_unref (scheme);
-
-  GMenu *toggles = g_menu_new ();
-  g_menu_append (toggles, "Text", "win.toggle-text");
-  g_menu_append (toggles, "Soundings", "win.toggle-soundings");
-  g_menu_append (toggles, "Other Category", "win.toggle-other");
-  g_menu_append_section (menu, "Show", G_MENU_MODEL (toggles));
-  g_object_unref (toggles);
-
-  GtkWidget *view_button = gtk_menu_button_new ();
-  gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (view_button), "display-brightness-symbolic");
-  gtk_menu_button_set_menu_model (GTK_MENU_BUTTON (view_button), G_MENU_MODEL (menu));
-  gtk_widget_set_tooltip_text (view_button, "Chart display");
-  g_object_unref (menu);
-
-  gtk_header_bar_pack_end (GTK_HEADER_BAR (header),
-                           lk_header_button ("preferences-system-symbolic",
-                                             "Mariner settings", "win.settings"));
-  gtk_header_bar_pack_end (GTK_HEADER_BAR (header), view_button);
-  gtk_header_bar_pack_end (GTK_HEADER_BAR (header),
-                           lk_header_button ("system-search-symbolic",
-                                             "Go to coordinate", "win.search"));
+  gtk_widget_add_css_class (header, "flat");
   return header;
 }
 
@@ -421,8 +433,14 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_add_css_class (self->window, "lk-chart-window");
   g_object_set_data_full (G_OBJECT (self->window), "lk-window", self, lk_window_free);
 
+  /* The name of the app, always. The chart is in the window, and the mariner
+   * reads which one it is from the readouts. */
+  gtk_window_set_title (GTK_WINDOW (self->window), "Lookout Marine");
   gtk_window_set_default_size (GTK_WINDOW (self->window), 1280, 800);
-  gtk_widget_set_size_request (self->window, 720, 520);
+  /* Narrow enough that the capsule's compact form is reachable: below
+   * LK_CHROME_COMPACT_WIDTH it drops the band and takes a smaller type, which
+   * is the same rule the phone shells follow. */
+  gtk_widget_set_size_request (self->window, 640, 480);
   gtk_application_window_set_show_menubar (GTK_APPLICATION_WINDOW (self->window), FALSE);
 
   g_action_map_add_action_entries (G_ACTION_MAP (self->window), lk_window_actions,
@@ -440,51 +458,62 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   self->loader = lk_window_build_loader ();
   self->empty_state = lk_window_build_empty_state ();
 
-  GtkWidget *overlay = gtk_overlay_new ();
-  gtk_overlay_set_child (GTK_OVERLAY (overlay), self->chart_view);
-  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), self->loader);
-  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), self->empty_state);
-  gtk_widget_set_vexpand (overlay, TRUE);
+  self->overlay = gtk_overlay_new ();
+  gtk_overlay_set_child (GTK_OVERLAY (self->overlay), self->chart_view);
+  gtk_widget_set_vexpand (self->overlay, TRUE);
 
-  /* Texture path: chart is a scene-graph node, so chrome floats over it.
-   * Fallback path: chart is a native surface above all widgets, so the HUD
-   * moves below it as a status bar (zoom bubbles are already in the headerbar). */
-  gboolean floating = lk_chart_view_can_overlay (LK_CHART_VIEW (self->chart_view));
+  /* The chart is a subsurface below a transparent hole in the window, so the
+   * chrome composites over it — the layout every shell uses: north at the top
+   * right, zoom at the bottom right, the distance bar at the bottom left, the
+   * readouts at the bottom centre, the build indicator at the top centre. */
 
-  /* Zoom bubbles, bottom-right, clear of the HUD bar. */
+  /* Top left: the search bubble reveals the coordinate go-to. */
+  GtkWidget *search = lk_bubble_new ("system-search-symbolic", "Go to coordinate", "win.search");
+  gtk_widget_set_halign (search, GTK_ALIGN_START);
+  gtk_widget_set_valign (search, GTK_ALIGN_START);
+  gtk_widget_set_margin_start (search, LK_CHROME_MARGIN);
+  gtk_widget_set_margin_top (search, LK_CHROME_MARGIN);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), search);
+
+  GtkWidget *north = lk_north_bubble_new (model);
+  gtk_widget_set_margin_end (north, LK_CHROME_MARGIN);
+  gtk_widget_set_margin_top (north, LK_CHROME_MARGIN);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), north);
+
+  /* Bottom right: zoom above the settings, the whole column clear of the band
+   * the capsule owns. The scheme and the view toggles are the mariner panel's
+   * alone; they kept their accelerators. */
   GtkWidget *zoom = lk_zoom_controls_new (model);
-  gtk_widget_set_halign (zoom, GTK_ALIGN_END);
-  gtk_widget_set_valign (zoom, GTK_ALIGN_END);
-  gtk_widget_set_margin_end (zoom, 12);
-  gtk_widget_set_margin_bottom (zoom, 52);
-  gtk_widget_set_visible (zoom, floating);
-  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), zoom);
+  gtk_box_append (GTK_BOX (zoom),
+                  lk_bubble_new ("preferences-system-symbolic", "Mariner settings",
+                                 "win.settings"));
+  gtk_widget_set_margin_end (zoom, LK_CHROME_MARGIN);
+  gtk_widget_set_margin_bottom (zoom, LK_HUD_BAND);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), zoom);
 
-  /* Compass, top-right, shown only once the view is turned. */
-  GtkWidget *compass = lk_compass_new (model);
-  gtk_widget_set_halign (compass, GTK_ALIGN_END);
-  gtk_widget_set_valign (compass, GTK_ALIGN_START);
-  gtk_widget_set_margin_end (compass, 12);
-  gtk_widget_set_margin_top (compass, 12);
-  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), compass);
+  self->scale_bar = lk_scale_bar_new (model);
+  gtk_widget_set_margin_start (self->scale_bar, LK_CHROME_MARGIN);
+  gtk_widget_set_margin_bottom (self->scale_bar, LK_HUD_BAND);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->scale_bar);
 
-  if (floating)
-    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), lk_hud_bar_new (model, TRUE));
+  GtkWidget *building = lk_building_pill_new (model);
+  gtk_widget_set_margin_top (building, LK_CHROME_MARGIN);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), building);
 
-  gtk_box_append (GTK_BOX (root), overlay);
+  self->capsule = lk_hud_capsule_new (model);
+  gtk_widget_set_margin_bottom (self->capsule, LK_CHROME_MARGIN);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->capsule);
 
-  if (!floating)
-    {
-      gtk_box_append (GTK_BOX (root), gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
-      gtk_box_append (GTK_BOX (root), lk_hud_bar_new (model, FALSE));
-    }
+  /* The loader and the empty state stand over all of it. */
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->loader);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->empty_state);
 
+  gtk_box_append (GTK_BOX (root), self->overlay);
   gtk_window_set_child (GTK_WINDOW (self->window), root);
 
   g_signal_connect (model, "notify", G_CALLBACK (lk_window_notify), self);
+  g_signal_connect (model, "pick-results", G_CALLBACK (lk_window_pick_changed), self);
 
-  lk_window_rebuild_recents (self);
-  lk_window_update_title (self);
   lk_window_update_overlays (self);
 
   return self->window;

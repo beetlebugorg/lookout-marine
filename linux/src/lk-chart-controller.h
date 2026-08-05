@@ -88,8 +88,21 @@ void lk_chart_controller_toggle_other_category (LkChartController *self);
 
 /* ---- pick --------------------------------------------------------------- */
 
-/* Features under a geo point. Transfer full: a GPtrArray of LkPickFeature. */
+/* The features a chartplotter should SHOW under a geo point, best first — the
+ * engine's ranked pick, not its draw-order list. Transfer full: a GPtrArray of
+ * LkPickFeature. */
 GPtrArray *lk_chart_controller_pick (LkChartController *self, double lon, double lat);
+
+/* A file a picked feature points at rather than carries: a caution note
+ * (TXTDSC, NTXTDS) or a chart picture (PICREP), stored beside the chart at
+ * bake time. *out_bytes is NULL when the chart carries no such file; the bytes
+ * belong to the handle and stay valid until the chart closes. */
+void lk_chart_controller_aux_file (LkChartController *self,
+                                   const char        *cell,
+                                   const char        *name,
+                                   const guint8     **out_bytes,
+                                   gsize             *out_length,
+                                   const char       **out_mime);
 
 /* Re-arm the render loop after a state change made outside this file. */
 void lk_chart_controller_kick (LkChartController *self);

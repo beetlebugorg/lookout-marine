@@ -147,7 +147,15 @@ lk_chart_controller_tick (GtkWidget     *widget,
   if (animating || lookout_needs_redraw (self->handle) != 0)
     {
       if (lookout_render (self->handle))
-        lk_chart_view_surface_ready (LK_CHART_VIEW (self->view));
+        {
+          lk_chart_view_surface_ready (LK_CHART_VIEW (self->view));
+          /* The chart is on the screen, so the loader has done its job. A
+           * library of a thousand cells keeps tessellating for a while after
+           * that, and the build pill carries it — a loader still up over a
+           * drawn chart says the app is stuck when it is not. */
+          if (self->model != NULL)
+            lk_app_model_set_first_build_done (self->model, TRUE);
+        }
       lk_chart_controller_push_readouts (self);
       self->idle_ticks = 0;
     }
@@ -361,6 +369,15 @@ lk_chart_controller_get_view (LkChartController *self)
   return view;
 }
 
+/* A pick report belongs to the view it was taken in. Any camera move retires
+ * it, so the report never floats over water it does not describe. */
+static void
+lk_chart_controller_retire_pick (LkChartController *self)
+{
+  if (self->model != NULL)
+    lk_app_model_clear_pick (self->model);
+}
+
 void
 lk_chart_controller_set_view (LkChartController *self, lookout_view view)
 {
@@ -369,6 +386,7 @@ lk_chart_controller_set_view (LkChartController *self, lookout_view view)
   if (self->handle == NULL)
     return;
   lookout_set_view (self->handle, &view);
+  lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
   self->last_readouts_us = 0;
   lk_chart_controller_push_readouts (self);
@@ -420,6 +438,7 @@ lk_chart_controller_pan (LkChartController *self, double dx, double dy)
   if (self->handle == NULL)
     return;
   lookout_pan_logical (self->handle, (float) dx, (float) dy);
+  lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
 }
 
@@ -431,6 +450,7 @@ lk_chart_controller_zoom_at (LkChartController *self, double dzoom, double x, do
   if (self->handle == NULL)
     return;
   lookout_zoom_at_logical (self->handle, dzoom, (float) x, (float) y);
+  lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
 }
 
@@ -456,6 +476,7 @@ lk_chart_controller_rotate_drag (LkChartController *self,
   if (self->handle == NULL)
     return;
   lookout_rotate_drag_logical (self->handle, (float) x0, (float) y0, (float) x1, (float) y1);
+  lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
   self->last_readouts_us = 0;
   lk_chart_controller_push_readouts (self);
@@ -469,6 +490,7 @@ lk_chart_controller_reset_rotation (LkChartController *self)
   if (self->handle == NULL)
     return;
   lookout_reset_rotation (self->handle);
+  lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
   self->last_readouts_us = 0;
   lk_chart_controller_push_readouts (self);
@@ -482,6 +504,10 @@ lk_chart_controller_fling_start (LkChartController *self, double vx, double vy)
   if (self->handle == NULL)
     return;
   lookout_fling_start (self->handle, vx, vy);
+  /* (0,0) is a grab stopping a coast, not a move: a tap must not retire the
+   * report the same tap is about to open. */
+  if (vx != 0 || vy != 0)
+    lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
 }
 
@@ -589,6 +615,34 @@ lk_chart_controller_pick (LkChartController *self, double lon, double lat)
     return results;
 
   tile57_query_cb cb = { .ctx = results, .feature = lk_pick_feature_cb };
-  lookout_pick (self->handle, lon, lat, &cb);
+  /* The ranked pick, not the raw one: the engine's own list is in draw order,
+   * which puts the land area before the light that was tapped. The core drops
+   * the meta objects that say nothing, demotes a feature the cell gave no
+   * attributes, and states depths in the mariner's unit — once, for every
+   * shell. */
+  lookout_pick_ranked (self->handle, lon, lat, &cb);
   return results;
+}
+
+void
+lk_chart_controller_aux_file (LkChartController *self,
+                              const char        *cell,
+                              const char        *name,
+                              const guint8     **out_bytes,
+                              gsize             *out_length,
+                              const char       **out_mime)
+{
+  g_return_if_fail (out_bytes != NULL && out_length != NULL && out_mime != NULL);
+
+  *out_bytes = NULL;
+  *out_length = 0;
+  *out_mime = NULL;
+
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || cell == NULL || name == NULL)
+    return;
+
+  /* The bytes belong to the handle and stay valid until lookout_close. */
+  lookout_aux_file (self->handle, cell, name, out_bytes, out_length, out_mime);
 }

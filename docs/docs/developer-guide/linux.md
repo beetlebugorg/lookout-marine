@@ -13,14 +13,54 @@ behaviour.
 
 ![Annapolis Harbor and the Naval Academy, day scheme](../img/linux-day.png)
 
-The left side of the headerbar has the open control, the recents list, the zoom
-controls, the fit control, and the north-up control. The right side has the search
-control, the display menu, and the settings control.
+The titlebar carries the name of the app and the window controls, and nothing
+else. Every control that acts on the chart is a bubble above the chart, which is
+where the SwiftUI shell, the WinUI 3 shell, and the Compose shell put it. No
+control is in two places, and the chart gets the whole window.
 
-The chrome floats above the chart. The HUD bar shows the coordinate of the pointer,
-or the coordinate of the center. It also shows an amber overscale badge when the
-view is finer than the data permits, then the scale, the zoom, and the scheme. The
-zoom buttons and the compass are above the corners of the chart.
+The layout is the layout of every host:
+
+| Position | Content |
+|---|---|
+| Top left | The search control. It reveals the coordinate go-to. |
+| Top right | The north control. The mark turns with the view. A click sets the chart north-up. |
+| Bottom right | Fit, zoom in, zoom out, the display menu, and the settings control. |
+| Bottom left | The distance bar. |
+| Bottom center | The readouts capsule. |
+| Top center | The build indicator, while the chart fills in. |
+
+The readouts capsule shows the navigational purpose band, the scale, the zoom, and
+the position. The position is the position of the pointer, or the position of the
+center when the pointer is outside the chart. An amber badge appears beside them
+when the view is finer than the data permits. The scale is also a control: a click
+opens the scale entry, where you type a scale or select a band. A narrow window
+drops the band and takes a smaller type, which is the rule the phone shells use.
+
+## The pick report
+
+A click on the chart marks the object and opens the report beside the mark.
+
+The **engine** composes the report. The core emits `{"report":…,"s57":…}` for each
+picked feature, which is the decoded page beside the raw payload. Every shell only
+parses that and lays it out; `tile57_s57_report` decides what a mariner reads, one
+time, for all of them. The app calls `lookout_pick_ranked`, so the core also
+removes the meta objects that say nothing, demotes a feature that has no
+attributes, and states each depth in the unit of the mariner.
+
+The card shows the operative fact as the title, what the object is under it, the
+notes of the cell first, then the attributes in chart language. The provenance is
+one line at the foot. The raw S-57 rows are one fold below that, and the copy
+control puts them on the clipboard, which is how you report a problem with a
+chart. A pick that finds several objects gets a column of them beside the report.
+
+The card stands above the mark, or below it when the space above is too small. It
+never covers the readouts, and a long report scrolls instead of growing. Any
+movement of the camera retires the report, so it never floats above water that it
+does not describe. **Escape** closes it.
+
+GLib has no JSON reader, and json-glib is not a dependency of GTK. Therefore
+`src/lk-json.c` reads the payload. It is small, and it adds no prerequisite for a
+packager.
 
 The full mariner panel is a separate window. Press **Ctrl+,** to open it. The
 panel is not modal, and the chart stays usable while the panel is open. The panel
@@ -158,12 +198,14 @@ the most recent chart. Then it looks for
 | File | Function |
 |------|----------|
 | `src/main.c` | The `GtkApplication` entry point, the CSS, and the accelerators |
-| `src/lk-window.c` | The window: the headerbar, the chart, the status bar, the actions, and the open dialog |
+| `src/lk-window.c` | The window: the titlebar, the chart, the floating chrome, the actions, and the open dialog |
 | `src/lk-chart-view.c` | The chart widget. It owns the surface, the transparent hole, and all input. |
 | `src/lk-chart-controller.c` | The one `lookout*` handle, every `lookout_*` call, and the render loop |
 | `src/lk-native-surface.c` | The X11 child window or the Wayland subsurface that the chart draws into |
-| `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate parser |
-| `src/lk-hud.c` | The status-bar readouts, the pick report, and the DMS format |
+| `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate and scale parsers |
+| `src/lk-hud.c` | The readouts capsule, the distance bar, the north control, the scale entry, and the formats |
+| `src/lk-pick-report.c` | The pick report: the decode, the card, and the placement of the callout |
+| `src/lk-json.c` | The JSON reader for the payload of a pick |
 | `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
 | `src/lk-settings-window.c` | The mariner panel (Display, Depths, Text, Charts, Advanced) |
