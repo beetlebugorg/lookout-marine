@@ -11,31 +11,25 @@
 
 /* Degrees, minutes and seconds with a hemisphere. The longitude has three
  * degree digits, so a pair keeps its column width. It agrees with
- * CoordFormat.dms (macOS and iOS), lkw::FormatCoord (Windows) and Hud.kt
+ * CoordFormat.dm (macOS and iOS), lkw::FormatCoord (Windows) and Hud.kt
  * (Android). Each host prints the same string. */
 char *
-lk_coord_format_dms (double value, gboolean is_lat)
+lk_coord_format_dm (double value, gboolean is_lat)
 {
   const char *hemi = is_lat ? (value >= 0 ? "N" : "S") : (value >= 0 ? "E" : "W");
   double magnitude = fabs (value);
   int degrees = (int) magnitude;
-  int minutes = (int) ((magnitude - degrees) * 60.0);
-  double seconds = ((magnitude - degrees) * 60.0 - minutes) * 60.0;
+  double minutes = (magnitude - degrees) * 60.0;
 
-  /* Carry the rounding. 59.96" prints as 60.0", which is the next minute. */
-  if (llround (seconds * 10.0) >= 600)
+  /* Carry the rounding. 59.9996' prints as 60.000', the next degree. */
+  if (llround (minutes * 1000.0) >= 60000)
     {
-      seconds = 0.0;
-      minutes++;
-    }
-  if (minutes >= 60)
-    {
-      minutes = 0;
+      minutes = 0.0;
       degrees++;
     }
 
-  return g_strdup_printf (is_lat ? "%02d°%02d'%04.1f\"%s" : "%03d°%02d'%04.1f\"%s",
-                          degrees, minutes, seconds, hemi);
+  return g_strdup_printf (is_lat ? "%02d°%06.3f'%s" : "%03d°%06.3f'%s",
+                          degrees, minutes, hemi);
 }
 
 /* The full 1:N with group separators: 1:13,267. The separator is a comma on
@@ -327,8 +321,8 @@ lk_hud_update_coord (LkHudCapsule *capsule)
   double lon = cursor ? lk_app_model_get_cursor_lon (capsule->model)
                       : lk_app_model_get_center_lon (capsule->model);
 
-  g_autofree char *lat_s = lk_coord_format_dms (lat, TRUE);
-  g_autofree char *lon_s = lk_coord_format_dms (lon, FALSE);
+  g_autofree char *lat_s = lk_coord_format_dm (lat, TRUE);
+  g_autofree char *lon_s = lk_coord_format_dm (lon, FALSE);
   g_autofree char *text = g_strdup_printf ("%s %s", lat_s, lon_s);
 
   gtk_label_set_text (GTK_LABEL (capsule->coord), text);

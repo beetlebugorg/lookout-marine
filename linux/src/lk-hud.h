@@ -61,7 +61,7 @@ GtkWidget *lk_bubble_menu_new (const char *icon_name, const char *tooltip, GMenu
 /* ---- readout formatting ------------------------------------------------- */
 
 /* One half of a position, in degrees, minutes and seconds: 38°58'34.8"N. */
-char *lk_coord_format_dms (double value, gboolean is_lat);
+char *lk_coord_format_dm (double value, gboolean is_lat);
 
 /* The full scale with group separators, as every shell prints it: 1:13,267. */
 char *lk_format_scale (double denominator);

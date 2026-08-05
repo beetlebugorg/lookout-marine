@@ -36,6 +36,7 @@
 		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
 		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
+		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
 		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
 		CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
 		D3A82191350619AF27200EF4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
@@ -74,6 +75,7 @@
 		2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		59E5805049B75D0B7A5BA9C5 /* PickReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReport.swift; sourceTree = "<group>"; };
+		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
 		64750619C04C6E8FC58ADF3C /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
 		684AE423C6C360B8C64E8187 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
@@ -127,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
+				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
 				F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */,
 			);
 			path = UITests;
@@ -405,6 +408,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
+				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
 				50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
