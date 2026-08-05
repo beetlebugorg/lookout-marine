@@ -129,6 +129,10 @@ final class AppModel: ObservableObject {
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
     // panel and Settings scene are AppKit-native)
     @Published var showImporter = false
+    /// The Add Raster Charts picker. Separate from `showImporter` because the
+    /// two import different things to different places: an ENC is copied into
+    /// the container and opened, a raster chart is added to the underlay.
+    @Published var showRasterImporter = false
     @Published var showSettings = false
     /// Which settings tab shows: 0 Display, 1 Depths, 2 Text, 3 Charts,
     /// 4 Advanced. The screenshot hook sets it.

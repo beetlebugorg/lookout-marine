@@ -147,7 +147,11 @@ private struct ChartsSections: View {
                 }
             }
             Button {
+                #if os(macOS)
                 model.presentRasterPanel()
+                #else
+                model.showRasterImporter = true
+                #endif
             } label: {
                 Label("Add Raster Charts…", systemImage: "plus")
             }

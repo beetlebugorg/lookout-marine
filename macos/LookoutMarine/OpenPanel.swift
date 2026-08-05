@@ -61,6 +61,12 @@ extension AppModel {
         addRasterCharts(picked)
     }
 
+}
+#endif
+
+import Foundation
+
+extension AppModel {
     /// Every raster chart under a directory. `.mbtiles` today; the extension is
     /// a hint only — the engine decides by what the file IS.
     func rasterPathsIn(_ dir: String) -> [String] {
@@ -72,7 +78,6 @@ extension AppModel {
         return paths.sorted()
     }
 }
-#endif
 
 #if os(iOS)
 import Foundation
@@ -103,6 +108,55 @@ extension AppModel {
         var isDir: ObjCBool = false
         fm.fileExists(atPath: dest.path, isDirectory: &isDir)
         if isDir.boolValue { openChartDirectory(dest.path) } else { openChart(dest.path) }
+    }
+
+    /// Install the raster charts picked on iOS.
+    ///
+    /// A chart ALREADY IN THE APP'S OWN DOCUMENTS is used where it lies. The
+    /// app publishes that directory to Files (UIFileSharingEnabled), so the way
+    /// to carry these aboard is to drop them in from a Mac or a drive and pick
+    /// them here. They are half-gigabyte downloads and copying one would spend
+    /// the space twice.
+    ///
+    /// Anything else is copied in, because the picker's security scope ends
+    /// with the URL and the engine holds the file open — mmapped — for as long
+    /// as the chart is installed.
+    func importRasterCharts(_ urls: [URL]) {
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = docs.appendingPathComponent("Raster", isDirectory: true)
+        var picked: [String] = []
+        var failed: [String] = []
+
+        for url in urls {
+            var isDir: ObjCBool = false
+            if url.path.hasPrefix(docs.path), fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+                picked.append(contentsOf: isDir.boolValue ? rasterPathsIn(url.path) : [url.path])
+                continue
+            }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            fm.fileExists(atPath: url.path, isDirectory: &isDir)
+            let sources = isDir.boolValue ? rasterPathsIn(url.path) : [url.path]
+            for src in sources {
+                let dest = dir.appendingPathComponent((src as NSString).lastPathComponent)
+                do {
+                    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                    if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                    try fm.copyItem(atPath: src, toPath: dest.path)
+                    picked.append(dest.path)
+                } catch {
+                    failed.append((src as NSString).lastPathComponent)
+                }
+            }
+        }
+
+        if !failed.isEmpty {
+            openError = failed.count == 1
+                ? "Couldn't copy \(failed[0]) into the app."
+                : "Couldn't copy \(failed.count) raster charts into the app."
+        }
+        addRasterCharts(picked)
     }
 }
 #endif

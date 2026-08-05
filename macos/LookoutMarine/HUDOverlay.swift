@@ -75,34 +75,29 @@ struct ReadoutsCapsule: View {
             // is carried here and pick one directly.
             if !visibleRasterSets.isEmpty {
                 separator
+                #if os(macOS)
                 // A plain Button, not a Menu: a macOS Menu renders its own
                 // label chrome and drops the pill's fill and tint. The choice
-                // list rides on the context menu instead.
-                Button { showRasterMenu() } label: {
-                    HStack(spacing: 5) {
-                        Text(pillName.uppercased())
-                        if rasterState != .on {
-                            Text("|").foregroundStyle(rasterTint.opacity(0.5))
-                            Text(rasterState == .off ? "OFF" : "ENC OFF")
-                        }
-                        // The chevron is a promise: a click opens a list. It is
-                        // therefore always shown, because a click always does.
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
-                            .opacity(0.7)
-                    }
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(rasterTint)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(rasterTint.opacity(rasterState == .off ? 0.28 : 0.18),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help(rasterHelp)
-                .accessibilityLabel(rasterHelp)
-                .chromeHitRegion("raster-pill")
+                // list rides on an AppKit menu instead.
+                Button { showRasterMenu() } label: { rasterPill }
+                    .buttonStyle(.plain)
+                    .help(rasterHelp)
+                    .accessibilityLabel(rasterHelp)
+                    .accessibilityIdentifier("raster-pill")
+                    .accessibilityValue(rasterStateName)
+                    .chromeHitRegion("raster-pill")
+                #else
+                // A SwiftUI Menu on iOS keeps the label exactly as given, so
+                // the pill holds its fill and tint and the touch target is the
+                // whole capsule. There is no pointer to pop an AppKit menu at.
+                Menu { rasterMenuItems } label: { rasterPill }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(rasterHelp)
+                    .accessibilityIdentifier("raster-pill")
+                    .accessibilityValue(rasterStateName)
+                    .chromeHitRegion("raster-pill")
+                #endif
             }
         }
         .font(.system(size: compact ? 12 : 14).monospacedDigit())
@@ -118,6 +113,60 @@ struct ReadoutsCapsule: View {
         .chromeHitRegion("hud-capsule")
     }
 
+    /// The pill itself. The colour and the text carry the state; both hosts
+    /// draw exactly this, so the two platforms cannot drift apart.
+    private var rasterPill: some View {
+        HStack(spacing: 5) {
+            Text(pillName.uppercased())
+            if rasterState != .on {
+                Text("|").foregroundStyle(rasterTint.opacity(0.5))
+                Text(rasterState == .off ? "OFF" : "ENC OFF")
+            }
+            // The chevron is a promise: a press opens a list. It is therefore
+            // always shown, because a press always does.
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .opacity(0.7)
+        }
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(rasterTint)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(rasterTint.opacity(rasterState == .off ? 0.28 : 0.18),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    #if os(iOS)
+    /// The same choices the Mac's menu offers, as SwiftUI.
+    @ViewBuilder private var rasterMenuItems: some View {
+        ForEach(visibleRasterSets) { set in
+            Button {
+                model.selectRasterSet(set.id)
+            } label: {
+                if set.id == model.rasterActive {
+                    Label(set.name, systemImage: "checkmark")
+                } else {
+                    Text(set.name)
+                }
+            }
+        }
+        Button { model.selectRasterSet(-1) } label: {
+            if model.rasterActive < 0 {
+                Label("None", systemImage: "checkmark")
+            } else {
+                Text("None")
+            }
+        }
+        Divider()
+        Button(model.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") {
+            model.toggleChart()
+        }
+        Button("Add Raster Charts…") { model.showRasterImporter = true }
+    }
+    #endif
+
+    #if os(macOS)
     /// Pop the set list at the pointer.
     ///
     /// AppKit rather than a SwiftUI `Menu`: a Menu renders its own label chrome
@@ -151,6 +200,7 @@ struct ReadoutsCapsule: View {
         objc_setAssociatedObject(menu, Unmanaged.passUnretained(menu).toOpaque(), target, .OBJC_ASSOCIATION_RETAIN)
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
+    #endif
 
     private enum RasterState { case on, off, chartOff }
 
@@ -184,6 +234,17 @@ struct ReadoutsCapsule: View {
         rasterState == .off ? Chrome.amber : Chrome.accent
     }
 
+    /// The state as one stable word, for assistive technology and for the UI
+    /// tests. The help text reads well and changes wording freely; this does
+    /// not, so a test can rely on it.
+    private var rasterStateName: String {
+        switch rasterState {
+        case .on: return "drawn"
+        case .off: return "off"
+        case .chartOff: return "drawn, ENC hidden"
+        }
+    }
+
     private var rasterHelp: String {
         let n = pillName
         let more = visibleRasterSets.count > 1
@@ -206,6 +267,7 @@ struct ReadoutsCapsule: View {
     }
 }
 
+#if os(macOS)
 /// Carries the pill menu's clicks back to the model. NSMenuItem needs an
 /// ObjC target, which a SwiftUI view is not.
 @MainActor
@@ -216,6 +278,7 @@ private final class RasterMenuTarget: NSObject {
     @objc func toggleChart() { model.toggleChart() }
     @objc func add() { model.presentRasterPanel() }
 }
+#endif
 
 /// The scale entry. Type a scale or select a band, and the view zooms to it.
 struct ScaleEntryPanel: View {
