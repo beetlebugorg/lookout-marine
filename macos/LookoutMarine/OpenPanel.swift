@@ -29,6 +29,48 @@ extension AppModel {
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         if isDir.boolValue { openChartDirectory(url.path) } else { openChart(url.path) }
     }
+
+    /// Present the Add Raster Charts panel. Multiple selection and folders both, because
+    /// the way this material actually ships is several files at once: the same
+    /// water from ArcGIS, Bing and Google side by side, or a folder of adjacent
+    /// regions from one provider.
+    ///
+    /// No content-type restriction, for the same reason as the chart panel — a
+    /// `.mbtiles` UTI is not registered on anyone's Mac, and greying out the
+    /// mariner's own downloads would be worse than letting the engine say no.
+    func presentRasterPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.title = "Add Raster Charts"
+        panel.message = "Choose raster charts (.mbtiles) - satellite imagery or another vendor's chart - or a folder of them."
+        guard panel.runModal() == .OK else { return }
+
+        var picked: [String] = []
+        for url in panel.urls {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                picked.append(contentsOf: rasterPathsIn(url.path))
+            } else {
+                picked.append(url.path)
+            }
+        }
+        addRasterCharts(picked)
+    }
+
+    /// Every raster chart under a directory. `.mbtiles` today; the extension is
+    /// a hint only — the engine decides by what the file IS.
+    func rasterPathsIn(_ dir: String) -> [String] {
+        guard let en = FileManager.default.enumerator(atPath: dir) else { return [] }
+        var paths: [String] = []
+        for case let rel as String in en where rel.lowercased().hasSuffix(".mbtiles") {
+            paths.append((dir as NSString).appendingPathComponent(rel))
+        }
+        return paths.sorted()
+    }
 }
 #endif
 

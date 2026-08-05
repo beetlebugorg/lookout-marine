@@ -91,6 +91,74 @@ private struct ChartsSections: View {
         } footer: {
             Text("A folder of baked cells opens as one seamless library.").captionFooter()
         }
+
+        // A raster chart is a different KIND of chart, so it gets its own section
+        // rather than a mixed list: one is the survey, the other is a picture of
+        // the water, and a mariner must never lose track of which is which.
+        Section {
+            if model.rasterPaths.isEmpty {
+                Text("No raster charts").foregroundStyle(.secondary)
+            } else {
+                // Grouped by provider, because a set is what the pill cycles and
+                // what covers a piece of water. A mariner turns off Navionics,
+                // not four files that happen to be Navionics.
+                ForEach(model.rasterGroups, id: \.name) { group in
+                    let on = model.rasterGroupOn(group.paths)
+                    HStack {
+                        Toggle("", isOn: Binding(
+                            get: { on },
+                            set: { model.setRasterGroupEnabled(group.paths, $0) }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        Text(group.name)
+                            .fontWeight(.medium)
+                            .foregroundStyle(on ? .primary : .secondary)
+                        Spacer()
+                        Text(group.paths.count == 1 ? "1 file" : "\(group.paths.count) files")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(group.paths, id: \.self) { p in
+                        HStack {
+                            Toggle("", isOn: Binding(
+                                get: { !model.rasterOff.contains(p) },
+                                set: { model.setRasterEnabled(p, $0) }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            Text(displayName(p))
+                                .font(.caption)
+                                .lineLimit(1).truncationMode(.middle)
+                                .foregroundStyle(model.rasterOff.contains(p) ? .secondary : .primary)
+                            Spacer()
+                            Button {
+                                model.removeRasterChart(p)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Remove. Takes effect the next time a chart opens.")
+                        }
+                        .padding(.leading, 22)
+                    }
+                }
+            }
+            Button {
+                model.presentRasterPanel()
+            } label: {
+                Label("Add Imagery…", systemImage: "plus")
+            }
+        } header: {
+            Text("Imagery")
+        } footer: {
+            Text("Satellite imagery and other picture charts you supply (.mbtiles). "
+                 + "Pick several at once, or a folder. The chart draws over them, "
+                 + "and drops its depth and land shading only where they cover.")
+                .captionFooter()
+        }
     }
 
     private func displayName(_ path: String) -> String {
