@@ -16,6 +16,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
@@ -61,6 +73,10 @@ fun ReadoutsCapsule(
     compact: Boolean,
     onScaleTap: () -> Unit,
     modifier: Modifier = Modifier,
+    raster: RasterState = RasterState(),
+    onRasterSelect: (Int) -> Unit = {},
+    onToggleChart: () -> Unit = {},
+    onAddRasterCharts: () -> Unit = {},
 ) {
     Surface(
         modifier = modifier.height(Chrome.capsule),
@@ -119,6 +135,126 @@ fun ReadoutsCapsule(
             if (readouts.overscale > OVERSCALE_VISIBLE_AT) {
                 OverscaleBadge(readouts.overscale)
             }
+            // The raster-chart pill. It appears only where a raster chart is in
+            // view, at any zoom, and goes when the mariner leaves the coverage.
+            // Where they carry nothing there is nothing to press.
+            if (raster.visible.isNotEmpty()) {
+                Separator()
+                RasterPill(
+                    raster = raster,
+                    onSelect = onRasterSelect,
+                    onToggleChart = onToggleChart,
+                    onAdd = onAddRasterCharts,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Names the raster chart set drawn over this view and opens the list of what
+ * covers it.
+ *
+ * The COLOUR reports the raster chart, not the ENC: blue while the picture is
+ * drawn, amber while one is here and off. Hiding the ENC above it does not
+ * change the colour, because the picture is still drawn — the "ENC OFF" text
+ * carries that, and a warning colour there would say the picture was off when
+ * it is the only thing on screen.
+ */
+@Composable
+private fun RasterPill(
+    raster: RasterState,
+    onSelect: (Int) -> Unit,
+    onToggleChart: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val visible = raster.visible
+    // The set the pill NAMES: the drawn one when it is in view, otherwise the
+    // first one that is. Naming one set and reporting the state of another is
+    // how a pill comes to read "NAVIONICS | OFF" while Navionics is drawn.
+    val named = visible.firstOrNull { it.id == raster.active } ?: visible.firstOrNull()
+    val drawn = named != null && named.id == raster.active
+    val amber = Color(0xFFFFA726)
+    val tint = if (drawn) MaterialTheme.colorScheme.primary else amber
+    val stateWord = when {
+        !drawn -> "off"
+        raster.chartHidden -> "drawn, ENC hidden"
+        else -> "drawn"
+    }
+
+    Box {
+        Surface(
+            color = tint.copy(alpha = if (drawn) 0.18f else 0.28f),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { open = true }
+                .semantics {
+                    contentDescription = "Raster chart ${named?.name ?: ""}, $stateWord"
+                },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = (named?.name ?: "").uppercase(Locale.US),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = tint,
+                    maxLines = 1,
+                )
+                if (!drawn || raster.chartHidden) {
+                    Text("|", color = tint.copy(alpha = 0.5f),
+                         style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        text = if (!drawn) "OFF" else "ENC OFF",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = tint,
+                        maxLines = 1,
+                    )
+                }
+                // The chevron is a promise: a press opens a list. It is
+                // therefore always shown, because a press always does.
+                Icon(
+                    imageVector = Icons.Filled.ArrowDropDown,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            visible.forEach { set ->
+                DropdownMenuItem(
+                    text = { Text(set.name) },
+                    leadingIcon = {
+                        if (set.id == raster.active) {
+                            Icon(Icons.Filled.Check, contentDescription = null)
+                        }
+                    },
+                    onClick = { open = false; onSelect(set.id) },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("None") },
+                leadingIcon = {
+                    if (raster.active < 0) Icon(Icons.Filled.Check, contentDescription = null)
+                },
+                onClick = { open = false; onSelect(-1) },
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text(if (raster.chartHidden) "Show ENC Over Raster" else "Hide ENC Over Raster") },
+                onClick = { open = false; onToggleChart() },
+            )
+            DropdownMenuItem(
+                text = { Text("Add Raster Charts…") },
+                onClick = { open = false; onAdd() },
+            )
         }
     }
 }
