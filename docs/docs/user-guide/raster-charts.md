@@ -80,6 +80,11 @@ picture can be drawn over a piece of water at a time.
 ⌘I past the last set turns off the sets covering the water in view. The sets
 covering other water stay as you left them.
 
+When you are zoomed out far enough to see two coasts at once, ⌘I works on the
+one under the middle of the screen. If neither is under the middle, it works on
+the one filling most of the screen. The other coast is not changed. Centre the
+coast you want to work on, or zoom in to it.
+
 ## The pill
 
 The pill sits at the right of the readouts. It appears whenever **a raster chart
