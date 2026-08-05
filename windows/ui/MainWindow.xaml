@@ -61,15 +61,13 @@
                 <FontIcon Glyph="&#xE738;" FontSize="18" />
             </Button>
         </StackPanel>
-        <StackPanel x:Name="RightBubbles" Orientation="Horizontal" Spacing="10"
-                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16">
-            <Button x:Name="LayersBtn" Style="{StaticResource Bubble}">
-                <FontIcon Glyph="&#xE81E;" FontSize="18" />
-            </Button>
-            <Button x:Name="SettingsBtn" Style="{StaticResource Bubble}">
-                <FontIcon Glyph="&#xE713;" FontSize="18" />
-            </Button>
-        </StackPanel>
+        <!-- Chart opening lives in the empty state, Ctrl+O, and Settings ▸
+             Charts — the chart chrome carries no open button, matching the
+             macOS and Android shells. -->
+        <Button x:Name="SettingsBtn" Style="{StaticResource Bubble}"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16">
+            <FontIcon Glyph="&#xE713;" FontSize="18" />
+        </Button>
 
         <!-- bottom-left: scale bar -->
         <StackPanel x:Name="ScaleBar" HorizontalAlignment="Left" VerticalAlignment="Bottom"
@@ -89,21 +87,104 @@
             </StackPanel>
         </Border>
 
-        <!-- bottom-left: identify results -->
-        <Border x:Name="IdentifyPanel" CornerRadius="8" Padding="10"
-                Background="#F2F8F8F8" BorderBrush="#33000000" BorderThickness="1"
-                HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                Margin="12,0,0,52" MaxWidth="360" Visibility="Collapsed">
-            <StackPanel Spacing="6">
-                <Grid>
-                    <TextBlock Text="Pick report" FontWeight="SemiBold" FontSize="13" />
-                    <Button x:Name="IdentifyClose" HorizontalAlignment="Right"
-                            Padding="4" Background="Transparent" BorderThickness="0">
-                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+        <!-- pick marker: a white ring under an S-52 magenta ring, so the mark
+             stays visible on a night chart. Placed in code at the pick point. -->
+        <Grid x:Name="PickMarker" Width="34" Height="34" Visibility="Collapsed"
+              HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False">
+            <Ellipse Stroke="#D9FFFFFF" StrokeThickness="4" Margin="3" />
+            <Ellipse Stroke="#DB198C" StrokeThickness="2" Margin="3" />
+        </Grid>
+
+        <!-- pick report card: a callout placed beside the mark in code. The
+             list column shows only when the pick found more than one object;
+             every dynamic row is built in MainWindow.Pick.cpp. -->
+        <Border x:Name="PickCard" CornerRadius="12" Background="White"
+                BorderBrush="#33000000" BorderThickness="1" Visibility="Collapsed"
+                HorizontalAlignment="Left" VerticalAlignment="Top">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid x:Name="PickListPane" Width="200" Background="#80F0F0F0"
+                      Visibility="Collapsed" CornerRadius="12,0,0,12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="PickListHeader" FontSize="11" FontWeight="SemiBold"
+                               CharacterSpacing="80" Foreground="#6B6B6B"
+                               Margin="14,12,14,6" Text="OBJECTS" />
+                    <ScrollViewer x:Name="PickListScroll" Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="PickList" Margin="6,0,6,8" Spacing="2" />
+                    </ScrollViewer>
+                    <!-- the chart's notes (meta objects) pinned at the column's
+                         floor: they keep one place and never scroll away -->
+                    <Border x:Name="PickNotesShelfRule" Grid.Row="2" BorderBrush="#DDDDDD"
+                            BorderThickness="0,1,0,0" Visibility="Collapsed">
+                        <StackPanel x:Name="PickNotesShelf" Margin="6,6,6,8" Spacing="2" />
+                    </Border>
+                </Grid>
+                <Rectangle x:Name="PickListRule" Grid.Column="0" Width="1" Fill="#DDDDDD"
+                           HorizontalAlignment="Right" Visibility="Collapsed" />
+                <Grid Grid.Column="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid Margin="16,12,8,8" ColumnSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock x:Name="PickTitle" FontSize="19" FontWeight="Bold"
+                                       Foreground="#1A1A1A" TextTrimming="CharacterEllipsis"
+                                       MaxLines="1" Text="" />
+                            <!-- reserved even when empty: the header keeps one
+                                 height for every object so rows never shift -->
+                            <TextBlock x:Name="PickSubtitle" FontSize="13" Foreground="#6B6B6B"
+                                       TextTrimming="CharacterEllipsis" MaxLines="1"
+                                       Text=" " />
+                        </StackPanel>
+                        <Button x:Name="PickCopyBtn" Grid.Column="1" Padding="8"
+                                Background="Transparent" BorderThickness="0"
+                                VerticalAlignment="Top" AutomationProperties.Name="Copy this report">
+                            <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                        </Button>
+                        <Button x:Name="PickCloseBtn" Grid.Column="2" Padding="8"
+                                Background="Transparent" BorderThickness="0"
+                                VerticalAlignment="Top" AutomationProperties.Name="Close the pick report">
+                            <FontIcon Glyph="&#xE711;" FontSize="14" />
+                        </Button>
+                    </Grid>
+                    <Rectangle Grid.Row="1" Height="1" Fill="#DDDDDD" />
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="PickBody" Margin="0,8,0,8" Spacing="0" />
+                    </ScrollViewer>
+                    <Rectangle Grid.Row="3" Height="1" Fill="#DDDDDD" />
+                    <TextBlock x:Name="PickFootnote" Grid.Row="4" FontSize="11"
+                               Foreground="#6B6B6B" TextWrapping="Wrap"
+                               IsTextSelectionEnabled="True" Margin="16,6,16,4" Text="" />
+                    <Button x:Name="PickFoldBtn" Grid.Row="5" HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left" Padding="14,6,14,8"
+                            Background="Transparent" BorderThickness="0">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon x:Name="PickFoldIcon" Glyph="&#xE76C;" FontSize="10"
+                                      Foreground="#6B6B6B" />
+                            <TextBlock x:Name="PickFoldLabel" FontSize="12" Foreground="#6B6B6B"
+                                       Text="S-57 source attributes" />
+                        </StackPanel>
                     </Button>
                 </Grid>
-                <ItemsControl x:Name="IdentifyList" />
-            </StackPanel>
+            </Grid>
         </Border>
 
         <!-- empty state -->
@@ -147,6 +228,44 @@
             </Grid>
         </Border>
 
+        <!-- bottom-center: the zoom-to-scale panel, above the readout capsule.
+             Presets are built in code (MainWindow.Scale.cpp). -->
+        <Border x:Name="ScalePanel" Width="340" CornerRadius="12" Background="White"
+                BorderBrush="#33000000" BorderThickness="1" Padding="14"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,70" Visibility="Collapsed">
+            <StackPanel Spacing="10">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock Text="Zoom to scale" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="#1A1A1A" />
+                        <TextBlock x:Name="ScaleNow" FontSize="12" Foreground="#6B6B6B"
+                                   VerticalAlignment="Center" Text="" />
+                    </StackPanel>
+                    <Button x:Name="ScaleClose" HorizontalAlignment="Right" Padding="4"
+                            Background="Transparent" BorderThickness="0">
+                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                    </Button>
+                </Grid>
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="1:" FontSize="17" FontWeight="SemiBold"
+                               Foreground="#1A1A1A" VerticalAlignment="Center" />
+                    <TextBox x:Name="ScaleBox" Grid.Column="1" FontSize="17"
+                             FontWeight="SemiBold" PlaceholderText="25,000" />
+                    <Button x:Name="ScaleGo" Grid.Column="2" Content="Go" IsEnabled="False"
+                            VerticalAlignment="Stretch" />
+                </Grid>
+                <TextBlock x:Name="ScaleHint" FontSize="12" Foreground="#6B6B6B"
+                           TextWrapping="Wrap" Text="Type a scale, for example 25,000 or 1:25k." />
+                <StackPanel x:Name="ScalePresetRows" Spacing="6" />
+            </StackPanel>
+        </Border>
+
         <!-- bottom-center: readout capsule -->
         <Border x:Name="HudPill" Height="44" CornerRadius="22" Background="White"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
@@ -156,8 +275,13 @@
                 <TextBlock x:Name="HudBand" FontSize="14" FontWeight="SemiBold"
                            Foreground="#1A1A1A" VerticalAlignment="Center" Text="—" />
                 <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
-                <TextBlock x:Name="HudScale" FontSize="14" FontWeight="SemiBold"
-                           Foreground="#1B49C4" VerticalAlignment="Center" Text="1:—" />
+                <!-- the one control in the capsule: click to zoom to a scale -->
+                <Button x:Name="HudScaleBtn" Padding="4,2" Background="Transparent"
+                        BorderThickness="0" CornerRadius="6" VerticalAlignment="Center"
+                        AutomationProperties.Name="Zoom to a scale">
+                    <TextBlock x:Name="HudScale" FontSize="14" FontWeight="SemiBold"
+                               Foreground="#1B49C4" Text="1:—" />
+                </Button>
                 <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
                 <TextBlock x:Name="HudZoom" FontSize="14" Foreground="#6B6B6B"
                            VerticalAlignment="Center" Text="z—" />
@@ -171,5 +295,50 @@
                 </Border>
             </StackPanel>
         </Border>
+
+        <!-- startup loader: the S-52 NODATA day blue under a 22% scrim, so
+             launch, loader and first frame read as one continuous surface.
+             Three phases (baking atlas / mapping cells / tessellating) set in
+             MainWindow.Loader.cpp. -->
+        <Grid x:Name="StartupLoader" Background="#FF93AEBB" Visibility="Collapsed">
+            <Grid Background="#38000000" />
+            <Border CornerRadius="12" Background="#F2F8F8F8" BorderBrush="#33000000"
+                    BorderThickness="1" Padding="28,22"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="12" HorizontalAlignment="Center">
+                    <!-- a hand-drawn compass mark: ring, four ticks, red north needle -->
+                    <Grid Width="56" Height="56" HorizontalAlignment="Center">
+                        <Ellipse Stroke="#1A1A1A" StrokeThickness="2.5" />
+                        <Rectangle Width="2.5" Height="6" Fill="#1A1A1A"
+                                   HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,4,0,0" />
+                        <Rectangle Width="2.5" Height="6" Fill="#1A1A1A"
+                                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,4" />
+                        <Rectangle Width="6" Height="2.5" Fill="#1A1A1A"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        <Rectangle Width="6" Height="2.5" Fill="#1A1A1A"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <Polygon Points="28,13 23,31 33,31" Fill="#D42E2E" />
+                    </Grid>
+                    <TextBlock Text="Lookout Marine" FontSize="20" FontWeight="SemiBold"
+                               Foreground="#1A1A1A" HorizontalAlignment="Center" />
+                    <TextBlock x:Name="LoaderPhase" FontSize="13" FontWeight="Medium"
+                               Foreground="#1A1A1A" HorizontalAlignment="Center" Text="" />
+                    <ProgressBar Width="240" IsIndeterminate="True" />
+                    <TextBlock x:Name="LoaderNote" FontSize="12" Foreground="#6B6B6B"
+                               HorizontalAlignment="Center" Visibility="Collapsed" Text="" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- full-size picture viewer for a PICREP image; tap anywhere closes -->
+        <Grid x:Name="PictureViewer" Background="#8C000000" Visibility="Collapsed">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                <Border CornerRadius="10">
+                    <Image x:Name="PictureImage" Stretch="Uniform" />
+                </Border>
+                <TextBlock x:Name="PictureName" FontSize="12" Foreground="#D9FFFFFF"
+                           HorizontalAlignment="Center" Text="" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </Window>

@@ -21,6 +21,13 @@ int lk_coord_parse(const char *text, double *out_lat, double *out_lon);
  * (e.g. "38°58.80'N"). is_lat picks N/S vs E/W. dst_len should be >= 16. */
 void lk_coord_format_dms(double value, int is_lat, char *dst, int dst_len);
 
+/* Parse a chart scale: "25000", "25,000", "1:25000", "25k", "1:2.5M". Text
+ * before the last ':' is discarded; whitespace and commas strip; a trailing
+ * k/m multiplies by 1e3/1e6. Range-gated to [100, 100,000,000] — a value
+ * outside that is not a chart scale. Ports ScaleParser (macos
+ * HUDOverlay.swift) / ScaleParser (android GoTo.kt). 1 on success. */
+int lk_scale_parse(const char *text, double *out_denom);
+
 #ifdef __cplusplus
 }
 #endif

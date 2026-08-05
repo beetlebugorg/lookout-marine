@@ -1,5 +1,6 @@
 // Chart gestures and commands, shared by the XAML pointer path and the
-// fallback wndproc.
+// fallback wndproc. A tap (drag under the slop) lands in ShowPick — the pick
+// report itself lives in MainWindow.Pick.cpp.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
@@ -87,29 +88,6 @@ namespace winrt::LookoutMarine::implementation
     {
         if (lk_controller_is_open(controller))
             lk_controller_zoom_at(controller, 1.0, x, y);
-    }
-
-    void MainWindow::ShowPick(double x, double y)
-    {
-        lk_pick_feature feats[16];
-        int n = lk_controller_pick_at(controller, x, y, feats, 16);
-        if (n <= 0)
-        {
-            IdentifyPanel().Visibility(Visibility::Collapsed);
-            return;
-        }
-        IdentifyList().Items().Clear();
-        for (int i = 0; i < n; ++i)
-        {
-            std::string line = feats[i].cls[0] != '\0' ? feats[i].cls : feats[i].s57;
-            if (feats[i].chart[0] != '\0')
-                line += std::string("  (") + feats[i].chart + ")";
-            Controls::TextBlock tb;
-            tb.Text(winrt::to_hstring(line));
-            tb.FontSize(12);
-            IdentifyList().Items().Append(tb);
-        }
-        IdentifyPanel().Visibility(Visibility::Visible);
     }
 
     void MainWindow::Command(char cmd)
