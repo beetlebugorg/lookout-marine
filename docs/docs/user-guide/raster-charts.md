@@ -62,6 +62,16 @@ regions make one set and draw as a single continuous picture.
 Compare the providers. Each shows a different day, a different tide and a
 different amount of cloud, and one of them shows the bottom.
 
+### Sets that cover different water
+
+Sets that cover different water are drawn at the same time. Carry a San
+Francisco set and an Atlantic set and each draws over its own coast. You do not
+have to switch sets when you change coasts.
+
+⌘I steps only between sets that cover the water in view. Off San Francisco it
+steps between the sets that cover San Francisco. The Atlantic set is not one of
+the steps, and it stays drawn while you compare the others.
+
 ## The pill
 
 The pill sits at the right of the readouts. It appears whenever **a raster chart
@@ -96,7 +106,7 @@ Three ways to the same thing:
 | | |
 |---|---|
 | The pill | Click it for the list. |
-| ⌘I | Step to the next set, then to none, then round again. |
+| ⌘I | Step to the next set covering this water, then to none, then round again. |
 | **Chart ▸ Raster Chart** | The same list, and **Next Raster Chart** for the step. |
 
 Use ⌘I over a reef. It opens nothing, so your eye keeps its fix and anything
