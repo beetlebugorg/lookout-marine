@@ -124,7 +124,7 @@ final class ChromeHostingController: UIHostingController<ContentView> {
             case "-":      model.zoomOut()
             case "0":      model.zoomToFit()
             case "l":      model.cycleScheme()
-            case "i" where key.modifierFlags.contains(.shift): model.presentRasterPanel()
+            case "i" where key.modifierFlags.contains(.shift): model.showRasterImporter = true
             case "i":      model.cycleRaster()
             case "h":      model.toggleChart()
             case "t":      model.toggleText()

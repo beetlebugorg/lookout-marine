@@ -21,6 +21,7 @@
 		4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
 		4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
+		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
 		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
@@ -90,6 +91,7 @@
 		D26F78CDEC3CDA7C0807297F /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterChartTests.swift; sourceTree = "<group>"; };
 		F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartInteractionTests.swift; sourceTree = "<group>"; };
 		FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LookoutMarine.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -125,6 +127,7 @@
 			isa = PBXGroup;
 			children = (
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
+				F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */,
 			);
 			path = UITests;
 			sourceTree = "<group>";
@@ -402,6 +405,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
+				50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

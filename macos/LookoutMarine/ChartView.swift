@@ -756,6 +756,11 @@ struct ChartView: View {
                       allowedContentTypes: [.item, .folder]) { result in
             if case .success(let url) = result { model.openImported(url) }
         }
+        .fileImporter(isPresented: $model.showRasterImporter,
+                      allowedContentTypes: [.item, .folder],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { model.importRasterCharts(urls) }
+        }
     }
 
     private var settingsSheetContent: some View {
