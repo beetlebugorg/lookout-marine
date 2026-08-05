@@ -255,6 +255,20 @@ pub const Gpu = struct {
     render_pass: vk.VkRenderPass = null, // -> PRESENT (window)
     off_pass: vk.VkRenderPass = null, // -> TRANSFER_SRC (offscreen)
 
+    /// The depth target. It exists for ONE job: the raster underlay writes
+    /// depth in front of the chart's opaque area fills, so those fills fail the
+    /// depth test exactly where a picture covers them and pass everywhere else.
+    /// That is how a mariner keeps the chart's depth shading outside the
+    /// coverage, and across every hole in a pyramid clipped to a coastline,
+    /// while seeing the picture under it — per pixel, with no scene rebuild.
+    ///
+    /// Transient: it is written and tested within one render pass and never
+    /// read afterwards, so a tiler keeps the samples in tile memory.
+    depth_img: vk.VkImage = null,
+    depth_mem: vk.VkDeviceMemory = null,
+    depth_view: vk.VkImageView = null,
+    depth_format: vk.VkFormat = vk.VK_FORMAT_D32_SFLOAT,
+
     set_layout_empty: vk.VkDescriptorSetLayout = null, // set 0
     set_layout_ubo: vk.VkDescriptorSetLayout = null, // sets 1 & 3 (dynamic UBO)
     set_layout_tex: vk.VkDescriptorSetLayout = null, // set 2
@@ -268,6 +282,7 @@ pub const Gpu = struct {
     pipe_layout: vk.VkPipelineLayout = null,
     pipeline: vk.VkPipeline = null, // chart
     sprite_pipeline: vk.VkPipeline = null,
+    raster_pipeline: vk.VkPipeline = null, // sprite program, depth-write on
     sdf_pipeline: vk.VkPipeline = null,
     pattern_pipeline: vk.VkPipeline = null,
 
@@ -673,7 +688,7 @@ pub const Gpu = struct {
     // ---- render passes ---------------------------------------------------------
     fn makePass(self: *Gpu, final_layout: vk.VkImageLayout) !vk.VkRenderPass {
         const samples: vk.VkSampleCountFlagBits = if (self.msaa_used) vk.VK_SAMPLE_COUNT_4_BIT else vk.VK_SAMPLE_COUNT_1_BIT;
-        var atts: [2]vk.VkAttachmentDescription = undefined;
+        var atts: [3]vk.VkAttachmentDescription = undefined;
         var natt: u32 = 1;
         atts[0] = std.mem.zeroes(vk.VkAttachmentDescription);
         atts[0].format = self.color_format;
@@ -698,18 +713,41 @@ pub const Gpu = struct {
             atts[1].initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
             atts[1].finalLayout = final_layout;
         }
+        // The depth attachment always comes last, so the colour indices above
+        // are untouched. Never stored: it is written and tested inside the pass
+        // and nothing reads it after.
+        const depth_index = natt;
+        atts[depth_index] = std.mem.zeroes(vk.VkAttachmentDescription);
+        atts[depth_index].format = self.depth_format;
+        atts[depth_index].samples = samples;
+        atts[depth_index].loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
+        atts[depth_index].storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[depth_index].stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[depth_index].stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[depth_index].initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+        atts[depth_index].finalLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        var depth_ref = vk.VkAttachmentReference{
+            .attachment = depth_index,
+            .layout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        natt += 1;
+
         var sub = std.mem.zeroes(vk.VkSubpassDescription);
         sub.pipelineBindPoint = vk.VK_PIPELINE_BIND_POINT_GRAPHICS;
         sub.colorAttachmentCount = 1;
         sub.pColorAttachments = &color_ref;
         if (self.msaa_used) sub.pResolveAttachments = &resolve_ref;
+        sub.pDepthStencilAttachment = &depth_ref;
         var dep = std.mem.zeroes(vk.VkSubpassDependency);
         dep.srcSubpass = vk.VK_SUBPASS_EXTERNAL;
         dep.dstSubpass = 0;
-        dep.srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep.srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dep.srcAccessMask = 0;
-        dep.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dep.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dep.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dep.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         var rp = std.mem.zeroes(vk.VkRenderPassCreateInfo);
         rp.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         rp.attachmentCount = natt;
@@ -765,7 +803,11 @@ pub const Gpu = struct {
         .{ .loc = 7, .format = vk.VK_FORMAT_R32_SFLOAT, .offset = 40 },
     };
 
-    fn buildPipeline(self: *Gpu, vspv: []const u32, fspv: []const u32, stride: u32, attrs: []const VAttr) !vk.VkPipeline {
+    /// `depth_write` is for the raster underlay alone. Everything else TESTS
+    /// depth and never writes it, which is what leaves the chart in painter's
+    /// order among its own ranges while still losing the fills the underlay
+    /// covered.
+    fn buildPipeline(self: *Gpu, vspv: []const u32, fspv: []const u32, stride: u32, attrs: []const VAttr, depth_write: bool) !vk.VkPipeline {
         const vmod = try self.makeShaderModule(vspv);
         defer vk.vkDestroyShaderModule(self.device, vmod, null);
         const fmod = try self.makeShaderModule(fspv);
@@ -829,7 +871,19 @@ pub const Gpu = struct {
         pci.pInputAssemblyState = &ia;
         pci.pViewportState = &vp;
         pci.pRasterizationState = &rs;
+        var ds = std.mem.zeroes(vk.VkPipelineDepthStencilStateCreateInfo);
+        ds.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        ds.depthTestEnable = vk.VK_TRUE;
+        ds.depthWriteEnable = if (depth_write) vk.VK_TRUE else vk.VK_FALSE;
+        // LESS, matching the Metal backend: the engine gives a nearer range a
+        // SMALLER depth, so a fill behind the underlay's plane fails.
+        ds.depthCompareOp = vk.VK_COMPARE_OP_LESS;
+        ds.depthBoundsTestEnable = vk.VK_FALSE;
+        ds.stencilTestEnable = vk.VK_FALSE;
+        ds.minDepthBounds = 0;
+        ds.maxDepthBounds = 1;
         pci.pMultisampleState = &ms;
+        pci.pDepthStencilState = &ds;
         pci.pColorBlendState = &cb;
         pci.pDynamicState = &dy;
         pci.layout = self.pipe_layout;
@@ -843,10 +897,13 @@ pub const Gpu = struct {
     }
 
     fn createPipelines(self: *Gpu) !void {
-        self.pipeline = try self.buildPipeline(chart_vert_spv, chart_frag_spv, @sizeOf(cc.tile57_gpu_vertex), &tri_attrs);
-        self.pattern_pipeline = try self.buildPipeline(pattern_vert_spv, pattern_frag_spv, @sizeOf(cc.tile57_gpu_vertex), &tri_attrs);
-        self.sprite_pipeline = try self.buildPipeline(sprite_vert_spv, sprite_frag_spv, @sizeOf(cc.tile57_gpu_quad), &quad_attrs);
-        self.sdf_pipeline = try self.buildPipeline(sprite_vert_spv, sdf_frag_spv, @sizeOf(cc.tile57_gpu_quad), &quad_attrs);
+        self.pipeline = try self.buildPipeline(chart_vert_spv, chart_frag_spv, @sizeOf(cc.tile57_gpu_vertex), &tri_attrs, false);
+        self.pattern_pipeline = try self.buildPipeline(pattern_vert_spv, pattern_frag_spv, @sizeOf(cc.tile57_gpu_vertex), &tri_attrs, false);
+        self.sprite_pipeline = try self.buildPipeline(sprite_vert_spv, sprite_frag_spv, @sizeOf(cc.tile57_gpu_quad), &quad_attrs, false);
+        self.sdf_pipeline = try self.buildPipeline(sprite_vert_spv, sdf_frag_spv, @sizeOf(cc.tile57_gpu_quad), &quad_attrs, false);
+        // The same sprite program, writing depth: the underlay, and nothing
+        // else, puts a plane in front of the chart's opaque fills.
+        self.raster_pipeline = try self.buildPipeline(sprite_vert_spv, sprite_frag_spv, @sizeOf(cc.tile57_gpu_quad), &quad_attrs, true);
     }
 
     // ---- commands / sync ----------------------------------------------------------
@@ -958,6 +1015,7 @@ pub const Gpu = struct {
         _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &n, &self.sc_images);
         self.sc_count = n;
         try self.ensureMsaa();
+        try self.ensureDepth();
         var i: u32 = 0;
         while (i < n) : (i += 1) {
             var vi = std.mem.zeroes(vk.VkImageViewCreateInfo);
@@ -968,13 +1026,13 @@ pub const Gpu = struct {
             vi.subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
             try check(vk.vkCreateImageView(self.device, &vi, null, &self.sc_views[i]), "swapchain view");
             const atts = if (self.msaa_used)
-                [2]vk.VkImageView{ self.msaa_view, self.sc_views[i] }
+                [3]vk.VkImageView{ self.msaa_view, self.sc_views[i], self.depth_view }
             else
-                [2]vk.VkImageView{ self.sc_views[i], null };
+                [3]vk.VkImageView{ self.sc_views[i], self.depth_view, null };
             var fb = std.mem.zeroes(vk.VkFramebufferCreateInfo);
             fb.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             fb.renderPass = self.render_pass;
-            fb.attachmentCount = if (self.msaa_used) 2 else 1;
+            fb.attachmentCount = if (self.msaa_used) 3 else 2;
             fb.pAttachments = &atts;
             fb.width = self.width;
             fb.height = self.height;
@@ -1009,6 +1067,7 @@ pub const Gpu = struct {
         _ = vk.vkDeviceWaitIdle(self.device);
         self.destroySwapchainViews();
         self.releaseMsaa();
+        self.releaseDepth();
         self.createSwapchain() catch |e| {
             logErr("swapchain recreate failed: %d", .{@as(c_int, @intFromError(e))});
             return;
@@ -1022,6 +1081,62 @@ pub const Gpu = struct {
             try self.createImage(self.width, self.height, self.color_format, vk.VK_SAMPLE_COUNT_4_BIT, vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, &self.msaa_img, &self.msaa_mem, &self.msaa_view);
         }
     }
+
+    /// The depth target, at the colour target's size and sample count. Both
+    /// passes share it: only one is ever recording.
+    fn ensureDepth(self: *Gpu) !void {
+        if (self.depth_img != null) return;
+        const samples: vk.VkSampleCountFlagBits =
+            if (self.msaa_used) vk.VK_SAMPLE_COUNT_4_BIT else vk.VK_SAMPLE_COUNT_1_BIT;
+        try self.createDepthImage(self.width, self.height, samples);
+    }
+
+    fn releaseDepth(self: *Gpu) void {
+        if (self.depth_view != null) vk.vkDestroyImageView(self.device, self.depth_view, null);
+        if (self.depth_img != null) vk.vkDestroyImage(self.device, self.depth_img, null);
+        if (self.depth_mem != null) vk.vkFreeMemory(self.device, self.depth_mem, null);
+        self.depth_view = null;
+        self.depth_img = null;
+        self.depth_mem = null;
+    }
+
+    /// Like createImage, but a depth aspect and a depth usage. Kept separate
+    /// rather than adding an aspect parameter to createImage, which every other
+    /// caller would have to pass and none of them wants.
+    fn createDepthImage(self: *Gpu, w: u32, h: u32, samples: vk.VkSampleCountFlagBits) !void {
+        var ii = std.mem.zeroes(vk.VkImageCreateInfo);
+        ii.sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = vk.VK_IMAGE_TYPE_2D;
+        ii.format = self.depth_format;
+        ii.extent = .{ .width = w, .height = h, .depth = 1 };
+        ii.mipLevels = 1;
+        ii.arrayLayers = 1;
+        ii.samples = samples;
+        ii.tiling = vk.VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+            vk.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        ii.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+        ii.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+        try check(vk.vkCreateImage(self.device, &ii, null, &self.depth_img), "vkCreateImage depth");
+        var req: vk.VkMemoryRequirements = undefined;
+        vk.vkGetImageMemoryRequirements(self.device, self.depth_img, &req);
+        var ai = std.mem.zeroes(vk.VkMemoryAllocateInfo);
+        ai.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        // LAZILY_ALLOCATED first: a tiler backs a transient attachment with no
+        // real memory at all. Not every driver offers it, so fall back.
+        ai.memoryTypeIndex = self.memType(req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) catch
+            try self.memType(req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        try check(vk.vkAllocateMemory(self.device, &ai, null, &self.depth_mem), "vkAllocateMemory depth");
+        try check(vk.vkBindImageMemory(self.device, self.depth_img, self.depth_mem, 0), "vkBindImageMemory depth");
+        var vi = std.mem.zeroes(vk.VkImageViewCreateInfo);
+        vi.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = self.depth_img;
+        vi.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = self.depth_format;
+        vi.subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+        try check(vk.vkCreateImageView(self.device, &vi, null, &self.depth_view), "vkCreateImageView depth");
+    }
     fn releaseMsaa(self: *Gpu) void {
         if (self.msaa_view != null) vk.vkDestroyImageView(self.device, self.msaa_view, null);
         if (self.msaa_img != null) vk.vkDestroyImage(self.device, self.msaa_img, null);
@@ -1033,16 +1148,17 @@ pub const Gpu = struct {
 
     fn ensureOffscreenTargets(self: *Gpu) !void {
         try self.ensureMsaa();
+        try self.ensureDepth();
         if (self.off_img == null) {
             try self.createImage(self.width, self.height, self.color_format, vk.VK_SAMPLE_COUNT_1_BIT, vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT, &self.off_img, &self.off_mem, &self.off_view);
             const atts = if (self.msaa_used)
-                [2]vk.VkImageView{ self.msaa_view, self.off_view }
+                [3]vk.VkImageView{ self.msaa_view, self.off_view, self.depth_view }
             else
-                [2]vk.VkImageView{ self.off_view, null };
+                [3]vk.VkImageView{ self.off_view, self.depth_view, null };
             var fb = std.mem.zeroes(vk.VkFramebufferCreateInfo);
             fb.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             fb.renderPass = self.off_pass;
-            fb.attachmentCount = if (self.msaa_used) 2 else 1;
+            fb.attachmentCount = if (self.msaa_used) 3 else 2;
             fb.pAttachments = &atts;
             fb.width = self.width;
             fb.height = self.height;
@@ -1151,6 +1267,7 @@ pub const Gpu = struct {
                 _ = vk.vkDeviceWaitIdle(self.device);
                 self.releaseOffscreen();
                 self.releaseMsaa();
+        self.releaseDepth();
                 self.width = w;
                 self.height = h;
                 try self.ensureOffscreenTargets();
@@ -1283,6 +1400,46 @@ pub const Gpu = struct {
         self.raster_draws = try a.dupe(RasterDraw, draws);
     }
 
+    /// The depth that puts the underlay immediately IN FRONT OF the chart's
+    /// opaque area fills, so those fills fail the depth test exactly where a
+    /// tile covers them and pass everywhere else. Per pixel: the chart keeps
+    /// its depth shading across a coverage edge and around every hole in a
+    /// pyramid clipped to a coastline.
+    ///
+    /// The engine gives range i of N the depth (N-i)/(N+1), so a later range is
+    /// nearer. This is that formula evaluated one step past the last opaque
+    /// area range. 0.999 with no scene: behind everything, which is right when
+    /// there is no chart to sit in front of.
+    pub fn rasterDepth(self: *const Gpu) f32 {
+        const s = self.scene orelse return 0.999;
+        if (s.ranges.len == 0) return 0.999;
+        var last: usize = 0;
+        var found = false;
+        for (s.ranges, 0..) |r, i| {
+            // flags bit 0 is OPAQUE: a pattern-less triangle range with every
+            // alpha at 255. Those are the fills that hide a picture.
+            if (r.kind == cc.TILE57_GPU_AREA and (r.flags & 1) != 0) {
+                last = i;
+                found = true;
+            }
+        }
+        if (!found) return 0.999;
+        const nr = s.ranges.len;
+        const d = @as(f64, @floatFromInt(nr - last - 1)) / @as(f64, @floatFromInt(nr + 1));
+        return @floatCast(d);
+    }
+
+    /// The depth that puts the underlay in front of the WHOLE chart, so the
+    /// chart falls out exactly where a picture covers and stays everywhere
+    /// else. Half the closest range's depth, so nothing the engine emits can be
+    /// nearer.
+    pub fn rasterDepthFront(self: *const Gpu) f32 {
+        const s = self.scene orelse return 0.5;
+        const nr = s.ranges.len;
+        if (nr == 0) return 0.5;
+        return @floatCast(0.5 / @as(f64, @floatFromInt(nr + 1)));
+    }
+
     pub fn clearRasterFrame(self: *Gpu) void {
         if (self.raster_buf.buf != null) {
             _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
@@ -1299,7 +1456,7 @@ pub const Gpu = struct {
     /// it — which is correct, and is what chart-over-picture undoes.
     fn recordRaster(self: *Gpu, cmd: vk.VkCommandBuffer, u: Uniforms) void {
         if (self.raster_draws.len == 0 or self.raster_buf.buf == null) return;
-        const pipe = self.sprite_pipeline orelse return;
+        const pipe = self.raster_pipeline orelse return;
         vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
         const zero: u64 = 0;
         vk.vkCmdBindVertexBuffers(cmd, 0, 1, &self.raster_buf.buf, &zero);
@@ -1454,13 +1611,21 @@ pub const Gpu = struct {
         self.ring_off = 0;
         var clear = std.mem.zeroes(vk.VkClearValue);
         clear.color.float32 = .{ self.clear.r, self.clear.g, self.clear.b, self.clear.a };
-        const clears = [2]vk.VkClearValue{ clear, clear };
+        // The depth clear is FARTHEST (1.0), so every range passes until the
+        // underlay puts its plane in front of the fills. It is the last
+        // attachment, so it sits after the colour ones however many there are.
+        var dclear = std.mem.zeroes(vk.VkClearValue);
+        dclear.depthStencil = .{ .depth = 1.0, .stencil = 0 };
+        const clears = if (self.msaa_used)
+            [3]vk.VkClearValue{ clear, clear, dclear }
+        else
+            [3]vk.VkClearValue{ clear, dclear, dclear };
         var rbi = std.mem.zeroes(vk.VkRenderPassBeginInfo);
         rbi.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rbi.renderPass = pass;
         rbi.framebuffer = fb;
         rbi.renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = self.width, .height = self.height } };
-        rbi.clearValueCount = if (self.msaa_used) 2 else 1;
+        rbi.clearValueCount = if (self.msaa_used) 3 else 2;
         rbi.pClearValues = &clears;
         vk.vkCmdBeginRenderPass(cmd, &rbi, vk.VK_SUBPASS_CONTENTS_INLINE);
         defer vk.vkCmdEndRenderPass(cmd);
@@ -1654,6 +1819,7 @@ pub const Gpu = struct {
         self.destroySwapchainViews();
         if (self.swapchain != null) vk.vkDestroySwapchainKHR(self.device, self.swapchain, null);
         self.releaseMsaa();
+        self.releaseDepth();
         self.destroyBuffer(&self.ring);
         if (self.acquire_sem != null) vk.vkDestroySemaphore(self.device, self.acquire_sem, null);
         if (self.render_sem != null) vk.vkDestroySemaphore(self.device, self.render_sem, null);
@@ -1662,6 +1828,7 @@ pub const Gpu = struct {
         if (self.cmd_pool != null) vk.vkDestroyCommandPool(self.device, self.cmd_pool, null);
         if (self.pipeline != null) vk.vkDestroyPipeline(self.device, self.pipeline, null);
         if (self.sprite_pipeline != null) vk.vkDestroyPipeline(self.device, self.sprite_pipeline, null);
+        if (self.raster_pipeline != null) vk.vkDestroyPipeline(self.device, self.raster_pipeline, null);
         if (self.sdf_pipeline != null) vk.vkDestroyPipeline(self.device, self.sdf_pipeline, null);
         if (self.pattern_pipeline != null) vk.vkDestroyPipeline(self.device, self.pattern_pipeline, null);
         if (self.pipe_layout != null) vk.vkDestroyPipelineLayout(self.device, self.pipe_layout, null);
