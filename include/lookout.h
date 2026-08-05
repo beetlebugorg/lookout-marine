@@ -135,11 +135,22 @@ void lookout_set_pixel_density(lookout *h, float density);
  * importing a folder keeps going. */
 int lookout_raster_add(lookout *h, const char *path);
 
-/* Step to the next raster chart set, or to "no picture" after the last one. */
+/* Step to the next raster chart set COVERING THE SAME WATER, or to "no picture"
+ * after the last one.
+ *
+ * Sets that cover different water are not steps in the cycle. They are drawn
+ * together (see below), so there is nothing to choose between them. */
 void lookout_raster_cycle(lookout *h);
 
-/* The active set's name, or "" for no picture. Borrowed: valid until the set
- * list changes. *out_len (NULL to ignore) receives the length. */
+/* The name of the set drawn over THIS view, or "" for no picture.
+ *
+ * Sets that cover different water draw at the same time: San Francisco and the
+ * Atlantic are not a mode a mariner should have to switch. Only sets whose
+ * coverage meets are a choice, and the cycle settles it. So one name describes
+ * one view, not the whole selection.
+ *
+ * Borrowed: valid until the set list changes. *out_len (NULL to ignore)
+ * receives the length. */
 const char *lookout_raster_active_name(lookout *h, size_t *out_len);
 
 /* 1 while the chart is drawing WITHOUT its opaque water and land fills, because
@@ -155,7 +166,8 @@ int lookout_raster_over_chart(lookout *h);
  * A mariner carrying four providers for one coast has to SEE what they carry
  * and pick one. A cycle alone cannot report what is installed. Build a menu
  * from these: walk 0..lookout_raster_set_count, keep the sets in view, and mark
- * the one lookout_raster_active_index reports.
+ * the one lookout_raster_active_index reports — which is the set drawn over
+ * this view, so the mark agrees with the picture.
  *
  * lookout_raster_select(h, -1) draws none. Names are borrowed and valid until
  * the set list changes. */
