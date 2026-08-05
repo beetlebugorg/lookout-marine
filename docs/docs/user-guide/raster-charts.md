@@ -72,6 +72,14 @@ have to switch sets when you change coasts.
 steps between the sets that cover San Francisco. The Atlantic set is not one of
 the steps, and it stays drawn while you compare the others.
 
+Each set keeps its own on and off. Turning the Atlantic set on does not turn a
+Pacific set on, and turning a Pacific set on does not turn the Atlantic set off.
+Turning one on turns off the sets that cover the same water, because only one
+picture can be drawn over a piece of water at a time.
+
+⌘I past the last set turns off the sets covering the water in view. The sets
+covering other water stay as you left them.
+
 ## The pill
 
 The pill sits at the right of the readouts. It appears whenever **a raster chart
