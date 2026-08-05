@@ -13,6 +13,7 @@ const sidebars = {
         'user-guide/chart-window',
         'user-guide/moving-the-chart',
         'user-guide/mariner-settings',
+        'user-guide/raster-charts',
       ],
     },
     {
