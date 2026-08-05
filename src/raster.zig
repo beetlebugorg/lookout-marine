@@ -60,6 +60,9 @@ pub const DEFAULT_BUDGET_BYTES: usize = 160 * 1024 * 1024;
 /// queueing thousands of tiles the mariner has already left behind.
 const MAX_INFLIGHT: usize = 64;
 
+/// How many tiles decode at once.
+const WORKERS: usize = 4;
+
 /// One open raster chart.
 pub const Source = struct {
     chart: *cc.tile57_raster_chart,
@@ -69,6 +72,11 @@ pub const Source = struct {
     /// "EU-SI-Full.W3.00.ArcGIS.Imagery.Z10-Z18.mbtiles 20240822051758 Unknown".
     label: []u8,
     path: []u8,
+    /// Serializes ENGINE access to this chart. `tile57_raster_chart_*` is not
+    /// internally synchronized, so the fetch is held under this; the JPEG
+    /// decode that follows is not, which is the whole point — decoding is the
+    /// expensive half and it runs in parallel across the pool.
+    mu: Lock = .{},
     /// Off keeps the file installed and stops drawing it. A mariner who carries
     /// four providers for one coast wants three of them quiet, not deleted —
     /// they are half-gigabyte downloads.
@@ -167,7 +175,10 @@ pub const Layer = struct {
     reqs: std.ArrayList(Req) = .empty,
     results: std.ArrayList(Res) = .empty,
     inflight: usize = 0,
-    thread: ?std.Thread = null,
+    /// A POOL, not one worker. One tile at a time made a pan across cold ground
+    /// fill in visibly serially, and a zoom wait for level after level. Four is
+    /// enough to keep a 60 fps view fed without turning a phone into a heater.
+    threads: [WORKERS]?std.Thread = .{null} ** WORKERS,
     stop: bool = false,
 
     pub fn init(a: std.mem.Allocator) Layer {
@@ -362,19 +373,36 @@ pub const Layer = struct {
         self.built_sig = 0;
     }
 
-    /// Step to the next set, with "no picture" as one position so a single
-    /// control also reaches the full chart. Never moves the camera and never
-    /// touches the vector scene.
-    pub fn cycle(self: *Layer) void {
-        if (self.sets.items.len == 0) {
+    /// Step to the next set THAT IS IN VIEW, then to nothing, then round again.
+    ///
+    /// Only in-view sets, because the cycle is a comparison gesture: a mariner
+    /// off San Francisco flipping between providers must not land on an
+    /// Atlantic set and see the picture vanish. It steps through exactly what
+    /// the pill's list offers, and that list holds only what covers the view.
+    ///
+    /// Never moves the camera and never rebuilds the vector scene.
+    pub fn cycle(self: *Layer, cam: camera.Camera) void {
+        const n = self.sets.items.len;
+        if (n == 0) {
             self.active = null;
+            self.built_valid = false;
+            self.built_sig = 0;
             return;
         }
-        self.active = if (self.active) |i|
-            (if (i + 1 >= self.sets.items.len) null else i + 1)
-        else
-            0;
+        const start: usize = if (self.active) |i| i + 1 else 0;
+        var j = start;
+        while (j < n) : (j += 1) {
+            if (self.setCoversView(j, cam)) {
+                self.active = j;
+                self.built_valid = false;
+                self.built_sig = 0;
+                return;
+            }
+        }
+        // Past the last one in view: show nothing. The next press starts over.
+        self.active = null;
         self.built_valid = false;
+        self.built_sig = 0;
     }
 
     pub fn activeName(self: *const Layer) [:0]const u8 {
@@ -466,8 +494,51 @@ pub const Layer = struct {
                     }
                     gop.value_ptr.used = self.frame;
                     if (gop.value_ptr.state == .pending) self.pending_now += 1;
-                    if (gop.value_ptr.state != .ready) continue;
-                    const tex = gop.value_ptr.tex orelse continue;
+
+                    // Not here yet: stand in with a COARSER ancestor already in
+                    // the cache, magnified over this tile's ground.
+                    //
+                    // Without this a zoom shows the bare ENC for as long as the
+                    // new level takes to arrive — the picture blinks out and
+                    // fills back in, which is the one thing a comparison must
+                    // not do. A tile map has the answer already: the parent
+                    // covers the same ground at half the detail, and it is
+                    // usually still in the cache from the zoom you just left.
+                    var tex = gop.value_ptr.tex;
+                    var tu0: f32 = 0;
+                    var tv0: f32 = 0;
+                    var tu1: f32 = 1;
+                    var tv1: f32 = 1;
+                    if (gop.value_ptr.state != .ready or tex == null) {
+                        tex = null;
+                        var up: u3 = 1;
+                        while (up <= 5 and up <= z) : (up += 1) {
+                            const az: u8 = z - up;
+                            if (az < src.info.min_zoom) break;
+                            const ax = wrapped_x >> up;
+                            const ay = ty >> up;
+                            const akey: Key = .{
+                                .x = @intCast(ax),
+                                .y = @intCast(ay),
+                                .z = @intCast(az),
+                                .set = @intCast(set_idx),
+                            };
+                            const anc = self.cache.getPtr(akey.pack()) orelse continue;
+                            if (anc.state != .ready) continue;
+                            anc.used = self.frame; // keep the stand-in alive
+                            tex = anc.tex;
+                            // Which quarter (or sixteenth, …) of the ancestor
+                            // this tile is.
+                            const span_a: f32 = @floatFromInt(@as(u32, 1) << up);
+                            const mask: i64 = (@as(i64, 1) << up) - 1;
+                            tu0 = @as(f32, @floatFromInt(wrapped_x & mask)) / span_a;
+                            tv0 = @as(f32, @floatFromInt(ty & mask)) / span_a;
+                            tu1 = tu0 + 1.0 / span_a;
+                            tv1 = tv0 + 1.0 / span_a;
+                            break;
+                        }
+                    }
+                    const draw_tex = tex orelse continue;
 
                     // The tile's world rect. `tx` stays UNwrapped here so a view
                     // straddling the antimeridian gets a continuous span; the
@@ -478,9 +549,9 @@ pub const Layer = struct {
                     const y1: f32 = @floatCast(@as(f64, @floatFromInt(ty + 1)) / span);
 
                     const first: u32 = @intCast(self.quads.items.len);
-                    self.pushQuad(x0, y0, x1, y1) catch continue;
+                    self.pushQuad(x0, y0, x1, y1, tu0, tv0, tu1, tv1) catch continue;
                     self.draws.append(self.alloc, .{
-                        .tex = tex,
+                        .tex = draw_tex,
                         .first = first,
                         .count = 6,
                     }) catch continue;
@@ -599,8 +670,9 @@ pub const Layer = struct {
         }
     }
 
-    /// Six vertices, two triangles, UV 0..1 over the tile.
-    fn pushQuad(self: *Layer, x0: f32, y0: f32, x1: f32, y1: f32) !void {
+    /// Six vertices, two triangles. The UV rect is normally the whole tile, and
+    /// a SUB-RECT when this quad is showing a coarser ancestor in its place.
+    fn pushQuad(self: *Layer, x0: f32, y0: f32, x1: f32, y1: f32, tu0: f32, tv0: f32, tu1: f32, tv1: f32) !void {
         const corner = struct {
             fn v(x: f32, y: f32, u: f32, vv: f32, tint: [4]u8, depth: f32) cc.tile57_gpu_quad {
                 return .{
@@ -627,12 +699,12 @@ pub const Layer = struct {
         const t = self.tint;
         const d = self.depth;
         try self.quads.appendSlice(self.alloc, &.{
-            corner.v(x0, y0, 0, 0, t, d),
-            corner.v(x1, y0, 1, 0, t, d),
-            corner.v(x1, y1, 1, 1, t, d),
-            corner.v(x0, y0, 0, 0, t, d),
-            corner.v(x1, y1, 1, 1, t, d),
-            corner.v(x0, y1, 0, 1, t, d),
+            corner.v(x0, y0, tu0, tv0, t, d),
+            corner.v(x1, y0, tu1, tv0, t, d),
+            corner.v(x1, y1, tu1, tv1, t, d),
+            corner.v(x0, y0, tu0, tv0, t, d),
+            corner.v(x1, y1, tu1, tv1, t, d),
+            corner.v(x0, y1, tu0, tv1, t, d),
         });
     }
 
@@ -702,22 +774,26 @@ pub const Layer = struct {
     }
 
     fn ensureWorker(self: *Layer) void {
-        if (self.thread != null) return;
-        self.thread = std.Thread.spawn(.{}, workerMain, .{self}) catch |e| blk: {
-            // Without the worker no tile ever lands, and the underlay silently
-            // stays empty — say so rather than leaving a blank chart to explain.
-            std.debug.print("raster: worker spawn failed ({s}); no raster chart will load\n", .{@errorName(e)});
-            break :blk null;
-        };
+        for (&self.threads) |*t| {
+            if (t.* != null) continue;
+            t.* = std.Thread.spawn(.{}, workerMain, .{self}) catch |e| blk: {
+                // Without a worker no tile ever lands and the underlay silently
+                // stays empty — say so rather than leaving a blank chart to
+                // explain.
+                std.debug.print("raster: worker spawn failed ({s})\n", .{@errorName(e)});
+                break :blk null;
+            };
+        }
     }
 
     fn stopWorker(self: *Layer) void {
-        const t = self.thread orelse return;
         self.mu.lock();
         self.stop = true;
         self.mu.unlock();
-        t.join();
-        self.thread = null;
+        for (&self.threads) |*t| {
+            if (t.*) |th| th.join();
+            t.* = null;
+        }
     }
 
     fn workerMain(self: *Layer) void {
@@ -761,7 +837,11 @@ pub const Layer = struct {
                     var bytes: ?[*]u8 = null;
                     var len: usize = 0;
                     var err: cc.tile57_error = undefined;
+                    // The ENGINE call only. The decode below runs unlocked, so
+                    // four workers decode four tiles at once.
+                    src.mu.lock();
                     const st = cc.tile57_raster_chart_tile(src.chart, req.z, req.x, req.y, &bytes, &len, &err);
+                    src.mu.unlock();
                     if (debugOn()) std.debug.print("raster: fetch z={d} x={d} y={d} -> status={d} len={d}\n", .{ req.z, req.x, req.y, st, len });
                     if (st != cc.TILE57_OK) continue;
                     const b = bytes orelse continue; // no tile here: the ordinary case
@@ -869,29 +949,42 @@ fn latToWorldY(lat: f64) f64 {
 /// carrying a compilation scale.
 pub fn setNameFor(path: []const u8) []const u8 {
     const base = std.fs.path.basename(path);
-    const known = [_][]const u8{
-        "ArcGIS", "Bing",  "Google", "Navionics", "ESRI",
-        "GE",     "CMap",  "C-Map",  "Sentinel",  "NAIP",
-        "Esri",   "SASP",  "Yandex", "OSM",       "Imagery",
-    };
-    for (known) |k| {
-        if (containsIgnoreCase(base, k)) return k;
-    }
+    if (providerIn(base)) |k| return k;
 
     const stem = base[0 .. std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len];
 
     // The bake's layout: the file sits alone in a directory named for itself,
-    // and the directory above is the bake. Group by the bake.
+    // and the directory above is the bake. Group by the bake, and read the
+    // producer out of ITS name — a baked sheet gives nothing usable of its own
+    // (an OpenSeaMap sheet calls itself `L14-6320-2600-16-32`), while the
+    // bundle it came from is named for who made it.
     if (std.mem.endsWith(u8, base, ".pmtiles")) {
         const dir = std.fs.path.dirname(path) orelse return stem;
         if (std.mem.eql(u8, std.fs.path.basename(dir), stem)) {
             if (std.fs.path.dirname(dir)) |root| {
                 const root_name = std.fs.path.basename(root);
-                if (root_name.len > 0) return root_name;
+                if (root_name.len > 0) {
+                    if (providerIn(root_name)) |k| return k;
+                    return root_name;
+                }
             }
         }
     }
     return if (stem.len == 0) base else stem;
+}
+
+/// A producer this name carries, if any. Longest first, so "OpenSeaMap" is not
+/// reported as "OSM".
+fn providerIn(name: []const u8) ?[]const u8 {
+    const known = [_][]const u8{
+        "OpenSeaMap", "Navionics", "Sentinel", "ArcGIS", "Google",
+        "C-Map",      "Yandex",    "Imagery",  "Bing",   "ESRI",
+        "Esri",       "CMap",      "NAIP",     "SASP",   "OSM",
+    };
+    for (known) |k| {
+        if (containsIgnoreCase(name, k)) return k;
+    }
+    return null;
 }
 
 fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
@@ -923,6 +1016,12 @@ test "set names: a provider for a community file, the bake for a sheet" {
         setNameFor("/c/USWestCoast/L14-6320-2600-16-32_14/L14-6320-2600-16-32_14.pmtiles"));
     try testing.expectEqualStrings("USWestCoast",
         setNameFor("/c/USWestCoast/L16-25312-10456-16-16_16/L16-25312-10456-16-16_16.pmtiles"));
+    // And the bake's own name names the producer when it carries one. A sheet
+    // calls itself L14-6320-2600-16-32; the bundle says who made it.
+    try testing.expectEqualStrings("OSM",
+        setNameFor("/c/OSM-OpenCPN2-KAP-USWestCoast-20260615/L14-x/L14-x.pmtiles"));
+    try testing.expectEqualStrings("OpenSeaMap",
+        setNameFor("/c/OpenSeaMap-WestCoast/L14-x/L14-x.pmtiles"));
     // A .pmtiles that is NOT in the bake's layout keeps its own name.
     try testing.expectEqualStrings("loose", setNameFor("/c/somewhere/loose.pmtiles"));
 }
