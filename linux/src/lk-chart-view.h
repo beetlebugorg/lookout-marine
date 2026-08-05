@@ -25,17 +25,10 @@ LkNativeSurface *lk_chart_view_get_native_surface (LkChartView *self);
 /* Create the chart's native subsurface; FALSE if none could be made. */
 gboolean lk_chart_view_ensure_native_surface (LkChartView *self);
 
-/* TRUE when GTK chrome can be drawn over the chart (always, via the below
- * subsurface + transparent hole). */
-gboolean lk_chart_view_can_overlay (LkChartView *self);
-
 /* The widget's size in logical points (with a fallback before layout). */
 void lk_chart_view_get_point_size (LkChartView *self, int *width, int *height);
 
 /* lookout presented its first frame — map the surface (hidden until then). */
 void lk_chart_view_surface_ready (LkChartView *self);
-
-/* Show the identify popover at a point in widget coordinates. */
-void lk_chart_view_present_identify (LkChartView *self, double x, double y);
 
 G_END_DECLS
