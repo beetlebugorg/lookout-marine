@@ -208,7 +208,7 @@ pub const Layer = struct {
         cc.tile57_raster_chart_get_info(ch, &info);
 
         const base = std.fs.path.basename(path);
-        const set_name = self.alloc.dupeZ(u8, providerOf(base)) catch return false;
+        const set_name = self.alloc.dupeZ(u8, setNameFor(path)) catch return false;
         const label = self.alloc.dupe(u8, base) catch {
             self.alloc.free(set_name);
             return false;
@@ -853,21 +853,44 @@ fn latToWorldY(lat: f64) f64 {
     return 0.5 - std.math.log(f64, std.math.e, (1.0 + s) / (1.0 - s)) / (4.0 * std.math.pi);
 }
 
-/// The provider token in a community file name, which is what a mariner actually
-/// cycles between: the same water ships from ArcGIS, Bing, Google and Navionics
-/// side by side, and the one that shows the bottom today is the one they want.
-/// Falls back to the whole stem, so an unrecognised name is its own set rather
-/// than being lumped in with strangers.
-pub fn providerOf(base: []const u8) []const u8 {
+/// What to call the set a file belongs to.
+///
+/// TWO SHAPES, because raster charts arrive two ways.
+///
+/// A community MBTiles names its provider, and that is what a mariner chooses
+/// between: the same water ships from ArcGIS, Bing, Google and Navionics side
+/// by side, and the one that shows the bottom today is the one they want.
+///
+/// A BAKED RNC does not. `tile57 bake` writes `<root>/<stem>/<stem>.pmtiles`,
+/// one directory per sheet, and a bundle holds hundreds — 968 in the
+/// OpenSeaMap West Coast set. Naming each after its own file would make 968
+/// sets of one sheet, which is not a choice a mariner can make. They belong to
+/// the bake they came from, and they quilt: that is the whole point of a sheet
+/// carrying a compilation scale.
+pub fn setNameFor(path: []const u8) []const u8 {
+    const base = std.fs.path.basename(path);
     const known = [_][]const u8{
-        "ArcGIS", "Bing", "Google", "Navionics", "ESRI",
-        "GE",     "CMap", "C-Map",  "Sentinel",  "NAIP",
-        "Esri",   "SASP", "Yandex", "OSM",       "Imagery",
+        "ArcGIS", "Bing",  "Google", "Navionics", "ESRI",
+        "GE",     "CMap",  "C-Map",  "Sentinel",  "NAIP",
+        "Esri",   "SASP",  "Yandex", "OSM",       "Imagery",
     };
     for (known) |k| {
         if (containsIgnoreCase(base, k)) return k;
     }
+
     const stem = base[0 .. std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len];
+
+    // The bake's layout: the file sits alone in a directory named for itself,
+    // and the directory above is the bake. Group by the bake.
+    if (std.mem.endsWith(u8, base, ".pmtiles")) {
+        const dir = std.fs.path.dirname(path) orelse return stem;
+        if (std.mem.eql(u8, std.fs.path.basename(dir), stem)) {
+            if (std.fs.path.dirname(dir)) |root| {
+                const root_name = std.fs.path.basename(root);
+                if (root_name.len > 0) return root_name;
+            }
+        }
+    }
     return if (stem.len == 0) base else stem;
 }
 
@@ -884,14 +907,24 @@ fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
 
 const testing = std.testing;
 
-test "provider token from real community file names" {
-    try testing.expectEqualStrings("ArcGIS", providerOf("EU-SI-Full.ArcGIS.Z10-Z18.2024-08.mbtiles"));
-    try testing.expectEqualStrings("Bing", providerOf("EU-FR-Corsica.Bing.Z10-Z18.2024-08.mbtiles"));
-    try testing.expectEqualStrings("Google", providerOf("CA-BC-Broughton-Archipelago.Google.Z10-Z18.2023-12.mbtiles"));
-    try testing.expectEqualStrings("Navionics", providerOf("Ru_Paramushir_Is_Navionics_Z10-Z18.mbtiles"));
-    try testing.expectEqualStrings("ESRI", providerOf("RU_Paramushir_Is_ESRI_Z10-Z18.mbtiles"));
+test "set names: a provider for a community file, the bake for a sheet" {
+    // A community MBTiles names its provider.
+    try testing.expectEqualStrings("ArcGIS", setNameFor("EU-SI-Full.ArcGIS.Z10-Z18.2024-08.mbtiles"));
+    try testing.expectEqualStrings("Bing", setNameFor("/x/EU-FR-Corsica.Bing.Z10-Z18.2024-08.mbtiles"));
+    try testing.expectEqualStrings("Google", setNameFor("CA-BC-Broughton-Archipelago.Google.Z10-Z18.2023-12.mbtiles"));
+    try testing.expectEqualStrings("Navionics", setNameFor("Ru_Paramushir_Is_Navionics_Z10-Z18.mbtiles"));
+    try testing.expectEqualStrings("ESRI", setNameFor("RU_Paramushir_Is_ESRI_Z10-Z18.mbtiles"));
     // No provider in the name: its own set, named for the file.
-    try testing.expectEqualStrings("Algeria-Z19", providerOf("Algeria-Z19.mbtiles"));
+    try testing.expectEqualStrings("Algeria-Z19", setNameFor("Algeria-Z19.mbtiles"));
+
+    // A BAKED SHEET belongs to its bake, not to itself. Without this the
+    // OpenSeaMap West Coast bundle makes 968 sets of one sheet each.
+    try testing.expectEqualStrings("USWestCoast",
+        setNameFor("/c/USWestCoast/L14-6320-2600-16-32_14/L14-6320-2600-16-32_14.pmtiles"));
+    try testing.expectEqualStrings("USWestCoast",
+        setNameFor("/c/USWestCoast/L16-25312-10456-16-16_16/L16-25312-10456-16-16_16.pmtiles"));
+    // A .pmtiles that is NOT in the bake's layout keeps its own name.
+    try testing.expectEqualStrings("loose", setNameFor("/c/somewhere/loose.pmtiles"));
 }
 
 test "world y from latitude matches the mercator corners" {
