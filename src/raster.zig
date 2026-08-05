@@ -95,6 +95,15 @@ pub const Set = struct {
     /// NUL-terminated: the C ABI hands this to a host as a C string.
     name: [:0]u8,
     sources: std.ArrayList(Source) = .empty,
+    /// Drawn where it covers.
+    ///
+    /// WHY PER SET AND NOT ONE SELECTION. Switching the Atlantic on must not
+    /// switch the west coast on, and switching the west coast on must not switch
+    /// the Atlantic off. One selection cannot express that: it makes every coast
+    /// share a single on/off, so a mariner who turned everything off and sailed
+    /// to the Atlantic got the Pacific back with it. Each set carries its own
+    /// state, and only sets covering the same water exclude each other.
+    shown: bool = false,
 
     fn deinit(self: *Set, a: std.mem.Allocator) void {
         for (self.sources.items) |*s| {
@@ -141,12 +150,6 @@ const Res = struct {
 pub const Layer = struct {
     alloc: std.mem.Allocator,
     sets: std.ArrayList(Set) = .empty,
-    /// Which set WINS WHERE SETS OVERLAP, or null for "no picture" — a position
-    /// in the cycle, so one control also reaches the full chart.
-    ///
-    /// This does not mean "the only set drawn". Sets that cover different water
-    /// draw together; see `drawList`.
-    active: ?usize = null,
     /// How many sets the last `prepare` drew. Only so `wantsFrame` can tell an
     /// underlay that owes tiles from one that is switched off.
     drawing: usize = 0,
@@ -254,9 +257,30 @@ pub const Layer = struct {
             .path = path_copy,
         }) catch return false;
 
-        if (self.active == null) self.active = self.sets.items.len - 1;
+        // Draw a new set unless something already covering that water is drawn.
+        // A mariner adding a second provider for one coast has not asked to
+        // replace the first; a mariner adding a coast they carry nothing for has.
+        const idx = self.indexOf(set).?;
+        if (!self.anyShownOver(idx)) self.sets.items[idx].shown = true;
+
         self.ensureWorker();
         return true;
+    }
+
+    fn indexOf(self: *const Layer, set: *const Set) ?usize {
+        for (self.sets.items, 0..) |*s, i| {
+            if (s == set) return i;
+        }
+        return null;
+    }
+
+    /// Is any OTHER set covering the same water already drawn?
+    fn anyShownOver(self: *const Layer, i: usize) bool {
+        for (self.sets.items, 0..) |*s, j| {
+            if (j == i or !s.shown) continue;
+            if (self.setsOverlap(i, j)) return true;
+        }
+        return false;
     }
 
     /// The set called `name`, creating it if new. Takes ownership of `name` when
@@ -294,27 +318,15 @@ pub const Layer = struct {
         }
         if (!found) return false;
 
-        // A set with nothing enabled left cannot draw, so it must not stay
-        // selected — the pill would keep naming a chart that is switched off.
-        // Move to the first set that still has something, or to nothing.
-        if (self.active) |i| {
+        // A set with nothing enabled left cannot draw, so it must not stay shown
+        // — the pill would keep naming a chart that is switched off. Switching a
+        // chart back on draws its set again, unless another set already covers
+        // that water, so the mariner does not have to find the pill as well.
+        for (self.sets.items, 0..) |*set, i| {
             if (!self.setHasEnabled(i)) {
-                self.active = null;
-                for (self.sets.items, 0..) |_, j| {
-                    if (self.setHasEnabled(j)) {
-                        self.active = j;
-                        break;
-                    }
-                }
-            }
-        } else {
-            // Nothing was drawn. If the mariner just switched something back on,
-            // draw it rather than making them find the pill.
-            for (self.sets.items, 0..) |_, j| {
-                if (self.setHasEnabled(j)) {
-                    self.active = j;
-                    break;
-                }
+                set.shown = false;
+            } else if (!set.shown and !self.anyShownOver(i)) {
+                set.shown = true;
             }
         }
         self.dropTiles(g);
@@ -367,21 +379,29 @@ pub const Layer = struct {
         return self.setCoversView(i, cam);
     }
 
-    /// Which set is drawn, or null.
-    pub fn activeIndex(self: *const Layer) ?usize {
-        return self.active;
-    }
-
-    /// Draw set `i`, or nothing when `i` is null.
-    pub fn selectSet(self: *Layer, i: ?usize) void {
+    /// Draw set `i`, or stop drawing over THIS view when `i` is null.
+    ///
+    /// Showing a set hides the sets covering the same water, and leaves every
+    /// other coast alone. "None" hides what is drawn here, not everywhere: a
+    /// mariner turning San Francisco off has said nothing about the Atlantic.
+    pub fn selectSet(self: *Layer, cam: camera.Camera, i: ?usize) void {
         if (i) |n| {
             if (n >= self.sets.items.len) return;
-            self.active = n;
-        } else {
-            self.active = null;
+            self.show(n);
+        } else if (self.shownSet(cam)) |cur| {
+            self.sets.items[cur].shown = false;
         }
         self.built_valid = false;
         self.built_sig = 0;
+    }
+
+    /// Draw set `i` and hide the sets it competes with.
+    fn show(self: *Layer, i: usize) void {
+        self.sets.items[i].shown = true;
+        for (self.sets.items, 0..) |*s, j| {
+            if (j == i or !s.shown) continue;
+            if (self.setsOverlap(i, j)) s.shown = false;
+        }
     }
 
     /// The world bounds of a set: the union of its enabled sources.
@@ -430,76 +450,59 @@ pub const Layer = struct {
     /// Francisco and the Atlantic has no choice to make between them: the two
     /// never meet, and making one of them a mode would mean pressing a key on
     /// every passage to get back the chart already installed. Only sets that
-    /// compete for the same ground are a choice, and `active` settles that
-    /// choice.
+    /// compete for the same ground are a choice.
     ///
-    /// `active` is null for "no picture", which is off everywhere.
+    /// `show` keeps at most one of a competing group drawn, so this only has to
+    /// take the sets that are on and in view.
     fn drawList(self: *Layer, cam: camera.Camera, out: *[MAX_DRAW_SETS]usize) usize {
         var n: usize = 0;
-        const act = self.active orelse return 0;
-        if (act < self.sets.items.len and self.setCoversView(act, cam)) {
-            out[n] = act;
-            n += 1;
-        }
-        for (0..self.sets.items.len) |j| {
+        for (self.sets.items, 0..) |*set, j| {
             if (n >= MAX_DRAW_SETS) break;
-            if (j == act) continue;
+            if (!set.shown) continue;
             if (!self.setCoversView(j, cam)) continue;
-            // The active set holds the ground it shares, whether or not it is
-            // itself on screen: a set is either a competitor or it is not.
-            if (self.setsOverlap(j, act)) continue;
-            var clash = false;
-            for (out[0..n]) |k| {
-                if (self.setsOverlap(j, k)) {
-                    clash = true;
-                    break;
-                }
-            }
-            if (clash) continue;
             out[n] = j;
             n += 1;
         }
         return n;
     }
 
-    /// Step to the next set THAT IS IN VIEW, then to nothing, then round again.
+    /// Step to the next set covering THIS WATER, then to nothing, then round
+    /// again.
     ///
-    /// Only in-view sets, because the cycle is a comparison gesture: a mariner
+    /// Only sets in view, because the cycle is a comparison gesture: a mariner
     /// off San Francisco flipping between providers must not land on an
     /// Atlantic set and see the picture vanish. It steps through exactly what
     /// the pill's list offers, and that list holds only what covers the view.
     ///
+    /// Only sets covering the same water, and it turns off only those: pressing
+    /// this off San Francisco says nothing about the Atlantic set, which keeps
+    /// whatever state the mariner left it in.
+    ///
     /// Never moves the camera and never rebuilds the vector scene.
     pub fn cycle(self: *Layer, cam: camera.Camera) void {
         const n = self.sets.items.len;
-        if (n == 0) {
-            self.active = null;
-            self.built_valid = false;
-            self.built_sig = 0;
-            return;
-        }
-        // Step from what is DRAWN HERE, which is not always `active`: sailing
-        // into San Francisco with the Atlantic set active shows San Francisco,
-        // and the key has to move that picture, not the one over the horizon.
+        self.built_valid = false;
+        self.built_sig = 0;
+        if (n == 0) return;
+
+        // Step from what is DRAWN HERE. Sailing into San Francisco with only the
+        // Atlantic set on shows nothing, and the first press has to reach San
+        // Francisco rather than step a chart over the horizon.
         const cur = self.shownSet(cam);
         const start: usize = if (cur) |i| i + 1 else 0;
         var j = start;
         while (j < n) : (j += 1) {
             if (!self.setCoversView(j, cam)) continue;
-            // Only a set competing for this water is a step in the cycle. A set
-            // covering other ground is drawn already and is not a choice.
+            // A set covering other water is drawn already and is not a choice.
             if (cur) |i| {
                 if (!self.setsOverlap(j, i)) continue;
             }
-            self.active = j;
-            self.built_valid = false;
-            self.built_sig = 0;
+            self.show(j);
             return;
         }
-        // Past the last competitor: show nothing. The next press starts over.
-        self.active = null;
-        self.built_valid = false;
-        self.built_sig = 0;
+        // Past the last one covering this water: turn that group off and leave
+        // every other coast as it was. The next press starts over.
+        if (cur) |i| self.sets.items[i].shown = false;
     }
 
     /// The set the mariner sees over this view — the first of the draw list.
@@ -510,8 +513,8 @@ pub const Layer = struct {
         return if (n == 0) null else list[0];
     }
 
-    /// Which set the pill names and the list marks: what is DRAWN HERE, which is
-    /// `active` only where sets compete. Null when nothing is drawn here.
+    /// Which set the pill names and the list marks: what is DRAWN HERE. Null
+    /// when nothing is drawn here.
     pub fn shownIndex(self: *Layer, cam: camera.Camera) ?usize {
         return self.shownSet(cam);
     }

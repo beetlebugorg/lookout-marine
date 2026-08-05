@@ -1837,7 +1837,7 @@ pub const Lookout = struct {
     }
 
     pub fn rasterSelect(self: *Lookout, i: ?usize) void {
-        self.raster.selectSet(i);
+        self.raster.selectSet(self.cam, i);
         self.rasterChanged();
     }
 

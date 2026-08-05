@@ -169,8 +169,12 @@ int lookout_raster_over_chart(lookout *h);
  * the one lookout_raster_active_index reports — which is the set drawn over
  * this view, so the mark agrees with the picture.
  *
- * lookout_raster_select(h, -1) draws none. Names are borrowed and valid until
- * the set list changes. */
+ * Each set carries its own on/off. Selecting one turns off the sets covering
+ * the same water and leaves the other coasts alone, so a mariner switching the
+ * Atlantic on does not switch the Pacific on with it.
+ *
+ * lookout_raster_select(h, -1) turns off what is drawn over THIS view, not
+ * every set. Names are borrowed and valid until the set list changes. */
 const char *lookout_raster_set_name(lookout *h, uint32_t i, size_t *out_len);
 int lookout_raster_set_in_view(lookout *h, uint32_t i);
 int32_t lookout_raster_active_index(lookout *h);
