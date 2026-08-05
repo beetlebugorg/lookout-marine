@@ -3,4 +3,8 @@
     <color name="colorPrimary">#3F51B5</color>
     <color name="colorPrimaryDark">#303F9F</color>
     <color name="colorAccent">#FF4081</color>
+    <!-- S-52 NODTA, the day palette's no-data ground. It is what the chart
+         clears to, so the window and the loading cover show the same colour the
+         first frame arrives on and there is no black flash between them. -->
+    <color name="nodata">#93AEBB</color>
 </resources>

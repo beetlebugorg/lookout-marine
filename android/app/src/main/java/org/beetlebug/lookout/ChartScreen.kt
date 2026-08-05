@@ -63,6 +63,9 @@ fun ChartScreen(
     var centreY by remember { mutableFloatStateOf(0f) }
     // The chart view's size in dp, which the pick report's placement needs.
     var viewW by remember { mutableStateOf(0.dp) }
+    // The capsule's measured height: one row on a tablet, two on a phone. The
+    // corner chrome has to clear whichever it is.
+    var capsuleH by remember { mutableStateOf(Chrome.capsule) }
     var viewH by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current.density
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -127,7 +130,7 @@ fun ChartScreen(
                 // not, so HUD_BAND stops being the gap between them and the
                 // two meet.
                 .navigationBarsPadding()
-                .padding(end = Chrome.margin, bottom = HUD_BAND),
+                .padding(end = Chrome.margin, bottom = Chrome.gap + capsuleH + Chrome.gap),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(Chrome.gap),
         ) {
@@ -143,7 +146,7 @@ fun ChartScreen(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .navigationBarsPadding()
-                .padding(start = Chrome.margin, bottom = HUD_BAND),
+                .padding(start = Chrome.margin, bottom = Chrome.gap + capsuleH + Chrome.gap),
         )
 
         // ---- the pick, marked on the chart and reported over it --------------
@@ -195,6 +198,15 @@ fun ChartScreen(
 
         // The loader while the library opens, then the pill for a rebuild.
         if (!controller.rendering) {
+            // Cover the surface while it is still bare. A SurfaceView shows
+            // BLACK until its first frame, and a chart takes seconds to open —
+            // long enough for the mariner to think the app has failed. The
+            // scheme's own background says it is working instead.
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Chrome.nodata,
+                content = {},
+            )
             StartupLoader(
                 cells = charts.chartPaths.size,
                 modifier = Modifier.align(Alignment.Center),
@@ -215,7 +227,8 @@ fun ChartScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = Chrome.margin),
+                .padding(bottom = Chrome.gap)
+                .onSizeChanged { capsuleH = (it.height / density).dp },
             raster = controller.raster,
             onRasterSelect = { controller.selectRasterSet(it) },
             onToggleChart = { controller.toggleChart() },
