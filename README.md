@@ -37,6 +37,13 @@ and switch between day and night.
   pre-rendered raster image, and no symbol is a look-alike. You get depth areas and
   contours, buoys and beacons with correct symbols, lights with sector lines,
   soundings, anchorage and restricted areas, and place names.
+- **It draws your satellite imagery under the chart.** Point it at the MBTiles
+  cruisers publish for poorly-charted coasts. The chart drops its depth and land
+  shading only where the imagery covers, so you keep the chart and still see the
+  water. Tap the pill in the readouts to step between providers — the same water
+  from Google, Bing and ArcGIS shows a different day, tide and cloud, and one of
+  them shows the bottom. See [Imagery](docs/docs/user-guide/imagery.md).
+
 - **It opens a whole coastline.** Point it at a folder of cells. The app maps each
   cell instead of loading it, so even a 1,700-cell library opens in milliseconds and
   is never fully resident. Tessellation runs on a worker thread, so the app stays
