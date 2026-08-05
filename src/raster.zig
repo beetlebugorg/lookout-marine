@@ -596,9 +596,23 @@ pub const Layer = struct {
 
                         const gop = self.cache.getOrPut(self.alloc, k) catch continue;
                         if (!gop.found_existing) {
+                            // A FULL QUEUE MUST NOT LEAVE A PENDING ENTRY. The
+                            // queue is bounded so a fast pan cannot enqueue
+                            // thousands of tiles, and a view wide enough to hold
+                            // two sets overflows it routinely. An entry left
+                            // `pending` with no request behind it is never
+                            // filled and never asked for again: the tile is
+                            // missing for the rest of the session, the count
+                            // never reaches zero, and `wantsFrame` asks forever
+                            // for a frame that cannot finish. Drop the entry and
+                            // let the next frame ask again as the queue drains.
+                            if (!self.request(set_idx, z, @intCast(wrapped_x), @intCast(ty))) {
+                                _ = self.cache.remove(k);
+                                self.pending_now += 1; // still owed: come back
+                                continue;
+                            }
                             gop.value_ptr.* = .{ .state = .pending, .used = self.frame };
                             self.pending_now += 1;
-                            _ = self.request(set_idx, z, @intCast(wrapped_x), @intCast(ty));
                             continue;
                         }
                         gop.value_ptr.used = self.frame;
