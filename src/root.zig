@@ -11,6 +11,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const gpu = @import("gpu.zig");
+const rasterlayer = @import("raster.zig");
 const camera = @import("camera.zig");
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 const atlas = @import("atlas.zig");
@@ -146,56 +147,7 @@ pub const OpenOptions = struct {
 
 pub const NativeKind = gpu.NativeKind;
 
-// A kernel-blocking lock for api_mu / engine_mu (NOT a spin). On Darwin that's
-// os_unfair_lock — Zig 0.16's std.Thread.Mutex spins there, and this layer takes
-// no Io. Everywhere else (Android/Linux/Windows) std.Thread.Mutex is the futex
-// path, which is also kernel-blocking. os_unfair_lock is Apple-only, so it must
-// not reach a non-Apple link.
-const Lock = if (@import("builtin").os.tag.isDarwin())
-    struct {
-        const Handle = extern struct { v: u32 = 0 };
-        extern "c" fn os_unfair_lock_lock(l: *Handle) void;
-        extern "c" fn os_unfair_lock_unlock(l: *Handle) void;
-        h: Handle = .{},
-        fn lock(self: *@This()) void {
-            os_unfair_lock_lock(&self.h);
-        }
-        fn unlock(self: *@This()) void {
-            os_unfair_lock_unlock(&self.h);
-        }
-    }
-else if (builtin.os.tag == .windows)
-    struct {
-        // No pthread in the MSVC CRT. SRWLOCK is the direct analog: a single
-        // pointer that zero-inits to SRWLOCK_INIT (no init call, like the zeroed
-        // pthread_mutex_t below), kernel-blocking, non-recursive.
-        // WINAPI convention (stdcall on x86, C on x64/aarch64) — required for a
-        // correct x86 build.
-        extern "kernel32" fn AcquireSRWLockExclusive(srw: *?*anyopaque) callconv(.winapi) void;
-        extern "kernel32" fn ReleaseSRWLockExclusive(srw: *?*anyopaque) callconv(.winapi) void;
-        m: ?*anyopaque = null, // SRWLOCK; null == SRWLOCK_INIT
-        fn lock(self: *@This()) void {
-            AcquireSRWLockExclusive(&self.m);
-        }
-        fn unlock(self: *@This()) void {
-            ReleaseSRWLockExclusive(&self.m);
-        }
-    }
-else
-    struct {
-        // Zig 0.16 has no std.Thread.Mutex (it moved behind an Io this layer
-        // doesn't take), so use pthread directly. A zeroed pthread_mutex_t is
-        // PTHREAD_MUTEX_INITIALIZER on Linux/bionic — kernel-blocking, no init call.
-        extern "c" fn pthread_mutex_lock(m: *std.c.pthread_mutex_t) c_int;
-        extern "c" fn pthread_mutex_unlock(m: *std.c.pthread_mutex_t) c_int;
-        m: std.c.pthread_mutex_t = std.mem.zeroes(std.c.pthread_mutex_t),
-        fn lock(self: *@This()) void {
-            _ = pthread_mutex_lock(&self.m);
-        }
-        fn unlock(self: *@This()) void {
-            _ = pthread_mutex_unlock(&self.m);
-        }
-    };
+const Lock = @import("lock.zig").Lock;
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
@@ -310,6 +262,18 @@ pub const Lookout = struct {
     // Reset on a new view (setView/fitChart) so a different area re-probes.
     served_max_zoom: f64 = 1e9,
 
+    /// The raster underlay: satellite imagery and other picture charts the
+    /// mariner supplies, drawn beneath the vector chart. Its own cache, worker
+    /// and memory ceiling — nothing here touches the scene (see raster.zig).
+    raster: rasterlayer.Layer = undefined,
+
+    /// Hide the chart WHERE A PICTURE COVERS IT, and keep it everywhere else.
+    /// The underlay moves in front of the whole chart instead of only its area
+    /// fills, so this needs no rebuild and no second scene. Flip it over a
+    /// feature: anything that moves is a real disagreement between the chart and
+    /// the picture.
+    chart_hidden: bool = false,
+
     // derived live (uniform-only) state
     cat_mask: u32 = 0b111,
     text_on: bool = true, // draw text ranges (labels)
@@ -373,6 +337,7 @@ pub const Lookout = struct {
                 .native_kind = opts.native_kind,
             }),
             .cam = undefined,
+            .raster = rasterlayer.Layer.init(alloc),
         };
         if (dbg) {
             std.debug.print("  gpu.init (Metal device+shaders+pipelines) {d} ms\n", .{gpu.ticksMs() - t});
@@ -899,6 +864,8 @@ pub const Lookout = struct {
     pub fn close(self: *Lookout) void {
         self.pollCompose(true); // finish any in-flight partition build first
         self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
+        // Before g.deinit(): the layer hands its textures back to the GPU.
+        self.raster.deinit(&self.g);
         if (self.sprite_atlas) |*sa| sa.deinit();
         if (self.glyph_atlas) |*ga| ga.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
@@ -1607,7 +1574,9 @@ pub const Lookout = struct {
     pub fn render(self: *Lookout) !bool {
         self.ensureAtlases();
         if (self.loadingPulse()) return self.g.renderWindow(self.uniforms(), false, false);
+        self.syncRasterMode(); // before prepareFrame: it decides what gets built
         self.prepareFrame();
+        self.raster.prepare(&self.g, self.cam);
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
         // A SKIPPED frame (swapchain saturated) must not clear the flag: the
         // pending content still needs a successful present.
@@ -1629,6 +1598,10 @@ pub const Lookout = struct {
         // (and the rebuild it forces) would never run.
         const lw, const lh = self.logicalSize();
         if (self.cam.vw != lw or self.cam.vh != lh) return true;
+        // The underlay streams its tiles in on a worker, and they land AFTER the
+        // frame that asked for them. Without this the mariner keeps whatever
+        // strip of imagery had loaded when they stopped panning.
+        if (self.raster.wantsFrame()) return true;
         return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {
@@ -1638,7 +1611,11 @@ pub const Lookout = struct {
     /// Render offscreen and write a PNG.
     pub fn snapshotPng(self: *Lookout, path: []const u8) !void {
         self.pollCompose(true);
+        self.syncRasterMode();
         self.buildGpuScene();
+        // A snapshot cannot show a tile that lands next frame, so wait for the
+        // underlay's worker rather than writing a half-filled picture.
+        self.raster.prepareBlocking(&self.g, self.cam, 5000);
         const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.g.width, self.g.height);
@@ -1646,7 +1623,9 @@ pub const Lookout = struct {
     /// Render offscreen into a caller RGBA8 buffer (len must be width*height*4).
     pub fn snapshotRgba(self: *Lookout, dst: []u8) !void {
         self.pollCompose(true);
+        self.syncRasterMode();
         self.buildGpuScene();
+        self.raster.prepareBlocking(&self.g, self.cam, 5000);
         const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;
@@ -1748,6 +1727,136 @@ pub const Lookout = struct {
     }
 
     // ---- convenience live toggles (mutate mariner, apply live) --------------
+    // ---- the raster underlay ----------------------------------------------
+
+    /// Open a raster chart the mariner supplied and add it to its set. False when
+    /// the file will not open; the caller carries on with the charts it has.
+    pub fn addRaster(self: *Lookout, path: [:0]const u8) bool {
+        const ok = self.raster.addSource(path);
+        if (ok) self.rasterChanged();
+        return ok;
+    }
+
+    /// Step to the next raster chart set, with "no picture" as one position. Moves no
+    /// camera and rebuilds no scene — the whole point is that a mariner comparing
+    /// two providers over a reef can flip between them without losing their fix.
+    pub fn cycleRaster(self: *Lookout) void {
+        self.raster.cycle();
+        self.rasterChanged();
+    }
+
+    /// Keep the chart in step with what is beneath it. With a picture active the
+    /// chart draws in CHART-OVER-PICTURE mode — its opaque water and land fills
+    /// drop out, or the mariner would see none of the raster chart they installed.
+    /// That is a real reduction in what the chart tells them, so a shell must
+    /// show that it is on (see rasterName / lookout_raster_active_name).
+    ///
+    /// The fills live in the scene's vertices, so this is a rebuild — the one
+    /// place the underlay does touch the scene, and only when the mariner turns
+    /// the picture on or off, never while they pan.
+    fn rasterChanged(self: *Lookout) void {
+        self.syncRasterMode();
+        self.applyRasterTint();
+        self.view_dirty = true;
+    }
+
+    /// Keep `mariner.chart_over_image` OFF. The chart draws complete, and the
+    /// underlay hides its area fills PER PIXEL by writing depth immediately in
+    /// front of them (see gpu.Gpu.rasterDepth). So the chart keeps its depth
+    /// shading everywhere the mariner has no picture — across a coverage edge,
+    /// and around every hole in a pyramid clipped to a coastline — and loses it
+    /// only where a picture actually is. No scene rebuild, and no all-or-nothing
+    /// decision about a whole view.
+    ///
+    /// The engine setting stays for the outputs that have no depth buffer to do
+    /// this with: the png / pdf / canvas paths.
+    fn syncRasterMode(self: *Lookout) void {
+        if (!self.mariner.chart_over_image) return;
+        self.mariner.chart_over_image = false;
+        self.dirty = true;
+        self.deriveLive();
+    }
+
+    /// The active set's name, or "" for no picture.
+    pub fn rasterName(self: *Lookout) [:0]const u8 {
+        return self.raster.activeName();
+    }
+
+    /// Is the chart actually drawing WITHOUT its opaque fills right now? That is
+    /// not the same as "a set is selected": the mode only engages where a picture
+    /// is really beneath the view, so a mariner carrying Croatian imagery gets a
+    /// normal chart in Chesapeake Bay.
+    pub fn rasterOverChart(self: *Lookout) bool {
+        return self.raster.coversView(self.cam);
+    }
+
+    /// Show or hide the vector chart. The picture beneath it stays.
+    pub fn setChartHidden(self: *Lookout, hidden: bool) void {
+        if (self.chart_hidden == hidden) return;
+        self.chart_hidden = hidden;
+        self.raster.hide_chart = hidden;
+        self.raster.built_valid = false; // the depth rides in the vertices
+        self.view_dirty = true;
+    }
+
+    pub fn toggleChart(self: *Lookout) void {
+        self.setChartHidden(!self.chart_hidden);
+    }
+
+    pub fn chartHidden(self: *Lookout) bool {
+        return self.chart_hidden;
+    }
+
+    /// The set that covers this view, drawn or not. A host shows this so a
+    /// mariner sailing into coverage can see there is a picture to turn on.
+    pub fn rasterAvailableName(self: *Lookout) [:0]const u8 {
+        return self.raster.availableName(self.cam);
+    }
+
+    /// Turn one raster chart on or off without removing it.
+    pub fn setRasterEnabled(self: *Lookout, path: []const u8, on: bool) bool {
+        const ok = self.raster.setEnabled(&self.g, path, on);
+        if (ok) self.view_dirty = true;
+        return ok;
+    }
+
+    pub fn rasterEnabled(self: *Lookout, path: []const u8) bool {
+        return self.raster.isEnabled(path);
+    }
+
+    pub fn rasterSetName(self: *Lookout, i: usize) [:0]const u8 {
+        return self.raster.setNameAt(i);
+    }
+
+    pub fn rasterSetInView(self: *Lookout, i: usize) bool {
+        return self.raster.setInView(i, self.cam);
+    }
+
+    pub fn rasterActiveIndex(self: *Lookout) ?usize {
+        return self.raster.activeIndex();
+    }
+
+    pub fn rasterSelect(self: *Lookout, i: ?usize) void {
+        self.raster.selectSet(i);
+        self.rasterChanged();
+    }
+
+    pub fn rasterSetCount(self: *Lookout) usize {
+        return self.raster.setCount();
+    }
+
+    /// Dim the picture with the colour scheme. A daylight photograph at full
+    /// brightness costs the mariner dark adaptation, which is the whole reason
+    /// the dusk and night schemes exist; the chart drawn over it would then be
+    /// the only dark thing on a bright display.
+    fn applyRasterTint(self: *Lookout) void {
+        // The engine states the factor so every host dims a picture identically.
+        const f = cc.tile57_mariner_image_dim(&self.mariner);
+        const v: u8 = @intFromFloat(@max(0.0, @min(255.0, f * 255.0)));
+        self.raster.tint = .{ v, v, v, 255 };
+        self.raster.built_valid = false; // the tint lives in the vertices
+    }
+
     pub fn cycleScheme(self: *Lookout) void {
         const order = [_]Scheme{ cc.TILE57_SCHEME_DAY, cc.TILE57_SCHEME_DUSK, cc.TILE57_SCHEME_NIGHT };
         var idx: usize = 0;
@@ -1756,6 +1865,7 @@ pub const Lookout = struct {
         };
         self.mariner.scheme = order[(idx + 1) % order.len];
         self.dirty = true; // a new palette is a fresh scene (colours are per-range)
+        self.applyRasterTint();
         self.deriveLive();
     }
     pub fn toggleText(self: *Lookout) void {

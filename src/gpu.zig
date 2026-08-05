@@ -24,3 +24,7 @@ pub const NativeKind = impl.NativeKind;
 pub const Color = impl.Color;
 pub const ticksMs = impl.ticksMs;
 pub const ticksUs = impl.ticksUs;
+/// The raster underlay (src/raster.zig): one tile's texture, and one tile's
+/// draw. Opaque to the layer, which only holds them.
+pub const RasterTex = impl.RasterTex;
+pub const RasterDraw = impl.RasterDraw;

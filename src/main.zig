@@ -19,6 +19,7 @@ const USAGE =
     \\  --width W --height H   render size in pixels (default 1600x1200)
     \\  --png OUT         day PNG output path (default lookout.png)
     \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
+    \\  --raster FILE     a picture chart (.mbtiles) under the chart; repeatable
     \\  -h, --help        this help
     \\
     \\Writes lookout.png (day), lookout-night.png (palette swap, no
@@ -89,6 +90,10 @@ pub fn main(init: std.process.Init) !void {
     // --safety N: set the mariner's safety contour before the first build —
     // the depth-band verification hook (bands must move when it does).
     var safety: ?f64 = null;
+    // --raster PATH: a picture chart the mariner supplied, drawn under the
+    // vector chart. Repeatable — several files group into sets by provider.
+    var rasters: std.ArrayList([:0]const u8) = .empty;
+    defer rasters.deinit(alloc);
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -116,6 +121,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--safety") and i + 1 < args.len) {
             i += 1;
             safety = std.fmt.parseFloat(f64, args[i]) catch null;
+        } else if (std.mem.eql(u8, a, "--raster") and i + 1 < args.len) {
+            i += 1;
+            try rasters.append(alloc, args[i][0.. :0]);
         } else if (a[0] != '-') {
             chart_path = args[i][0.. :0];
         }
@@ -134,6 +142,14 @@ pub fn main(init: std.process.Init) !void {
         return error.ChartOpenFailed;
     };
     defer l.close();
+
+    for (rasters.items) |rp| {
+        if (l.addRaster(rp)) {
+            std.debug.print("raster: {s}\n", .{rp});
+        } else {
+            std.debug.print("raster: FAILED {s}\n", .{rp});
+        }
+    }
 
     const v = if (lon != null and lat != null and zoom != null)
         lk.View{ .lon = lon.?, .lat = lat.?, .zoom = zoom.? }
