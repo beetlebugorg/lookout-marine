@@ -1741,7 +1741,7 @@ pub const Lookout = struct {
     /// camera and rebuilds no scene — the whole point is that a mariner comparing
     /// two providers over a reef can flip between them without losing their fix.
     pub fn cycleRaster(self: *Lookout) void {
-        self.raster.cycle();
+        self.raster.cycle(self.cam);
         self.rasterChanged();
     }
 
