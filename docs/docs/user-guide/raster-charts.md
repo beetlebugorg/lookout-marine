@@ -14,84 +14,80 @@ reads two kinds:
 - **BSB/KAP** — raster nautical charts, such as the discontinued NOAA RNC
   sheets, baked with tile57.
 
-The ENC tells you the depths, the aids and the hazards. It cannot tell you what
+The ENC gives you the depths, the aids and the hazards. It cannot show you what
 is there now: the coral heads, the sand bar across the entrance, the breakwater
 built since the last edition. A raster chart can.
 
-Lookout draws a raster chart below the ENC and drops the ENC's own shading only
-where the raster chart covers. You keep the chart, and you see the water.
+Lookout draws the raster chart below the ENC, and drops the ENC's own shading
+only where the raster chart covers. You keep the chart and you see the water.
 
-## Three views of the same water
+## What you see
 
-The Golden Gate, at the same camera, in each of the three states.
+The Golden Gate, from the same position, in each of the three states.
 
-**The ENC alone.** Depth shading, aids, hazards — and no picture of what is
-there.
+**The ENC on its own.** Depths, aids and hazards. No picture of what is there.
 
 ![The ENC alone at the Golden Gate](../img/raster-state-enc-only.webp)
 
-**The raster chart below the ENC.** The ENC drops its depth and land shading
-where the raster chart covers, and keeps everything else: the contours, the
-buoys, the lights, the traffic separation, the soundings and the labels.
+**A raster chart below the ENC.** Where the raster chart covers, the ENC drops
+its depth and land fills and keeps everything else — the contours, the buoys,
+the lights, the traffic separation, the soundings and the labels.
 
 ![A Google raster chart below the ENC](../img/raster-state-both.webp)
 
-**The raster chart alone.** ⇧⌘H hides the ENC where the raster chart covers it.
+**The raster chart with the ENC hidden.** ⇧⌘H hides the ENC wherever the raster
+chart covers. Everywhere else the ENC still draws.
 
 ![The raster chart with the ENC hidden](../img/raster-state-raster-only.webp)
 
 ## Add a raster chart
 
-Raster charts are yours to supply. Lookout has no catalogue and downloads
-nothing.
-
 Open **Chart ▸ Add Raster Charts…** (⇧⌘I), or the **Raster charts** section of
 the Charts tab in Settings. The panel takes several files at once, and whole
 folders.
 
-Lookout adds the list again to every chart you open, so a raster chart survives
-a change of ENC and a restart.
+Lookout installs the list again with every chart you open, so a raster chart
+survives both a change of ENC and a restart.
 
-To switch one off without removing it, use the **Raster charts** section of the
-Charts tab in Settings. These are half-gigabyte downloads; carrying four
+The **Raster charts** section of the Charts tab in Settings switches one off
+without removing it. These are half-gigabyte downloads, and carrying four
 providers for one coast usually means wanting three of them quiet.
 
 ## Sets
 
-MBTiles files group into **sets** by their provider. Files named `…ArcGIS…`,
-`…Bing…` and `…Google…` become three sets. Files from one provider that cover
-adjacent regions become one set, and draw as one continuous picture.
+Files group into **sets** by their provider. Files named `…ArcGIS…`, `…Bing…`
+and `…Google…` make three sets. Files from one provider covering adjacent
+regions make one set and draw as a single continuous picture.
 
-Compare the providers. Each one shows a different day, a different tide and a
-different amount of cloud. One of them shows the bottom.
+Compare the providers. Each shows a different day, a different tide and a
+different amount of cloud, and one of them shows the bottom.
 
 ## The pill
 
-The pill appears at the right of the readouts whenever **a raster chart is in
-view**, at any zoom — sail into your MBTiles coverage and it appears, leave it
-and it goes. Away from your raster charts there is nothing to press, and no
-pill.
+The pill sits at the right of the readouts. It appears whenever **a raster chart
+is in view**, at any zoom, and it goes when you leave the coverage. Where you
+carry nothing there is nothing to press.
 
-Sail into coverage with the raster chart off and the pill lights up in amber.
-It names the set and says it is off:
+Sail into coverage with the raster chart switched off and the pill turns amber.
+It names the set and says that it is off:
 
 ![The pill above a raster chart that is switched off](../img/raster-pill-off.webp)
 
-Click the pill and it opens the list of what covers this view. Pick one and it
-turns blue:
+Click the pill to open the list of what covers this view. Choose one and the
+pill turns blue:
 
 ![The pill above a raster chart that is drawn](../img/raster-pill-on.webp)
 
-With the ENC hidden above the raster chart (⇧⌘H) it stays blue — the raster
-chart is still drawn — and says so:
+With the ENC hidden (⇧⌘H) the pill stays blue, because the raster chart is
+still drawn, and the text says which one is off:
 
 ![The pill with the ENC hidden above the raster chart](../img/raster-pill-chartoff.webp)
 
 ## Choosing one
 
-The chevron on the pill means it opens a list. The list holds every set that
-covers this view, marks the one being drawn, and holds **None**, the chart
-switch and **Add Raster Charts…**
+The chevron means the pill opens a list. The list holds every set that covers
+this view and marks the one being drawn, followed by **None**, the ENC switch
+and **Add Raster Charts…**
 
 ![The list the pill opens](../img/raster-pill-menu.webp)
 
@@ -103,30 +99,29 @@ Three ways to the same thing:
 | ⌘I | Step to the next set, then to none, then round again. |
 | **Chart ▸ Raster Chart** | The same list, and **Next Raster Chart** for the step. |
 
-⌘I is the one to use above a reef. It does not open anything, so your eye keeps
-its fix, and anything that moves between two providers is a real difference.
+Use ⌘I over a reef. It opens nothing, so your eye keeps its fix and anything
+that moves between two providers is a real difference.
 
-## Only above the raster chart
+## At the edge of the coverage
 
-The ENC keeps everything it draws wherever the raster chart does not reach.
-Below is the southern edge of a San Francisco Bay set, off Santa Cruz: the
-picture inside its own rectangle, and outside it the full ENC — depth contours,
-soundings, buoys and the shading of the water.
+A raster chart changes the ENC only where it covers. Outside its bounds the ENC
+is untouched.
+
+Below is the southern edge of a San Francisco Bay set, off Santa Cruz. Inside
+the rectangle you see the picture. Outside it you see the whole ENC: depth
+contours, soundings, buoys and the shading of the water.
 
 ![The southern edge of a raster chart's coverage, off Santa Cruz](../img/raster-coverage-edge.webp)
 
-Holes work the same way. These tile pyramids follow a coastline, so about a
-third of the ground inside their own bounds carries no tile. The ENC draws alone
-there, with no marker and no gap.
+Holes behave the same way. These tile pyramids follow a coastline, so about a
+third of the ground inside their own bounds has no tile. The ENC draws there on
+its own, with no marker and no gap.
 
-## Hide the ENC above the raster chart
+## Comparing the two
 
-**Chart ▸ Hide Chart** (⇧⌘H), or the pill's context menu, hides the ENC where
-the raster chart covers it. The ENC stays everywhere else.
+**Chart ▸ Hide ENC Over Raster** (⇧⌘H), or the pill's list, hides the ENC
+wherever the raster chart covers. The ENC stays everywhere else.
 
-![The ENC hidden above the raster chart](../img/raster-chart-hidden.webp)
-
-Use it to check that the two agree. Hide the ENC and show it again above a
-jetty or a buoy; anything that jumps is a real disagreement between the ENC and
-the raster chart. Your eye finds that movement more easily than a small offset
-in a blend.
+Use it to check that the two agree. Hide the ENC and show it again over a jetty
+or a buoy: anything that jumps is a real disagreement between them. Your eye
+finds that movement far more easily than it finds a small offset in a blend.

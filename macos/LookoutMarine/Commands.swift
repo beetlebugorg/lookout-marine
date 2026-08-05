@@ -44,10 +44,8 @@ struct AppCommands: Commands {
                 Divider()
                 Button("Cycle") { model.cycleScheme() }.keyboardShortcut("l", modifiers: .command)
                 Divider()
-                // "Imagery" rather than "raster chart": the mariner's word for
-                // the thing they downloaded. Steps through the installed sets and
-                // then back to no picture, so one control also restores the full
-                // chart.
+                // The same list the HUD pill opens: every set that covers the
+                // view, marked with the one being drawn.
                 Menu("Raster Chart") {
                     ForEach(model.rasterSets.filter(\.inView)) { set in
                         Button {

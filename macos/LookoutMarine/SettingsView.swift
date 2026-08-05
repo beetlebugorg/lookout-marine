@@ -149,14 +149,15 @@ private struct ChartsSections: View {
             Button {
                 model.presentRasterPanel()
             } label: {
-                Label("Add Imagery…", systemImage: "plus")
+                Label("Add Raster Charts…", systemImage: "plus")
             }
         } header: {
-            Text("Imagery")
+            Text("Raster charts")
         } footer: {
-            Text("Satellite imagery and other picture charts you supply (.mbtiles). "
-                 + "Pick several at once, or a folder. The chart draws over them, "
-                 + "and drops its depth and land shading only where they cover.")
+            Text("Charts made of pictures: MBTiles of satellite imagery or another "
+                 + "vendor's charts, and BSB/KAP raster nautical charts. The ENC "
+                 + "draws over them and drops its depth and land shading only where "
+                 + "they cover. Switch one off to keep it installed without drawing it.")
                 .captionFooter()
         }
     }

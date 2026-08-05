@@ -271,8 +271,40 @@ pub const Layer = struct {
             }
         }
         if (!found) return false;
+
+        // A set with nothing enabled left cannot draw, so it must not stay
+        // selected — the pill would keep naming a chart that is switched off.
+        // Move to the first set that still has something, or to nothing.
+        if (self.active) |i| {
+            if (!self.setHasEnabled(i)) {
+                self.active = null;
+                for (self.sets.items, 0..) |_, j| {
+                    if (self.setHasEnabled(j)) {
+                        self.active = j;
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Nothing was drawn. If the mariner just switched something back on,
+            // draw it rather than making them find the pill.
+            for (self.sets.items, 0..) |_, j| {
+                if (self.setHasEnabled(j)) {
+                    self.active = j;
+                    break;
+                }
+            }
+        }
         self.dropTiles(g);
         return true;
+    }
+
+    fn setHasEnabled(self: *const Layer, i: usize) bool {
+        if (i >= self.sets.items.len) return false;
+        for (self.sets.items[i].sources.items) |*src| {
+            if (src.enabled) return true;
+        }
+        return false;
     }
 
     /// Is the chart at `path` installed and on?
