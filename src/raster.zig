@@ -485,18 +485,16 @@ pub const Layer = struct {
         self.built_sig = 0;
         if (n == 0) return;
 
-        // Step from what is DRAWN HERE. Sailing into San Francisco with only the
-        // Atlantic set on shows nothing, and the first press has to reach San
-        // Francisco rather than step a chart over the horizon.
-        const cur = self.shownSet(cam);
+        // One group, chosen from the water in the middle of the screen. Every
+        // other coast is left exactly as it is, drawn or not.
+        const anchor = self.focusSet(cam) orelse return;
+        const cur = self.shownInGroup(cam, anchor);
         const start: usize = if (cur) |i| i + 1 else 0;
         var j = start;
         while (j < n) : (j += 1) {
             if (!self.setCoversView(j, cam)) continue;
-            // A set covering other water is drawn already and is not a choice.
-            if (cur) |i| {
-                if (!self.setsOverlap(j, i)) continue;
-            }
+            // `setsOverlap(anchor, anchor)` is true, so the anchor is a step.
+            if (!self.setsOverlap(j, anchor)) continue;
             self.show(j);
             return;
         }
@@ -505,12 +503,68 @@ pub const Layer = struct {
         if (cur) |i| self.sets.items[i].shown = false;
     }
 
-    /// The set the mariner sees over this view — the first of the draw list.
-    /// Null when nothing is drawn here.
+    /// The set covering THE WATER THE MARINER IS LOOKING AT, drawn or not.
+    ///
+    /// WHY THE CYCLE NEEDS THIS. With two coasts on screen at once there are two
+    /// groups in view and one key. Taking the first of them makes the key walk
+    /// one coast to off and then start on the other, so a press near the end
+    /// switches a coast the mariner was not working on. The key has to settle on
+    /// one group and leave the rest alone.
+    ///
+    /// The group under the middle of the screen wins; failing that, the one
+    /// filling most of it. Both hold still while the view holds still, and a
+    /// mariner zoomed in on one coast always gets that coast.
+    fn focusSet(self: *Layer, cam: camera.Camera) ?usize {
+        const box = visibleBox(cam);
+        var best: ?usize = null;
+        var best_area: f64 = 0;
+        var best_centred = false;
+        for (self.sets.items, 0..) |_, i| {
+            if (!self.setCoversView(i, cam)) continue;
+            const b = self.setBounds(i) orelse continue;
+            var area: f64 = 0;
+            var centred = false;
+            // The view's x span is continuous and may run outside [0,1] across
+            // the antimeridian, so meet the set at each world instance.
+            for ([_]f64{ -1, 0, 1 }) |shift| {
+                const x0 = @max(box.x0, b.x0 + shift);
+                const x1 = @min(box.x1, b.x1 + shift);
+                const y0 = @max(box.y0, b.y0);
+                const y1 = @min(box.y1, b.y1);
+                if (x1 <= x0 or y1 <= y0) continue;
+                area += (x1 - x0) * (y1 - y0);
+                if (cam.center.x >= b.x0 + shift and cam.center.x <= b.x1 + shift and
+                    cam.center.y >= b.y0 and cam.center.y <= b.y1) centred = true;
+            }
+            const better = best == null or
+                (centred and !best_centred) or
+                (centred == best_centred and area > best_area);
+            if (better) {
+                best = i;
+                best_area = area;
+                best_centred = centred;
+            }
+        }
+        return best;
+    }
+
+    /// The drawn set covering the same water as `anchor`, or null. At most one
+    /// of a competing group is ever on, so the first match is the answer.
+    fn shownInGroup(self: *Layer, cam: camera.Camera, anchor: usize) ?usize {
+        for (self.sets.items, 0..) |*s, j| {
+            if (!s.shown) continue;
+            if (!self.setCoversView(j, cam)) continue;
+            if (!self.setsOverlap(j, anchor)) continue;
+            return j;
+        }
+        return null;
+    }
+
+    /// The set the mariner sees over the water they are looking at, or null when
+    /// that water has no picture drawn on it.
     fn shownSet(self: *Layer, cam: camera.Camera) ?usize {
-        var list: [MAX_DRAW_SETS]usize = undefined;
-        const n = self.drawList(cam, &list);
-        return if (n == 0) null else list[0];
+        const anchor = self.focusSet(cam) orelse return null;
+        return self.shownInGroup(cam, anchor);
     }
 
     /// Which set the pill names and the list marks: what is DRAWN HERE. Null
@@ -745,9 +799,9 @@ pub const Layer = struct {
     /// learns the raster chart they installed is under them.
     pub fn availableName(self: *Layer, cam: camera.Camera) [:0]const u8 {
         if (self.shownSet(cam)) |i| return self.sets.items[i].name;
-        for (self.sets.items, 0..) |*set, i| {
-            if (self.setCoversView(i, cam)) return set.name;
-        }
+        // Nothing drawn on this water: name the set the pill and ⌘I would turn
+        // on, so what the mariner reads is what the control does.
+        if (self.focusSet(cam)) |i| return self.sets.items[i].name;
         return "";
     }
 
