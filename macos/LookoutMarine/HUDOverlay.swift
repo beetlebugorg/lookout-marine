@@ -64,6 +64,46 @@ struct ReadoutsCapsule: View {
                     .background(Chrome.overscale.opacity(0.2),
                                 in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
+            // The active raster chart set. Shown whenever a picture is on, because
+            // the chart is then drawing WITHOUT its opaque water and land fills
+            // — a real reduction in what it is telling the mariner, and one they
+            // must never mistake for the full chart. Names the provider, which
+            // is what they are choosing between.
+            // The raster-chart pill. It appears only where a raster chart is in
+            // view. A click steps to the next one — the fast comparison, which
+            // must not cost a menu. Click and hold, or right-click, to SEE what
+            // is carried here and pick one directly.
+            if !visibleRasterSets.isEmpty {
+                separator
+                // A plain Button, not a Menu: a macOS Menu renders its own
+                // label chrome and drops the pill's fill and tint. The choice
+                // list rides on the context menu instead.
+                Button { showRasterMenu() } label: {
+                    HStack(spacing: 5) {
+                        Text(pillName.uppercased())
+                        if rasterState != .on {
+                            Text("|").foregroundStyle(rasterTint.opacity(0.5))
+                            Text(rasterState == .off ? "OFF" : "ENC OFF")
+                        }
+                        // The chevron is a promise: a click opens a list. It is
+                        // therefore always shown, because a click always does.
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                            .opacity(0.7)
+                    }
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(rasterTint)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(rasterTint.opacity(rasterState == .off ? 0.28 : 0.18),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help(rasterHelp)
+                .accessibilityLabel(rasterHelp)
+                .chromeHitRegion("raster-pill")
+            }
         }
         .font(.system(size: compact ? 12 : 14).monospacedDigit())
         .lineLimit(1)
@@ -73,8 +113,86 @@ struct ReadoutsCapsule: View {
         .background(Chrome.surface, in: Capsule())
         .overlay(Capsule().strokeBorder(Chrome.edge.opacity(0.25), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
-        // The capsule does not disable hit testing. Only the scale button is a
-        // control. A drag that starts on the other parts must reach the chart.
+        // The capsule takes its own taps. Without this a tap on the readouts
+        // fell through to the chart and picked whatever was under it.
+        .chromeHitRegion("hud-capsule")
+    }
+
+    /// Pop the set list at the pointer.
+    ///
+    /// AppKit rather than a SwiftUI `Menu`: a Menu renders its own label chrome
+    /// and drops the pill's fill and tint, and that colour IS the state — amber
+    /// for off, blue for drawn, orange for the ENC hidden above it.
+    private func showRasterMenu() {
+        let menu = NSMenu()
+        let target = RasterMenuTarget(model: model)
+        menu.autoenablesItems = false
+        for set in visibleRasterSets {
+            let item = NSMenuItem(title: set.name, action: #selector(RasterMenuTarget.pick(_:)), keyEquivalent: "")
+            item.target = target
+            item.tag = set.id
+            item.state = (set.id == model.rasterActive) ? .on : .off
+            menu.addItem(item)
+        }
+        let none = NSMenuItem(title: "None", action: #selector(RasterMenuTarget.pick(_:)), keyEquivalent: "")
+        none.target = target
+        none.tag = -1
+        none.state = (model.rasterActive < 0) ? .on : .off
+        menu.addItem(none)
+        menu.addItem(.separator())
+        let hide = NSMenuItem(title: model.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster",
+                              action: #selector(RasterMenuTarget.toggleChart), keyEquivalent: "")
+        hide.target = target
+        menu.addItem(hide)
+        let add = NSMenuItem(title: "Add Raster Charts…", action: #selector(RasterMenuTarget.add), keyEquivalent: "")
+        add.target = target
+        menu.addItem(add)
+        // The target dies with this scope unless the menu holds it.
+        objc_setAssociatedObject(menu, Unmanaged.passUnretained(menu).toOpaque(), target, .OBJC_ASSOCIATION_RETAIN)
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    private enum RasterState { case on, off, chartOff }
+
+    /// The sets with enabled charts in view. The pill exists for these.
+    private var visibleRasterSets: [ChartController.RasterSet] {
+        model.rasterSets.filter(\.inView)
+    }
+
+    /// The set the pill NAMES: the drawn one when it is in view, otherwise the
+    /// first one that is. Naming one set and reporting the state of another is
+    /// how the pill came to read "NAVIONICS | OFF" while Navionics was drawn.
+    private var pillSet: ChartController.RasterSet? {
+        if let a = visibleRasterSets.first(where: { $0.id == model.rasterActive }) { return a }
+        return visibleRasterSets.first
+    }
+
+    private var pillName: String { pillSet?.name ?? "" }
+
+    /// Read from the set the pill names, so the two can never disagree.
+    private var rasterState: RasterState {
+        guard let s = pillSet, s.id == model.rasterActive else { return .off }
+        return model.chartHidden ? .chartOff : .on
+    }
+
+    /// The colour reports THE RASTER CHART, not the ENC: blue while the chart is
+    /// drawn, amber while one is here and off. Hiding the ENC above it does not
+    /// change the colour, because the raster chart is still drawn — the "ENC
+    /// OFF" text carries that, and a warning colour there would say the picture
+    /// was off when it is the only thing on screen.
+    private var rasterTint: Color {
+        rasterState == .off ? Chrome.amber : Chrome.accent
+    }
+
+    private var rasterHelp: String {
+        let n = pillName
+        let more = visibleRasterSets.count > 1
+            ? " \(visibleRasterSets.count) raster charts cover this view; right-click to choose." : ""
+        switch rasterState {
+        case .off: return "\(n) is here but off. Click to choose it." + more
+        case .chartOff: return "\(n), with the ENC hidden above it. Click to choose another." + more
+        case .on: return "\(n) below the ENC. Click to choose another." + more
+        }
     }
 
     private var separator: some View {
@@ -86,6 +204,17 @@ struct ReadoutsCapsule: View {
         let lon = model.cursorLon ?? model.centerLon
         return CoordFormat.position(lat: lat, lon: lon)
     }
+}
+
+/// Carries the pill menu's clicks back to the model. NSMenuItem needs an
+/// ObjC target, which a SwiftUI view is not.
+@MainActor
+private final class RasterMenuTarget: NSObject {
+    let model: AppModel
+    init(model: AppModel) { self.model = model }
+    @objc func pick(_ sender: NSMenuItem) { model.selectRasterSet(sender.tag) }
+    @objc func toggleChart() { model.toggleChart() }
+    @objc func add() { model.presentRasterPanel() }
 }
 
 /// The scale entry. Type a scale or select a band, and the view zooms to it.
