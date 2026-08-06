@@ -147,6 +147,33 @@ export fn lookout_plugins_load(h: ?*lookout, dir: [*:0]const u8) c_int {
     return 0;
 }
 
+/// 1 while a plugin layer is running. A render-on-demand shell needs this: a
+/// plugin posts geometry from its own thread with no gesture behind it, so a
+/// loop that only wakes on input must keep polling `lookout_needs_redraw` at a
+/// low rate while plugins are up, instead of sleeping until the mariner
+/// touches something.
+export fn lookout_plugins_active(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.pluginsActive()) 1 else 0;
+}
+
+/// What the plugin overlay says about the symbol nearest a LOGICAL point, as
+/// JSON: `{"title":"...","rows":[["key","value"],...]}`. NULL when no symbol
+/// with a payload is within about 14 pt of it.
+///
+/// Borrowed: valid until the next `lookout_overlay_at`. `*out_len` (NULL to
+/// ignore) receives the length. The core copies the payload out from under the
+/// plugin's own thread, so the pointer stays good even if the plugin redraws
+/// that target in the meantime.
+export fn lookout_overlay_at(h: ?*lookout, x_pt: f32, y_pt: f32, out_len: ?*usize) ?[*]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = l.overlayAt(x_pt, y_pt) orelse return null;
+    if (out_len) |p| p.* = s.len;
+    return s.ptr;
+}
+
 /// 1 if the symbol/font atlas cache is already built — i.e. the NEXT open will
 /// not need the one-time rasterize. A host can call this before opening to show
 /// a "preparing chart symbols" message only on the first run. No handle needed.

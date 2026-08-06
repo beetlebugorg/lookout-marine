@@ -97,6 +97,30 @@ struct OverlayLayer: View {
         return CalloutPlace(x: x, y: point.y + clear, edge: .below, room: max(0, under))
     }
 
+    /// Where the hover tooltip stands. The tip sits below and right of the
+    /// pointer, and flips to the other side of whichever edge it would cross.
+    /// The card is never measured: it holds two edges and SwiftUI sizes it.
+    struct HoverPlace {
+        let alignment: Alignment
+        let leading: CGFloat
+        let trailing: CGFloat
+        let top: CGFloat
+        let bottom: CGFloat
+    }
+
+    static func hoverLayout(point: CGPoint, in view: CGSize) -> HoverPlace {
+        let gap: CGFloat = 14
+        let flipX = point.x + gap + HoverTip.maxWidth > view.width - Chrome.margin
+        let flipY = point.y + gap + HoverTip.assumedHeight > view.height - Chrome.margin
+        return HoverPlace(
+            alignment: Alignment(horizontal: flipX ? .trailing : .leading,
+                                 vertical: flipY ? .bottom : .top),
+            leading: flipX ? 0 : point.x + gap,
+            trailing: flipX ? max(0, view.width - point.x + gap) : 0,
+            top: flipY ? 0 : point.y + gap,
+            bottom: flipY ? max(0, view.height - point.y + gap) : 0)
+    }
+
     static func bottomSheetSize(in view: CGSize) -> CGSize {
         // The chart keeps the larger part of the view.
         CGSize(width: view.width, height: min(340, (view.height * 0.48).rounded(.down)))
@@ -287,6 +311,22 @@ struct OverlayLayer: View {
                         EmptyChartState(model: model).chromeHitRegion("empty-state")
                     }
                 }
+                // The overlay hover tooltip, clear of the pointer. Padding,
+                // not an offset, for the reason above. No chrome hit region:
+                // a click over the tip must still pick the chart under it.
+                .overlay(alignment: .topLeading) {
+                    if let info = model.hover, let p = model.hoverPoint {
+                        let place = Self.hoverLayout(point: p, in: geo.size)
+                        HoverTip(info: info)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: place.alignment)
+                            .padding(.leading, place.leading)
+                            .padding(.trailing, place.trailing)
+                            .padding(.top, place.top)
+                            .padding(.bottom, place.bottom)
+                            .allowsHitTesting(false)
+                    }
+                }
                 // No .animation keyed on pickResults: it animates every layout
                 // change in the subtree, which slid each new report across the
                 // chart from the previous one's position. The report shows
@@ -437,6 +477,8 @@ final class ChartNSView: NSView {
     // True while a mouse series that began on the chrome runs. The whole
     // series is dropped, not only the down (see mouseDown).
     private var chromeClick = false
+    /// Debounce for the overlay hover; see scheduleHover.
+    private var hoverTimer: Timer?
     private var rotating = false
     private var downPoint = CGPoint.zero
     private var lastDrag = CGPoint.zero
@@ -619,15 +661,48 @@ final class ChartNSView: NSView {
         guard bounds.contains(p) else {
             model?.cursorLon = nil
             model?.cursorLat = nil
+            clearHover()
             return
         }
         if let g = controller?.geo(atPoint: p) {
             model?.cursorLon = g.lon
             model?.cursorLat = g.lat
         }
+        scheduleHover(at: p)
     }
     override func mouseExited(with event: NSEvent) {
         model?.cursorLon = nil; model?.cursorLat = nil
+        clearHover()
+    }
+
+    // MARK: Hover over an overlay symbol
+
+    /// How long the pointer must settle before the overlay is asked what is
+    /// under it.
+    private static let hoverDelay: TimeInterval = 0.15
+
+    /// Ask once the pointer has been still for `hoverDelay`. An open tooltip
+    /// is dropped as soon as the pointer leaves its symbol, without waiting.
+    private func scheduleHover(at p: CGPoint) {
+        hoverTimer?.invalidate()
+        if model?.hover != nil, controller?.overlayInfo(atPoint: p) == nil { clearHover() }
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverDelay,
+                                          repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let m = self.model else { return }
+                let info = self.controller?.overlayInfo(atPoint: p)
+                if m.hover != info { m.hover = info }
+                m.hoverPoint = info == nil ? nil : p
+            }
+        }
+    }
+
+    private func clearHover() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        guard let m = model else { return }
+        if m.hover != nil { m.hover = nil }
+        if m.hoverPoint != nil { m.hoverPoint = nil }
     }
 
     // MARK: Drag = pan (with fling) / shift-drag = rotate
@@ -1086,3 +1161,46 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
 }
 
 #endif
+
+/// What a plugin overlay symbol says, shown while the pointer rests on it.
+/// Panel surface and type sizes are the app's, the same as a pick report.
+/// Values are monospaced-digit so a live SOG does not reflow its column.
+struct HoverTip: View {
+    let info: OverlayHover
+
+    /// `maxWidth` caps the card. `assumedHeight` only tells hoverLayout which
+    /// way to flip, so it is an over-estimate and never a frame.
+    static let maxWidth: CGFloat = 240
+    static let assumedHeight: CGFloat = 150
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(info.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Chrome.ink)
+                .lineLimit(1)
+            if !info.rows.isEmpty {
+                Divider().overlay(Chrome.rule)
+                Grid(alignment: .leadingFirstTextBaseline,
+                     horizontalSpacing: 12, verticalSpacing: 3) {
+                    ForEach(info.rows, id: \.0) { key, value in
+                        GridRow {
+                            Text(key)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Chrome.muted)
+                            Text(value)
+                                .font(.system(size: 12).monospacedDigit())
+                                .foregroundStyle(Chrome.ink)
+                                .gridColumnAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: Self.maxWidth, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .panelSurface(cornerRadius: 8, opaque: true)
+    }
+}

@@ -829,6 +829,13 @@ pub const Overlay = struct {
 
     /// A symbol at lon/lat, rotated to a TRUE bearing (clockwise from north).
     pub fn symbol(self: *Overlay, id: []const u8, sym: Sym, lon: f64, lat: f64, rot_deg: f64, color: Color, scale: f64) void {
+        self.symbolOpen(id, sym, lon, lat, rot_deg, color, scale);
+        self.b.raw("}");
+    }
+
+    /// Everything a symbol object holds except its closing brace, so a caller
+    /// may append a `pick` before closing it.
+    fn symbolOpen(self: *Overlay, id: []const u8, sym: Sym, lon: f64, lat: f64, rot_deg: f64, color: Color, scale: f64) void {
         self.beginSet();
         self.b.raw("{\"id\":");
         self.b.str(id);
@@ -840,7 +847,38 @@ pub const Overlay = struct {
         self.b.num(rot_deg);
         self.b.raw(",\"scale\":");
         self.b.num(scale);
-        self.b.print(",\"color\":\"{s}\"}}", .{color.text()});
+        self.b.print(",\"color\":\"{s}\"", .{color.text()});
+    }
+
+    /// A symbol plus a `pick` payload: a title and rows of key/value pairs the
+    /// shell shows on hover or on a tap. The core validates, escapes and caps
+    /// the text. Values are strings, not numbers: the payload is what the
+    /// mariner reads, and only the plugin knows the unit.
+    pub fn symbolPick(
+        self: *Overlay,
+        id: []const u8,
+        sym: Sym,
+        lon: f64,
+        lat: f64,
+        rot_deg: f64,
+        color: Color,
+        scale: f64,
+        title: []const u8,
+        rows: []const [2][]const u8,
+    ) void {
+        self.symbolOpen(id, sym, lon, lat, rot_deg, color, scale);
+        self.b.raw(",\"pick\":{\"title\":");
+        self.b.str(title);
+        self.b.raw(",\"rows\":[");
+        for (rows, 0..) |r, i| {
+            if (i > 0) self.b.raw(",");
+            self.b.raw("[");
+            self.b.str(r[0]);
+            self.b.raw(",");
+            self.b.str(r[1]);
+            self.b.raw("]");
+        }
+        self.b.raw("]}}");
     }
 
     /// A polyline through `pts`, each `.{ lon, lat }`. `width_pt` is screen

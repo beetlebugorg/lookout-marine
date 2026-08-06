@@ -99,6 +99,26 @@ void lookout_close(lookout *h);
  * call at all; LOOKOUT_NMEA=host:port configures the NMEA 0183 plugin. */
 int lookout_plugins_load(lookout *h, const char *dir);
 
+/* 1 while a plugin layer is running.
+ *
+ * A render-on-demand shell needs this. A plugin posts geometry from its own
+ * thread with no gesture behind it, so a loop that only wakes on input never
+ * shows moving traffic. While this returns 1, keep polling
+ * lookout_needs_redraw() at a low rate (a few Hz is enough) instead of
+ * sleeping until the mariner touches something. */
+int lookout_plugins_active(lookout *h);
+
+/* What the plugin overlay says about the symbol nearest a LOGICAL point, as
+ * JSON: {"title":"...","rows":[["key","value"],...]}. NULL when no symbol
+ * carrying a payload is within about 14 pt of it. Use it for hover on a
+ * pointer platform; a tap can use it too.
+ *
+ * Borrowed: valid until the next lookout_overlay_at(). *out_len (NULL to
+ * ignore) receives the length. The payload is copied out from under the
+ * plugin's own thread, so the pointer stays good even if the plugin redraws
+ * that target meanwhile. */
+const char *lookout_overlay_at(lookout *h, float x_pt, float y_pt, size_t *out_len);
+
 /* 1 if the symbol/font atlas cache is already built — the next open won't need
  * the one-time rasterize (~1.3s at 1x, more at HiDPI). Call before opening to
  * show a "preparing chart symbols" indicator only on the first run. */

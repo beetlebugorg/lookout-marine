@@ -4,8 +4,8 @@
 //! objects (symbol / polyline / polygon anchored to lon/lat, coloured by
 //! palette TOKEN), and this store keeps them, expands them to triangles in
 //! web-mercator world space, and hands the render thread one flat vertex array
-//! the backend uploads verbatim. Colour is a token, never an RGB, so night
-//! never breaks: the token table below resolves per scheme.
+//! the backend uploads verbatim. Colour is a token, never an RGB; the token
+//! table below resolves it per scheme.
 //!
 //! THE API root.zig DRIVES
 //!
@@ -72,31 +72,17 @@ fn rgb(hex: u24, a: f32) Rgba {
     };
 }
 
-/// Token -> RGBA per scheme, indexed [token][scheme].
-///
-/// PICKED BY EYE, not from a published table: S-52 standardises the chart's
-/// colours, not an overlay set, so these are judgement calls against the three
-/// tile57 palettes (day background NODTA #93aebb, dusk #404d53, night #171e21).
-/// Day values are dark and saturated because the day chart is pale; dusk values
-/// are light because the dusk chart is dark slate; night values are dim reds
-/// and ambers at low luminance so a night-adapted eye is not reset, with
-/// `target_danger` the brightest of them because an alarm must be seen.
+/// Token -> RGBA per scheme, indexed [token][scheme]. Not from a standard;
+/// see PROTOTYPE-CONCERNS.md. Night values are held under 0.35 encoded
+/// luminance, which the token test enforces.
 const TOKENS: [7][3]Rgba = .{
-    // ownship: black on the day chart (the S-52 convention), pale on dusk,
-    // dim orange at night — the one symbol that must always be findable.
-    .{ rgb(0x101418, 1.0), rgb(0xC8D2D8, 1.0), rgb(0x9A4218, 1.0) },
-    // target: magenta by day/dusk (the chart's "attention" hue, and clear of
-    // both the blue water and the red danger state); dim amber at night.
-    .{ rgb(0x8C1EA8, 1.0), rgb(0xB478D2, 1.0), rgb(0x7A4A10, 1.0) },
-    // target_danger: red in every scheme, brightest token at night.
-    .{ rgb(0xD40B1E, 1.0), rgb(0xE03A44, 1.0), rgb(0xC2301C, 1.0) },
-    // track: quiet — it is history, and it must not compete with the chart.
-    .{ rgb(0x2D4F8F, 0.85), rgb(0x7F9FD0, 0.85), rgb(0x5A2410, 0.85) },
-    // laylines: port red / starboard green, the sides' own colours.
-    .{ rgb(0xC8102E, 0.95), rgb(0xE0505F, 0.95), rgb(0x8E2418, 0.95) },
-    .{ rgb(0x0F8A3C, 0.95), rgb(0x4FBD74, 0.95), rgb(0x2A5C1C, 0.95) },
-    // warning: amber.
-    .{ rgb(0xE06A00, 1.0), rgb(0xF0A040, 1.0), rgb(0x7E5008, 1.0) },
+    .{ rgb(0x101418, 1.0), rgb(0xC8D2D8, 1.0), rgb(0x9A4218, 1.0) }, // ownship
+    .{ rgb(0x8C1EA8, 1.0), rgb(0xB478D2, 1.0), rgb(0x7A4A10, 1.0) }, // target
+    .{ rgb(0xD40B1E, 1.0), rgb(0xE03A44, 1.0), rgb(0xC2301C, 1.0) }, // target_danger
+    .{ rgb(0x2D4F8F, 0.85), rgb(0x7F9FD0, 0.85), rgb(0x5A2410, 0.85) }, // track
+    .{ rgb(0xC8102E, 0.95), rgb(0xE0505F, 0.95), rgb(0x8E2418, 0.95) }, // layline_port
+    .{ rgb(0x0F8A3C, 0.95), rgb(0x4FBD74, 0.95), rgb(0x2A5C1C, 0.95) }, // layline_stbd
+    .{ rgb(0xE06A00, 1.0), rgb(0xF0A040, 1.0), rgb(0x7E5008, 1.0) }, // warning
 };
 
 /// The RGBA a token resolves to under `scheme`.
@@ -137,34 +123,79 @@ const Object = struct {
     width_pt: f32 = 1.5,
     dash: bool = false,
     alpha: f32 = 1, // polygon fill alpha, multiplies the token's
+    /// Canonical JSON `{"title":"...","rows":[["k","v"],...]}`, or empty.
+    /// Owned. Only symbols are hit-tested; see `pickAt`.
+    pick: []u8 = &.{},
 
     fn free(self: *Object, alloc: std.mem.Allocator) void {
         if (self.pts.len > 0) alloc.free(self.pts);
         self.pts = &.{};
+        if (self.pick.len > 0) alloc.free(self.pick);
+        self.pick = &.{};
     }
 };
 
 // ---- geometry constants (screen points) ------------------------------------
+//
+// S-52 sizes symbols in millimetres: a .dai vector unit is 0.01 mm (PresLib
+// Part I s8) on a 0.3 mm pixel pitch. This file's unit is the point. S-52
+// defines no geometry for the own-ship and AIS symbols; see
+// PROTOTYPE-CONCERNS.md, "What S-52 says".
 
-const CIRCLE_SEGS = 24; // ring tessellation; 24 is smooth at 8 pt
-const OWNSHIP_R_OUTER = 8.0;
-const OWNSHIP_R_INNER = 5.0;
-const OWNSHIP_STROKE = 1.6;
-const OWNSHIP_NOTCH_TIP = 13.0; // bow notch apex, from the centre
-const OWNSHIP_NOTCH_BASE = 7.2; // where the notch meets the outer ring
-const OWNSHIP_NOTCH_HALF = 3.2;
-const TARGET_TIP = 6.5; // AIS triangle: apex ahead of the anchor
-const TARGET_TAIL = 3.5; // ...and base behind it (10 pt overall)
-const TARGET_HALF = 3.5;
+/// Points per millimetre.
+const PT_PER_MM: f64 = 72.0 / 25.4;
+
+/// Smallest own-ship length drawn. 9 mm, not the 6 mm the standard names as
+/// the threshold for a scaled outline: at 6 mm long this hull is 1.9 mm in the
+/// beam and reads as a line. See PROTOTYPE-CONCERNS.md.
+const OWNSHIP_MIN_LEN_PT: f64 = 9.0 * PT_PER_MM; // 25.5 pt
+
+/// Own ship's length overall, metres. No vessel configuration exists, so this
+/// is a compile-time default.
+const OWNSHIP_LOA_M: f64 = 12.0;
+
+/// Beam as a fraction of length overall. Constant, so the outline keeps its
+/// proportions at every size.
+const OWNSHIP_BEAM_RATIO: f64 = 0.31;
+
+/// The own-ship hull in plan: `along` in fractions of length overall, bow
+/// positive; `across` in fractions of the half beam, starboard positive.
+/// Origin is the reported position. Convex, so it fans.
+const HULL: [7][2]f64 = .{
+    .{ -0.50, -1.00 }, // port quarter
+    .{ -0.50, 1.00 }, // starboard quarter
+    .{ 0.20, 1.00 }, // starboard shoulder
+    .{ 0.38, 0.72 },
+    .{ 0.50, 0.00 }, // stem
+    .{ 0.38, -0.72 },
+    .{ 0.20, -1.00 }, // port shoulder
+};
+
+/// The AIS target triangle: acute isosceles, 20 pt long by 14 pt at the base.
+const TARGET_TIP = 13.0; // apex ahead of the anchor
+const TARGET_TAIL = 7.0; // base behind it
+const TARGET_HALF = 7.0;
 const DASH_ON = 7.0;
 const DASH_OFF = 5.0;
 /// Above this many dash cycles a segment draws solid — see emitPolyline.
 const MAX_DASHES_PER_SEG = 4096;
 
-/// Vertices one `ownship` symbol expands to: two stroked rings + the bow notch.
-pub const OWNSHIP_VERTS = CIRCLE_SEGS * 6 * 2 + 3;
+/// Vertices one `ownship` symbol expands to: the hull, fanned.
+pub const OWNSHIP_VERTS = (HULL.len - 2) * 3;
 /// Vertices one `target` symbol expands to.
 pub const TARGET_VERTS = 3;
+
+/// How near a logical point must be to a symbol's anchor for `pickAt` to
+/// report it.
+pub const PICK_RADIUS_PT: f64 = 14.0;
+
+/// Ceilings on a pick payload. Over either, the payload is truncated.
+const MAX_PICK_ROWS = 16;
+const MAX_PICK_TEXT = 96;
+
+/// Metres round the equator: 2*pi*a for the WGS84 semi-major axis. The width
+/// of the web-mercator world.
+const EARTH_CIRCUMFERENCE_M: f64 = 40075016.685578488;
 
 /// Rebuild when the scale has moved more than 5% — log2(1.05) of zoom.
 const ZOOM_REBUILD_DZ = 0.070389327891398;
@@ -186,6 +217,11 @@ pub const Store = struct {
     /// insertion order within a kind, which is stable frame to frame.
     objs: std.StringArrayHashMapUnmanaged(Object) = .empty,
     verts: std.ArrayList(Vertex) = .empty,
+    /// The last pick payload handed out, copied under the mutex. `pickAt`
+    /// returns a slice of this, not of the object: batches land on a broker
+    /// thread that does not hold the C ABI lock, so a pointer into an object
+    /// would dangle when the plugin redrew that target.
+    pick_out: std.ArrayList(u8) = .empty,
     gen: u64 = 0,
     dirty: bool = true,
     has_build: bool = false,
@@ -204,6 +240,7 @@ pub const Store = struct {
         }
         self.objs.deinit(self.alloc);
         self.verts.deinit(self.alloc);
+        self.pick_out.deinit(self.alloc);
         self.* = undefined;
     }
 
@@ -306,6 +343,7 @@ pub const Store = struct {
         const kind = std.meta.stringToEnum(Kind, jstr(o.get("kind") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
         const token = std.meta.stringToEnum(Token, jstr(o.get("color") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
         var obj = Object{ .kind = kind, .token = token };
+        errdefer obj.free(self.alloc);
         switch (kind) {
             .symbol => {
                 obj.sym = std.meta.stringToEnum(Sym, jstr(o.get("sym") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
@@ -313,6 +351,8 @@ pub const Store = struct {
                 obj.rot_deg = @floatCast(jnum(o.get("rot_deg")) orelse 0);
                 obj.scale = @floatCast(jnum(o.get("scale")) orelse 1);
                 if (!(obj.scale > 0.05 and obj.scale < 20)) obj.scale = 1;
+                // A malformed pick costs the payload, not the symbol.
+                if (o.get("pick")) |p| obj.pick = try self.parsePick(p) orelse &.{};
             },
             .polyline, .polygon => {
                 const arr = o.get(if (kind == .polyline) "pts" else "ring") orelse return error.Skip;
@@ -335,6 +375,95 @@ pub const Store = struct {
             },
         }
         return obj;
+    }
+
+    // ---- pick payloads ----------------------------------------------------
+
+    /// Validate a posted `pick` and re-emit it as canonical JSON:
+    /// `{"title":"...","rows":[["k","v"],...]}`. Anything that is not a string
+    /// is dropped; every string is escaped and capped. Null when nothing is
+    /// left. Re-emitted rather than kept verbatim: the parser gives no source
+    /// spans.
+    fn parsePick(self: *Store, v: std.json.Value) error{OutOfMemory}!?[]u8 {
+        if (v != .object) return null;
+        const title = if (v.object.get("title")) |ttl| jstr(ttl) orelse "" else "";
+        const rows: []std.json.Value = if (v.object.get("rows")) |r|
+            (if (r == .array) r.array.items else &.{})
+        else
+            &.{};
+        if (title.len == 0 and rows.len == 0) return null;
+
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(self.alloc);
+        try out.appendSlice(self.alloc, "{\"title\":");
+        try self.jsonStr(&out, clip(title));
+        try out.appendSlice(self.alloc, ",\"rows\":[");
+        var n: usize = 0;
+        for (rows) |row| {
+            if (n == MAX_PICK_ROWS) break;
+            if (row != .array or row.array.items.len < 2) continue;
+            const k = jstr(row.array.items[0]) orelse continue;
+            const val = jstr(row.array.items[1]) orelse continue;
+            if (n > 0) try out.append(self.alloc, ',');
+            n += 1;
+            try out.append(self.alloc, '[');
+            try self.jsonStr(&out, clip(k));
+            try out.append(self.alloc, ',');
+            try self.jsonStr(&out, clip(val));
+            try out.append(self.alloc, ']');
+        }
+        try out.appendSlice(self.alloc, "]}");
+        return try out.toOwnedSlice(self.alloc);
+    }
+
+    /// One JSON string literal, escaped. Control bytes go out as \u00xx.
+    fn jsonStr(self: *Store, out: *std.ArrayList(u8), s: []const u8) error{OutOfMemory}!void {
+        const hex = "0123456789abcdef";
+        try out.append(self.alloc, '"');
+        for (s) |c| switch (c) {
+            '"' => try out.appendSlice(self.alloc, "\\\""),
+            '\\' => try out.appendSlice(self.alloc, "\\\\"),
+            0x08 => try out.appendSlice(self.alloc, "\\b"),
+            0x0c => try out.appendSlice(self.alloc, "\\f"),
+            '\n' => try out.appendSlice(self.alloc, "\\n"),
+            '\r' => try out.appendSlice(self.alloc, "\\r"),
+            '\t' => try out.appendSlice(self.alloc, "\\t"),
+            else => if (c < 0x20) {
+                try out.appendSlice(self.alloc, "\\u00");
+                try out.append(self.alloc, hex[(c >> 4) & 0xf]);
+                try out.append(self.alloc, hex[c & 0xf]);
+            } else try out.append(self.alloc, c),
+        };
+        try out.append(self.alloc, '"');
+    }
+
+    /// The pick payload of the nearest SYMBOL whose anchor falls inside
+    /// `PICK_RADIUS_PT` of a logical point, or null. Anchors are projected
+    /// with the renderer's own camera, so rotation and the antimeridian hold.
+    /// Symbols only: a line or an area has no single point to measure to.
+    ///
+    /// Borrowed: valid until the next `pickAt`.
+    pub fn pickAt(self: *Store, cam: camera.Camera, x_pt: f32, y_pt: f32) ?[]const u8 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        var best: ?*const Object = null;
+        var best_d2: f64 = PICK_RADIUS_PT * PICK_RADIUS_PT;
+        for (self.objs.values()) |*o| {
+            if (o.kind != .symbol or o.pick.len == 0) continue;
+            const s = cam.worldToScreen(geo(o.at));
+            const dx = s.x - @as(f64, x_pt);
+            const dy = s.y - @as(f64, y_pt);
+            const d2 = dx * dx + dy * dy;
+            // Strictly nearer, so a tie keeps the earlier object.
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best = o;
+            }
+        }
+        const o = best orelse return null;
+        self.pick_out.clearRetainingCapacity();
+        self.pick_out.appendSlice(self.alloc, o.pick) catch return null;
+        return self.pick_out.items;
     }
 
     // ---- the geometry -----------------------------------------------------
@@ -484,22 +613,23 @@ pub const Store = struct {
         const fy = -std.math.cos(th);
         switch (o.sym) {
             .ownship => {
-                try self.ring(at, OWNSHIP_R_OUTER * s, OWNSHIP_STROKE * s, c);
-                try self.ring(at, OWNSHIP_R_INNER * s, OWNSHIP_STROKE * s, c);
-                // Bow notch: a filled wedge from the outer ring forward, the
-                // only part of the symbol that shows which way the boat points.
+                const len = ownshipLenWorld(o.at[1], wpp, o.scale);
+                const half_beam = len * OWNSHIP_BEAM_RATIO * 0.5;
                 const px = -fy; // starboard unit vector
                 const py = fx;
-                const tip = camera.Vec2{ .x = at.x + fx * OWNSHIP_NOTCH_TIP * s, .y = at.y + fy * OWNSHIP_NOTCH_TIP * s };
-                const l = camera.Vec2{
-                    .x = at.x + fx * OWNSHIP_NOTCH_BASE * s - px * OWNSHIP_NOTCH_HALF * s,
-                    .y = at.y + fy * OWNSHIP_NOTCH_BASE * s - py * OWNSHIP_NOTCH_HALF * s,
-                };
-                const r = camera.Vec2{
-                    .x = at.x + fx * OWNSHIP_NOTCH_BASE * s + px * OWNSHIP_NOTCH_HALF * s,
-                    .y = at.y + fy * OWNSHIP_NOTCH_BASE * s + py * OWNSHIP_NOTCH_HALF * s,
-                };
-                try self.tri(l, tip, r, c);
+                var pts: [HULL.len]camera.Vec2 = undefined;
+                for (HULL, &pts) |h, *p| {
+                    const along = h[0] * len;
+                    const across = h[1] * half_beam;
+                    p.* = .{
+                        .x = at.x + fx * along + px * across,
+                        .y = at.y + fy * along + py * across,
+                    };
+                }
+                var i: usize = 1;
+                while (i + 1 < pts.len) : (i += 1) {
+                    try self.tri(pts[0], pts[i], pts[i + 1], c);
+                }
             },
             .target => {
                 const px = -fy;
@@ -517,28 +647,15 @@ pub const Store = struct {
             },
         }
     }
-
-    /// A stroked circle of radius `r`, `w` wide, as CIRCLE_SEGS quads.
-    fn ring(self: *Store, at: camera.Vec2, r: f64, w: f64, c: Rgba) Error!void {
-        const ri = r - w * 0.5;
-        const ro = r + w * 0.5;
-        var i: usize = 0;
-        while (i < CIRCLE_SEGS) : (i += 1) {
-            const a0 = 2.0 * std.math.pi * @as(f64, @floatFromInt(i)) / CIRCLE_SEGS;
-            const a1 = 2.0 * std.math.pi * @as(f64, @floatFromInt(i + 1)) / CIRCLE_SEGS;
-            const c0 = std.math.cos(a0);
-            const s0 = std.math.sin(a0);
-            const c1 = std.math.cos(a1);
-            const s1 = std.math.sin(a1);
-            const in0 = camera.Vec2{ .x = at.x + c0 * ri, .y = at.y + s0 * ri };
-            const out0 = camera.Vec2{ .x = at.x + c0 * ro, .y = at.y + s0 * ro };
-            const in1 = camera.Vec2{ .x = at.x + c1 * ri, .y = at.y + s1 * ri };
-            const out1 = camera.Vec2{ .x = at.x + c1 * ro, .y = at.y + s1 * ro };
-            try self.tri(in0, out0, out1, c);
-            try self.tri(in0, out1, in1, c);
-        }
-    }
 };
+
+/// Clip a payload string to `MAX_PICK_TEXT`, on a UTF-8 boundary.
+fn clip(s: []const u8) []const u8 {
+    if (s.len <= MAX_PICK_TEXT) return s;
+    var n: usize = MAX_PICK_TEXT;
+    while (n > 0 and (s[n] & 0xc0) == 0x80) n -= 1;
+    return s[0..n];
+}
 
 /// lon/lat -> web-mercator world [0,1]. The chart's own transform: overlay
 /// geometry and chart geometry must land in the same space to the last bit.
@@ -550,6 +667,21 @@ pub fn geo(lonlat: [2]f64) camera.Vec2 {
 /// camera.worldToPx (whose vw/vh are logical points, so this is too).
 pub fn worldPerPt(zoom: f64) f64 {
     return 1.0 / (256.0 * std.math.pow(f64, 2.0, zoom));
+}
+
+/// The own-ship symbol's length in world units: the greater of true scale and
+/// the 6 mm floor, times the plugin's own `scale`. Both candidates are
+/// lengths, so the shape does not change across the crossover.
+pub fn ownshipLenWorld(lat_deg: f64, wpp: f64, scale: f64) f64 {
+    return @max(OWNSHIP_LOA_M * worldPerMetre(lat_deg), OWNSHIP_MIN_LEN_PT * wpp) * scale;
+}
+
+/// World units per metre on the ground at `lat_deg`. Web mercator is
+/// conformal, so a world unit spans the equator's circumference times
+/// cos(latitude). The cosine is floored to keep a polar position finite.
+pub fn worldPerMetre(lat_deg: f64) f64 {
+    const c = @abs(std.math.cos(lat_deg * std.math.pi / 180.0));
+    return 1.0 / (EARTH_CIRCUMFERENCE_M * @max(c, 1.0e-6));
 }
 
 // ---- JSON helpers ----------------------------------------------------------
@@ -672,23 +804,27 @@ test "symbol expansion vertex counts and orientation" {
     );
     var fr = try s.buildIfNeeded(15.0, .day);
     try t.expectEqual(@as(usize, OWNSHIP_VERTS), fr.verts.len);
-    try t.expectEqual(@as(usize, 291), fr.verts.len);
+    try t.expectEqual(@as(usize, 15), fr.verts.len); // 7 hull points, fanned
 
-    // The bow notch is the last triangle; heading 0 (north) puts its apex ABOVE
-    // the anchor, which in world space (y down) is a SMALLER y.
+    // The hull fans from HULL[0]: triangles (0,1,2) (0,2,3) (0,3,4) (0,4,5)
+    // (0,5,6), so HULL[4], the stem, lands at vertex 8. Heading 0 puts the
+    // stem north of the anchor, which in world space (y down) is a smaller y.
     const at = geo(.{ -76.4767, 38.9763 });
-    const tip_n = fr.verts[fr.verts.len - 2];
-    try t.expect(@as(f64, tip_n.y) < at.y);
-    try t.expectApproxEqAbs(@as(f32, @floatCast(at.x)), tip_n.x, 1e-9);
+    const stem_n = fr.verts[8];
+    try t.expect(@as(f64, stem_n.y) < at.y);
+    try t.expectApproxEqAbs(@as(f32, @floatCast(at.x)), stem_n.x, 1e-9);
+    // The transom corners are astern of it.
+    try t.expect(@as(f64, fr.verts[0].y) > at.y);
+    try t.expect(@as(f64, fr.verts[1].y) > at.y);
 
-    // Heading 90 (east) puts it to the RIGHT, at the same latitude.
+    // Heading 90 (east) puts the stem to the RIGHT, at the same latitude.
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":90,"color":"ownship"}]}
     );
     fr = try s.buildIfNeeded(15.0, .day);
-    const tip_e = fr.verts[fr.verts.len - 2];
-    try t.expect(@as(f64, tip_e.x) > at.x);
-    try t.expectApproxEqAbs(@as(f32, @floatCast(at.y)), tip_e.y, 1e-9);
+    const stem_e = fr.verts[8];
+    try t.expect(@as(f64, stem_e.x) > at.x);
+    try t.expectApproxEqAbs(@as(f32, @floatCast(at.y)), stem_e.y, 1e-9);
 
     // A target is one triangle; two objects add up.
     try s.applyBatch("p",
@@ -696,6 +832,178 @@ test "symbol expansion vertex counts and orientation" {
     );
     fr = try s.buildIfNeeded(15.0, .day);
     try t.expectEqual(@as(usize, OWNSHIP_VERTS + TARGET_VERTS), fr.verts.len);
+}
+
+test "the own-ship hull is a ship, at true scale once that is legible" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    const lat: f64 = 38.9763;
+    try s.applyBatch("p",
+        \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":0,"color":"ownship"}]}
+    );
+
+    // Vertex 8 is the stem and vertices 0/1 the transom corners, so length and
+    // beam are measurable off the built triangles.
+    const measure = struct {
+        fn go(fr: Frame) struct { len: f64, beam: f64 } {
+            const stem_y = @as(f64, fr.verts[8].y);
+            const transom_y = @as(f64, fr.verts[0].y);
+            return .{
+                .len = transom_y - stem_y,
+                .beam = @abs(@as(f64, fr.verts[1].x) - @as(f64, fr.verts[0].x)),
+            };
+        }
+    }.go;
+
+    // The rule, in f64. Below the crossover the floor governs and the symbol
+    // holds its point size. Above it, true scale governs and the symbol holds
+    // its size on the ground.
+    const floor15 = OWNSHIP_MIN_LEN_PT * worldPerPt(15.0);
+    const truth = OWNSHIP_LOA_M * worldPerMetre(lat);
+    try t.expectEqual(floor15, ownshipLenWorld(lat, worldPerPt(15.0), 1));
+    try t.expect(floor15 > truth); // at zoom 15 a 12 m boat is sub-millimetre
+    try t.expectEqual(floor15 * 0.5, ownshipLenWorld(lat, worldPerPt(16.0), 1));
+    try t.expectEqual(truth, ownshipLenWorld(lat, worldPerPt(20.0), 1));
+    try t.expectEqual(truth, ownshipLenWorld(lat, worldPerPt(21.0), 1)); // ground-fixed
+    // The crossover: the zoom at which 12 m first covers the floor.
+    const crossover = std.math.log2(OWNSHIP_MIN_LEN_PT / (256.0 * truth));
+    try t.expectApproxEqAbs(@as(f64, 18.0), crossover, 0.1);
+    try t.expectEqual(truth * 2.0, ownshipLenWorld(lat, worldPerPt(20.0), 2));
+
+    // The built triangles follow that rule. Tolerance is the f32 vertex grid,
+    // not the maths: world coordinates are ~0.38 here, where one f32 step is
+    // 3.0e-8, and each measurement is a difference of two of them.
+    const grid = 4.0 * 2.98e-8;
+    const low = measure(try s.buildIfNeeded(15.0, .day));
+    try t.expectApproxEqAbs(floor15, low.len, grid);
+    // Beam holds its fraction of length, and the stem is narrower than the
+    // shoulders: a ship, not a box.
+    try t.expectApproxEqAbs(low.len * OWNSHIP_BEAM_RATIO, low.beam, grid);
+    try t.expect(low.beam < low.len);
+}
+
+test "worldPerMetre is the chart's own scale, and finite at the pole" {
+    // Checked against the transform the overlay geometry uses, at Annapolis.
+    const lat: f64 = 38.9763;
+    const east = geo(.{ -76.4767 + 1.0e-4, lat });
+    const home = geo(.{ -76.4767, lat });
+    const world_per_deg_lon = (east.x - home.x) / 1.0e-4;
+    const m_per_deg_lon = world_per_deg_lon / worldPerMetre(lat);
+    // ~86.5 km per degree of longitude at 39 N.
+    try t.expectApproxEqRel(@as(f64, 86545.0), m_per_deg_lon, 1e-3);
+    // The cosine floor keeps a polar boat finite rather than infinite.
+    try t.expect(std.math.isFinite(worldPerMetre(90.0)));
+    try t.expect(worldPerMetre(90.0) > 0);
+}
+
+test "a pick payload survives the round trip, escaped and capped" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    try s.applyBatch("p",
+        \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.47,38.97],"color":"target",
+        \\ "pick":{"title":"EVER \"GIVEN\"","rows":[["MMSI","366123456"],["SOG","9.9 kn"]]}}]}
+    );
+    const got = s.objs.get("p/t1").?.pick;
+    try t.expectEqualStrings(
+        \\{"title":"EVER \"GIVEN\"","rows":[["MMSI","366123456"],["SOG","9.9 kn"]]}
+    , got);
+
+    // A control byte cannot break the shape, and the result parses back.
+    try s.applyBatch("p", "{\"set\":[{\"id\":\"t2\",\"kind\":\"symbol\",\"sym\":\"target\"," ++
+        "\"at\":[-76.47,38.97],\"color\":\"target\"," ++
+        "\"pick\":{\"title\":\"a\\u0007b\",\"rows\":[[\"k\",\"v\"]]}}]}");
+    const raw = s.objs.get("p/t2").?.pick;
+    try t.expect(std.mem.indexOf(u8, raw, "\\u0007") != null);
+    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, raw, .{});
+    defer parsed.deinit();
+    try t.expectEqualStrings("a\x07b", parsed.value.object.get("title").?.string);
+
+    // Rows that are not two strings are dropped. The good ones survive.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"t3","kind":"symbol","sym":"target","at":[-76.47,38.97],"color":"target",
+        \\ "pick":{"title":"x","rows":[["ok","1"],["short"],[3,4],["ok2","2"]]}}]}
+    );
+    try t.expectEqualStrings(
+        \\{"title":"x","rows":[["ok","1"],["ok2","2"]]}
+    , s.objs.get("p/t3").?.pick);
+
+    // No pick, or an empty one, leaves the object out of the hit test.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"t4","kind":"symbol","sym":"target","at":[-76.47,38.97],"color":"target"},
+        \\ {"id":"t5","kind":"symbol","sym":"target","at":[-76.47,38.97],"color":"target","pick":{"rows":[]}}]}
+    );
+    try t.expectEqual(@as(usize, 0), s.objs.get("p/t4").?.pick.len);
+    try t.expectEqual(@as(usize, 0), s.objs.get("p/t5").?.pick.len);
+}
+
+test "hit test: inside the radius, nearest wins, empty answers nothing" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+
+    // A north-up camera at zoom 15 over Annapolis, 800x600 logical points.
+    const centre = geo(.{ -76.4767, 38.9763 });
+    var cam = camera.Camera{
+        .origin = centre,
+        .center = centre,
+        .zoom = 15.0,
+        .vw = 800,
+        .vh = 600,
+    };
+    const mid_x: f32 = 400;
+    const mid_y: f32 = 300;
+
+    // Nothing retained: nothing to report.
+    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y));
+
+    // One target under the centre of the view.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.4767,38.9763],"color":"target",
+        \\ "pick":{"title":"ONE","rows":[["MMSI","1"]]}}]}
+    );
+    const hit = s.pickAt(cam, mid_x, mid_y) orelse return error.TestExpectedHit;
+    try t.expect(std.mem.indexOf(u8, hit, "\"ONE\"") != null);
+
+    // Just inside the radius answers; just outside does not.
+    try t.expect(s.pickAt(cam, mid_x + 13, mid_y) != null);
+    try t.expect(s.pickAt(cam, mid_x + 15, mid_y) == null);
+    try t.expect(s.pickAt(cam, mid_x, mid_y - 13) != null);
+    try t.expect(s.pickAt(cam, mid_x + 200, mid_y) == null);
+
+    // A second target 20 pt east of the first. Between them the nearer one
+    // answers, on either side of the midpoint. Insertion order does not decide.
+    const east_20pt = camera.Vec2{ .x = centre.x + 20.0 * worldPerPt(15.0), .y = centre.y };
+    const ll = camera.worldToLonLat(east_20pt);
+    var buf: [256]u8 = undefined;
+    try s.applyBatch("p", try std.fmt.bufPrint(&buf,
+        \\{{"set":[{{"id":"t2","kind":"symbol","sym":"target","at":[{d:.9},{d:.9}],"color":"target",
+        \\ "pick":{{"title":"TWO","rows":[["MMSI","2"]]}}}}]}}
+    , .{ ll.x, ll.y }));
+    try t.expect(std.mem.indexOf(u8, s.pickAt(cam, mid_x + 8, mid_y).?, "\"ONE\"") != null);
+    try t.expect(std.mem.indexOf(u8, s.pickAt(cam, mid_x + 12, mid_y).?, "\"TWO\"") != null);
+
+    // A symbol without a payload is not a hit, even under the cursor.
+    s.removeSource("p");
+    try s.applyBatch("p",
+        \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"color":"ownship"}]}
+    );
+    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y));
+
+    // Neither is a polyline that happens to pass under the cursor.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.48,38.9763],[-76.47,38.9763]],"color":"track",
+        \\ "pick":{"title":"LINE","rows":[["a","b"]]}}]}
+    );
+    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y));
+
+    // The camera is the renderer's: panning the view moves what answers.
+    s.removeSource("p");
+    try s.applyBatch("p",
+        \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.4767,38.9763],"color":"target",
+        \\ "pick":{"title":"ONE","rows":[["MMSI","1"]]}}]}
+    );
+    cam.center.x = centre.x + 100.0 * worldPerPt(15.0);
+    try t.expect(s.pickAt(cam, mid_x, mid_y) == null);
+    try t.expect(s.pickAt(cam, mid_x - 100, mid_y) != null);
 }
 
 test "a dashed line cannot run away" {

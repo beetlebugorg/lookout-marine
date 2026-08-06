@@ -33,6 +33,27 @@ struct PickFeature: Identifiable, Hashable {
     let s57: String     // full S-57 attribute JSON (unused in the HUD line)
 }
 
+/// What a plugin overlay symbol says about itself. Decoded from the JSON
+/// `lookout_overlay_at` returns.
+struct OverlayHover: Equatable {
+    let title: String
+    let rows: [(String, String)]
+
+    static func == (a: OverlayHover, b: OverlayHover) -> Bool {
+        a.title == b.title && a.rows.count == b.rows.count
+            && zip(a.rows, b.rows).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
+    }
+
+    init?(json: Data) {
+        guard let top = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let title = top["title"] as? String else { return nil }
+        self.title = title
+        self.rows = (top["rows"] as? [[String]] ?? []).compactMap {
+            $0.count >= 2 ? ($0[0], $0[1]) : nil
+        }
+    }
+}
+
 @MainActor
 final class ChartController: NSObject {
     /// The opaque `lookout*`. nil until a chart is opened.
@@ -50,6 +71,9 @@ final class ChartController: NSObject {
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval = 0
     private var idleTicks = 0
+    /// Runs only while the display link is paused and plugins are loaded.
+    /// See "Idle poll" below.
+    private var idlePoll: Timer?
     /// Rendering runs OFF the main thread so UIKit gesture bursts can never
     /// delay a frame slot (the 120Hz budget is 8.3ms). The display link stays
     /// on main as the pacemaker; each tick hands one render to this queue.
@@ -223,6 +247,7 @@ final class ChartController: NSObject {
     private func stopDisplayLink() {
         displayLink?.invalidate()
         displayLink = nil
+        stopIdlePoll()
     }
 
     /// A pick report belongs to the view it was taken in. Any camera move
@@ -233,12 +258,55 @@ final class ChartController: NSObject {
 
     /// Resume ticking after any state change (mutating calls funnel through here).
     private func kick() {
+        stopIdlePoll()
         idleTicks = 0
         if let link = displayLink {
             if link.isPaused { lastTimestamp = 0; link.isPaused = false }
         } else {
             startDisplayLink()
         }
+    }
+
+    // MARK: - Idle poll
+    //
+    // The display link pauses when nothing is moving, and only input restarts
+    // it. A plugin posts geometry with no input behind it, so while plugins
+    // are loaded a timer polls needs-redraw and kicks the link when it answers
+    // yes. Without it, AIS traffic froze until the mariner touched the
+    // trackpad.
+
+    /// Poll rate while paused. The AIS store coalesces to 2 Hz; this is twice
+    /// that.
+    private static let idlePollInterval: TimeInterval = 0.25
+
+    private func startIdlePoll() {
+        guard idlePoll == nil, let h = handle, lookout_plugins_active(h) != 0 else { return }
+        idlePoll = Timer.scheduledTimer(withTimeInterval: Self.idlePollInterval,
+                                        repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let h = self.handle else { return }
+                if lookout_needs_redraw(h) != 0 { self.kick() }
+            }
+        }
+    }
+
+    private func stopIdlePoll() {
+        idlePoll?.invalidate()
+        idlePoll = nil
+    }
+
+    // MARK: - Overlay hover
+
+    /// What the plugin overlay says about the symbol nearest a point, in
+    /// logical points. nil when nothing is near it.
+    func overlayInfo(atPoint p: CGPoint) -> OverlayHover? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let raw = lookout_overlay_at(h, Float(p.x), Float(p.y), &len), len > 0 else {
+            return nil
+        }
+        // Borrowed until the next call, so copy before anything else runs.
+        return OverlayHover(json: Data(bytes: raw, count: len))
     }
 
     // CADisplayLink fires on the main run loop; assume main-actor isolation.
@@ -277,7 +345,10 @@ final class ChartController: NSObject {
             // rendered — retire the startup loader.
             if model?.firstBuildDone == false { model?.firstBuildDone = true }
             idleTicks += 1
-            if idleTicks > 2 { link.isPaused = true }
+            if idleTicks > 2 {
+                link.isPaused = true
+                startIdlePoll()
+            }
         }
     }
 

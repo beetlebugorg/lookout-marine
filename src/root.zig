@@ -908,6 +908,24 @@ pub const Lookout = struct {
         return ps.overlay.needsRebuild(self.cam.zoom, self.overlayScheme());
     }
 
+    /// True once a plugin layer is up. A shell asks so it can keep polling
+    /// `needsRedraw` while it would otherwise sleep: plugin geometry arrives
+    /// with no gesture behind it, and a render-on-demand loop that only wakes
+    /// on input never shows it.
+    pub fn pluginsActive(self: *Lookout) bool {
+        if (!plugins_on) return false;
+        return self.plugins != null;
+    }
+
+    /// What the overlay symbol nearest `x_pt`,`y_pt` says about itself, or
+    /// null. Logical points, the same unit as every other pointer entry point.
+    /// Borrowed: valid until the next call.
+    pub fn overlayAt(self: *Lookout, x_pt: f32, y_pt: f32) ?[]const u8 {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        return ps.overlay.pickAt(self.cam, x_pt, y_pt);
+    }
+
     fn composeWorker(self: *Lookout) void {
         var err: cc.tile57_error = undefined;
         var c: ?*cc.tile57_compose = null;

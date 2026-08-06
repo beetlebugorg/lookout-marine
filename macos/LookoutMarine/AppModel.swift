@@ -109,6 +109,12 @@ final class AppModel: ObservableObject {
     @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
     @Published var centerLat: Double = 0
     @Published var centerLon: Double = 0
+    /// What the plugin overlay says about the symbol under the pointer, and
+    /// where the pointer is in the chrome's coordinate space. Both nil when the
+    /// pointer is over nothing. Set by the chart view after a hover settles.
+    @Published var hover: OverlayHover?
+    @Published var hoverPoint: CGPoint?
+
     /// The cursor pick: the features under the last tap, where it happened (in
     /// the chrome's coordinate space), and which one the report is showing.
     @Published var pickResults: [PickFeature] = []

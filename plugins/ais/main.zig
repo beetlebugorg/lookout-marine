@@ -1,34 +1,31 @@
-//! AIS: draws the other traffic and shouts when one of them is going to hit
-//! you.
+//! AIS: draws the other traffic and alarms on a close approach.
 //!
-//! One overlay object per target — a `target` symbol at its last reported
-//! position, rotated to true heading where the target sends one and to course
-//! over ground where it does not. The set is rebuilt from the full snapshot
-//! the host delivers on every AIS_CHANGED, so a target that stops reporting,
-//! or that the host evicts, loses its symbol without this plugin keeping a
-//! diff of what the chart is showing.
+//! Up to three overlay objects per target, all deleted together:
+//!
+//!   t<mmsi>       the triangle, rotated to heading, else course over ground
+//!   t<mmsi>/hdg   the heading line, solid
+//!   t<mmsi>/vec   the six-minute speed vector, dashed
+//!
+//! The symbol carries a pick payload, which the shell shows on hover. The set
+//! is rebuilt from the full snapshot the host delivers on every AIS_CHANGED,
+//! so this plugin keeps no diff of what the chart is showing.
 //!
 //! THE ALARM. Every AIS_CHANGED, each target with a position is run against
-//! own ship through cpa.zig. A target whose closest approach is inside
-//! `cpa_alarm_m` and still ahead of us by less than `tcpa_alarm_s` is drawn
-//! `target_danger` and raises one alarm — ONE. The gate state is kept per
-//! MMSI, so the alarm re-arms only after that target leaves the gate. Without
-//! that, a target closing for ten minutes would raise twelve hundred alarms
-//! and the twelve-hundredth would mean nothing.
+//! own ship through cpa.zig. A target inside `cpa_alarm_m` and less than
+//! `tcpa_alarm_s` ahead is drawn `target_danger` and raises one alarm. The
+//! gate state is per MMSI, so the alarm re-arms only after that target leaves
+//! the gate.
 //!
-//! WITHOUT OWN POSITION there is no relative motion to compute, so targets are
-//! still drawn — where the traffic is remains worth knowing — but nothing is
-//! flagged and the status line says degraded. A CPA computed against a
-//! position an hour old is not a conservative estimate, it is a wrong one.
+//! WITHOUT OWN POSITION there is no relative motion to compute. Targets are
+//! still drawn, nothing is flagged, and the status line says degraded.
 //!
 //! WHY A TIMER AS WELL. The 180-second age rule is time passing, not an event.
-//! A harbour where every target goes quiet at once produces no AIS_CHANGED,
-//! and the symbols would sit on the chart until one of them spoke again. A
-//! 1 Hz sweep ages them out and keeps the status line honest.
+//! A 1 Hz sweep ages targets out and keeps the status line current.
 
 const std = @import("std");
 const lk = @import("lk");
 const cpa = @import("cpa.zig");
+const vec = @import("vector.zig");
 
 comptime {
     lk.registerPlugin(@This());
@@ -36,9 +33,8 @@ comptime {
 
 // ---- the numbers, all in one place -----------------------------------------
 
-/// A target not heard from for this long stops being drawn. PROTOTYPE.md's
-/// rule. The host's own eviction is 600 s, so between the two the target is
-/// still in the store — it just is not on the chart claiming to be somewhere.
+/// A target not heard from for this long stops being drawn. The host evicts
+/// at 600 s; between the two limits the target is in the store but not drawn.
 const stale_target_ms: i64 = 180_000;
 
 /// A target this old is dropped from the plugin's table too. It cannot come
@@ -60,9 +56,13 @@ const sweep_ms: i64 = 1000;
 /// running in a place with 256 targets in range has other problems.
 const max_targets: usize = 256;
 
-/// Symbols per overlay call. Deletes all go in the first batch, so this bounds
-/// `ov_buf` whatever the target count.
-const sets_per_batch: usize = 40;
+/// Overlay objects per call. A drawn target is up to three of them: the
+/// symbol, its heading line and its speed vector. Bounds `ov_buf` whatever the
+/// target count.
+const objs_per_batch: usize = 24;
+
+/// Metres per second to knots, for the pick payload.
+const kn_per_mps: f64 = 3600.0 / vec.nautical_mile_m; // 1.94384
 
 /// Longest vessel name put in an alarm body. The AIS wire format allows 20.
 const max_name = 32;
@@ -279,6 +279,18 @@ const Plan = struct {
     draw: bool = false,
     danger: bool = false,
     rot_deg: f64 = 0,
+    /// The reported heading, if the target sent one. The heading line uses
+    /// this alone. The symbol's rotation may fall back to course over ground;
+    /// the heading line may not.
+    hdg_deg: ?f64 = null,
+    cog_deg: ?f64 = null,
+    sog_mps: ?f64 = null,
+    /// The closest-approach solution, when own ship's fix allowed one.
+    sol: ?cpa.Solution = null,
+    /// The two lines, resolved here because the delete pass must know which
+    /// are absent, and every delete goes out before the first set.
+    hdg_line: ?[2][2]f64 = null,
+    vec_line: ?[2][2]f64 = null,
 };
 
 /// Shortest payload that could carry a target. A parse failure and an empty
@@ -326,6 +338,13 @@ fn rebuild(payload: []const u8) void {
         // is going. The symbol claims the first, and falls back to the second,
         // and to north when the target reports neither.
         plan.rot_deg = t.heading orelse t.cog orelse 0;
+        plan.hdg_deg = t.heading;
+        plan.cog_deg = t.cog;
+        plan.sog_mps = t.sog;
+
+        const at = vec.Point{ .lat = t.lat.?, .lon = t.lon.? };
+        plan.hdg_line = vec.ray(at, t.heading, vec.heading_line_m);
+        plan.vec_line = vec.ray(at, t.cog, vec.vectorLengthM(t.sog orelse 0));
 
         const o = own orelse {
             e.in_gate = false;
@@ -337,6 +356,7 @@ fn rebuild(payload: []const u8) void {
             .sog_mps = t.sog orelse 0,
             .cog_deg = t.cog orelse t.heading orelse 0,
         });
+        plan.sol = sol;
         plan.danger = sol.dangerous(cpa_alarm_m, tcpa_alarm_s);
         if (plan.danger) danger_count += 1;
         if (plan.danger and !e.in_gate) alarm(t, sol);
@@ -344,26 +364,27 @@ fn rebuild(payload: []const u8) void {
     }
 
     // Deletes first: the builder drops a del that follows a set, and the host
-    // applies deletes before sets in any case.
+    // applies deletes before sets in any case. A target owns three objects and
+    // loses all three together.
     var b = Batch.begin();
     for (tracked[0..n_tracked]) |*e| {
         if (!e.drawn or e.want) continue;
-        var idb: [id_len]u8 = undefined;
-        b.del(objectId(&idb, e.mmsi));
+        b.delTarget(e.mmsi);
         e.drawn = false;
+    }
+    // A drawn target that stopped reporting a heading, or slowed below the
+    // vector gate, loses that one line. Deleting a line that is not there is a
+    // no-op host side, so this needs no memory of the last pass.
+    for (list, plans) |t, plan| {
+        if (!plan.draw) continue;
+        if (plan.hdg_line == null) b.del(t.mmsi, .hdg);
+        if (plan.vec_line == null) b.del(t.mmsi, .vec);
     }
 
     var drawn_count: usize = 0;
     for (list, plans) |t, plan| {
         if (!plan.draw) continue;
-        var idb: [id_len]u8 = undefined;
-        b.symbol(
-            objectId(&idb, t.mmsi),
-            t.lon.?,
-            t.lat.?,
-            plan.rot_deg,
-            if (plan.danger) .target_danger else .target,
-        );
+        b.drawTarget(t, plan, mono);
         drawn_count += 1;
         if (plan.e) |e| e.drawn = true;
     }
@@ -393,8 +414,7 @@ fn sweep() void {
         const age = e.ageMs(mono);
         if (age > stale_target_ms) {
             if (e.drawn) {
-                var idb: [id_len]u8 = undefined;
-                b.del(objectId(&idb, e.mmsi));
+                b.delTarget(e.mmsi);
                 e.drawn = false;
             }
             e.in_gate = false;
@@ -416,44 +436,150 @@ fn sweep() void {
 
 // ---- output -------------------------------------------------------------------
 
-/// Overlay object ids: `t` and the MMSI. The host namespaces them per plugin,
-/// so nothing else can collide with them.
-const id_len = 12;
+/// Overlay object ids: `t` and the MMSI for the symbol, plus `/hdg` and
+/// `/vec` for the two lines. The host namespaces them per plugin. Longest is
+/// "t" + 10 digits + "/hdg" = 15.
+const id_len = 16;
 
-fn objectId(buf: *[id_len]u8, mmsi: u32) []const u8 {
-    return std.fmt.bufPrint(buf, "t{d}", .{mmsi}) catch buf[0..0];
+const Id = enum {
+    symbol,
+    hdg,
+    vec,
+
+    fn suffix(self: Id) []const u8 {
+        return switch (self) {
+            .symbol => "",
+            .hdg => "/hdg",
+            .vec => "/vec",
+        };
+    }
+};
+
+fn objectId(buf: *[id_len]u8, mmsi: u32, which: Id) []const u8 {
+    return std.fmt.bufPrint(buf, "t{d}{s}", .{ mmsi, which.suffix() }) catch buf[0..0];
 }
 
 /// An overlay batch that starts a new call rather than overflowing its buffer.
-/// Deletes must all be emitted before the first symbol; after that the batch
-/// may split anywhere, because two calls carrying different ids mean the same
-/// thing as one call carrying both.
+/// Deletes go before sets within one call, and the split keeps every delete
+/// ahead of every set across the whole rebuild. The host applies calls in
+/// order, and nothing here deletes an id it has already set this pass.
 const Batch = struct {
     ov: lk.Overlay,
-    sets: usize = 0,
+    objs: usize = 0,
 
     fn begin() Batch {
         return .{ .ov = lk.Overlay.init(&ov_buf) };
     }
 
-    fn del(self: *Batch, id: []const u8) void {
-        self.ov.del(id);
+    /// Send what is buffered and start a fresh call.
+    fn restart(self: *Batch) void {
+        _ = self.ov.send();
+        self.ov = lk.Overlay.init(&ov_buf);
+        self.objs = 0;
     }
 
-    fn symbol(self: *Batch, id: []const u8, lon: f64, lat: f64, rot_deg: f64, color: lk.Color) void {
-        if (self.sets == sets_per_batch) {
-            _ = self.ov.send();
-            self.ov = lk.Overlay.init(&ov_buf);
-            self.sets = 0;
+    fn room(self: *Batch) void {
+        if (self.objs == objs_per_batch) self.restart();
+        self.objs += 1;
+    }
+
+    fn del(self: *Batch, mmsi: u32, which: Id) void {
+        self.room();
+        var idb: [id_len]u8 = undefined;
+        self.ov.del(objectId(&idb, mmsi, which));
+    }
+
+    /// Drop everything one target owns. Deleting an object that is not there
+    /// is a no-op host side.
+    fn delTarget(self: *Batch, mmsi: u32) void {
+        for ([_]Id{ .symbol, .hdg, .vec }) |which| self.del(mmsi, which);
+    }
+
+    /// One target: the triangle, the heading line and the six-minute vector.
+    fn drawTarget(self: *Batch, t: lk.Target, plan: Plan, mono: i64) void {
+        const color: lk.Color = if (plan.danger) .target_danger else .target;
+        var idb: [id_len]u8 = undefined;
+
+        self.room();
+        var pick: PickRows = .{};
+        pick.fill(t, plan, mono);
+        self.ov.symbolPick(
+            objectId(&idb, t.mmsi, .symbol),
+            .target,
+            t.lon.?,
+            t.lat.?,
+            plan.rot_deg,
+            color,
+            1.0,
+            pick.title(t),
+            pick.rows(),
+        );
+
+        if (plan.hdg_line) |line| {
+            self.room();
+            self.ov.polyline(objectId(&idb, t.mmsi, .hdg), &line, vec.line_width_pt, color, false);
         }
-        self.ov.symbol(id, .target, lon, lat, rot_deg, color, 1.0);
-        self.sets += 1;
+        if (plan.vec_line) |line| {
+            self.room();
+            self.ov.polyline(objectId(&idb, t.mmsi, .vec), &line, vec.line_width_pt, color, true);
+        }
     }
 
     /// Sending an empty batch is a no-op in the builder, so this is safe to
     /// call whether or not anything was added.
     fn flush(self: *Batch) void {
         _ = self.ov.send();
+    }
+};
+
+/// What a hover over a target says. Fixed buffers: the lk arena resets when
+/// the event handler returns.
+///
+/// UNITS. These are display strings in knots, degrees, metres and minutes,
+/// formatted here. That breaks the rule that units convert in the core. See
+/// PROTOTYPE-CONCERNS.md.
+const PickRows = struct {
+    /// Room for every row `fill` can add: MMSI, SOG, COG, HDG, CPA, TCPA, Age.
+    buf: [7][40]u8 = undefined,
+    store: [7][2][]const u8 = undefined,
+    n: usize = 0,
+    name_buf: [max_name]u8 = undefined,
+
+    fn add(self: *PickRows, key: []const u8, comptime fmt: []const u8, args: anytype) void {
+        if (self.n == self.buf.len) return;
+        const v = std.fmt.bufPrint(&self.buf[self.n], fmt, args) catch return;
+        self.store[self.n] = .{ key, v };
+        self.n += 1;
+    }
+
+    fn fill(self: *PickRows, t: lk.Target, plan: Plan, mono: i64) void {
+        self.add("MMSI", "{d}", .{t.mmsi});
+        if (plan.sog_mps) |s| self.add("SOG", "{d:.1} kn", .{s * kn_per_mps});
+        if (plan.cog_deg) |c| self.add("COG", "{d:.0}\u{00b0}", .{c});
+        if (plan.hdg_deg) |hh| self.add("HDG", "{d:.0}\u{00b0}", .{hh});
+        // CPA and TCPA only when own ship's fix allowed the solve, and only
+        // while the target is still closing.
+        if (plan.sol) |sol| {
+            if (sol.tcpa_s) |tc| {
+                if (tc >= 0) {
+                    self.add("CPA", "{d:.0} m", .{sol.cpa_m});
+                    self.add("TCPA", "{d:.1} min", .{tc / 60.0});
+                }
+            }
+        }
+        if (plan.e) |e| self.add("Age", "{d} s", .{@divTrunc(e.ageMs(mono), 1000)});
+    }
+
+    /// The name the target reports, or its MMSI.
+    fn title(self: *PickRows, t: lk.Target) []const u8 {
+        if (t.name) |n| {
+            if (n.len > 0) return n[0..@min(n.len, max_name)];
+        }
+        return std.fmt.bufPrint(&self.name_buf, "MMSI {d}", .{t.mmsi}) catch "AIS target";
+    }
+
+    fn rows(self: *PickRows) []const [2][]const u8 {
+        return self.store[0..self.n];
     }
 };
 
