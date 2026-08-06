@@ -72,8 +72,38 @@ pub const Error = error{
     /// A plugin cannot be loaded once the dispatch threads are running: they
     /// hold pointers into the registry, which growing it would invalidate.
     AlreadyStarted,
+    /// `configSet` named an id no plugin here answers to.
+    UnknownPlugin,
+    /// The config JSON is not an object, or a field it names does not match
+    /// the kind the schema declares.
+    BadConfig,
     OutOfMemory,
 };
+
+/// One settings field a manifest declares. A shell renders these; the plugin
+/// receives their values and nothing else.
+///
+/// A number field is clamped to `min`..`max` on the way in, so a plugin never
+/// has to defend against a setting outside the range it published.
+pub const Field = struct {
+    key: []u8,
+    /// What the shell shows beside the control. Defaults to the key.
+    label: []u8,
+    /// The unit of a number field, for display only: values cross the ABI in
+    /// the unit the schema names.
+    unit: []u8,
+    kind: Kind,
+    min: f64 = 0,
+    max: f64 = 0,
+    /// A toggle's default is 0 or 1.
+    default_value: f64 = 0,
+
+    pub const Kind = enum { number, toggle };
+};
+
+/// Longest settings schema a manifest may declare. A pane a mariner has to
+/// scroll past is a pane nobody reads at sea.
+pub const max_fields = 16;
 
 /// How long a plugin may stay inside ONE module call before the watchdog
 /// terminates it.
@@ -90,19 +120,95 @@ pub const Error = error{
 pub const default_event_budget_ms: i64 = 1000;
 
 /// A plugin's manifest.json:
-/// `{"id":"org.beetlebug.ais","name":"AIS","abi":1,"capabilities":[...]}`.
+/// `{"id":"org.beetlebug.ais","name":"AIS","abi":1,"capabilities":[...],
+///   "settings":[{"key":"cpa_limit","kind":"number","unit":"m","min":93,
+///                "max":9260,"default":926}]}`.
 pub const Manifest = struct {
     id: []u8,
     name: []u8,
     abi: u32,
     caps: broker.Caps,
+    /// The settings schema, empty when the manifest declares none.
+    settings: []Field = &.{},
 
     pub fn deinit(self: *Manifest, alloc: std.mem.Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
+        freeFields(alloc, self.settings, self.settings.len);
         self.* = undefined;
     }
+
+    pub fn field(self: *const Manifest, key: []const u8) ?usize {
+        for (self.settings, 0..) |f, i| {
+            if (std.mem.eql(u8, f.key, key)) return i;
+        }
+        return null;
+    }
 };
+
+/// One settings field out of a manifest. Everything the shell needs to draw a
+/// control, and everything `configSet` needs to police one.
+fn parseField(alloc: std.mem.Allocator, v: std.json.Value) !Field {
+    if (v != .object) return Error.BadManifest;
+    const o = v.object;
+    const key = switch (o.get("key") orelse return Error.BadManifest) {
+        .string => |s| s,
+        else => return Error.BadManifest,
+    };
+    if (key.len == 0 or key.len > 32) return Error.BadManifest;
+    const kind_text = switch (o.get("kind") orelse return Error.BadManifest) {
+        .string => |s| s,
+        else => return Error.BadManifest,
+    };
+    const kind = std.meta.stringToEnum(Field.Kind, kind_text) orelse return Error.BadManifest;
+    const label = switch (o.get("label") orelse std.json.Value{ .string = key }) {
+        .string => |s| s,
+        else => key,
+    };
+    const unit = switch (o.get("unit") orelse std.json.Value{ .string = "" }) {
+        .string => |s| s,
+        else => "",
+    };
+
+    var f = Field{
+        .key = try alloc.dupe(u8, key),
+        .label = undefined,
+        .unit = undefined,
+        .kind = kind,
+    };
+    errdefer alloc.free(f.key);
+    f.label = try alloc.dupe(u8, label);
+    errdefer alloc.free(f.label);
+    f.unit = try alloc.dupe(u8, unit);
+    errdefer alloc.free(f.unit);
+
+    switch (kind) {
+        .number => {
+            f.min = jsonNumber(o.get("min")) orelse return Error.BadManifest;
+            f.max = jsonNumber(o.get("max")) orelse return Error.BadManifest;
+            if (!(f.max > f.min)) return Error.BadManifest;
+            const d = jsonNumber(o.get("default")) orelse return Error.BadManifest;
+            f.default_value = std.math.clamp(d, f.min, f.max);
+        },
+        .toggle => {
+            f.max = 1;
+            f.default_value = switch (o.get("default") orelse return Error.BadManifest) {
+                .bool => |b| if (b) 1 else 0,
+                else => return Error.BadManifest,
+            };
+        },
+    }
+    return f;
+}
+
+fn jsonNumber(v: ?std.json.Value) ?f64 {
+    return switch (v orelse return null) {
+        .integer => |i| @floatFromInt(i),
+        .float => |x| if (std.math.isFinite(x)) x else null,
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch null,
+        else => null,
+    };
+}
 
 /// Parse a manifest. Unknown capability names are refused rather than ignored:
 /// a typo in a grant is a plugin that silently loses a permission at sea.
@@ -142,7 +248,43 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     const id_owned = try alloc.dupe(u8, id);
     errdefer alloc.free(id_owned);
     const name_owned = try alloc.dupe(u8, name);
-    return .{ .id = id_owned, .name = name_owned, .abi = abi, .caps = caps };
+    errdefer alloc.free(name_owned);
+
+    // `built` counts the fields already allocated, so a malformed field
+    // halfway down the schema frees exactly the ones before it.
+    var fields: []Field = &.{};
+    var built: usize = 0;
+    errdefer freeFields(alloc, fields, built);
+    if (o.get("settings")) |sv| {
+        if (sv != .array) return Error.BadManifest;
+        if (sv.array.items.len > max_fields) return Error.BadManifest;
+        fields = try alloc.alloc(Field, sv.array.items.len);
+        for (sv.array.items) |item| {
+            fields[built] = try parseField(alloc, item);
+            built += 1;
+            // Two fields with one key would give the shell two controls over
+            // the same value.
+            for (fields[0 .. built - 1]) |g| {
+                if (std.mem.eql(u8, g.key, fields[built - 1].key)) return Error.BadManifest;
+            }
+        }
+    }
+    return .{
+        .id = id_owned,
+        .name = name_owned,
+        .abi = abi,
+        .caps = caps,
+        .settings = fields,
+    };
+}
+
+fn freeFields(alloc: std.mem.Allocator, fields: []Field, built: usize) void {
+    for (fields[0..built]) |f| {
+        alloc.free(f.key);
+        alloc.free(f.label);
+        alloc.free(f.unit);
+    }
+    if (fields.len > 0) alloc.free(fields);
 }
 
 /// One loaded plugin, and the thread that runs it.
@@ -155,6 +297,10 @@ pub const Entry = struct {
     /// Heap-allocated so its address, which every native reaches through
     /// `wasm.callerUserData`, survives the registry list growing.
     state: *broker.Plugin,
+    /// The value in force for each field of `manifest.settings`, in the same
+    /// order. Guarded by the host's `cfg_mu`: a shell writes these from its own
+    /// thread while the plugin runs.
+    values: []f64 = &.{},
     /// Cleared when the plugin trapped, was terminated, or was shut down.
     /// Atomic: its own dispatch thread writes it, the watchdog on the I/O
     /// thread and the harness read it.
@@ -255,6 +401,10 @@ pub const Host = struct {
     /// Source ids are handed out in load order, which the vessel store reads
     /// as priority order. 1-based: 0 is the host's own reserved id.
     next_source: store.SourceId = 1,
+    /// Guards every entry's `values`. A settings change comes from the shell's
+    /// thread; the config JSON it produces is built under this lock and handed
+    /// to the broker as a plain payload.
+    cfg_mu: store.Lock = .{},
 
     pub fn init(alloc: std.mem.Allocator, br: *broker.Broker, opts: Options) Host {
         return .{ .alloc = alloc, .br = br, .opts = opts };
@@ -272,6 +422,7 @@ pub const Host = struct {
             e.inst.deinit();
             e.module.deinit();
             self.alloc.free(e.bytes);
+            if (e.values.len > 0) self.alloc.free(e.values);
             e.manifest.deinit(self.alloc);
             self.alloc.destroy(e.state);
         }
@@ -344,6 +495,12 @@ pub const Host = struct {
         errdefer manifest.deinit(self.alloc);
         if (manifest.abi != abi_version) return Error.AbiMismatch;
 
+        // Every setting starts at its schema default. A shell that has one
+        // saved sends it with `configSet` once the plugin is up.
+        const values = try self.alloc.alloc(f64, manifest.settings.len);
+        errdefer if (values.len > 0) self.alloc.free(values);
+        for (manifest.settings, values) |f, *v| v.* = f.default_value;
+
         const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{stem});
         defer self.alloc.free(wasm_name);
         const raw = try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
@@ -401,7 +558,7 @@ pub const Host = struct {
             self.br.removePlugin(state);
         }
 
-        const cfg = try self.startJson(manifest.id);
+        const cfg = try self.startJson(&manifest, values);
         defer self.alloc.free(cfg);
         const rc = inst.start(cfg) catch |e| {
             self.reportTrap(&inst, manifest.id, "lk_start");
@@ -419,6 +576,7 @@ pub const Host = struct {
             .module = module,
             .inst = inst,
             .state = state,
+            .values = values,
         });
         self.br.say(broker.level_info, manifest.id, "started ({s}, source {d})", .{ manifest.name, state.source });
         _ = dir_path;
@@ -430,18 +588,138 @@ pub const Host = struct {
         self.runtime_held = true;
     }
 
-    /// `{"abi":1,"config":{...}}`. Only nmea0183 takes configuration in the
-    /// prototype; everything else starts with an empty object, which is what a
-    /// plugin with nothing to configure must accept.
-    fn startJson(self: *Host, id: []const u8) ![]u8 {
-        if (std.mem.endsWith(u8, id, "nmea0183")) {
-            return std.fmt.allocPrint(
-                self.alloc,
-                "{{\"abi\":{d},\"config\":{{\"host\":\"{s}\",\"port\":{d}}}}}",
-                .{ abi_version, self.opts.nmea_host, self.opts.nmea_port },
-            );
+    /// `{"abi":1,"config":{...}}`. The config is the plugin's settings at
+    /// their current values, so a plugin reads one shape at start and at every
+    /// CONFIG_CHANGED. nmea0183's host and port ride in the same object: they
+    /// are configuration the host owns rather than the mariner.
+    fn startJson(self: *Host, manifest: *const Manifest, values: []const f64) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.alloc);
+        try out.print(self.alloc, "{{\"abi\":{d},\"config\":{{", .{abi_version});
+        var first = true;
+        if (std.mem.endsWith(u8, manifest.id, "nmea0183")) {
+            try out.print(self.alloc, "\"host\":\"{s}\",\"port\":{d}", .{ self.opts.nmea_host, self.opts.nmea_port });
+            first = false;
         }
-        return std.fmt.allocPrint(self.alloc, "{{\"abi\":{d},\"config\":{{}}}}", .{abi_version});
+        try writeSettings(&out, self.alloc, manifest.settings, values, first);
+        try out.appendSlice(self.alloc, "}}");
+        return out.toOwnedSlice(self.alloc);
+    }
+
+    // -- settings --------------------------------------------------------------
+
+    fn entryFor(self: *Host, id: []const u8) ?*Entry {
+        for (self.entries.items) |*e| {
+            if (std.mem.eql(u8, e.manifest.id, id)) return e;
+        }
+        return null;
+    }
+
+    /// The plugin's settings object, `{"cpa_limit":926,"cpa_alarm":true,...}`,
+    /// appended to `out`. Every field the schema declares is present, whether
+    /// or not the mariner has ever touched it.
+    pub fn configJson(self: *Host, id: []const u8, out: *std.ArrayList(u8)) !void {
+        self.cfg_mu.lock();
+        defer self.cfg_mu.unlock();
+        const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+        try out.append(self.alloc, '{');
+        try writeSettings(out, self.alloc, e.manifest.settings, e.values, true);
+        try out.append(self.alloc, '}');
+    }
+
+    /// Apply a settings object and tell the plugin. Keys the schema does not
+    /// declare are ignored; a number outside its range is clamped rather than
+    /// refused, because a shell that sends 10 000 m wants the largest limit
+    /// the plugin offers, not an error it will not show anybody.
+    ///
+    /// The plugin receives the WHOLE config, not the change, so a handler
+    /// never has to merge. Delivery goes through the ordinary event queue, so
+    /// it lands in order behind whatever the plugin is already handling.
+    pub fn configSet(self: *Host, id: []const u8, json: []const u8) !void {
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.alloc);
+        var index: u32 = 0;
+
+        {
+            var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, json, .{}) catch
+                return Error.BadConfig;
+            defer parsed.deinit();
+            if (parsed.value != .object) return Error.BadConfig;
+
+            self.cfg_mu.lock();
+            defer self.cfg_mu.unlock();
+            const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+            if (e.manifest.settings.len == 0) return Error.BadConfig;
+            index = e.state.index;
+
+            var it = parsed.value.object.iterator();
+            while (it.next()) |kv| {
+                const at = e.manifest.field(kv.key_ptr.*) orelse continue;
+                const f = e.manifest.settings[at];
+                switch (f.kind) {
+                    .number => {
+                        const v = jsonNumber(kv.value_ptr.*) orelse return Error.BadConfig;
+                        e.values[at] = std.math.clamp(v, f.min, f.max);
+                    },
+                    .toggle => e.values[at] = switch (kv.value_ptr.*) {
+                        .bool => |b| if (b) 1 else 0,
+                        else => return Error.BadConfig,
+                    },
+                }
+            }
+            try payload.append(self.alloc, '{');
+            try writeSettings(&payload, self.alloc, e.manifest.settings, e.values, true);
+            try payload.append(self.alloc, '}');
+        }
+
+        self.br.push(index, broker.Kind.config_changed, 0, payload.items);
+        self.br.say(broker.level_info, id, "config {s}", .{payload.items});
+    }
+
+    /// Every loaded plugin, its state, its status line, and its settings
+    /// schema with the value in force. This is what a shell reads to draw a
+    /// settings pane; it never has to know what a plugin is for.
+    pub fn registryJson(self: *Host, out: *std.ArrayList(u8)) !void {
+        self.cfg_mu.lock();
+        defer self.cfg_mu.unlock();
+        const alloc = self.alloc;
+        try out.appendSlice(alloc, "{\"plugins\":[");
+        for (self.entries.items, 0..) |*e, i| {
+            if (i > 0) try out.append(alloc, ',');
+            try out.appendSlice(alloc, "{\"id\":");
+            try writeJsonString(out, alloc, e.manifest.id);
+            try out.appendSlice(alloc, ",\"name\":");
+            try writeJsonString(out, alloc, e.manifest.name);
+            try out.print(alloc, ",\"live\":{s}", .{if (e.isLive()) "true" else "false"});
+            // The status line is a string, not an object: it is text a plugin
+            // wrote, and the shell decides what to do with it.
+            try out.appendSlice(alloc, ",\"status\":");
+            try writeJsonString(out, alloc, e.state.status());
+            try out.appendSlice(alloc, ",\"settings\":[");
+            for (e.manifest.settings, e.values, 0..) |f, v, k| {
+                if (k > 0) try out.append(alloc, ',');
+                try out.appendSlice(alloc, "{\"key\":");
+                try writeJsonString(out, alloc, f.key);
+                try out.appendSlice(alloc, ",\"label\":");
+                try writeJsonString(out, alloc, f.label);
+                try out.print(alloc, ",\"kind\":\"{s}\"", .{@tagName(f.kind)});
+                if (f.unit.len > 0) {
+                    try out.appendSlice(alloc, ",\"unit\":");
+                    try writeJsonString(out, alloc, f.unit);
+                }
+                switch (f.kind) {
+                    .number => try out.print(alloc, ",\"min\":{d},\"max\":{d},\"default\":{d},\"value\":{d}", .{
+                        f.min, f.max, f.default_value, v,
+                    }),
+                    .toggle => try out.print(alloc, ",\"default\":{s},\"value\":{s}", .{
+                        boolText(f.default_value), boolText(v),
+                    }),
+                }
+                try out.append(alloc, '}');
+            }
+            try out.appendSlice(alloc, "]}");
+        }
+        try out.appendSlice(alloc, "]}");
     }
 
     // -- the event loop ------------------------------------------------------
@@ -713,6 +991,48 @@ fn lessName(_: void, a: []u8, b: []u8) bool {
     return std.mem.lessThan(u8, a, b);
 }
 
+fn boolText(v: f64) []const u8 {
+    return if (v != 0) "true" else "false";
+}
+
+/// `"key":value` for each field, comma-separated. `first` says whether the
+/// object it is going into is still empty.
+fn writeSettings(
+    out: *std.ArrayList(u8),
+    alloc: std.mem.Allocator,
+    fields: []const Field,
+    values: []const f64,
+    first: bool,
+) !void {
+    var lead = first;
+    for (fields, values) |f, v| {
+        if (!lead) try out.append(alloc, ',');
+        lead = false;
+        try writeJsonString(out, alloc, f.key);
+        switch (f.kind) {
+            .number => try out.print(alloc, ":{d}", .{v}),
+            .toggle => try out.print(alloc, ":{s}", .{boolText(v)}),
+        }
+    }
+}
+
+/// A quoted, escaped JSON string. A manifest is a file on disk and a status
+/// line is text a plugin wrote; neither may break the shape of what it lands
+/// in.
+fn writeJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
+    try out.append(alloc, '"');
+    for (s) |c| switch (c) {
+        '"' => try out.appendSlice(alloc, "\\\""),
+        '\\' => try out.appendSlice(alloc, "\\\\"),
+        '\n' => try out.appendSlice(alloc, "\\n"),
+        '\r' => try out.appendSlice(alloc, "\\r"),
+        '\t' => try out.appendSlice(alloc, "\\t"),
+        0...8, 11, 12, 14...31 => try out.print(alloc, "\\u{x:0>4}", .{c}),
+        else => try out.append(alloc, c),
+    };
+    try out.append(alloc, '"');
+}
+
 // ---- tests -------------------------------------------------------------------
 
 const t = std.testing;
@@ -753,6 +1073,14 @@ test "a manifest is refused rather than half-read" {
     try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":\"vessel.read\"}"));
 }
 
+const ais_settings_manifest =
+    \\{"id":"org.beetlebug.ais","name":"AIS targets","abi":1,
+    \\ "capabilities":["ais.read"],
+    \\ "settings":[
+    \\  {"key":"cpa_limit","label":"CPA limit","kind":"number","unit":"m","min":93,"max":9260,"default":926},
+    \\  {"key":"cpa_alarm","label":"Collision alarm","kind":"toggle","default":true}]}
+;
+
 test "the start payload carries the ABI, and NMEA config only for nmea0183" {
     var vessels = try store.Store.init(t.allocator);
     defer vessels.deinit();
@@ -763,11 +1091,62 @@ test "the start payload carries the ABI, and NMEA config only for nmea0183" {
     var h = Host.init(t.allocator, &br, .{ .nmea_host = "10.0.0.4", .nmea_port = 2000 });
     defer h.deinit();
 
-    const nmea = try h.startJson("org.beetlebug.nmea0183");
+    var nm = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.nmea0183\",\"abi\":1}");
+    defer nm.deinit(t.allocator);
+    const nmea = try h.startJson(&nm, &.{});
     defer t.allocator.free(nmea);
     try t.expectEqualStrings("{\"abi\":1,\"config\":{\"host\":\"10.0.0.4\",\"port\":2000}}", nmea);
 
-    const other = try h.startJson("org.beetlebug.ownship");
+    var om = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.ownship\",\"abi\":1}");
+    defer om.deinit(t.allocator);
+    const other = try h.startJson(&om, &.{});
     defer t.allocator.free(other);
     try t.expectEqualStrings("{\"abi\":1,\"config\":{}}", other);
+
+    // A plugin with a schema starts on its defaults, in the same shape
+    // CONFIG_CHANGED later carries.
+    var am = try parseManifest(t.allocator, ais_settings_manifest);
+    defer am.deinit(t.allocator);
+    const with = try h.startJson(&am, &.{ 926, 1 });
+    defer t.allocator.free(with);
+    try t.expectEqualStrings("{\"abi\":1,\"config\":{\"cpa_limit\":926,\"cpa_alarm\":true}}", with);
+}
+
+test "a settings schema parses, and a malformed field refuses the manifest" {
+    const a = t.allocator;
+    var m = try parseManifest(a, ais_settings_manifest);
+    defer m.deinit(a);
+    try t.expectEqual(@as(usize, 2), m.settings.len);
+    try t.expectEqualStrings("cpa_limit", m.settings[0].key);
+    try t.expectEqualStrings("CPA limit", m.settings[0].label);
+    try t.expectEqualStrings("m", m.settings[0].unit);
+    try t.expectEqual(Field.Kind.number, m.settings[0].kind);
+    try t.expectEqual(@as(f64, 93), m.settings[0].min);
+    try t.expectEqual(@as(f64, 9260), m.settings[0].max);
+    try t.expectEqual(@as(f64, 926), m.settings[0].default_value);
+    try t.expectEqual(Field.Kind.toggle, m.settings[1].kind);
+    try t.expectEqual(@as(f64, 1), m.settings[1].default_value);
+    try t.expectEqual(@as(usize, 1), m.field("cpa_alarm").?);
+    try t.expect(m.field("nothing") == null);
+
+    // A field with no kind, an unknown kind, a range that is not one, a
+    // toggle whose default is a number, and two fields sharing a key.
+    const bad = [_][]const u8{
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\"}]}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"slider\",\"default\":1}]}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"number\",\"min\":5,\"max\":5,\"default\":5}]}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"number\",\"min\":0,\"max\":5}]}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"toggle\",\"default\":1}]}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"toggle\",\"default\":true}," ++
+            "{\"key\":\"a\",\"kind\":\"toggle\",\"default\":false}]}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{}}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+
+    // A default outside the range it declares is clamped, not refused.
+    var clamped = try parseManifest(a,
+        \\{"id":"x","abi":1,"settings":[{"key":"a","kind":"number","min":1,"max":10,"default":99}]}
+    );
+    defer clamped.deinit(a);
+    try t.expectEqual(@as(f64, 10), clamped.settings[0].default_value);
 }

@@ -6,11 +6,13 @@
 //!   - RMC, GGA, VTG, the relative MWV and GSV are the worked examples the
 //!     standard's documentation and the common receiver manuals print,
 //!     published checksums included.
-//!   - The AIS type 1, type 18 and two-part type 5 are the worked examples
-//!     from the AIVDM/AIVDO decoding guide. They must decode to the MMSIs,
-//!     positions and ship names that guide states, which is what checks the
-//!     bit layouts in `parser.zig` against something outside this
-//!     repository.
+//!   - The AIS type 1, type 18, two-part type 5 and two-part type 21 are the
+//!     worked examples from the AIVDM/AIVDO decoding guide. They must decode
+//!     to the MMSIs, positions, ship names and aid names that guide states,
+//!     which is what checks the bit layouts in `parser.zig` against something
+//!     outside this repository.
+//!   - The virtual and off-position type 21 lines have no published example.
+//!     They come from the encoder in `tools/nmea_gen.zig`, and each says so.
 //!   - The rest follow the same field layouts by hand: a receiver with no
 //!     fix, the heading, depth and wind sentences, and — from the encoder
 //!     in `tools/nmea_gen.zig` — a type 24 A/B pair and a type 1 carrying
@@ -23,12 +25,13 @@
 /// Every line here parses. `bad_checksum` and `no_checksum` are excluded on
 /// purpose: they exist to be rejected.
 pub const all = [_][]const u8{
-    rmc,           rmc_void,        gga,           gga_nofix,
-    vtg,           hdt,             hdg,           hdg_novar,
-    dpt,           dbt,             mwv_apparent,  mwv_true,
-    mwd,           vhw,             gsv,           aivdm_type1,
-    aivdm_type18,  aivdm_type5_a,   aivdm_type5_b, aivdm_type24a,
-    aivdm_type24b, aivdm_sentinels,
+    rmc,                  rmc_void,            gga,            gga_nofix,
+    vtg,                  hdt,                 hdg,            hdg_novar,
+    dpt,                  dbt,                 mwv_apparent,   mwv_true,
+    mwd,                  vhw,                 gsv,            aivdm_type1,
+    aivdm_type18,         aivdm_type5_a,       aivdm_type5_b,  aivdm_type24a,
+    aivdm_type24b,        aivdm_sentinels,     aivdm_type21_a, aivdm_type21_b,
+    aivdm_type21_virtual, aivdm_type21_offpos,
 };
 
 // --- talker sentences ------------------------------------------------------
@@ -137,3 +140,49 @@ pub const aivdm_type24_expect = .{
 /// A type 1 carrying every not-available sentinel at once: latitude 91°,
 /// longitude 181°, speed 1023, course 3600, heading 511, status 15.
 pub const aivdm_sentinels = "!AIVDM,1,1,,A,15MwqgwP?w<tSF0l4Q@>4?wp0000,0*77";
+
+// --- type 21, aids to navigation -------------------------------------------
+
+/// EXTERNALLY CORROBORATED. The two-fragment type 21 from the AIVDM/AIVDO
+/// decoding guide's own sample data, with the decode that document prints
+/// beside it — including the name that runs into the name extension. It is
+/// 346 bits, so 74 of them are extension.
+pub const aivdm_type21_a = "!AIVDM,2,1,5,B,E1mg=5J1T4W0h97aRh6ba84<h2d;W:Te=eLvH50```q,0*46";
+pub const aivdm_type21_b = "!AIVDM,2,2,5,B,:D44QDlp0C1DU00,2*36";
+pub const aivdm_type21_expect = .{
+    .mmsi = @as(u32, 123456789),
+    .aid_type = @as(u8, 20), // cardinal mark N
+    .name = "CHINA ROSE MURPHY EXPRESS ALERT",
+    .lat = 47.9206183333,
+    .lon = -122.698591667,
+    .off_position = false,
+    .virtual_aid = false,
+};
+
+/// SELF-CONSISTENT. A virtual isolated danger at the synthetic log's own
+/// water, written by the encoder in `tools/nmea_gen.zig` and read back here.
+/// No published example of a virtual aid was available; the bit layout it is
+/// built on is the one the corroborated fixture above checks.
+pub const aivdm_type21_virtual = "!AIVDM,1,1,,B,E>k`s`v;4a::PV@;a2QUh6Pa5P0=@uoO;9kjH20@@@g010,4*3D";
+pub const aivdm_type21_virtual_expect = .{
+    .mmsi = @as(u32, 993672099),
+    .aid_type = @as(u8, 28), // isolated danger
+    .name = "VIRTUAL WRECK MARK",
+    .lat = 38.983498333,
+    .lon = -76.473228333,
+    .off_position = false,
+    .virtual_aid = true,
+};
+
+/// SELF-CONSISTENT, same provenance. A physical starboard hand buoy reporting
+/// itself off station, with a 24-character name that needs the extension.
+pub const aivdm_type21_offpos = "!AIVDM,1,1,,B,E>k`tNtPW70`7V4ah1T0W72V@1:e@vpV;9VVh20@@@gh03nH<P,4*22";
+pub const aivdm_type21_offpos_expect = .{
+    .mmsi = @as(u32, 993672315),
+    .aid_type = @as(u8, 25), // starboard hand mark
+    .name = "ANNAPOLIS CHANNEL BUOY 2",
+    .lat = 38.97225,
+    .lon = -76.466283333,
+    .off_position = true,
+    .virtual_aid = false,
+};

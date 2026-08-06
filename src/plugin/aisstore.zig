@@ -23,13 +23,19 @@ const store = @import("store.zig");
 pub const SourceId = store.SourceId;
 const Lock = store.Lock;
 
-/// ITU-R M.1371 static data carries a 20 character vessel name.
-pub const max_name = 20;
+/// The longest name the wire format carries: a vessel's static report has 20
+/// characters, and an aid to navigation may add a 14-character extension.
+pub const max_name = 34;
 
 /// A target not heard from for this long is gone. 600 s is well past the
 /// slowest class A static report, so it only fires when the target really has
 /// left range or switched off.
 pub const default_evict_ms: i64 = 600_000;
+
+/// An aid to navigation transmits about every three minutes, so the vessel
+/// limit would drop one that is still on station and still talking. Thirty
+/// minutes is ten missed reports.
+pub const default_aton_evict_ms: i64 = 1_800_000;
 
 /// One target. The name lives inline so a snapshot is a plain copy with no
 /// pointers back into the store.
@@ -48,6 +54,16 @@ pub const Target = struct {
     heading: ?f64 = null,
     name_buf: [max_name]u8 = [_]u8{0} ** max_name,
     name_len: u8 = 0,
+    /// True once the target has reported as an aid to navigation. An AtoN ages
+    /// on its own clock and gets no CPA: it is not going anywhere.
+    aton: bool = false,
+    /// The navaid type, 0..31, as type 21 carries it.
+    aton_type: ?u8 = null,
+    /// True for an aid with nothing in the water: a station broadcasts it.
+    virtual_aton: bool = false,
+    /// True when the aid reports itself off its charted position. Null when it
+    /// has never said either way.
+    off_position: ?bool = null,
     /// When this target was last updated, as the caller stamped it.
     ts_ms: i64 = 0,
     /// The source that last updated it.
@@ -78,6 +94,12 @@ pub const Update = struct {
     cog: ?f64 = null,
     heading: ?f64 = null,
     name: ?[]const u8 = null,
+    /// Set true by a type 21 report. Never set back to false: a target that
+    /// has once identified as an aid to navigation stays one.
+    aton: ?bool = null,
+    aton_type: ?u8 = null,
+    virtual_aton: ?bool = null,
+    off_position: ?bool = null,
     ts_ms: i64,
 };
 
@@ -94,6 +116,7 @@ pub const AisStore = struct {
     mu: Lock = .{},
     targets: std.AutoHashMapUnmanaged(u32, Target) = .empty,
     evict_after_ms: i64 = default_evict_ms,
+    aton_evict_after_ms: i64 = default_aton_evict_ms,
     seq_no: u64 = 0,
 
     pub fn init(alloc: std.mem.Allocator) AisStore {
@@ -141,6 +164,14 @@ pub const AisStore = struct {
             @memcpy(tgt.name_buf[0..len], trimmed[0..len]);
             tgt.name_len = @intCast(len);
         }
+        // An aid to navigation reports its nature every time; a position
+        // report from the same MMSI must not take it away again.
+        if (u.aton) |v| {
+            if (v) tgt.aton = true;
+        }
+        if (u.aton_type) |v| tgt.aton_type = v;
+        if (u.virtual_aton) |v| tgt.virtual_aton = v;
+        if (u.off_position) |v| tgt.off_position = v;
         tgt.ts_ms = u.ts_ms;
         tgt.source = source_id;
         self.seq_no +%= 1;
@@ -185,9 +216,10 @@ pub const AisStore = struct {
         return out;
     }
 
-    /// Drop targets older than `evict_after_ms`; returns how many went. Age is
-    /// measured strictly, so a target exactly at the limit survives one more
-    /// tick. The host calls this on its fanout tick.
+    /// Drop targets older than the limit for their kind — `evict_after_ms` for
+    /// a vessel, `aton_evict_after_ms` for an aid to navigation. Returns how
+    /// many went. Age is measured strictly, so a target exactly at the limit
+    /// survives one more tick. The host calls this on its fanout tick.
     pub fn evict(self: *AisStore, now_ms: i64) !usize {
         return self.removeWhere(.{ .older_than = now_ms });
     }
@@ -212,7 +244,8 @@ pub const AisStore = struct {
         var it = self.targets.iterator();
         while (it.next()) |e| {
             const hit = switch (pred) {
-                .older_than => |now_ms| e.value_ptr.ageMs(now_ms) > self.evict_after_ms,
+                .older_than => |now_ms| e.value_ptr.ageMs(now_ms) >
+                    if (e.value_ptr.aton) self.aton_evict_after_ms else self.evict_after_ms,
                 .source => |sid| e.value_ptr.source == sid,
             };
             if (hit) try doomed.append(self.alloc, e.key_ptr.*);
@@ -264,11 +297,53 @@ test "an upsert merges fields and leaves the rest alone" {
 test "a name is trimmed and truncated, and angles come out canonical" {
     var s = AisStore.init(t.allocator);
     defer s.deinit();
-    try s.upsert(.{ .mmsi = 1, .name = "  MARY ELLEN CARTER LONG NAME  ", .cog = -30, .heading = 725, .ts_ms = 0 }, 1);
+    try s.upsert(.{ .mmsi = 1, .name = "  MARY ELLEN CARTER OF HALIFAX AND POINTS EAST  ", .cog = -30, .heading = 725, .ts_ms = 0 }, 1);
     const a = s.get(1).?;
-    try t.expectEqualStrings("MARY ELLEN CARTER LO", a.name().?);
+    try t.expectEqualStrings("MARY ELLEN CARTER OF HALIFAX AND P", a.name().?);
     try t.expectApproxEqAbs(@as(f64, 330), a.cog.?, 1e-9);
     try t.expectApproxEqAbs(@as(f64, 5), a.heading.?, 1e-9);
+}
+
+test "an aid to navigation keeps its nature and gets the AtoN eviction clock" {
+    var s = AisStore.init(t.allocator);
+    defer s.deinit();
+    try s.upsert(.{
+        .mmsi = 993672099,
+        .lat = 38.98,
+        .lon = -76.47,
+        .name = "VIRTUAL WRECK MARK",
+        .aton = true,
+        .aton_type = 28,
+        .virtual_aton = true,
+        .off_position = false,
+        .ts_ms = 0,
+    }, 1);
+    // A vessel beside it, heard at the same instant.
+    try s.upsert(.{ .mmsi = 366123456, .lat = 38.98, .lon = -76.47, .ts_ms = 0 }, 1);
+
+    const a = s.get(993672099).?;
+    try t.expect(a.aton);
+    try t.expect(a.virtual_aton);
+    try t.expectEqual(@as(u8, 28), a.aton_type.?);
+    try t.expect(!a.off_position.?);
+
+    // The vessel goes at ten minutes; the aid stays until thirty.
+    try t.expectEqual(@as(usize, 1), try s.evict(600_001));
+    try t.expect(s.get(993672099) != null);
+    try t.expectEqual(@as(usize, 0), try s.evict(1_800_000));
+    try t.expectEqual(@as(usize, 1), try s.evict(1_800_001));
+    try t.expect(s.get(993672099) == null);
+}
+
+test "an AtoN that also sends a position report stays an AtoN" {
+    var s = AisStore.init(t.allocator);
+    defer s.deinit();
+    try s.upsert(.{ .mmsi = 993672315, .lat = 38.98, .lon = -76.47, .aton = true, .aton_type = 25, .ts_ms = 0 }, 1);
+    try s.upsert(.{ .mmsi = 993672315, .lat = 38.99, .lon = -76.46, .ts_ms = 1_000 }, 1);
+    const a = s.get(993672315).?;
+    try t.expect(a.aton);
+    try t.expectEqual(@as(u8, 25), a.aton_type.?);
+    try t.expectApproxEqAbs(@as(f64, 38.99), a.lat.?, 1e-9);
 }
 
 test "a target that cannot be drawn is rejected, not stored" {

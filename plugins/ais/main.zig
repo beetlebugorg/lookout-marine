@@ -4,7 +4,18 @@
 //!
 //!   t<mmsi>       the triangle, rotated to heading, else course over ground
 //!   t<mmsi>/hdg   the heading line, solid
-//!   t<mmsi>/vec   the six-minute speed vector, dashed
+//!   t<mmsi>/vec   the speed vector, dashed, as long as `vector_min` says
+//!
+//! AIDS TO NAVIGATION share the store and nothing else. A buoy is not going
+//! anywhere, so it gets one object — a diamond, broken open when the aid is
+//! virtual — with no CPA, no vector and no heading line, and it ages on its own
+//! slower clock. A physical aid that reports itself off station raises one
+//! warning.
+//!
+//! SETTINGS, all applied hot, all in config.zig: the gate's two limits, the
+//! alarm switch, the vector time, and the speed under which a vessel is not
+//! drawn. A CONFIG_CHANGED redraws from the last snapshot, so a changed limit
+//! shows on the chart in that same call rather than at the next report.
 //!
 //! The symbol carries a pick payload, which the shell shows on hover. The set
 //! is rebuilt from the full snapshot the host delivers on every AIS_CHANGED,
@@ -26,6 +37,8 @@ const std = @import("std");
 const lk = @import("lk");
 const cpa = @import("cpa.zig");
 const vec = @import("vector.zig");
+const cfg = @import("config.zig");
+const aton = @import("aton.zig");
 
 comptime {
     lk.registerPlugin(@This());
@@ -41,13 +54,15 @@ const stale_target_ms: i64 = 180_000;
 /// back without a fresh AIS_CHANGED, which would build the entry again.
 const forget_target_ms: i64 = 600_000;
 
+/// An aid to navigation reports about every three minutes, so the vessel
+/// limits would undraw one that is still on station. Undraw at ten minutes,
+/// forget at thirty — the store evicts at thirty too.
+const stale_aton_ms: i64 = 600_000;
+const forget_aton_ms: i64 = 1_800_000;
+
 /// Own ship values older than this are not usable for a CPA. Same window as
 /// the vessel store's default and as the ownship plugin's.
 const max_own_age_ms: i64 = 10_000;
-
-/// The danger gate: half a nautical mile, ten minutes.
-const cpa_alarm_m: f64 = 926.0;
-const tcpa_alarm_s: f64 = 600.0;
 
 /// Age sweep and status rate.
 const sweep_ms: i64 = 1000;
@@ -64,8 +79,9 @@ const objs_per_batch: usize = 24;
 /// Metres per second to knots, for the pick payload.
 const kn_per_mps: f64 = 3600.0 / vec.nautical_mile_m; // 1.94384
 
-/// Longest vessel name put in an alarm body. The AIS wire format allows 20.
-const max_name = 32;
+/// Longest name put in an alarm body or a pick title. The wire format allows
+/// 20 for a vessel and 34 for an aid to navigation.
+const max_name = 34;
 
 // ---- state that outlives an event ------------------------------------------
 // All container-level: lk's scratch allocator is reset the moment an event
@@ -81,6 +97,11 @@ const Tracked = struct {
     /// True while the target is inside the danger gate. The alarm fires on the
     /// false→true edge only.
     in_gate: bool = false,
+    /// True for an aid to navigation, which ages on the slower clock.
+    aton: bool = false,
+    /// True once the off-position warning has gone out for this aid. Cleared
+    /// when it reports itself back on station.
+    warned: bool = false,
     /// Present in the snapshot being processed, and wanted on the chart by it.
     /// Both are scratch for one rebuild.
     seen: bool = false,
@@ -97,6 +118,14 @@ const Tracked = struct {
 
     fn ageMs(self: Tracked, mono: i64) i64 {
         return self.age_at_recv + (mono - self.recv_mono);
+    }
+
+    fn staleMs(self: Tracked) i64 {
+        return if (self.aton) stale_aton_ms else stale_target_ms;
+    }
+
+    fn forgetMs(self: Tracked) i64 {
+        return if (self.aton) forget_aton_ms else forget_target_ms;
     }
 };
 
@@ -158,12 +187,23 @@ var had_snapshot: bool = false;
 /// every call and the arena is for what the host hands in.
 var ov_buf: [16 * 1024]u8 = undefined;
 
+/// The mariner's settings, replaced whole on every CONFIG_CHANGED.
+var settings: cfg.Settings = .{};
+
+/// The last AIS snapshot, kept so a settings change can redraw at once instead
+/// of waiting up to half a second for the next one. A snapshot too large for
+/// the buffer is not kept: the change then lands on the next report, and the
+/// line below says so once.
+var snap_buf: [32 * 1024]u8 = undefined;
+var snap_len: usize = 0;
+var snap_dropped_logged: bool = false;
+
 const State = enum { starting, running, degraded, stopped };
 
 // ---- lifecycle ---------------------------------------------------------------
 
 pub fn start(s: lk.Start) !void {
-    _ = s;
+    settings = cfg.fromValue(s.config);
     if (lk.aisSubscribe() < 0) return error.AisSubscribeRefused;
     const n = lk.subscribePaths(&.{
         "navigation.position",
@@ -178,7 +218,11 @@ pub fn start(s: lk.Start) !void {
 
 pub fn onEvent(e: lk.Event) !void {
     switch (e) {
-        .ais_changed => |payload| rebuild(payload),
+        .ais_changed => |payload| {
+            keepSnapshot(payload);
+            rebuild(payload);
+        },
+        .config_changed => |payload| reconfigure(payload),
         .store_changed => |payload| ingest(payload),
         .timer => sweep(),
         // The host drops a plugin's overlay objects when it stops it, so
@@ -186,6 +230,37 @@ pub fn onEvent(e: lk.Event) !void {
         .shutdown => setStatus(.stopped, 0, 0),
         else => {},
     }
+}
+
+// ---- settings ----------------------------------------------------------------
+
+/// Take the new settings and act on them now. The gate, the colours and the
+/// vector lengths all come out of the last snapshot, so redrawing it is the
+/// whole of "applied hot"; with no snapshot yet there is nothing on the chart
+/// and the sweep keeps the status line honest.
+fn reconfigure(payload: []const u8) void {
+    settings = cfg.fromJson(lk.scratch(), payload);
+    lk.logf(.info, "settings: cpa {d:.0} m, tcpa {d:.0} s, alarm {}, vector {d:.0} s, min sog {d:.2} m/s", .{
+        settings.cpa_limit_m,
+        settings.tcpa_limit_s,
+        settings.cpa_alarm,
+        settings.vector_seconds,
+        settings.min_sog_mps,
+    });
+    if (snap_len > 0) rebuild(snap_buf[0..snap_len]) else sweep();
+}
+
+fn keepSnapshot(payload: []const u8) void {
+    if (payload.len > snap_buf.len) {
+        snap_len = 0;
+        if (!snap_dropped_logged) {
+            snap_dropped_logged = true;
+            lk.logf(.warn, "snapshot of {d} bytes is not kept; a settings change lands on the next report", .{payload.len});
+        }
+        return;
+    }
+    @memcpy(snap_buf[0..payload.len], payload);
+    snap_len = payload.len;
 }
 
 // ---- own ship ----------------------------------------------------------------
@@ -278,6 +353,9 @@ const Plan = struct {
     e: ?*Tracked = null,
     draw: bool = false,
     danger: bool = false,
+    /// The shape this target draws as. An aid to navigation is a diamond, and
+    /// a virtual one a broken diamond.
+    sym: lk.Sym = .target,
     rot_deg: f64 = 0,
     /// The reported heading, if the target sent one. The heading line uses
     /// this alone. The symbol's rotation may fall back to course over ground;
@@ -324,9 +402,10 @@ fn rebuild(payload: []const u8) void {
         const e = findOrAdd(t.mmsi) orelse continue;
         plan.e = e;
         e.seen = true;
+        e.aton = t.aton;
         e.stamp(t.age_ms, mono);
 
-        if (!t.hasPosition() or t.age_ms > stale_target_ms) {
+        if (!t.hasPosition() or t.age_ms > e.staleMs() or settings.hidden(t.sog, t.aton)) {
             // Off the chart, and out of the gate: a target that has stopped
             // reporting may alarm again when it comes back.
             e.in_gate = false;
@@ -334,6 +413,18 @@ fn rebuild(payload: []const u8) void {
         }
         plan.draw = true;
         e.want = true;
+
+        if (t.aton) {
+            // An aid to navigation has no heading, no course and nowhere to
+            // go: one symbol, and a warning if it says it has drifted.
+            plan.sym = if (t.virtual_aton) .aton_virtual else .aton;
+            if (aton.wantsWarning(t.virtual_aton, t.off_position, e.warned)) {
+                e.warned = true;
+                offPositionWarning(t);
+            } else if (aton.rearm(t.off_position)) e.warned = false;
+            continue;
+        }
+
         // Heading is where the hull points and course over ground is where it
         // is going. The symbol claims the first, and falls back to the second,
         // and to north when the target reports neither.
@@ -344,7 +435,7 @@ fn rebuild(payload: []const u8) void {
 
         const at = vec.Point{ .lat = t.lat.?, .lon = t.lon.? };
         plan.hdg_line = vec.ray(at, t.heading, vec.heading_line_m);
-        plan.vec_line = vec.ray(at, t.cog, vec.vectorLengthM(t.sog orelse 0));
+        plan.vec_line = vec.ray(at, t.cog, vec.vectorLengthFor(t.sog orelse 0, settings.vector_seconds));
 
         const o = own orelse {
             e.in_gate = false;
@@ -357,7 +448,10 @@ fn rebuild(payload: []const u8) void {
             .cog_deg = t.cog orelse t.heading orelse 0,
         });
         plan.sol = sol;
-        plan.danger = sol.dangerous(cpa_alarm_m, tcpa_alarm_s);
+        // With the alarm switched off there is no danger colour either: the
+        // mariner chose silence, and a red triangle nobody hears is worse than
+        // no red triangle.
+        plan.danger = settings.cpa_alarm and sol.dangerous(settings.cpa_limit_m, settings.tcpa_limit_s);
         if (plan.danger) danger_count += 1;
         if (plan.danger and !e.in_gate) alarm(t, sol);
         e.in_gate = plan.danger;
@@ -376,7 +470,8 @@ fn rebuild(payload: []const u8) void {
     // vector gate, loses that one line. Deleting a line that is not there is a
     // no-op host side, so this needs no memory of the last pass.
     for (list, plans) |t, plan| {
-        if (!plan.draw) continue;
+        // An aid to navigation never had either line to lose.
+        if (!plan.draw or plan.sym != .target) continue;
         if (plan.hdg_line == null) b.del(t.mmsi, .hdg);
         if (plan.vec_line == null) b.del(t.mmsi, .vec);
     }
@@ -412,13 +507,13 @@ fn sweep() void {
     while (i < n_tracked) {
         const e = &tracked[i];
         const age = e.ageMs(mono);
-        if (age > stale_target_ms) {
+        if (age > e.staleMs()) {
             if (e.drawn) {
                 b.delTarget(e.mmsi);
                 e.drawn = false;
             }
             e.in_gate = false;
-            if (age > forget_target_ms) {
+            if (age > e.forgetMs()) {
                 removeAt(i);
                 continue;
             }
@@ -495,9 +590,17 @@ const Batch = struct {
         for ([_]Id{ .symbol, .hdg, .vec }) |which| self.del(mmsi, which);
     }
 
-    /// One target: the triangle, the heading line and the six-minute vector.
+    /// One target: the triangle, the heading line and the speed vector. An aid
+    /// to navigation is the symbol alone.
     fn drawTarget(self: *Batch, t: lk.Target, plan: Plan, mono: i64) void {
-        const color: lk.Color = if (plan.danger) .target_danger else .target;
+        const color: lk.Color = if (plan.danger)
+            .target_danger
+            // An aid that has drifted off its charted position is a hazard in
+            // the wrong place: it takes the warning colour.
+        else if (t.aton and (t.off_position orelse false))
+            .warning
+        else
+            .target;
         var idb: [id_len]u8 = undefined;
 
         self.room();
@@ -505,7 +608,7 @@ const Batch = struct {
         pick.fill(t, plan, mono);
         self.ov.symbolPick(
             objectId(&idb, t.mmsi, .symbol),
-            .target,
+            plan.sym,
             t.lon.?,
             t.lat.?,
             plan.rot_deg,
@@ -554,6 +657,13 @@ const PickRows = struct {
 
     fn fill(self: *PickRows, t: lk.Target, plan: Plan, mono: i64) void {
         self.add("MMSI", "{d}", .{t.mmsi});
+        if (t.aton) {
+            self.add("Type", "{s}", .{aton.navaidName(t.aton_type)});
+            self.add("Virtual", "{s}", .{if (t.virtual_aton) "yes" else "no"});
+            if (t.off_position) |off| self.add("Off position", "{s}", .{if (off) "YES" else "no"});
+            if (plan.e) |e| self.add("Age", "{d} s", .{@divTrunc(e.ageMs(mono), 1000)});
+            return;
+        }
         if (plan.sog_mps) |s| self.add("SOG", "{d:.1} kn", .{s * kn_per_mps});
         if (plan.cog_deg) |c| self.add("COG", "{d:.0}\u{00b0}", .{c});
         if (plan.hdg_deg) |hh| self.add("HDG", "{d:.0}\u{00b0}", .{hh});
@@ -575,6 +685,7 @@ const PickRows = struct {
         if (t.name) |n| {
             if (n.len > 0) return n[0..@min(n.len, max_name)];
         }
+        if (t.aton) return std.fmt.bufPrint(&self.name_buf, "AtoN {d}", .{t.mmsi}) catch "Aid to navigation";
         return std.fmt.bufPrint(&self.name_buf, "MMSI {d}", .{t.mmsi}) catch "AIS target";
     }
 
@@ -583,15 +694,31 @@ const PickRows = struct {
     }
 };
 
+/// The name to put in an alert, or the MMSI when the target has not sent one.
+fn whoIs(buf: *[max_name]u8, t: lk.Target) []const u8 {
+    if (t.name) |n| {
+        if (n.len > 0) return n[0..@min(n.len, max_name)];
+    }
+    return std.fmt.bufPrint(buf, "{d}", .{t.mmsi}) catch "unknown";
+}
+
+/// One warning for an aid to navigation that says it has left its charted
+/// position. A warning, not an alarm: the buoy is in the wrong place, which is
+/// a reason to distrust it, not a collision in the next ten minutes.
+fn offPositionWarning(t: lk.Target) void {
+    var who_buf: [max_name]u8 = undefined;
+    var body: [200]u8 = undefined;
+    const text = std.fmt.bufPrint(&body, "{s} ({s}) reports itself off position", .{
+        whoIs(&who_buf, t),
+        aton.navaidName(t.aton_type),
+    }) catch return;
+    _ = lk.raiseAlert(.warning, "AtoN off position", text);
+}
+
 /// One alarm, on the edge into the gate.
 fn alarm(t: lk.Target, sol: cpa.Solution) void {
     var who_buf: [max_name]u8 = undefined;
-    const who = blk: {
-        if (t.name) |n| {
-            if (n.len > 0) break :blk n[0..@min(n.len, max_name)];
-        }
-        break :blk std.fmt.bufPrint(&who_buf, "{d}", .{t.mmsi}) catch "unknown";
-    };
+    const who = whoIs(&who_buf, t);
 
     var body: [160]u8 = undefined;
     const text = std.fmt.bufPrint(&body, "{s}: CPA {d:.0} m in {d:.0} s", .{
@@ -608,7 +735,12 @@ fn alarm(t: lk.Target, sol: cpa.Solution) void {
 fn setStatus(s: State, drawn: usize, danger: usize) void {
     switch (s) {
         .starting => lk.status("starting", "waiting for targets", .{}),
-        .running => lk.status("running", "{d} targets, {d} in CPA alarm", .{ drawn, danger }),
+        // Silence a mariner chose has to look different from silence that is
+        // broken, so the line says so for as long as the alarm is off.
+        .running => if (settings.cpa_alarm)
+            lk.status("running", "{d} targets, {d} in CPA alarm", .{ drawn, danger })
+        else
+            lk.status("running", "{d} targets, alarms off", .{drawn}),
         .degraded => lk.status("degraded", "{d} targets, no own position: no CPA", .{drawn}),
         .stopped => lk.status("stopped", "shut down", .{}),
     }

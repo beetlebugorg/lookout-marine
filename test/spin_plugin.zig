@@ -64,7 +64,7 @@ pub fn onEvent(e: lk.Event) !void {
             draw();
         },
         .ais_changed => |payload| lk.logf(.info, "spin saw {d} ais targets", .{lk.targets(payload).len}),
-        .tcp_connected, .tcp_closed, .tcp_data => {},
+        .tcp_connected, .tcp_closed, .tcp_data, .config_changed => {},
         .shutdown => lk.status("stopped", "shut down after {d} events", .{events}),
     }
 }

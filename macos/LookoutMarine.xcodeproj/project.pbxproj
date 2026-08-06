@@ -13,6 +13,7 @@
 		0B449CF57106605B212E94E1 /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		0BC91B15C4652260E6898412 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
 		0FC697E6E69C983F38573E8D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
+		22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
 		23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
 		299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
 		3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231885FFFF86BB739D2D973D /* SettingsWindow.swift */; };
@@ -32,6 +33,7 @@
 		91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
+		A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
 		A2167318FA9028D99B57EAAF /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
 		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
@@ -67,6 +69,7 @@
 /* Begin PBXFileReference section */
 		0196916E70289224C21747BF /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginSettings.swift; sourceTree = "<group>"; };
 		08B62D296D34C231163DF7C2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0ACD979758E1C7A0557028AA /* MarinerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettings.swift; sourceTree = "<group>"; };
 		10B668C8717144E00D603812 /* LookoutMarine-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -162,6 +165,7 @@
 				684AE423C6C360B8C64E8187 /* OpenPanel.swift */,
 				59E5805049B75D0B7A5BA9C5 /* PickReport.swift */,
 				64750619C04C6E8FC58ADF3C /* Platform.swift */,
+				08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */,
 				D26F78CDEC3CDA7C0807297F /* SearchField.swift */,
 				08B62D296D34C231163DF7C2 /* SettingsView.swift */,
 				231885FFFF86BB739D2D973D /* SettingsWindow.swift */,
@@ -372,6 +376,7 @@
 				BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */,
 				A2167318FA9028D99B57EAAF /* PickReport.swift in Sources */,
 				CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */,
+				A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */,
 				3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */,
 				5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */,
 				FF271F85614ACC3553CB502F /* SettingsWindow.swift in Sources */,
@@ -395,6 +400,7 @@
 				23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */,
 				CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */,
 				D3A82191350619AF27200EF4 /* Platform.swift in Sources */,
+				22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */,
 				4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */,
 				FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */,
 				3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */,

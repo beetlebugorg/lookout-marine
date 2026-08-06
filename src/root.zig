@@ -174,6 +174,9 @@ const PluginSystem = if (plugins_on) struct {
     overlay: ov.Store,
     br: phost.broker.Broker,
     host: phost.Host,
+    /// Scratch for the registry and config JSON the C ABI hands out. Borrowed
+    /// by the caller until the next such call, like every other query here.
+    json: std.ArrayList(u8) = .empty,
 
     fn create(alloc: std.mem.Allocator) !*@This() {
         const self = try alloc.create(@This());
@@ -205,6 +208,7 @@ const PluginSystem = if (plugins_on) struct {
         self.overlay.deinit();
         self.ais.deinit();
         self.vessels.deinit();
+        self.json.deinit(gpa);
         gpa.destroy(self);
     }
 
@@ -1223,6 +1227,34 @@ pub const Lookout = struct {
         if (!plugins_on) return null;
         const ps = self.plugins orelse return null;
         return ps.overlay.infoFor(id, self.ship_at);
+    }
+
+    /// Every loaded plugin with its settings schema and current values, as
+    /// JSON. This is what a shell renders a settings pane from. Borrowed until
+    /// the next call; null when no plugin layer is up.
+    pub fn pluginsJson(self: *Lookout) ?[]const u8 {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        ps.json.clearRetainingCapacity();
+        ps.host.registryJson(&ps.json) catch return null;
+        return ps.json.items;
+    }
+
+    /// One plugin's settings, as JSON. Borrowed until the next call.
+    pub fn pluginConfig(self: *Lookout, id: []const u8) ?[]const u8 {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        ps.json.clearRetainingCapacity();
+        ps.host.configJson(id, &ps.json) catch return null;
+        return ps.json.items;
+    }
+
+    /// Change one plugin's settings. Keys the schema does not declare are
+    /// ignored; the plugin hears the whole config at once and applies it.
+    pub fn setPluginConfig(self: *Lookout, id: []const u8, json: []const u8) !void {
+        if (!plugins_on) return error.PluginsUnavailable;
+        const ps = self.plugins orelse return error.PluginsUnavailable;
+        try ps.host.configSet(id, json);
     }
 
     // ---- follow mode --------------------------------------------------------

@@ -2,5 +2,12 @@
   "id": "org.beetlebug.ais",
   "name": "AIS targets",
   "abi": 1,
-  "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"]
+  "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"],
+  "settings": [
+    {"key": "cpa_limit", "label": "CPA limit", "kind": "number", "unit": "m", "min": 93, "max": 9260, "default": 926},
+    {"key": "tcpa_limit", "label": "TCPA limit", "kind": "number", "unit": "min", "min": 1, "max": 60, "default": 10},
+    {"key": "cpa_alarm", "label": "Collision alarm", "kind": "toggle", "default": true},
+    {"key": "vector_min", "label": "Target vectors", "kind": "number", "unit": "min", "min": 1, "max": 24, "default": 6},
+    {"key": "min_sog", "label": "Hide targets under", "kind": "number", "unit": "kn", "min": 0, "max": 5, "default": 0}
+  ]
 }

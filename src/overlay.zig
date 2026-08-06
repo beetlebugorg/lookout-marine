@@ -58,7 +58,7 @@ pub const Kind = enum(u8) { symbol, polyline, polygon };
 
 /// The symbol shapes the prototype draws. Expanded to vector geometry here —
 /// no sprite atlas, so the overlay pass carries no texture.
-pub const Sym = enum(u8) { ownship, target };
+pub const Sym = enum(u8) { ownship, target, aton, aton_virtual };
 
 /// Straight-alpha RGBA, 0..1 (what the shader wants).
 pub const Rgba = [4]f32;
@@ -181,6 +181,16 @@ const HULL: [7][2]f64 = .{
 const TARGET_TIP = 13.0; // apex ahead of the anchor
 const TARGET_TAIL = 7.0; // base behind it
 const TARGET_HALF = 7.0;
+/// The aid-to-navigation mark: a diamond, half its diagonal. 14 pt across,
+/// the same visual weight as the target triangle.
+const ATON_HALF = 7.0;
+/// The virtual aid's broken outline: stroke half-width, and the fraction of
+/// each edge one of its two strokes covers. IALA draws a virtual aid as a
+/// broken version of the same mark; the shape follows that convention, not a
+/// published drawing. See PROTOTYPE-CONCERNS.md.
+const ATON_STROKE_HALF = 1.15;
+const ATON_DASH = 0.36;
+
 const DASH_ON = 7.0;
 const DASH_OFF = 5.0;
 /// Above this many dash cycles a segment draws solid — see emitPolyline.
@@ -190,6 +200,11 @@ const MAX_DASHES_PER_SEG = 4096;
 pub const OWNSHIP_VERTS = (HULL.len - 2) * 3;
 /// Vertices one `target` symbol expands to.
 pub const TARGET_VERTS = 3;
+/// Vertices one physical `aton` symbol expands to: the diamond, two triangles.
+pub const ATON_VERTS = 6;
+/// Vertices one `aton_virtual` symbol expands to: eight strokes, two triangles
+/// each.
+pub const ATON_VIRTUAL_VERTS = 8 * 6;
 
 /// How near a logical point must be to a symbol's anchor for `pickAt` to
 /// report it.
@@ -725,6 +740,37 @@ pub const Store = struct {
                 };
                 try self.tri(l, tip, r, c);
             },
+            // An aid to navigation is a diamond: filled when there is
+            // something in the water, and drawn as a broken outline when a
+            // station is broadcasting a mark that is not there.
+            .aton, .aton_virtual => {
+                const h = ATON_HALF * s;
+                const d = [4]camera.Vec2{
+                    .{ .x = at.x, .y = at.y - h },
+                    .{ .x = at.x + h, .y = at.y },
+                    .{ .x = at.x, .y = at.y + h },
+                    .{ .x = at.x - h, .y = at.y },
+                };
+                if (o.sym == .aton) {
+                    try self.tri(d[0], d[1], d[2], c);
+                    try self.tri(d[0], d[2], d[3], c);
+                    return;
+                }
+                const hw = ATON_STROKE_HALF * s;
+                for (0..4) |i| {
+                    const a = d[i];
+                    const b = d[(i + 1) % 4];
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const len = std.math.hypot(dx, dy);
+                    if (!(len > 0)) continue;
+                    const ux = dx / len;
+                    const uy = dy / len;
+                    // One stroke in from each corner, leaving the middle open.
+                    try self.quad(a, .{ .x = a.x + dx * ATON_DASH, .y = a.y + dy * ATON_DASH }, ux, uy, hw, c);
+                    try self.quad(.{ .x = b.x - dx * ATON_DASH, .y = b.y - dy * ATON_DASH }, b, ux, uy, hw, c);
+                }
+            },
         }
     }
 };
@@ -990,6 +1036,50 @@ test "a dashed line keeps its width and dashes at every angle" {
                 };
             }
         }
+    }
+}
+
+test "an aid to navigation is a diamond, and a virtual one is broken open" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    // Zoom 8: the symbol spans thousands of f32 steps of world space, so the
+    // measurements below are the geometry and not the vertex grid.
+    const zoom = 8.0;
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(zoom);
+    const grid = 1e-7;
+
+    try s.applyBatch("p",
+        \\{"set":[{"id":"a","kind":"symbol","sym":"aton","at":[-76.4767,38.9763],"color":"target"}]}
+    );
+    var fr = try s.buildIfNeeded(zoom, .day, null);
+    try t.expectEqual(@as(usize, ATON_VERTS), fr.verts.len);
+    // Four corners on the axes, ATON_HALF points from the anchor.
+    for (fr.verts) |v| {
+        const dx = @abs(@as(f64, v.x) - at.x);
+        const dy = @abs(@as(f64, v.y) - at.y);
+        try t.expect(dx < grid or dy < grid);
+        try t.expectApproxEqAbs(ATON_HALF * wpp, @max(dx, dy), grid);
+    }
+
+    // The virtual mark is the same diamond drawn as eight strokes, so it
+    // covers the same extent with far more geometry and an open middle to
+    // each edge.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"v","kind":"symbol","sym":"aton_virtual","at":[-76.4767,38.9763],"color":"target"}]}
+    );
+    fr = try s.buildIfNeeded(zoom, .day, null);
+    try t.expectEqual(@as(usize, ATON_VERTS + ATON_VIRTUAL_VERTS), fr.verts.len);
+    var far: f64 = 0;
+    for (fr.verts[ATON_VERTS..]) |v| {
+        far = @max(far, @max(@abs(@as(f64, v.x) - at.x), @abs(@as(f64, v.y) - at.y)));
+    }
+    try t.expectApproxEqAbs(ATON_HALF * wpp, far, ATON_STROKE_HALF * wpp);
+    // No stroke reaches the middle of an edge: the midpoint of the top-right
+    // edge is bare, which is what tells a mariner nothing is in the water.
+    const mid = camera.Vec2{ .x = at.x + ATON_HALF * wpp * 0.5, .y = at.y - ATON_HALF * wpp * 0.5 };
+    for (fr.verts[ATON_VERTS..]) |v| {
+        try t.expect(dist(.{ .x = v.x, .y = v.y }, mid) > ATON_STROKE_HALF * wpp);
     }
 }
 

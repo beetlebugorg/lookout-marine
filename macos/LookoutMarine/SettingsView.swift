@@ -16,10 +16,14 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @StateObject private var m = MarinerSettings()
+    @StateObject private var p = PluginSettings()
 
     var body: some View {
         content
-            .onAppear { m.bind(to: model.controller) }
+            .onAppear {
+                m.bind(to: model.controller)
+                p.bind(to: model.controller)
+            }
     }
 
     @ViewBuilder private var content: some View {
@@ -33,14 +37,92 @@ struct SettingsView: View {
                 .tabItem { Label("Text", systemImage: "textformat") }.tag(2)
             Form { ChartsSections(model: model) }.formStyle(.grouped)
                 .tabItem { Label("Charts", systemImage: "map") }.tag(3)
+            Form { PluginsSections(p: p) }.formStyle(.grouped)
+                .tabItem { Label("Plugins", systemImage: "puzzlepiece.extension") }.tag(5)
             Form { AdvancedSections(m: m) }.formStyle(.grouped)
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }.tag(4)
         }
         #if os(macOS)
-        // The five tab labels need this width. In a narrower window macOS
+        // The six tab labels need this width. In a narrower window macOS
         // collapses the tab bar into an overflow menu.
-        .frame(minWidth: 660, minHeight: 560)
+        .frame(minWidth: 760, minHeight: 560)
         #endif
+    }
+}
+
+// MARK: - Plugins
+
+/// One section per plugin, built from the settings schema its manifest
+/// declared. Nothing here names a plugin or a setting: a number field with a
+/// unit and a range, and a toggle, are the whole vocabulary the core hands
+/// over.
+private struct PluginsSections: View {
+    @ObservedObject var p: PluginSettings
+
+    var body: some View {
+        if p.plugins.isEmpty {
+            Section {
+                Text("No plugins loaded").foregroundStyle(.secondary)
+            } footer: {
+                Text("Plugins draw own ship, the AIS traffic and the laylines. "
+                     + "They start with the chart.").captionFooter()
+            }
+        }
+        ForEach(p.plugins) { plugin in
+            Section {
+                if plugin.fields.isEmpty {
+                    Text("Nothing to configure").foregroundStyle(.secondary)
+                } else {
+                    ForEach(plugin.fields) { f in
+                        switch f.kind {
+                        case .toggle:
+                            Toggle(f.label, isOn: p.toggle(plugin.id, f.key))
+                        case .number:
+                            PluginNumberRow(field: f, value: p.number(plugin.id, f.key))
+                        }
+                    }
+                    if p.isChanged(plugin.id) {
+                        Button("Reset to defaults") { p.resetToDefaults(plugin.id) }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text(plugin.name)
+                    if !plugin.live {
+                        Text("stopped").font(.caption).foregroundStyle(.red)
+                    }
+                }
+            } footer: {
+                Text(plugin.statusDetail.isEmpty ? plugin.id : plugin.statusDetail)
+                    .captionFooter()
+            }
+        }
+    }
+}
+
+/// A number a plugin asked for: typed or stepped, inside the range the schema
+/// declares, with its unit beside it. Same shape as the depth rows, because a
+/// mariner should not have to learn a second kind of number field.
+private struct PluginNumberRow: View {
+    let field: PluginField
+    @Binding var value: Double
+
+    var body: some View {
+        LabeledContent(field.label) {
+            HStack(spacing: 6) {
+                TextField("", value: $value, format: .number.precision(.fractionLength(0...2)))
+                    .labelsHidden()
+                    .frame(width: 68)
+                    .multilineTextAlignment(.trailing)
+                    #if os(iOS)
+                    .keyboardType(.decimalPad)
+                    #endif
+                Stepper("", value: $value, in: field.min...field.max, step: field.step)
+                    .labelsHidden()
+                Text(field.unit).foregroundStyle(.secondary)
+                    .frame(width: 24, alignment: .leading)
+            }
+        }
     }
 }
 

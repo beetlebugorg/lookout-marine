@@ -108,6 +108,36 @@ int lookout_plugins_load(lookout *h, const char *dir);
  * sleeping until the mariner touches something. */
 int lookout_plugins_active(lookout *h);
 
+/* Every loaded plugin with its settings schema and the values in force:
+ *
+ *   {"plugins":[{"id":"org.beetlebug.ais","name":"AIS targets","live":true,
+ *                "status":"{\"state\":\"running\",...}",
+ *                "settings":[
+ *                  {"key":"cpa_limit","label":"CPA limit","kind":"number",
+ *                   "unit":"m","min":93,"max":9260,"default":926,"value":926},
+ *                  {"key":"cpa_alarm","label":"Collision alarm",
+ *                   "kind":"toggle","default":true,"value":true}]}]}
+ *
+ * A shell draws a control per field — a number field with its unit and range,
+ * a toggle as a switch — and needs to know nothing about what a plugin does.
+ * Borrowed until the next plugin query; NULL when no plugin layer is up.
+ * *out_len (NULL to ignore) receives the length. */
+const char *lookout_plugins_json(lookout *h, size_t *out_len);
+
+/* One plugin's settings, as a JSON object of key to value. Every key its
+ * schema declares is present. Borrowed until the next plugin query; NULL when
+ * `id` names no loaded plugin. */
+const char *lookout_plugin_config_get(lookout *h, const char *id, size_t *out_len);
+
+/* Change one plugin's settings. `json` is an object of the keys the schema
+ * declares; a key it does not declare is ignored and a number outside its
+ * range is clamped. The plugin receives the WHOLE config at once and applies
+ * it live — no restart, and the AIS alarm gate re-evaluates immediately.
+ *
+ * Returns 0, or -1 when the id is unknown, the plugin declares no settings, or
+ * the JSON is not an object. Persisting the values is the shell's job. */
+int lookout_plugin_config_set(lookout *h, const char *id, const char *json);
+
 /* What the plugin overlay says about the symbol nearest a LOGICAL point, as
  * JSON: {"title":"...","rows":[["key","value"],...]}. NULL when no symbol
  * carrying a payload is within about 14 pt of it. Use it for hover on a

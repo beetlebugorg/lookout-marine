@@ -435,6 +435,8 @@ pub fn build(b: *std.Build) void {
         "plugins/ownship/track.zig",
         "plugins/ais/cpa.zig",
         "plugins/ais/vector.zig",
+        "plugins/ais/config.zig",
+        "plugins/ais/aton.zig",
         "plugins/laylines/geo.zig",
         // The generator's round trip re-parses the log it writes and runs the
         // ais plugin's own solver over it, so the scenario the harness replays

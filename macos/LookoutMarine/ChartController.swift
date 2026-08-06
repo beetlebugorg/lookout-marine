@@ -199,6 +199,10 @@ final class ChartController: NSObject {
         MarinerSettings.applySavedOverlay(&mm)
         setMariner(mm)
 
+        // The plugins came up inside lookout_open, so their saved settings can
+        // go in now. A plugin with none stays on its manifest defaults.
+        PluginSettings.applySaved(to: self)
+
         startDisplayLink()
         pushReadouts()
         model?.hasChart = true
@@ -546,6 +550,36 @@ final class ChartController: NSObject {
     var pluginsActive: Bool {
         guard let h = handle else { return false }
         return lookout_plugins_active(h) != 0
+    }
+
+    // MARK: - Plugin settings
+
+    /// Every loaded plugin with its settings schema, as JSON. The settings pane
+    /// renders straight from this: the app knows nothing about what a plugin is
+    /// for, only what controls it asked for.
+    func pluginsJSON() -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = lookout_plugins_json(h, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+
+    /// One plugin's settings object, or nil when the id is not loaded.
+    func pluginConfigJSON(_ id: String) -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = lookout_plugin_config_get(h, id, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+
+    /// Push settings to a plugin. Applied live — the plugin redraws inside the
+    /// call, so the chart is kicked to show it.
+    @discardableResult
+    func setPluginConfig(_ id: String, _ json: String) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_plugin_config_set(h, id, json) == 0
+        if ok { kick() }
+        return ok
     }
 
     // MARK: - Geo <-> screen (points API; pixels under the hood)

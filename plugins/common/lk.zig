@@ -339,6 +339,10 @@ pub const TcpData = struct { conn: i64, bytes: []const u8 };
 /// What `onEvent` receives. The payload slices point into the arena and are
 /// gone when your handler returns; copy anything you keep.
 pub const Event = union(enum) {
+    /// The plugin's whole settings object, `{"cpa_limit":926,...}`, after the
+    /// mariner changed one of them. Every field the manifest's schema declares
+    /// is present, so a handler reads what it wants and never merges.
+    config_changed: []const u8,
     /// The timer id `timerSet` returned.
     timer: i64,
     tcp_connected: i64,
@@ -361,6 +365,7 @@ pub const Start = struct {
     config: std.json.Value,
 };
 
+const kind_config_changed: u32 = 1;
 const kind_timer: u32 = 3;
 const kind_tcp_connected: u32 = 4;
 const kind_tcp_data: u32 = 5;
@@ -419,6 +424,7 @@ pub fn registerPlugin(comptime P: type) void {
             const payload: []const u8 = if (len == 0) &[_]u8{} else ptr[0..@intCast(len)];
             const id: i64 = @bitCast(handle);
             const ev: Event = switch (kind) {
+                kind_config_changed => .{ .config_changed = payload },
                 kind_timer => .{ .timer = id },
                 kind_tcp_connected => .{ .tcp_connected = id },
                 kind_tcp_data => .{ .tcp_data = .{ .conn = id, .bytes = payload } },
@@ -511,6 +517,16 @@ pub const Target = struct {
     cog: ?f64 = null,
     heading: ?f64 = null,
     name: ?[]const u8 = null,
+    /// True when this is an aid to navigation, not a vessel: no CPA, no
+    /// vector, and its own aging.
+    aton: bool = false,
+    /// The navaid type, 0..31, as type 21 carries it.
+    aton_type: ?u8 = null,
+    /// True for an aid with nothing in the water behind it.
+    virtual_aton: bool = false,
+    /// True when the aid reports itself off its charted position; null when it
+    /// has never said either way.
+    off_position: ?bool = null,
     ts_ms: i64 = 0,
     age_ms: i64 = 0,
 
@@ -541,6 +557,10 @@ pub fn targets(payload: []const u8) []const Target {
             .cog = jnumOpt(o.get("cog")),
             .heading = jnumOpt(o.get("heading")),
             .name = if (o.get("name")) |v| jstr(v) else null,
+            .aton = jboolOpt(o.get("aton")) orelse false,
+            .aton_type = atonType(o.get("aton_type")),
+            .virtual_aton = jboolOpt(o.get("virtual")) orelse false,
+            .off_position = jboolOpt(o.get("off_position")),
             .ts_ms = jintOpt(o.get("ts")) orelse 0,
             .age_ms = jintOpt(o.get("age_ms")) orelse 0,
         };
@@ -588,8 +608,25 @@ pub fn jint(v: std.json.Value) ?i64 {
     };
 }
 
+pub fn jbool(v: std.json.Value) ?bool {
+    return switch (v) {
+        .bool => |b| b,
+        else => null,
+    };
+}
+
 fn jnumOpt(v: ?std.json.Value) ?f64 {
     return jnum(v orelse return null);
+}
+
+fn jboolOpt(v: ?std.json.Value) ?bool {
+    return jbool(v orelse return null);
+}
+
+/// A navaid type code. Anything outside 0..31 loses the type, not the target.
+fn atonType(v: ?std.json.Value) ?u8 {
+    const n = jintOpt(v) orelse return null;
+    return if (n >= 0 and n <= 31) @intCast(n) else null;
 }
 
 fn jintOpt(v: ?std.json.Value) ?i64 {
@@ -752,6 +789,12 @@ pub const AisUpsert = struct {
             self.b.raw(",\"name\":");
             self.b.str(n);
         }
+        if (t.aton) {
+            self.b.raw(",\"aton\":true");
+            if (t.aton_type) |v| self.b.print(",\"aton_type\":{d}", .{v});
+            if (t.virtual_aton) self.b.raw(",\"virtual\":true");
+            if (t.off_position) |v| self.b.print(",\"off_position\":{s}", .{if (v) "true" else "false"});
+        }
         self.b.print(",\"ts\":{d}}}", .{t.ts_ms});
     }
 
@@ -783,7 +826,9 @@ pub const Color = enum {
     }
 };
 
-pub const Sym = enum { ownship, target };
+/// The symbol shapes the core draws. `aton` is a physical aid to navigation
+/// and `aton_virtual` one that exists only as a broadcast.
+pub const Sym = enum { ownship, target, aton, aton_virtual };
 
 /// Builds `{"set":[...],"del":[...]}`.
 ///

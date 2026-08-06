@@ -142,6 +142,11 @@ pub const TargetFields = struct {
     heading: ?f64 = null,
     /// Points into the scratch buffer `parser.decode` was given.
     name: ?[]const u8 = null,
+    /// Set by a type 21 report: this station is an aid to navigation.
+    aton: bool = false,
+    aton_type: ?u8 = null,
+    virtual_aton: bool = false,
+    off_position: ?bool = null,
 };
 
 /// The target a decoded AIS message updates, or null when it carries nothing
@@ -167,6 +172,19 @@ pub fn fromAis(msg: parser.AisMessage) ?TargetFields {
         .static => |st| {
             if (st.mmsi == 0 or st.name.len == 0) return null;
             return .{ .mmsi = st.mmsi, .name = st.name };
+        },
+        .aton => |a| {
+            if (a.mmsi == 0) return null;
+            return .{
+                .mmsi = a.mmsi,
+                .lat = a.lat,
+                .lon = a.lon,
+                .name = if (a.name.len == 0) null else a.name,
+                .aton = true,
+                .aton_type = a.aid_type,
+                .virtual_aton = a.virtual_aid,
+                .off_position = a.off_position,
+            };
         },
     }
 }
@@ -316,6 +334,27 @@ test "a two-fragment type 5 becomes a name" {
     try testing.expectEqual(fx.aivdm_type5_expect.mmsi, t.mmsi);
     try testing.expectEqualStrings(fx.aivdm_type5_expect.name, t.name.?);
     try testing.expect(t.lat == null);
+}
+
+test "a type 21 becomes an AtoN target with its flags" {
+    var text: [parser.text_scratch_bytes]u8 = undefined;
+    const v = fromAis(try decodeOne(fx.aivdm_type21_virtual, &text)) orelse return error.NoTarget;
+    try testing.expectEqual(fx.aivdm_type21_virtual_expect.mmsi, v.mmsi);
+    try testing.expectEqualStrings(fx.aivdm_type21_virtual_expect.name, v.name.?);
+    try testing.expectApproxEqAbs(fx.aivdm_type21_virtual_expect.lat, v.lat.?, 1e-7);
+    try testing.expect(v.aton);
+    try testing.expect(v.virtual_aton);
+    try testing.expectEqual(@as(u8, 28), v.aton_type.?);
+    try testing.expect(!v.off_position.?);
+    // An aid has no way of moving, so it publishes no speed or course.
+    try testing.expect(v.sog_mps == null);
+    try testing.expect(v.cog == null);
+    try testing.expect(v.heading == null);
+
+    const o = fromAis(try decodeOne(fx.aivdm_type21_offpos, &text)) orelse return error.NoTarget;
+    try testing.expect(o.aton);
+    try testing.expect(!o.virtual_aton);
+    try testing.expect(o.off_position.?);
 }
 
 test "type 24 part A is a name, part B nothing to upsert" {

@@ -202,6 +202,10 @@ fn handleVdm(v: parser.Vdm) void {
         .cog = t.cog,
         .heading = t.heading,
         .name = t.name,
+        .aton = t.aton,
+        .aton_type = t.aton_type,
+        .virtual_aton = t.virtual_aton,
+        .off_position = t.off_position,
         .ts_ms = lk.nowMs(),
     });
     const rc = u.send();

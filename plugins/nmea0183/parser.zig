@@ -662,6 +662,13 @@ const TextBuf = struct {
 /// destination).
 pub const text_scratch_bytes = 64;
 
+/// The fixed part of a type 21 report. Anything past this is name extension.
+const aton_fixed_bits = 272;
+
+/// Longest AtoN name: the 20-character field plus the 14 characters the
+/// extension may add.
+pub const max_aton_name = 34;
+
 /// The longest armored payload `Assembler` will hold: nine fragments of the
 /// 82-character sentence limit.
 pub const max_assembly = 640;
@@ -824,9 +831,31 @@ pub const AisStatic = struct {
     to_starboard_m: ?u16,
 };
 
+/// An aid to navigation: type 21. A buoy, a beacon, a light — or nothing at
+/// all, when `virtual_aid` is set and a shore station broadcasts a mark that
+/// is not there.
+pub const AisAton = struct {
+    mmsi: u32,
+    /// The navaid type, 0..31. 0 is "not specified"; 1..15 are fixed aids and
+    /// 16..31 floating ones.
+    aid_type: u8,
+    /// The name field and its extension, joined. Slices into the caller's
+    /// scratch buffer; empty when the field was entirely `@` padding.
+    name: []const u8,
+    /// Null on the 91°/181° "not available" sentinels.
+    lat: ?f64,
+    lon: ?f64,
+    /// True when the aid reports itself off its charted position. Null when
+    /// the UTC second is over 59: the flag only counts with a real timestamp.
+    off_position: ?bool,
+    /// True when no physical aid is there and a station transmits it for one.
+    virtual_aid: bool,
+};
+
 pub const AisMessage = union(enum) {
     position: AisPosition,
     static: AisStatic,
+    aton: AisAton,
 };
 
 /// Decodes a reassembled payload. `text` holds the decoded strings and must
@@ -914,8 +943,48 @@ pub fn decode(payload: []const u8, fill: u3, text: []u8) Error!AisMessage {
             } };
             return error.Unsupported;
         },
+        21 => {
+            const second = try b.u(253, 6);
+            return .{ .aton = .{
+                .mmsi = mmsi,
+                .aid_type = @intCast(try b.u(38, 5)),
+                .name = try atonName(b, &tb),
+                .lon = coord(try b.sint(164, 28), 181.0),
+                .lat = coord(try b.sint(192, 27), 91.0),
+                .off_position = if (second > 59) null else (try b.u(259, 1)) == 1,
+                .virtual_aid = (try b.u(269, 1)) == 1,
+            } };
+        },
         else => return error.Unsupported,
     }
+}
+
+/// A type 21 name: the 20-character field, plus the extension that follows the
+/// fixed part when the field is full. A name field that ends in `@` padding is
+/// the whole name, and the extension is not read.
+fn atonName(b: Bits, tb: *TextBuf) Error![]const u8 {
+    const out = try tb.take(max_aton_name);
+    var n: usize = 0;
+    var full = true;
+    for (0..20) |k| {
+        const ch = text_alphabet[@intCast(try b.u(43 + k * 6, 6))];
+        if (ch == '@') {
+            full = false;
+            break;
+        }
+        out[n] = ch;
+        n += 1;
+    }
+    if (full and b.total > aton_fixed_bits) {
+        const chars = @min((b.total - aton_fixed_bits) / 6, max_aton_name - 20);
+        for (0..chars) |k| {
+            const ch = text_alphabet[@intCast(try b.u(aton_fixed_bits + k * 6, 6))];
+            if (ch == '@') break;
+            out[n] = ch;
+            n += 1;
+        }
+    }
+    return std.mem.trimEnd(u8, out[0..n], " ");
 }
 
 /// 1/10000 minute units to degrees, with the "not available" sentinel — and
@@ -1197,6 +1266,131 @@ test "type 24 part A carries the name and part B the callsign" {
     try testing.expectEqual(@as(u8, 1), sb.part.?);
     try testing.expectEqualStrings(fx.aivdm_type24_expect.callsign, sb.callsign);
     try testing.expectEqual(fx.aivdm_type24_expect.mmsi, sb.mmsi);
+}
+
+fn atonOf(line: []const u8, text: []u8) !AisAton {
+    var a = Assembler{};
+    const done = a.push((try parse(line)).vdm) orelse return error.Incomplete;
+    return (try decode(done.payload, done.fill, text)).aton;
+}
+
+test "a two-fragment type 21 decodes the aid and joins its name extension" {
+    var text: [text_scratch_bytes]u8 = undefined;
+    var a = Assembler{};
+    try testing.expect(a.push((try parse(fx.aivdm_type21_a)).vdm) == null);
+    const done = a.push((try parse(fx.aivdm_type21_b)).vdm).?;
+    const an = (try decode(done.payload, done.fill, &text)).aton;
+    const e = fx.aivdm_type21_expect;
+    try testing.expectEqual(e.mmsi, an.mmsi);
+    try testing.expectEqual(e.aid_type, an.aid_type);
+    // 31 characters: 20 in the fixed field and 11 in the extension.
+    try testing.expectEqualStrings(e.name, an.name);
+    try expectNear(e.lat, an.lat, 1e-7);
+    try expectNear(e.lon, an.lon, 1e-7);
+    try testing.expectEqual(e.off_position, an.off_position.?);
+    try testing.expectEqual(e.virtual_aid, an.virtual_aid);
+}
+
+test "a virtual aid and an off-position aid decode their flags" {
+    var text: [text_scratch_bytes]u8 = undefined;
+    const v = try atonOf(fx.aivdm_type21_virtual, &text);
+    const ev = fx.aivdm_type21_virtual_expect;
+    try testing.expectEqual(ev.mmsi, v.mmsi);
+    try testing.expectEqual(ev.aid_type, v.aid_type);
+    try testing.expectEqualStrings(ev.name, v.name);
+    try expectNear(ev.lat, v.lat, 1e-7);
+    try expectNear(ev.lon, v.lon, 1e-7);
+    try testing.expect(v.virtual_aid);
+    try testing.expect(!v.off_position.?);
+
+    var text_b: [text_scratch_bytes]u8 = undefined;
+    const o = try atonOf(fx.aivdm_type21_offpos, &text_b);
+    const eo = fx.aivdm_type21_offpos_expect;
+    try testing.expectEqual(eo.mmsi, o.mmsi);
+    try testing.expectEqual(eo.aid_type, o.aid_type);
+    // 24 characters, so four of them ride in the extension.
+    try testing.expectEqualStrings(eo.name, o.name);
+    try expectNear(eo.lat, o.lat, 1e-7);
+    try expectNear(eo.lon, o.lon, 1e-7);
+    try testing.expect(!o.virtual_aid);
+    try testing.expect(o.off_position.?);
+}
+
+/// A bit packer for the type 21 cases no published example carries. Same
+/// order as `Bits.u` reads: most significant bit first.
+const Packer = struct {
+    codes: [64]u6 = @splat(0),
+    n: usize = 0,
+
+    fn put(self: *Packer, value: u64, bits: usize) void {
+        var k = bits;
+        while (k > 0) {
+            k -= 1;
+            if ((value >> @intCast(k)) & 1 == 1) {
+                const shift: u3 = @intCast(5 - (self.n % 6));
+                self.codes[self.n / 6] |= @as(u6, 1) << shift;
+            }
+            self.n += 1;
+        }
+    }
+
+    fn text(self: *Packer, s: []const u8, chars: usize) void {
+        for (0..chars) |i| self.put(if (i < s.len) textCode(s[i]) else 0, 6);
+    }
+
+    fn armored(self: *Packer, out: []u8) []const u8 {
+        const n = (self.n + 5) / 6;
+        for (0..n) |i| out[i] = armor(self.codes[i]);
+        return out[0..n];
+    }
+};
+
+/// A type 21 with the name field padded, `second`, and a name extension.
+fn packAton(p: *Packer, name: []const u8, second: u64, extension: []const u8) void {
+    p.put(21, 6);
+    p.put(0, 2);
+    p.put(993672001, 30);
+    p.put(19, 5); // special mark
+    p.text(name, 20);
+    p.put(0, 1); // accuracy
+    p.put(0, 28); // lon 0
+    p.put(0, 27); // lat 0
+    p.put(0, 30); // dimensions
+    p.put(1, 4); // EPFD
+    p.put(second, 6);
+    p.put(1, 1); // off position
+    p.put(0, 8); // regional
+    p.put(0, 1); // RAIM
+    p.put(0, 1); // virtual
+    p.put(0, 1); // assigned
+    p.put(0, 1); // spare
+    for (extension) |c| p.put(textCode(c), 6);
+}
+
+test "a padded type 21 name ignores the extension, and a bad second voids off-position" {
+    var text_buf: [text_scratch_bytes]u8 = undefined;
+    var buf: [64]u8 = undefined;
+
+    // The name field ends in @ padding, so the extension is not part of the
+    // name however many characters follow.
+    var short = Packer{};
+    packAton(&short, "BUOY", 30, "IGNORED");
+    var an = (try decode(short.armored(&buf), 0, &text_buf)).aton;
+    try testing.expectEqualStrings("BUOY", an.name);
+    try testing.expect(an.off_position.?);
+
+    // UTC second 60 means the position system is not working; the
+    // off-position flag beside it is not usable.
+    var late = Packer{};
+    packAton(&late, "BUOY", 60, "");
+    an = (try decode(late.armored(&buf), 0, &text_buf)).aton;
+    try testing.expect(an.off_position == null);
+
+    // A report cut short of the fixed 272 bits is truncated, not guessed at.
+    var cut = Packer{};
+    packAton(&cut, "BUOY", 30, "");
+    const full = cut.armored(&buf);
+    try testing.expectError(error.Truncated, decode(full[0 .. full.len - 4], 0, &text_buf));
 }
 
 test "out-of-order and orphaned AIS fragments drop without crashing" {

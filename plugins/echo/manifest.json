@@ -2,5 +2,9 @@
   "id": "org.beetlebug.echo",
   "name": "Echo (test plugin)",
   "abi": 1,
-  "capabilities": ["vessel.read", "overlay.draw", "net.tcp-client"]
+  "capabilities": ["vessel.read", "overlay.draw", "net.tcp-client"],
+  "settings": [
+    {"key": "draw", "label": "Draw the symbol", "kind": "toggle", "default": true},
+    {"key": "scale", "label": "Symbol size", "kind": "number", "unit": "x", "min": 0.5, "max": 3, "default": 1}
+  ]
 }

@@ -1156,6 +1156,12 @@ fn writeAisChanged(out: *std.ArrayList(u8), alloc: std.mem.Allocator, targets: [
             try out.appendSlice(alloc, ",\"name\":");
             try writeJsonString(out, alloc, n);
         }
+        if (tg.aton) {
+            try out.appendSlice(alloc, ",\"aton\":true");
+            if (tg.aton_type) |v| try out.print(alloc, ",\"aton_type\":{d}", .{v});
+            if (tg.virtual_aton) try out.appendSlice(alloc, ",\"virtual\":true");
+            if (tg.off_position) |v| try out.print(alloc, ",\"off_position\":{s}", .{if (v) "true" else "false"});
+        }
         try out.print(alloc, ",\"ts\":{d},\"age_ms\":{d}}}", .{ tg.ts_ms, now - tg.ts_ms });
     }
     try out.appendSlice(alloc, "]}");
@@ -1289,6 +1295,10 @@ fn hostAisUpsert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callc
                 .string => |s| s,
                 else => null,
             },
+            .aton = jsonBool(o.get("aton")),
+            .aton_type = atonType(o.get("aton_type")),
+            .virtual_aton = jsonBool(o.get("virtual")),
+            .off_position = jsonBool(o.get("off_position")),
             .ts_ms = jsonInt(o.get("ts")) orelse wallMs(),
         };
         p.broker.ais.upsert(upd, p.source) catch |e| {
@@ -1573,6 +1583,21 @@ fn jsonNum(v: ?std.json.Value) ?f64 {
         .number_string => |s| std.fmt.parseFloat(f64, s) catch null,
         else => null,
     };
+}
+
+fn jsonBool(v: ?std.json.Value) ?bool {
+    const val = v orelse return null;
+    return switch (val) {
+        .bool => |b| b,
+        else => null,
+    };
+}
+
+/// A navaid type code. Out of the 0..31 the wire format defines it reads as
+/// unknown, so a bad value loses the type rather than the whole target.
+fn atonType(v: ?std.json.Value) ?u8 {
+    const n = jsonInt(v) orelse return null;
+    return if (n >= 0 and n <= 31) @intCast(n) else null;
 }
 
 fn jsonInt(v: ?std.json.Value) ?i64 {

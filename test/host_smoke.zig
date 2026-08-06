@@ -186,6 +186,103 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
     try std.testing.expectEqual(@as(usize, 0), ov.count());
 }
 
+// Settings, end to end: the schema out of the manifest, the defaults into
+// lk_start, a change through configSet, the CONFIG_CHANGED event that carries
+// the whole config, and the plugin acting on it.
+//
+// The subject is echo's `draw` toggle, because a toggle a plugin obeys is
+// visible in the overlay store: on it draws its symbol, off it deletes it.
+// Asserting on the object rather than on a log line is the point — this is the
+// path the mariner's switch travels.
+test "a settings change reaches the plugin and changes what it draws" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try stage(alloc, &tmp);
+    defer alloc.free(dir_path);
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var ov = overlay.Store.init(alloc);
+    defer ov.deinit();
+    var sink = LogSink{ .alloc = alloc };
+    defer sink.text.deinit(alloc);
+
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{
+        .ctx = &ov,
+        .applyFn = OvSink.apply,
+        .removeFn = OvSink.remove,
+    });
+    defer br.deinit();
+    br.setLog(&sink, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{});
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
+
+    // The schema arrived with the manifest, and the registry JSON carries it
+    // with the defaults as the values in force.
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(alloc);
+    try h.registryJson(&json);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"key\":\"draw\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"kind\":\"toggle\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"default\":true,\"value\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"min\":0.5,\"max\":3") != null);
+
+    json.clearRetainingCapacity();
+    try h.configJson(echo_id, &json);
+    try std.testing.expectEqualStrings("{\"draw\":true,\"scale\":1}", json.items);
+
+    // Draw once at the default scale.
+    br.push(echo.index, broker.Kind.store_changed, 0,
+        \\{"values":[{"path":"navigation.position","value":{"lat":38.98,"lon":-76.47},"ts":1000,"age_ms":10}]}
+    );
+    try std.testing.expectEqual(@as(usize, 1), h.pump());
+    try std.testing.expect(ov.objs.contains(echo_id ++ "/echo"));
+    const fr = try ov.buildIfNeeded(15.0, .day, null);
+    const one_x = fr.verts[0].x;
+
+    // A key the schema does not declare is ignored, and a number outside its
+    // range is clamped rather than refused.
+    try h.configSet(echo_id, "{\"scale\":9,\"nonsense\":1}");
+    try std.testing.expectEqual(@as(usize, 1), h.pump());
+    json.clearRetainingCapacity();
+    try h.configJson(echo_id, &json);
+    try std.testing.expectEqualStrings("{\"draw\":true,\"scale\":3}", json.items);
+    // The plugin redrew at the new scale: the same symbol, wider.
+    const bigger = try ov.buildIfNeeded(15.0, .day, null);
+    try std.testing.expect(@abs(bigger.verts[0].x - one_x) > 0);
+
+    // The toggle off: the plugin deletes its own object.
+    try h.configSet(echo_id, "{\"draw\":false}");
+    try std.testing.expectEqual(@as(usize, 1), h.pump());
+    try std.testing.expect(!ov.objs.contains(echo_id ++ "/echo"));
+    try std.testing.expect(sink.has("config draw false"));
+    // The change is what the plugin was told, not what it was asked: the whole
+    // config, every field, one event.
+    try std.testing.expect(sink.has("config {\"draw\":false,\"scale\":3}"));
+
+    // ...and back on, with nothing else touched.
+    try h.configSet(echo_id, "{\"draw\":true}");
+    try std.testing.expectEqual(@as(usize, 1), h.pump());
+    try std.testing.expect(ov.objs.contains(echo_id ++ "/echo"));
+
+    // An unknown plugin, a config that is not an object, and a toggle sent as
+    // a number are all refused without touching what is in force.
+    try std.testing.expectError(host.Error.UnknownPlugin, h.configSet("org.nobody", "{}"));
+    try std.testing.expectError(host.Error.BadConfig, h.configSet(echo_id, "[]"));
+    try std.testing.expectError(host.Error.BadConfig, h.configSet(echo_id, "{\"draw\":1}"));
+    json.clearRetainingCapacity();
+    try h.configJson(echo_id, &json);
+    try std.testing.expectEqualStrings("{\"draw\":true,\"scale\":3}", json.items);
+    try std.testing.expect(!sink.has("trapped"));
+}
+
 // The arena regression. A payload big enough that parsing it needs more
 // scratch than the plugin's static buffer holds makes lk.zig grow linear
 // memory INSIDE the event. The first version of that arena abandoned the

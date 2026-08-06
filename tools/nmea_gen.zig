@@ -19,6 +19,10 @@
 //!      south-east from a position already astern: its TCPA is negative from
 //!      t = 0, the "closest approach already happened" case.
 //!
+//! Two aids to navigation report type 21 every three minutes: a real starboard
+//! hand buoy whose name runs into the name extension, and a virtual isolated
+//! danger with nothing in the water behind it.
+//!
 //! Everything here is deterministic — no clock, no randomness — so two runs
 //! produce identical bytes and a golden test can diff them.
 //!
@@ -222,6 +226,35 @@ const target_b = Target{
     .nav_status = 1,
 };
 
+/// The two aids to navigation, in the open water own ship sails into. One is a
+/// real buoy; the other is broadcast by a shore station and has nothing in the
+/// water at all. Both report every `aton_period_s`, which is the rate a real
+/// AtoN keeps.
+///
+/// The buoy's name runs past the 20-character field, so the round trip covers
+/// the name extension. Both report ON position: an off-position aid raises a
+/// warning alert, and the replay's alert count is what the phase gate reads.
+const aton_physical = Aton{
+    .mmsi = 993672315,
+    .aid_type = 25, // starboard hand mark
+    .name = "ANNAPOLIS CHANNEL BUOY 2",
+    .at = .{ .x = 900.0, .y = -450.0 },
+};
+
+const aton_virtual = Aton{
+    .mmsi = 993672099,
+    .aid_type = 28, // isolated danger
+    .name = "VIRTUAL WRECK MARK",
+    // Abeam of the buoy, 250 m away, so one crop of the render holds both and
+    // the difference between the two marks is a comparison, not a memory.
+    .at = .{ .x = 1150.0, .y = -450.0 },
+    .virtual_aid = true,
+};
+
+/// How often an aid to navigation transmits. Three minutes is the rate the
+/// station keeps; the store evicts an AtoN at thirty.
+const aton_period_s = 180;
+
 /// Target C: a class B leaving to the south-east from a position already
 /// astern of own ship. She opens from the first second, so her TCPA is
 /// negative throughout — the case the gate must refuse however small the CPA
@@ -378,6 +411,55 @@ pub fn encodeStatic5(mmsi: u32, s: Ship) Payload {
     w.putText(s.destination, 20);
     w.put(0, 1); // DTE ready
     w.put(0, 1); // spare
+    return w;
+}
+
+/// One aid to navigation, as type 21 carries it.
+pub const Aton = struct {
+    mmsi: u32,
+    /// The navaid type code: 25 is a starboard hand mark, 28 an isolated
+    /// danger.
+    aid_type: u8,
+    name: []const u8,
+    /// Where it sits at t = 0. An AtoN does not move.
+    at: Vec,
+    virtual_aid: bool = false,
+    off_position: bool = false,
+    /// Metres from the reference point to bow, stern, port and starboard —
+    /// the extent of the mark itself.
+    size_m: u16 = 2,
+};
+
+/// A type 21 report. The fixed part is 272 bits; a name over 20 characters
+/// puts the rest in the extension, padded with zero bits to an 8-bit boundary,
+/// which is how the receiver deduces its length.
+pub fn encodeAton(a: Aton, second: u8) Payload {
+    var w = Payload{};
+    w.put(21, 6);
+    w.put(0, 2); // repeat indicator
+    w.put(a.mmsi, 30);
+    w.put(a.aid_type, 5);
+    w.putText(a.name, 20);
+    w.put(0, 1); // position accuracy
+    w.putLon(a.at.lon());
+    w.putLat(a.at.lat());
+    w.put(a.size_m, 9); // to bow
+    w.put(a.size_m, 9); // to stern
+    w.put(a.size_m, 6); // to port
+    w.put(a.size_m, 6); // to starboard
+    w.put(1, 4); // EPFD: GPS
+    w.put(second, 6);
+    w.put(@intFromBool(a.off_position), 1);
+    w.put(0, 8); // regional reserved
+    w.put(0, 1); // RAIM
+    w.put(@intFromBool(a.virtual_aid), 1);
+    w.put(0, 1); // assigned mode
+    w.put(0, 1); // spare
+    if (a.name.len > 20) {
+        var i: usize = 20;
+        while (i < a.name.len) : (i += 1) w.put(p.textCode(a.name[i]), 6);
+        while (w.nbits % 8 != 0) w.put(0, 1);
+    }
     return w;
 }
 
@@ -545,6 +627,12 @@ pub fn generate(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
             try emitVdm(o, encodePosition(target_b, target_b.at(tf), second, false), 'A', 0);
             try emitVdm(o, encodePosition(target_c, target_c.at(tf), second, true), 'B', 0);
         }
+        if (t % aton_period_s == 0 and t < duration_s) {
+            const second: u8 = @intCast(ss);
+            try emitVdm(o, encodeAton(aton_physical, second), 'B', msg_id);
+            msg_id = (msg_id + 1) % 10;
+            try emitVdm(o, encodeAton(aton_virtual, second), 'B', 0);
+        }
         if (t % 60 == 0 and t < duration_s) {
             try emitVdm(o, encodeStatic5(target_b.mmsi, ship_b), 'A', msg_id);
             msg_id = (msg_id + 1) % 10;
@@ -691,6 +779,8 @@ test "the generated log parses back to the scene it was built from" {
     var seen_a: usize = 0;
     var seen_b: usize = 0;
     var seen_c: usize = 0;
+    var seen_aton_physical: usize = 0;
+    var seen_aton_virtual: usize = 0;
     var name_b: [32]u8 = undefined;
     var name_b_len: usize = 0;
     var name_c: [32]u8 = undefined;
@@ -805,6 +895,27 @@ test "the generated log parses back to the scene it was built from" {
                                 try testing.expect(false);
                             }
                         },
+                        .aton => |an| {
+                            if (an.mmsi == aton_physical.mmsi) {
+                                seen_aton_physical += 1;
+                                try testing.expectEqualStrings(aton_physical.name, an.name);
+                                try testing.expectEqual(aton_physical.aid_type, an.aid_type);
+                                try testing.expect(!an.virtual_aid);
+                                try testing.expect(!an.off_position.?);
+                                try testing.expectApproxEqAbs(aton_physical.at.lat(), an.lat.?, 1e-5);
+                                try testing.expectApproxEqAbs(aton_physical.at.lon(), an.lon.?, 1e-5);
+                            } else if (an.mmsi == aton_virtual.mmsi) {
+                                seen_aton_virtual += 1;
+                                try testing.expectEqualStrings(aton_virtual.name, an.name);
+                                try testing.expectEqual(aton_virtual.aid_type, an.aid_type);
+                                try testing.expect(an.virtual_aid);
+                                try testing.expect(!an.off_position.?);
+                                try testing.expectApproxEqAbs(aton_virtual.at.lat(), an.lat.?, 1e-5);
+                                try testing.expectApproxEqAbs(aton_virtual.at.lon(), an.lon.?, 1e-5);
+                            } else {
+                                try testing.expect(false);
+                            }
+                        },
                         .static => |st| {
                             if (st.msg_type == 5) {
                                 try testing.expectEqual(target_b.mmsi, st.mmsi);
@@ -835,6 +946,10 @@ test "the generated log parses back to the scene it was built from" {
     try testing.expectEqual(@as(usize, duration_s / 10), seen_a);
     try testing.expectEqual(@as(usize, duration_s / 10), seen_b);
     try testing.expectEqual(@as(usize, duration_s / 10), seen_c);
+    // Every third minute, up to but not including the end of the log.
+    const aton_reports = (duration_s + aton_period_s - 1) / aton_period_s;
+    try testing.expectEqual(aton_reports, seen_aton_physical);
+    try testing.expectEqual(aton_reports, seen_aton_virtual);
     try testing.expectEqual(@as(u64, 0), feeder.stats.bad_checksum);
     try testing.expectEqual(@as(u64, 0), feeder.stats.no_checksum);
     try testing.expectEqual(@as(u64, 0), feeder.stats.oversize);

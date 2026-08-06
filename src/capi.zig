@@ -158,6 +158,39 @@ export fn lookout_plugins_active(h: ?*lookout) c_int {
     return if (l.pluginsActive()) 1 else 0;
 }
 
+/// Every loaded plugin with its settings schema and the values in force, as
+/// JSON. A shell renders a settings pane from this and needs to know nothing
+/// about what any plugin does. Borrowed until the next plugin query; NULL when
+/// no plugin layer is up.
+export fn lookout_plugins_json(h: ?*lookout, out_len: ?*usize) ?[*]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = l.pluginsJson() orelse return null;
+    if (out_len) |p| p.* = s.len;
+    return s.ptr;
+}
+
+/// One plugin's settings object. Borrowed until the next plugin query; NULL
+/// when the id is not loaded.
+export fn lookout_plugin_config_get(h: ?*lookout, id: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = l.pluginConfig(std.mem.span(id)) orelse return null;
+    if (out_len) |p| p.* = s.len;
+    return s.ptr;
+}
+
+/// Change one plugin's settings, applied at once. `json` is an object of the
+/// keys the schema declares; anything else in it is ignored and a number
+/// outside its range is clamped. 0 on success, -1 when the id is unknown, the
+/// plugin has no settings, or the JSON is not an object.
+export fn lookout_plugin_config_set(h: ?*lookout, id: [*:0]const u8, json: [*:0]const u8) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setPluginConfig(std.mem.span(id), std.mem.span(json)) catch return -1;
+    return 0;
+}
+
 /// What the plugin overlay says about the symbol nearest a LOGICAL point, as
 /// JSON: `{"title":"...","rows":[["key","value"],...]}`. NULL when no symbol
 /// with a payload is within about 14 pt of it.

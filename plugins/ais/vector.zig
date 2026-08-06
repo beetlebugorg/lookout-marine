@@ -56,8 +56,15 @@ pub fn wrapLon(deg: f64) f64 {
 /// Zero when the target is under `min_sog_mps`, which tells the caller to draw
 /// no vector.
 pub fn vectorLengthM(sog_mps: f64) f64 {
+    return vectorLengthFor(sog_mps, vector_seconds);
+}
+
+/// The same, for a vector time the mariner chose. Own ship's vector uses the
+/// default; a mariner who wants to see further ahead moves both.
+pub fn vectorLengthFor(sog_mps: f64, seconds: f64) f64 {
     if (!std.math.isFinite(sog_mps) or sog_mps <= min_sog_mps) return 0;
-    return sog_mps * vector_seconds;
+    if (!std.math.isFinite(seconds) or seconds <= 0) return 0;
+    return sog_mps * seconds;
 }
 
 /// Great-circle destination from `from`, `distance_m` along `bearing_deg`.
@@ -141,6 +148,18 @@ test "a speed vector is six minutes of the target's speed" {
     // The same six minutes own ship uses.
     try t.expectEqual(@as(f64, 360), vector_seconds);
     try t.expectApproxEqRel(@as(f64, 1852.0), vectorLengthM(5.144444444), 1e-6);
+}
+
+test "a chosen vector time scales the length and nothing else" {
+    const ten_kn = 10.0 * nautical_mile_m / 3600.0;
+    // Twelve minutes of 10 kn is two miles; one minute is a sixth of one.
+    try t.expectApproxEqRel(nautical_mile_m * 2.0, vectorLengthFor(ten_kn, 12 * 60), 1e-12);
+    try t.expectApproxEqRel(nautical_mile_m / 6.0, vectorLengthFor(ten_kn, 60), 1e-12);
+    try t.expectEqual(vectorLengthM(ten_kn), vectorLengthFor(ten_kn, vector_seconds));
+    // The slow gate still applies, and a vector time of nothing draws nothing.
+    try t.expectEqual(@as(f64, 0), vectorLengthFor(0.1, 12 * 60));
+    try t.expectEqual(@as(f64, 0), vectorLengthFor(ten_kn, 0));
+    try t.expectEqual(@as(f64, 0), vectorLengthFor(ten_kn, -60));
 }
 
 test "a target too slow to have a course flies no vector" {

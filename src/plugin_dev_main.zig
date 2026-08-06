@@ -58,6 +58,11 @@ const USAGE =
     \\  --width W --height H  render size (default 1600x1200)
     \\  --scheme day|dusk|night   palette (default day)
     \\  --print WHAT      all | deltas | overlay | alert | status (default all)
+    \\  --set-config ID JSON  change a plugin's settings mid-replay, e.g.
+    \\                    --set-config 200@org.beetlebug.ais '{"cpa_limit":100}'
+    \\                    The SECONDS@ prefix is the replay second to do it at;
+    \\                    without one it happens before the replay starts.
+    \\                    Repeatable, applied in the order given.
     \\  -h, --help        this help
     \\
 ;
@@ -405,7 +410,16 @@ const Watcher = struct {
             const k = std.fmt.bufPrint(&key, "{d}", .{tg.mmsi}) catch continue;
             var line: [max_text]u8 = undefined;
             var w = std.Io.Writer.fixed(&line);
-            w.print("{d:.5},{d:.5} sog {d:.1} m/s cog {d:.0} hdg {d:.0} {s}", .{
+            if (tg.aton) {
+                w.print("{d:.5},{d:.5} AtoN type {d}{s}{s} {s}", .{
+                    tg.lat orelse 0,
+                    tg.lon orelse 0,
+                    tg.aton_type orelse 0,
+                    if (tg.virtual_aton) " VIRTUAL" else " physical",
+                    if (tg.off_position orelse false) " OFF POSITION" else "",
+                    tg.name() orelse "",
+                }) catch {};
+            } else w.print("{d:.5},{d:.5} sog {d:.1} m/s cog {d:.0} hdg {d:.0} {s}", .{
                 tg.lat orelse 0,
                 tg.lon orelse 0,
                 tg.sog orelse 0,
@@ -527,8 +541,27 @@ fn scanPmtiles(alloc: std.mem.Allocator, dir: []const u8, out: *std.ArrayList([:
 // main
 // ---------------------------------------------------------------------------
 
+/// One `--set-config`: a settings change and the replay second to make it at.
+/// Proving a setting is applied HOT means changing it while the log is playing
+/// and watching the behaviour move, which is what the second is for.
+const Change = struct {
+    at_s: f64 = 0,
+    id: [:0]const u8,
+    json: [:0]const u8,
+    done: bool = false,
+};
+
+/// `[SECONDS@]ID`.
+fn parseChangeTarget(text: [:0]const u8) struct { at_s: f64, id: [:0]const u8 } {
+    const at = std.mem.indexOfScalar(u8, text, '@') orelse return .{ .at_s = 0, .id = text };
+    const secs = std.fmt.parseFloat(f64, text[0..at]) catch
+        fail("--set-config: {s} is not a replay second", .{text[0..at]});
+    return .{ .at_s = secs, .id = text[at + 1 .. :0] };
+}
+
 const Args = struct {
     charts: std.ArrayList([:0]const u8) = .empty,
+    changes: std.ArrayList(Change) = .empty,
     plugins_dir: ?[:0]const u8 = null,
     replay_path: ?[]const u8 = null,
     rate: f64 = 1,
@@ -577,6 +610,7 @@ pub fn main(init: std.process.Init) !void {
 
     var a = Args{};
     defer a.charts.deinit(alloc);
+    defer a.changes.deinit(alloc);
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
@@ -622,6 +656,15 @@ pub fn main(init: std.process.Init) !void {
             else
                 fail("--scheme wants day, dusk or night", .{});
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--set-config")) {
+            const target = parseChangeTarget(next orelse fail("--set-config needs a plugin id", .{}));
+            if (i + 2 >= argv.len) fail("--set-config needs an id and a JSON object", .{});
+            try a.changes.append(alloc, .{
+                .at_s = target.at_s,
+                .id = target.id,
+                .json = argv[i + 2][0.. :0],
+            });
+            i += 2;
         } else if (std.mem.eql(u8, arg, "--print")) {
             a.print = std.meta.stringToEnum(Print, next orelse "") orelse
                 fail("--print wants all, deltas, overlay, alert or status", .{});
@@ -744,6 +787,15 @@ pub fn main(init: std.process.Init) !void {
         if (!warned_silent and log_text.len > 0 and state.conns.load(.monotonic) == 0 and now - start_mono > 5_000) {
             warned_silent = true;
             emit("harness: nothing has connected to {s} after 5 s; the log is not being read\n", .{nmea});
+        }
+        for (a.changes.items) |*c| {
+            if (c.done or state.replaySeconds() < c.at_s) continue;
+            c.done = true;
+            if (l.setPluginConfig(std.mem.span(c.id.ptr), std.mem.span(c.json.ptr))) |_| {
+                emit("t={d:>7.1}s set-config {s} {s}\n", .{ state.replaySeconds(), c.id, c.json });
+            } else |e| {
+                emit("t={d:>7.1}s set-config {s} REFUSED: {s}\n", .{ state.replaySeconds(), c.id, @errorName(e) });
+            }
         }
         if (now >= next_poll) {
             next_poll = now + poll_interval_ms;
