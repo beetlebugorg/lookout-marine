@@ -76,7 +76,7 @@ a short leader. Useful on approach, noisy in a crowded harbour.
 
 ## Charts
 
-![The Charts tab](../img/settings-charts.png)
+![The Charts tab](../img/settings-charts.webp)
 
 The open library, the recent ones, and the button to add more.
 

@@ -44,7 +44,7 @@ works: the harbour chart where you have one, the coastal chart around it.
 
 With nothing open yet, the same picker sits in the middle of the window:
 
-![A first start, with no chart open](../img/macos-empty.png)
+![A first start, with no chart open](../img/macos-empty.webp)
 
 The app opens where you left it the last time.
 
