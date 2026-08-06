@@ -478,9 +478,10 @@ pub const Gpu = struct {
     /// scope fence). The hook exists so the core's per-frame call site is
     /// backend-independent: take the frame, say so once, draw nothing.
     var overlay_told = false;
-    pub fn setOverlay(self: *Gpu, fr: ov.Frame) !void {
+    pub fn setOverlay(self: *Gpu, fr: ov.Frame, u: Uniforms) !void {
         _ = self;
         _ = fr;
+        _ = u;
         if (!overlay_told) {
             overlay_told = true;
             std.debug.print("overlay: not implemented on this backend\n", .{});

@@ -14,7 +14,9 @@
 //!   try ov.applyBatch("org.beetlebug.ais", json);   // broker thread, any time
 //!   ov.removeSource("org.beetlebug.ais");           // plugin stopped/failed
 //!   const fr = try ov.buildIfNeeded(cam.zoom, .day, null); // render thread, per frame
-//!   try gpu.setOverlay(fr);                          // re-uploads iff fr.generation moved
+//!   try gpu.setOverlay(fr, u);   // re-uploads iff fr.generation moved; `u` is
+//!                                // the frame uniform with the MVP and wrap
+//!                                // rebuilt for fr.origin
 //!
 //! THREADING. `applyBatch` / `removeSource` run on the broker's worker: they
 //! take the mutex and touch only the object map. `buildIfNeeded` takes the same
@@ -30,10 +32,18 @@
 //! zoom has moved more than 5% in scale. Between rebuilds a symbol scales with
 //! the chart, which at 5% is under half a point on an 8 pt symbol.
 //!
-//! COORDINATES. Vertices are ABSOLUTE web-mercator world [0,1] as f32 — the
-//! same space, and the same f32 precision, as the chart vertices the engine
-//! emits (root.zig builds the MVP with origin 0,0). The backend's overlay
-//! shader applies the same antimeridian wrap the chart shader does.
+//! COORDINATES. Vertices are web-mercator world, RELATIVE to the build origin
+//! the frame carries, as f32. Relative on purpose: an f32 holding an absolute
+//! world coordinate spends its whole mantissa on the distance from the prime
+//! meridian, so its step grows with the scale — a quarter point at zoom 15 but
+//! four points at zoom 19 — and each corner of a line quad then snaps to that
+//! grid on its own, drawing a 2 pt line as anything from nothing to a fat
+//! wedge. Measured from a point near the geometry the same f32 is exact to
+//! nanometres at every zoom. The caller draws the frame with the MVP built for
+//! `origin` (camera.mvpOrigin), which is the trick the chart's per-tile origins
+//! already use. The backend's overlay shader applies the same antimeridian wrap
+//! the chart shader does, and it works unchanged in the relative frame: a whole
+//! world width is 1.0 in both.
 const std = @import("std");
 const camera = @import("camera.zig");
 const lock = @import("lock.zig");
@@ -106,6 +116,9 @@ pub const Vertex = extern struct {
 pub const Frame = struct {
     verts: []const Vertex,
     generation: u64,
+    /// The world point the vertices are measured FROM. Draw them with the MVP
+    /// built for it, and wrap about (camera centre - origin). See COORDINATES.
+    origin: camera.Vec2,
 };
 
 /// One retained object, as posted. Geometry is kept in GEO and expanded per
@@ -251,6 +264,8 @@ pub const Store = struct {
     has_build: bool = false,
     built_zoom: f64 = 0,
     built_scheme: Scheme = .day,
+    /// The world point this build's vertices are measured from.
+    built_origin: camera.Vec2 = .{ .x = 0, .y = 0 },
     /// Own ship's display position at the last build, and whether any object
     /// rides it. Without a rider the position is ignored and nothing rebuilds.
     built_ship: ?[2]f64 = null,
@@ -571,11 +586,24 @@ pub const Store = struct {
         self.mu.lock();
         defer self.mu.unlock();
         if (self.needsRebuildLocked(zoom, scheme, ship)) try self.buildLocked(zoom, scheme, ship);
-        return .{ .verts = self.verts.items, .generation = self.gen };
+        return .{ .verts = self.verts.items, .generation = self.gen, .origin = self.built_origin };
+    }
+
+    /// The point this build measures its vertices from: the first object's own
+    /// POSTED position. Any point near the geometry serves — what matters is
+    /// that it is not own ship's carried position, which walks between fixes
+    /// and would move every vertex in the frame with it.
+    fn originLocked(self: *Store) camera.Vec2 {
+        for (self.objs.values()) |*o| {
+            if (o.kind == .symbol) return geo(o.at);
+            if (o.pts.len > 0) return geo(o.pts[0]);
+        }
+        return .{ .x = 0, .y = 0 };
     }
 
     fn buildLocked(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) Error!void {
         self.verts.clearRetainingCapacity();
+        self.built_origin = self.originLocked();
         const wpp = worldPerPt(zoom);
         // Paint order: areas, then lines, then symbols. A track must not cover
         // the boat, and a warning area must not cover either.
@@ -614,8 +642,11 @@ pub const Store = struct {
 
     fn push(self: *Store, w: camera.Vec2, c: Rgba) Error!void {
         try self.verts.append(self.alloc, .{
-            .x = @floatCast(w.x),
-            .y = @floatCast(w.y),
+            // Measured from the build origin, x the SHORT way round the world:
+            // f32 holds a small delta exactly, an absolute world coordinate
+            // only to the nearest few metres. See COORDINATES.
+            .x = @floatCast(camera.wrapDx(w.x, self.built_origin.x)),
+            .y = @floatCast(w.y - self.built_origin.y),
             .r = c[0],
             .g = c[1],
             .b = c[2],
@@ -864,6 +895,13 @@ fn jpoint(v: std.json.Value) ?[2]f64 {
 
 const t = std.testing;
 
+/// Vertex `i` of a frame back in ABSOLUTE world coordinates — what the shader
+/// reconstructs from the origin the frame carries. The tests measure geometry,
+/// so they work in the space the geometry was posted in.
+fn absAt(fr: Frame, i: usize) camera.Vec2 {
+    return .{ .x = @as(f64, fr.verts[i].x) + fr.origin.x, .y = @as(f64, fr.verts[i].y) + fr.origin.y };
+}
+
 test "geo matches camera.zig and known mercator values" {
     // Hand-computed web-mercator for Annapolis harbour and the origin.
     const a = geo(.{ -76.4767, 38.9763 });
@@ -980,60 +1018,82 @@ test "a ship anchor moves the symbol and its line, not the rest" {
 // every bearing. Angle-dependent breakage (a quadrant term in the dash or
 // perpendicular math, or a per-vertex wrap decision) shows as a failing
 // (bearing, rotation) pair. The sweep is 24 x 24 and pure vertex math.
-test "a dashed line keeps its width and dashes at every angle" {
-    // Zoom 12: overlay vertices are absolute world coordinates in f32, whose
-    // step here is 0.03 pt. Deeper zooms coarsen that (0.25 pt at z15) and
-    // would swamp the measurement.
-    const zoom: f64 = 12;
+//
+// It runs DEEP, and at a HiDPI density. The vertex array was absolute world in
+// f32, whose step is a quarter point at zoom 15 and four points at zoom 19, so
+// each corner of a quad snapped to its own grid cell and a 3 pt line drew as
+// anything from nothing to a wedge three times too wide, worst on the diagonal
+// bearings. Nothing caught it: this test only ran at zoom 12, and every harness
+// render frames the standard scene at zoom 15. A mariner works at zoom 18-21.
+test "a dashed line keeps its width and dashes at every angle, zoom and density" {
     const width_pt: f64 = 3.0;
     const lat0: f64 = 38.9763;
     const lon0: f64 = -76.4767;
     const m_per_deg = 40075016.685578488 / 360.0;
 
-    var deg: f64 = 0;
-    while (deg < 360) : (deg += 15) {
-        var s = Store.init(t.allocator);
-        defer s.deinit();
-        // 5 km on this bearing, which is about 170 pt and a dozen dashes.
-        const th = deg * std.math.pi / 180.0;
-        const lat1 = lat0 + 5000.0 * @cos(th) / m_per_deg;
-        const lon1 = lon0 + 5000.0 * @sin(th) / (m_per_deg * @cos(lat0 * std.math.pi / 180.0));
-        var buf: [256]u8 = undefined;
-        const batch = try std.fmt.bufPrint(&buf, "{{\"set\":[{{\"id\":\"v\",\"kind\":\"polyline\",\"pts\":[[{d},{d}],[{d},{d}]]," ++
-            "\"width_pt\":3.0,\"dash\":true,\"color\":\"ownship\"}}]}}", .{ lon0, lat0, lon1, lat1 });
-        try s.applyBatch("p", batch);
-        const fr = try s.buildIfNeeded(zoom, .day, null);
-        const quads = fr.verts.len / 6;
-        try t.expect(quads >= 8);
+    // (zoom, pixel density). The viewport is the app's own 2528 x 1460 drawable
+    // expressed in POINTS, so a size is a size at either density: the camera
+    // works in logical points and density lives in the projection alone.
+    for ([_][2]f64{ .{ 12, 1 }, .{ 15, 2 }, .{ 19, 1 }, .{ 19, 2 }, .{ 21, 2 } }) |cfg| {
+        const zoom = cfg[0];
+        const density = cfg[1];
+        const vw: f32 = @floatCast(2528.0 / density);
+        const vh: f32 = @floatCast(1460.0 / density);
+        // A line 170 pt long at whatever the zoom is: about a dozen dashes.
+        const metres = 170.0 * worldPerPt(zoom) / worldPerMetre(lat0);
 
-        const origin = geo(.{ lon0, lat0 });
-        var rot: f64 = 0;
-        while (rot < 360) : (rot += 15) {
-            var cam = camera.Camera{
-                .origin = origin,
-                .center = origin,
-                .zoom = zoom,
-                .target_zoom = zoom,
-                .rotation = rot * std.math.pi / 180.0,
-                .vw = 1200,
-                .vh = 800,
-            };
-            var i: usize = 0;
-            while (i < quads) : (i += 1) {
-                const v = fr.verts[i * 6 ..][0..6];
-                const p0 = camera.Vec2{ .x = v[0].x, .y = v[0].y };
-                const p1 = camera.Vec2{ .x = v[1].x, .y = v[1].y };
-                const p3 = camera.Vec2{ .x = v[5].x, .y = v[5].y };
-                const w = dist(cam.worldToScreen(p0), cam.worldToScreen(p3));
-                const l = dist(cam.worldToScreen(p0), cam.worldToScreen(p1));
-                t.expectApproxEqAbs(width_pt, w, 0.15) catch |e| {
-                    std.debug.print("width failed at bearing {d} rot {d} quad {d}\n", .{ deg, rot, i });
-                    return e;
+        var deg: f64 = 0;
+        while (deg < 360) : (deg += 15) {
+            var s = Store.init(t.allocator);
+            defer s.deinit();
+            const th = deg * std.math.pi / 180.0;
+            const lat1 = lat0 + metres * @cos(th) / m_per_deg;
+            const lon1 = lon0 + metres * @sin(th) / (m_per_deg * @cos(lat0 * std.math.pi / 180.0));
+            var buf: [256]u8 = undefined;
+            const batch = try std.fmt.bufPrint(&buf, "{{\"set\":[{{\"id\":\"v\",\"kind\":\"polyline\",\"pts\":[[{d},{d}],[{d},{d}]]," ++
+                "\"width_pt\":3.0,\"dash\":true,\"color\":\"ownship\"}}]}}", .{ lon0, lat0, lon1, lat1 });
+            try s.applyBatch("p", batch);
+            const fr = try s.buildIfNeeded(zoom, .day, null);
+            const quads = fr.verts.len / 6;
+            try t.expect(quads >= 8);
+            // The vertices are SMALL: a harbour-sized overlay measured from its
+            // own origin, not the prime meridian. This is what buys the
+            // precision the widths below depend on.
+            for (fr.verts) |v| try t.expect(@abs(v.x) < 0.01 and @abs(v.y) < 0.01);
+
+            const origin = geo(.{ lon0, lat0 });
+            var rot: f64 = 0;
+            while (rot < 360) : (rot += 15) {
+                var cam = camera.Camera{
+                    .origin = origin,
+                    .center = origin,
+                    .zoom = zoom,
+                    .target_zoom = zoom,
+                    .rotation = rot * std.math.pi / 180.0,
+                    .vw = vw,
+                    .vh = vh,
                 };
-                if (i + 1 < quads) t.expectApproxEqAbs(DASH_ON, l, 0.2) catch |e| {
-                    std.debug.print("dash failed at bearing {d} rot {d} quad {d}\n", .{ deg, rot, i });
-                    return e;
-                };
+                var i: usize = 0;
+                while (i < quads) : (i += 1) {
+                    const p0 = absAt(fr, i * 6 + 0);
+                    const p1 = absAt(fr, i * 6 + 1);
+                    const p3 = absAt(fr, i * 6 + 5);
+                    const w = dist(cam.worldToScreen(p0), cam.worldToScreen(p3));
+                    const l = dist(cam.worldToScreen(p0), cam.worldToScreen(p1));
+                    t.expectApproxEqAbs(width_pt, w, 0.05) catch |e| {
+                        std.debug.print("width failed at z{d} density {d} bearing {d} rot {d} quad {d}: {d:.3} pt\n", .{ zoom, density, deg, rot, i, w });
+                        return e;
+                    };
+                    // ...and the same width in DEVICE pixels: 3 pt is 6 px at 2x.
+                    t.expectApproxEqAbs(width_pt * density, w * density, 0.1) catch |e| {
+                        std.debug.print("device width failed at z{d} density {d} bearing {d} rot {d}\n", .{ zoom, density, deg, rot });
+                        return e;
+                    };
+                    if (i + 1 < quads) t.expectApproxEqAbs(DASH_ON, l, 0.1) catch |e| {
+                        std.debug.print("dash failed at z{d} density {d} bearing {d} rot {d} quad {d}: {d:.3} pt\n", .{ zoom, density, deg, rot, i, l });
+                        return e;
+                    };
+                }
             }
         }
     }
@@ -1055,9 +1115,10 @@ test "an aid to navigation is a diamond, and a virtual one is broken open" {
     var fr = try s.buildIfNeeded(zoom, .day, null);
     try t.expectEqual(@as(usize, ATON_VERTS), fr.verts.len);
     // Four corners on the axes, ATON_HALF points from the anchor.
-    for (fr.verts) |v| {
-        const dx = @abs(@as(f64, v.x) - at.x);
-        const dy = @abs(@as(f64, v.y) - at.y);
+    for (0..fr.verts.len) |i| {
+        const p = absAt(fr, i);
+        const dx = @abs(p.x - at.x);
+        const dy = @abs(p.y - at.y);
         try t.expect(dx < grid or dy < grid);
         try t.expectApproxEqAbs(ATON_HALF * wpp, @max(dx, dy), grid);
     }
@@ -1071,15 +1132,16 @@ test "an aid to navigation is a diamond, and a virtual one is broken open" {
     fr = try s.buildIfNeeded(zoom, .day, null);
     try t.expectEqual(@as(usize, ATON_VERTS + ATON_VIRTUAL_VERTS), fr.verts.len);
     var far: f64 = 0;
-    for (fr.verts[ATON_VERTS..]) |v| {
-        far = @max(far, @max(@abs(@as(f64, v.x) - at.x), @abs(@as(f64, v.y) - at.y)));
+    for (ATON_VERTS..fr.verts.len) |i| {
+        const p = absAt(fr, i);
+        far = @max(far, @max(@abs(p.x - at.x), @abs(p.y - at.y)));
     }
     try t.expectApproxEqAbs(ATON_HALF * wpp, far, ATON_STROKE_HALF * wpp);
     // No stroke reaches the middle of an edge: the midpoint of the top-right
     // edge is bare, which is what tells a mariner nothing is in the water.
     const mid = camera.Vec2{ .x = at.x + ATON_HALF * wpp * 0.5, .y = at.y - ATON_HALF * wpp * 0.5 };
-    for (fr.verts[ATON_VERTS..]) |v| {
-        try t.expect(dist(.{ .x = v.x, .y = v.y }, mid) > ATON_STROKE_HALF * wpp);
+    for (ATON_VERTS..fr.verts.len) |i| {
+        try t.expect(dist(absAt(fr, i), mid) > ATON_STROKE_HALF * wpp);
     }
 }
 
@@ -1097,21 +1159,21 @@ test "symbol expansion vertex counts and orientation" {
     // (0,5,6), so HULL[4], the stem, lands at vertex 8. Heading 0 puts the
     // stem north of the anchor, which in world space (y down) is a smaller y.
     const at = geo(.{ -76.4767, 38.9763 });
-    const stem_n = fr.verts[8];
-    try t.expect(@as(f64, stem_n.y) < at.y);
-    try t.expectApproxEqAbs(@as(f32, @floatCast(at.x)), stem_n.x, 1e-9);
+    const stem_n = absAt(fr, 8);
+    try t.expect(stem_n.y < at.y);
+    try t.expectApproxEqAbs(at.x, stem_n.x, 1e-9);
     // The transom corners are astern of it.
-    try t.expect(@as(f64, fr.verts[0].y) > at.y);
-    try t.expect(@as(f64, fr.verts[1].y) > at.y);
+    try t.expect(absAt(fr, 0).y > at.y);
+    try t.expect(absAt(fr, 1).y > at.y);
 
     // Heading 90 (east) puts the stem to the RIGHT, at the same latitude.
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":90,"color":"ownship"}]}
     );
     fr = try s.buildIfNeeded(15.0, .day, null);
-    const stem_e = fr.verts[8];
-    try t.expect(@as(f64, stem_e.x) > at.x);
-    try t.expectApproxEqAbs(@as(f32, @floatCast(at.y)), stem_e.y, 1e-9);
+    const stem_e = absAt(fr, 8);
+    try t.expect(stem_e.x > at.x);
+    try t.expectApproxEqAbs(at.y, stem_e.y, 1e-9);
 
     // A target is one triangle; two objects add up.
     try s.applyBatch("p",
@@ -1157,10 +1219,11 @@ test "the own-ship hull is a ship, at true scale once that is legible" {
     try t.expectApproxEqAbs(@as(f64, 18.0), crossover, 0.1);
     try t.expectEqual(truth * 2.0, ownshipLenWorld(lat, worldPerPt(20.0), 2));
 
-    // The built triangles follow that rule. Tolerance is the f32 vertex grid,
-    // not the maths: world coordinates are ~0.38 here, where one f32 step is
-    // 3.0e-8, and each measurement is a difference of two of them.
-    const grid = 4.0 * 2.98e-8;
+    // The built triangles follow that rule, to the f32 vertex grid. Vertices
+    // are measured from the build origin, which for one symbol is the symbol
+    // itself, so a step here is a step of the OFFSET (~1e-6 world) and not of
+    // an absolute coordinate — five orders finer than it used to be.
+    const grid = 4.0 * 2.98e-8 * 1e-3;
     const low = measure(try s.buildIfNeeded(15.0, .day, null));
     try t.expectApproxEqAbs(floor15, low.len, grid);
     // Beam holds its fraction of length, and the stem is narrower than the
@@ -1417,16 +1480,15 @@ test "symbol size tracks the zoom" {
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","rot_deg":0,"at":[-76.4,38.9],"color":"target"}]}
     );
     const at = geo(.{ -76.4, 38.9 });
-    const a = (try s.buildIfNeeded(10.0, .day, null)).verts[1]; // the apex
-    const b = (try s.buildIfNeeded(11.0, .day, null)).verts[1];
+    const fa = try s.buildIfNeeded(10.0, .day, null);
+    const da = at.y - absAt(fa, 1).y; // the apex
+    const fb = try s.buildIfNeeded(11.0, .day, null);
+    const db = at.y - absAt(fb, 1).y;
     // One zoom level in = half the world size, so the symbol keeps its point
-    // size. Tolerance is set by the f32 vertex grid, not the math: world x is
-    // ~0.29 there, where an f32 step is 3e-8 — about 0.1% of a 6.5 pt offset at
-    // zoom 10, and proportionally more the further in the view goes.
-    const da = at.y - @as(f64, a.y);
-    const db = at.y - @as(f64, b.y);
-    try t.expectApproxEqRel(da, db * 2.0, 5e-3);
-    try t.expectApproxEqRel(TARGET_TIP * worldPerPt(10.0), da, 5e-3);
+    // size. The f32 vertex grid is no longer in the way — the offsets are
+    // measured from the symbol's own anchor — so the tolerance is the math's.
+    try t.expectApproxEqRel(da, db * 2.0, 1e-6);
+    try t.expectApproxEqRel(TARGET_TIP * worldPerPt(10.0), da, 1e-6);
 }
 
 test "object budget is enforced" {

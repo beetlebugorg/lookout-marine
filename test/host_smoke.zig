@@ -168,10 +168,12 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
     const fr = try ov.buildIfNeeded(15.0, .day, null);
     try std.testing.expectEqual(@as(usize, overlay.TARGET_VERTS), fr.verts.len);
     // Drawn where the payload said, not at the plugin's fallback position.
+    // Vertices are measured from the frame's origin, so put them back first.
     const at = overlay.geo(.{ -76.47, 38.98 });
     var near = false;
     for (fr.verts) |v| {
-        if (@abs(@as(f64, v.x) - at.x) < 1e-4 and @abs(@as(f64, v.y) - at.y) < 1e-4) near = true;
+        if (@abs(@as(f64, v.x) + fr.origin.x - at.x) < 1e-4 and
+            @abs(@as(f64, v.y) + fr.origin.y - at.y) < 1e-4) near = true;
     }
     try std.testing.expect(near);
 

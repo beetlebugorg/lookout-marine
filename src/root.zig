@@ -1180,7 +1180,13 @@ pub const Lookout = struct {
             std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
             return;
         };
-        self.g.setOverlay(frame) catch |e| {
+        // The overlay pass draws from the frame's OWN origin. Its vertices are
+        // relative to it, so the MVP and the antimeridian wrap must be too.
+        // The camera does not move between here and this frame's draw.
+        var u = self.uniforms();
+        u.mvp = self.cam.mvpOrigin(frame.origin);
+        u.wrap_x = @floatCast(self.cam.center.x - frame.origin.x);
+        self.g.setOverlay(frame, u) catch |e| {
             std.debug.print("overlay upload failed: {s}\n", .{@errorName(e)});
         };
     }

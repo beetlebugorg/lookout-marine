@@ -114,6 +114,11 @@ pub const Gpu = struct {
     overlay_buf: ?*mc.lkm_buf = null,
     overlay_count: u32 = 0,
     overlay_gen: u64 = 0, // 0 = nothing uploaded yet (a built store is >= 1)
+    /// The overlay pass's own frame uniform — the chart's, with the MVP and
+    /// wrap rebuilt for the overlay's origin. setOverlay writes it, and it is
+    /// the only thing that creates overlay_buf, so a buffer to draw always has
+    /// a uniform to draw it with.
+    overlay_u: Uniforms = std.mem.zeroes(Uniforms),
     /// recordDraws outcome signature — a new line prints only when it changes.
     last_draw_log: u64 = 0,
     // Rolling frame-cost stats, printed once per STAT_FRAMES rendered frames:
@@ -328,12 +333,16 @@ pub const Gpu = struct {
 
     // ---- chart overlays ----------------------------------------------------
 
-    /// Adopt an overlay frame. A no-op while the generation is unchanged, so
-    /// the render thread may call this every frame; the buffer is replaced
-    /// wholesale otherwise (the encoder retains what an in-flight frame bound,
-    /// so releasing the old one here is safe — same contract as the raster
-    /// buffer).
-    pub fn setOverlay(self: *Gpu, fr: ov.Frame) !void {
+    /// Adopt an overlay frame and the view it is drawn with. The BUFFER upload
+    /// is a no-op while the generation is unchanged, so the render thread may
+    /// call this every frame; the buffer is replaced wholesale otherwise (the
+    /// encoder retains what an in-flight frame bound, so releasing the old one
+    /// here is safe — same contract as the raster buffer). `u` is taken every
+    /// time: the vertices are relative to the frame's origin, so the pass needs
+    /// the MVP and wrap built for that origin, and the camera moves every frame
+    /// while the geometry does not.
+    pub fn setOverlay(self: *Gpu, fr: ov.Frame, u: Uniforms) !void {
+        self.overlay_u = u;
         if (fr.generation == self.overlay_gen) return;
         self.overlay_gen = fr.generation;
         self.freeOverlayBuf();
@@ -360,15 +369,16 @@ pub const Gpu = struct {
     /// in the same encoder. Depth test only: the shader emits z = 0 (the near
     /// plane) so nothing the chart wrote can hide plugin content, and the pass
     /// writes no depth so plugin content cannot hide the chart from a later
-    /// pass either. The frame uniform goes through unmodified; the overlay
-    /// shader reads only its mvp and wrap_x.
-    fn recordOverlay(self: *Gpu, f: *mc.lkm_frame, u: Uniforms) void {
+    /// pass either. The overlay carries its OWN uniform (setOverlay): the
+    /// shader reads mvp and wrap_x, and both are built for the overlay's
+    /// origin, not the chart's.
+    fn recordOverlay(self: *Gpu, f: *mc.lkm_frame) void {
         const buf = self.overlay_buf orelse return;
         if (self.overlay_count == 0) return;
         mc.lkm_set_depth_mode(f, 0);
         mc.lkm_set_pipeline(f, mc.LKM_PIPE_OVERLAY);
         mc.lkm_bind_vbuf(f, buf);
-        mc.lkm_set_uniforms(f, &u, @sizeOf(Uniforms));
+        mc.lkm_set_uniforms(f, &self.overlay_u, @sizeOf(Uniforms));
         mc.lkm_draw(f, 0, self.overlay_count);
     }
 
@@ -592,7 +602,7 @@ pub const Gpu = struct {
     // an own-ship symbol must not vanish because the chart is still loading.
     fn recordDraws(self: *Gpu, f: *mc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
         self.recordScene(f, u, text_on, sound_on);
-        self.recordOverlay(f, u);
+        self.recordOverlay(f);
     }
 
     // Walk the ranges in paint order, switching pipeline per range: triangles ->
