@@ -245,14 +245,62 @@ pub const Gpu = struct {
         }
     }
 
-    /// Draw the underlay: sprite pipeline, blended depth mode (no write), one
-    /// draw per tile. Runs BEFORE the chart, so the chart's own fills paint over
-    /// it — correct, and what chart-over-picture undoes.
+    /// The depth that puts the underlay immediately IN FRONT OF the chart's
+    /// opaque area fills, and behind everything else.
+    ///
+    /// WHY THIS WORKS. The engine gives range i of N the depth (N-i)/(N+1) —
+    /// paint order, normalized. So a depth is a position in that order, and
+    /// picking one is picking a place to insert the picture. Just in front of
+    /// the LAST opaque area range means the picture hides the fills and nothing
+    /// else: every contour, symbol, light, sounding and label paints over it,
+    /// because they all paint after the fills and so sit closer.
+    ///
+    /// WHY IT IS BETTER THAN SUPPRESSING THE FILLS. This is PER PIXEL. The
+    /// chart keeps its depth shading everywhere the mariner has no picture, and
+    /// loses it only under one — including across a coverage edge, and around
+    /// every hole in a pyramid clipped to a coastline. No scene rebuild, and no
+    /// all-or-nothing decision about a whole view.
+    ///
+    /// 0.999 with no scene: behind everything, which is right when there is no
+    /// chart to sit in front of.
+    pub fn rasterDepth(self: *const Gpu) f32 {
+        const s = self.scene orelse return 0.999;
+        if (s.ranges.len == 0) return 0.999;
+        var last: usize = 0;
+        var found = false;
+        for (s.ranges, 0..) |r, i| {
+            // flags bit 0 is OPAQUE: a pattern-less triangle range with every
+            // alpha at 255. Those are the fills that hide a picture.
+            if (r.kind == cc.TILE57_GPU_AREA and (r.flags & 1) != 0) {
+                last = i;
+                found = true;
+            }
+        }
+        if (!found) return 0.999;
+        const nr = s.ranges.len;
+        const d = @as(f64, @floatFromInt(nr - last - 1)) / @as(f64, @floatFromInt(nr + 1));
+        return @floatCast(d);
+    }
+
+    /// The depth that puts the underlay in front of the WHOLE chart, so the
+    /// chart falls out exactly where a picture covers and stays everywhere
+    /// else. Half the closest range's depth, so nothing the engine emits can be
+    /// nearer.
+    pub fn rasterDepthFront(self: *const Gpu) f32 {
+        const s = self.scene orelse return 0.5;
+        const nr = s.ranges.len;
+        if (nr == 0) return 0.5;
+        return @floatCast(0.5 / @as(f64, @floatFromInt(nr + 1)));
+    }
+
+    /// Draw the underlay: the raster pipe (sprite shading, depth WRITE), one
+    /// draw per tile. It records first, and its depth (in the vertices, from
+    /// rasterDepth) is what suppresses the chart's opaque fills: they sit
+    /// farther and lose the depth test per pixel wherever a picture covers.
     fn recordRaster(self: *Gpu, f: *dc.lkd_frame, u: Uniforms) void {
         const buf = self.raster_buf orelse return;
         if (self.raster_draws.len == 0) return;
-        dc.lkd_set_depth_mode(f, 0);
-        dc.lkd_set_pipeline(f, dc.LKD_PIPE_SPRITE);
+        dc.lkd_set_pipeline(f, dc.LKD_PIPE_RASTER);
         dc.lkd_bind_vbuf(f, buf);
         var uu = u;
         // BASE and never scale-gated: the underlay is the only thing on screen
