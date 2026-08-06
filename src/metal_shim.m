@@ -21,10 +21,69 @@
 #error "metal_shim.m must be compiled with -fno-objc-arc"
 #endif
 
+// The overlay pipeline's shader (LKM_PIPE_OVERLAY). The chart's shaders come
+// from the engine (tile57 shaders/lookout.metal, handed in as msl_source); the
+// overlay is the host's own content, so its source lives here and compiles into
+// its own library at create. Self-contained on purpose: nothing here may break
+// if the engine renames a struct.
+//
+// The uniform block is a byte-for-byte copy of tile57_gpu_uniforms (128 B) so
+// the overlay pass can reuse the frame uniform the chart already sends — only
+// mvp and wrap_x are read, the rest holds the offsets. The static_assert makes
+// a layout skew a loud failure at lkm_create instead of a wrong picture.
+static const char *const LKM_OVERLAY_MSL =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct U {\n"
+    "    float4x4 mvp;\n"
+    "    float2 px_to_clip;\n"
+    "    float size_scale;\n"
+    "    float current_scale;\n"
+    "    uint cat_mask;\n"
+    "    float wrap_x;\n"
+    "    float rot_sin;\n"
+    "    float rot_cos;\n"
+    "    float4 color;\n"
+    "    float2 anchor_px;\n"
+    "    float2 cell_px;\n"
+    "};\n"
+    "static_assert(sizeof(U) == 128, \"overlay uniform must match tile57_gpu_uniforms\");\n"
+    // == overlay.Vertex (24 B). packed_float2/4 hold the stride at 24; natural
+    // alignment would pad to 32 and shear the stream (see ChartVertex).
+    "struct OverlayVertex {\n"
+    "    packed_float2 world;\n"
+    "    packed_float4 color;\n"
+    "};\n"
+    "static_assert(sizeof(OverlayVertex) == 24, \"overlay vertex must match overlay.Vertex\");\n"
+    "struct OverlayOut {\n"
+    "    float4 pos [[position]];\n"
+    "    float4 color;\n"
+    "};\n"
+    "vertex OverlayOut overlay_vert(uint vid [[vertex_id]],\n"
+    "                               const device OverlayVertex *verts [[buffer(0)]],\n"
+    "                               constant U &u [[buffer(1)]]) {\n"
+    "    OverlayVertex v = verts[vid];\n"
+    // Same antimeridian wrap the chart shader applies: draw at the world
+    // instance nearest the camera, so an overlay across the seam is seamless.
+    "    float2 world = float2(v.world.x + rint(u.wrap_x - v.world.x), v.world.y);\n"
+    "    float4 clip = u.mvp * float4(world, 0.0, 1.0);\n"
+    // z = 0 is the near plane. The chart's paint-order depths are all in (0,1),
+    // so a depth-test-only overlay pass is never hidden by the chart it
+    // annotates — and writes nothing, so it cannot hide the chart either.
+    "    clip.z = 0.0;\n"
+    "    OverlayOut out;\n"
+    "    out.pos = clip;\n"
+    "    out.color = v.color;\n"
+    "    return out;\n"
+    "}\n"
+    "fragment float4 overlay_frag(OverlayOut in [[stage_in]]) {\n"
+    "    return in.color;\n"
+    "}\n";
+
 struct lkm_ctx {
     id<MTLDevice> device;          // retained
     id<MTLCommandQueue> queue;     // retained
-    id<MTLRenderPipelineState> pipes[4]; // retained
+    id<MTLRenderPipelineState> pipes[LKM_PIPE_COUNT]; // retained
     id<MTLSamplerState> sampler;   // retained
     CAMetalLayer *layer;           // NOT retained — the host view owns it
     id<MTLTexture> msaa;           // retained; lazily (re)sized 4x color target
@@ -175,6 +234,18 @@ lkm_ctx *lkm_create(void *metal_layer, const char *msl_source, int want_msaa,
             [lib release];
             if (!built) break;
 
+            // The overlay's own library — see LKM_OVERLAY_MSL.
+            id<MTLLibrary> olib = [c->device newLibraryWithSource:[NSString stringWithUTF8String:LKM_OVERLAY_MSL]
+                                                          options:nil
+                                                            error:&e]; // +1
+            if (!olib) {
+                set_err(err, e.localizedDescription);
+                break;
+            }
+            c->pipes[LKM_PIPE_OVERLAY] = make_pipe(c->device, olib, @"overlay_vert", @"overlay_frag", samples, err); // +1
+            [olib release];
+            if (!c->pipes[LKM_PIPE_OVERLAY]) break;
+
             MTLSamplerDescriptor *sd = [[MTLSamplerDescriptor alloc] init];
             sd.minFilter = MTLSamplerMinMagFilterLinear;
             sd.magFilter = MTLSamplerMinMagFilterLinear;
@@ -206,7 +277,7 @@ void lkm_destroy(lkm_ctx *c) {
         if (c->layer && c->layer.device == c->device) c->layer.device = nil;
         [c->device release];
         [c->queue release];
-        for (int i = 0; i < 4; i++) [c->pipes[i] release];
+        for (int i = 0; i < LKM_PIPE_COUNT; i++) [c->pipes[i] release];
         [c->sampler release];
         [c->msaa release];
         [c->depth release];
@@ -420,7 +491,7 @@ void lkm_set_depth_mode(lkm_frame *f, int opaque) {
 }
 
 void lkm_set_pipeline(lkm_frame *f, int which) {
-    if (!f || which < 0 || which > 3 || f->cur_pipe == which) return;
+    if (!f || which < 0 || which >= LKM_PIPE_COUNT || f->cur_pipe == which) return;
     f->cur_pipe = which;
     [f->enc setRenderPipelineState:f->ctx->pipes[which]];
 }

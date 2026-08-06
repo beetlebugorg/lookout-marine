@@ -12,6 +12,7 @@ const std = @import("std");
 const cc = @import("c.zig").c;
 const dc = @cImport(@cInclude("d3d12_shim.h"));
 const png = @import("png.zig");
+const ov = @import("overlay.zig");
 const hlsl_source = @embedFile("hlsl_src");
 
 /// Vertex-shader uniform block (128 bytes), matching `cbuffer U` in
@@ -243,6 +244,25 @@ pub const Gpu = struct {
             if (self.raster_alloc) |a| a.free(self.raster_draws);
             self.raster_draws = &.{};
         }
+    }
+
+    // ---- chart overlays (not on this backend) -------------------------------
+
+    /// Overlay drawing is Metal-only in the plugin prototype (PROTOTYPE.md's
+    /// scope fence). The hook exists so the core's per-frame call site is
+    /// backend-independent: take the frame, say so once, draw nothing.
+    var overlay_told = false;
+    pub fn setOverlay(self: *Gpu, fr: ov.Frame) !void {
+        _ = self;
+        _ = fr;
+        if (!overlay_told) {
+            overlay_told = true;
+            std.debug.print("overlay: not implemented on this backend\n", .{});
+        }
+    }
+
+    pub fn clearOverlay(self: *Gpu) void {
+        _ = self;
     }
 
     /// The depth that puts the underlay immediately IN FRONT OF the chart's

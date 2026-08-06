@@ -1,15 +1,17 @@
-//! Metal transport: device, four pipelines, persistent buffers, and a per-frame
+//! Metal transport: device, the pipelines, persistent buffers, and a per-frame
 //! render (present into the host's CAMetalLayer OR headless offscreen
 //! readback). All vector work happened in the engine — the frame phase here
 //! only updates a uniform and issues draws (spec §6).
 //!
 //! Apple-only by design (see the `sdl-gpu` tag for the cross-platform SDL_GPU
 //! predecessor and the driver-stack workarounds this replaces): the ObjC lives
-//! in metal_shim.m, shaders in shaders/lookout.metal (compiled at runtime).
+//! in metal_shim.m, the chart shaders in shaders/lookout.metal and the overlay
+//! shader in metal_shim.m itself (both compiled at runtime).
 const std = @import("std");
 const cc = @import("c.zig").c;
 const mc = @import("c_metal.zig").c;
 const png = @import("png.zig");
+const ov = @import("overlay.zig");
 const msl_source = @embedFile("metal_src");
 
 /// Vertex-shader uniform block (128 bytes), matching `struct U` in
@@ -106,6 +108,12 @@ pub const Gpu = struct {
     raster_buf: ?*mc.lkm_buf = null,
     raster_draws: []RasterDraw = &.{},
     raster_alloc: ?std.mem.Allocator = null,
+    /// Chart overlays (src/overlay.zig): one triangle stream in world space,
+    /// coloured per vertex, drawn after everything else. Re-uploaded when the
+    /// store's generation moves — a plugin batch or a zoom step, not a frame.
+    overlay_buf: ?*mc.lkm_buf = null,
+    overlay_count: u32 = 0,
+    overlay_gen: u64 = 0, // 0 = nothing uploaded yet (a built store is >= 1)
     /// recordDraws outcome signature — a new line prints only when it changes.
     last_draw_log: u64 = 0,
     // Rolling frame-cost stats, printed once per STAT_FRAMES rendered frames:
@@ -316,6 +324,52 @@ pub const Gpu = struct {
             mc.lkm_bind_texture(f, d.tex);
             mc.lkm_draw(f, d.first, d.count);
         }
+    }
+
+    // ---- chart overlays ----------------------------------------------------
+
+    /// Adopt an overlay frame. A no-op while the generation is unchanged, so
+    /// the render thread may call this every frame; the buffer is replaced
+    /// wholesale otherwise (the encoder retains what an in-flight frame bound,
+    /// so releasing the old one here is safe — same contract as the raster
+    /// buffer).
+    pub fn setOverlay(self: *Gpu, fr: ov.Frame) !void {
+        if (fr.generation == self.overlay_gen) return;
+        self.overlay_gen = fr.generation;
+        self.freeOverlayBuf();
+        if (fr.verts.len == 0) return;
+        const bytes = std.mem.sliceAsBytes(fr.verts);
+        self.overlay_buf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+        self.overlay_count = @intCast(fr.verts.len);
+    }
+
+    /// Drop the overlay geometry (every plugin stopped, or teardown). The next
+    /// setOverlay re-uploads whatever the store then holds.
+    pub fn clearOverlay(self: *Gpu) void {
+        self.freeOverlayBuf();
+        self.overlay_gen = 0;
+    }
+
+    fn freeOverlayBuf(self: *Gpu) void {
+        if (self.overlay_buf) |b| mc.lkm_free_buffer(b);
+        self.overlay_buf = null;
+        self.overlay_count = 0;
+    }
+
+    /// Draw the overlay LAST — after the raster underlay and the whole chart,
+    /// in the same encoder. Depth test only: the shader emits z = 0 (the near
+    /// plane) so nothing the chart wrote can hide plugin content, and the pass
+    /// writes no depth so plugin content cannot hide the chart from a later
+    /// pass either. The frame uniform goes through unmodified; the overlay
+    /// shader reads only its mvp and wrap_x.
+    fn recordOverlay(self: *Gpu, f: *mc.lkm_frame, u: Uniforms) void {
+        const buf = self.overlay_buf orelse return;
+        if (self.overlay_count == 0) return;
+        mc.lkm_set_depth_mode(f, 0);
+        mc.lkm_set_pipeline(f, mc.LKM_PIPE_OVERLAY);
+        mc.lkm_bind_vbuf(f, buf);
+        mc.lkm_set_uniforms(f, &u, @sizeOf(Uniforms));
+        mc.lkm_draw(f, 0, self.overlay_count);
     }
 
     // ---- the draw-ready scene from tile57 ----------------------------------
@@ -533,12 +587,20 @@ pub const Gpu = struct {
     }
 
     // ---- record one frame's draws into an open frame ------------------------
+    // The whole frame, in paint order: raster underlay and chart (recordScene),
+    // then the overlay on top. The overlay runs even when there is no scene —
+    // an own-ship symbol must not vanish because the chart is still loading.
+    fn recordDraws(self: *Gpu, f: *mc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+        self.recordScene(f, u, text_on, sound_on);
+        self.recordOverlay(f, u);
+    }
+
     // Walk the ranges in paint order, switching pipeline per range: triangles ->
     // flat-colour (or pattern) pipeline; quads -> sprite or SDF pipeline.
     // `text_on`/`sound_on` drop those ranges live (the engine emits them; the
     // host gates by skipping the draw). The pattern anchor + per-cell period
     // ride the uniform.
-    fn recordDraws(self: *Gpu, f: *mc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+    fn recordScene(self: *Gpu, f: *mc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
         // Before anything the chart draws, and before the early return below:
         // where the chart has no data at all is exactly where the mariner most
         // needs the picture, so a missing scene must not take the underlay away.
@@ -837,6 +899,7 @@ pub const Gpu = struct {
     pub fn deinit(self: *Gpu) void {
         self.freeScene();
         self.clearRasterFrame();
+        self.clearOverlay();
         if (self.sprite_tex) |t| mc.lkm_free_texture(t);
         if (self.glyph_tex) |t| mc.lkm_free_texture(t);
         if (self.glyph_bold_tex) |t| mc.lkm_free_texture(t);

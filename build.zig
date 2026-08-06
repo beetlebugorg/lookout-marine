@@ -15,6 +15,15 @@ fn haveLocalTile57(b: *std.Build) bool {
     return true;
 }
 
+/// True when scripts/build-wamr.sh has produced the wasm runtime archive.
+/// WAMR is built by cmake, not by this build: it is a large C project with
+/// its own option matrix, and the archive is a machine-local artifact.
+fn haveWamrDist(b: *std.Build) bool {
+    const probe = b.pathFromRoot("vendor/wamr-dist/lib/libvmlib.a");
+    std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch return false;
+    return true;
+}
+
 // The NDK triple for an *-linux-android target (null otherwise). Mirrors
 // tile57's build.zig: the C deps need the NDK sysroot's bionic + arch headers.
 fn androidTriple(target: std.Build.ResolvedTarget) ?[]const u8 {
@@ -90,10 +99,32 @@ pub fn build(b: *std.Build) void {
         @panic("-Dbackend=vk targets Android, Linux and Windows; use metal on Apple");
     if (use_d3d12 and !is_windows)
         @panic("-Dbackend=d3d12 targets Windows only");
+    // The wasm plugin host (src/plugin/): on by default where it can build —
+    // macOS with the WAMR archive present. Off elsewhere so a fresh clone,
+    // an iOS cross-build or a machine that has not run scripts/build-wamr.sh
+    // still builds the chart core. Asking for it without the archive is an
+    // error with the fix in it, not a silent skip.
+    const wamr_dist = haveWamrDist(b);
+    const plugins_host = target.result.os.tag == .macos;
+    const want_plugins = b.option(bool, "plugins", "Build the wasm plugin host (macOS; needs scripts/build-wamr.sh)") orelse
+        (plugins_host and wamr_dist);
+    const plugins = want_plugins and plugins_host and wamr_dist;
+    // Asked for and not possible: a build error carrying the fix, not a panic
+    // and not a silent skip that would leave the host quietly missing.
+    const plugins_refusal: ?[]const u8 = if (!want_plugins or plugins)
+        null
+    else if (!plugins_host)
+        "-Dplugins: the wasm plugin host is macOS-only in this prototype (vendor/wamr-dist holds a macOS arm64 archive)."
+    else
+        "-Dplugins: vendor/wamr-dist/lib/libvmlib.a is missing. Run scripts/build-wamr.sh to build the pinned WAMR runtime, then build again.";
+    const plugins_fail: ?*std.Build.Step = if (plugins_refusal) |msg| &b.addFail(msg).step else null;
+    if (plugins_fail) |fail| b.getInstallStep().dependOn(fail);
+
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "gpu_sdl", use_sdl);
     build_opts.addOption(bool, "gpu_vk", use_vk);
     build_opts.addOption(bool, "gpu_d3d12", use_d3d12);
+    build_opts.addOption(bool, "plugins", plugins);
     const build_opts_mod = build_opts.createModule();
 
     // Android cross-compile (mirrors tile57's -Dandroid-ndk): the C deps need the
@@ -140,9 +171,11 @@ pub fn build(b: *std.Build) void {
         windows: bool,
         sdl_include: ?[]const u8,
         build_opts_mod: *std.Build.Module,
-        /// `link_tile57` adds the engine archive: always for an exe, but for a
-        /// static lib only where the linker copes with it (see addObjectFile below).
-        fn apply(self: @This(), mod: *std.Build.Module, link_tile57: bool) void {
+        plugins: bool,
+        /// `link_archives` adds the prebuilt archives (tile57, and WAMR when
+        /// the plugin host is on): always for an exe, but for a static lib
+        /// only where the linker copes with it (see addObjectFile below).
+        fn apply(self: @This(), mod: *std.Build.Module, link_archives: bool) void {
             const bb = self.b;
             mod.addImport("build_options", self.build_opts_mod); // src/gpu.zig backend switch
             if (self.android) {
@@ -176,7 +209,14 @@ pub fn build(b: *std.Build) void {
             // unpacks it (one-archive convenience on Apple), but ELF/COFF linkers
             // reject it, so off Apple the host links libtile57.a alongside (both
             // are installed to <prefix>/lib below). Exes always link it.
-            if (link_tile57) mod.addObjectFile(self.tile57_lib);
+            if (link_archives) mod.addObjectFile(self.tile57_lib);
+            if (self.plugins) {
+                // WAMR: wasm_export.h for the @cImport in src/plugin/wasm.zig,
+                // libvmlib.a for the interpreter itself. Both come from
+                // vendor/wamr-dist, which scripts/build-wamr.sh fills.
+                mod.addIncludePath(bb.path("vendor/wamr-dist/include"));
+                if (link_archives) mod.addObjectFile(bb.path("vendor/wamr-dist/lib/libvmlib.a"));
+            }
             if (self.use_sdl) {
                 if (self.android) {
                     // Android: the gradle/CMake build links SDL3; here we only need
@@ -222,7 +262,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod, .plugins = plugins };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -302,5 +342,49 @@ pub fn build(b: *std.Build) void {
         test_mod.linkFramework("Foundation", .{});
     }
     const tests = b.addTest(.{ .root_module = test_mod });
-    b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    // ---- wasm plugin host smoke test ----
+    // A module built for the plugin ABI is loaded by the real embedding and
+    // driven through its exports: verification-bar item 4, and the guard that
+    // keeps the WAMR wiring honest before the broker exists.
+    if (plugins) {
+        // wasm32-freestanding, no WASI: what every plugin is built as. Exports
+        // only — no _start — and rdynamic so the linker keeps them.
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+        const smoke_plugin_mod = b.createModule(.{
+            .root_source_file = b.path("test/smoke_plugin.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+        });
+        const smoke_plugin = b.addExecutable(.{ .name = "smoke_plugin", .root_module = smoke_plugin_mod });
+        smoke_plugin.entry = .disabled;
+        smoke_plugin.rdynamic = true;
+
+        // The wrapper alone: the smoke test needs the runtime, not the chart
+        // engine, so it skips cfg.apply and its Metal/tile57 baggage.
+        const wasm_mod = b.createModule(.{
+            .root_source_file = b.path("src/plugin/wasm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        wasm_mod.addIncludePath(b.path("vendor/wamr-dist/include"));
+        wasm_mod.addObjectFile(b.path("vendor/wamr-dist/lib/libvmlib.a"));
+
+        const smoke_mod = b.createModule(.{
+            .root_source_file = b.path("test/wasm_smoke.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        smoke_mod.addImport("wasm", wasm_mod);
+        smoke_mod.addAnonymousImport("smoke_plugin_wasm", .{ .root_source_file = smoke_plugin.getEmittedBin() });
+
+        const smoke_run = b.addRunArtifact(b.addTest(.{ .root_module = smoke_mod }));
+        b.step("wasm-smoke", "Run the WAMR embedding smoke test").dependOn(&smoke_run.step);
+        test_step.dependOn(&smoke_run.step);
+    }
+    if (plugins_fail) |fail| test_step.dependOn(fail);
 }
