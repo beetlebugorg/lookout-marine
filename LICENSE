@@ -19,3 +19,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Acknowledgements
+
+The AIS (AIVDM/AIVDO) message decoding in this project was written against
+"AIVDM/AIVDO protocol decoding" by Eric S. Raymond and contributors, part of
+the gpsd project (https://gitlab.com/gpsd/gpsd/-/blob/master/www/AIVDM.adoc).
+No gpsd code is included; the document served as the protocol reference and
+the source of several worked decoding examples used as test fixtures.
