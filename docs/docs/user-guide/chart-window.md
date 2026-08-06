@@ -9,11 +9,11 @@ sidebar_position: 2
 The chart fills the window and the controls float in the corners. Everything
 between them is chart: a drag there pans, even close to a button.
 
-![The chart window on macOS](../img/macos-day.png)
+![The chart window on macOS](../img/macos-day.webp)
 
 ## Readout capsule
 
-![The readout capsule](../img/detail/readout-capsule.png)
+![The readout capsule](../img/detail/readout-capsule.webp)
 
 - **Band** — the kind of chart you are on: Berthing, Harbor, Approach, Coastal,
   General or Overview.
@@ -31,7 +31,7 @@ A phone hides the band and sets the type smaller. Position and scale always stay
 
 ## Bubbles
 
-![The zoom and settings bubbles](../img/detail/zoom-settings.png)
+![The zoom and settings bubbles](../img/detail/zoom-settings.webp)
 
 - **Search**, top left — go to a position.
 - **North**, top right — it points north as you turn the chart. Click it to
@@ -41,7 +41,7 @@ A phone hides the band and sets the type smaller. Position and scale always stay
 
 ## Scale bar
 
-![The scale bar](../img/detail/scale-bar.png)
+![The scale bar](../img/detail/scale-bar.webp)
 
 A round distance at the current scale, in the bottom left corner.
 

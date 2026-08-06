@@ -11,12 +11,12 @@ sidebar_position: 3
 Shift + drag with a mouse, or twist two fingers on a touch screen. The chart
 turns about the centre of the view.
 
-![The chart turned 45 degrees](../img/macos-rotated.png)
+![The chart turned 45 degrees](../img/macos-rotated.webp)
 
 The north bubble in the top right corner points north the whole time. Click or
 tap it, or press ⌘↑ (Ctrl+↑), and the chart returns to north-up.
 
-![The north bubble on a turned chart](../img/detail/north-bubble.png)
+![The north bubble on a turned chart](../img/detail/north-bubble.webp)
 
 On a touch screen the twist waits until you have turned about 18 degrees. Two
 fingers never pinch without some twist, and without the pause every zoom would
@@ -26,7 +26,7 @@ also spin the chart.
 
 Click the blue scale in the bar at the bottom.
 
-![The scale entry](../img/detail/scale-entry.png)
+![The scale entry](../img/detail/scale-entry.webp)
 
 - Type a scale and press Return. `25000`, `25,000`, `1:25000` and `25k` all mean
   the same thing.
@@ -41,7 +41,7 @@ it has.
 The search bubble is in the top left corner. Type a position and press Return.
 Latitude first:
 
-![The search field](../img/detail/search-field.png)
+![The search field](../img/detail/search-field.webp)
 
 - `38.978, -76.492`
 - `38°58'40"N 076°29'32"W`, or `38 58 40 N, 76 29 32 W`
