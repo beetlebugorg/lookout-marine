@@ -49,6 +49,7 @@ namespace winrt::LookoutMarine::implementation
         BuildingPill().Visibility(r.building && !loader_waiting ? Visibility::Visible
                                                                 : Visibility::Collapsed);
         NorthRotate().Angle(-r.rotation_deg);
+        UpdateRasterPill(r);
         UpdateScaleBar(r.scale_denom);
     }
 

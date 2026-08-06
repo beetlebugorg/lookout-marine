@@ -49,6 +49,15 @@ namespace winrt::LookoutMarine::implementation
         fire_and_forget PickChartFile();
         fire_and_forget PickChartFolder();
         void SubmitSearch();
+        // raster underlay (MainWindow.Raster.cpp)
+        void InstallStoredRasters();  // re-add the stored list after each open
+        void AddRasterPaths(std::vector<std::string> const &paths);
+        fire_and_forget AddRasterFiles();
+        fire_and_forget AddRasterFolder();
+        void CycleRaster();           // Ctrl+I; opens the picker when none installed
+        void ShowRasterMenu();
+        void UpdateRasterPill(lk_readout const &r);
+        fire_and_forget ShowRasterError(winrt::hstring msg);
         // zoom-to-scale panel (MainWindow.Scale.cpp)
         void WireScale();
         void ToggleScalePanel();
@@ -91,6 +100,12 @@ namespace winrt::LookoutMarine::implementation
         double scalebar_pt{ 0 }, scalebar_m{ 0 };
         bool open_attempted{ false };
         std::string open_chart_label; // what Settings ▸ Charts names as open
+
+        // raster underlay state: the installed paths in the order added,
+        // rebuilt from the store at every open (the sources are attached to
+        // the lookout handle the open destroyed). UI thread only.
+        std::vector<std::string> raster_paths;
+        std::wstring raster_pill_shown; // change-detect: last pill text ("" = hidden)
 
         // startup loader state
         bool open_pending{ false };      // an OpenPaths is deferred/running

@@ -24,6 +24,14 @@ typedef struct {
     double overscale;      /* >=1; indicate when > ~1.05 */
     int    scheme;         /* 0 day, 1 dusk, 2 night */
     int    building;       /* 1 while a background tessellation fills in */
+    /* Raster underlay, for the pill (see lookout.h "raster underlay"): the set
+     * DRAWN over this view (or ""), the set COVERING this view while switched
+     * off (or ""), whether the chart is drawing reduced over a picture, and
+     * whether the ENC is hidden where pictures cover. */
+    char   raster_active[96];
+    char   raster_available[96];
+    int    raster_over;
+    int    chart_hidden;
 } lk_readout;
 
 /* One identified feature from a ranked pick. Strings are malloc'd,
@@ -101,6 +109,23 @@ int  lk_controller_aux_file(lk_controller *self, const char *cell, const char *n
                             const unsigned char **bytes, size_t *len, const char **mime);
 
 void lk_controller_readout(lk_controller *self, lk_readout *out);
+
+/* Raster underlay (see lookout.h). add installs one .mbtiles and returns 1 on
+ * success — persistence is the host's job (lk_store_note_raster). The set
+ * names are copied into `out` (truncated, always NUL-terminated); in_view and
+ * the active index build the pill's menu. */
+int  lk_controller_raster_add(lk_controller *self, const char *path);
+void lk_controller_raster_cycle(lk_controller *self);
+void lk_controller_raster_select(lk_controller *self, int index); /* -1 = none */
+int  lk_controller_raster_set_count(lk_controller *self);
+int  lk_controller_raster_set_name(lk_controller *self, unsigned i, char *out, size_t out_len);
+int  lk_controller_raster_set_in_view(lk_controller *self, unsigned i);
+int  lk_controller_raster_active_index(lk_controller *self);
+int  lk_controller_raster_set_enabled(lk_controller *self, const char *path, int enabled);
+int  lk_controller_raster_enabled(lk_controller *self, const char *path);
+/* Hide/show the ENC where a picture covers it (instant, never rebuilds). */
+void lk_controller_toggle_chart(lk_controller *self);
+int  lk_controller_chart_hidden(lk_controller *self);
 
 #ifdef __cplusplus
 }
