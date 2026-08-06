@@ -475,6 +475,10 @@ lk_hud_capsule_new (LkAppModel *model)
   gtk_widget_set_visible (capsule->overscale, FALSE);
   gtk_box_append (GTK_BOX (root), capsule->overscale);
 
+  /* The raster chart pill closes the capsule. It hides itself where no raster
+   * chart is in view, which is most water. */
+  gtk_box_append (GTK_BOX (root), lk_raster_pill_new (model));
+
   g_signal_connect_data (model, "notify", G_CALLBACK (lk_hud_capsule_notify), capsule,
                          lk_hud_capsule_free, 0);
 
@@ -484,6 +488,181 @@ lk_hud_capsule_new (LkAppModel *model)
   lk_hud_update_overscale (capsule);
   lk_hud_update_compact (capsule);
   return root;
+}
+
+/* ---- the raster chart pill ---------------------------------------------- */
+
+/* It names the raster chart set drawn over this view and opens the list of what
+ * covers it.
+ *
+ * The COLOUR reports the raster chart, not the ENC: the accent while the
+ * picture is drawn, amber while one is here and off. Hiding the ENC above it
+ * does not change the colour, because the picture is still drawn — the "ENC
+ * OFF" text carries that, and a warning colour there would say the picture was
+ * off when it is the only thing on the screen. */
+typedef struct {
+  LkAppModel *model;
+  GtkWidget  *root;   /* the rule and the pill, which appear together */
+  GtkWidget  *button;
+  GtkWidget  *name;
+  GtkWidget  *bar;    /* the rule between the name and the state */
+  GtkWidget  *state;
+} LkRasterPill;
+
+static void
+lk_raster_pill_free (gpointer data, GClosure *closure)
+{
+  g_free (data);
+}
+
+/* The set the pill NAMES: the drawn one when it is in view, else the first one
+ * that is. Naming one set and reporting the state of another is how a pill
+ * comes to read "NAVIONICS | OFF" while Navionics is drawn. */
+static const LkRasterSet *
+lk_raster_pill_named_set (LkRasterPill *pill, guint *out_visible)
+{
+  GPtrArray *sets = lk_app_model_get_raster_sets (pill->model);
+  int active = lk_app_model_get_raster_active (pill->model);
+  const LkRasterSet *named = NULL;
+  guint visible = 0;
+
+  for (guint i = 0; i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (!set->in_view)
+        continue;
+      visible++;
+      if (named == NULL || set->id == active)
+        named = set;
+    }
+
+  if (out_visible != NULL)
+    *out_visible = visible;
+  return named;
+}
+
+static void
+lk_raster_pill_update (LkRasterPill *pill)
+{
+  guint visible = 0;
+  const LkRasterSet *named = lk_raster_pill_named_set (pill, &visible);
+
+  gtk_widget_set_visible (pill->root, named != NULL);
+  if (named == NULL)
+    return;
+
+  gboolean drawn = named->id == lk_app_model_get_raster_active (pill->model);
+  gboolean hidden = lk_app_model_get_chart_hidden (pill->model);
+
+  g_autofree char *upper = g_utf8_strup (named->name, -1);
+  gtk_label_set_text (GTK_LABEL (pill->name), upper);
+
+  gtk_widget_set_visible (pill->bar, !drawn || hidden);
+  gtk_widget_set_visible (pill->state, !drawn || hidden);
+  gtk_label_set_text (GTK_LABEL (pill->state), drawn ? "ENC OFF" : "OFF");
+
+  if (drawn)
+    gtk_widget_remove_css_class (pill->button, "lk-off");
+  else
+    gtk_widget_add_css_class (pill->button, "lk-off");
+
+  const char *what = drawn ? (hidden ? "%s, with the ENC hidden above it. Click to choose another."
+                                     : "%s below the ENC. Click to choose another.")
+                           : "%s is here but off. Click to choose it.";
+  g_autofree char *help = g_strdup_printf (what, named->name);
+  g_autofree char *tooltip =
+      visible > 1 ? g_strdup_printf ("%s %u raster charts cover this view.", help, visible)
+                  : g_strdup (help);
+  gtk_widget_set_tooltip_text (pill->button, tooltip);
+}
+
+static void
+lk_raster_pill_changed (LkAppModel *model, gpointer user_data)
+{
+  lk_raster_pill_update (user_data);
+}
+
+/* The list the pill opens: every set covering this view, the drawn one marked,
+ * then None, the ENC switch and the picker. It is rebuilt on each press, so
+ * what it offers is what the view has under it now. */
+static void
+lk_raster_pill_build_menu (GtkMenuButton *button, gpointer user_data)
+{
+  LkRasterPill *pill = user_data;
+  GPtrArray *sets = lk_app_model_get_raster_sets (pill->model);
+  g_autoptr (GMenu) menu = g_menu_new ();
+  g_autoptr (GMenu) choices = g_menu_new ();
+  g_autoptr (GMenu) commands = g_menu_new ();
+
+  for (guint i = 0; i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (!set->in_view)
+        continue;
+
+      g_autoptr (GMenuItem) item = g_menu_item_new (set->name, NULL);
+      g_menu_item_set_action_and_target_value (item, "win.raster-select",
+                                               g_variant_new_int32 (set->id));
+      g_menu_append_item (choices, item);
+    }
+
+  g_autoptr (GMenuItem) none = g_menu_item_new ("None", NULL);
+  g_menu_item_set_action_and_target_value (none, "win.raster-select",
+                                           g_variant_new_int32 (-1));
+  g_menu_append_item (choices, none);
+
+  g_menu_append (commands,
+                 lk_app_model_get_chart_hidden (pill->model) ? "Show ENC Over Raster"
+                                                             : "Hide ENC Over Raster",
+                 "win.toggle-chart");
+  g_menu_append (commands, "Add Raster Charts…", "win.raster-add");
+
+  g_menu_append_section (menu, NULL, G_MENU_MODEL (choices));
+  g_menu_append_section (menu, NULL, G_MENU_MODEL (commands));
+  gtk_menu_button_set_menu_model (button, G_MENU_MODEL (menu));
+}
+
+GtkWidget *
+lk_raster_pill_new (LkAppModel *model)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (model), NULL);
+
+  LkRasterPill *pill = g_new0 (LkRasterPill, 1);
+  pill->model = model;
+
+  GtkWidget *content = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
+  pill->name = gtk_label_new ("");
+  pill->bar = gtk_label_new ("|");
+  pill->state = gtk_label_new ("");
+
+  gtk_widget_add_css_class (pill->bar, "lk-raster-bar");
+  gtk_box_append (GTK_BOX (content), pill->name);
+  gtk_box_append (GTK_BOX (content), pill->bar);
+  gtk_box_append (GTK_BOX (content), pill->state);
+
+  /* The chevron is a promise: a press opens a list. It is therefore always
+   * shown, because a press always does. */
+  GtkWidget *chevron = gtk_image_new_from_icon_name ("pan-down-symbolic");
+  gtk_image_set_pixel_size (GTK_IMAGE (chevron), 12);
+  gtk_box_append (GTK_BOX (content), chevron);
+
+  pill->button = gtk_menu_button_new ();
+  gtk_menu_button_set_child (GTK_MENU_BUTTON (pill->button), content);
+  gtk_menu_button_set_direction (GTK_MENU_BUTTON (pill->button), GTK_ARROW_UP);
+  gtk_menu_button_set_create_popup_func (GTK_MENU_BUTTON (pill->button),
+                                         lk_raster_pill_build_menu, pill, NULL);
+  gtk_widget_add_css_class (pill->button, "lk-raster-pill");
+
+  pill->root = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_box_append (GTK_BOX (pill->root), lk_hud_rule ());
+  gtk_box_append (GTK_BOX (pill->root), pill->button);
+
+  g_signal_connect_data (model, "raster-changed", G_CALLBACK (lk_raster_pill_changed),
+                         pill, lk_raster_pill_free, 0);
+  lk_raster_pill_update (pill);
+  return pill->root;
 }
 
 /* ---- the distance bar --------------------------------------------------- */

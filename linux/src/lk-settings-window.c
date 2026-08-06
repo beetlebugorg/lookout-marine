@@ -13,6 +13,12 @@ typedef struct {
   LkAppModel *model;
   LkMariner  *mariner;
 
+  /* The raster chart list, rebuilt whenever the installed set changes. The
+   * rebuild runs off an idle: a switch here changes the model, and rebuilding
+   * inside that would destroy the very switch that is still emitting. */
+  GtkWidget *raster_list;
+  guint      raster_refresh_id;
+
   /* Depths tab widgets that have to react to each other. */
   GtkWidget *band_preview;
   GtkWidget *shallow_row;
@@ -28,6 +34,7 @@ lk_settings_free (gpointer data)
 {
   LkSettings *settings = data;
 
+  g_clear_handle_id (&settings->raster_refresh_id, g_source_remove);
   g_clear_object (&settings->mariner);
   g_free (settings);
 }
@@ -569,6 +576,207 @@ lk_charts_recent_clicked (GtkButton *button, gpointer user_data)
     lk_app_model_open_chart (settings->model, path);
 }
 
+/* ---- the raster chart list ---------------------------------------------- */
+
+static void
+lk_raster_group_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  gboolean on = gtk_switch_get_active (widget);
+
+  if (settings->updating)
+    return;
+
+  /* The rebuild this starts frees the switch, and the switch owns the list. */
+  g_autoptr (GPtrArray) paths = g_ptr_array_ref (g_object_get_data (G_OBJECT (widget), "lk-paths"));
+
+  /* A mariner turns off Navionics, not four files that happen to be Navionics. */
+  for (guint i = 0; i < paths->len; i++)
+    lk_app_model_set_raster_enabled (settings->model, g_ptr_array_index (paths, i), on);
+}
+
+static void
+lk_raster_file_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *path = g_object_get_data (G_OBJECT (widget), "lk-path");
+
+  if (settings->updating)
+    return;
+
+  lk_app_model_set_raster_enabled (settings->model, path, gtk_switch_get_active (widget));
+}
+
+static void
+lk_raster_remove_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *path = g_object_get_data (G_OBJECT (button), "lk-path");
+
+  lk_app_model_remove_raster_chart (settings->model, path);
+}
+
+static void
+lk_raster_add_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+
+  lk_present_add_raster_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                                settings->model);
+}
+
+static void
+lk_raster_add_folder_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+
+  lk_present_add_raster_folder_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                                       settings->model);
+}
+
+static GtkWidget *
+lk_raster_switch (gboolean on)
+{
+  GtkWidget *widget = gtk_switch_new ();
+
+  gtk_switch_set_active (GTK_SWITCH (widget), on);
+  gtk_widget_set_valign (widget, GTK_ALIGN_CENTER);
+  return widget;
+}
+
+/* One switch for the set, one for each file under it. The set is what the pill
+ * cycles and what covers a piece of water; the file is what the mariner
+ * downloaded. */
+static void
+lk_settings_fill_raster_list (LkSettings *settings)
+{
+  GtkWidget *list = settings->raster_list;
+  GtkWidget *child;
+
+  /* Programming a switch must not read back as a mariner moving it. */
+  settings->updating = TRUE;
+
+  while ((child = gtk_widget_get_first_child (list)) != NULL)
+    gtk_box_remove (GTK_BOX (list), child);
+
+  if (lk_app_model_get_raster_count (settings->model) == 0)
+    {
+      GtkWidget *empty = gtk_label_new ("No raster charts");
+      gtk_widget_add_css_class (empty, "dim-label");
+      gtk_label_set_xalign (GTK_LABEL (empty), 0.0);
+      gtk_box_append (GTK_BOX (list), empty);
+      settings->updating = FALSE;
+      return;
+    }
+
+  g_autoptr (GPtrArray) groups = lk_app_model_get_raster_groups (settings->model);
+
+  for (guint i = 0; i < groups->len; i++)
+    {
+      const LkRasterGroup *group = g_ptr_array_index (groups, i);
+      gboolean any_on = FALSE;
+
+      for (guint j = 0; j < group->paths->len; j++)
+        {
+          if (lk_app_model_raster_enabled (settings->model, g_ptr_array_index (group->paths, j)))
+            any_on = TRUE;
+        }
+
+      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      GtkWidget *toggle = lk_raster_switch (any_on);
+      GtkWidget *name = gtk_label_new (group->name);
+      g_autofree char *count = g_strdup_printf (group->paths->len == 1 ? "%u file" : "%u files",
+                                                group->paths->len);
+      GtkWidget *files = gtk_label_new (count);
+
+      gtk_widget_add_css_class (name, "heading");
+      gtk_label_set_xalign (GTK_LABEL (name), 0.0);
+      gtk_widget_set_hexpand (name, TRUE);
+      gtk_widget_add_css_class (files, "dim-label");
+      gtk_widget_add_css_class (files, "caption");
+
+      /* The switch owns its copies. The group's strings belong to the installed
+       * list, and a removal frees them while this row is still on the screen. */
+      GPtrArray *owned = g_ptr_array_new_with_free_func (g_free);
+      for (guint j = 0; j < group->paths->len; j++)
+        g_ptr_array_add (owned, g_strdup (g_ptr_array_index (group->paths, j)));
+
+      g_object_set_data_full (G_OBJECT (toggle), "lk-paths", owned,
+                              (GDestroyNotify) g_ptr_array_unref);
+      g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_raster_group_toggled), settings);
+
+      gtk_box_append (GTK_BOX (row), toggle);
+      gtk_box_append (GTK_BOX (row), name);
+      gtk_box_append (GTK_BOX (row), files);
+      gtk_widget_set_margin_top (row, 6);
+      gtk_box_append (GTK_BOX (list), row);
+
+      for (guint j = 0; j < group->paths->len; j++)
+        {
+          const char *path = g_ptr_array_index (group->paths, j);
+          g_autofree char *base = g_path_get_basename (path);
+          gboolean on = lk_app_model_raster_enabled (settings->model, path);
+
+          GtkWidget *file_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+          GtkWidget *file_toggle = lk_raster_switch (on);
+          GtkWidget *label = gtk_label_new (base);
+          GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
+
+          gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_MIDDLE);
+          gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+          gtk_widget_set_hexpand (label, TRUE);
+          gtk_widget_add_css_class (label, "caption");
+          if (!on)
+            gtk_widget_add_css_class (label, "dim-label");
+
+          gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
+          gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
+          /* The engine cannot drop a chart from a live handle, so a removal
+           * switches the picture off now and the chart goes at the next open. */
+          gtk_widget_set_tooltip_text (remove, "Remove. The picture goes at once.");
+
+          g_object_set_data_full (G_OBJECT (file_toggle), "lk-path", g_strdup (path), g_free);
+          g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (path), g_free);
+          g_signal_connect (file_toggle, "notify::active",
+                            G_CALLBACK (lk_raster_file_toggled), settings);
+          g_signal_connect (remove, "clicked", G_CALLBACK (lk_raster_remove_clicked), settings);
+
+          gtk_widget_set_margin_start (file_row, 22);
+          gtk_box_append (GTK_BOX (file_row), file_toggle);
+          gtk_box_append (GTK_BOX (file_row), label);
+          gtk_box_append (GTK_BOX (file_row), remove);
+          gtk_box_append (GTK_BOX (list), file_row);
+        }
+    }
+  settings->updating = FALSE;
+}
+
+static gboolean
+lk_settings_refill_raster (gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  settings->raster_refresh_id = 0;
+  lk_settings_fill_raster_list (settings);
+  return G_SOURCE_REMOVE;
+}
+
+/* A switch in this list changes the model, which brings us straight back here.
+ * Rebuilding now would free the switch that is still emitting, so the rebuild
+ * waits for the next idle — which also folds one group's files into one pass. */
+static void
+lk_settings_raster_changed (LkAppModel *model, gpointer user_data)
+{
+  LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
+
+  if (settings == NULL || settings->raster_list == NULL || settings->raster_refresh_id != 0)
+    return;
+
+  settings->raster_refresh_id = g_idle_add (lk_settings_refill_raster, settings);
+}
+
 static void
 lk_build_charts_page (GtkWidget *notebook, LkSettings *settings)
 {
@@ -616,6 +824,33 @@ lk_build_charts_page (GtkWidget *notebook, LkSettings *settings)
   g_signal_connect (button, "clicked", G_CALLBACK (lk_charts_open_clicked), settings);
   gtk_box_append (GTK_BOX (add), button);
   lk_footer (add, "A folder of baked cells opens as one seamless library.");
+
+  /* A raster chart is a different KIND of chart, so it gets its own section
+   * rather than a mixed list: one is the survey, the other is a picture of the
+   * water, and a mariner must never lose track of which is which. */
+  GtkWidget *raster = lk_section (page, "Raster charts");
+  settings->raster_list = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+  gtk_box_append (GTK_BOX (raster), settings->raster_list);
+  lk_settings_fill_raster_list (settings);
+
+  GtkWidget *raster_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *add_files = gtk_button_new_with_label ("Add Raster Charts…");
+  GtkWidget *add_folder = gtk_button_new_with_label ("Add Folder…");
+
+  g_signal_connect (add_files, "clicked", G_CALLBACK (lk_raster_add_clicked), settings);
+  g_signal_connect (add_folder, "clicked", G_CALLBACK (lk_raster_add_folder_clicked), settings);
+  gtk_box_append (GTK_BOX (raster_buttons), add_files);
+  gtk_box_append (GTK_BOX (raster_buttons), add_folder);
+  gtk_widget_set_halign (raster_buttons, GTK_ALIGN_START);
+  gtk_widget_set_margin_top (raster_buttons, 6);
+  gtk_box_append (GTK_BOX (raster), raster_buttons);
+
+  lk_footer (raster,
+             "Charts made of pictures: MBTiles of satellite imagery or another "
+             "vendor's charts, and BSB/KAP raster nautical charts baked with tile57. "
+             "The ENC draws over them and drops its depth and land shading only "
+             "where they cover. Switch one off to keep it installed without "
+             "drawing it.");
 }
 
 static void
@@ -704,6 +939,12 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent)
   GtkEventController *keys = gtk_event_controller_key_new ();
   g_signal_connect (keys, "key-pressed", G_CALLBACK (lk_settings_key_pressed), window);
   gtk_widget_add_controller (window, keys);
+
+  /* The panel outlives none of its own edits, but a raster chart added from the
+   * pill's list while the panel is open must appear in it. connect_object drops
+   * the handler with the window. */
+  g_signal_connect_object (model, "raster-changed",
+                           G_CALLBACK (lk_settings_raster_changed), window, 0);
 
   GtkWidget *notebook = gtk_notebook_new ();
   gtk_window_set_child (GTK_WINDOW (window), notebook);

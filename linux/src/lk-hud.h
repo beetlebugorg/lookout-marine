@@ -38,6 +38,12 @@ G_BEGIN_DECLS
  * the scale entry. */
 GtkWidget *lk_hud_capsule_new (LkAppModel *model);
 
+/* The raster chart pill, at the right of the readouts. It appears wherever a
+ * raster chart is in view, at any zoom, and it goes when the mariner leaves the
+ * coverage. It names the set drawn over this view and opens the list of what
+ * covers it. */
+GtkWidget *lk_raster_pill_new (LkAppModel *model);
+
 /* The distance bar: four alternating segments under a round distance. */
 GtkWidget *lk_scale_bar_new (LkAppModel *model);
 

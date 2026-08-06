@@ -86,6 +86,56 @@ void lk_chart_controller_toggle_text (LkChartController *self);
 void lk_chart_controller_toggle_soundings (LkChartController *self);
 void lk_chart_controller_toggle_other_category (LkChartController *self);
 
+/* ---- raster underlay ---------------------------------------------------- */
+
+/* One set the engine reports: the charts of one provider, drawn as one
+ * picture. `in_view` says whether it has enabled charts under this view, which
+ * is what the pill and its list are built from. */
+typedef struct {
+  int      id;
+  char    *name;
+  gboolean in_view;
+} LkRasterSet;
+
+void lk_raster_set_free (LkRasterSet *set);
+
+/* Open one raster chart into the live handle. FALSE when the file will not
+ * open: a bad chart never takes the app down. */
+gboolean lk_chart_controller_raster_add (LkChartController *self, const char *path);
+
+/* Step to the next set covering the water in view, then to no picture. The
+ * camera does not move, so a mariner comparing two providers over a reef keeps
+ * their fix. */
+void lk_chart_controller_raster_cycle (LkChartController *self);
+
+/* Draw set `index`, or none for -1. Off is off for the water in view only: the
+ * sets covering other coasts stay as the mariner left them. */
+void lk_chart_controller_raster_select (LkChartController *self, int index);
+
+/* Turn one installed chart on or off. It stays installed either way. */
+gboolean lk_chart_controller_raster_set_enabled (LkChartController *self,
+                                                 const char        *path,
+                                                 gboolean           enabled);
+
+/* Every set, with whether it covers this view. Transfer full: a GPtrArray of
+ * LkRasterSet. */
+GPtrArray *lk_chart_controller_raster_sets (LkChartController *self);
+
+int      lk_chart_controller_raster_active_index (LkChartController *self);
+/* The set drawn over this view, or "". Transfer full. */
+char    *lk_chart_controller_raster_active_name (LkChartController *self);
+/* A set covering this view, DRAWN OR NOT, or "". It is what tells a mariner
+ * sailing into coverage that a picture is here while it is switched off.
+ * Transfer full. */
+char    *lk_chart_controller_raster_available_name (LkChartController *self);
+/* TRUE while the chart draws without its opaque fills, because a picture is
+ * beneath THIS view. */
+gboolean lk_chart_controller_raster_over_chart (LkChartController *self);
+
+/* Hide the vector chart where a picture covers it, and show it again. */
+void     lk_chart_controller_toggle_chart (LkChartController *self);
+gboolean lk_chart_controller_chart_hidden (LkChartController *self);
+
 /* ---- pick --------------------------------------------------------------- */
 
 /* The features a chartplotter should SHOW under a geo point, best first — the

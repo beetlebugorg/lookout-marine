@@ -11,7 +11,7 @@ and switch between day and night.
 <table>
   <tr valign="top">
     <td align="center"><b>macOS</b> · SwiftUI<br><img src="docs/docs/img/macos-day.webp" width="300" alt="Annapolis Harbor on macOS, day scheme"></td>
-    <td align="center"><b>Linux</b> · GTK4<br><img src="docs/docs/img/linux-day.png" width="300" alt="Annapolis Harbor on Linux, day scheme"></td>
+    <td align="center"><b>Linux</b> · GTK4<br><img src="docs/docs/img/linux-day.webp" width="300" alt="Annapolis Harbor on Linux, day scheme"></td>
     <td align="center"><b>Windows</b> · WinUI 3<br><img src="docs/docs/img/windows-day.png" width="300" alt="Annapolis Harbor on Windows, day scheme"></td>
   </tr>
 </table>

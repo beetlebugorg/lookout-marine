@@ -11,7 +11,7 @@ Vulkan** (`src/gpu_vk.zig`) into a surface that the compositor shows. It is the
 equivalent of the SwiftUI shell and the Java shell: same core, same C ABI, same
 behaviour.
 
-![Annapolis Harbor and the Naval Academy, day scheme](../img/linux-day.png)
+![Annapolis Harbor and the Naval Academy, day scheme](../img/linux-day.webp)
 
 The titlebar carries the name of the app and the window controls, and nothing
 else. Every control that acts on the chart is a bubble above the chart, which is
@@ -66,7 +66,41 @@ The full mariner panel is a separate window. Press **Ctrl+,** to open it. The
 panel is not modal, and the chart stays usable while the panel is open. The panel
 applies each edit after a short delay, and it keeps each value.
 
-![The mariner settings panel above the chart](../img/linux-settings.png)
+![The mariner settings panel above the chart](../img/linux-settings.webp)
+
+## Raster charts
+
+The engine draws the [raster charts](../user-guide/raster-charts.md) below the
+ENC. The shell supplies the list and the controls. The keys are the macOS keys
+with Ctrl for Command.
+
+| Control | Function |
+|---|---|
+| **Ctrl+I** | Step to the next set covering this water, then to no picture. |
+| **Ctrl+Shift+I** | Add raster charts. It also answers Ctrl+I when nothing is installed. |
+| **Ctrl+Shift+H** | Hide the ENC where a picture covers it, and show it again. |
+| The pill | The last item in the readouts capsule. A click opens the list. |
+| Settings ▸ Charts | Add a folder, switch one set or one file off, and remove one. |
+
+The pill appears wherever a raster chart is in view, and it goes when the mariner
+leaves the coverage. It names the set drawn over this view. The COLOUR reports the
+raster chart, not the ENC: the accent colour while the picture draws, amber while
+one covers the view and is off. Hiding the ENC above it keeps the accent colour,
+because the picture is still drawn; the "ENC OFF" text carries that.
+
+`src/lk-raster.c` holds the installed list and the on/off state. **The list must
+live in the shell.** The engine holds what is open now, and a raster chart belongs
+to one `lookout*` handle. A chart set has to outlive both a change of ENC and a
+restart, so the list is persisted in `settings.ini` and
+`lk_chart_controller_open` replays it into each new handle. That file also mirrors
+the engine's set-name rule (`raster.zig setNameFor`), so the name the settings
+form prints is the name the pill cycles.
+
+Which sets cover the view changes as the mariner sails, so the state is read off
+the engine with the other readouts, at 10 Hz. Anything that changes the selection
+outside a frame — a switch in the settings panel, a chart added — reads it back at
+once, because the readouts only run while the chart renders and the panel can be
+open over a chart that is standing still.
 
 ## How the chart gets onto the screen
 
@@ -205,6 +239,7 @@ the most recent chart. Then it looks for
 | `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate and scale parsers |
 | `src/lk-hud.c` | The readouts capsule, the distance bar, the north control, the scale entry, and the formats |
 | `src/lk-pick-report.c` | The pick report: the decode, the card, and the placement of the callout |
+| `src/lk-raster.c` | The installed raster charts, their on and off, and the set names |
 | `src/lk-json.c` | The JSON reader for the payload of a pick |
 | `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
