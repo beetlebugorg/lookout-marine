@@ -5,7 +5,7 @@ chart core. The Windows counterpart of the SwiftUI shell on macOS/iOS, the GTK4
 shell on Linux, and the Java shell on Android: same core, same C ABI, same
 behaviour.
 
-![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/windows-day.png)
+![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/windows-day.webp)
 
 The core renders with **Direct3D 12**, the Windows form of the macOS Metal
 transport. The core owns the device, the pipelines (HLSL, compiled at
@@ -49,6 +49,11 @@ pane at startup (screenshots). `LOOKOUT_SHOW=pick` (or `pick:0.5x0.85`, a view
 fraction) runs a cursor pick 3 s after the chart opens — the screenshot
 protocol's pick frame.
 
+Raster charts (see `docs/docs/user-guide/raster-charts.md`): **Ctrl+Shift+I**
+adds `.mbtiles` files (Settings ▸ Charts also takes a folder), **Ctrl+I** steps
+between the sets covering the view, **Ctrl+Shift+H** hides the ENC where a
+picture covers it. The pill at the right of the readouts opens the same list.
+
 ## What's in here
 
 | File | Role |
@@ -60,11 +65,12 @@ protocol's pick frame.
 | `ui/MainWindow.Loader.cpp` | The startup loader phases (atlas / mapping / tessellating) |
 | `ui/MainWindow.Pick.cpp` | The pick report card: ranked pick, object list, decoded rows, raw fold |
 | `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
+| `ui/MainWindow.Raster.cpp` | The raster pill and its menu, the add flow, the re-install at every open |
 | `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
 | `ui/MainWindow.Settings.cpp` | The mariner pane: tabbed pages, debounced apply |
 | `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
 | `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |
-| `src/lk_store.*` | Camera pose, recents and mariner settings in `%APPDATA%\lookout-marine\settings.ini` |
+| `src/lk_store.*` | Camera pose, recents, mariner settings and the raster chart list in `%APPDATA%\lookout-marine\settings.ini` |
 | `src/lk_coord.*` | Coordinate go-to parser and DMS formatting |
 | `src/lk_paths.*`, `src/lk_format.*`, `src/lk_backdrop.*` | Chart discovery, HUD formatting, the transparent backdrop |
 | `build-core.ps1` | Builds the Zig core where the vcxproj expects its outputs |

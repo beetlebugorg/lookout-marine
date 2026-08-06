@@ -2,6 +2,7 @@
 #include "lk_paths.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 
 #include "lk_store.h"
@@ -29,6 +30,82 @@ namespace lkw
         if (std::filesystem::exists(path, ec))
             return { path };
         return {};
+    }
+
+    std::vector<std::string> CollectRasterCharts(std::string const &dir)
+    {
+        std::vector<std::string> out;
+        std::error_code ec;
+        for (auto const &e : std::filesystem::recursive_directory_iterator(dir, ec))
+        {
+            if (!e.is_regular_file(ec))
+                continue;
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            if (ext == ".mbtiles")
+                out.push_back(e.path().string());
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
+    namespace
+    {
+        bool ContainsIgnoreCase(std::string const &hay, std::string const &needle)
+        {
+            if (needle.empty() || hay.size() < needle.size())
+                return false;
+            auto it = std::search(hay.begin(), hay.end(), needle.begin(), needle.end(),
+                                  [](unsigned char a, unsigned char b) {
+                                      return std::tolower(a) == std::tolower(b);
+                                  });
+            return it != hay.end();
+        }
+
+        /* A producer this name carries, if any. Longest first, so "OpenSeaMap"
+         * is not reported as "OSM" (mirrors raster.zig providerIn). */
+        char const *ProviderIn(std::string const &name)
+        {
+            static char const *known[] = {
+                "OpenSeaMap", "Navionics", "Sentinel", "ArcGIS", "Google",
+                "C-Map",      "Yandex",    "Imagery",  "Bing",   "ESRI",
+                "Esri",       "CMap",      "NAIP",     "SASP",   "OSM",
+            };
+            for (auto k : known)
+                if (ContainsIgnoreCase(name, k))
+                    return k;
+            return nullptr;
+        }
+    }
+
+    std::string RasterSetNameFor(std::string const &path)
+    {
+        std::filesystem::path p(path);
+        std::string base = p.filename().string();
+        if (auto k = ProviderIn(base))
+            return k;
+
+        std::string stem = p.stem().string();
+
+        /* The bake's layout — <root>/<stem>/<stem>.pmtiles: the sheet belongs
+         * to the bake, and the bake's own name names the producer when it
+         * carries one. */
+        if (p.extension() == ".pmtiles")
+        {
+            auto dir = p.parent_path();
+            if (dir.filename().string() == stem)
+            {
+                std::string root = dir.parent_path().filename().string();
+                if (!root.empty())
+                {
+                    if (auto k = ProviderIn(root))
+                        return k;
+                    return root;
+                }
+            }
+        }
+        return stem.empty() ? base : stem;
     }
 
     std::vector<std::string> InitialPaths()

@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <map>
 
 #include "lk_paths.h"
 #include "lk_store.h"
@@ -227,6 +228,182 @@ namespace winrt::LookoutMarine::implementation
             foot.Opacity(0.7);
             foot.TextWrapping(TextWrapping::Wrap);
             stack.Children().Append(foot);
+
+            // ---- raster charts: what is installed, grouped the way the
+            // engine groups sets, each file with its own on/off (half-gigabyte
+            // downloads are switched off, not deleted) and a remove.
+            header(L"Raster charts");
+            if (raster_paths.empty())
+            {
+                Controls::TextBlock none;
+                none.Text(L"No raster charts");
+                none.FontSize(12);
+                none.Opacity(0.7);
+                stack.Children().Append(none);
+            }
+            else
+            {
+                // The store carries the enabled flags (the live handle cannot
+                // answer for a file that failed to install this session).
+                std::map<std::string, bool> on;
+                {
+                    int *enabled = nullptr;
+                    char **stored = lk_store_load_rasters(&enabled);
+                    for (int i = 0; stored != nullptr && stored[i] != nullptr; ++i)
+                        on[stored[i]] = enabled[i] != 0;
+                    lk_store_free_rasters(stored, enabled);
+                }
+
+                // Group by the engine's set name, first-seen order, so what
+                // Settings shows and what the pill cycles are the same thing.
+                std::vector<std::pair<std::string, std::vector<std::string>>> groups;
+                for (auto const &p : raster_paths)
+                {
+                    std::string g = lkw::RasterSetNameFor(p);
+                    auto it = std::find_if(groups.begin(), groups.end(),
+                                           [&](auto const &e) { return e.first == g; });
+                    if (it == groups.end())
+                        groups.push_back({ g, { p } });
+                    else
+                        it->second.push_back(p);
+                }
+
+                auto set_file_enabled = [this](std::string const &path, bool v) {
+                    lk_store_set_raster_enabled(path.c_str(), v ? 1 : 0);
+                    lk_controller_raster_set_enabled(controller, path.c_str(), v ? 1 : 0);
+                };
+                auto mini_switch = [this](bool is_on, auto &&set) {
+                    Controls::ToggleSwitch ts;
+                    ts.OnContent(nullptr);
+                    ts.OffContent(nullptr);
+                    ts.MinWidth(0);
+                    ts.IsOn(is_on);
+                    ts.Toggled([this, set](auto &&s, auto &&) {
+                        if (settings_loading)
+                            return;
+                        set(s.template as<Controls::ToggleSwitch>().IsOn());
+                        UpdateReadouts(true);
+                        BuildSettingsPage();
+                    });
+                    return ts;
+                };
+
+                for (auto const &[gname, files] : groups)
+                {
+                    bool group_on = false;
+                    for (auto const &p : files)
+                        group_on = group_on || on.count(p) == 0 || on[p];
+
+                    Controls::Grid row;
+                    Controls::ColumnDefinition c0, c1, c2;
+                    c0.Width({ 0, GridUnitType::Auto });
+                    c1.Width({ 1, GridUnitType::Star });
+                    c2.Width({ 0, GridUnitType::Auto });
+                    row.ColumnDefinitions().ReplaceAll({ c0, c1, c2 });
+
+                    auto gts = mini_switch(group_on, [this, set_file_enabled, files](bool v) {
+                        for (auto const &p : files)
+                            set_file_enabled(p, v);
+                    });
+                    row.Children().Append(gts);
+
+                    Controls::TextBlock name;
+                    name.Text(winrt::to_hstring(gname));
+                    name.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
+                    name.Opacity(group_on ? 1.0 : 0.6);
+                    name.VerticalAlignment(VerticalAlignment::Center);
+                    name.TextTrimming(TextTrimming::CharacterEllipsis);
+                    Controls::Grid::SetColumn(name, 1);
+                    row.Children().Append(name);
+
+                    Controls::TextBlock count;
+                    count.Text(winrt::to_hstring(files.size() == 1
+                        ? std::string("1 file")
+                        : std::to_string(files.size()) + " files"));
+                    count.FontSize(11);
+                    count.Opacity(0.7);
+                    count.VerticalAlignment(VerticalAlignment::Center);
+                    Controls::Grid::SetColumn(count, 2);
+                    row.Children().Append(count);
+                    stack.Children().Append(row);
+
+                    for (auto const &p : files)
+                    {
+                        bool file_on = on.count(p) == 0 || on[p];
+
+                        Controls::Grid frow;
+                        Controls::ColumnDefinition f0, f1, f2;
+                        f0.Width({ 0, GridUnitType::Auto });
+                        f1.Width({ 1, GridUnitType::Star });
+                        f2.Width({ 0, GridUnitType::Auto });
+                        frow.ColumnDefinitions().ReplaceAll({ f0, f1, f2 });
+                        frow.Margin({ 22, 0, 0, 0 });
+
+                        auto fts = mini_switch(file_on, [this, set_file_enabled, p](bool v) {
+                            set_file_enabled(p, v);
+                        });
+                        frow.Children().Append(fts);
+
+                        Controls::TextBlock fname;
+                        fname.Text(winrt::to_hstring(std::filesystem::path(p).filename().string()));
+                        fname.FontSize(11);
+                        fname.Opacity(file_on ? 1.0 : 0.6);
+                        fname.VerticalAlignment(VerticalAlignment::Center);
+                        fname.TextTrimming(TextTrimming::CharacterEllipsis);
+                        Controls::Grid::SetColumn(fname, 1);
+                        frow.Children().Append(fname);
+
+                        Controls::Button rm;
+                        Controls::FontIcon minus;
+                        minus.Glyph(L"\uE738"); // Remove
+                        minus.FontSize(12);
+                        rm.Content(minus);
+                        rm.Padding({ 4, 2, 4, 2 });
+                        rm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                        rm.BorderThickness({ 0, 0, 0, 0 });
+                        Automation::AutomationProperties::SetName(rm,
+                            L"Remove. Takes full effect the next time a chart opens.");
+                        rm.Click([this, p](auto &&, auto &&) {
+                            lk_store_forget_raster(p.c_str());
+                            raster_paths.erase(
+                                std::remove(raster_paths.begin(), raster_paths.end(), p),
+                                raster_paths.end());
+                            // The engine has no remove: quiet it on the live
+                            // handle, and the next open drops it for good.
+                            lk_controller_raster_set_enabled(controller, p.c_str(), 0);
+                            UpdateReadouts(true);
+                            BuildSettingsPage();
+                        });
+                        Controls::Grid::SetColumn(rm, 2);
+                        frow.Children().Append(rm);
+                        stack.Children().Append(frow);
+                    }
+                }
+            }
+
+            Controls::Button add_raster;
+            add_raster.Content(winrt::box_value(L"Add Raster Charts…"));
+            add_raster.HorizontalAlignment(HorizontalAlignment::Stretch);
+            add_raster.Margin({ 0, 8, 0, 0 });
+            add_raster.Click([this](auto &&, auto &&) { AddRasterFiles(); });
+            stack.Children().Append(add_raster);
+
+            Controls::Button add_raster_dir;
+            add_raster_dir.Content(winrt::box_value(L"Add a Folder of Raster Charts…"));
+            add_raster_dir.HorizontalAlignment(HorizontalAlignment::Stretch);
+            add_raster_dir.Click([this](auto &&, auto &&) { AddRasterFolder(); });
+            stack.Children().Append(add_raster_dir);
+
+            Controls::TextBlock raster_foot;
+            raster_foot.Text(L"Charts made of pictures: MBTiles of satellite imagery or "
+                             L"another vendor's charts, and BSB/KAP raster nautical charts "
+                             L"baked with tile57. The ENC draws over them and drops its "
+                             L"depth and land shading only where they cover. Switch one "
+                             L"off to keep it installed without drawing it.");
+            raster_foot.FontSize(11);
+            raster_foot.Opacity(0.7);
+            raster_foot.TextWrapping(TextWrapping::Wrap);
+            stack.Children().Append(raster_foot);
             break;
         }
         case 4: // Advanced
