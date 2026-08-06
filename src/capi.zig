@@ -134,6 +134,19 @@ export fn lookout_close(h: ?*lookout) void {
     if (h) |x| cast(x).close();
 }
 
+/// Load and start the wasm plugins in `dir` — every `<id>.manifest.json` with
+/// an `<id>.wasm` beside it. 0 on success, -1 if the directory is unreadable
+/// or this build has no plugin host. A plugin that fails to load is logged and
+/// skipped; the others still run, so 0 does not mean every module started.
+///
+/// Setting LOOKOUT_PLUGINS before opening does the same thing without a call.
+export fn lookout_plugins_load(h: ?*lookout, dir: [*:0]const u8) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.loadPlugins(std.mem.span(dir)) catch return -1;
+    return 0;
+}
+
 /// 1 if the symbol/font atlas cache is already built — i.e. the NEXT open will
 /// not need the one-time rasterize. A host can call this before opening to show
 /// a "preparing chart symbols" message only on the first run. No handle needed.

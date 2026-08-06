@@ -86,6 +86,19 @@ lookout *lookout_open_charts_in_window(lookout_native_kind kind, void *native_ha
                                        uint32_t width, uint32_t height, int want_msaa);
 void lookout_close(lookout *h);
 
+/* ---- wasm plugins (prototype) ------------------------------------------ */
+/* Load and start the plugins in `dir`: every "<id>.manifest.json" with an
+ * "<id>.wasm" beside it, which is the layout `zig build plugins` installs into
+ * zig-out/plugins. Plugins publish vessel and AIS data and draw chart
+ * overlays; the core renders whatever they draw, so a shell needs no other
+ * call. Returns 0 on success, -1 when the directory cannot be read or this
+ * build has no plugin host (macOS only in the prototype). A plugin that fails
+ * to load is logged and skipped, so 0 does not mean every module started.
+ *
+ * Setting LOOKOUT_PLUGINS=<dir> before opening does the same thing with no
+ * call at all; LOOKOUT_NMEA=host:port configures the NMEA 0183 plugin. */
+int lookout_plugins_load(lookout *h, const char *dir);
+
 /* 1 if the symbol/font atlas cache is already built — the next open won't need
  * the one-time rasterize (~1.3s at 1x, more at HiDPI). Call before opening to
  * show a "preparing chart symbols" indicator only on the first run. */

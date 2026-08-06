@@ -16,9 +16,17 @@ const camera = @import("camera.zig");
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 const atlas = @import("atlas.zig");
 const png = @import("png.zig");
+const ov = @import("overlay.zig");
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
+
+/// The wasm plugin host. Off unless build.zig turned it on (macOS with the
+/// WAMR archive present), and the import itself is behind the flag: without
+/// `-Dplugins` there are no WAMR headers for src/plugin/wasm.zig's @cImport to
+/// find, so the file must not be analysed at all.
+const plugins_on = @import("build_options").plugins;
+const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 
 // The async build's WORKER runs tessellation (runJob — pure engine, no GPU) on
 // every backend: a rebuild takes ~1s on a phone and must never sit inside
@@ -149,6 +157,77 @@ pub const NativeKind = gpu.NativeKind;
 
 const Lock = @import("lock.zig").Lock;
 
+/// Everything the plugin layer needs from the core, in one heap allocation:
+/// the vessel store, the AIS store, the overlay store, the broker that
+/// implements the ABI over them, and the registry that runs the modules.
+///
+/// Heap-allocated and built in place because the broker holds pointers to the
+/// stores beside it — moving this struct would dangle them.
+const PluginSystem = if (plugins_on) struct {
+    alloc: std.mem.Allocator,
+    vessels: phost.store.Store,
+    ais: phost.aisstore.AisStore,
+    overlay: ov.Store,
+    br: phost.broker.Broker,
+    host: phost.Host,
+
+    fn create(alloc: std.mem.Allocator) !*@This() {
+        const self = try alloc.create(@This());
+        errdefer alloc.destroy(self);
+        self.* = .{
+            .alloc = alloc,
+            .vessels = try phost.store.Store.init(alloc),
+            .ais = phost.aisstore.AisStore.init(alloc),
+            .overlay = ov.Store.init(alloc),
+            .br = undefined,
+            .host = undefined,
+        };
+        self.br = phost.broker.Broker.init(alloc, &self.vessels, &self.ais, .{
+            .ctx = &self.overlay,
+            .applyFn = applyOverlay,
+            .removeFn = removeOverlay,
+        });
+        self.host = phost.Host.init(alloc, &self.br, optionsFromEnv());
+        return self;
+    }
+
+    /// Order matters: the registry stops the dispatch thread (delivering
+    /// SHUTDOWN, which can still draw and publish) before the broker stops the
+    /// I/O thread, and both are down before the stores they write to go.
+    fn destroy(self: *@This()) void {
+        const gpa = self.alloc;
+        self.host.deinit();
+        self.br.deinit();
+        self.overlay.deinit();
+        self.ais.deinit();
+        self.vessels.deinit();
+        gpa.destroy(self);
+    }
+
+    /// `LOOKOUT_NMEA=host:port` is the one piece of plugin configuration the
+    /// prototype carries; it reaches nmea0183 through its lk_start payload.
+    fn optionsFromEnv() phost.Options {
+        var opts = phost.Options{};
+        const raw = std.c.getenv("LOOKOUT_NMEA") orelse return opts;
+        const text = std.mem.span(raw);
+        const colon = std.mem.lastIndexOfScalar(u8, text, ':') orelse return opts;
+        if (colon == 0 or colon + 1 >= text.len) return opts;
+        opts.nmea_host = text[0..colon];
+        opts.nmea_port = std.fmt.parseInt(u16, text[colon + 1 ..], 10) catch return .{};
+        return opts;
+    }
+
+    fn applyOverlay(ctx: ?*anyopaque, source: []const u8, json: []const u8) anyerror!void {
+        const s: *ov.Store = @ptrCast(@alignCast(ctx.?));
+        return s.applyBatch(source, json);
+    }
+
+    fn removeOverlay(ctx: ?*anyopaque, source: []const u8) void {
+        const s: *ov.Store = @ptrCast(@alignCast(ctx.?));
+        s.removeSource(source);
+    }
+} else struct {};
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -266,6 +345,11 @@ pub const Lookout = struct {
     /// mariner supplies, drawn beneath the vector chart. Its own cache, worker
     /// and memory ceiling — nothing here touches the scene (see raster.zig).
     raster: rasterlayer.Layer = undefined,
+
+    /// The wasm plugin layer, once something has asked for it (LOOKOUT_PLUGINS
+    /// at open, or lookout_plugins_load). Null costs nothing: no threads, no
+    /// stores, no runtime.
+    plugins: ?*PluginSystem = null,
 
     /// Hide the chart WHERE A PICTURE COVERS IT, and keep it everywhere else.
     /// The underlay moves in front of the whole chart instead of only its area
@@ -759,6 +843,69 @@ pub const Lookout = struct {
             };
             self.pollCompose(self.compose_thread == null); // apply immediately if it ran sync
         }
+        // LOOKOUT_PLUGINS is the prototype's whole install story: point it at a
+        // directory of modules and they run. A shell that wants control calls
+        // lookout_plugins_load instead and leaves the variable unset.
+        if (plugins_on) {
+            if (std.c.getenv("LOOKOUT_PLUGINS")) |dir| {
+                const path = std.mem.span(dir);
+                self.loadPlugins(path) catch |e| {
+                    std.debug.print("plugins: LOOKOUT_PLUGINS={s} not loaded: {s}\n", .{ path, @errorName(e) });
+                };
+            }
+        }
+    }
+
+    // ---- plugins ------------------------------------------------------------
+
+    /// Load and start the wasm plugins in `dir` — every `<id>.manifest.json`
+    /// with an `<id>.wasm` beside it, which is what `zig build plugins`
+    /// installs. The plugin layer is created on the first call.
+    pub fn loadPlugins(self: *Lookout, dir: []const u8) !void {
+        if (plugins_on) {
+            const ps = self.plugins orelse blk: {
+                const created = try PluginSystem.create(self.alloc);
+                self.plugins = created;
+                break :blk created;
+            };
+            try ps.host.loadDir(dir);
+            try ps.host.start();
+            self.markDirty();
+        } else return error.PluginsUnavailable;
+    }
+
+    /// The overlay palette scheme that matches the chart's.
+    fn overlayScheme(self: *Lookout) ov.Scheme {
+        return switch (self.mariner.scheme) {
+            cc.TILE57_SCHEME_NIGHT => .night,
+            cc.TILE57_SCHEME_DUSK => .dusk,
+            else => .day,
+        };
+    }
+
+    /// Rebuild the plugin overlay for this frame's zoom and scheme and hand it
+    /// to the GPU layer. Cheap when nothing changed: the store returns the same
+    /// generation and the backend skips the upload.
+    fn updateOverlay(self: *Lookout) void {
+        if (!plugins_on) return;
+        const ps = self.plugins orelse return;
+        const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.overlayScheme()) catch |e| {
+            std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
+            return;
+        };
+        self.g.setOverlay(frame) catch |e| {
+            std.debug.print("overlay upload failed: {s}\n", .{@errorName(e)});
+        };
+    }
+
+    /// True when a plugin has posted geometry the current frame does not show.
+    /// The app renders ON DEMAND, so without this a symbol drawn while the
+    /// chart sat idle would not appear until the mariner touched the screen —
+    /// the same reason raster.wantsFrame exists.
+    fn overlayWantsFrame(self: *Lookout) bool {
+        if (!plugins_on) return false;
+        const ps = self.plugins orelse return false;
+        return ps.overlay.needsRebuild(self.cam.zoom, self.overlayScheme());
     }
 
     fn composeWorker(self: *Lookout) void {
@@ -862,6 +1009,15 @@ pub const Lookout = struct {
     }
 
     pub fn close(self: *Lookout) void {
+        // FIRST: the plugin threads draw into the overlay store and read the
+        // GPU layer's frame through it, so they have to be stopped before
+        // anything below them is torn down.
+        if (plugins_on) {
+            if (self.plugins) |ps| {
+                ps.destroy();
+                self.plugins = null;
+            }
+        }
         self.pollCompose(true); // finish any in-flight partition build first
         self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
         // Before g.deinit(): the layer hands its textures back to the GPU.
@@ -1577,6 +1733,7 @@ pub const Lookout = struct {
         self.syncRasterMode(); // before prepareFrame: it decides what gets built
         self.prepareFrame();
         self.raster.prepare(&self.g, self.cam);
+        self.updateOverlay();
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
         // A SKIPPED frame (swapchain saturated) must not clear the flag: the
         // pending content still needs a successful present.
@@ -1602,6 +1759,9 @@ pub const Lookout = struct {
         // frame that asked for them. Without this the mariner keeps whatever
         // strip of imagery had loaded when they stopped panning.
         if (self.raster.wantsFrame()) return true;
+        // A plugin can post geometry at any moment, from its own thread, with
+        // no gesture behind it.
+        if (self.overlayWantsFrame()) return true;
         return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {
@@ -1616,6 +1776,7 @@ pub const Lookout = struct {
         // A snapshot cannot show a tile that lands next frame, so wait for the
         // underlay's worker rather than writing a half-filled picture.
         self.raster.prepareBlocking(&self.g, self.cam, 5000);
+        self.updateOverlay();
         const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.g.width, self.g.height);
@@ -1626,6 +1787,7 @@ pub const Lookout = struct {
         self.syncRasterMode();
         self.buildGpuScene();
         self.raster.prepareBlocking(&self.g, self.cam, 5000);
+        self.updateOverlay();
         const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;

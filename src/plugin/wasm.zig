@@ -71,6 +71,25 @@ pub fn deinitRuntime() void {
     c.wasm_runtime_destroy();
 }
 
+/// Every thread that enters wasm needs its own runtime thread environment —
+/// the interpreter's stack boundary and signal handling are per-thread, and a
+/// call from a thread without one traps with "thread signal env not inited"
+/// rather than running. initRuntime does this for the thread that calls it;
+/// any OTHER thread (the host's dispatch thread, the harness's) calls this
+/// once before its first call and destroyThreadEnv when it is done.
+///
+/// The setup mprotects the guard page below the calling thread's stack, and on
+/// macOS that fails for stacks of 8 MiB and up — Zig's std.Thread default is
+/// 16 MiB, so a thread that will enter wasm must be spawned with a smaller
+/// one (host.zig uses 2 MiB).
+pub fn initThreadEnv() Error!void {
+    if (!c.wasm_runtime_init_thread_env()) return error.RuntimeInit;
+}
+
+pub fn destroyThreadEnv() void {
+    c.wasm_runtime_destroy_thread_env();
+}
+
 // ---- native functions the host offers plugins ----
 
 /// One host import. `signature` is WAMR's argument-type string, written from

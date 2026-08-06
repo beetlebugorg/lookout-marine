@@ -37,7 +37,10 @@ pub const Target = struct {
     mmsi: u32,
     lat: ?f64 = null,
     lon: ?f64 = null,
-    /// Speed over ground, knots as AIS reports it.
+    /// Speed over ground, METRES PER SECOND. The AIS wire format reports
+    /// knots; converting is the parsing plugin's job, so everything above this
+    /// store — navigation.speedOverGround, the CPA math, the overlay — reads
+    /// one unit and never has to ask which.
     sog: ?f64 = null,
     /// Course over ground, degrees true in [0,360).
     cog: ?f64 = null,

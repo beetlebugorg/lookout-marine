@@ -24,6 +24,29 @@ fn haveWamrDist(b: *std.Build) bool {
     return true;
 }
 
+fn haveFile(b: *std.Build, rel: []const u8) bool {
+    std.Io.Dir.accessAbsolute(b.graph.io, b.pathFromRoot(rel), .{}) catch return false;
+    return true;
+}
+
+/// The `id` out of a plugin's manifest.json, read at configure time so the
+/// installed files are named the way the host looks them up (`<id>.wasm` and
+/// `<id>.manifest.json`). Falls back to the directory name, which keeps a
+/// plugin buildable while its manifest is being written.
+fn manifestId(b: *std.Build, dir_name: []const u8) []const u8 {
+    const path = b.pathFromRoot(b.fmt("plugins/{s}/manifest.json", .{dir_name}));
+    const text = std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(64 * 1024)) catch
+        return dir_name;
+    const parsed = std.json.parseFromSlice(std.json.Value, b.allocator, text, .{}) catch
+        return dir_name;
+    defer parsed.deinit();
+    if (parsed.value != .object) return dir_name;
+    return switch (parsed.value.object.get("id") orelse return dir_name) {
+        .string => |s| b.dupe(s),
+        else => dir_name,
+    };
+}
+
 // The NDK triple for an *-linux-android target (null otherwise). Mirrors
 // tile57's build.zig: the C deps need the NDK sysroot's bionic + arch headers.
 fn androidTriple(target: std.Build.ResolvedTarget) ?[]const u8 {
@@ -345,14 +368,74 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
-    // ---- wasm plugin host smoke test ----
+    // ---- plugin-layer unit tests ----
+    // Each file rooted the way its own `zig test <file>` roots it, so what the
+    // phase gate runs and what an agent runs by hand are the same compilation.
+    // These do not need tile57 or a GPU, so they skip cfg.apply.
+    for ([_][]const u8{
+        "src/plugin/store.zig",
+        "src/plugin/aisstore.zig",
+        "src/overlay.zig",
+        "plugins/nmea0183/parser.zig",
+    }) |path| {
+        const mod = b.createModule(.{
+            .root_source_file = b.path(path),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // the stores' and overlay's lock is os_unfair_lock
+        });
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
+    }
+
+    // ---- the wasm plugins ----
+    // wasm32-freestanding, no WASI: what every plugin is built as. Exports
+    // only — no _start — and rdynamic so the linker keeps them. Each plugin
+    // lands in zig-out/plugins as `<id>.wasm` beside `<id>.manifest.json`,
+    // which is the pair src/plugin/host.zig loads.
+    const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+    const lk_mod = b.createModule(.{
+        .root_source_file = b.path("plugins/common/lk.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+    });
+    const plugins_step = b.step("plugins", "Build the wasm plugin modules into zig-out/plugins");
+    // `echo` is the throwaway that proves the ABI end to end; the other four
+    // are PROTOTYPE.md's. A name with no main.zig yet is skipped, so a plugin
+    // agent adds one file and it builds.
+    var echo_wasm: ?std.Build.LazyPath = null;
+    for ([_][]const u8{ "echo", "nmea0183", "ownship", "ais", "laylines" }) |name| {
+        const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
+        if (!haveFile(b, main_rel)) continue;
+        const mod = b.createModule(.{
+            .root_source_file = b.path(main_rel),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+        });
+        mod.addImport("lk", lk_mod);
+        const wasm_exe = b.addExecutable(.{ .name = name, .root_module = mod });
+        wasm_exe.entry = .disabled;
+        wasm_exe.rdynamic = true;
+
+        const id = manifestId(b, name);
+        plugins_step.dependOn(&b.addInstallFileWithDir(
+            wasm_exe.getEmittedBin(),
+            .{ .custom = "plugins" },
+            b.fmt("{s}.wasm", .{id}),
+        ).step);
+        const manifest_rel = b.fmt("plugins/{s}/manifest.json", .{name});
+        if (haveFile(b, manifest_rel)) plugins_step.dependOn(&b.addInstallFileWithDir(
+            b.path(manifest_rel),
+            .{ .custom = "plugins" },
+            b.fmt("{s}.manifest.json", .{id}),
+        ).step);
+        if (std.mem.eql(u8, name, "echo")) echo_wasm = wasm_exe.getEmittedBin();
+    }
+
+    // ---- wasm plugin host smoke tests ----
     // A module built for the plugin ABI is loaded by the real embedding and
     // driven through its exports: verification-bar item 4, and the guard that
-    // keeps the WAMR wiring honest before the broker exists.
+    // keeps the WAMR wiring honest.
     if (plugins) {
-        // wasm32-freestanding, no WASI: what every plugin is built as. Exports
-        // only — no _start — and rdynamic so the linker keeps them.
-        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
         const smoke_plugin_mod = b.createModule(.{
             .root_source_file = b.path("test/smoke_plugin.zig"),
             .target = wasm_target,
@@ -385,6 +468,48 @@ pub fn build(b: *std.Build) void {
         const smoke_run = b.addRunArtifact(b.addTest(.{ .root_module = smoke_mod }));
         b.step("wasm-smoke", "Run the WAMR embedding smoke test").dependOn(&smoke_run.step);
         test_step.dependOn(&smoke_run.step);
+
+        // host.zig and broker.zig import nothing above src/plugin/, so they
+        // build as their own module — which is what lets the tests below use
+        // them without the chart core. Rooting at host.zig picks up broker's
+        // and the stores' tests too.
+        const host_mod = b.createModule(.{
+            .root_source_file = b.path("src/plugin/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        host_mod.addIncludePath(b.path("vendor/wamr-dist/include"));
+        host_mod.addObjectFile(b.path("vendor/wamr-dist/lib/libvmlib.a"));
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = host_mod })).step);
+
+        // The whole plugin layer end to end: manifests, grants, the broker's
+        // natives, the event loop and the overlay store, driven by the echo
+        // plugin. The overlay store rides in as its own module and is wired to
+        // the broker through OverlaySink.
+        if (echo_wasm) |bin| {
+            const ov_mod = b.createModule(.{
+                .root_source_file = b.path("src/overlay.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            });
+
+            const host_smoke_mod = b.createModule(.{
+                .root_source_file = b.path("test/host_smoke.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            });
+            host_smoke_mod.addImport("host", host_mod);
+            host_smoke_mod.addImport("overlay", ov_mod);
+            host_smoke_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
+            host_smoke_mod.addAnonymousImport("echo_manifest", .{ .root_source_file = b.path("plugins/echo/manifest.json") });
+
+            const host_smoke_run = b.addRunArtifact(b.addTest(.{ .root_module = host_smoke_mod }));
+            b.step("host-smoke", "Run the plugin host + broker end-to-end test").dependOn(&host_smoke_run.step);
+            test_step.dependOn(&host_smoke_run.step);
+        }
     }
     if (plugins_fail) |fail| test_step.dependOn(fail);
 }
