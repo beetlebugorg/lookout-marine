@@ -31,9 +31,9 @@ comptime {
 
 // ---- the numbers, all in one place -----------------------------------------
 
-/// A fix older than this is not a fix. PROTOTYPE.md's rule, and the same
-/// window the vessel store uses to call a navigation value stale.
-const max_age_ms: i64 = 10_000;
+/// A fix older than this is not a fix. One 5 s window rules all vessel data;
+/// the vessel store uses the same number.
+const max_age_ms: i64 = 5_000;
 
 /// Overlay republish rate.
 const redraw_ms: i64 = 1000;

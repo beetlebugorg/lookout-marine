@@ -122,15 +122,12 @@ pub const Change = struct {
     reading: ?Reading,
 };
 
-/// Values older than this are stale unless a family below overrides it.
-pub const default_staleness_ms: i64 = 10_000;
+/// Values older than this are stale. One window rules every path: on the
+/// water, five seconds without an instrument is the fact a mariner needs to
+/// see. Per-family overrides stay possible through setFamilyStaleness.
+pub const default_staleness_ms: i64 = 5_000;
 
-/// Per-family staleness. Longest matching prefix wins. Wind is the one family
-/// that legitimately updates slowly, and the layline plugin treats 30 s as its
-/// own limit, so the store agrees rather than declaring wind stale first.
-const default_families = [_]Family{
-    .{ .prefix = "environment.wind.", .ms = 30_000 },
-};
+const default_families = [_]Family{};
 
 const Family = struct { prefix: []const u8, ms: i64 };
 
@@ -571,7 +568,7 @@ test "a stale elected value falls back to the next fresh source" {
     try s.set("navigation.position", pos_a, 1_000, 1); // the boat's GPS, then silent
     try s.set("navigation.position", pos_b, 20_000, 2); // the phone keeps publishing
 
-    // 11 s after source 1's fix: past the 10 s window, so source 2 is elected.
+    // 20 s after source 1's fix: past the 5 s window, so source 2 is elected.
     const r = s.readElected("navigation.position", 21_000).?;
     try t.expectEqual(@as(SourceId, 2), r.source);
     try t.expect(!r.stale);
@@ -596,17 +593,20 @@ test "with every source stale the most recent value reads as stale" {
     try t.expectEqual(@as(i64, 55_000), r.age_ms);
 }
 
-test "wind gets its own staleness window and a family can be overridden" {
+test "one staleness window rules every path and a family can be overridden" {
     var s = try Store.init(t.allocator);
     defer s.deinit();
     try s.set("environment.wind.directionTrue", "215", 0, 1);
     try s.set("environment.depth.belowTransducer", "2.9", 0, 1);
 
+    try t.expect(!s.readElected("environment.wind.directionTrue", 4_000).?.stale);
+    try t.expect(!s.readElected("environment.depth.belowTransducer", 4_000).?.stale);
+    try t.expect(s.readElected("environment.wind.directionTrue", 6_000).?.stale);
+    try t.expect(s.readElected("environment.depth.belowTransducer", 6_000).?.stale);
+
+    try s.setFamilyStaleness("environment.wind.", 30_000);
     try t.expect(!s.readElected("environment.wind.directionTrue", 20_000).?.stale);
     try t.expect(s.readElected("environment.depth.belowTransducer", 20_000).?.stale);
-
-    try s.setFamilyStaleness("environment.wind.", 5_000);
-    try t.expect(s.readElected("environment.wind.directionTrue", 20_000).?.stale);
 }
 
 test "an unregistered source publishes at lowest priority" {
@@ -689,24 +689,24 @@ test "an election that changes with time alone reaches the subscriber" {
 
     const sub = try s.subscribe(5, &.{"navigation.position"});
     try s.set("navigation.position", pos_a, 0, 1); // the boat's GPS, then silent
-    try s.set("navigation.position", pos_b, 5_000, 2); // the phone, still going
-    try s.collectChanged(sub, 5_000, &out);
+    try s.set("navigation.position", pos_b, 2_000, 2); // the phone, still going
+    try s.collectChanged(sub, 2_000, &out);
     try t.expectEqual(@as(SourceId, 1), out.items[0].reading.?.source);
     out.clearRetainingCapacity();
 
-    // No write happens; source 1 simply ages out of its window and hands over.
-    try t.expectEqual(@as(usize, 0), s.refresh(9_000));
+    // No write happens; source 1 simply ages out of its 5 s window and hands over.
+    try t.expectEqual(@as(usize, 0), s.refresh(4_000));
     try t.expect(!s.hasChanges(sub));
-    try t.expectEqual(@as(usize, 1), s.refresh(11_000));
-    try s.collectChanged(sub, 11_000, &out);
+    try t.expectEqual(@as(usize, 1), s.refresh(6_000));
+    try s.collectChanged(sub, 6_000, &out);
     try t.expectEqual(@as(usize, 1), out.items.len);
     try t.expect(!out.items[0].reading.?.stale);
     try t.expectEqual(@as(SourceId, 2), out.items[0].reading.?.source);
 
     // Both stale: the most recent value reads, flagged, rather than vanishing.
-    try t.expectEqual(@as(usize, 1), s.refresh(40_000));
+    try t.expectEqual(@as(usize, 1), s.refresh(20_000));
     out.clearRetainingCapacity();
-    try s.collectChanged(sub, 40_000, &out);
+    try s.collectChanged(sub, 20_000, &out);
     try t.expect(out.items[0].reading.?.stale);
     try t.expectEqual(@as(SourceId, 2), out.items[0].reading.?.source);
 }

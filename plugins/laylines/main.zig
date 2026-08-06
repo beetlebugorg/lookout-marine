@@ -23,14 +23,10 @@ comptime {
 const id_port = "layline_port";
 const id_stbd = "layline_stbd";
 
-/// Wind older than this is not worth drawing from. Matches the vessel store's
-/// own wind staleness window.
-const wind_max_age_ms: i64 = 30_000;
-
-/// Position is held to the same window. The brief names no figure for it here;
-/// in practice both values come off the same instrument feed, so a stream that
-/// dies takes them out together.
-const position_max_age_ms: i64 = 30_000;
+/// One 5 s window rules all vessel data; the vessel store and the other
+/// plugins use the same number.
+const wind_max_age_ms: i64 = 5_000;
+const position_max_age_ms: i64 = 5_000;
 
 const redraw_interval_ms: i64 = 1000;
 
