@@ -14,22 +14,37 @@
 //! the misconfiguration behind a stack trace. The natives are registered for
 //! every plugin, so the check is per call, not per instantiation.
 //!
-//! THREADS. Three, and only three:
+//! THREADS.
 //!   * the caller's thread, during load/start — natives may run here before
-//!     the dispatch thread exists;
-//!   * the host's DISPATCH thread, inside a wasm call — every native runs
-//!     here in steady state;
+//!     any dispatch thread exists;
+//!   * ONE DISPATCH THREAD PER PLUGIN (host.zig owns them), inside a wasm
+//!     call — every native runs on the thread of the plugin that called it.
+//!     Each plugin has its OWN FIFO here, so a plugin stuck in a loop stalls
+//!     only itself;
 //!   * this file's I/O thread — poll on the plugin sockets, timer deadlines,
-//!     and the 100 ms fanout tick. It only ever ENQUEUES events; it never
-//!     enters wasm.
-//! `mu` guards the queue, the connection list, the timer list and the plugin
-//! records. It is the OUTERMOST lock: code holding it may take the vessel,
-//! AIS or overlay store's lock, never the other way round.
+//!     the 100 ms fanout tick and the watchdog scan. It only ever ENQUEUES
+//!     events, never enters wasm and never joins a dispatch thread, so no
+//!     plugin can hold it up;
+//!   * a short-lived resolver thread per tcp_connect, which runs getaddrinfo
+//!     and hands the socket back. It touches nothing else.
+//!
+//! LOCK ORDER, outermost first:
+//!   1. `mu` — the per-plugin queues, the connection list, the timer list and
+//!      the plugin records. Code holding it may take the locks below it;
+//!      nothing below it ever takes `mu`.
+//!   2. the vessel store's and the AIS store's own locks.
+//! Two sinks sit outside that ladder. The LOG sink is a leaf: it may be called
+//! with `mu` held (an overflow drop is reported from inside the queue) and must
+//! never take a broker lock. The OVERLAY sink is called with NO broker lock
+//! held, because the overlay store is also the renderer's. WAMR's locks are
+//! taken only by wasm.zig calls, which are never made under `mu` — including
+//! the watchdog's terminate, which runs on the I/O thread holding nothing.
 //!
 //! THE FANOUT TICK is the reason the I/O thread exists at all. It calls
 //! `Store.refresh` FIRST: a fix ageing out of its window and handing over to
 //! the next source produces no write, so without the refresh a staleness
-//! handover would never reach a subscriber.
+//! handover would never reach a subscriber. The same tick runs the host's
+//! watchdog, which is why the tick period sets the watchdog's precision.
 
 const std = @import("std");
 const wasm = @import("wasm.zig");
@@ -137,6 +152,22 @@ pub const OverlaySink = struct {
     }
 };
 
+/// The host's watchdog, run from the fanout tick.
+///
+/// Behind a function pointer for the same reason OverlaySink is: this file must
+/// not import host.zig, and the instances the watchdog terminates are the
+/// host's. The broker supplies only the clock and the thread to run on — it has
+/// no opinion about what "too long" means.
+pub const WatchdogSink = struct {
+    ctx: ?*anyopaque = null,
+    tickFn: ?*const fn (ctx: ?*anyopaque, mono_ms: i64) void = null,
+
+    pub fn tick(self: WatchdogSink, mono_ms: i64) void {
+        const f = self.tickFn orelse return;
+        f(self.ctx, mono_ms);
+    }
+};
+
 // ---- per-plugin state ------------------------------------------------------
 
 /// Longest chrome status text kept per plugin. PROTOTYPE.md's chrome is one
@@ -175,6 +206,18 @@ pub const Plugin = struct {
         return self.status_buf[0..self.status_len];
     }
 
+    /// Replace the chrome status. Normally the plugin's own words, through
+    /// `chrome_status`; the host also writes here when it disables a plugin,
+    /// which is the one case where nobody is left inside the module to say
+    /// what happened. Returns true when the text actually changed.
+    pub fn setStatus(self: *Plugin, text: []const u8) bool {
+        const n = @min(text.len, max_status);
+        const changed = n != self.status_len or !std.mem.eql(u8, self.status_buf[0..n], text[0..n]);
+        @memcpy(self.status_buf[0..n], text[0..n]);
+        self.status_len = n;
+        return changed;
+    }
+
     pub fn lastAlert(self: *const Plugin) []const u8 {
         return self.alert_buf[0..self.alert_len];
     }
@@ -191,11 +234,39 @@ pub const Event = struct {
     payload: []u8,
 };
 
-/// One global FIFO across all plugins, one event in flight. Over this the
-/// prototype's four plugins never queue more than a few dozen events; the cap
-/// exists so a plugin that stops consuming cannot grow the queue without
-/// bound.
-const max_queued = 4096;
+/// ONE FIFO PER PLUGIN, this deep. Over this the prototype's four plugins
+/// never queue more than a few dozen events; the cap exists so a plugin that
+/// stops consuming cannot grow its queue without bound — and because the
+/// queues are separate, the plugin that stops consuming is the only one that
+/// loses events.
+const max_queued = 1024;
+
+/// Above this depth the I/O thread stops READING that plugin's sockets, which
+/// pushes the backlog into the kernel's receive buffer and then onto the peer
+/// as TCP window pressure. Three quarters leaves room for the events a paused
+/// plugin still gets — timers and fanout, which have nowhere to push back to.
+const pause_reads_at = max_queued * 3 / 4;
+
+/// Highest plugin index a queue is kept for. Indices come from the host's
+/// registry, so this is a sanity bound on the array a stray push could grow,
+/// not a product decision about how many plugins may run.
+const max_plugins = 64;
+
+/// One plugin's inbound FIFO.
+const Queue = struct {
+    items: std.ArrayList(Event) = .empty,
+    /// Read cursor. The queue compacts when the cursor has passed half of it,
+    /// so a steady stream neither shifts every pop nor grows without bound.
+    head: usize = 0,
+    /// Events discarded because this queue was full.
+    dropped: u64 = 0,
+    /// True while this plugin's sockets are not being read.
+    paused: bool = false,
+
+    fn depth(self: *const Queue) usize {
+        return self.items.items.len - self.head;
+    }
+};
 
 // ---- sockets and timers ----------------------------------------------------
 
@@ -206,8 +277,9 @@ const Conn = struct {
     plugin: u32,
     state: ConnState,
     fd: std.c.fd_t = -1,
-    /// Kept until the socket is connected: the I/O thread resolves, so the
-    /// plugin's tcp_connect never blocks on DNS.
+    /// Kept until the socket is connected: a resolver thread reads it, so the
+    /// plugin's tcp_connect never blocks on DNS and neither does the I/O
+    /// thread.
     host: []u8,
     port: u16,
     /// Bytes tcp_send handed over, not yet written.
@@ -237,6 +309,16 @@ pub const ais_evict_ms: i64 = 600_000;
 /// reassembles lines itself.
 const read_chunk = 8192;
 
+/// Native stack for a resolver thread. It runs getaddrinfo and connect and
+/// nothing else — it never enters wasm — so it needs far less than the
+/// 16 MiB Zig would otherwise reserve per attempt.
+const resolver_stack_bytes: usize = 512 * 1024;
+
+/// How long `stop` waits for the resolver threads before it says so. They are
+/// detached and call back into the broker, so the wait itself is not optional;
+/// the line exists because a dead nameserver makes it a long one.
+const resolver_wait_warn_ms: u32 = 1000;
+
 // ---- the broker ------------------------------------------------------------
 
 pub const Broker = struct {
@@ -244,15 +326,13 @@ pub const Broker = struct {
     vessels: *vstore.Store,
     ais: *ais_store.AisStore,
     overlay: OverlaySink,
+    watchdog: WatchdogSink = .{},
     log_ctx: ?*anyopaque = null,
     log_fn: LogFn = defaultLog,
 
     mu: Lock = .{},
-    queue: std.ArrayList(Event) = .empty,
-    /// Read cursor. The queue compacts when the cursor has passed half of it,
-    /// so a steady stream neither shifts every pop nor grows without bound.
-    head: usize = 0,
-    dropped: u64 = 0,
+    /// One FIFO per plugin, indexed by the host's registry index.
+    queues: std.ArrayList(Queue) = .empty,
 
     plugins: std.ArrayList(*Plugin) = .empty,
     conns: std.ArrayList(Conn) = .empty,
@@ -262,6 +342,10 @@ pub const Broker = struct {
 
     io_thread: ?std.Thread = null,
     stopping: std.atomic.Value(bool) = .init(false),
+    /// Resolver threads still running. `stop` waits for it to reach zero: they
+    /// are detached and they call back into this broker, so it must outlive
+    /// them.
+    resolvers: std.atomic.Value(u32) = .init(0),
     /// Self-pipe: a native run on the dispatch thread writes one byte so the
     /// I/O thread leaves poll at once instead of finishing its current wait.
     /// Without it a 5 ms timer set from inside an event could fire 100 ms late.
@@ -286,8 +370,11 @@ pub const Broker = struct {
     /// broker owns. Plugin records belong to the host and are not freed here.
     pub fn deinit(self: *Broker) void {
         self.stop();
-        for (self.queue.items[self.head..]) |e| self.alloc.free(e.payload);
-        self.queue.deinit(self.alloc);
+        for (self.queues.items) |*q| {
+            for (q.items.items[q.head..]) |e| self.alloc.free(e.payload);
+            q.items.deinit(self.alloc);
+        }
+        self.queues.deinit(self.alloc);
         for (self.conns.items) |*c| {
             if (c.fd >= 0) _ = std.c.close(c.fd);
             c.out.deinit(self.alloc);
@@ -304,6 +391,14 @@ pub const Broker = struct {
         self.log_fn = f;
     }
 
+    /// Install the host's watchdog. Set it before `start`; clear it (both
+    /// arguments null) before the instances it terminates go away.
+    pub fn setWatchdog(self: *Broker, ctx: ?*anyopaque, f: ?*const fn (ctx: ?*anyopaque, mono_ms: i64) void) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.watchdog = .{ .ctx = ctx, .tickFn = f };
+    }
+
     /// Log one formatted line. Truncated at 512 bytes rather than allocated:
     /// a log line is never load-bearing and this runs on the I/O thread too.
     pub fn say(self: *Broker, level: u32, who: []const u8, comptime fmt: []const u8, args: anytype) void {
@@ -315,14 +410,41 @@ pub const Broker = struct {
     pub fn registerPlugin(self: *Broker, p: *Plugin) !void {
         self.mu.lock();
         defer self.mu.unlock();
+        _ = try self.queueForLocked(p.index);
         try self.plugins.append(self.alloc, p);
     }
 
-    // -- the queue -----------------------------------------------------------
+    /// Forget a plugin that never finished loading. Its queue stays (indices
+    /// are reused by the next load attempt) but is emptied, so a half-started
+    /// plugin leaves no events and no dangling record behind.
+    pub fn removePlugin(self: *Broker, p: *Plugin) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.plugins.items, 0..) |q, i| {
+            if (q == p) {
+                _ = self.plugins.orderedRemove(i);
+                break;
+            }
+        }
+        self.clearQueueLocked(p.index);
+    }
 
-    /// Enqueue one event, copying `payload`. Over the cap the event is dropped
-    /// and counted: refusing to allocate is better than an unbounded queue,
-    /// and the plugin that stopped consuming is the one that loses events.
+    // -- the queues ----------------------------------------------------------
+
+    /// This plugin's queue, created on first use.
+    fn queueForLocked(self: *Broker, plugin: u32) !*Queue {
+        if (plugin >= max_plugins) return error.TooManyPlugins;
+        while (self.queues.items.len <= plugin) try self.queues.append(self.alloc, .{});
+        return &self.queues.items[plugin];
+    }
+
+    /// Enqueue one event for one plugin, copying `payload`. Over the cap the
+    /// event is dropped and counted against THAT plugin: the queues are
+    /// separate, so a plugin that stops consuming loses only its own events.
+    ///
+    /// SHUTDOWN ignores the cap. It is the one event a plugin must receive to
+    /// close its sockets and stop drawing, and dropping it because the plugin
+    /// was already in trouble is exactly backwards.
     pub fn push(self: *Broker, plugin: u32, kind: u32, handle: u64, payload: []const u8) void {
         self.mu.lock();
         defer self.mu.unlock();
@@ -330,44 +452,63 @@ pub const Broker = struct {
     }
 
     fn pushLocked(self: *Broker, plugin: u32, kind: u32, handle: u64, payload: []const u8) void {
-        if (self.queue.items.len - self.head >= max_queued) {
-            self.dropped += 1;
+        const q = self.queueForLocked(plugin) catch return;
+        if (q.depth() >= max_queued and kind != Kind.shutdown) {
+            self.dropLocked(q, plugin, kind);
             return;
         }
         const owned = self.alloc.dupe(u8, payload) catch {
-            self.dropped += 1;
+            self.dropLocked(q, plugin, kind);
             return;
         };
-        self.queue.append(self.alloc, .{
+        q.items.append(self.alloc, .{
             .plugin = plugin,
             .kind = kind,
             .handle = handle,
             .payload = owned,
         }) catch {
             self.alloc.free(owned);
-            self.dropped += 1;
+            self.dropLocked(q, plugin, kind);
         };
     }
 
-    /// The next event, or null. The caller owns the payload and frees it with
-    /// `freeEvent`.
-    pub fn pop(self: *Broker) ?Event {
+    /// A dropped event, counted and — for the first one, and then rarely —
+    /// said out loud. A silent drop is a plugin that quietly misses fixes.
+    fn dropLocked(self: *Broker, q: *Queue, plugin: u32, kind: u32) void {
+        q.dropped += 1;
+        if (q.dropped != 1 and q.dropped % 1000 != 0) return;
+        const id = self.idOfLocked(plugin);
+        self.say(level_warn, id, "queue full at {d} events: dropped event {d} ({d} dropped so far)", .{ max_queued, kind, q.dropped });
+    }
+
+    fn idOfLocked(self: *Broker, plugin: u32) []const u8 {
+        for (self.plugins.items) |p| {
+            if (p.index == plugin) return p.id;
+        }
+        return "host";
+    }
+
+    /// The next event for one plugin, or null. The caller owns the payload and
+    /// frees it with `freeEvent`.
+    pub fn popFor(self: *Broker, plugin: u32) ?Event {
         self.mu.lock();
         defer self.mu.unlock();
-        if (self.head >= self.queue.items.len) {
-            if (self.head > 0) {
-                self.queue.clearRetainingCapacity();
-                self.head = 0;
+        if (plugin >= self.queues.items.len) return null;
+        const q = &self.queues.items[plugin];
+        if (q.head >= q.items.items.len) {
+            if (q.head > 0) {
+                q.items.clearRetainingCapacity();
+                q.head = 0;
             }
             return null;
         }
-        const e = self.queue.items[self.head];
-        self.head += 1;
-        if (self.head > 64 and self.head * 2 > self.queue.items.len) {
-            const rest = self.queue.items.len - self.head;
-            std.mem.copyForwards(Event, self.queue.items[0..rest], self.queue.items[self.head..]);
-            self.queue.shrinkRetainingCapacity(rest);
-            self.head = 0;
+        const e = q.items.items[q.head];
+        q.head += 1;
+        if (q.head > 64 and q.head * 2 > q.items.items.len) {
+            const rest = q.items.items.len - q.head;
+            std.mem.copyForwards(Event, q.items.items[0..rest], q.items.items[q.head..]);
+            q.items.shrinkRetainingCapacity(rest);
+            q.head = 0;
         }
         return e;
     }
@@ -376,10 +517,44 @@ pub const Broker = struct {
         self.alloc.free(e.payload);
     }
 
+    /// Throw away everything queued for one plugin. Its dispatch thread calls
+    /// this on the way out.
+    pub fn clearQueue(self: *Broker, plugin: u32) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.clearQueueLocked(plugin);
+    }
+
+    fn clearQueueLocked(self: *Broker, plugin: u32) void {
+        if (plugin >= self.queues.items.len) return;
+        const q = &self.queues.items[plugin];
+        for (q.items.items[q.head..]) |e| self.alloc.free(e.payload);
+        q.items.clearRetainingCapacity();
+        q.head = 0;
+    }
+
+    /// Events waiting across every plugin.
     pub fn queued(self: *Broker) usize {
         self.mu.lock();
         defer self.mu.unlock();
-        return self.queue.items.len - self.head;
+        var n: usize = 0;
+        for (self.queues.items) |*q| n += q.depth();
+        return n;
+    }
+
+    pub fn queuedFor(self: *Broker, plugin: u32) usize {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (plugin >= self.queues.items.len) return 0;
+        return self.queues.items[plugin].depth();
+    }
+
+    /// Events this plugin lost to a full queue.
+    pub fn droppedFor(self: *Broker, plugin: u32) u64 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (plugin >= self.queues.items.len) return 0;
+        return self.queues.items[plugin].dropped;
     }
 
     // -- disabling a plugin --------------------------------------------------
@@ -407,18 +582,7 @@ pub const Broker = struct {
             }
 
             // Queued events for a plugin that will never run them again.
-            var w: usize = self.head;
-            var r: usize = self.head;
-            while (r < self.queue.items.len) : (r += 1) {
-                const e = self.queue.items[r];
-                if (e.plugin == index) {
-                    self.alloc.free(e.payload);
-                    continue;
-                }
-                self.queue.items[w] = e;
-                w += 1;
-            }
-            self.queue.shrinkRetainingCapacity(w);
+            self.clearQueueLocked(index);
 
             var i: usize = 0;
             while (i < self.conns.items.len) {
@@ -508,15 +672,34 @@ pub const Broker = struct {
     }
 
     pub fn stop(self: *Broker) void {
-        const th = self.io_thread orelse return;
+        const th = self.io_thread orelse {
+            self.awaitResolvers();
+            return;
+        };
         self.stopping.store(true, .release);
         self.wakeIo();
         th.join();
         self.io_thread = null;
+        // The resolvers write into this broker and are detached, so they have
+        // to be gone before anything it owns is. The wake pipe stays open until
+        // they are: the last thing each does is write to it.
+        self.awaitResolvers();
         for (self.wake) |fd| if (fd >= 0) {
             _ = std.c.close(fd);
         };
         self.wake = .{ -1, -1 };
+    }
+
+    fn awaitResolvers(self: *Broker) void {
+        var waited: u32 = 0;
+        var said = false;
+        while (self.resolvers.load(.acquire) > 0) : (waited += 2) {
+            if (!said and waited >= resolver_wait_warn_ms) {
+                said = true;
+                self.say(level_warn, "host", "waiting for {d} name lookup(s) to finish", .{self.resolvers.load(.acquire)});
+            }
+            sleepMs(2);
+        }
     }
 
     fn wakeIo(self: *Broker) void {
@@ -545,39 +728,83 @@ pub const Broker = struct {
         }
     }
 
-    /// Resolve and connect anything tcp_connect handed over. Runs on the I/O
-    /// thread so a name lookup never stalls a plugin mid-event.
+    /// One pending connect, handed to a resolver thread.
+    const Resolve = struct {
+        br: *Broker,
+        id: i64,
+        plugin: u32,
+        port: u16,
+        host_len: usize,
+        host: [256]u8,
+    };
+
+    /// Hand anything tcp_connect queued to a resolver thread of its own.
+    ///
+    /// getaddrinfo BLOCKS — on a dead nameserver for seconds — and this used to
+    /// run inline here, which meant one plugin's bad hostname stopped every
+    /// other plugin's timers, fanout and socket reads for the duration. A
+    /// connect is rare (a reconnect loop is one every two seconds at worst), so
+    /// a thread per attempt is the cheap answer at this scale; a resolver pool
+    /// is the answer at a larger one.
     fn startPending(self: *Broker) void {
         while (true) {
             var id: i64 = 0;
-            var host_copy: [256]u8 = undefined;
-            var host_len: usize = 0;
-            var port: u16 = 0;
             var plugin: u32 = 0;
+            var port: u16 = 0;
+            var host_buf: [256]u8 = undefined;
+            var host_len: usize = 0;
             {
                 self.mu.lock();
                 defer self.mu.unlock();
                 const c = for (self.conns.items) |*c| {
                     if (c.state == .resolving and !c.closing) break c;
-                } else {
-                    return;
-                };
+                } else return;
                 id = c.id;
-                host_len = @min(c.host.len, host_copy.len);
-                @memcpy(host_copy[0..host_len], c.host[0..host_len]);
-                port = c.port;
                 plugin = c.plugin;
+                port = c.port;
+                host_len = @min(c.host.len, host_buf.len);
+                @memcpy(host_buf[0..host_len], c.host[0..host_len]);
                 // Claim it before unlocking so the next pass does not retry it.
                 c.state = .connecting;
             }
 
-            const fd = dial(host_copy[0..host_len], port) catch |e| {
-                self.say(level_warn, "host", "tcp connect to {s}:{d} failed: {s}", .{ host_copy[0..host_len], port, @errorName(e) });
+            const req = self.alloc.create(Resolve) catch {
                 self.finishConn(id, plugin, null);
                 continue;
             };
-            self.finishConn(id, plugin, fd);
+            req.* = .{ .br = self, .id = id, .plugin = plugin, .port = port, .host_len = host_len, .host = undefined };
+            @memcpy(req.host[0..host_len], host_buf[0..host_len]);
+
+            // Counted before the spawn: `stop` waits on this, and the thread
+            // may finish before spawn even returns.
+            _ = self.resolvers.fetchAdd(1, .acq_rel);
+            const th = std.Thread.spawn(.{ .stack_size = resolver_stack_bytes }, resolveMain, .{req}) catch |e| {
+                _ = self.resolvers.fetchSub(1, .acq_rel);
+                self.alloc.destroy(req);
+                self.say(level_warn, "host", "no thread to resolve a connect: {s}", .{@errorName(e)});
+                self.finishConn(id, plugin, null);
+                continue;
+            };
+            th.detach();
         }
+    }
+
+    /// Resolve one hostname and start the connect, off the I/O thread. The
+    /// socket comes back mid-handshake and the I/O thread finishes it on
+    /// POLLOUT, exactly as before.
+    fn resolveMain(req: *Resolve) void {
+        const self = req.br;
+        const host = req.host[0..req.host_len];
+        const fd: ?std.c.fd_t = dial(host, req.port) catch |e| blk: {
+            self.say(level_warn, "host", "tcp connect to {s}:{d} failed: {s}", .{ host, req.port, @errorName(e) });
+            break :blk null;
+        };
+        self.finishConn(req.id, req.plugin, fd);
+        // The poll set has no slot for a socket that did not exist when it was
+        // built, so say so rather than waiting out the tick.
+        self.wakeIo();
+        self.alloc.destroy(req);
+        _ = self.resolvers.fetchSub(1, .acq_rel);
     }
 
     /// Attach the socket to its connection, or report the failure as a close.
@@ -610,6 +837,13 @@ pub const Broker = struct {
     /// Poll set: the wake pipe first, then one slot per connection with a
     /// socket. Returns the timeout in ms — the nearest of the next timer and
     /// the next fanout tick, so an idle host wakes 10 times a second.
+    ///
+    /// BACKPRESSURE lives here. A plugin whose queue is near full has POLL.IN
+    /// left off its sockets, so its data backs up in the kernel receive buffer
+    /// and from there onto the peer, and the host stops allocating events it
+    /// cannot deliver. Only that plugin's sockets go quiet; a slow AIS plugin
+    /// does not stop the NMEA feed. Errors and hangups still arrive, because
+    /// poll reports those whether they were asked for or not.
     fn buildPollSet(self: *Broker, fds: *std.ArrayList(std.c.pollfd), owners: *std.ArrayList(i64)) i32 {
         self.mu.lock();
         defer self.mu.unlock();
@@ -619,7 +853,8 @@ pub const Broker = struct {
         fds.append(self.alloc, .{ .fd = self.wake[0], .events = std.c.POLL.IN, .revents = 0 }) catch {};
         for (self.conns.items) |*c| {
             if (c.fd < 0 or c.closing) continue;
-            var events: i16 = std.c.POLL.IN;
+            var events: i16 = 0;
+            if (!self.pausedLocked(c.plugin)) events |= std.c.POLL.IN;
             if (c.state == .connecting or c.out.items.len > 0) events |= std.c.POLL.OUT;
             fds.append(self.alloc, .{ .fd = c.fd, .events = events, .revents = 0 }) catch break;
             owners.append(self.alloc, c.id) catch break;
@@ -632,6 +867,25 @@ pub const Broker = struct {
         }
         const wait = deadline - now;
         return @intCast(std.math.clamp(wait, 0, tick_ms));
+    }
+
+    /// Whether this plugin's sockets are being read, with the state change
+    /// logged once each way so a stalled plugin is visible rather than merely
+    /// slow.
+    fn pausedLocked(self: *Broker, plugin: u32) bool {
+        if (plugin >= self.queues.items.len) return false;
+        const q = &self.queues.items[plugin];
+        const want = q.depth() >= pause_reads_at;
+        if (want != q.paused) {
+            q.paused = want;
+            const id = self.idOfLocked(plugin);
+            if (want) {
+                self.say(level_warn, id, "queue at {d} events: pausing this plugin's socket reads", .{q.depth()});
+            } else {
+                self.say(level_info, id, "queue drained to {d} events: reading again", .{q.depth()});
+            }
+        }
+        return want;
     }
 
     fn serviceSockets(self: *Broker, fds: []std.c.pollfd, owners: []const i64) void {
@@ -783,6 +1037,17 @@ pub const Broker = struct {
         if (mono < self.next_tick) return;
         self.next_tick = mono + tick_ms;
         const now = wallMs();
+
+        // The watchdog goes first and runs with no lock held: it may terminate
+        // an instance, and the dispatch thread that then unwinds needs `mu` to
+        // clean up. It never joins that thread — the I/O thread must not be
+        // able to wait on a plugin.
+        const wd = blk: {
+            self.mu.lock();
+            defer self.mu.unlock();
+            break :blk self.watchdog;
+        };
+        wd.tick(mono);
 
         // FIRST: a handover that happens because a value went stale produces no
         // write, so without this the subscriber never hears about it.
@@ -1048,13 +1313,46 @@ fn hostOverlay(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callcon
 fn hostChromeStatus(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) void {
     const p = caller(env) orelse return;
     const text = bytes(ptr, len);
-    const n = @min(text.len, max_status);
-    const changed = n != p.status_len or !std.mem.eql(u8, p.status_buf[0..n], text[0..n]);
-    @memcpy(p.status_buf[0..n], text[0..n]);
-    p.status_len = n;
     // Only transitions: a plugin posting the same status at 1 Hz would
     // otherwise fill the log with the line that says nothing changed.
-    if (changed) p.broker.say(level_info, p.id, "status {s}", .{text});
+    if (p.setStatus(text)) p.broker.say(level_info, p.id, "status {s}", .{text});
+}
+
+/// The log level an alert of this severity goes out at: alarm at error,
+/// warning at warn, notice and caution at info.
+///
+/// The prototype has no alarm surface, so an alert IS its log line, and the
+/// line has to carry the difference between "you may want to know" and "act
+/// now": an alarm at info is an alarm nobody sees, and a notice at error is an
+/// operator who learns to ignore red. Anything unrecognised — including a
+/// payload with no severity at all — is treated as an alarm, because an
+/// unreadable severity is not a reason to be quiet.
+///
+/// `caution` is here because that is the third name plugins/common/lk.zig
+/// offers; `notice` is the name the ruling used. Both mean the same tier.
+fn alertLevel(json: []const u8) u32 {
+    const sev = jsonStringField(json, "severity") orelse return level_err;
+    if (std.mem.eql(u8, sev, "notice") or std.mem.eql(u8, sev, "caution")) return level_info;
+    if (std.mem.eql(u8, sev, "warning")) return level_warn;
+    return level_err;
+}
+
+/// The string value of a top-level-ish `"key":"value"` pair, by scan rather
+/// than by parse: this runs on every alert and the payload is the plugin's own
+/// one-line JSON, not a document.
+fn jsonStringField(json: []const u8, key: []const u8) ?[]const u8 {
+    var quoted: [32]u8 = undefined;
+    if (key.len + 2 > quoted.len) return null;
+    quoted[0] = '"';
+    @memcpy(quoted[1 .. 1 + key.len], key);
+    quoted[1 + key.len] = '"';
+    const at = std.mem.indexOf(u8, json, quoted[0 .. key.len + 2]) orelse return null;
+    var i = at + key.len + 2;
+    while (i < json.len and (json[i] == ' ' or json[i] == ':')) i += 1;
+    if (i >= json.len or json[i] != '"') return null;
+    i += 1;
+    const end = std.mem.indexOfScalarPos(u8, json, i, '"') orelse return null;
+    return json[i..end];
 }
 
 fn hostAlert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
@@ -1064,10 +1362,7 @@ fn hostAlert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(
     const n = @min(text.len, max_alert);
     @memcpy(p.alert_buf[0..n], text[0..n]);
     p.alert_len = n;
-    // The prototype has no alarm surface, so an alert IS its log line, and it
-    // goes out at error level whatever its severity says: a chartplotter that
-    // swallows an alarm is worse than one that shouts a caution.
-    p.broker.say(level_err, p.id, "ALERT {s}", .{text});
+    p.broker.say(alertLevel(text), p.id, "ALERT {s}", .{text});
     return 0;
 }
 
@@ -1387,7 +1682,7 @@ test "a published value re-emits as the text the store parses" {
     try t.expectError(error.Unsupported, writeJsonValue(&out, a, .{ .string = "EVER GIVEN" }));
 }
 
-test "the event queue is FIFO across plugins and compacts as it drains" {
+test "each plugin's queue is its own FIFO and compacts as it drains" {
     var vessels = try vstore.Store.init(t.allocator);
     defer vessels.deinit();
     var ais = ais_store.AisStore.init(t.allocator);
@@ -1395,16 +1690,63 @@ test "the event queue is FIFO across plugins and compacts as it drains" {
     var b = Broker.init(t.allocator, &vessels, &ais, .{});
     defer b.deinit();
 
-    for (0..200) |i| b.push(@intCast(i % 3), Kind.timer, i, "x");
-    try t.expectEqual(@as(usize, 200), b.queued());
-    for (0..200) |i| {
-        const e = b.pop().?;
-        defer b.freeEvent(e);
-        try t.expectEqual(@as(u64, i), e.handle);
-        try t.expectEqual(@as(u32, @intCast(i % 3)), e.plugin);
+    for (0..300) |i| b.push(@intCast(i % 3), Kind.timer, i, "x");
+    try t.expectEqual(@as(usize, 300), b.queued());
+    try t.expectEqual(@as(usize, 100), b.queuedFor(1));
+
+    // Each plugin sees its own events, in the order they were pushed, and none
+    // of anybody else's.
+    for (0..3) |p| {
+        for (0..100) |n| {
+            const e = b.popFor(@intCast(p)).?;
+            defer b.freeEvent(e);
+            try t.expectEqual(@as(u64, n * 3 + p), e.handle);
+            try t.expectEqual(@as(u32, @intCast(p)), e.plugin);
+        }
+        try t.expect(b.popFor(@intCast(p)) == null);
     }
-    try t.expect(b.pop() == null);
     try t.expectEqual(@as(usize, 0), b.queued());
+}
+
+test "a plugin that stops consuming loses its own events and nobody else's" {
+    var vessels = try vstore.Store.init(t.allocator);
+    defer vessels.deinit();
+    var ais = ais_store.AisStore.init(t.allocator);
+    defer ais.deinit();
+    var b = Broker.init(t.allocator, &vessels, &ais, .{});
+    defer b.deinit();
+    b.setLog(null, silentLog);
+
+    for (0..max_queued + 50) |i| b.push(0, Kind.timer, i, "");
+    b.push(1, Kind.timer, 7, "");
+
+    try t.expectEqual(@as(usize, max_queued), b.queuedFor(0));
+    try t.expectEqual(@as(u64, 50), b.droppedFor(0));
+    // The neighbour is untouched: separate queues, separate caps.
+    try t.expectEqual(@as(usize, 1), b.queuedFor(1));
+    try t.expectEqual(@as(u64, 0), b.droppedFor(1));
+    // The FIFO keeps the OLDEST events; the overflow is at the tail.
+    const first = b.popFor(0).?;
+    defer b.freeEvent(first);
+    try t.expectEqual(@as(u64, 0), first.handle);
+
+    // SHUTDOWN ignores the cap: a plugin in trouble is exactly the one that
+    // has to hear it.
+    b.push(0, Kind.shutdown, 0, "");
+    try t.expectEqual(@as(usize, max_queued), b.queuedFor(0));
+    try t.expectEqual(@as(u64, 50), b.droppedFor(0));
+}
+
+test "an alert's severity picks the log level it goes out at" {
+    try t.expectEqual(level_err, alertLevel("{\"severity\":\"alarm\",\"title\":\"CPA\"}"));
+    try t.expectEqual(level_warn, alertLevel("{\"severity\":\"warning\",\"title\":\"shallow\"}"));
+    try t.expectEqual(level_info, alertLevel("{\"severity\":\"notice\",\"title\":\"waypoint\"}"));
+    try t.expectEqual(level_info, alertLevel("{\"severity\":\"caution\",\"title\":\"wind\"}"));
+    // A severity nobody recognises, or none at all, is treated as an alarm.
+    try t.expectEqual(level_err, alertLevel("{\"severity\":\"whatever\"}"));
+    try t.expectEqual(level_err, alertLevel("{\"title\":\"no severity here\"}"));
+    // The body must not decide the level: only the severity field is read.
+    try t.expectEqual(level_err, alertLevel("{\"severity\":\"alarm\",\"body\":\"notice the warning\"}"));
 }
 
 test "dropping a plugin takes its queued events and its store contributions" {
@@ -1427,9 +1769,10 @@ test "dropping a plugin takes its queued events and its store contributions" {
 
     try t.expect(!p.enabled);
     try t.expectEqual(@as(usize, 2), b.queued());
-    const a = b.pop().?;
+    try t.expectEqual(@as(usize, 0), b.queuedFor(1));
+    const a = b.popFor(0).?;
     b.freeEvent(a);
-    const c = b.pop().?;
+    const c = b.popFor(0).?;
     defer b.freeEvent(c);
     try t.expectEqual(@as(u64, 1), a.handle);
     try t.expectEqual(@as(u64, 3), c.handle);
@@ -1480,6 +1823,59 @@ test "a plugin socket connects, carries bytes both ways, and reports the close" 
     try t.expectEqual(@as(usize, 0), remaining);
 }
 
+test "a backed-up plugin stops being read from, and its neighbour does not" {
+    var vessels = try vstore.Store.init(t.allocator);
+    defer vessels.deinit();
+    var ais = ais_store.AisStore.init(t.allocator);
+    defer ais.deinit();
+    var b = Broker.init(t.allocator, &vessels, &ais, .{});
+    defer b.deinit();
+    b.setLog(null, silentLog);
+
+    var srv = try Listener.open();
+    defer srv.close();
+    try b.start();
+
+    // One socket each for two plugins.
+    try t.expect(b.openConn(0, "127.0.0.1", srv.port) > 0);
+    const peer0 = try srv.accept();
+    defer _ = std.c.close(peer0);
+    try t.expectEqual(Kind.tcp_connected, try expectEvent(&b, 2_000));
+
+    try t.expect(b.openConn(1, "127.0.0.1", srv.port) > 0);
+    const peer1 = try srv.accept();
+    defer _ = std.c.close(peer1);
+    var waited: u32 = 0;
+    while (b.queuedFor(1) == 0 and waited < 2_000) : (waited += 5) sleepMs(5);
+    const connected1 = b.popFor(1) orelse return error.NoEvent;
+    b.freeEvent(connected1);
+
+    // Plugin 0 stops consuming: fill its queue to the watermark, then let the
+    // I/O thread rebuild its poll set before anything is written.
+    for (0..pause_reads_at) |i| b.push(0, Kind.timer, i, "");
+    b.wakeIo();
+    sleepMs(150);
+
+    _ = std.c.write(peer0, "$GPRMC,\r\n", 9);
+    _ = std.c.write(peer1, "$GPRMC,\r\n", 9);
+    sleepMs(400);
+
+    // Nothing was read for plugin 0 — its depth is exactly what was pushed —
+    // while plugin 1's data came through on the same I/O thread.
+    try t.expectEqual(@as(usize, pause_reads_at), b.queuedFor(0));
+    try t.expectEqual(@as(u64, 0), b.droppedFor(0));
+    try t.expectEqual(@as(usize, 1), b.queuedFor(1));
+    const data1 = b.popFor(1) orelse return error.NoEvent;
+    defer b.freeEvent(data1);
+    try t.expectEqual(Kind.tcp_data, data1.kind);
+
+    // Once plugin 0 catches up, reading resumes and the bytes are still there:
+    // the pause held them in the kernel rather than throwing them away.
+    while (b.popFor(0)) |e| b.freeEvent(e);
+    b.wakeIo();
+    try t.expectEqual(Kind.tcp_data, try expectEvent(&b, 2_000));
+}
+
 test "a connection to nothing comes back as a close, not a hang" {
     var vessels = try vstore.Store.init(t.allocator);
     defer vessels.deinit();
@@ -1497,11 +1893,11 @@ test "a connection to nothing comes back as a close, not a hang" {
 
 fn silentLog(_: ?*anyopaque, _: u32, _: []const u8, _: []const u8) void {}
 
-/// The next event's kind, waiting up to `timeout_ms`.
+/// The next event's kind for plugin 0, waiting up to `timeout_ms`.
 fn expectEvent(b: *Broker, timeout_ms: u32) !u32 {
     var waited: u32 = 0;
     while (waited < timeout_ms) : (waited += 5) {
-        if (b.pop()) |e| {
+        if (b.popFor(0)) |e| {
             defer b.freeEvent(e);
             return e.kind;
         }

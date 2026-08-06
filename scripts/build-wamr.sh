@@ -78,6 +78,16 @@ CMAKE
 #     the Zig wasm32 default CPU (lime1) emits them; SIMD, tail call, GC,
 #     memory64, multi-memory and threads stay off — nothing emits them and
 #     each one costs loader and interpreter code.
+#   * thread manager ON, and it is the WATCHDOG that needs it. With it off,
+#     wasm_runtime_terminate only writes the instance's exception string, and
+#     nothing in the interpreter reads that string, so a plugin spinning in a
+#     `while (true)` never notices and the terminate call does nothing. With it
+#     on, wasm_set_exception routes through wasm_cluster_set_exception, which
+#     also raises WASM_SUSPEND_FLAG_TERMINATE, and the fast interpreter's
+#     CHECK_SUSPEND_FLAGS — compiled in only under this flag — tests it at every
+#     branch, loop back edge and call, so the stuck frame returns at once. Cost:
+#     one relaxed atomic load per back edge, plus a cluster object per instance.
+#     LIB_PTHREAD stays off; plugins still cannot spawn threads.
 #   * PIC: the archive is linked into liblookout_marine.a and from there into
 #     app binaries.
 #   * hardware bound check OFF: the alternative is WAMR installing
@@ -106,7 +116,7 @@ cmake -S "$src/lookout-embed" -B "$build" \
     -DWAMR_BUILD_LIBC_UVWASI=0 \
     -DWAMR_BUILD_LIB_PTHREAD=0 \
     -DWAMR_BUILD_LIB_WASI_THREADS=0 \
-    -DWAMR_BUILD_THREAD_MGR=0 \
+    -DWAMR_BUILD_THREAD_MGR=1 \
     -DWAMR_BUILD_MULTI_MODULE=0 \
     -DWAMR_BUILD_SHARED_MEMORY=0 \
     -DWAMR_BUILD_BULK_MEMORY=1 \

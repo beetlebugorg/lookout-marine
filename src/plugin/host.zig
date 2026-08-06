@@ -16,16 +16,28 @@
 //!   ...
 //!   h.stop();                                     // SHUTDOWN, best effort
 //!
-//! ONE DISPATCH THREAD, one event in flight across all plugins. PROTOTYPE.md
-//! only requires one event at a time PER plugin, but with four plugins a
-//! single FIFO is the same thing minus three threads, and it makes the order
-//! events reach the stores deterministic for the replay harness.
+//! ONE DISPATCH THREAD PER PLUGIN, each draining that plugin's own FIFO in the
+//! broker. PROTOTYPE.md requires one event at a time PER plugin, which this
+//! still gives: a plugin is entered by exactly one thread, ever. What it adds
+//! is TIME ISOLATION — a plugin that takes a second over an event, or never
+//! returns at all, delays nobody but itself. The single shared thread the
+//! prototype started with made every plugin as slow as the slowest one.
+//!
+//! THE WATCHDOG is the other half of that. A dispatch thread publishes the
+//! monotonic time at which it entered the module; the broker's 100 ms tick
+//! reads those stamps on the I/O thread and terminates any instance that has
+//! been inside longer than `Options.event_budget_ms`. The terminated call
+//! comes back as a trap, lands in the ordinary disable path, and the plugin's
+//! thread exits. The I/O thread never joins or waits on a stuck thread — if it
+//! did, one bad plugin would take the sockets and timers down with it.
 //!
 //! LIFETIMES WAMR IMPOSES. Two buffers must outlive an instance and neither is
 //! copied by the runtime: the module BYTES (loaded in place and patched) and
 //! the NativeSymbol array (broker.zig holds that one in a container-level var).
 //! Each registry entry therefore owns its byte buffer until the instance is
-//! gone.
+//! gone. The registry itself must not move while the dispatch threads are
+//! running — each holds a pointer into it — so loading is refused once `start`
+//! has been called.
 //!
 //! A TRAPPED PLUGIN IS DISABLED, not retried. WAMR's exception text is logged,
 //! the instance is left instantiated but never entered again, and everything
@@ -57,8 +69,25 @@ pub const Error = error{
     BadManifest,
     AbiMismatch,
     StartRefused,
+    /// A plugin cannot be loaded once the dispatch threads are running: they
+    /// hold pointers into the registry, which growing it would invalidate.
+    AlreadyStarted,
     OutOfMemory,
 };
+
+/// How long a plugin may stay inside ONE module call before the watchdog
+/// terminates it.
+///
+/// A second is enormous for an event handler — the prototype's four take
+/// microseconds — and small enough that a mariner watching a stuck plugin
+/// disappear never sees the chart stall. Precision is one tick of the broker's
+/// 100 ms I/O loop, so the kill lands between budget and budget + 100 ms; the
+/// number is a floor on patience, not a deadline anybody meets exactly.
+///
+/// One budget for every plugin. Per-plugin budgets out of the manifest, and
+/// criticality tiers that would let a chart-drawing plugin die while the
+/// autopilot's is given longer, are the obvious next thing and are not built.
+pub const default_event_budget_ms: i64 = 1000;
 
 /// A plugin's manifest.json:
 /// `{"id":"org.beetlebug.ais","name":"AIS","abi":1,"capabilities":[...]}`.
@@ -116,8 +145,8 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     return .{ .id = id_owned, .name = name_owned, .abi = abi, .caps = caps };
 }
 
-/// One loaded plugin.
-const Entry = struct {
+/// One loaded plugin, and the thread that runs it.
+pub const Entry = struct {
     manifest: Manifest,
     /// WAMR loads the module in place and keeps referring to this buffer.
     bytes: []align(8) u8,
@@ -126,8 +155,29 @@ const Entry = struct {
     /// Heap-allocated so its address, which every native reaches through
     /// `wasm.callerUserData`, survives the registry list growing.
     state: *broker.Plugin,
-    /// Cleared when the plugin trapped or was shut down.
-    live: bool = true,
+    /// Cleared when the plugin trapped, was terminated, or was shut down.
+    /// Atomic: its own dispatch thread writes it, the watchdog on the I/O
+    /// thread and the harness read it.
+    live: std.atomic.Value(bool) = .init(true),
+    /// This plugin's dispatch thread, and its private stop flag.
+    thread: ?std.Thread = null,
+    stopping: std.atomic.Value(bool) = .init(false),
+    /// Monotonic ms at which the dispatch thread entered the module, or 0 when
+    /// it is not inside one. Written by the dispatch thread on both sides of
+    /// every call, read by the watchdog.
+    entered_ms: std.atomic.Value(i64) = .init(0),
+    /// How long the plugin had been inside the module when the watchdog
+    /// terminated it, or 0 if it never did. Doubles as the "the watchdog got
+    /// here first" flag, claimed with a compare-and-swap so one overrun is
+    /// terminated once.
+    killed_ms: std.atomic.Value(i64) = .init(0),
+    /// Set once everything the plugin contributed has been dropped, so the
+    /// clean-up runs exactly once whichever path reaches it.
+    retired: std.atomic.Value(bool) = .init(false),
+
+    pub fn isLive(self: *const Entry) bool {
+        return self.live.load(.acquire);
+    }
 };
 
 pub const Options = struct {
@@ -136,13 +186,26 @@ pub const Options = struct {
     nmea_port: u16 = 10110,
     limits: wasm.Limits = .{},
     /// How long `stop` waits for SHUTDOWN to reach every plugin before the
-    /// dispatch thread is torn down anyway. Best effort by contract: a plugin
+    /// dispatch threads are torn down anyway. Best effort by contract: a plugin
     /// stuck in a loop must not stop the app from closing.
     shutdown_ms: u32 = 500,
+    /// The watchdog's budget for one module call. See
+    /// `default_event_budget_ms`.
+    event_budget_ms: i64 = default_event_budget_ms,
 };
 
-/// Native stack for the dispatch thread. Ample for the fast interpreter plus
-/// the JSON the natives parse, and small enough to be cheap per host.
+/// Longest disable reason kept. It has to fit inside the JSON status line the
+/// host writes, which `broker.max_status` bounds.
+const max_reason: usize = broker.max_status - 40;
+
+/// How long `stop` lets an in-flight call finish after the threads have been
+/// told to stop, before it terminates the instance so the join cannot hang.
+/// Short: by this point the plugin has already had `shutdown_ms` to drain.
+const shutdown_grace_ms: u32 = 100;
+
+/// Native stack for a dispatch thread, one per plugin. Ample for the fast
+/// interpreter plus the JSON the natives parse, and small enough to be cheap
+/// per plugin.
 ///
 /// It was once forced: with hardware bound checking on, WAMR's per-thread
 /// setup mprotects the guard page below the thread's stack, and on macOS that
@@ -185,8 +248,8 @@ pub const Host = struct {
     br: *broker.Broker,
     opts: Options,
     entries: std.ArrayList(Entry) = .empty,
-    thread: ?std.Thread = null,
-    stopping: std.atomic.Value(bool) = .init(false),
+    /// True between `start` and `stop`, while the dispatch threads exist.
+    started: bool = false,
     /// True between the first successful load and deinit.
     runtime_held: bool = false,
     /// Source ids are handed out in load order, which the vessel store reads
@@ -201,6 +264,10 @@ pub const Host = struct {
     /// broker is not owned here and is not stopped.
     pub fn deinit(self: *Host) void {
         self.stop();
+        // The watchdog holds this host's address and runs on the broker's I/O
+        // thread. `stop` joined that thread; clearing the hook keeps a broker
+        // restarted without a host from reaching freed entries.
+        self.br.setWatchdog(null, null);
         for (self.entries.items) |*e| {
             e.inst.deinit();
             e.module.deinit();
@@ -238,6 +305,9 @@ pub const Host = struct {
     /// Load order is the sorted file order, and load order IS source priority
     /// in the vessel store, so it is deterministic across machines.
     pub fn loadDir(self: *Host, dir_path: []const u8) !void {
+        // The dispatch threads hold pointers into `entries`; appending to it
+        // now could move them. Load first, then start.
+        if (self.started) return Error.AlreadyStarted;
         var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |e| {
             self.br.say(broker.level_warn, "host", "plugins: cannot open {s}: {s}", .{ dir_path, @errorName(e) });
             return e;
@@ -321,7 +391,15 @@ pub const Host = struct {
         // source has to exist before the plugin's first publish.
         try self.br.vessels.registerSource(state.source);
         try self.br.registerPlugin(state);
-        errdefer self.br.dropPlugin(state.index, broker.wallMs());
+        // Both, in this order: dropPlugin releases what the plugin managed to
+        // acquire during lk_start, removePlugin takes the record itself out of
+        // the broker's list. Without the second one a plugin that fails here
+        // leaves a pointer to freed memory behind, and the NEXT plugin loaded
+        // gets its index.
+        errdefer {
+            self.br.dropPlugin(state.index, broker.wallMs());
+            self.br.removePlugin(state);
+        }
 
         const cfg = try self.startJson(manifest.id);
         defer self.alloc.free(cfg);
@@ -368,101 +446,186 @@ pub const Host = struct {
 
     // -- the event loop ------------------------------------------------------
 
-    /// Start the broker's I/O thread and this host's dispatch thread. Call
-    /// after `loadDir`: `lk_start` runs on the caller's thread, and nothing
-    /// should be delivering events while it does.
+    /// Start the broker's I/O thread, arm the watchdog, and give every live
+    /// plugin its own dispatch thread. Call after `loadDir`: `lk_start` runs on
+    /// the caller's thread, and nothing should be delivering events while it
+    /// does.
     pub fn start(self: *Host) !void {
-        if (self.thread != null) return;
-        self.stopping.store(false, .release);
+        if (self.started) return;
+        // Armed before the I/O thread exists, so the first tick already has it.
+        self.br.setWatchdog(self, watchdogTick);
         try self.br.start();
-        self.thread = try std.Thread.spawn(.{ .stack_size = dispatch_stack_bytes }, dispatchMain, .{self});
+        self.started = true;
+        for (self.entries.items, 0..) |*e, i| {
+            if (!e.isLive()) continue;
+            e.stopping.store(false, .release);
+            e.thread = std.Thread.spawn(
+                .{ .stack_size = dispatch_stack_bytes },
+                dispatchMain,
+                .{ self, @as(u32, @intCast(i)) },
+            ) catch |err| {
+                // No thread means no events, ever. Better a plugin that is
+                // visibly gone than one that is silently deaf.
+                self.br.say(broker.level_err, e.manifest.id, "no dispatch thread: {s}", .{@errorName(err)});
+                self.retire(@intCast(i), true, "no dispatch thread");
+                continue;
+            };
+        }
     }
 
-    /// SHUTDOWN to every live plugin, drained best effort, then both threads
+    /// SHUTDOWN to every live plugin, drained best effort, then every thread
     /// down. Safe to call twice and safe to call without `start`.
+    ///
+    /// The join at the end is bounded because anything still inside a module
+    /// when the grace period runs out is terminated first. A plugin in a loop
+    /// must not stop the app from closing, and a thread that never returns
+    /// cannot be joined.
     pub fn stop(self: *Host) void {
-        if (self.thread != null) {
-            for (self.entries.items) |*e| {
-                if (e.live) self.br.push(e.state.index, broker.Kind.shutdown, 0, "");
-            }
-            var waited: u32 = 0;
-            while (self.br.queued() > 0 and waited < self.opts.shutdown_ms) : (waited += 2) {
-                broker.sleepMs(2);
-            }
-            self.stopping.store(true, .release);
-            self.thread.?.join();
-            self.thread = null;
-        } else {
+        if (!self.started) {
             // Never started: deliver SHUTDOWN inline so a plugin that opened a
             // socket in lk_start still gets told.
-            for (self.entries.items) |*e| {
-                if (e.live) self.deliverTo(e.state.index, broker.Kind.shutdown, 0, "");
+            for (self.entries.items, 0..) |*e, i| {
+                if (e.isLive()) self.deliverTo(@intCast(i), broker.Kind.shutdown, 0, "");
+            }
+            self.br.stop();
+            return;
+        }
+
+        for (self.entries.items, 0..) |*e, i| {
+            if (e.isLive()) self.br.push(@intCast(i), broker.Kind.shutdown, 0, "");
+        }
+        var waited: u32 = 0;
+        while (self.br.queued() > 0 and waited < self.opts.shutdown_ms) : (waited += 2) {
+            broker.sleepMs(2);
+        }
+
+        for (self.entries.items) |*e| e.stopping.store(true, .release);
+        var grace: u32 = 0;
+        while (grace < shutdown_grace_ms and self.anyInModule()) : (grace += 2) broker.sleepMs(2);
+        for (self.entries.items) |*e| {
+            if (e.thread == null or e.entered_ms.load(.acquire) == 0) continue;
+            self.br.say(broker.level_warn, e.manifest.id, "still inside the module at shutdown; terminating", .{});
+            e.inst.terminate();
+        }
+        for (self.entries.items) |*e| {
+            if (e.thread) |th| {
+                th.join();
+                e.thread = null;
             }
         }
+        self.started = false;
         self.br.stop();
+    }
+
+    fn anyInModule(self: *Host) bool {
+        for (self.entries.items) |*e| {
+            if (e.thread != null and e.entered_ms.load(.acquire) != 0) return true;
+        }
+        return false;
     }
 
     /// Deliver everything queued, on the CALLING thread, and return how many
     /// events went. For the replay harness and the tests, where delivery has
     /// to be deterministic rather than concurrent. Never call this while
-    /// `start` has a dispatch thread running — both would enter wasm.
+    /// `start` has dispatch threads running — two threads would enter the same
+    /// instance.
+    ///
+    /// Round robin rather than plugin by plugin, so an event that makes one
+    /// plugin publish still reaches the others in something like the order the
+    /// old single queue gave them.
     pub fn pump(self: *Host) usize {
         var n: usize = 0;
-        while (self.br.pop()) |e| {
-            defer self.br.freeEvent(e);
-            self.deliverTo(e.plugin, e.kind, e.handle, e.payload);
-            n += 1;
+        var moved = true;
+        while (moved) {
+            moved = false;
+            for (0..self.entries.items.len) |i| {
+                const e = self.br.popFor(@intCast(i)) orelse continue;
+                defer self.br.freeEvent(e);
+                self.deliverTo(@intCast(i), e.kind, e.handle, e.payload);
+                n += 1;
+                moved = true;
+            }
         }
         return n;
     }
 
-    fn dispatchMain(self: *Host) void {
+    /// One plugin's dispatch thread: its queue, its instance, nobody else's.
+    fn dispatchMain(self: *Host, index: u32) void {
+        const e = &self.entries.items[index];
         // WAMR keeps the interpreter's native stack boundary per THREAD, and
         // the load thread got its own from initRuntime. Cheap, and the
         // documented way to enter wasm from a thread the runtime has not seen;
         // without the hardware bound check it is no longer the difference
         // between running and trapping.
         wasm.initThreadEnv() catch {
-            self.br.say(broker.level_err, "host", "dispatch thread has no wasm runtime env; no events will be delivered", .{});
+            self.br.say(broker.level_err, e.manifest.id, "dispatch thread has no wasm runtime env; no events will be delivered", .{});
             return;
         };
         defer wasm.destroyThreadEnv();
 
         // Polled rather than waited on a condition variable, for the same
         // reason raster.zig's worker is: Zig 0.16 has no std.Thread.Condition
-        // outside an Io. The backoff keeps an idle host off the CPU; the
+        // outside an Io. The backoff keeps an idle plugin off the CPU; the
         // broker's fanout tick lands every 100 ms anyway.
         var idle_ms: u32 = 1;
-        while (!self.stopping.load(.acquire)) {
-            const e = self.br.pop() orelse {
+        while (!e.stopping.load(.acquire) and e.isLive()) {
+            // The watchdog may have terminated this instance while the thread
+            // was between events, or just after a call returned. Either way the
+            // plugin overran and is finished.
+            if (e.killed_ms.load(.acquire) != 0) {
+                self.disableStuck(index);
+                break;
+            }
+            const ev = self.br.popFor(index) orelse {
                 broker.sleepMs(idle_ms);
                 if (idle_ms < 8) idle_ms *= 2;
                 continue;
             };
             idle_ms = 1;
-            defer self.br.freeEvent(e);
-            self.deliverTo(e.plugin, e.kind, e.handle, e.payload);
+            defer self.br.freeEvent(ev);
+            self.deliverTo(index, ev.kind, ev.handle, ev.payload);
         }
         // Anything still queued belongs to nobody now.
-        while (self.br.pop()) |e| self.br.freeEvent(e);
+        self.br.clearQueue(index);
     }
 
     fn deliverTo(self: *Host, index: u32, kind: u32, handle: u64, payload: []const u8) void {
         if (index >= self.entries.items.len) return;
         const e = &self.entries.items[index];
-        if (!e.live) return;
+        if (!e.isLive()) return;
         // SHUTDOWN is the last thing a plugin ever sees, whatever it returns.
-        if (kind == broker.Kind.shutdown) e.live = false;
+        if (kind == broker.Kind.shutdown) e.live.store(false, .release);
 
+        // The stamp the watchdog reads. Set before the call and cleared after
+        // it however it ends, so a plugin is only ever judged on time it is
+        // actually spending inside the module.
+        e.entered_ms.store(broker.monoMs(), .release);
         const rc = e.inst.eventWith(kind, handle, payload) catch |err| {
-            self.reportTrap(&e.inst, e.manifest.id, "lk_event");
-            self.disable(index, err);
+            e.entered_ms.store(0, .release);
+            if (e.killed_ms.load(.acquire) != 0) {
+                self.disableStuck(index);
+                return;
+            }
+            // An ordinary trap keeps its OWN text. WAMR's message says what the
+            // module did wrong ("unreachable", "out of bounds memory access"),
+            // which is the only useful thing anybody has; the error name is the
+            // fallback for a failure with no exception behind it, such as
+            // lk_alloc answering zero.
+            var tbuf: [max_reason]u8 = undefined;
+            const text = e.inst.exception() orelse @errorName(err);
+            const kept = tbuf[0..@min(text.len, tbuf.len)];
+            @memcpy(kept, text[0..kept.len]);
+            e.inst.clearException();
+            self.br.say(broker.level_err, e.manifest.id, "lk_event trapped: {s}", .{kept});
+            self.retire(index, true, kept);
             return;
         };
+        e.entered_ms.store(0, .release);
+
         // A non-zero return is the plugin's own complaint, not a fault: it
         // stays running and the line says which event it disliked.
         if (rc != 0) self.br.say(broker.level_warn, e.manifest.id, "event {d} returned {d}", .{ kind, rc });
-        if (kind == broker.Kind.shutdown) self.br.dropPlugin(index, broker.wallMs());
+        if (kind == broker.Kind.shutdown) self.retire(index, false, "shutdown");
     }
 
     fn reportTrap(self: *Host, inst: *wasm.Instance, id: []const u8, what: []const u8) void {
@@ -471,13 +634,78 @@ pub const Host = struct {
         inst.clearException();
     }
 
-    /// Take a plugin out of service and erase everything it contributed.
-    fn disable(self: *Host, index: u32, cause: anyerror) void {
+    /// The disable path for a plugin the watchdog terminated. WAMR's own text
+    /// for this trap is "terminated by user", which says who did it and nothing
+    /// about why, so it is dropped in favour of the budget it blew. Every other
+    /// trap keeps its original exception text.
+    fn disableStuck(self: *Host, index: u32) void {
         const e = &self.entries.items[index];
-        if (!e.live) return;
-        e.live = false;
-        self.br.say(broker.level_err, e.manifest.id, "disabled after {s}; overlays and published values cleared", .{@errorName(cause)});
+        e.inst.clearException();
+        var buf: [max_reason]u8 = undefined;
+        const reason = std.fmt.bufPrint(
+            &buf,
+            "stuck in lk_event (terminated after {d} ms)",
+            .{e.killed_ms.load(.acquire)},
+        ) catch "stuck in lk_event";
+        self.retire(index, true, reason);
+    }
+
+    /// Take a plugin out of service and erase everything it contributed:
+    /// overlay objects, published values, AIS targets, sockets, timers and
+    /// whatever was still queued. `fault` distinguishes a plugin that broke —
+    /// logged as an error, status line replaced with the reason — from one that
+    /// was shut down, which keeps whatever it last said about itself.
+    fn retire(self: *Host, index: u32, fault: bool, reason: []const u8) void {
+        const e = &self.entries.items[index];
+        e.live.store(false, .release);
+        if (e.retired.swap(true, .acq_rel)) return;
+        if (fault) {
+            // The reason goes into a JSON status line, and part of it is text
+            // WAMR wrote, so quotes, backslashes and control bytes are folded
+            // to spaces rather than escaped: this is a one-line status, not a
+            // document, and it must not be able to break the shape.
+            var safe: [max_reason]u8 = undefined;
+            const n = @min(reason.len, safe.len);
+            for (reason[0..n], 0..) |ch, i| safe[i] = switch (ch) {
+                '"', '\\', 0...31, 127 => ' ',
+                else => ch,
+            };
+            var buf: [broker.max_status]u8 = undefined;
+            const line = std.fmt.bufPrint(&buf, "{{\"state\":\"disabled\",\"detail\":\"{s}\"}}", .{safe[0..n]}) catch "{\"state\":\"disabled\"}";
+            _ = e.state.setStatus(line);
+            self.br.say(broker.level_err, e.manifest.id, "disabled: {s}; overlays and published values cleared", .{safe[0..n]});
+        }
         self.br.dropPlugin(index, broker.wallMs());
+    }
+
+    // -- the watchdog --------------------------------------------------------
+
+    /// Called from the broker's 100 ms tick, on the I/O thread, with no lock
+    /// held. Terminates any plugin that has been inside a module call for
+    /// longer than the budget, and returns at once: it never joins the stuck
+    /// thread, never waits for it, and does not touch anything the stuck thread
+    /// owns. The plugin's own dispatch thread does the clean-up when the
+    /// terminated call unwinds.
+    fn watchdogTick(ctx: ?*anyopaque, mono_ms: i64) void {
+        const self: *Host = @ptrCast(@alignCast(ctx orelse return));
+        for (self.entries.items) |*e| {
+            if (!e.isLive()) continue;
+            const entered = e.entered_ms.load(.acquire);
+            if (entered == 0) continue;
+            const elapsed = mono_ms - entered;
+            if (elapsed < self.opts.event_budget_ms) continue;
+            // Claim the kill. A second tick over the same stuck call must not
+            // terminate it twice, and must not overwrite the elapsed time the
+            // disable line will report.
+            if (e.killed_ms.cmpxchgStrong(0, elapsed, .acq_rel, .acquire) != null) continue;
+            self.br.say(
+                broker.level_err,
+                e.manifest.id,
+                "over the {d} ms event budget ({d} ms inside the module); terminating",
+                .{ self.opts.event_budget_ms, elapsed },
+            );
+            e.inst.terminate();
+        }
     }
 };
 

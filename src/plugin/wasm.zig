@@ -6,8 +6,11 @@
 //! module bytes and the lifecycle. The runtime is the fast interpreter built
 //! by scripts/build-wamr.sh (no AOT, no JIT, no WASI).
 //!
-//! Nothing here is thread-safe. The host contract is one event at a time per
-//! plugin, so an Instance belongs to whichever thread is currently inside it.
+//! Nothing here is thread-safe, with ONE exception: `Instance.terminate` is
+//! meant to be called from another thread while a call is in flight, and is
+//! the only call that may be. The host contract is otherwise one event at a
+//! time per plugin, so an Instance belongs to whichever thread is currently
+//! inside it.
 //!
 //! Two rules the ABI depends on:
 //!   * Nothing crosses as a host pointer. A plugin sees only app addresses —
@@ -277,6 +280,25 @@ pub const Instance = struct {
 
     pub fn clearException(self: *Instance) void {
         c.wasm_runtime_clear_exception(self.inst);
+    }
+
+    /// Stop whatever this instance is doing, FROM ANOTHER THREAD. The call in
+    /// flight fails as if it had trapped, so the thread inside the module
+    /// returns error.Trap and unwinds normally; a plugin spinning in a loop
+    /// that calls nothing stops too. This is the host watchdog's only weapon.
+    ///
+    /// It works because scripts/build-wamr.sh builds with
+    /// WAMR_BUILD_THREAD_MGR=1. Without that flag this call only writes the
+    /// instance's exception string, and the interpreter never reads it — a
+    /// spinning module would ignore it forever. With it, the write also raises
+    /// the exec env's terminate flag, and the fast interpreter tests that flag
+    /// at every branch, loop back edge and call.
+    ///
+    /// Safe on an instance that is idle, but not free: the exception stays set,
+    /// so the NEXT call into the module fails too. The host treats a terminated
+    /// plugin as disabled for good, which makes that moot.
+    pub fn terminate(self: *Instance) void {
+        c.wasm_runtime_terminate(self.inst);
     }
 
     /// Any export beyond the five, by name. The host uses this for nothing;

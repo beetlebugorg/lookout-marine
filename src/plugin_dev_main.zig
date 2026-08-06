@@ -120,7 +120,7 @@ fn logSink(ctx: ?*anyopaque, level: u32, plugin: []const u8, msg: []const u8) vo
     const is_status = std.mem.startsWith(u8, msg, "status ");
     if (is_alert) _ = st.alerts.fetchAdd(1, .monotonic);
     if (std.mem.indexOf(u8, msg, "trapped") != null or
-        std.mem.startsWith(u8, msg, "disabled after")) st.trapped.store(true, .monotonic);
+        std.mem.startsWith(u8, msg, "disabled:")) st.trapped.store(true, .monotonic);
 
     const show = switch (st.print) {
         .all => true,
@@ -779,10 +779,10 @@ pub fn main(init: std.process.Init) !void {
     var trapped = state.trapped.load(.monotonic);
     if (ps) |p| {
         for (p.host.entries.items) |*e| {
-            if (!e.live) trapped = true;
+            if (!e.isLive()) trapped = true;
             emit("plugin {s}: {s}, {d} denied call(s), status {s}\n", .{
                 e.manifest.id,
-                if (e.live) "live" else "STOPPED",
+                if (e.isLive()) "live" else "STOPPED",
                 e.state.denied,
                 if (e.state.status().len > 0) e.state.status() else "(none)",
             });

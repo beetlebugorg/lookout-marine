@@ -561,6 +561,35 @@ pub fn build(b: *std.Build) void {
             const host_smoke_run = b.addRunArtifact(b.addTest(.{ .root_module = host_smoke_mod }));
             b.step("host-smoke", "Run the plugin host + broker end-to-end test").dependOn(&host_smoke_run.step);
             test_step.dependOn(&host_smoke_run.step);
+
+            // Time isolation: echo beside a plugin that stops answering. Like
+            // echo, the spinner is BUILT and never installed — it is a fixture
+            // for this test, not something `zig build plugins` should emit.
+            const spin_mod = b.createModule(.{
+                .root_source_file = b.path("test/spin_plugin.zig"),
+                .target = wasm_target,
+                .optimize = .ReleaseSmall,
+            });
+            spin_mod.addImport("lk", lk_mod);
+            const spin_plugin = b.addExecutable(.{ .name = "spin_plugin", .root_module = spin_mod });
+            spin_plugin.entry = .disabled;
+            spin_plugin.rdynamic = true;
+
+            const isolation_mod = b.createModule(.{
+                .root_source_file = b.path("test/host_isolation.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            });
+            isolation_mod.addImport("host", host_mod);
+            isolation_mod.addImport("overlay", ov_mod);
+            isolation_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
+            isolation_mod.addAnonymousImport("echo_manifest", .{ .root_source_file = b.path("plugins/echo/manifest.json") });
+            isolation_mod.addAnonymousImport("spin_plugin_wasm", .{ .root_source_file = spin_plugin.getEmittedBin() });
+
+            const isolation_run = b.addRunArtifact(b.addTest(.{ .root_module = isolation_mod }));
+            b.step("host-isolation", "Run the per-plugin thread + watchdog test").dependOn(&isolation_run.step);
+            test_step.dependOn(&isolation_run.step);
         }
     }
     if (plugins_fail) |fail| test_step.dependOn(fail);
