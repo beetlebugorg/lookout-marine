@@ -15,13 +15,22 @@ fn haveLocalTile57(b: *std.Build) bool {
     return true;
 }
 
-/// True when scripts/build-wamr.sh has produced the wasm runtime archive.
-/// WAMR is built by cmake, not by this build: it is a large C project with
-/// its own option matrix, and the archive is a machine-local artifact.
-fn haveWamrDist(b: *std.Build) bool {
-    const probe = b.pathFromRoot("vendor/wamr-dist/lib/libvmlib.a");
-    std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch return false;
-    return true;
+/// Where scripts/build-wamr.sh puts the wasm runtime for one target, and the
+/// argument that builds it. WAMR is built by cmake, not by this build: it is a
+/// large C project with its own option matrix, and the archive is a
+/// machine-local artifact. macOS, iOS device and iOS simulator are three
+/// different mach-o platforms, so each needs its own archive.
+const WamrDist = struct { dir: []const u8, mode: []const u8 };
+
+fn wamrDist(target: std.Build.ResolvedTarget) ?WamrDist {
+    return switch (target.result.os.tag) {
+        .macos => .{ .dir = "vendor/wamr-dist", .mode = "macos" },
+        .ios => if (target.result.abi == .simulator)
+            WamrDist{ .dir = "vendor/wamr-dist-iossim", .mode = "iossim" }
+        else
+            WamrDist{ .dir = "vendor/wamr-dist-ios", .mode = "ios" },
+        else => null,
+    };
 }
 
 fn haveFile(b: *std.Build, rel: []const u8) bool {
@@ -123,23 +132,28 @@ pub fn build(b: *std.Build) void {
     if (use_d3d12 and !is_windows)
         @panic("-Dbackend=d3d12 targets Windows only");
     // The wasm plugin host (src/plugin/): on by default where it can build —
-    // macOS with the WAMR archive present. Off elsewhere so a fresh clone,
-    // an iOS cross-build or a machine that has not run scripts/build-wamr.sh
-    // still builds the chart core. Asking for it without the archive is an
-    // error with the fix in it, not a silent skip.
-    const wamr_dist = haveWamrDist(b);
-    const plugins_host = target.result.os.tag == .macos;
-    const want_plugins = b.option(bool, "plugins", "Build the wasm plugin host (macOS; needs scripts/build-wamr.sh)") orelse
+    // an Apple target whose WAMR archive is present. Off elsewhere so a fresh
+    // clone, an Android build or a machine that has not run
+    // scripts/build-wamr.sh still builds the chart core. Asking for it without
+    // the archive is an error with the fix in it, not a silent skip.
+    // iOS works because the runtime is the fast INTERPRETER: no JIT, so no
+    // executable pages, and the hardware bound check is off, so no signal
+    // handlers of WAMR's own.
+    const wamr = wamrDist(target);
+    const wamr_dir = if (wamr) |w| w.dir else "vendor/wamr-dist";
+    const wamr_dist = wamr != null and haveFile(b, b.fmt("{s}/lib/libvmlib.a", .{wamr_dir}));
+    const plugins_host = wamr != null;
+    const want_plugins = b.option(bool, "plugins", "Build the wasm plugin host (macOS/iOS; needs scripts/build-wamr.sh)") orelse
         (plugins_host and wamr_dist);
     const plugins = want_plugins and plugins_host and wamr_dist;
     // Asked for and not possible: a build error carrying the fix, not a panic
     // and not a silent skip that would leave the host quietly missing.
     const plugins_refusal: ?[]const u8 = if (!want_plugins or plugins)
         null
-    else if (!plugins_host)
-        "-Dplugins: the wasm plugin host is macOS-only in this prototype (vendor/wamr-dist holds a macOS arm64 archive)."
+    else if (wamr) |w|
+        b.fmt("-Dplugins: {s}/lib/libvmlib.a is missing. Run `scripts/build-wamr.sh {s}` to build the pinned WAMR runtime for this target, then build again.", .{ w.dir, w.mode })
     else
-        "-Dplugins: vendor/wamr-dist/lib/libvmlib.a is missing. Run scripts/build-wamr.sh to build the pinned WAMR runtime, then build again.";
+        "-Dplugins: the wasm plugin host runs on macOS and iOS in this prototype. scripts/build-wamr.sh builds no archive for this target.";
     const plugins_fail: ?*std.Build.Step = if (plugins_refusal) |msg| &b.addFail(msg).step else null;
     if (plugins_fail) |fail| b.getInstallStep().dependOn(fail);
 
@@ -195,6 +209,8 @@ pub fn build(b: *std.Build) void {
         sdl_include: ?[]const u8,
         build_opts_mod: *std.Build.Module,
         plugins: bool,
+        /// The vendor/wamr-dist* directory for this target (see wamrDist).
+        wamr_dir: []const u8,
         /// `link_archives` adds the prebuilt archives (tile57, and WAMR when
         /// the plugin host is on): always for an exe, but for a static lib
         /// only where the linker copes with it (see addObjectFile below).
@@ -235,10 +251,12 @@ pub fn build(b: *std.Build) void {
             if (link_archives) mod.addObjectFile(self.tile57_lib);
             if (self.plugins) {
                 // WAMR: wasm_export.h for the @cImport in src/plugin/wasm.zig,
-                // libvmlib.a for the interpreter itself. Both come from
-                // vendor/wamr-dist, which scripts/build-wamr.sh fills.
-                mod.addIncludePath(bb.path("vendor/wamr-dist/include"));
-                if (link_archives) mod.addObjectFile(bb.path("vendor/wamr-dist/lib/libvmlib.a"));
+                // libvmlib.a for the interpreter itself. Both come from this
+                // target's vendor/wamr-dist* dir, which scripts/build-wamr.sh
+                // fills. The headers are the same on every target; the archive
+                // is not.
+                mod.addIncludePath(bb.path(bb.fmt("{s}/include", .{self.wamr_dir})));
+                if (link_archives) mod.addObjectFile(bb.path(bb.fmt("{s}/lib/libvmlib.a", .{self.wamr_dir})));
             }
             if (self.use_sdl) {
                 if (self.android) {
@@ -285,7 +303,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod, .plugins = plugins };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -376,9 +394,9 @@ pub fn build(b: *std.Build) void {
         // Asked for and not possible: say which of the three reasons it is,
         // the way -Dplugins does above.
         dev_step.dependOn(&b.addFail(if (!plugins_host)
-            "plugin-dev: the wasm plugin host — and so this harness — is macOS-only in this prototype."
+            "plugin-dev: the wasm plugin host — and so this harness — runs on macOS and iOS in this prototype."
         else if (!wamr_dist)
-            "plugin-dev: the harness needs the wasm plugin host. Run scripts/build-wamr.sh, then build again."
+            b.fmt("plugin-dev: the harness needs the wasm plugin host. Run `scripts/build-wamr.sh {s}`, then build again.", .{wamr.?.mode})
         else
             "plugin-dev: the harness drives the wasm plugin host, so it cannot be built with -Dplugins=false.").step);
     }
@@ -506,8 +524,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
-        wasm_mod.addIncludePath(b.path("vendor/wamr-dist/include"));
-        wasm_mod.addObjectFile(b.path("vendor/wamr-dist/lib/libvmlib.a"));
+        wasm_mod.addIncludePath(b.path(b.fmt("{s}/include", .{wamr_dir})));
+        wasm_mod.addObjectFile(b.path(b.fmt("{s}/lib/libvmlib.a", .{wamr_dir})));
 
         const smoke_mod = b.createModule(.{
             .root_source_file = b.path("test/wasm_smoke.zig"),
@@ -532,8 +550,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
-        host_mod.addIncludePath(b.path("vendor/wamr-dist/include"));
-        host_mod.addObjectFile(b.path("vendor/wamr-dist/lib/libvmlib.a"));
+        host_mod.addIncludePath(b.path(b.fmt("{s}/include", .{wamr_dir})));
+        host_mod.addObjectFile(b.path(b.fmt("{s}/lib/libvmlib.a", .{wamr_dir})));
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = host_mod })).step);
 
         // The whole plugin layer end to end: manifests, grants, the broker's
