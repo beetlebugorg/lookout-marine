@@ -44,7 +44,7 @@ On iOS and iPadOS, `simctl launch` sends them as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 ```sh
 cd linux
 ninja -C build
-./screenshots.sh all            # writes docs/docs/img/linux-day.png and docs/docs/img/linux-settings.png
+./screenshots.sh all            # writes docs/docs/img/linux-day.webp and docs/docs/img/linux-settings.webp
 ```
 
 The script starts the app in an **off-screen sway session**. Then it captures the
@@ -105,7 +105,7 @@ frame correctly. Do not make it larger.
 `LOOKOUT_SHOW` opens chrome at start, so a frame needs no synthetic input:
 `settings`, `scale`, `search`, or a comma-separated list of them. The WinUI 3 shell
 uses `LOOKOUT_OPEN_SETTINGS=1` for the settings frame. A settings frame must agree
-with `linux-settings.png`.
+with `linux-settings.webp`.
 
 ## iPadOS and iOS
 
@@ -184,7 +184,7 @@ made and then found.
    the capture surface was smaller than the minimum size of the app.
 2. **Does the chrome float above the chart?** If the chrome is in a bar below the
    chart, the host used a path that cannot composite.
-3. **Are the text and the symbols sharp at 100%?** Examine the PNG file at 100%. Soft
+3. **Are the text and the symbols sharp at 100%?** Examine the image file at 100%. Soft
    glyphs show that something resampled the chart. The size that the core drew and
    the size that the toolkit composited are not the same.
 4. **Is the chart in the frame?** A frame of flat NODATA blue shows that the camera

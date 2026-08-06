@@ -8,7 +8,7 @@ core, same C ABI, same behaviour.
 
 **Architecture, design history and gotchas: [docs/linux.md](../docs/docs/developer-guide/linux.md).**
 
-![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/linux-day.png)
+![Annapolis Harbor and the Naval Academy, day scheme](../docs/docs/img/linux-day.webp)
 
 ## Prerequisites
 
@@ -46,13 +46,23 @@ mariner settings, picks a folder of cells; on first launch the app probes
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` pins the opening camera.
 
+## Raster charts
+
+**Ctrl+Shift+I** adds `.mbtiles` raster charts; the **Charts** tab of the mariner
+settings adds a whole folder and switches one off. The engine draws them below the
+ENC. The pill at the end of the readouts names the set drawn over the view: blue
+when it draws, amber when one covers the view and is off. **Ctrl+I** steps to the
+next set covering this water, and **Ctrl+Shift+H** hides the ENC where a picture
+covers it. The installed list lives in `settings.ini` and is replayed into every
+chart the engine opens.
+
 ## Testing
 
 - **Core unit tests:** `zig build test -Dbackend=vk` from the repo root.
 - **Render parity / smoke:** `zig-out/bin/lookout-marine-demo <chart.pmtiles>`.
 - **Screenshots:** `./screenshots.sh all` — runs the app in an off-screen sway
-  session and writes `../docs/docs/img/linux-*.png`. Needs `sway` + `grim`; see
-  [the protocol](../docs/docs/developer-guide/screenshots.md).
+  session and writes `../docs/docs/img/linux-*.webp`. Needs `sway`, `grim` and
+  ImageMagick; see [the protocol](../docs/docs/developer-guide/screenshots.md).
 
 ## What's in here
 
@@ -66,6 +76,7 @@ mariner settings, picks a folder of cells; on first launch the app probes
 | `src/lk-app-model.c` | Shared state, recents, open paths, coordinate and scale parsers |
 | `src/lk-hud.c` | The readouts capsule, scale bar, north bubble, scale entry, formatting |
 | `src/lk-pick-report.c` | The cursor pick report: the decode, the card, the callout placement |
+| `src/lk-raster.c` | The installed raster charts, their on/off, and the set names |
 | `src/lk-json.c` | A small JSON reader for the engine's pick payload |
 | `src/lk-search.c` | Coordinate go-to (feature search stubbed) |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |

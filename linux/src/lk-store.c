@@ -4,6 +4,7 @@
 
 #define LK_GROUP_VIEW    "view"
 #define LK_GROUP_RECENTS "recents"
+#define LK_GROUP_RASTER  "raster"
 #define LK_GROUP_MARINER "mariner.v1"
 
 #define LK_MAX_RECENTS 10
@@ -103,6 +104,55 @@ lk_store_note_recent (const char *path)
   g_key_file_set_string_list (keyfile, LK_GROUP_RECENTS, "paths",
                               (const char *const *) merged->pdata, merged->len);
   lk_store_flush (keyfile);
+}
+
+/* ---- raster charts ------------------------------------------------------ */
+
+static char **
+lk_store_load_list (const char *key)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  char **list = g_key_file_get_string_list (keyfile, LK_GROUP_RASTER, key, NULL, NULL);
+
+  return list != NULL ? list : g_new0 (char *, 1);
+}
+
+static void
+lk_store_save_list (const char *key, const char *const *paths)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
+
+  if (n == 0)
+    g_key_file_remove_key (keyfile, LK_GROUP_RASTER, key, NULL);
+  else
+    g_key_file_set_string_list (keyfile, LK_GROUP_RASTER, key, paths, n);
+
+  lk_store_flush (keyfile);
+}
+
+char **
+lk_store_load_raster_paths (void)
+{
+  return lk_store_load_list ("paths");
+}
+
+void
+lk_store_save_raster_paths (const char *const *paths)
+{
+  lk_store_save_list ("paths", paths);
+}
+
+char **
+lk_store_load_raster_off (void)
+{
+  return lk_store_load_list ("off");
+}
+
+void
+lk_store_save_raster_off (const char *const *paths)
+{
+  lk_store_save_list ("off", paths);
 }
 
 /* ---- mariner ------------------------------------------------------------ */
