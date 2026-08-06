@@ -27,7 +27,9 @@
 #define LKD_SRV_SLOTS 1024
 #define LKD_URING_BYTES (256 * 2048)
 
-enum { PSO_CHART = 0, PSO_SPRITE, PSO_SDF, PSO_PATTERN, PSO_CHART_OPAQUE, PSO_COUNT };
+/* The first five match LKD_PIPE_* by value (apply_draw_state indexes with the
+ * pipe); PSO_CHART_OPAQUE is reached only through the depth-mode override. */
+enum { PSO_CHART = 0, PSO_SPRITE, PSO_SDF, PSO_PATTERN, PSO_RASTER, PSO_CHART_OPAQUE, PSO_COUNT };
 
 typedef struct retire_item {
     ID3D12Resource *res;
@@ -490,8 +492,12 @@ static int make_pipelines(lkd_ctx *c, const char *hlsl, char err[LKD_ERR_LEN])
                                        _countof(quad_layout), 0);
         c->psos[PSO_SDF] = make_pso(c, sprite_vs, sdf_ps, quad_layout,
                                     _countof(quad_layout), 0);
+        /* The raster underlay: sprite shading, but depth WRITE (see
+         * LKD_PIPE_RASTER in the header). */
+        c->psos[PSO_RASTER] = make_pso(c, sprite_vs, sprite_ps, quad_layout,
+                                       _countof(quad_layout), 1);
         ok = c->psos[PSO_CHART] && c->psos[PSO_CHART_OPAQUE] && c->psos[PSO_PATTERN] &&
-             c->psos[PSO_SPRITE] && c->psos[PSO_SDF];
+             c->psos[PSO_SPRITE] && c->psos[PSO_SDF] && c->psos[PSO_RASTER];
         if (!ok)
             set_err(err, "create pipeline state", E_FAIL);
     }
