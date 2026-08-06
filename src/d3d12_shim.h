@@ -30,6 +30,11 @@ enum {
     LKD_PIPE_SPRITE = 1,
     LKD_PIPE_SDF = 2,
     LKD_PIPE_PATTERN = 3,
+    /* The raster underlay's pipe: the sprite program with depth WRITE, so the
+     * picture's depth (in its vertices) culls the chart's opaque fills per
+     * pixel — the fills sit farther and lose the depth test where a picture
+     * covers. Everything nearer (lines, symbols, text) still paints over it. */
+    LKD_PIPE_RASTER = 4,
 };
 
 #define LKD_ERR_LEN 256

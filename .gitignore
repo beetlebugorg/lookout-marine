@@ -16,3 +16,9 @@ macos/DerivedData/
 # Docusaurus build output
 docs/build/
 docs/.docusaurus/
+
+# Local engineering notes (not version-controlled)
+/specs/
+
+# Claude Code agent worktrees / session data
+.claude/

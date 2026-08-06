@@ -6,6 +6,7 @@
 #include <gtk/gtk.h>
 
 #include "lk-chart-controller.h"
+#include "lk-raster.h"
 
 G_BEGIN_DECLS
 
@@ -44,6 +45,49 @@ void lk_app_model_set_scheme (LkAppModel *self, int scheme);
 void lk_app_model_toggle_text (LkAppModel *self);
 void lk_app_model_toggle_soundings (LkAppModel *self);
 void lk_app_model_toggle_other_category (LkAppModel *self);
+
+/* ---- raster charts ------------------------------------------------------ */
+
+/* Install the files the mariner chose, persist the list, and draw what was just
+ * added when it covers this view. Files that will not open are reported
+ * together through ::open-error, not one alert at a time — a folder of twenty
+ * asking twenty times would be unusable. */
+void lk_app_model_add_raster_charts (LkAppModel *self, const char *const *paths);
+
+/* Replay the installed list into a chart the engine has just opened. */
+void lk_app_model_reinstall_raster_charts (LkAppModel *self);
+
+/* Forget one file. The engine cannot drop a chart from a live handle, so the
+ * chart is switched off now and dropped the next time a chart opens. */
+void lk_app_model_remove_raster_chart (LkAppModel *self, const char *path);
+
+/* Turn one installed chart on or off. Off keeps the file. */
+void     lk_app_model_set_raster_enabled (LkAppModel *self, const char *path, gboolean on);
+gboolean lk_app_model_raster_enabled (LkAppModel *self, const char *path);
+
+/* The installed files, and them grouped by set. The groups are transfer full. */
+const char *const *lk_app_model_get_raster_paths (LkAppModel *self);
+guint              lk_app_model_get_raster_count (LkAppModel *self);
+GPtrArray         *lk_app_model_get_raster_groups (LkAppModel *self);
+
+/* Step to the next set covering this water, draw one directly, and hide the ENC
+ * where a picture covers it. */
+void lk_app_model_cycle_raster (LkAppModel *self);
+void lk_app_model_select_raster_set (LkAppModel *self, int index);
+void lk_app_model_toggle_chart (LkAppModel *self);
+
+/* Read every raster field off the engine at once. Anything that changes the set
+ * list or the selection outside a frame must call this: the readouts only run
+ * while the chart renders, and the settings window can be open over a chart
+ * that is standing still. Emits ::raster-changed when something moved. */
+void lk_app_model_refresh_raster_state (LkAppModel *self);
+
+/* What the pill is built from. The sets are borrowed. */
+GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
+int         lk_app_model_get_raster_active (LkAppModel *self);
+const char *lk_app_model_get_raster_available (LkAppModel *self);
+gboolean    lk_app_model_get_raster_over_chart (LkAppModel *self);
+gboolean    lk_app_model_get_chart_hidden (LkAppModel *self);
 
 /* ---- search: coordinate go-to ------------------------------------------- */
 

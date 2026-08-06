@@ -34,6 +34,11 @@ pub const Uniforms = cc.tile57_gpu_uniforms;
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
+/// One raster tile's texture, and one tile's draw in the underlay
+/// (src/raster.zig). Opaque to the layer, which only holds them.
+pub const RasterTex = *sdl.SDL_GPUTexture;
+pub const RasterDraw = struct { tex: RasterTex, first: u32, count: u32 };
+
 /// Monotonic milliseconds / microseconds (SDL's own timer).
 pub fn ticksMs() i64 {
     return @intCast(sdl.SDL_GetTicks());
@@ -83,6 +88,13 @@ pub const Gpu = struct {
     device: *sdl.SDL_GPUDevice,
     window: ?*sdl.SDL_Window,
     pipeline: *sdl.SDL_GPUGraphicsPipeline, // chart (flat-colour triangles)
+    /// The raster underlay (src/raster.zig): world-space textured quads drawn
+    /// BEFORE the chart, one texture per tile, through the sprite pipeline — a
+    /// raster tile IS a textured world-space quad with a tint, so no backend
+    /// carries a shader for it. Replaced when the visible tile set changes.
+    raster_buf: ?*sdl.SDL_GPUBuffer = null,
+    raster_draws: []RasterDraw = &.{},
+    raster_alloc: ?std.mem.Allocator = null,
     sprite_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
     sdf_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
     pattern_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
@@ -429,6 +441,58 @@ pub const Gpu = struct {
         return tex;
     }
 
+    // ---- the raster underlay ----------------------------------------------
+
+    pub fn newRasterTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !RasterTex {
+        return self.makeAtlasTexture(rgba, w, h);
+    }
+
+    pub fn freeRasterTexture(self: *Gpu, t: RasterTex) void {
+        sdl.SDL_ReleaseGPUTexture(self.device, t);
+    }
+
+    /// Adopt this frame's raster quads + per-tile draws.
+    pub fn setRasterFrame(self: *Gpu, quads: []const cc.tile57_gpu_quad, draws: []const RasterDraw) !void {
+        self.clearRasterFrame();
+        if (quads.len == 0 or draws.len == 0) return;
+        const a = self.raster_alloc orelse std.heap.c_allocator;
+        self.raster_alloc = a;
+        const bytes = std.mem.sliceAsBytes(quads);
+        self.raster_buf = try self.uploadBuffer(sdl.SDL_GPU_BUFFERUSAGE_VERTEX, bytes);
+        self.raster_draws = try a.dupe(RasterDraw, draws);
+    }
+
+    pub fn clearRasterFrame(self: *Gpu) void {
+        if (self.raster_buf) |b| sdl.SDL_ReleaseGPUBuffer(self.device, b);
+        self.raster_buf = null;
+        if (self.raster_draws.len > 0) {
+            if (self.raster_alloc) |a| a.free(self.raster_draws);
+            self.raster_draws = &.{};
+        }
+    }
+
+    /// Draw the underlay: sprite pipeline, one draw per tile (each carries its
+    /// own texture). Runs BEFORE the chart, so the chart's own fills paint over
+    /// it — correct, and what chart-over-picture undoes.
+    fn recordRaster(self: *Gpu, cmd: *sdl.SDL_GPUCommandBuffer, pass: ?*sdl.SDL_GPURenderPass, u: Uniforms) void {
+        const buf = self.raster_buf orelse return;
+        if (self.raster_draws.len == 0) return;
+        const pipe = self.sprite_pipeline orelse return;
+        sdl.SDL_BindGPUGraphicsPipeline(pass, pipe);
+        const bind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = buf, .offset = 0 }};
+        sdl.SDL_BindGPUVertexBuffers(pass, 0, &bind, 1);
+        var uu = u;
+        // BASE and never scale-gated: the underlay is the only thing on screen
+        // where the chart has nothing, so a category filter must not remove it.
+        uu.cat_mask = 0xFFFFFFFF;
+        sdl.SDL_PushGPUVertexUniformData(cmd, 0, &uu, @sizeOf(Uniforms));
+        for (self.raster_draws) |d| {
+            const samp = [_]sdl.SDL_GPUTextureSamplerBinding{.{ .texture = d.tex, .sampler = self.sampler }};
+            sdl.SDL_BindGPUFragmentSamplers(pass, 0, &samp, 1);
+            sdl.SDL_DrawGPUPrimitives(pass, d.count, 1, d.first, 0);
+        }
+    }
+
     fn uploadBuffer(self: *Gpu, usage: sdl.SDL_GPUBufferUsageFlags, bytes: []const u8) !*sdl.SDL_GPUBuffer {
         var bi = std.mem.zeroes(sdl.SDL_GPUBufferCreateInfo);
         bi.usage = usage;
@@ -595,6 +659,10 @@ pub const Gpu = struct {
         const scis = sdl.SDL_Rect{ .x = 0, .y = 0, .w = @intCast(self.width), .h = @intCast(self.height) };
         sdl.SDL_SetGPUScissor(pass, &scis);
 
+        // Before the chart, and before the early return below: where the chart
+        // has no data is exactly where the mariner most needs the picture.
+        self.recordRaster(cmd, pass, u);
+
         const s = if (self.scene) |*sc| sc else return;
         const vbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
@@ -720,6 +788,7 @@ pub const Gpu = struct {
     }
 
     pub fn deinit(self: *Gpu) void {
+        self.clearRasterFrame();
         const d = self.device;
         self.freeScene();
         self.releaseTargets();

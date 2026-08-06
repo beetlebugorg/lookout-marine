@@ -613,3 +613,138 @@ export fn Java_org_beetlebug_lookout_Lookout_nPick(env: [*c]j.JNIEnv, cls: j.jcl
     }
     return arr;
 }
+
+// ---- raster charts -------------------------------------------------------
+//
+// The mariner's own pictures under the ENC: satellite imagery as MBTiles, or
+// another vendor's chart. See src/raster.zig for the layer and include/lookout.h
+// for what each of these means.
+
+extern fn lookout_raster_add(h: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn lookout_raster_cycle(h: ?*anyopaque) void;
+extern fn lookout_raster_active_name(h: ?*anyopaque, out_len: ?*usize) [*:0]const u8;
+extern fn lookout_raster_available_name(h: ?*anyopaque, out_len: ?*usize) [*:0]const u8;
+extern fn lookout_raster_over_chart(h: ?*anyopaque) c_int;
+extern fn lookout_raster_set_count(h: ?*anyopaque) u32;
+extern fn lookout_raster_set_name(h: ?*anyopaque, i: u32, out_len: ?*usize) [*:0]const u8;
+extern fn lookout_raster_set_in_view(h: ?*anyopaque, i: u32) c_int;
+extern fn lookout_raster_active_index(h: ?*anyopaque) i32;
+extern fn lookout_raster_select(h: ?*anyopaque, i: i32) void;
+extern fn lookout_raster_set_enabled(h: ?*anyopaque, path: [*:0]const u8, enabled: c_int) c_int;
+extern fn lookout_raster_enabled(h: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn lookout_toggle_chart(h: ?*anyopaque) void;
+extern fn lookout_chart_hidden(h: ?*anyopaque) c_int;
+
+/// boolean nRasterAdd(long h, String path)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return if (lookout_raster_add(h.l, @ptrCast(cpath)) != 0) 1 else 0;
+}
+
+/// void nRasterCycle(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterCycle(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_raster_cycle(h.l);
+}
+
+/// String nRasterActiveName(long h) -- the set drawn over this view, or "".
+export fn Java_org_beetlebug_lookout_Lookout_nRasterActiveName(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return env_(env).NewStringUTF.?(env, "");
+    return env_(env).NewStringUTF.?(env, lookout_raster_active_name(h.l, null));
+}
+
+/// String nRasterAvailableName(long h) -- a set in view, drawn or not, or "".
+export fn Java_org_beetlebug_lookout_Lookout_nRasterAvailableName(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return env_(env).NewStringUTF.?(env, "");
+    return env_(env).NewStringUTF.?(env, lookout_raster_available_name(h.l, null));
+}
+
+/// boolean nRasterOverChart(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterOverChart(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_raster_over_chart(h.l) != 0) 1 else 0;
+}
+
+/// int nRasterSetCount(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetCount(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return @intCast(lookout_raster_set_count(h.l));
+}
+
+/// String nRasterSetName(long h, int i)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetName(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return env_(env).NewStringUTF.?(env, "");
+    if (i < 0) return env_(env).NewStringUTF.?(env, "");
+    return env_(env).NewStringUTF.?(env, lookout_raster_set_name(h.l, @intCast(i), null));
+}
+
+/// boolean nRasterSetInView(long h, int i)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetInView(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    if (i < 0) return 0;
+    return if (lookout_raster_set_in_view(h.l, @intCast(i)) != 0) 1 else 0;
+}
+
+/// int nRasterActiveIndex(long h) -- -1 for "no picture here".
+export fn Java_org_beetlebug_lookout_Lookout_nRasterActiveIndex(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return -1;
+    return lookout_raster_active_index(h.l);
+}
+
+/// void nRasterSelect(long h, int i) -- -1 turns off what is drawn here.
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSelect(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_raster_select(h.l, i);
+}
+
+/// boolean nRasterSetEnabled(long h, String path, boolean on)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetEnabled(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring, on: j.jboolean) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return if (lookout_raster_set_enabled(h.l, @ptrCast(cpath), if (on != 0) 1 else 0) != 0) 1 else 0;
+}
+
+/// boolean nRasterEnabled(long h, String path)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterEnabled(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return if (lookout_raster_enabled(h.l, @ptrCast(cpath)) != 0) 1 else 0;
+}
+
+/// void nToggleChart(long h) -- hide/show the ENC where a raster chart covers.
+export fn Java_org_beetlebug_lookout_Lookout_nToggleChart(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_chart(h.l);
+}
+
+/// boolean nChartHidden(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nChartHidden(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_chart_hidden(h.l) != 0) 1 else 0;
+}

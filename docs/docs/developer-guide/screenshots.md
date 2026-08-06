@@ -26,7 +26,8 @@ or missing its chrome. The same frame on each host makes those faults obvious.
 | **Logical size** | 1400 x 900 points |
 | **Scale** | 2, which gives **2800 x 1800 px** |
 | **Frames** | `day` (the chart and the floating chrome) and `settings` (the mariner panel above the chart) |
-| **File names** | `docs/docs/img/<host>-<shot>.png`, for example `linux-day.png` or `macos-day.png` |
+| **File names** | `docs/docs/img/<host>-<shot>.webp`, for example `linux-day.webp` or `macos-day.webp` |
+| **Format** | WebP, quality 88. See [Format](#format). |
 
 Two environment variables make the camera the same on each host:
 
@@ -43,7 +44,7 @@ On iOS and iPadOS, `simctl launch` sends them as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 ```sh
 cd linux
 ninja -C build
-./screenshots.sh all            # writes docs/docs/img/linux-day.png and docs/docs/img/linux-settings.png
+./screenshots.sh all            # writes docs/docs/img/linux-day.webp and docs/docs/img/linux-settings.webp
 ```
 
 The script starts the app in an **off-screen sway session**. Then it captures the
@@ -77,13 +78,19 @@ Use the same four values: the chart, the camera, the day scheme, and 1400 x 900 
 scale 2. Capture only the window. Do not capture the screen, and do not include the
 desktop.
 
+A display smaller than the frame cannot give the frame. macOS lets a window run
+off the side of the screen but not under the menu bar, so a short display clamps
+the HEIGHT and the aspect comes out wrong. Give `LOOKOUT_WINDOW` a smaller size
+holding the same 1400:900 aspect instead, and say what you used. A 1280 x 803
+desktop takes 1120 x 720.
+
 ```sh
 open -n --env LOOKOUT_OPEN=<chart|folder> \
         --env LOOKOUT_VIEW=-76.482,38.976,13.7 \
         --env LOOKOUT_WINDOW=1400x900 \
         build/Debug/LookoutMarine.app
 # one window only, no shadow, written to the specified file name
-screencapture -o -l"$(GetWindowID LookoutMarine)" docs/docs/img/macos-day.png
+screencapture -o -l"$(GetWindowID LookoutMarine)" docs/docs/img/macos-day.webp
 ```
 
 `LOOKOUT_WINDOW=WIDTHxHEIGHT` sets the content size, so the frame is the same on
@@ -98,7 +105,7 @@ frame correctly. Do not make it larger.
 `LOOKOUT_SHOW` opens chrome at start, so a frame needs no synthetic input:
 `settings`, `scale`, `search`, or a comma-separated list of them. The WinUI 3 shell
 uses `LOOKOUT_OPEN_SETTINGS=1` for the settings frame. A settings frame must agree
-with `linux-settings.png`.
+with `linux-settings.webp`.
 
 ## iPadOS and iOS
 
@@ -115,10 +122,10 @@ SIMCTL_CHILD_LOOKOUT_OPEN=<chart|folder> \
 SIMCTL_CHILD_LOOKOUT_VIEW=-76.482,38.976,13.7 \
   xcrun simctl launch booted org.beetlebug.lookout-marine-ios
 sleep 60   # a 7,000-cell library takes about a minute to map and draw
-xcrun simctl io booted screenshot docs/docs/img/ipad-day.png
+xcrun simctl io booted screenshot docs/docs/img/ipad-day.webp
 ```
 
-Use the same steps on an iPhone device for `iphone-day-raw.png`. Both frames are
+Use the same steps on an iPhone device for `iphone-day-raw.webp`. Both frames are
 portrait: `simctl` cannot rotate a device. To make a landscape frame, run the
 `testFrameForScreenshot` UI test with `TEST_RUNNER_LOOKOUT_FRAME=1`, which turns the
 device and then holds while you capture.
@@ -128,12 +135,12 @@ phone read as devices beside the desktop windows. The `-raw` file keeps the
 capture; the plain name holds the framed image.
 
 ```sh
-swift macos/frame-device.swift docs/docs/img/ipad-day-raw.png \
-  docs/docs/img/ipad-day.png 60 150 90 1        # bezel, body radius, screen radius, camera
-swift macos/frame-device.swift docs/docs/img/iphone-day-raw.png \
-  docs/docs/img/iphone-day.png 45 210 165 0     # the phone camera is in the screen
-swift macos/frame-device.swift docs/docs/img/android-day-raw.png \
-  docs/docs/img/android-day.png 60 150 90 1     # the tablet frame serves Android too
+swift macos/frame-device.swift docs/docs/img/ipad-day-raw.webp \
+  docs/docs/img/ipad-day.webp 60 150 90 1        # bezel, body radius, screen radius, camera
+swift macos/frame-device.swift docs/docs/img/iphone-day-raw.webp \
+  docs/docs/img/iphone-day.webp 45 210 165 0     # the phone camera is in the screen
+swift macos/frame-device.swift docs/docs/img/android-day-raw.webp \
+  docs/docs/img/android-day.webp 60 150 90 1     # the tablet frame serves Android too
 ```
 
 ## Android
@@ -143,12 +150,30 @@ this machine does not give it, so the capture comes from a device over
 `adb`. The frame above is the same one the tablet uses.
 
 ```sh
-adb -s <device> exec-out screencap -p > docs/docs/img/android-day-raw.png
+adb -s <device> exec-out screencap -p > docs/docs/img/android-day-raw.webp
 ```
 
 Take the capture in ONE session with the taps that frame it. A relaunch
 restores the saved view, so coordinates read off an earlier capture aim at a
 view the app no longer shows.
+
+## Format
+
+WebP, quality 88. A chart screenshot is a dense picture and PNG stores it
+losslessly: the same frames were 7.8 MB as PNG and 2.0 MB as WebP, and the chart
+text is not visibly different. Re-shooting a frame commits a whole new copy, so
+this is paid on every take.
+
+```sh
+python3 -c "from PIL import Image; import sys
+im = Image.open(sys.argv[1]).convert('RGBA')
+im.save(sys.argv[2], 'WEBP', quality=88, method=6)" in.png out.webp
+```
+
+The `-raw` capture keeps its NATIVE size: it is the evidence that the frame was
+taken at the specified size, and the framed image is derived from it. The image a
+reader is served is capped — 1600 px for a window, 1400 for a device — because
+the README shows these 160 to 300 points wide and the docs column is about 750.
 
 ## How to examine a frame
 
@@ -159,7 +184,7 @@ made and then found.
    the capture surface was smaller than the minimum size of the app.
 2. **Does the chrome float above the chart?** If the chrome is in a bar below the
    chart, the host used a path that cannot composite.
-3. **Are the text and the symbols sharp at 100%?** Examine the PNG file at 100%. Soft
+3. **Are the text and the symbols sharp at 100%?** Examine the image file at 100%. Soft
    glyphs show that something resampled the chart. The size that the core drew and
    the size that the toolkit composited are not the same.
 4. **Is the chart in the frame?** A frame of flat NODATA blue shows that the camera

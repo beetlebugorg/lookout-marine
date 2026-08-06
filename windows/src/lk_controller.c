@@ -348,6 +348,113 @@ lk_controller_toggle_other_category(lk_controller *self)
         lookout_toggle_other_category(self->handle);
 }
 
+/* ---- raster underlay ----------------------------------------------------- */
+
+int
+lk_controller_raster_add(lk_controller *self, const char *path)
+{
+    if (!lk_controller_is_open(self) || path == NULL || path[0] == '\0')
+        return 0;
+    return lookout_raster_add(self->handle, path);
+}
+
+void
+lk_controller_raster_cycle(lk_controller *self)
+{
+    if (lk_controller_is_open(self))
+        lookout_raster_cycle(self->handle);
+}
+
+void
+lk_controller_raster_select(lk_controller *self, int index)
+{
+    if (lk_controller_is_open(self))
+        lookout_raster_select(self->handle, index);
+}
+
+int
+lk_controller_raster_set_count(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return (int)lookout_raster_set_count(self->handle);
+}
+
+/* Borrowed engine strings are copied out at once: the set list can change on
+ * the next add, and the WinRT layer wants its own hstring anyway. */
+static void
+copy_name(const char *name, size_t len, char *out, size_t out_len)
+{
+    if (out == NULL || out_len == 0)
+        return;
+    if (name == NULL)
+        len = 0;
+    if (len >= out_len)
+        len = out_len - 1;
+    memcpy(out, name, len);
+    out[len] = '\0';
+}
+
+int
+lk_controller_raster_set_name(lk_controller *self, unsigned i, char *out, size_t out_len)
+{
+    if (out != NULL && out_len > 0)
+        out[0] = '\0';
+    if (!lk_controller_is_open(self))
+        return 0;
+    size_t len = 0;
+    const char *name = lookout_raster_set_name(self->handle, i, &len);
+    copy_name(name, len, out, out_len);
+    return len > 0;
+}
+
+int
+lk_controller_raster_set_in_view(lk_controller *self, unsigned i)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_raster_set_in_view(self->handle, i);
+}
+
+int
+lk_controller_raster_active_index(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return -1;
+    return (int)lookout_raster_active_index(self->handle);
+}
+
+int
+lk_controller_raster_set_enabled(lk_controller *self, const char *path, int enabled)
+{
+    if (!lk_controller_is_open(self) || path == NULL)
+        return 0;
+    return lookout_raster_set_enabled(self->handle, path, enabled);
+}
+
+int
+lk_controller_raster_enabled(lk_controller *self, const char *path)
+{
+    if (!lk_controller_is_open(self) || path == NULL)
+        return 0;
+    return lookout_raster_enabled(self->handle, path);
+}
+
+void
+lk_controller_toggle_chart(lk_controller *self)
+{
+    if (lk_controller_is_open(self))
+        lookout_toggle_chart(self->handle);
+}
+
+int
+lk_controller_chart_hidden(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_chart_hidden(self->handle);
+}
+
 /* ---- pick --------------------------------------------------------------- */
 
 typedef struct {
@@ -473,4 +580,13 @@ lk_controller_readout(lk_controller *self, lk_readout *out)
     lookout_get_mariner(self->handle, &m);
     out->scheme = (int)m.scheme;
     out->building = lookout_is_building(self->handle);
+
+    size_t len = 0;
+    const char *name = lookout_raster_active_name(self->handle, &len);
+    copy_name(name, len, out->raster_active, sizeof out->raster_active);
+    len = 0;
+    name = lookout_raster_available_name(self->handle, &len);
+    copy_name(name, len, out->raster_available, sizeof out->raster_available);
+    out->raster_over = lookout_raster_over_chart(self->handle);
+    out->chart_hidden = lookout_chart_hidden(self->handle);
 }

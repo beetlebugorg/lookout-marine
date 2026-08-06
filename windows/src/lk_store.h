@@ -28,6 +28,19 @@ void   lk_store_free_recents(char **recents);
 void lk_store_save_mariner(const tile57_mariner *m);
 void lk_store_apply_saved_mariner(tile57_mariner *m);
 
+/* Raster charts: the installed list survives a change of ENC and a restart —
+ * the shell re-adds every stored path after each open. Each path carries its
+ * own enabled flag (half-gigabyte downloads are switched off, not deleted).
+ * load returns a NULL-terminated array of malloc'd paths, freed with
+ * lk_store_free_rasters; *enabled_out (optional) receives a malloc'd int per
+ * path, freed by the same call. note appends (deduped, enabled); forget
+ * removes the path. */
+char **lk_store_load_rasters(int **enabled_out);
+void   lk_store_note_raster(const char *path);
+void   lk_store_forget_raster(const char *path);
+void   lk_store_set_raster_enabled(const char *path, int enabled);
+void   lk_store_free_rasters(char **paths, int *enabled);
+
 #ifdef __cplusplus
 }
 #endif

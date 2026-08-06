@@ -78,6 +78,7 @@ namespace winrt::LookoutMarine::implementation
 
         if (OpenChart(paths))
         {
+            InstallStoredRasters(); // the open destroyed the handle they rode on
             EmptyState().Visibility(Visibility::Collapsed);
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);

@@ -33,8 +33,8 @@ lk_search_changed (GtkEditable *editable, gpointer user_data)
 
   if (lk_coordinate_parse (text, &lat, &lon))
     {
-      g_autofree char *lat_s = lk_coord_format_dms (lat, TRUE);
-      g_autofree char *lon_s = lk_coord_format_dms (lon, FALSE);
+      g_autofree char *lat_s = lk_coord_format_dm (lat, TRUE);
+      g_autofree char *lon_s = lk_coord_format_dm (lon, FALSE);
       g_autofree char *label = g_strdup_printf ("Go to %s %s", lat_s, lon_s);
       gtk_label_set_text (GTK_LABEL (search->hint), label);
       gtk_widget_remove_css_class (search->hint, "dim-label");

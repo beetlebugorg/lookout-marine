@@ -9,7 +9,7 @@ sidebar_position: 4
 A native **WinUI 3** shell (Windows App SDK, C++/WinRT) around the Zig chart
 core. Same core, same C ABI and same behaviour as the other hosts.
 
-![Annapolis Harbor and the Naval Academy, day scheme](../img/windows-day.png)
+![Annapolis Harbor and the Naval Academy, day scheme](../img/windows-day.webp)
 
 The core renders with **Direct3D 12**, the Windows form of the Metal transport.
 It owns the device, the pipelines (HLSL, compiled at run time) and a composition
@@ -50,7 +50,7 @@ executable.
 | `LOOKOUT_WARP` | `1` forces the software rasterizer |
 | `LOOKOUT_OPEN_SETTINGS` | `1` opens the mariner pane at start, for a screenshot |
 
-![The mariner pane above the chart](../img/windows-settings.png)
+![The mariner pane above the chart](../img/windows-settings.webp)
 
 ## Files
 

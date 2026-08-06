@@ -60,9 +60,12 @@ namespace lkw
         SplitDMS(lat, &lat_d, &lat_m, &lat_s);
         SplitDMS(lon, &lon_d, &lon_m, &lon_s);
         wchar_t buf[64];
-        swprintf_s(buf, L"%02d\x00B0%02d'%04.1f\"%c %03d\x00B0%02d'%04.1f\"%c",
-                   lat_d, lat_m, lat_s, lat < 0 ? L'S' : L'N',
-                   lon_d, lon_m, lon_s, lon < 0 ? L'W' : L'E');
+        // Degrees and DECIMAL MINUTES: what a GPS shows, what goes in the log,
+        // and what is passed over the radio. One minute of latitude is one
+        // nautical mile, so a decimal minute reads as distance directly.
+        swprintf_s(buf, L"%02d\x00B0%06.3f'%c %03d\x00B0%06.3f'%c",
+                   lat_d, lat_m + lat_s / 60.0, lat < 0 ? L'S' : L'N',
+                   lon_d, lon_m + lon_s / 60.0, lon < 0 ? L'W' : L'E');
         return buf;
     }
 }

@@ -69,6 +69,7 @@ namespace winrt::LookoutMarine::implementation
         NorthBtn().Click([this](auto &&, auto &&) { Command('u'); });
         SettingsBtn().Click([this](auto &&, auto &&) { Command(','); });
         SearchBtn().Click([this](auto &&, auto &&) { Command('f'); });
+        RasterPill().Click([this](auto &&, auto &&) { ShowRasterMenu(); });
         SettingsClose().Click([this](auto &&, auto &&) {
             SettingsPane().Visibility(Visibility::Collapsed);
         });
@@ -163,6 +164,9 @@ namespace winrt::LookoutMarine::implementation
             { Windows::System::VirtualKey::S, true, 'S' },
             { Windows::System::VirtualKey::D, false, 'd' },
             { Windows::System::VirtualKey::F, false, 'f' },
+            { Windows::System::VirtualKey::I, false, 'i' }, // next raster chart
+            { Windows::System::VirtualKey::I, true, 'I' },  // add raster charts
+            { Windows::System::VirtualKey::H, true, 'H' },  // hide ENC over raster
             { (Windows::System::VirtualKey)0xBC, false, ',' }, // VK_OEM_COMMA
         };
         for (auto const &a : accels)

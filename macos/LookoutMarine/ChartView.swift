@@ -103,6 +103,15 @@ struct OverlayLayer: View {
     }
     static let sideSheetWidth: CGFloat = 360
 
+    /// The capsule's measured height. It is one row on a wide window and two on
+    /// a phone, and the corner chrome has to clear whichever it is.
+    @State private var capsuleHeight: CGFloat = Chrome.capsule
+
+    /// How far the capsule sits off the bottom. A phone gives it less, because
+    /// a two-row capsule grows upward into the zoom controls and the screen has
+    /// none to spare.
+    private var capsuleBottom: CGFloat { Chrome.gap }
+
     var body: some View {
         GeometryReader { geo in
             let compact = geo.size.width < Self.compactWidth
@@ -114,7 +123,7 @@ struct OverlayLayer: View {
             // a narrow window, and the sheet when one is up.
             let corner: CGFloat = form == .bottomSheet
                 ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
-                : (compact ? Chrome.margin + Chrome.capsule + Chrome.gap : Chrome.margin)
+                : (compact ? capsuleBottom + capsuleHeight + Chrome.gap : Chrome.margin)
             Color.clear
                 .allowsHitTesting(false)
                 // Top left: the search bubble opens the search field.
@@ -254,11 +263,12 @@ struct OverlayLayer: View {
                         if model.hasChart, form == nil || form == .callout {
                             ReadoutsCapsule(model: model, compact: compact,
                                             onScaleTap: toggleScaleEntry)
+                                .measureSize { capsuleHeight = $0.height }
                         }
                     }
                     .padding(.bottom, form == .bottomSheet
                              ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
-                             : Chrome.margin)
+                             : capsuleBottom)
                 }
                 .overlay(alignment: .top) {
                     if model.isBuilding { BuildingPill().padding(.top, 10) }
@@ -755,6 +765,11 @@ struct ChartView: View {
         .fileImporter(isPresented: $model.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
             if case .success(let url) = result { model.openImported(url) }
+        }
+        .fileImporter(isPresented: $model.showRasterImporter,
+                      allowedContentTypes: [.item, .folder],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { model.importRasterCharts(urls) }
         }
     }
 

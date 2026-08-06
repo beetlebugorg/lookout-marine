@@ -135,7 +135,30 @@ static const char *LK_CSS =
     "  background: alpha(@warning_color, 0.18);"
     "  border-radius: 999px;"
     "  padding: 1px 7px;"
-    "}";
+    "}"
+    /* The raster chart pill, at the end of the capsule. The COLOUR reports the
+     * raster chart, not the ENC: the accent while the picture is drawn, amber
+     * while one is here and off. It is a control, so it must not carry a button
+     * frame inside a readout. */
+    ".lk-raster-pill > button {"
+    "  padding: 1px 7px;"
+    "  min-height: 0;"
+    "  min-width: 0;"
+    "  border: none;"
+    "  box-shadow: none;"
+    "  border-radius: 8px;"
+    "  font-size: 90%;"
+    "  font-weight: bold;"
+    "  color: @accent_color;"
+    "  background: alpha(@accent_color, 0.18);"
+    "}"
+    ".lk-raster-pill.lk-off > button {"
+    "  color: @warning_color;"
+    "  background: alpha(@warning_color, 0.28);"
+    "}"
+    ".lk-raster-pill > button:hover { background: alpha(@accent_color, 0.30); }"
+    ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
+    ".lk-raster-bar { opacity: 0.5; }";
 
 static void
 lk_app_activate (GtkApplication *app, gpointer user_data)
@@ -175,6 +198,9 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
     { "win.search",           { "<Control>f", NULL } },
     { "win.close-pick",       { "Escape", NULL } },
     { "win.settings",         { "<Control>comma", NULL } },
+    { "win.raster-cycle",     { "<Control>i", NULL } },
+    { "win.raster-add",       { "<Control><Shift>i", NULL } },
+    { "win.toggle-chart",     { "<Control><Shift>h", NULL } },
   };
 
   for (gsize i = 0; i < G_N_ELEMENTS (accels); i++)

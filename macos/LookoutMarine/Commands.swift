@@ -44,6 +44,44 @@ struct AppCommands: Commands {
                 Divider()
                 Button("Cycle") { model.cycleScheme() }.keyboardShortcut("l", modifiers: .command)
             }
+            // The same list the HUD pill opens: every set that covers the
+            // view, marked with the one being drawn.
+            Menu("Raster Chart") {
+                ForEach(model.rasterSets.filter(\.inView)) { set in
+                    Button {
+                        model.selectRasterSet(set.id)
+                    } label: {
+                        if set.id == model.rasterActive {
+                            Label(set.name, systemImage: "checkmark")
+                        } else {
+                            Text(set.name)
+                        }
+                    }
+                }
+                if model.rasterSets.contains(where: \.inView) { Divider() }
+                Button {
+                    model.selectRasterSet(-1)
+                } label: {
+                    if model.rasterActive < 0 {
+                        Label("None", systemImage: "checkmark")
+                    } else {
+                        Text("None")
+                    }
+                }
+            }
+            .disabled(model.rasterPaths.isEmpty)
+            Button("Next Raster Chart") { model.cycleRaster() }
+                .keyboardShortcut("i", modifiers: .command)
+                .disabled(model.rasterPaths.isEmpty)
+            Button("Add Raster Charts…") { model.presentRasterPanel() }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+            Button(model.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") { model.toggleChart() }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .help("Hide the ENC where a raster chart covers it.")
+            if !model.rasterPaths.isEmpty {
+                Button("Forget Raster Charts (\(model.rasterPaths.count))") { model.clearRasterCharts() }
+                    .help("Takes effect the next time a chart is opened.")
+            }
             Divider()
             Button("Zoom In")      { model.zoomIn() }.keyboardShortcut("+", modifiers: .command)
             Button("Zoom Out")     { model.zoomOut() }.keyboardShortcut("-", modifiers: .command)

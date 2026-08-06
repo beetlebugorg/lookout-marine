@@ -47,6 +47,15 @@ object Chrome {
      */
     val compactWidth = 700.dp
 
+    /**
+     * S-52 NODTA for the day palette — what the engine clears the chart to
+     * where it has no data. The window and the loading cover use it so the
+     * wait looks like an empty chart rather than a dead app, and the first
+     * frame arrives on the same colour with no flash. Matches
+     * Lookout.nodata's default in src/root.zig.
+     */
+    val nodata = Color(0xFF93AEBB)
+
     /** Ground metres per dp at a 1:1 display scale, from the 0.28 mm pixel. */
     const val METRES_PER_DP_AT_1_TO_1 = 0.00028
 }

@@ -101,6 +101,113 @@ lk_present_open_chart_dialog (GtkWindow *parent, LkAppModel *model)
   lk_open_chart_choice (parent, model);
 }
 
+/* ---- the raster chart pickers ------------------------------------------- */
+
+static void
+lk_raster_files_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  LkAppModel *model = user_data;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GListModel) files =
+      gtk_file_dialog_open_multiple_finish (GTK_FILE_DIALOG (source), result, &error);
+
+  if (files == NULL)
+    return; /* cancelled, or an error GTK already surfaced */
+
+  g_autoptr (GPtrArray) paths = g_ptr_array_new_with_free_func (g_free);
+  guint n = g_list_model_get_n_items (files);
+
+  for (guint i = 0; i < n; i++)
+    {
+      g_autoptr (GFile) file = g_list_model_get_item (files, i);
+      char *path = g_file_get_path (file);
+
+      if (path != NULL)
+        g_ptr_array_add (paths, path);
+    }
+
+  if (paths->len == 0)
+    {
+      lk_app_model_set_open_error (model,
+                                   "Those aren't local files — the engine reads a raster "
+                                   "chart off the disk and needs a real path.");
+      return;
+    }
+
+  g_ptr_array_add (paths, NULL);
+  lk_app_model_add_raster_charts (model, (const char *const *) paths->pdata);
+}
+
+void
+lk_present_add_raster_dialog (GtkWindow *parent, LkAppModel *model)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (model));
+
+  GtkFileDialog *dialog = gtk_file_dialog_new ();
+  g_autoptr (GtkFileFilter) raster = gtk_file_filter_new ();
+  g_autoptr (GListStore) filters = g_list_store_new (GTK_TYPE_FILE_FILTER);
+
+  gtk_file_dialog_set_title (dialog, "Add Raster Charts");
+  gtk_file_dialog_set_modal (dialog, TRUE);
+  gtk_file_dialog_set_accept_label (dialog, "Add");
+
+  /* The extension is a hint only: the engine decides by what the file IS. The
+   * "All files" filter is there so a chart with an odd name is still reachable. */
+  gtk_file_filter_set_name (raster, "Raster charts");
+  gtk_file_filter_add_suffix (raster, "mbtiles"); /* a suffix rule ignores case */
+  g_list_store_append (filters, raster);
+
+  g_autoptr (GtkFileFilter) all = gtk_file_filter_new ();
+  gtk_file_filter_set_name (all, "All files");
+  gtk_file_filter_add_pattern (all, "*");
+  g_list_store_append (filters, all);
+
+  gtk_file_dialog_set_filters (dialog, G_LIST_MODEL (filters));
+  gtk_file_dialog_set_default_filter (dialog, raster);
+
+  gtk_file_dialog_open_multiple (dialog, parent, NULL, lk_raster_files_chosen, model);
+  g_object_unref (dialog);
+}
+
+static void
+lk_raster_folder_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  LkAppModel *model = user_data;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GFile) folder =
+      gtk_file_dialog_select_folder_finish (GTK_FILE_DIALOG (source), result, &error);
+
+  if (folder == NULL)
+    return;
+
+  g_autofree char *path = g_file_get_path (folder);
+  if (path == NULL)
+    return;
+
+  g_auto (GStrv) paths = lk_raster_charts_in_dir (path);
+  if (g_strv_length (paths) == 0)
+    {
+      lk_app_model_set_open_error (model, "That folder holds no .mbtiles raster charts.");
+      return;
+    }
+
+  lk_app_model_add_raster_charts (model, (const char *const *) paths);
+}
+
+void
+lk_present_add_raster_folder_dialog (GtkWindow *parent, LkAppModel *model)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (model));
+
+  GtkFileDialog *dialog = gtk_file_dialog_new ();
+
+  gtk_file_dialog_set_title (dialog, "Add a Folder of Raster Charts");
+  gtk_file_dialog_set_modal (dialog, TRUE);
+  gtk_file_dialog_set_accept_label (dialog, "Add");
+  gtk_file_dialog_select_folder (dialog, parent, NULL, lk_raster_folder_chosen, model);
+  g_object_unref (dialog);
+}
+
 /* ---- actions ------------------------------------------------------------ */
 
 static void
@@ -135,6 +242,56 @@ static void
 lk_action_toggle_soundings (GSimpleAction *a, GVariant *p, gpointer d) { lk_app_model_toggle_soundings (((LkWindow *) d)->model); }
 static void
 lk_action_toggle_other (GSimpleAction *a, GVariant *p, gpointer d) { lk_app_model_toggle_other_category (((LkWindow *) d)->model); }
+
+/* ---- raster charts ------------------------------------------------------ */
+
+/* The cycle has nowhere to go with nothing installed, so the key press offers
+ * the picker rather than doing nothing at all. */
+static void
+lk_action_raster_cycle (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  if (lk_app_model_get_raster_count (self->model) == 0)
+    {
+      lk_present_add_raster_dialog (GTK_WINDOW (self->window), self->model);
+      return;
+    }
+
+  lk_app_model_cycle_raster (self->model);
+}
+
+static void
+lk_action_raster_select (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_app_model_select_raster_set (self->model, g_variant_get_int32 (parameter));
+}
+
+static void
+lk_action_raster_add (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_present_add_raster_dialog (GTK_WINDOW (self->window), self->model);
+}
+
+static void
+lk_action_raster_add_folder (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_present_add_raster_folder_dialog (GTK_WINDOW (self->window), self->model);
+}
+
+static void
+lk_action_toggle_chart (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_app_model_toggle_chart (self->model);
+}
 
 static void
 lk_action_set_scheme (GSimpleAction *action, GVariant *parameter, gpointer user_data)
@@ -192,6 +349,13 @@ static const GActionEntry lk_window_actions[] = {
   { "close-pick",       lk_action_close_pick },
   { "settings",         lk_action_settings },
   { "set-scheme",       lk_action_set_scheme, "i", "0" },
+  { "raster-cycle",     lk_action_raster_cycle },
+  /* Stateful, so the pill's list marks the set that is drawn. The state is the
+   * index the engine reports, pushed back on every raster change. */
+  { "raster-select",    lk_action_raster_select, "i", "-1" },
+  { "raster-add",       lk_action_raster_add },
+  { "raster-add-folder", lk_action_raster_add_folder },
+  { "toggle-chart",     lk_action_toggle_chart },
 };
 
 /* ---- model-driven chrome ------------------------------------------------ */
@@ -307,6 +471,20 @@ static void
 lk_window_pick_changed (LkAppModel *model, gpointer user_data)
 {
   lk_window_update_pick (user_data);
+}
+
+/* The engine owns which set is drawn: the cycle key, a chart opening and a
+ * chart switched off all move it. Push it back into the action, so the list the
+ * pill opens marks the picture actually on the screen. */
+static void
+lk_window_raster_changed (LkAppModel *model, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window), "raster-select");
+
+  if (action != NULL)
+    g_simple_action_set_state (G_SIMPLE_ACTION (action),
+                               g_variant_new_int32 (lk_app_model_get_raster_active (model)));
 }
 
 static void
@@ -513,6 +691,7 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   g_signal_connect (model, "notify", G_CALLBACK (lk_window_notify), self);
   g_signal_connect (model, "pick-results", G_CALLBACK (lk_window_pick_changed), self);
+  g_signal_connect (model, "raster-changed", G_CALLBACK (lk_window_raster_changed), self);
 
   lk_window_update_overlays (self);
 

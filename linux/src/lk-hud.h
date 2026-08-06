@@ -38,6 +38,12 @@ G_BEGIN_DECLS
  * the scale entry. */
 GtkWidget *lk_hud_capsule_new (LkAppModel *model);
 
+/* The raster chart pill, at the right of the readouts. It appears wherever a
+ * raster chart is in view, at any zoom, and it goes when the mariner leaves the
+ * coverage. It names the set drawn over this view and opens the list of what
+ * covers it. */
+GtkWidget *lk_raster_pill_new (LkAppModel *model);
+
 /* The distance bar: four alternating segments under a round distance. */
 GtkWidget *lk_scale_bar_new (LkAppModel *model);
 
@@ -61,7 +67,7 @@ GtkWidget *lk_bubble_menu_new (const char *icon_name, const char *tooltip, GMenu
 /* ---- readout formatting ------------------------------------------------- */
 
 /* One half of a position, in degrees, minutes and seconds: 38°58'34.8"N. */
-char *lk_coord_format_dms (double value, gboolean is_lat);
+char *lk_coord_format_dm (double value, gboolean is_lat);
 
 /* The full scale with group separators, as every shell prints it: 1:13,267. */
 char *lk_format_scale (double denominator);

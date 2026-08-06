@@ -18,6 +18,34 @@ struct OpenRequest: Equatable {
 final class AppModel: ObservableObject {
     // MARK: Chart state
     @Published var hasChart = false
+    /// The active raster chart set's name, or "" for no picture. Shown at all times
+    /// while a picture is on: the chart drops its opaque water and land fills to
+    /// let the picture through, and the mariner must never mistake that display
+    /// for the full chart.
+    @Published var rasterName = ""
+    /// Every raster chart file the mariner has installed, in the order added. The
+    /// controller replays these into each newly opened chart, so a raster chart
+    /// survives switching charts and relaunching.
+    @Published var rasterPaths: [String] = []
+    /// True only while a picture is really beneath the view and the chart is
+    /// therefore drawing without its opaque fills. The HUD badge keys off this,
+    /// not off the selected set — a badge that appeared whenever a raster chart was
+    /// merely installed would claim the chart was reduced when it was not.
+    @Published var rasterInView = false
+    /// True while the vector chart is hidden and only the picture shows.
+    @Published var chartHidden = false
+    /// The set that covers this view, DRAWN OR NOT. Empty when none does. The
+    /// pill appears only when this is set: a control that is useless here is
+    /// noise, and one that says nothing about what is available teaches nothing.
+    @Published var rasterAvailable = ""
+    /// The installed charts the mariner has switched OFF. They stay installed:
+    /// these are half-gigabyte downloads, and carrying four providers for one
+    /// coast means wanting three of them quiet, not deleted.
+    @Published var rasterOff: Set<String> = []
+    /// Every set, with whether it is in view. The pill's menu is built from it.
+    @Published var rasterSets: [ChartController.RasterSet] = []
+    /// The drawn set's index, or -1.
+    @Published var rasterActive = -1
     @Published var chartPath: String?
     @Published var recents: [String] = []
     @Published var openRequest: OpenRequest?
@@ -101,6 +129,10 @@ final class AppModel: ObservableObject {
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
     // panel and Settings scene are AppKit-native)
     @Published var showImporter = false
+    /// The Add Raster Charts picker. Separate from `showImporter` because the
+    /// two import different things to different places: an ENC is copied into
+    /// the container and opened, a raster chart is added to the underlay.
+    @Published var showRasterImporter = false
     @Published var showSettings = false
     /// Which settings tab shows: 0 Display, 1 Depths, 2 Text, 3 Charts,
     /// 4 Advanced. The screenshot hook sets it.
@@ -125,9 +157,20 @@ final class AppModel: ObservableObject {
     weak var controller: ChartController?
 
     private let recentsKey = "lookout.recents"
+    /// The raster charts the mariner installed. Persisted, because a chart set is a
+    /// half-gigabyte download they picked deliberately — asking again every
+    /// launch would be its own bug.
+    private let rasterKey = "lookout.rastercharts"
+    private let rasterOffKey = "lookout.rastercharts.off"
 
     init() {
         recents = UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
+        // Drop anything that has since been deleted or unplugged, so a stale
+        // entry never becomes an error the mariner has to dismiss at every
+        // launch.
+        rasterPaths = (UserDefaults.standard.stringArray(forKey: rasterKey) ?? [])
+            .filter { FileManager.default.fileExists(atPath: $0) }
+        rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
     }
 
     // MARK: - Opening charts
@@ -270,6 +313,162 @@ final class AppModel: ObservableObject {
         guard let c = controller else { return }
         c.cycleScheme()
         MarinerSettings.save(c.getMariner())
+    }
+    /// Hide or show the vector chart, leaving the picture beneath it.
+    func toggleChart() {
+        guard let c = controller else { return }
+        c.toggleChart()
+        chartHidden = c.chartHidden()
+    }
+
+    /// Install the raster charts the mariner chose. Files that will not open are reported
+    /// together rather than one alert at a time — picking a folder of twenty and
+    /// being asked twenty times would be unusable.
+    func addRasterCharts(_ paths: [String]) {
+        guard let c = controller else { return }
+        var failed: [String] = []
+        for p in paths where !rasterPaths.contains(p) {
+            if c.addRaster(p) {
+                rasterPaths.append(p)
+            } else {
+                failed.append((p as NSString).lastPathComponent)
+            }
+        }
+        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+
+        // Read the whole state back, not just the name. The pill is built from
+        // rasterSets and rasterAvailable, and those reach it through the frame
+        // readouts — which never come while the chart sits idle behind the open
+        // panel. Without this, adding a chart over the water you are looking at
+        // appeared to do nothing at all.
+        refreshRasterState()
+
+        // Draw what was just added, if it covers this view. The mariner picked
+        // these files deliberately while looking at this water; showing them is
+        // the obvious answer, and the pill takes them back in one click.
+        if let added = paths.last(where: { rasterPaths.contains($0) }) {
+            let name = AppModel.providerLabel(added)
+            if let set = rasterSets.first(where: { $0.name == name && $0.inView }) {
+                selectRasterSet(set.id)
+            }
+        }
+
+        if !failed.isEmpty {
+            openError = failed.count == 1
+                ? "Couldn't open \(failed[0]).\nIt may not be a raster chart tile57 reads."
+                : "Couldn't open \(failed.count) of \(paths.count) files:\n" + failed.joined(separator: "\n")
+        }
+    }
+
+    /// Pull every published raster field off the controller at once. Anything
+    /// that changes the set list or the selection outside a frame must call
+    /// this: the readouts only run while the chart renders.
+    func refreshRasterState() {
+        guard let c = controller else { return }
+        rasterName = c.rasterName()
+        rasterActive = c.rasterActiveIndex()
+        rasterSets = c.rasterSets()
+        rasterAvailable = c.rasterAvailableName()
+        chartHidden = c.chartHidden()
+    }
+
+    /// Draw one set, or none for -1.
+    func selectRasterSet(_ i: Int) {
+        guard let c = controller else { return }
+        c.rasterSelect(i)
+        refreshRasterState()
+    }
+
+    /// The installed files grouped by the provider their name gives — the same
+    /// grouping the engine uses for a set, so what Settings shows and what the
+    /// pill cycles are the same thing.
+    var rasterGroups: [(name: String, paths: [String])] {
+        var order: [String] = []
+        var byName: [String: [String]] = [:]
+        for p in rasterPaths {
+            let n = AppModel.providerLabel(p)
+            if byName[n] == nil { order.append(n) }
+            byName[n, default: []].append(p)
+        }
+        return order.map { ($0, byName[$0] ?? []) }
+    }
+
+    /// Is any file of this set on?
+    func rasterGroupOn(_ paths: [String]) -> Bool {
+        paths.contains { !rasterOff.contains($0) }
+    }
+
+    /// Turn a whole set on or off. Off keeps every file installed.
+    func setRasterGroupEnabled(_ paths: [String], _ on: Bool) {
+        for p in paths { setRasterEnabled(p, on) }
+    }
+
+    /// Turn one raster chart on or off. It stays installed either way.
+    func setRasterEnabled(_ path: String, _ on: Bool) {
+        if on { rasterOff.remove(path) } else { rasterOff.insert(path) }
+        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
+        controller?.setRasterEnabled(path, on)
+        // Read the selection back: switching off the last file of the drawn set
+        // moves the selection, and the pill must not keep naming a chart that
+        // is off. Settings can be open while the chart is idle, so this cannot
+        // wait for the next frame's readouts.
+        refreshRasterState()
+    }
+
+    /// Remove one source. The engine cannot drop a source from a live handle,
+    /// so this takes effect the next time a chart opens.
+    func removeRasterChart(_ path: String) {
+        rasterPaths.removeAll { $0 == path }
+        rasterOff.remove(path)
+        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
+    }
+
+    /// What to call the set a file belongs to — mirrors the engine's rule.
+    ///
+    /// A community MBTiles names its provider, and that is what a mariner
+    /// chooses between. A baked sheet does not: `tile57 bake` writes one
+    /// directory per sheet under a bake root, and a bundle holds hundreds, so
+    /// they belong to the bake they came from.
+    static func providerLabel(_ path: String) -> String {
+        let ns = path as NSString
+        let base = ns.lastPathComponent
+        for k in ["ArcGIS", "Bing", "Google", "Navionics", "ESRI", "Esri",
+                  "CMap", "C-Map", "Sentinel", "NAIP", "OSM", "Imagery"] {
+            if base.range(of: k, options: .caseInsensitive) != nil { return k }
+        }
+        let stem = (base as NSString).deletingPathExtension
+        if base.lowercased().hasSuffix(".pmtiles") {
+            let dir = ns.deletingLastPathComponent
+            if (dir as NSString).lastPathComponent == stem {
+                let root = ((dir as NSString).deletingLastPathComponent as NSString).lastPathComponent
+                if !root.isEmpty { return root }
+            }
+        }
+        return stem.isEmpty ? base : stem
+    }
+
+    /// Forget every installed source. The engine has no remove yet, so this
+    /// takes effect on the next chart open — say so where it is offered.
+    func clearRasterCharts() {
+        rasterPaths.removeAll()
+        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+    }
+
+    /// Step to the next raster chart set, with "no picture" as one position — so the
+    /// same control also reaches the full chart.
+    func cycleRaster() {
+        guard let c = controller else { return }
+        // Nothing installed: the cycle has nowhere to go, so offer the picker
+        // rather than letting the key press do nothing at all.
+        if rasterPaths.isEmpty {
+            #if os(macOS)
+            presentRasterPanel()
+            #endif
+            return
+        }
+        c.cycleRaster()
+        rasterName = c.rasterName()
     }
     /// Set the color scheme directly (0 day / 1 dusk / 2 night).
     func setScheme(_ s: Int) {

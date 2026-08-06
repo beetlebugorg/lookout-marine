@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,7 +45,11 @@ import java.io.File
  * gigabytes. So: broad read access, browse the real filesystem, open in place.
  */
 @Composable
-fun ChartsSection(charts: ChartsModel, onRequestAccess: () -> Unit) {
+fun ChartsSection(
+    charts: ChartsModel,
+    controller: ChartController,
+    onRequestAccess: () -> Unit,
+) {
     SectionHeader("Open charts")
     Footer(charts.activeLabel)
 
@@ -81,6 +86,159 @@ fun ChartsSection(charts: ChartsModel, onRequestAccess: () -> Unit) {
             onClick = charts::clearSelection,
             modifier = Modifier.padding(horizontal = 12.dp),
         ) { Text("Use pushed / bundled charts instead") }
+    }
+
+    RasterChartsSection(controller)
+}
+
+/**
+ * The mariner's own picture charts. A different KIND of chart from the ENC, so
+ * it gets its own section rather than a row in the library browser.
+ */
+@Composable
+private fun RasterChartsSection(controller: ChartController) {
+    val installed = controller.rasterCharts
+    var browsing by remember { mutableStateOf(false) }
+
+    SectionHeader("Raster charts")
+    Footer(
+        "Charts made of pictures: MBTiles of satellite imagery or another " +
+            "vendor's charts. The ENC draws over them and drops its depth and " +
+            "land shading only where they cover. Switch one off to keep it " +
+            "installed without drawing it.",
+    )
+
+    if (installed.paths.isEmpty()) {
+        Footer("No raster charts.")
+    } else {
+        installed.groups.forEach { (provider, paths) ->
+            // The provider switch: these files draw as one picture, so they go
+            // on and off together.
+            val groupOn = paths.any { installed.isEnabled(it) }
+            SwitchRow(
+                label = provider,
+                checked = groupOn,
+                onCheckedChange = { controller.setRasterGroupEnabled(paths, it) },
+            )
+            paths.forEach { p ->
+                SwitchRow(
+                    label = File(p).name,
+                    checked = installed.isEnabled(p),
+                    indent = true,
+                    onCheckedChange = { controller.setRasterEnabled(p, it) },
+                    onRemove = { controller.removeRasterChart(p) },
+                )
+            }
+        }
+    }
+
+    TextButton(
+        onClick = { browsing = !browsing },
+        modifier = Modifier.padding(horizontal = 12.dp),
+    ) { Text(if (browsing) "Done adding" else "Add raster charts…") }
+
+    if (browsing) {
+        RasterBrowser(controller)
+    }
+}
+
+/**
+ * Browse to a folder of raster charts and add every one under it. The same
+ * approach the library browser takes, and for the same reason: the engine opens
+ * these BY PATH and mmaps them, and a copy of a half-gigabyte download into app
+ * storage would spend the space twice.
+ */
+@Composable
+private fun RasterBrowser(controller: ChartController) {
+    val roots = controller.rasterCharts.let { _ -> storageRootsRemembered() }
+    var cur by remember { mutableStateOf(roots.firstOrNull()) }
+    var kids by remember { mutableStateOf<List<File>>(emptyList()) }
+    var found by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    LaunchedEffect(cur) {
+        val dir = cur
+        if (dir == null) {
+            kids = emptyList(); found = emptyList()
+            return@LaunchedEffect
+        }
+        val listed = withContext(Dispatchers.IO) {
+            dir.listFiles()?.filter { it.isDirectory && it.canRead() }
+                ?.sortedBy { it.name.lowercase() } ?: emptyList()
+        }
+        // Only this directory's own charts, not the whole subtree: the walk is
+        // what the Add button does, and a browser that scans everything below
+        // every folder it lists would crawl a storage volume on each tap.
+        val here = withContext(Dispatchers.IO) {
+            dir.listFiles()?.filter {
+                it.isFile && it.extension.equals("mbtiles", ignoreCase = true)
+            }?.map { it.absolutePath }?.sorted() ?: emptyList()
+        }
+        kids = listed
+        found = here
+    }
+
+    Text(
+        text = cur?.absolutePath ?: "Storage",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+    )
+
+    val parent = cur?.parentFile
+    if (cur != null && parent != null && parent.canRead() && roots.none { it.path == cur?.path }) {
+        BrowseRow(Icons.Default.ArrowUpward, parent.name.ifEmpty { "/" }) { cur = parent }
+    }
+    kids.forEach { d ->
+        BrowseRow(Icons.Default.Folder, d.name) { cur = d }
+    }
+
+    if (found.isNotEmpty()) {
+        Button(
+            onClick = { controller.addRasterCharts(found) },
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+        ) { Text("Add ${found.size} here") }
+    } else {
+        Footer("No .mbtiles in this folder.")
+    }
+}
+
+@Composable
+private fun storageRootsRemembered(): List<File> {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    return remember { storageRoots(ctx) }
+}
+
+/** One switch row, with an optional Remove. */
+@Composable
+private fun SwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    indent: Boolean = false,
+    onRemove: (() -> Unit)? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = if (indent) 40.dp else 20.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
+    ) {
+        Text(
+            text = label,
+            style = if (indent) MaterialTheme.typography.bodySmall
+                    else MaterialTheme.typography.bodyMedium,
+            color = if (checked) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (onRemove != null) {
+            TextButton(onClick = onRemove) { Text("Remove") }
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

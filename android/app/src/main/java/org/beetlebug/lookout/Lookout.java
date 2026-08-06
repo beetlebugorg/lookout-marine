@@ -193,4 +193,73 @@ public final class Lookout implements AutoCloseable {
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
     private static native String[] nPick(long h, double lon, double lat);
+
+    // ---- raster charts ---------------------------------------------------
+    //
+    // A raster chart is a chart made of pictures the mariner supplies: MBTiles
+    // of satellite imagery, or another vendor's chart rendered to tiles. They
+    // draw BELOW the ENC, which then drops its opaque depth and land fills
+    // wherever a picture covers, so the mariner keeps the contours, buoys,
+    // lights and soundings and sees the water as well.
+    //
+    // Charts group into SETS by provider. Sets covering different water draw at
+    // the same time; only sets covering the same water are a choice.
+
+    /** Open a raster chart and add it to its set. False when it will not open. */
+    public boolean rasterAdd(String path)        { return h != 0 && nRasterAdd(h, path); }
+
+    /** Step to the next set covering the water in view, then to none. */
+    public void rasterCycle()                    { if (h != 0) nRasterCycle(h); }
+
+    /** The set drawn over this view, or "" when this water has no picture. */
+    public String rasterActiveName()             { return h == 0 ? "" : nRasterActiveName(h); }
+
+    /**
+     * A set whose charts are in view, DRAWN OR NOT. This is what lets the pill
+     * say "there is a picture here" while it is switched off — without it a
+     * mariner sailing into coverage never learns the chart is under them.
+     */
+    public String rasterAvailableName()          { return h == 0 ? "" : nRasterAvailableName(h); }
+
+    /**
+     * True while the ENC is drawing WITHOUT its opaque fills, because a picture
+     * is beneath THIS view. Not the same as "a set is selected": the mode
+     * engages only where a chart actually covers.
+     */
+    public boolean rasterOverChart()             { return h != 0 && nRasterOverChart(h); }
+
+    public int rasterSetCount()                  { return h == 0 ? 0 : nRasterSetCount(h); }
+    public String rasterSetName(int i)           { return h == 0 ? "" : nRasterSetName(h, i); }
+    public boolean rasterSetInView(int i)        { return h != 0 && nRasterSetInView(h, i); }
+
+    /** Which set is drawn over this view, or -1. */
+    public int rasterActiveIndex()               { return h == 0 ? -1 : nRasterActiveIndex(h); }
+
+    /** Draw set i. -1 turns off what is drawn over THIS view, not every set. */
+    public void rasterSelect(int i)              { if (h != 0) nRasterSelect(h, i); }
+
+    /** Switch one chart off without removing it. These are big downloads. */
+    public boolean rasterSetEnabled(String path, boolean on) {
+        return h != 0 && nRasterSetEnabled(h, path, on);
+    }
+    public boolean rasterEnabled(String path)    { return h != 0 && nRasterEnabled(h, path); }
+
+    /** Hide the ENC wherever a raster chart covers, and show it again. */
+    public void toggleChart()                    { if (h != 0) nToggleChart(h); }
+    public boolean chartHidden()                 { return h != 0 && nChartHidden(h); }
+
+    private static native boolean nRasterAdd(long h, String path);
+    private static native void nRasterCycle(long h);
+    private static native String nRasterActiveName(long h);
+    private static native String nRasterAvailableName(long h);
+    private static native boolean nRasterOverChart(long h);
+    private static native int nRasterSetCount(long h);
+    private static native String nRasterSetName(long h, int i);
+    private static native boolean nRasterSetInView(long h, int i);
+    private static native int nRasterActiveIndex(long h);
+    private static native void nRasterSelect(long h, int i);
+    private static native boolean nRasterSetEnabled(long h, String path, boolean on);
+    private static native boolean nRasterEnabled(long h, String path);
+    private static native void nToggleChart(long h);
+    private static native boolean nChartHidden(long h);
 }

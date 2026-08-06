@@ -107,6 +107,10 @@ lk_chart_controller_push_readouts (LkChartController *self)
                               lookout_overscale (self->handle),
                               (int) mariner.scheme);
 
+  /* Which raster chart sets cover the view changes as the mariner sails, so
+   * the pill is fed from the frame like every other readout. */
+  lk_app_model_refresh_raster_state (self->model);
+
   /* Persist periodically: a crash or kill -9 never reaches close(). */
   if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC)
     {
@@ -277,6 +281,13 @@ lk_chart_controller_open (LkChartController *self,
 
   g_free (self->chart_path);
   self->chart_path = n == 1 ? g_strdup (paths[0]) : g_path_get_dirname (paths[0]);
+
+  /* Re-install the mariner's raster charts. A raster chart belongs to a lookout
+   * handle, and the close above destroyed the old one, so every open replays
+   * them — that is what makes a raster chart survive both a change of ENC and a
+   * restart. */
+  if (self->model != NULL)
+    lk_app_model_reinstall_raster_charts (self->model);
 
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
@@ -584,8 +595,151 @@ LK_CONTROLLER_TOGGLE (lk_chart_controller_cycle_scheme, lookout_cycle_scheme)
 LK_CONTROLLER_TOGGLE (lk_chart_controller_toggle_text, lookout_toggle_text)
 LK_CONTROLLER_TOGGLE (lk_chart_controller_toggle_soundings, lookout_toggle_soundings)
 LK_CONTROLLER_TOGGLE (lk_chart_controller_toggle_other_category, lookout_toggle_other_category)
+LK_CONTROLLER_TOGGLE (lk_chart_controller_raster_cycle, lookout_raster_cycle)
+LK_CONTROLLER_TOGGLE (lk_chart_controller_toggle_chart, lookout_toggle_chart)
 
 #undef LK_CONTROLLER_TOGGLE
+
+/* ---- raster underlay ---------------------------------------------------- */
+
+void
+lk_raster_set_free (LkRasterSet *set)
+{
+  if (set == NULL)
+    return;
+  g_free (set->name);
+  g_free (set);
+}
+
+/* The engine's strings are borrowed and valid until the set list changes, so
+ * every one of them is copied out here. */
+static char *
+lk_raster_dup (const char *text, size_t length)
+{
+  return g_strndup (text != NULL ? text : "", length);
+}
+
+gboolean
+lk_chart_controller_raster_add (LkChartController *self, const char *path)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || path == NULL)
+    return FALSE;
+
+  gboolean added = lookout_raster_add (self->handle, path) != 0;
+  if (added)
+    lk_chart_controller_kick (self);
+  return added;
+}
+
+void
+lk_chart_controller_raster_select (LkChartController *self, int index)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_raster_select (self->handle, (int32_t) index);
+  lk_chart_controller_kick (self);
+}
+
+gboolean
+lk_chart_controller_raster_set_enabled (LkChartController *self,
+                                        const char        *path,
+                                        gboolean           enabled)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || path == NULL)
+    return FALSE;
+
+  gboolean known = lookout_raster_set_enabled (self->handle, path, enabled ? 1 : 0) != 0;
+  lk_chart_controller_kick (self);
+  return known;
+}
+
+GPtrArray *
+lk_chart_controller_raster_sets (LkChartController *self)
+{
+  GPtrArray *sets = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_raster_set_free);
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), sets);
+
+  if (self->handle == NULL)
+    return sets;
+
+  uint32_t count = lookout_raster_set_count (self->handle);
+  for (uint32_t i = 0; i < count; i++)
+    {
+      size_t length = 0;
+      const char *name = lookout_raster_set_name (self->handle, i, &length);
+      LkRasterSet *set = g_new0 (LkRasterSet, 1);
+
+      set->id = (int) i;
+      set->name = lk_raster_dup (name, length);
+      set->in_view = lookout_raster_set_in_view (self->handle, i) != 0;
+      g_ptr_array_add (sets, set);
+    }
+
+  return sets;
+}
+
+int
+lk_chart_controller_raster_active_index (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), -1);
+
+  if (self->handle == NULL)
+    return -1;
+  return (int) lookout_raster_active_index (self->handle);
+}
+
+char *
+lk_chart_controller_raster_active_name (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), g_strdup (""));
+
+  if (self->handle == NULL)
+    return g_strdup ("");
+
+  size_t length = 0;
+  const char *name = lookout_raster_active_name (self->handle, &length);
+  return lk_raster_dup (name, length);
+}
+
+char *
+lk_chart_controller_raster_available_name (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), g_strdup (""));
+
+  if (self->handle == NULL)
+    return g_strdup ("");
+
+  size_t length = 0;
+  const char *name = lookout_raster_available_name (self->handle, &length);
+  return lk_raster_dup (name, length);
+}
+
+gboolean
+lk_chart_controller_raster_over_chart (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  return lookout_raster_over_chart (self->handle) != 0;
+}
+
+gboolean
+lk_chart_controller_chart_hidden (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  return lookout_chart_hidden (self->handle) != 0;
+}
 
 /* ---- pick --------------------------------------------------------------- */
 
