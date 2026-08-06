@@ -13,7 +13,7 @@
 //!   defer ov.deinit();
 //!   try ov.applyBatch("org.beetlebug.ais", json);   // broker thread, any time
 //!   ov.removeSource("org.beetlebug.ais");           // plugin stopped/failed
-//!   const fr = try ov.buildIfNeeded(cam.zoom, .day); // render thread, per frame
+//!   const fr = try ov.buildIfNeeded(cam.zoom, .day, null); // render thread, per frame
 //!   try gpu.setOverlay(fr);                          // re-uploads iff fr.generation moved
 //!
 //! THREADING. `applyBatch` / `removeSource` run on the broker's worker: they
@@ -126,6 +126,12 @@ const Object = struct {
     /// Canonical JSON `{"title":"...","rows":[["k","v"],...]}`, or empty.
     /// Owned. Only symbols are hit-tested; see `pickAt`.
     pick: []u8 = &.{},
+    /// The object rides own ship's DISPLAY position instead of the lon/lat it
+    /// was posted with. Fixes arrive about once a second; the core carries the
+    /// boat between them and substitutes that point here, so the symbol and
+    /// its lines move smoothly. A polyline keeps its shape and travels with
+    /// its first point.
+    ship_anchor: bool = false,
 
     fn free(self: *Object, alloc: std.mem.Allocator) void {
         if (self.pts.len > 0) alloc.free(self.pts);
@@ -222,11 +228,18 @@ pub const Store = struct {
     /// thread that does not hold the C ABI lock, so a pointer into an object
     /// would dangle when the plugin redrew that target.
     pick_out: std.ArrayList(u8) = .empty,
+    /// The id last handed out by a hit test, NUL-terminated. Same reason as
+    /// pick_out: a plugin thread may replace the object at any moment.
+    id_out: std.ArrayList(u8) = .empty,
     gen: u64 = 0,
     dirty: bool = true,
     has_build: bool = false,
     built_zoom: f64 = 0,
     built_scheme: Scheme = .day,
+    /// Own ship's display position at the last build, and whether any object
+    /// rides it. Without a rider the position is ignored and nothing rebuilds.
+    built_ship: ?[2]f64 = null,
+    has_ship_anchor: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) Store {
         return .{ .alloc = alloc };
@@ -241,6 +254,7 @@ pub const Store = struct {
         self.objs.deinit(self.alloc);
         self.verts.deinit(self.alloc);
         self.pick_out.deinit(self.alloc);
+        self.id_out.deinit(self.alloc);
         self.* = undefined;
     }
 
@@ -303,6 +317,7 @@ pub const Store = struct {
                 }
                 gop.value_ptr.* = obj;
                 self.dirty = true;
+                if (obj.ship_anchor) self.has_ship_anchor = true;
             }
         }
     }
@@ -324,6 +339,7 @@ pub const Store = struct {
                 self.dirty = true;
             } else i += 1;
         }
+        self.noteShipAnchors();
     }
 
     fn removeLocked(self: *Store, k: []const u8) void {
@@ -332,6 +348,19 @@ pub const Store = struct {
             var v = kv.value;
             v.free(self.alloc);
             self.dirty = true;
+            self.noteShipAnchors();
+        }
+    }
+
+    /// Does anything ride own ship's display position? Recomputed on every
+    /// change, so a frame with no rider never rebuilds for a moving boat.
+    fn noteShipAnchors(self: *Store) void {
+        self.has_ship_anchor = false;
+        for (self.objs.values()) |*o| {
+            if (o.ship_anchor) {
+                self.has_ship_anchor = true;
+                return;
+            }
         }
     }
 
@@ -344,6 +373,9 @@ pub const Store = struct {
         const token = std.meta.stringToEnum(Token, jstr(o.get("color") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
         var obj = Object{ .kind = kind, .token = token };
         errdefer obj.free(self.alloc);
+        if (o.get("anchor")) |a| {
+            if (jstr(a)) |name| obj.ship_anchor = std.mem.eql(u8, name, "ownship");
+        }
         switch (kind) {
             .symbol => {
                 obj.sym = std.meta.stringToEnum(Sym, jstr(o.get("sym") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
@@ -437,61 +469,97 @@ pub const Store = struct {
         try out.append(self.alloc, '"');
     }
 
-    /// The pick payload of the nearest SYMBOL whose anchor falls inside
+    /// What a hit test answers with. Borrowed: valid until the next hit test
+    /// or info lookup. `id` is the host-namespaced object id, NUL-terminated
+    /// so a C shell can hand it straight back to `infoFor`.
+    pub const Hit = struct { id: [:0]const u8, info: []const u8, at: [2]f64 };
+
+    /// The nearest SYMBOL carrying a pick payload whose anchor falls inside
     /// `PICK_RADIUS_PT` of a logical point, or null. Anchors are projected
     /// with the renderer's own camera, so rotation and the antimeridian hold.
     /// Symbols only: a line or an area has no single point to measure to.
-    ///
-    /// Borrowed: valid until the next `pickAt`.
-    pub fn pickAt(self: *Store, cam: camera.Camera, x_pt: f32, y_pt: f32) ?[]const u8 {
+    pub fn hitAt(self: *Store, cam: camera.Camera, x_pt: f32, y_pt: f32, ship: ?[2]f64) ?Hit {
         self.mu.lock();
         defer self.mu.unlock();
-        var best: ?*const Object = null;
+        var best: ?usize = null;
         var best_d2: f64 = PICK_RADIUS_PT * PICK_RADIUS_PT;
-        for (self.objs.values()) |*o| {
+        for (self.objs.values(), 0..) |*o, i| {
             if (o.kind != .symbol or o.pick.len == 0) continue;
-            const s = cam.worldToScreen(geo(o.at));
+            const s = cam.worldToScreen(geo(effAt(o, ship)));
             const dx = s.x - @as(f64, x_pt);
             const dy = s.y - @as(f64, y_pt);
             const d2 = dx * dx + dy * dy;
             // Strictly nearer, so a tie keeps the earlier object.
             if (d2 < best_d2) {
                 best_d2 = d2;
-                best = o;
+                best = i;
             }
         }
-        const o = best orelse return null;
+        return self.hitLocked(best orelse return null, ship);
+    }
+
+    /// The same answer for an object already known by id, or null when it is
+    /// gone. A shell that pinned a target asks each frame: the payload moves
+    /// with new data and the anchor moves with the target.
+    pub fn infoFor(self: *Store, id: []const u8, ship: ?[2]f64) ?Hit {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.hitLocked(self.objs.getIndex(id) orelse return null, ship);
+    }
+
+    fn hitLocked(self: *Store, i: usize, ship: ?[2]f64) ?Hit {
+        const o = &self.objs.values()[i];
         self.pick_out.clearRetainingCapacity();
         self.pick_out.appendSlice(self.alloc, o.pick) catch return null;
-        return self.pick_out.items;
+        self.id_out.clearRetainingCapacity();
+        self.id_out.appendSlice(self.alloc, self.objs.keys()[i]) catch return null;
+        self.id_out.append(self.alloc, 0) catch return null;
+        const id = self.id_out.items[0 .. self.id_out.items.len - 1 :0];
+        return .{ .id = id, .info = self.pick_out.items, .at = effAt(o, ship) };
+    }
+
+    /// Borrowed: valid until the next call. The payload alone, for hover.
+    pub fn pickAt(self: *Store, cam: camera.Camera, x_pt: f32, y_pt: f32, ship: ?[2]f64) ?[]const u8 {
+        const h = self.hitAt(cam, x_pt, y_pt, ship) orelse return null;
+        return h.info;
     }
 
     // ---- the geometry -----------------------------------------------------
 
-    /// True when the vertex array no longer matches (zoom, scheme) or an apply
-    /// has landed since the last build.
-    pub fn needsRebuild(self: *Store, zoom: f64, scheme: Scheme) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
-        return self.needsRebuildLocked(zoom, scheme);
+    /// Where an object actually draws: own ship's display position when it
+    /// declared that anchor and the core has one, else the posted lon/lat.
+    fn effAt(o: *const Object, ship: ?[2]f64) [2]f64 {
+        if (o.ship_anchor) {
+            if (ship) |s| return s;
+        }
+        return o.at;
     }
 
-    fn needsRebuildLocked(self: *Store, zoom: f64, scheme: Scheme) bool {
+    /// True when the vertex array no longer matches (zoom, scheme, own ship's
+    /// display position) or an apply has landed since the last build.
+    pub fn needsRebuild(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.needsRebuildLocked(zoom, scheme, ship);
+    }
+
+    fn needsRebuildLocked(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) bool {
         if (!self.has_build or self.dirty) return true;
         if (scheme != self.built_scheme) return true;
+        if (self.has_ship_anchor and !samePoint(ship, self.built_ship)) return true;
         return @abs(zoom - self.built_zoom) > ZOOM_REBUILD_DZ;
     }
 
     /// Render-thread entry: rebuild if needed and return the current frame.
     /// The returned slice is valid until the next call.
-    pub fn buildIfNeeded(self: *Store, zoom: f64, scheme: Scheme) Error!Frame {
+    pub fn buildIfNeeded(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) Error!Frame {
         self.mu.lock();
         defer self.mu.unlock();
-        if (self.needsRebuildLocked(zoom, scheme)) try self.buildLocked(zoom, scheme);
+        if (self.needsRebuildLocked(zoom, scheme, ship)) try self.buildLocked(zoom, scheme, ship);
         return .{ .verts = self.verts.items, .generation = self.gen };
     }
 
-    fn buildLocked(self: *Store, zoom: f64, scheme: Scheme) Error!void {
+    fn buildLocked(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) Error!void {
         self.verts.clearRetainingCapacity();
         const wpp = worldPerPt(zoom);
         // Paint order: areas, then lines, then symbols. A track must not cover
@@ -505,8 +573,11 @@ pub const Store = struct {
                         c[3] *= o.alpha;
                         try self.emitPolygon(o.pts, c);
                     },
-                    .polyline => try self.emitPolyline(o.pts, @as(f64, o.width_pt) * wpp, o.dash, wpp, c),
-                    .symbol => try self.emitSymbol(o, wpp, c),
+                    // A ship-anchored line keeps its shape and travels with
+                    // its first point, so the heading line and the speed
+                    // vector stay attached to the hull between fixes.
+                    .polyline => try self.emitPolyline(o.pts, @as(f64, o.width_pt) * wpp, o.dash, wpp, c, lineShift(o, ship)),
+                    .symbol => try self.emitSymbol(o, effAt(o, ship), wpp, c),
                 }
             }
         }
@@ -515,6 +586,15 @@ pub const Store = struct {
         self.has_build = true;
         self.built_zoom = zoom;
         self.built_scheme = scheme;
+        self.built_ship = ship;
+    }
+
+    /// How far a ship-anchored polyline moves: its first point to own ship's
+    /// display position, in lon/lat. Zero for every other line.
+    fn lineShift(o: *const Object, ship: ?[2]f64) [2]f64 {
+        if (!o.ship_anchor or o.pts.len == 0) return .{ 0, 0 };
+        const s = ship orelse return .{ 0, 0 };
+        return .{ s[0] - o.pts[0][0], s[1] - o.pts[0][1] };
     }
 
     fn push(self: *Store, w: camera.Vec2, c: Rgba) Error!void {
@@ -548,7 +628,7 @@ pub const Store = struct {
     /// One quad per segment, `w_world` wide, mitre-less: at prototype line
     /// widths (1–3 pt) a butt join is invisible, and a mitre needs a join pass
     /// that would double the vertex count.
-    fn emitPolyline(self: *Store, pts: [][2]f64, w_world: f64, dash: bool, wpp: f64, c: Rgba) Error!void {
+    fn emitPolyline(self: *Store, pts: [][2]f64, w_world: f64, dash: bool, wpp: f64, c: Rgba, shift: [2]f64) Error!void {
         if (pts.len < 2) return;
         const hw = w_world * 0.5;
         const on = DASH_ON * wpp;
@@ -556,8 +636,8 @@ pub const Store = struct {
         var phase: f64 = 0; // distance along the whole line, so dashes run through vertices
         var i: usize = 0;
         while (i + 1 < pts.len) : (i += 1) {
-            const a = geo(pts[i]);
-            const b = geo(pts[i + 1]);
+            const a = geo(.{ pts[i][0] + shift[0], pts[i][1] + shift[1] });
+            const b = geo(.{ pts[i + 1][0] + shift[0], pts[i + 1][1] + shift[1] });
             const dx = b.x - a.x;
             const dy = b.y - a.y;
             const len = @sqrt(dx * dx + dy * dy);
@@ -604,8 +684,8 @@ pub const Store = struct {
         try self.tri(p0, p2, p3, c);
     }
 
-    fn emitSymbol(self: *Store, o: *const Object, wpp: f64, c: Rgba) Error!void {
-        const at = geo(o.at);
+    fn emitSymbol(self: *Store, o: *const Object, at_geo: [2]f64, wpp: f64, c: Rgba) Error!void {
+        const at = geo(at_geo);
         const s = wpp * @as(f64, o.scale);
         // True bearing -> world direction: world y runs SOUTH, so north is -y.
         const th = @as(f64, o.rot_deg) * std.math.pi / 180.0;
@@ -613,7 +693,7 @@ pub const Store = struct {
         const fy = -std.math.cos(th);
         switch (o.sym) {
             .ownship => {
-                const len = ownshipLenWorld(o.at[1], wpp, o.scale);
+                const len = ownshipLenWorld(at_geo[1], wpp, o.scale);
                 const half_beam = len * OWNSHIP_BEAM_RATIO * 0.5;
                 const px = -fy; // starboard unit vector
                 const py = fx;
@@ -659,6 +739,20 @@ fn clip(s: []const u8) []const u8 {
 
 /// lon/lat -> web-mercator world [0,1]. The chart's own transform: overlay
 /// geometry and chart geometry must land in the same space to the last bit.
+/// Two optional lon/lat points, compared exactly. A display position that has
+/// not changed must not force a rebuild.
+fn samePoint(a: ?[2]f64, b: ?[2]f64) bool {
+    if (a == null and b == null) return true;
+    const x = a orelse return false;
+    const y = b orelse return false;
+    return x[0] == y[0] and x[1] == y[1];
+}
+
+/// Screen distance between two projected points, in logical points.
+fn dist(a: camera.Vec2, b: camera.Vec2) f64 {
+    return std.math.hypot(a.x - b.x, a.y - b.y);
+}
+
 pub fn geo(lonlat: [2]f64) camera.Vec2 {
     return camera.lonLatToWorld(lonlat[0], lonlat[1]);
 }
@@ -796,13 +890,116 @@ test "malformed rows are skipped, malformed batches rejected" {
     try t.expect(s.objs.contains("p/e"));
 }
 
+// Rule 8: the symbol and its lines ride own ship's display position, so the
+// boat sits still on screen between fixes while the chart slides.
+test "a ship anchor moves the symbol and its line, not the rest" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    try s.applyBatch("p",
+        \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"anchor":"ownship","rot_deg":0,"color":"ownship"},
+        \\ {"id":"hdg","kind":"polyline","pts":[[-76.4767,38.9763],[-76.4767,38.9863]],"anchor":"ownship","color":"ownship"},
+        \\ {"id":"t","kind":"symbol","sym":"target","at":[-76.4767,38.9763],"color":"target"}]}
+    );
+    try t.expect(s.has_ship_anchor);
+
+    const base = try s.buildIfNeeded(15.0, .day, null);
+    const fixed = try t.allocator.dupe(Vertex, base.verts);
+    defer t.allocator.free(fixed);
+
+    // The same frame with the boat carried 0.001 degrees north.
+    const ship = [2]f64{ -76.4767, 38.9773 };
+    try t.expect(s.needsRebuild(15.0, .day, ship));
+    const moved = try s.buildIfNeeded(15.0, .day, ship);
+    try t.expectEqual(fixed.len, moved.verts.len);
+    const dy = geo(ship).y - geo(.{ -76.4767, 38.9763 }).y;
+
+    var shifted: usize = 0;
+    var still: usize = 0;
+    for (fixed, moved.verts) |a, b| {
+        if (@abs(b.y - (a.y + @as(f32, @floatCast(dy)))) < 1e-9 and @abs(b.x - a.x) < 1e-9) {
+            shifted += 1;
+        } else if (a.x == b.x and a.y == b.y) still += 1;
+    }
+    // Every vertex of the boat and its heading line moved by the same delta;
+    // the target's triangle did not move at all.
+    try t.expectEqual(@as(usize, TARGET_VERTS), still);
+    try t.expectEqual(fixed.len - TARGET_VERTS, shifted);
+
+    // The same position twice is not a rebuild.
+    try t.expect(!s.needsRebuild(15.0, .day, ship));
+}
+
+// Line expansion is pure world space and the camera only rotates the MVP, so
+// a dashed line must measure the same on screen at every view rotation and at
+// every bearing. Angle-dependent breakage (a quadrant term in the dash or
+// perpendicular math, or a per-vertex wrap decision) shows as a failing
+// (bearing, rotation) pair. The sweep is 24 x 24 and pure vertex math.
+test "a dashed line keeps its width and dashes at every angle" {
+    // Zoom 12: overlay vertices are absolute world coordinates in f32, whose
+    // step here is 0.03 pt. Deeper zooms coarsen that (0.25 pt at z15) and
+    // would swamp the measurement.
+    const zoom: f64 = 12;
+    const width_pt: f64 = 3.0;
+    const lat0: f64 = 38.9763;
+    const lon0: f64 = -76.4767;
+    const m_per_deg = 40075016.685578488 / 360.0;
+
+    var deg: f64 = 0;
+    while (deg < 360) : (deg += 15) {
+        var s = Store.init(t.allocator);
+        defer s.deinit();
+        // 5 km on this bearing, which is about 170 pt and a dozen dashes.
+        const th = deg * std.math.pi / 180.0;
+        const lat1 = lat0 + 5000.0 * @cos(th) / m_per_deg;
+        const lon1 = lon0 + 5000.0 * @sin(th) / (m_per_deg * @cos(lat0 * std.math.pi / 180.0));
+        var buf: [256]u8 = undefined;
+        const batch = try std.fmt.bufPrint(&buf, "{{\"set\":[{{\"id\":\"v\",\"kind\":\"polyline\",\"pts\":[[{d},{d}],[{d},{d}]]," ++
+            "\"width_pt\":3.0,\"dash\":true,\"color\":\"ownship\"}}]}}", .{ lon0, lat0, lon1, lat1 });
+        try s.applyBatch("p", batch);
+        const fr = try s.buildIfNeeded(zoom, .day, null);
+        const quads = fr.verts.len / 6;
+        try t.expect(quads >= 8);
+
+        const origin = geo(.{ lon0, lat0 });
+        var rot: f64 = 0;
+        while (rot < 360) : (rot += 15) {
+            var cam = camera.Camera{
+                .origin = origin,
+                .center = origin,
+                .zoom = zoom,
+                .target_zoom = zoom,
+                .rotation = rot * std.math.pi / 180.0,
+                .vw = 1200,
+                .vh = 800,
+            };
+            var i: usize = 0;
+            while (i < quads) : (i += 1) {
+                const v = fr.verts[i * 6 ..][0..6];
+                const p0 = camera.Vec2{ .x = v[0].x, .y = v[0].y };
+                const p1 = camera.Vec2{ .x = v[1].x, .y = v[1].y };
+                const p3 = camera.Vec2{ .x = v[5].x, .y = v[5].y };
+                const w = dist(cam.worldToScreen(p0), cam.worldToScreen(p3));
+                const l = dist(cam.worldToScreen(p0), cam.worldToScreen(p1));
+                t.expectApproxEqAbs(width_pt, w, 0.15) catch |e| {
+                    std.debug.print("width failed at bearing {d} rot {d} quad {d}\n", .{ deg, rot, i });
+                    return e;
+                };
+                if (i + 1 < quads) t.expectApproxEqAbs(DASH_ON, l, 0.2) catch |e| {
+                    std.debug.print("dash failed at bearing {d} rot {d} quad {d}\n", .{ deg, rot, i });
+                    return e;
+                };
+            }
+        }
+    }
+}
+
 test "symbol expansion vertex counts and orientation" {
     var s = Store.init(t.allocator);
     defer s.deinit();
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":0,"color":"ownship"}]}
     );
-    var fr = try s.buildIfNeeded(15.0, .day);
+    var fr = try s.buildIfNeeded(15.0, .day, null);
     try t.expectEqual(@as(usize, OWNSHIP_VERTS), fr.verts.len);
     try t.expectEqual(@as(usize, 15), fr.verts.len); // 7 hull points, fanned
 
@@ -821,7 +1018,7 @@ test "symbol expansion vertex counts and orientation" {
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":90,"color":"ownship"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day);
+    fr = try s.buildIfNeeded(15.0, .day, null);
     const stem_e = fr.verts[8];
     try t.expect(@as(f64, stem_e.x) > at.x);
     try t.expectApproxEqAbs(@as(f32, @floatCast(at.y)), stem_e.y, 1e-9);
@@ -830,7 +1027,7 @@ test "symbol expansion vertex counts and orientation" {
     try s.applyBatch("p",
         \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.47,38.97],"rot_deg":210,"color":"target"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day);
+    fr = try s.buildIfNeeded(15.0, .day, null);
     try t.expectEqual(@as(usize, OWNSHIP_VERTS + TARGET_VERTS), fr.verts.len);
 }
 
@@ -874,7 +1071,7 @@ test "the own-ship hull is a ship, at true scale once that is legible" {
     // not the maths: world coordinates are ~0.38 here, where one f32 step is
     // 3.0e-8, and each measurement is a difference of two of them.
     const grid = 4.0 * 2.98e-8;
-    const low = measure(try s.buildIfNeeded(15.0, .day));
+    const low = measure(try s.buildIfNeeded(15.0, .day, null));
     try t.expectApproxEqAbs(floor15, low.len, grid);
     // Beam holds its fraction of length, and the stem is narrower than the
     // shoulders: a ship, not a box.
@@ -953,21 +1150,21 @@ test "hit test: inside the radius, nearest wins, empty answers nothing" {
     const mid_y: f32 = 300;
 
     // Nothing retained: nothing to report.
-    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y));
+    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y, null));
 
     // One target under the centre of the view.
     try s.applyBatch("p",
         \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.4767,38.9763],"color":"target",
         \\ "pick":{"title":"ONE","rows":[["MMSI","1"]]}}]}
     );
-    const hit = s.pickAt(cam, mid_x, mid_y) orelse return error.TestExpectedHit;
+    const hit = s.pickAt(cam, mid_x, mid_y, null) orelse return error.TestExpectedHit;
     try t.expect(std.mem.indexOf(u8, hit, "\"ONE\"") != null);
 
     // Just inside the radius answers; just outside does not.
-    try t.expect(s.pickAt(cam, mid_x + 13, mid_y) != null);
-    try t.expect(s.pickAt(cam, mid_x + 15, mid_y) == null);
-    try t.expect(s.pickAt(cam, mid_x, mid_y - 13) != null);
-    try t.expect(s.pickAt(cam, mid_x + 200, mid_y) == null);
+    try t.expect(s.pickAt(cam, mid_x + 13, mid_y, null) != null);
+    try t.expect(s.pickAt(cam, mid_x + 15, mid_y, null) == null);
+    try t.expect(s.pickAt(cam, mid_x, mid_y - 13, null) != null);
+    try t.expect(s.pickAt(cam, mid_x + 200, mid_y, null) == null);
 
     // A second target 20 pt east of the first. Between them the nearer one
     // answers, on either side of the midpoint. Insertion order does not decide.
@@ -978,22 +1175,22 @@ test "hit test: inside the radius, nearest wins, empty answers nothing" {
         \\{{"set":[{{"id":"t2","kind":"symbol","sym":"target","at":[{d:.9},{d:.9}],"color":"target",
         \\ "pick":{{"title":"TWO","rows":[["MMSI","2"]]}}}}]}}
     , .{ ll.x, ll.y }));
-    try t.expect(std.mem.indexOf(u8, s.pickAt(cam, mid_x + 8, mid_y).?, "\"ONE\"") != null);
-    try t.expect(std.mem.indexOf(u8, s.pickAt(cam, mid_x + 12, mid_y).?, "\"TWO\"") != null);
+    try t.expect(std.mem.indexOf(u8, s.pickAt(cam, mid_x + 8, mid_y, null).?, "\"ONE\"") != null);
+    try t.expect(std.mem.indexOf(u8, s.pickAt(cam, mid_x + 12, mid_y, null).?, "\"TWO\"") != null);
 
     // A symbol without a payload is not a hit, even under the cursor.
     s.removeSource("p");
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"color":"ownship"}]}
     );
-    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y));
+    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y, null));
 
     // Neither is a polyline that happens to pass under the cursor.
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.48,38.9763],[-76.47,38.9763]],"color":"track",
         \\ "pick":{"title":"LINE","rows":[["a","b"]]}}]}
     );
-    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y));
+    try t.expectEqual(@as(?[]const u8, null), s.pickAt(cam, mid_x, mid_y, null));
 
     // The camera is the renderer's: panning the view moves what answers.
     s.removeSource("p");
@@ -1002,8 +1199,8 @@ test "hit test: inside the radius, nearest wins, empty answers nothing" {
         \\ "pick":{"title":"ONE","rows":[["MMSI","1"]]}}]}
     );
     cam.center.x = centre.x + 100.0 * worldPerPt(15.0);
-    try t.expect(s.pickAt(cam, mid_x, mid_y) == null);
-    try t.expect(s.pickAt(cam, mid_x - 100, mid_y) != null);
+    try t.expect(s.pickAt(cam, mid_x, mid_y, null) == null);
+    try t.expect(s.pickAt(cam, mid_x - 100, mid_y, null) != null);
 }
 
 test "a dashed line cannot run away" {
@@ -1020,14 +1217,14 @@ test "a dashed line cannot run away" {
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-77.0,38.9],[-76.0,38.9]],"dash":true,"color":"track"}]}
     );
-    try t.expectEqual(@as(usize, 6), (try s.buildIfNeeded(22.0, .day)).verts.len);
+    try t.expectEqual(@as(usize, 6), (try s.buildIfNeeded(22.0, .day, null)).verts.len);
 
     // Repeated and reversed points: zero-length segments, and a walk that has
     // to survive its own boundary arithmetic.
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.48,38.98],[-76.48,38.98],[-76.4799,38.98],[-76.48,38.98]],"dash":true,"color":"track"}]}
     );
-    const fr = try s.buildIfNeeded(17.0, .day);
+    const fr = try s.buildIfNeeded(17.0, .day, null);
     try t.expect(fr.verts.len > 0);
     try t.expectEqual(@as(usize, 0), fr.verts.len % 6);
 }
@@ -1039,7 +1236,7 @@ test "polyline, dash and polygon expansion" {
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.50,38.90],[-76.48,38.92],[-76.46,38.90]],"width_pt":2,"color":"track"}]}
     );
-    var fr = try s.buildIfNeeded(15.0, .day);
+    var fr = try s.buildIfNeeded(15.0, .day, null);
     try t.expectEqual(@as(usize, 12), fr.verts.len);
     const solid = fr.verts.len;
 
@@ -1047,7 +1244,7 @@ test "polyline, dash and polygon expansion" {
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.50,38.90],[-76.48,38.92],[-76.46,38.90]],"width_pt":2,"dash":true,"color":"track"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day);
+    fr = try s.buildIfNeeded(15.0, .day, null);
     try t.expect(fr.verts.len > solid);
     try t.expectEqual(@as(usize, 0), fr.verts.len % 6);
 
@@ -1056,7 +1253,7 @@ test "polyline, dash and polygon expansion" {
     try s.applyBatch("p",
         \\{"set":[{"id":"z","kind":"polygon","ring":[[-76.5,38.9],[-76.4,38.9],[-76.4,39.0],[-76.45,39.05],[-76.5,39.0]],"alpha":0.25,"color":"warning"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day);
+    fr = try s.buildIfNeeded(15.0, .day, null);
     try t.expectEqual(@as(usize, 9), fr.verts.len);
     // The polygon's alpha multiplies the token's.
     try t.expectApproxEqAbs(@as(f32, 0.25), fr.verts[0].a, 1e-6);
@@ -1090,10 +1287,10 @@ test "token resolution per scheme" {
     try s.applyBatch("p",
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","at":[-76.4,38.9],"color":"target_danger"}]}
     );
-    const day = (try s.buildIfNeeded(15.0, .day)).verts[0];
+    const day = (try s.buildIfNeeded(15.0, .day, null)).verts[0];
     const want_day = resolve(.target_danger, .day);
     try t.expectEqual(want_day[0], day.r);
-    const night = (try s.buildIfNeeded(15.0, .night)).verts[0];
+    const night = (try s.buildIfNeeded(15.0, .night, null)).verts[0];
     const want_night = resolve(.target_danger, .night);
     try t.expectEqual(want_night[0], night.r);
 }
@@ -1104,23 +1301,23 @@ test "rebuild gating on zoom, scheme and apply" {
     try s.applyBatch("p",
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","at":[-76.4,38.9],"color":"target"}]}
     );
-    const g0 = (try s.buildIfNeeded(15.0, .day)).generation;
+    const g0 = (try s.buildIfNeeded(15.0, .day, null)).generation;
     // Same inputs: no rebuild, same generation, so the GPU never re-uploads.
-    try t.expect(!s.needsRebuild(15.0, .day));
-    try t.expectEqual(g0, (try s.buildIfNeeded(15.0, .day)).generation);
+    try t.expect(!s.needsRebuild(15.0, .day, null));
+    try t.expectEqual(g0, (try s.buildIfNeeded(15.0, .day, null)).generation);
     // Under 5% of scale: still no rebuild.
-    try t.expect(!s.needsRebuild(15.05, .day));
+    try t.expect(!s.needsRebuild(15.05, .day, null));
     // Over it: rebuild.
-    try t.expect(s.needsRebuild(15.1, .day));
-    const g1 = (try s.buildIfNeeded(15.1, .day)).generation;
+    try t.expect(s.needsRebuild(15.1, .day, null));
+    const g1 = (try s.buildIfNeeded(15.1, .day, null)).generation;
     try t.expect(g1 > g0);
     // A scheme change rebuilds; so does an apply.
-    try t.expect(s.needsRebuild(15.1, .night));
-    _ = try s.buildIfNeeded(15.1, .night);
-    try t.expect(!s.needsRebuild(15.1, .night));
+    try t.expect(s.needsRebuild(15.1, .night, null));
+    _ = try s.buildIfNeeded(15.1, .night, null);
+    try t.expect(!s.needsRebuild(15.1, .night, null));
     try s.applyBatch("p", "{\"del\":[\"t\"]}");
-    try t.expect(s.needsRebuild(15.1, .night));
-    try t.expectEqual(@as(usize, 0), (try s.buildIfNeeded(15.1, .night)).verts.len);
+    try t.expect(s.needsRebuild(15.1, .night, null));
+    try t.expectEqual(@as(usize, 0), (try s.buildIfNeeded(15.1, .night, null)).verts.len);
 }
 
 test "symbol size tracks the zoom" {
@@ -1130,8 +1327,8 @@ test "symbol size tracks the zoom" {
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","rot_deg":0,"at":[-76.4,38.9],"color":"target"}]}
     );
     const at = geo(.{ -76.4, 38.9 });
-    const a = (try s.buildIfNeeded(10.0, .day)).verts[1]; // the apex
-    const b = (try s.buildIfNeeded(11.0, .day)).verts[1];
+    const a = (try s.buildIfNeeded(10.0, .day, null)).verts[1]; // the apex
+    const b = (try s.buildIfNeeded(11.0, .day, null)).verts[1];
     // One zoom level in = half the world size, so the symbol keeps its point
     // size. Tolerance is set by the f32 vertex grid, not the math: world x is
     // ~0.29 there, where an f32 step is 3e-8 — about 0.1% of a 6.5 pt offset at

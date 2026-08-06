@@ -44,6 +44,10 @@ const MAX_SCHEMES = 3; // day / dusk / night
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
 
+/// What an overlay hit test answers with: the object's id, its pick payload
+/// and the point it draws at. Borrowed until the next overlay query.
+pub const OverlayHit = ov.Store.Hit;
+
 /// Base mariner for a build: the user's state, but with the live-gated axes
 /// forced permissive so EVERY feature reaches the surface tagged, then gated
 /// per-frame in the shader. Geometry-affecting fields (contours,
@@ -226,7 +230,275 @@ const PluginSystem = if (plugins_on) struct {
         const s: *ov.Store = @ptrCast(@alignCast(ctx.?));
         s.removeSource(source);
     }
+
+    /// Everything own ship's display position and course-up need, elected and
+    /// checked for staleness in one pass.
+    fn readShip(vessels: *phost.store.Store, now_ms: i64) ShipRead {
+        var out = ShipRead{};
+        if (vessels.readElected("navigation.position", now_ms)) |r| {
+            if (!r.stale and r.value == .position)
+                out.fix = .{ .lon = r.value.position.lon, .lat = r.value.position.lat, .ts_ms = r.ts_ms };
+        }
+        out.cog_deg = number(vessels, "navigation.courseOverGroundTrue", now_ms);
+        out.sog_ms = number(vessels, "navigation.speedOverGround", now_ms);
+        out.heading_deg = number(vessels, "navigation.headingTrue", now_ms);
+        return out;
+    }
+
+    /// A fresh elected number, or null when the path is empty or stale.
+    fn number(vessels: *phost.store.Store, path: []const u8, now_ms: i64) ?f64 {
+        const r = vessels.readElected(path, now_ms) orelse return null;
+        if (r.stale or r.value != .number) return null;
+        return r.value.number;
+    }
 } else struct {};
+
+/// One position from the store, with the time it was published.
+const ShipFix = struct { lon: f64, lat: f64, ts_ms: i64 };
+
+/// The own-ship values a frame needs. A null field is missing or stale.
+const ShipRead = struct {
+    fix: ?ShipFix = null,
+    cog_deg: ?f64 = null,
+    sog_ms: ?f64 = null,
+    heading_deg: ?f64 = null,
+};
+
+/// Metres per degree of latitude. The display position moves metres between
+/// fixes, so a spherical step is exact enough and costs one multiply.
+const M_PER_DEG: f64 = 40075016.685578488 / 360.0;
+
+/// Own ship as the screen shows it. Fixes land about once a second and a chart
+/// that only moved then would step, so the newest fix is carried forward along
+/// COG at SOG. The carry stops at the staleness window: a lost GPS must not
+/// keep the boat sailing.
+const ShipDisplay = struct {
+    /// The store's staleness window. Past it there is no display position.
+    const CARRY_MS: i64 = 5_000;
+    /// Below this the course a GPS reports is noise, not a heading: 0.4 kn in
+    /// metres per second. Course up freezes on the last good course there.
+    const COURSE_FLOOR_MS: f64 = 0.4 * 1852.0 / 3600.0;
+    /// Weight of a new course in the smoothed one. About a three second lag at
+    /// the 1 Hz fixes this carries, which is what stops the chart hunting.
+    const COURSE_ALPHA: f64 = 0.25;
+
+    last: ?ShipFix = null,
+    prev: ?ShipFix = null,
+    cog_deg: ?f64 = null,
+    sog_ms: ?f64 = null,
+    heading_deg: ?f64 = null,
+    /// The course the display position is travelling, low-passed. Course up
+    /// turns the chart to this, not to the raw reading.
+    course_deg: ?f64 = null,
+
+    /// Take this frame's reading. A fix already held is not a new fix.
+    fn observe(self: *ShipDisplay, r: ShipRead) void {
+        var fresh = false;
+        if (r.fix) |f| {
+            const same = if (self.last) |l| l.ts_ms == f.ts_ms and l.lon == f.lon and l.lat == f.lat else false;
+            if (!same) {
+                self.prev = self.last;
+                self.last = f;
+                fresh = true;
+            }
+        } else {
+            self.last = null;
+            self.prev = null;
+        }
+        self.cog_deg = r.cog_deg;
+        self.sog_ms = r.sog_ms;
+        self.heading_deg = r.heading_deg;
+        // Once per fix, not once per frame: the smoothing constant below is in
+        // fixes, and this runs on every tick.
+        if (fresh) self.trackCourse();
+    }
+
+    /// Fold this reading's course into the smoothed one. A boat under the
+    /// speed floor keeps the course it had: a drifting GPS would otherwise
+    /// spin the chart while the boat sits still.
+    fn trackCourse(self: *ShipDisplay) void {
+        const v = self.velocity() orelse return;
+        const speed = @sqrt(v[0] * v[0] + v[1] * v[1]);
+        if (speed < COURSE_FLOOR_MS) return;
+        const raw = std.math.atan2(v[0], v[1]) * 180.0 / std.math.pi;
+        const prev = self.course_deg orelse {
+            self.course_deg = wrap360(raw);
+            return;
+        };
+        // Smooth the SHORT way round: 350 and 10 degrees are 20 apart.
+        var d = raw - prev;
+        d -= 360.0 * @round(d / 360.0);
+        self.course_deg = wrap360(prev + COURSE_ALPHA * d);
+    }
+
+    /// Where to draw own ship at `now_ms`: the newest fix carried forward.
+    /// Null with no fix, or when the carry has run past the window.
+    fn at(self: ShipDisplay, now_ms: i64) ?[2]f64 {
+        const l = self.last orelse return null;
+        const dt_ms = now_ms - l.ts_ms;
+        if (dt_ms > CARRY_MS) return null;
+        if (dt_ms <= 0) return .{ l.lon, l.lat };
+        const v = self.velocity() orelse return .{ l.lon, l.lat };
+        const dt = @as(f64, @floatFromInt(dt_ms)) / 1000.0;
+        const lat = l.lat + v[1] * dt / M_PER_DEG;
+        const coslat = @max(0.01, @cos(l.lat * std.math.pi / 180.0));
+        return .{ l.lon + v[0] * dt / (M_PER_DEG * coslat), lat };
+    }
+
+    /// Metres per second east and north: COG and SOG when the instruments
+    /// give them, else the run between the last two fixes.
+    fn velocity(self: ShipDisplay) ?[2]f64 {
+        if (self.cog_deg) |c| {
+            if (self.sog_ms) |sp| {
+                const th = c * std.math.pi / 180.0;
+                return .{ sp * @sin(th), sp * @cos(th) };
+            }
+        }
+        const l = self.last orelse return null;
+        const p = self.prev orelse return null;
+        const dt = @as(f64, @floatFromInt(l.ts_ms - p.ts_ms)) / 1000.0;
+        if (!(dt > 0.05)) return null;
+        const coslat = @max(0.01, @cos(l.lat * std.math.pi / 180.0));
+        return .{ (l.lon - p.lon) * M_PER_DEG * coslat / dt, (l.lat - p.lat) * M_PER_DEG / dt };
+    }
+
+    /// What course up turns the chart to: the smoothed display course. Null
+    /// before the boat has moved, and frozen while it is stopped.
+    fn upDeg(self: ShipDisplay) ?f64 {
+        if (self.last == null) return null; // no fix: nothing to turn to
+        return self.course_deg;
+    }
+};
+
+/// A bearing folded into [0, 360).
+fn wrap360(deg: f64) f64 {
+    const d = @mod(deg, 360.0);
+    return if (d < 0) d + 360.0 else d;
+}
+
+/// What follow mode is doing, for the shell's lock control. Anything but `off`
+/// means follow is on: `waiting` is armed with no usable fix.
+pub const FollowState = enum(c_int) { off = 0, following = 1, waiting = 2 };
+
+/// Follow mode: own ship held at a fixed point on screen while the chart
+/// slides under it. The core owns the behaviour; a shell only draws the button
+/// and calls setFollow. Camera moves go through here so every entry point
+/// (frame tick, pan, zoom) obeys the same rules.
+const Follow = struct {
+    /// The anchor, as a fraction of the view: horizontal centre, three quarters
+    /// down, so the water ahead fills the screen.
+    const anchor_x = 0.5;
+    const anchor_y = 0.75;
+
+    /// Below this the chart is not re-turned. Course-up follows a heading that
+    /// wanders a tenth of a degree at a time, and every turn is a repaint.
+    const ROT_DEADBAND = 0.2 * std.math.pi / 180.0;
+
+    on: bool = false,
+    /// Course-up: the chart turns so own ship's heading points up the screen.
+    /// Independent of follow — the mariner can have either alone.
+    course_up: bool = false,
+    /// The fix and the camera pose the last move produced. A tick that finds
+    /// both unchanged does nothing, so a placement the mercator clamp could not
+    /// finish does not re-fire every frame.
+    applied: ?Applied = null,
+
+    const Applied = struct {
+        fix: camera.Vec2,
+        center: camera.Vec2,
+        zoom: f64,
+        rotation: f64,
+        vw: f32,
+        vh: f32,
+    };
+
+    /// The anchor in the camera's own unit (logical px).
+    fn anchor(cam: camera.Camera) [2]f32 {
+        return .{ cam.vw * anchor_x, cam.vh * anchor_y };
+    }
+
+    fn clear(self: *Follow) void {
+        self.on = false;
+        self.applied = null;
+    }
+
+    /// The view rotation that puts a true bearing at the top of the screen.
+    /// A world bearing draws at screen bearing (bearing + rotation).
+    fn rotationFor(up_deg: f64) f64 {
+        const r = -up_deg * std.math.pi / 180.0;
+        return r - 2.0 * std.math.pi * @round(r / (2.0 * std.math.pi));
+    }
+
+    /// True when course-up would turn the chart: it is on, a heading is fresh,
+    /// and the chart is more than the deadband away from it.
+    fn rotatePending(self: Follow, cam: camera.Camera, up_deg: ?f64) bool {
+        if (!self.course_up) return false;
+        const want = rotationFor(up_deg orelse return false);
+        var d = want - cam.rotation;
+        d -= 2.0 * std.math.pi * @round(d / (2.0 * std.math.pi));
+        return @abs(d) > ROT_DEADBAND;
+    }
+
+    /// Turn the chart to the heading. True when it moved.
+    fn rotate(self: Follow, cam: *camera.Camera, up_deg: ?f64) bool {
+        if (!self.rotatePending(cam.*, up_deg)) return false;
+        cam.rotation = rotationFor(up_deg.?);
+        return true;
+    }
+
+    /// True when a tick would move the camera. needsRedraw asks, so a
+    /// render-on-demand shell wakes for a new fix.
+    fn pending(self: Follow, cam: camera.Camera, fix: ?camera.Vec2) bool {
+        if (!self.on) return false;
+        const w = fix orelse return false; // no fix, or stale: armed and waiting
+        const p = self.applied orelse return true;
+        return !(p.fix.x == w.x and p.fix.y == w.y and
+            p.center.x == cam.center.x and p.center.y == cam.center.y and
+            p.zoom == cam.zoom and p.rotation == cam.rotation and
+            p.vw == cam.vw and p.vh == cam.vh);
+    }
+
+    /// Put the fix back on the anchor. A null fix (none yet, or stale) leaves
+    /// the camera alone. True when the camera moved.
+    fn apply(self: *Follow, cam: *camera.Camera, fix: ?camera.Vec2) bool {
+        if (!self.pending(cam.*, fix)) return false;
+        const w = fix.?;
+        const a = anchor(cam.*);
+        cam.placeAt(w, a[0], a[1]);
+        self.applied = .{
+            .fix = w,
+            .center = cam.center,
+            .zoom = cam.zoom,
+            .rotation = cam.rotation,
+            .vw = cam.vw,
+            .vh = cam.vh,
+        };
+        return true;
+    }
+
+    /// A pan hands the chart back to the mariner: the pan happens and follow
+    /// goes off.
+    fn pan(self: *Follow, cam: *camera.Camera, dx: f32, dy: f32) void {
+        self.clear();
+        cam.panPx(dx, dy);
+    }
+
+    /// Where a zoom pivots: the anchor while following, whatever point the
+    /// caller passed, so own ship does not drift off it.
+    fn zoomFocus(self: Follow, cam: camera.Camera, x: f32, y: f32) [2]f32 {
+        return if (self.on) anchor(cam) else .{ x, y };
+    }
+
+    fn zoomAbout(self: Follow, cam: *camera.Camera, dz: f64, x: f32, y: f32) void {
+        const f = self.zoomFocus(cam.*, x, y);
+        cam.zoomAbout(dz, f[0], f[1]);
+    }
+
+    fn zoomToward(self: Follow, cam: *camera.Camera, dz: f64, x: f32, y: f32) void {
+        const f = self.zoomFocus(cam.*, x, y);
+        cam.zoomToward(dz, f[0], f[1]);
+    }
+};
 
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
@@ -350,6 +622,12 @@ pub const Lookout = struct {
     /// at open, or lookout_plugins_load). Null costs nothing: no threads, no
     /// stores, no runtime.
     plugins: ?*PluginSystem = null,
+
+    /// Follow mode and course-up, off until a shell turns them on.
+    follow: Follow = .{},
+    /// Own ship between fixes, and where this frame draws it (lon, lat).
+    ship: ShipDisplay = .{},
+    ship_at: ?[2]f64 = null,
 
     /// Hide the chart WHERE A PICTURE COVERS IT, and keep it everywhere else.
     /// The underlay moves in front of the whole chart instead of only its area
@@ -889,7 +1167,12 @@ pub const Lookout = struct {
     fn updateOverlay(self: *Lookout) void {
         if (!plugins_on) return;
         const ps = self.plugins orelse return;
-        const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.overlayScheme()) catch |e| {
+        // Own ship's display position, the camera lock and the overlay all
+        // ride this tick: the stores are current here and the frame's MVP is
+        // built after it, so a move shows in this frame.
+        self.tickShip();
+        self.followTick();
+        const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.overlayScheme(), self.ship_at) catch |e| {
             std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
             return;
         };
@@ -905,7 +1188,7 @@ pub const Lookout = struct {
     fn overlayWantsFrame(self: *Lookout) bool {
         if (!plugins_on) return false;
         const ps = self.plugins orelse return false;
-        return ps.overlay.needsRebuild(self.cam.zoom, self.overlayScheme());
+        return ps.overlay.needsRebuild(self.cam.zoom, self.overlayScheme(), self.ship_at);
     }
 
     /// True once a plugin layer is up. A shell asks so it can keep polling
@@ -923,7 +1206,97 @@ pub const Lookout = struct {
     pub fn overlayAt(self: *Lookout, x_pt: f32, y_pt: f32) ?[]const u8 {
         if (!plugins_on) return null;
         const ps = self.plugins orelse return null;
-        return ps.overlay.pickAt(self.cam, x_pt, y_pt);
+        return ps.overlay.pickAt(self.cam, x_pt, y_pt, self.ship_at);
+    }
+
+    /// The overlay symbol nearest a logical point, with its id and the anchor
+    /// it draws at. A shell pins a bubble to the id and asks `overlayInfo` for
+    /// it every frame. Borrowed until the next overlay query.
+    pub fn overlayHit(self: *Lookout, x_pt: f32, y_pt: f32) ?ov.Store.Hit {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        return ps.overlay.hitAt(self.cam, x_pt, y_pt, self.ship_at);
+    }
+
+    /// What that object says now, or null once it is gone.
+    pub fn overlayInfo(self: *Lookout, id: []const u8) ?ov.Store.Hit {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        return ps.overlay.infoFor(id, self.ship_at);
+    }
+
+    // ---- follow mode --------------------------------------------------------
+
+    /// Read the vessel store and recompute own ship's display position. Called
+    /// on the frame tick and by the queries a shell polls, so an answer between
+    /// frames is still current.
+    fn tickShip(self: *Lookout) void {
+        if (plugins_on) {
+            const ps = self.plugins orelse return;
+            const now = phost.broker.wallMs();
+            self.ship.observe(PluginSystem.readShip(&ps.vessels, now));
+            self.ship_at = self.ship.at(now);
+        }
+    }
+
+    /// The display position as a world point, for the camera.
+    fn shipWorld(self: *Lookout) ?camera.Vec2 {
+        const p = self.ship_at orelse return null;
+        return camera.lonLatToWorld(p[0], p[1]);
+    }
+
+    /// Turn follow mode on or off. Turning it on moves the chart at once when
+    /// a fresh fix exists; with none, follow waits armed and the camera holds.
+    pub fn setFollow(self: *Lookout, on: bool) void {
+        if (!on) return self.follow.clear();
+        self.follow.on = true;
+        self.follow.applied = null;
+        self.tickShip();
+        self.followTick();
+    }
+
+    /// Turn course-up on or off. On, the chart turns so own ship's heading
+    /// points up the screen and keeps turning with it.
+    pub fn setCourseUp(self: *Lookout, on: bool) void {
+        self.follow.course_up = on;
+        if (on) {
+            self.tickShip();
+            self.followTick();
+        }
+    }
+
+    /// What the shell's lock control shows: off, following a fresh fix, or on
+    /// and waiting for one.
+    pub fn followState(self: *Lookout) FollowState {
+        if (!self.follow.on) return .off;
+        self.tickShip();
+        return if (self.ship_at != null) .following else .waiting;
+    }
+
+    /// The same three states for the course-up control.
+    pub fn courseUpState(self: *Lookout) FollowState {
+        if (!self.follow.course_up) return .off;
+        self.tickShip();
+        return if (self.ship.upDeg() != null) .following else .waiting;
+    }
+
+    /// Hold own ship on the anchor and, with course-up on, the chart on its
+    /// heading. The display position moves every frame, so this runs every
+    /// frame; when nothing moved it costs one comparison.
+    fn followTick(self: *Lookout) void {
+        var moved = self.follow.rotate(&self.cam, self.ship.upDeg());
+        if (self.follow.apply(&self.cam, self.shipWorld())) moved = true;
+        if (moved) self.markDirty();
+    }
+
+    /// True when the camera has a move to make from the boat rather than from
+    /// a gesture: a display position that has walked on, or a new heading
+    /// under course-up.
+    fn followWantsFrame(self: *Lookout) bool {
+        if (!self.follow.on and !self.follow.course_up) return false;
+        self.tickShip();
+        if (self.follow.rotatePending(self.cam, self.ship.upDeg())) return true;
+        return self.follow.pending(self.cam, self.shipWorld());
     }
 
     fn composeWorker(self: *Lookout) void {
@@ -1191,12 +1564,14 @@ pub const Lookout = struct {
     }
 
     // ---- interaction --------------------------------------------------------
+    // Pan and zoom go through the follow controller: a pan turns follow off, a
+    // zoom keeps it on and pivots on own ship.
     pub fn panPixels(self: *Lookout, dx: f32, dy: f32) void {
-        self.cam.panPx(dx, dy);
+        self.follow.pan(&self.cam, dx, dy);
         self.markDirty();
     }
     pub fn zoomAt(self: *Lookout, dzoom: f64, x_px: f32, y_px: f32) void {
-        self.cam.zoomAbout(dzoom, x_px, y_px);
+        self.follow.zoomAbout(&self.cam, dzoom, x_px, y_px);
         self.markDirty();
     }
     pub fn screenToGeo(self: *Lookout, x_px: f32, y_px: f32) View {
@@ -1210,11 +1585,11 @@ pub const Lookout = struct {
     // Mouse coords from a HiDPI window arrive in logical points — which is the
     // camera's own unit now, so they pass straight through.
     pub fn panLogical(self: *Lookout, dx_pt: f32, dy_pt: f32) void {
-        self.cam.panPx(dx_pt, dy_pt);
+        self.follow.pan(&self.cam, dx_pt, dy_pt);
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        self.cam.zoomToward(dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
+        self.follow.zoomToward(&self.cam, dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
         self.markDirty();
     }
 
@@ -1228,12 +1603,14 @@ pub const Lookout = struct {
         const cy = sz[1] * 0.5;
         const a0 = std.math.atan2(@as(f64, prev_y - cy), @as(f64, prev_x - cx));
         const a1 = std.math.atan2(@as(f64, cur_y - cy), @as(f64, cur_x - cx));
+        self.follow.course_up = false; // the mariner turned the chart by hand
         self.cam.rotation += a1 - a0;
         self.markDirty();
     }
 
     /// Snap the view back to north-up.
     pub fn resetRotation(self: *Lookout) void {
+        self.follow.course_up = false; // north-up is the opposite of course-up
         if (self.cam.rotation == 0) return;
         self.cam.rotation = 0;
         self.markDirty();
@@ -1779,7 +2156,11 @@ pub const Lookout = struct {
         if (self.raster.wantsFrame()) return true;
         // A plugin can post geometry at any moment, from its own thread, with
         // no gesture behind it.
+        // Own ship's display position walks between fixes: the symbol moves,
+        // and while following the chart slides under it. No gesture behind it.
+        self.tickShip();
         if (self.overlayWantsFrame()) return true;
+        if (self.followWantsFrame()) return true;
         return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {
@@ -2114,4 +2495,191 @@ test "camera roundtrip" {
     const ll = camera.worldToLonLat(w);
     try std.testing.expectApproxEqAbs(@as(f64, -76.48), ll.x, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 38.98), ll.y, 1e-9);
+}
+
+// ---- follow mode ------------------------------------------------------------
+// The camera a follow test starts from: an Annapolis view the size of the Mac
+// window the mode was measured in.
+fn followTestCamera() camera.Camera {
+    const origin = camera.lonLatToWorld(-76.4767, 38.9763);
+    return .{
+        .origin = origin,
+        .center = origin,
+        .zoom = 15,
+        .target_zoom = 15,
+        .vw = 1264,
+        .vh = 730,
+        .min_zoom = 4,
+        .max_zoom = 22,
+    };
+}
+
+test "follow puts the fix at the centre, three quarters down" {
+    const t = std.testing;
+    var cam = followTestCamera();
+    var f = Follow{ .on = true };
+    const fix = camera.lonLatToWorld(-76.4720, 38.9800); // north-east of the centre
+    try t.expect(f.apply(&cam, fix));
+    const s = cam.worldToScreen(fix);
+    try t.expectApproxEqAbs(@as(f64, 1264.0 * 0.5), s.x, 1e-6);
+    try t.expectApproxEqAbs(@as(f64, 730.0 * 0.75), s.y, 1e-6);
+    // The same fix on the same pose is already anchored: no move, no frame.
+    try t.expect(!f.pending(cam, fix));
+    try t.expect(!f.apply(&cam, fix));
+}
+
+test "a pan turns follow off and still pans" {
+    const t = std.testing;
+    var cam = followTestCamera();
+    var f = Follow{ .on = true };
+    _ = f.apply(&cam, camera.lonLatToWorld(-76.4720, 38.9800));
+    const before = cam.center;
+    f.pan(&cam, 120, -40);
+    try t.expect(!f.on);
+    try t.expect(f.applied == null);
+    try t.expect(cam.center.x != before.x and cam.center.y != before.y);
+    // Own ship walks across the screen from here: a new fix moves nothing.
+    const held = cam.center;
+    try t.expect(!f.apply(&cam, camera.lonLatToWorld(-76.4700, 38.9820)));
+    try t.expectEqual(held.x, cam.center.x);
+    try t.expectEqual(held.y, cam.center.y);
+}
+
+test "a zoom while following pivots on the anchor" {
+    const t = std.testing;
+    const ax: f32 = 1264.0 * 0.5;
+    const ay: f32 = 730.0 * 0.75;
+    var cam = followTestCamera();
+    var f = Follow{ .on = true };
+    const fix = camera.lonLatToWorld(-76.4720, 38.9800);
+    _ = f.apply(&cam, fix);
+    // The caller passes a corner; own ship must stay where it is anyway.
+    f.zoomAbout(&cam, 2.0, 30, 30);
+    try t.expectApproxEqAbs(@as(f64, 17), cam.zoom, 1e-12);
+    const s = cam.worldToScreen(fix);
+    try t.expectApproxEqAbs(@as(f64, ax), s.x, 1e-6);
+    try t.expectApproxEqAbs(@as(f64, ay), s.y, 1e-6);
+    // With follow off the same call honours the point it was given.
+    var cam2 = followTestCamera();
+    const off = Follow{};
+    const under = cam2.screenToWorld(30, 30);
+    off.zoomAbout(&cam2, 2.0, 30, 30);
+    const after = cam2.screenToWorld(30, 30);
+    try t.expectApproxEqAbs(under.x, after.x, 1e-9);
+    try t.expectApproxEqAbs(under.y, after.y, 1e-9);
+}
+
+test "a fix older than the staleness window leaves the camera alone" {
+    if (plugins_on) {
+        const t = std.testing;
+        var vessels = try phost.store.Store.init(t.allocator);
+        defer vessels.deinit();
+        try vessels.set("navigation.position", "{\"lat\":38.98,\"lon\":-76.472}", 1_000, 1);
+
+        // 4 s after the fix: inside the 5 s window, so follow moves the chart.
+        var ship = ShipDisplay{};
+        ship.observe(PluginSystem.readShip(&vessels, 5_000));
+        const fresh = ship.at(5_000);
+        try t.expect(fresh != null);
+        var cam = followTestCamera();
+        var f = Follow{ .on = true };
+        try t.expect(f.apply(&cam, camera.lonLatToWorld(fresh.?[0], fresh.?[1])));
+
+        // 9 s after it: past the window. Follow stays on, armed and waiting.
+        var stale_cam = followTestCamera();
+        var g = Follow{ .on = true };
+        ship.observe(PluginSystem.readShip(&vessels, 10_000));
+        const stale = ship.at(10_000);
+        try t.expect(stale == null);
+        try t.expect(!g.pending(stale_cam, null));
+        try t.expect(!g.apply(&stale_cam, null));
+        try t.expect(g.on);
+        try t.expectEqual(followTestCamera().center.x, stale_cam.center.x);
+        try t.expectEqual(followTestCamera().center.y, stale_cam.center.y);
+    }
+}
+
+// Rule 8: the ship must not step once a second. The display position carries
+// the newest fix forward along COG at SOG, and stops at the window.
+test "the display position carries own ship between fixes" {
+    const t = std.testing;
+    var ship = ShipDisplay{};
+    ship.observe(.{
+        .fix = .{ .lon = -76.4767, .lat = 38.9763, .ts_ms = 1_000 },
+        .cog_deg = 90.0, // due east
+        .sog_ms = 10.0,
+        .heading_deg = 95.0,
+    });
+    const at0 = ship.at(1_000).?;
+    try t.expectApproxEqAbs(@as(f64, -76.4767), at0[0], 1e-12);
+    // Half a second east at 10 m/s is 5 m of longitude and no latitude.
+    const at1 = ship.at(1_500).?;
+    const east_m = (at1[0] - at0[0]) * M_PER_DEG * @cos(38.9763 * std.math.pi / 180.0);
+    try t.expectApproxEqAbs(@as(f64, 5.0), east_m, 0.01);
+    try t.expectApproxEqAbs(at0[1], at1[1], 1e-12);
+    // The carry is monotonic up to the window and gone after it.
+    try t.expect(ship.at(5_900) != null);
+    try t.expect(ship.at(6_100) == null);
+}
+
+// A fix with no instruments behind it still carries, on the run between the
+// last two fixes.
+test "the display position falls back to the run between fixes" {
+    const t = std.testing;
+    var ship = ShipDisplay{};
+    ship.observe(.{ .fix = .{ .lon = -76.5000, .lat = 38.9763, .ts_ms = 1_000 } });
+    ship.observe(.{ .fix = .{ .lon = -76.4990, .lat = 38.9763, .ts_ms = 2_000 } });
+    const at = ship.at(2_500).?;
+    // Half the last second's run again: 0.0005 degrees of longitude.
+    try t.expectApproxEqAbs(@as(f64, -76.4985), at[0], 1e-6);
+}
+
+// Rule 5: course up turns to the SMOOTHED display course, and a boat that is
+// stopped keeps the course it had rather than spinning the chart on GPS noise.
+test "the display course is smoothed and freezes when the boat stops" {
+    const t = std.testing;
+    var ship = ShipDisplay{};
+    var ts: i64 = 1_000;
+    while (ts <= 5_000) : (ts += 1_000) {
+        ship.observe(.{ .fix = .{ .lon = -76.5, .lat = 38.9, .ts_ms = ts }, .cog_deg = 90, .sog_ms = 5 });
+    }
+    try t.expectApproxEqAbs(@as(f64, 90.0), ship.upDeg().?, 1e-9);
+
+    // A turn to 120 moves the chart part of the way, not all at once.
+    ship.observe(.{ .fix = .{ .lon = -76.5, .lat = 38.9, .ts_ms = 6_000 }, .cog_deg = 120, .sog_ms = 5 });
+    const turning = ship.upDeg().?;
+    try t.expect(turning > 90.0 and turning < 120.0);
+
+    // Under the speed floor the course holds, whatever the GPS says.
+    ship.observe(.{ .fix = .{ .lon = -76.5, .lat = 38.9, .ts_ms = 7_000 }, .cog_deg = 300, .sog_ms = 0.1 });
+    try t.expectEqual(turning, ship.upDeg().?);
+
+    // A lost fix leaves nothing to turn to.
+    ship.observe(.{});
+    try t.expect(ship.upDeg() == null);
+}
+
+// Course-up turns the chart so the heading points up the screen, and holds
+// still inside the deadband.
+test "course up turns the chart to own ship's heading" {
+    const t = std.testing;
+    var cam = followTestCamera();
+    var f = Follow{ .course_up = true };
+    try t.expect(f.rotate(&cam, 75.0));
+    try t.expectApproxEqAbs(-75.0 * std.math.pi / 180.0, cam.rotation, 1e-12);
+    // A world bearing of 75 degrees now draws straight up the screen.
+    const c = camera.worldToLonLat(cam.center);
+    const north = camera.lonLatToWorld(c.x, c.y + 0.01);
+    const p0 = cam.worldToScreen(cam.center);
+    const pn = cam.worldToScreen(north);
+    const screen_bearing = std.math.atan2(pn.x - p0.x, p0.y - pn.y) * 180.0 / std.math.pi;
+    try t.expectApproxEqAbs(@as(f64, -75.0), screen_bearing, 0.05); // north is 75 to the left
+    // Inside the deadband nothing turns; outside it does.
+    try t.expect(!f.rotate(&cam, 75.1));
+    try t.expect(f.rotate(&cam, 78.0));
+    // No heading: the chart stays where it is.
+    try t.expect(!f.rotate(&cam, null));
+    // Off: nothing turns at all.
+    const off = Follow{};
+    try t.expect(!off.rotate(&cam, 10.0));
 }

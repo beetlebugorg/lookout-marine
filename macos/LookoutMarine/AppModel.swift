@@ -109,6 +109,20 @@ final class AppModel: ObservableObject {
     @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
     @Published var centerLat: Double = 0
     @Published var centerLon: Double = 0
+    /// Follow mode as the core reports it: 0 off, 1 following own ship, 2 on
+    /// and waiting for a fix. Polled on the render tick, never remembered from
+    /// a tap: the core turns follow off itself when the mariner pans.
+    @Published var followState: Int = 0
+    /// Course up as the core reports it: 0 off, 1 turning with own ship, 2 on
+    /// and waiting for a heading. Polled like followState.
+    @Published var courseUpState: Int = 0
+    /// True while the plugin layer is up. Own ship comes from a plugin, so the
+    /// follow control is only shown when one can supply a position.
+    @Published var pluginsActive = false
+    /// The overlay object the mariner pinned, and where it draws in the
+    /// chrome's coordinate space. One at a time.
+    @Published var pinned: OverlayPin?
+    @Published var pinnedPoint: CGPoint?
     /// What the plugin overlay says about the symbol under the pointer, and
     /// where the pointer is in the chrome's coordinate space. Both nil when the
     /// pointer is over nothing. Set by the chart view after a hover settles.
@@ -120,6 +134,15 @@ final class AppModel: ObservableObject {
     @Published var pickResults: [PickFeature] = []
     @Published var pickPoint: CGPoint?
     @Published var pickIndex = 0
+    /// Where on the CHART the pick was taken. The mark belongs to the object,
+    /// not to the screen: follow moves the chart with no gesture behind it, so
+    /// the mark is re-projected from this every frame.
+    var pickGeo: (lon: Double, lat: Double)?
+    /// Where the REPORT is docked: the mark's position when the pick was
+    /// taken, and fixed for as long as the report is open. The panel's frame
+    /// must not depend on anything the camera touches, or a chart sliding
+    /// under follow re-lays it out every frame.
+    @Published var pickAnchor: CGPoint?
     /// Where a hook-driven pick should anchor its report. The chart view sets it
     /// to the centre of its bounds.
     var pickCentreHint: CGPoint?
@@ -313,6 +336,42 @@ final class AppModel: ObservableObject {
     func zoomOut()  { controller?.zoomCentered(-1.0) }
     func zoomToFit(){ controller?.fitChart() }
     func northUp()  { controller?.resetRotation() }
+
+    /// What the compass bubble shows. The core owns both parts: it drops
+    /// follow on a pan and course up on a hand rotation, so this is read, not
+    /// remembered.
+    var orientation: Orientation {
+        if followState == 0 { return .unlocked }
+        if followState == 2 { return .armed }   // on, no fix to follow yet
+        return courseUpState == 0 ? .northUp : .courseUp
+    }
+
+    /// The compass bubble's tap. It always locks the chart to own ship, and
+    /// once locked it cycles north up and course up.
+    func cycleOrientation() {
+        guard let c = controller else { return }
+        if followState == 0 {
+            c.setFollow(true)          // lock, leaving the chart as it lies
+        } else if courseUpState == 0 {
+            c.setCourseUp(true)        // turn with own ship
+        } else {
+            c.resetRotation()          // back to north up, still locked
+        }
+    }
+
+    /// Pin an overlay object's bubble. It replaces any bubble already up, and
+    /// a hover tooltip never shares the screen with one.
+    func pin(_ p: OverlayPin) {
+        hover = nil
+        hoverPoint = nil
+        pinned = p
+        pinnedPoint = controller?.screenPoint(forGeoLon: p.lon, lat: p.lat)
+    }
+
+    func closePin() {
+        if pinned != nil { pinned = nil }
+        if pinnedPoint != nil { pinnedPoint = nil }
+    }
     /// Scheme changes from the MENU must persist like ones from the settings
     /// form (the form saves in its own apply path).
     func cycleScheme() {
@@ -513,6 +572,8 @@ final class AppModel: ObservableObject {
         pickResults = results
         pickPoint = results.isEmpty ? nil : point
         pickIndex = 0
+        pickGeo = results.isEmpty ? nil : controller?.geo(atPoint: point)
+        pickAnchor = pickPoint
         // A sheet covers part of the chart, so the object can fall under it.
         // Lift the chart until the mark clears the sheet, and move the mark
         // with it. Only a sheet needs this. A callout stands over its object
@@ -521,6 +582,8 @@ final class AppModel: ObservableObject {
         if let p = pickPoint, let lift = sheetLift(for: p), lift > 0 {
             controller?.panRevealingPick(dxPt: 0, dyPt: -lift)
             pickPoint = CGPoint(x: p.x, y: p.y - lift)
+            pickGeo = controller?.geo(atPoint: pickPoint!)
+            pickAnchor = pickPoint
             pickLift = lift
         }
         // The screenshot protocol's view of a pick: where, and what came
@@ -540,6 +603,8 @@ final class AppModel: ObservableObject {
         }
         pickResults = []
         pickPoint = nil
+        pickGeo = nil
+        pickAnchor = nil
         pickIndex = 0
     }
 

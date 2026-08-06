@@ -833,6 +833,15 @@ pub const Overlay = struct {
         self.b.raw("}");
     }
 
+    /// A symbol that rides own ship's DISPLAY position: the core carries the
+    /// newest fix forward and substitutes it every frame, so the boat sits
+    /// still on screen instead of stepping once a second. The lon/lat posted
+    /// here is still the fix, and is what draws if the core has no carry.
+    pub fn shipSymbol(self: *Overlay, id: []const u8, sym: Sym, lon: f64, lat: f64, rot_deg: f64, color: Color, scale: f64) void {
+        self.symbolOpen(id, sym, lon, lat, rot_deg, color, scale);
+        self.b.raw(",\"anchor\":\"ownship\"}");
+    }
+
     /// Everything a symbol object holds except its closing brace, so a caller
     /// may append a `pick` before closing it.
     fn symbolOpen(self: *Overlay, id: []const u8, sym: Sym, lon: f64, lat: f64, rot_deg: f64, color: Color, scale: f64) void {
@@ -884,6 +893,17 @@ pub const Overlay = struct {
     /// A polyline through `pts`, each `.{ lon, lat }`. `width_pt` is screen
     /// points, not metres — the core converts at the live zoom.
     pub fn polyline(self: *Overlay, id: []const u8, pts: []const [2]f64, width_pt: f64, color: Color, dash: bool) void {
+        self.polylineAnchored(id, pts, width_pt, color, dash, false);
+    }
+
+    /// A line that travels with own ship's display position, keeping its shape
+    /// and its first point on the boat — the heading line and the speed
+    /// vector, which must not lag the hull between fixes.
+    pub fn shipPolyline(self: *Overlay, id: []const u8, pts: []const [2]f64, width_pt: f64, color: Color, dash: bool) void {
+        self.polylineAnchored(id, pts, width_pt, color, dash, true);
+    }
+
+    fn polylineAnchored(self: *Overlay, id: []const u8, pts: []const [2]f64, width_pt: f64, color: Color, dash: bool, ship: bool) void {
         self.beginSet();
         self.b.raw("{\"id\":");
         self.b.str(id);
@@ -891,7 +911,11 @@ pub const Overlay = struct {
         self.points(pts);
         self.b.raw("],\"width_pt\":");
         self.b.num(width_pt);
-        self.b.print(",\"dash\":{s},\"color\":\"{s}\"}}", .{ if (dash) "true" else "false", color.text() });
+        self.b.print(",\"dash\":{s},\"color\":\"{s}\"{s}}}", .{
+            if (dash) "true" else "false",
+            color.text(),
+            if (ship) ",\"anchor\":\"ownship\"" else "",
+        });
     }
 
     /// A filled ring. `alpha` multiplies the token's own alpha.

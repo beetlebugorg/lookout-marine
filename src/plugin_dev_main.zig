@@ -541,13 +541,17 @@ const Args = struct {
     print: Print = .all,
 };
 
+/// `lon,lat,zoom[,rotation_deg]`. The rotation is there because overlay
+/// geometry under a turned camera is only verifiable by rendering one.
 fn parseView(text: []const u8) ?lk.View {
     var it = std.mem.splitScalar(u8, text, ',');
     const lon = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
     const lat = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
     const zoom = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
+    var rot: f64 = 0;
+    if (it.next()) |r| rot = std.fmt.parseFloat(f64, r) catch return null;
     if (it.next() != null) return null;
-    return .{ .lon = lon, .lat = lat, .zoom = zoom };
+    return .{ .lon = lon, .lat = lat, .zoom = zoom, .rotation_deg = rot };
 }
 
 fn fail(comptime fmt: []const u8, args: anytype) noreturn {
@@ -599,7 +603,7 @@ pub fn main(init: std.process.Init) !void {
             a.png = next orelse fail("--png needs a path", .{});
             i += 1;
         } else if (std.mem.eql(u8, arg, "--view")) {
-            a.view = parseView(next orelse "") orelse fail("--view wants lon,lat,zoom", .{});
+            a.view = parseView(next orelse "") orelse fail("--view wants lon,lat,zoom[,rotation_deg]", .{});
             i += 1;
         } else if (std.mem.eql(u8, arg, "--width")) {
             a.width = std.fmt.parseInt(u32, next orelse "", 10) catch fail("--width wants pixels", .{});

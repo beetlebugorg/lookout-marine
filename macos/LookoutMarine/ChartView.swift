@@ -139,7 +139,7 @@ struct OverlayLayer: View {
     var body: some View {
         GeometryReader { geo in
             let compact = geo.size.width < Self.compactWidth
-            let form: PickForm? = model.pickPoint == nil ? nil : Self.pickForm(for: geo.size)
+            let form: PickForm? = model.pickAnchor == nil ? nil : Self.pickForm(for: geo.size)
             // A side sheet owns the leading edge; the chrome there slides
             // inboard of it.
             let sideInset: CGFloat = form == .sideSheet ? Self.sideSheetWidth + Chrome.gap : 0
@@ -171,13 +171,14 @@ struct OverlayLayer: View {
                 // physical trailing edge, because in landscape the safe-area
                 // inset moves it toward the middle.
                 .overlay(alignment: .topTrailing) {
-                    NorthBubble(rotationDeg: model.rotationDeg) { model.northUp() }
+                    NorthBubble(rotationDeg: model.rotationDeg,
+                                orientation: model.orientation) { model.cycleOrientation() }
                         .chromeHitRegion("compass")
                         .padding(Chrome.margin)
                         .ignoresSafeArea(.container, edges: .trailing)
                 }
-                // Bottom right: zoom above settings. The charts live in the
-                // Charts tab of the settings.
+                // Bottom right: follow above zoom above settings. The charts
+                // live in the Charts tab of the settings.
                 .overlay(alignment: .bottomTrailing) {
                     VStack(alignment: .trailing, spacing: Chrome.gap) {
                         ZoomControls(model: model)
@@ -212,8 +213,10 @@ struct OverlayLayer: View {
                 // moves the drawing and not the layout, so the frame the
                 // chrome publishes would stay at the top left and every click
                 // on the report would reach the chart underneath.
+                // The report docks where the pick was taken and stays there.
+                // Only the mark above tracks the chart.
                 .overlay(alignment: .topLeading) {
-                    if let point = model.pickPoint, let form {
+                    if let point = model.pickAnchor, let form {
                         switch form {
                         case .callout:
                             let width = PickCallout.width(for: model.pickResults.count,
@@ -315,7 +318,7 @@ struct OverlayLayer: View {
                 // not an offset, for the reason above. No chrome hit region:
                 // a click over the tip must still pick the chart under it.
                 .overlay(alignment: .topLeading) {
-                    if let info = model.hover, let p = model.hoverPoint {
+                    if let info = model.hover, let p = model.hoverPoint, model.pinned == nil {
                         let place = Self.hoverLayout(point: p, in: geo.size)
                         HoverTip(info: info)
                             .frame(maxWidth: .infinity, maxHeight: .infinity,
@@ -325,6 +328,22 @@ struct OverlayLayer: View {
                             .padding(.top, place.top)
                             .padding(.bottom, place.bottom)
                             .allowsHitTesting(false)
+                    }
+                }
+                // The pinned bubble. Same card as the tooltip, with a close
+                // control, and it takes the pointer: the mariner has to be
+                // able to press that control.
+                .overlay(alignment: .topLeading) {
+                    if let pin = model.pinned, let p = model.pinnedPoint {
+                        let place = Self.hoverLayout(point: p, in: geo.size)
+                        HoverTip(info: pin.info) { model.closePin() }
+                            .chromeHitRegion("pinned-bubble")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: place.alignment)
+                            .padding(.leading, place.leading)
+                            .padding(.trailing, place.trailing)
+                            .padding(.top, place.top)
+                            .padding(.bottom, place.bottom)
                     }
                 }
                 // No .animation keyed on pickResults: it animates every layout
@@ -685,6 +704,7 @@ final class ChartNSView: NSView {
     /// is dropped as soon as the pointer leaves its symbol, without waiting.
     private func scheduleHover(at p: CGPoint) {
         hoverTimer?.invalidate()
+        if model?.pinned != nil { return } // one bubble at a time
         if model?.hover != nil, controller?.overlayInfo(atPoint: p) == nil { clearHover() }
         hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverDelay,
                                           repeats: false) { [weak self] _ in
@@ -779,6 +799,13 @@ final class ChartNSView: NSView {
             }
             return
         }
+        // An overlay symbol answers first and takes the click: a tap on a
+        // target pins its bubble and does not also open the chart's report.
+        if let hit = controller?.overlayHit(atPoint: p) {
+            model?.pin(hit)
+            return
+        }
+        model?.closePin() // a click elsewhere on the chart closes the bubble
         guard let g = controller?.geo(atPoint: p) else { return }
         model?.showPick(controller?.pick(lon: g.lon, lat: g.lat) ?? [], at: p)
     }
@@ -1167,6 +1194,9 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
 /// Values are monospaced-digit so a live SOG does not reflow its column.
 struct HoverTip: View {
     let info: OverlayHover
+    /// Set when the card is PINNED: it then carries a close control. A hover
+    /// tooltip has none — it goes when the pointer does.
+    var onClose: (() -> Void)?
 
     /// `maxWidth` caps the card. `assumedHeight` only tells hoverLayout which
     /// way to flip, so it is an over-estimate and never a frame.
@@ -1175,10 +1205,24 @@ struct HoverTip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(info.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Chrome.ink)
-                .lineLimit(1)
+            HStack(spacing: 8) {
+                Text(info.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Chrome.ink)
+                    .lineLimit(1)
+                if let onClose {
+                    Spacer(minLength: 0)
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Chrome.muted)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(ChromeFlatStyle(cornerRadius: 4))
+                    .help("Close")
+                    .accessibilityLabel("Close")
+                }
+            }
             if !info.rows.isEmpty {
                 Divider().overlay(Chrome.rule)
                 Grid(alignment: .leadingFirstTextBaseline,

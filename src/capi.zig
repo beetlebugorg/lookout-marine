@@ -174,6 +174,53 @@ export fn lookout_overlay_at(h: ?*lookout, x_pt: f32, y_pt: f32, out_len: ?*usiz
     return s.ptr;
 }
 
+/// One overlay object, as a hit test or an id lookup answers. `id` is
+/// NUL-terminated and can go straight back to `lookout_overlay_info`; `info`
+/// is the pick payload, NULL when the object carries none. `lon`/`lat` are
+/// where the object draws NOW. Every pointer is borrowed until the next
+/// overlay call.
+pub const lookout_overlay_obj = extern struct {
+    id: ?[*:0]const u8,
+    id_len: usize,
+    info: ?[*]const u8,
+    info_len: usize,
+    lon: f64,
+    lat: f64,
+};
+
+fn fillObj(out: *lookout_overlay_obj, hit: lk.OverlayHit) void {
+    out.* = .{
+        .id = hit.id.ptr,
+        .id_len = hit.id.len,
+        .info = if (hit.info.len > 0) hit.info.ptr else null,
+        .info_len = hit.info.len,
+        .lon = hit.at[0],
+        .lat = hit.at[1],
+    };
+}
+
+/// The overlay symbol nearest a LOGICAL point, with its id and anchor: 1 when
+/// one answers, 0 when none is within about 14 pt. A shell pins an info bubble
+/// to that id and follows it with lookout_overlay_info.
+export fn lookout_overlay_hit(h: ?*lookout, x_pt: f32, y_pt: f32, out: *lookout_overlay_obj) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const hit = l.overlayHit(x_pt, y_pt) orelse return 0;
+    fillObj(out, hit);
+    return 1;
+}
+
+/// What that object says now: 1 while it exists, 0 once it is gone (the
+/// target aged out, or its plugin stopped). The payload and the anchor are
+/// current, so a pinned bubble re-reads both every render tick.
+export fn lookout_overlay_info(h: ?*lookout, id: [*:0]const u8, out: *lookout_overlay_obj) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const hit = l.overlayInfo(std.mem.span(id)) orelse return 0;
+    fillObj(out, hit);
+    return 1;
+}
+
 /// 1 if the symbol/font atlas cache is already built — i.e. the NEXT open will
 /// not need the one-time rasterize. A host can call this before opening to show
 /// a "preparing chart symbols" message only on the first run. No handle needed.
@@ -552,6 +599,51 @@ export fn lookout_overscale(h: ?*lookout) f64 {
     const l = locked(h);
     defer l.apiUnlock();
     return l.overscale();
+}
+
+// ---- follow mode -----------------------------------------------------------
+/// Hold own ship at a fixed point on screen — the horizontal centre, three
+/// quarters down the view — and move the chart under it as the fix updates.
+/// Turning it on moves the chart at once when a fresh fix exists. With no fix,
+/// or one past the 5 s staleness window, the camera holds and follow waits.
+///
+/// The core turns follow off itself on lookout_pan and lookout_pan_logical: a
+/// pan hands the chart back to the mariner. Zoom and rotation leave it on, and
+/// a zoom while following pivots on own ship whatever point you pass.
+export fn lookout_follow_set(h: ?*lookout, on: c_int) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setFollow(on != 0);
+}
+
+/// What follow mode is doing: 0 off, 1 following own ship, 2 on but waiting
+/// for a fix. Non-zero means follow is on, so `!= 0` is enough for a control
+/// that draws two states. Poll it on your render tick: the core turns follow
+/// off on a pan, so a button that tracks only its own taps goes wrong.
+export fn lookout_follow_active(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return @intFromEnum(l.followState());
+}
+
+/// Course up: turn the chart so own ship's heading points up the screen, and
+/// keep turning it as the ship turns. Heading when the compass is fresh, else
+/// course over ground; with neither the chart holds and the control waits.
+/// Independent of follow — either mode works alone.
+///
+/// The core turns course up off itself when the mariner rotates the chart by
+/// hand or asks for north up.
+export fn lookout_course_up_set(h: ?*lookout, on: c_int) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setCourseUp(on != 0);
+}
+
+/// 0 off, 1 turning with own ship, 2 on but waiting for a heading.
+export fn lookout_course_up_active(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return @intFromEnum(l.courseUpState());
 }
 
 /// The current view's 1:N scale denominator, from the authoritative camera math.

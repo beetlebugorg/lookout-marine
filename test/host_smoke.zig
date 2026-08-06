@@ -165,7 +165,7 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
     // The host namespaces overlay ids by plugin, so two plugins may both call
     // an object "echo".
     try std.testing.expect(ov.objs.contains(echo_id ++ "/echo"));
-    const fr = try ov.buildIfNeeded(15.0, .day);
+    const fr = try ov.buildIfNeeded(15.0, .day, null);
     try std.testing.expectEqual(@as(usize, overlay.TARGET_VERTS), fr.verts.len);
     // Drawn where the payload said, not at the plugin's fallback position.
     const at = overlay.geo(.{ -76.47, 38.98 });

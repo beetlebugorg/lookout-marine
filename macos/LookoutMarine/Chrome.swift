@@ -113,12 +113,16 @@ extension View {
 /// makes a control look like a painted shape. WinUI tints its bubbles the same
 /// way, so the states are parity, not decoration.
 struct ChromeButtonStyle: ButtonStyle {
+    /// The resting fill of a bubble whose mode is ON. nil is the plain bubble.
+    var activeFill: Color?
+
     func makeBody(configuration: Configuration) -> some View {
-        Bubble(configuration: configuration)
+        Bubble(configuration: configuration, activeFill: activeFill)
     }
 
     private struct Bubble: View {
         let configuration: ButtonStyleConfiguration
+        let activeFill: Color?
         @Environment(\.isEnabled) private var isEnabled
         @State private var hovering = false
 
@@ -140,6 +144,9 @@ struct ChromeButtonStyle: ButtonStyle {
         }
 
         private var fill: Color {
+            if let activeFill {
+                return configuration.isPressed ? activeFill.opacity(0.75) : activeFill
+            }
             if configuration.isPressed { return Chrome.pressFill }
             return hovering ? Chrome.hoverFill : Chrome.surface
         }
@@ -202,24 +209,61 @@ struct ChromeBubble: View {
     }
 }
 
-/// The north bubble. The mark turns with the view. A tap sets the chart to
-/// north-up. It is always visible, as in the WinUI 3 shell.
+/// How the chart is held: free, locked to own ship north-up, or locked to own
+/// ship with its course up the screen.
+enum Orientation {
+    case unlocked
+    /// Locked, but with no fix to lock to yet — armed and waiting.
+    case armed
+    case northUp
+    case courseUp
+}
+
+/// The compass bubble, which is also the lock. The mark turns with the view,
+/// so it always points at north. A tap locks the chart to own ship and then
+/// cycles north-up and course-up; a pan unlocks it again, which the core
+/// reports and this draws.
 struct NorthBubble: View {
     let rotationDeg: Double
-    let onReset: () -> Void
+    var orientation: Orientation = .unlocked
+    let onTap: () -> Void
 
     var body: some View {
-        Button(action: onReset) {
-            VStack(spacing: -1) {
-                Image(systemName: "triangle.fill").font(.system(size: 8))
-                Text("N").font(.system(size: 14, weight: .semibold))
+        Button(action: onTap) {
+            ZStack {
+                // Armed: follow is on and waiting for a fix. A ring, not a
+                // fill: nothing is being followed yet.
+                if orientation == .armed {
+                    Circle().strokeBorder(Chrome.accent, lineWidth: 2)
+                        .frame(width: Chrome.bubble - 4, height: Chrome.bubble - 4)
+                }
+                // The letter names what is up: north, or own ship's course.
+                // Under N the mark turns with the view and points at north;
+                // under C the course is up by definition, so it stands still.
+                VStack(spacing: -1) {
+                    Image(systemName: "triangle.fill").font(.system(size: 8))
+                    Text(orientation == .courseUp ? "C" : "N")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(ink)
+                .rotationEffect(.degrees(orientation == .courseUp ? 0 : rotationDeg))
             }
-            .foregroundStyle(Chrome.ink)
-            .rotationEffect(.degrees(-rotationDeg))
         }
-        .buttonStyle(ChromeButtonStyle())
-        .help("Reset to north-up")
-        .accessibilityLabel("Reset to north-up")
+        .buttonStyle(ChromeButtonStyle(activeFill: locked ? Chrome.accent : nil))
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private var locked: Bool { orientation == .northUp || orientation == .courseUp }
+    private var ink: Color { locked ? .white : Chrome.ink }
+
+    private var help: String {
+        switch orientation {
+        case .unlocked: return "Follow own ship"
+        case .armed: return "Following own ship — waiting for a fix"
+        case .northUp: return "Following own ship, north up — tap for course up"
+        case .courseUp: return "Following own ship, course up — tap for north up"
+        }
     }
 }
 

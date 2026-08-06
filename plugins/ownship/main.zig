@@ -42,8 +42,9 @@ const redraw_ms: i64 = 1000;
 const track_min_ms: i64 = 1000;
 const track_min_m: f64 = 2.0;
 
-/// Heading line length.
-const heading_line_m: f64 = trk.nm_m;
+/// Heading line length: 0.1 nm, the same as an AIS target's heading line, so
+/// own ship and the traffic read on one scale. A 1 nm line crossed the harbour.
+const heading_line_m: f64 = 0.1 * trk.nm_m;
 
 /// The COG vector is where the boat gets to in six minutes at this speed.
 const cog_vector_s: f64 = 6 * 60;
@@ -287,9 +288,11 @@ fn draw(plan: Plan, rot: ?f64, course: ?f64, speed: f64) void {
     // The overlay wants at least two points for a line.
     if (n < 2) ov.del(id_track);
 
-    if (plan.ship) ov.symbol(id_ship, .ownship, pos_lon, pos_lat, rot orelse 0, .ownship, 1.0);
-    if (plan.line) ov.polyline(id_hdg, ray(rot.?, heading_line_m), hdg_width_pt, .ownship, false);
-    if (plan.vector) ov.polyline(id_cog, ray(course.?, speed * cog_vector_s), cog_width_pt, .ownship, true);
+    // The boat and its two lines ride the core's display position, so they
+    // move smoothly between the 1 Hz fixes. The track keeps the raw fixes.
+    if (plan.ship) ov.shipSymbol(id_ship, .ownship, pos_lon, pos_lat, rot orelse 0, .ownship, 1.0);
+    if (plan.line) ov.shipPolyline(id_hdg, ray(rot.?, heading_line_m), hdg_width_pt, .ownship, false);
+    if (plan.vector) ov.shipPolyline(id_cog, ray(course.?, speed * cog_vector_s), cog_width_pt, .ownship, true);
     if (n >= 2) ov.polyline(id_track, pts_buf[0..n], track_width_pt, .track, false);
 
     _ = ov.send();

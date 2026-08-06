@@ -119,6 +119,32 @@ int lookout_plugins_active(lookout *h);
  * that target meanwhile. */
 const char *lookout_overlay_at(lookout *h, float x_pt, float y_pt, size_t *out_len);
 
+/* One overlay object, as a hit test or an id lookup answers.
+ *
+ * `id` is NUL-terminated and goes straight back to lookout_overlay_info().
+ * `info` is the pick payload (the same JSON lookout_overlay_at returns), NULL
+ * when the object carries none. `lon`/`lat` are where the object draws NOW.
+ * Every pointer is borrowed until the next overlay call. */
+typedef struct {
+    const char *id;
+    size_t      id_len;
+    const char *info;
+    size_t      info_len;
+    double      lon, lat;
+} lookout_overlay_obj;
+
+/* The overlay symbol nearest a LOGICAL point: 1 when one answers, 0 when none
+ * is within about 14 pt. Use it on a tap: pin an info bubble to the id it
+ * returns, and follow the object with lookout_overlay_info(). A tap that hits
+ * an overlay symbol should not also open the chart pick report. */
+int lookout_overlay_hit(lookout *h, float x_pt, float y_pt, lookout_overlay_obj *out);
+
+/* What that object says now: 1 while it exists, 0 once it is gone (the target
+ * aged out, or its plugin stopped). Payload and anchor are both current, so a
+ * pinned bubble re-reads them every render tick to move itself and refresh its
+ * values, and closes itself when this returns 0. */
+int lookout_overlay_info(lookout *h, const char *id, lookout_overlay_obj *out);
+
 /* 1 if the symbol/font atlas cache is already built — the next open won't need
  * the one-time rasterize (~1.3s at 1x, more at HiDPI). Call before opening to
  * show a "preparing chart symbols" indicator only on the first run. */
@@ -250,6 +276,45 @@ void lookout_pan_logical(lookout *h, float dx_pt, float dy_pt);
 void lookout_zoom_at_logical(lookout *h, double dzoom, float x_pt, float y_pt);
 void lookout_screen_to_geo(lookout *h, float x_px, float y_px, double *lon, double *lat);
 void lookout_geo_to_screen(lookout *h, double lon, double lat, float *x_px, float *y_px);
+
+/* ---- follow mode -------------------------------------------------------- */
+/* Hold own ship at a fixed point on screen — the horizontal centre, three
+ * quarters down the view, so the water ahead fills it — and move the chart
+ * under the ship as the fix updates. Turning it on moves the chart at once
+ * when a fresh fix exists. With no fix, or one past the 5 s staleness window,
+ * the camera holds and follow waits for one.
+ *
+ * The core turns follow off itself on lookout_pan and lookout_pan_logical: a
+ * pan hands the chart back to the mariner. Zoom and rotation leave it on, and
+ * a zoom while following pivots on own ship whatever point you pass.
+ *
+ * The position comes from the plugin layer, so follow needs plugins running to
+ * do anything. */
+void lookout_follow_set(lookout *h, int on);
+
+/* What follow mode is doing: 0 off, 1 following own ship, 2 on but waiting for
+ * a fix. Non-zero means follow is on, so `!= 0` is enough for a control that
+ * draws two states. Poll it on your render tick: the core turns follow off on
+ * a pan, so a button that tracks only its own taps goes wrong. */
+int lookout_follow_active(lookout *h);
+
+/* Course up: turn the chart so own ship's heading points up the screen, and
+ * keep turning it as the ship turns. Heading when the compass is fresh, else
+ * course over ground; with neither the chart holds and the control waits.
+ * Independent of follow — either mode works alone.
+ *
+ * The core turns course up off itself when the mariner rotates the chart by
+ * hand or asks for north up. */
+void lookout_course_up_set(lookout *h, int on);
+
+/* 0 off, 1 turning with own ship, 2 on but waiting for a heading. */
+int lookout_course_up_active(lookout *h);
+
+/* Own ship does not step from fix to fix. The core carries the newest fix
+ * forward along COG at SOG (stopping at the 5 s staleness window) and both the
+ * camera and the own-ship overlay ride that display position, so the boat sits
+ * still on screen and the chart slides. While it moves, lookout_needs_redraw
+ * answers 1 every frame. */
 
 /* ---- mariner (ALL S-52 display settings) ------------------------------- */
 /* Fill *m with tile57's canonical defaults, then edit and set. */

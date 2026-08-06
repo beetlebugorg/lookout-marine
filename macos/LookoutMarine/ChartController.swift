@@ -33,6 +33,15 @@ struct PickFeature: Identifiable, Hashable {
     let s57: String     // full S-57 attribute JSON (unused in the HUD line)
 }
 
+/// One overlay object the mariner pinned: which object it is, what it says
+/// now, and where it draws now. Re-read from the core every render tick.
+struct OverlayPin: Equatable {
+    let id: String
+    var info: OverlayHover
+    var lon: Double
+    var lat: Double
+}
+
 /// What a plugin overlay symbol says about itself. Decoded from the JSON
 /// `lookout_overlay_at` returns.
 struct OverlayHover: Equatable {
@@ -309,9 +318,64 @@ final class ChartController: NSObject {
         return OverlayHover(json: Data(bytes: raw, count: len))
     }
 
+    /// The overlay object under a point, with its id and anchor. nil when
+    /// nothing is near it. A tap uses this; hover uses `overlayInfo(atPoint:)`.
+    func overlayHit(atPoint p: CGPoint) -> OverlayPin? {
+        guard let h = handle else { return nil }
+        var o = lookout_overlay_obj()
+        guard lookout_overlay_hit(h, Float(p.x), Float(p.y), &o) != 0 else { return nil }
+        return pin(from: o)
+    }
+
+    /// What a pinned object says now, or nil once it is gone.
+    func overlayInfo(id: String) -> OverlayPin? {
+        guard let h = handle else { return nil }
+        var o = lookout_overlay_obj()
+        guard id.withCString({ lookout_overlay_info(h, $0, &o) }) != 0 else { return nil }
+        return pin(from: o)
+    }
+
+    /// Everything in the struct is borrowed until the next overlay call, so
+    /// copy both strings out before anything else runs.
+    private func pin(from o: lookout_overlay_obj) -> OverlayPin? {
+        guard let idp = o.id, let infop = o.info, o.info_len > 0 else { return nil }
+        let id = String(cString: idp)
+        guard let info = OverlayHover(json: Data(bytes: infop, count: o.info_len)) else { return nil }
+        return OverlayPin(id: id, info: info, lon: o.lon, lat: o.lat)
+    }
+
     // CADisplayLink fires on the main run loop; assume main-actor isolation.
     @objc private nonisolated func displayLinkFired(_ link: CADisplayLink) {
         MainActor.assumeIsolated { self.step(link) }
+    }
+
+    /// Chrome that belongs to a place on the chart — the pick mark and a
+    /// pinned bubble — re-projected every frame. Follow moves the chart with
+    /// no gesture behind it, so a point measured when the mariner tapped
+    /// slides off its object. Assigns only on a real move: @Published fires
+    /// on assignment, and this runs at frame rate.
+    private func syncGeoChrome() {
+        guard let model else { return }
+        if let g = model.pickGeo, model.pickPoint != nil {
+            let p = screenPoint(forGeoLon: g.lon, lat: g.lat)
+            if moved(model.pickPoint, p) { model.pickPoint = p }
+        }
+        // A pinned bubble is re-read, not remembered: the target moves, its
+        // values change, and it goes away when the plugin drops it.
+        if let pinned = model.pinned {
+            if let now = overlayInfo(id: pinned.id) {
+                if model.pinned != now { model.pinned = now }
+                let p = screenPoint(forGeoLon: now.lon, lat: now.lat)
+                if moved(model.pinnedPoint, p) { model.pinnedPoint = p }
+            } else {
+                model.closePin()
+            }
+        }
+    }
+
+    private func moved(_ a: CGPoint?, _ b: CGPoint) -> Bool {
+        guard let a else { return true }
+        return abs(a.x - b.x) >= 0.5 || abs(a.y - b.y) >= 0.5
     }
 
     private func step(_ link: CADisplayLink) {
@@ -332,10 +396,17 @@ final class ChartController: NSObject {
                 renderQueue.async { [weak self] in
                     _ = lookout_render(h)
                     self?.renderGate.signal()
-                    DispatchQueue.main.async { self?.pushReadouts() }
+                    DispatchQueue.main.async {
+                        self?.syncGeoChrome()
+                        self?.pushReadouts()
+                    }
                 }
             }
             idleTicks = 0
+            // The first scene is up once a frame has gone out with no build
+            // outstanding. Own ship moves between fixes, so with plugins
+            // running the loop may never reach the idle branch below.
+            if !building, model?.firstBuildDone == false { model?.firstBuildDone = true }
         } else if building {
             // A background tessellation is filling in — keep ticking so it appears.
             idleTicks = 0
@@ -440,6 +511,41 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         lookout_fling_start(h, vx, vy)
         kick()
+    }
+
+    // MARK: - Follow mode
+
+    /// 0 off, 1 following own ship, 2 on and waiting for a fix. The core turns
+    /// follow off on a pan, so this is read on the render tick, not remembered.
+    var followState: Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_follow_active(h))
+    }
+
+    func setFollow(_ on: Bool) {
+        guard let h = handle else { return }
+        lookout_follow_set(h, on ? 1 : 0)
+        retirePickReport()
+        kick(); pushReadouts()
+    }
+
+    /// 0 off, 1 turning with own ship, 2 on and waiting for a heading.
+    var courseUpState: Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_course_up_active(h))
+    }
+
+    func setCourseUp(_ on: Bool) {
+        guard let h = handle else { return }
+        lookout_course_up_set(h, on ? 1 : 0)
+        kick(); pushReadouts()
+    }
+
+    /// 1 while the wasm plugin layer is up. Own ship comes from a plugin, so
+    /// the follow control has nothing to lock on to without one.
+    var pluginsActive: Bool {
+        guard let h = handle else { return false }
+        return lookout_plugins_active(h) != 0
     }
 
     // MARK: - Geo <-> screen (points API; pixels under the hood)
@@ -628,6 +734,14 @@ final class ChartController: NSObject {
         if model.rasterActive != ai { model.rasterActive = ai }
         let active = rasterName()
         if model.rasterName != active { model.rasterName = active }
+        // The core turns follow off itself on a pan; polling here is what makes
+        // the lock button follow the core instead of its own last tap.
+        let follow = followState
+        if model.followState != follow { model.followState = follow }
+        let cup = courseUpState
+        if model.courseUpState != cup { model.courseUpState = cup }
+        let plugged = pluginsActive
+        if model.pluginsActive != plugged { model.pluginsActive = plugged }
         if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
         if model.centerLat != v.lat { model.centerLat = v.lat }
