@@ -206,14 +206,17 @@ test "both stopped: relative motion of exactly zero does not divide by zero" {
     try testing.expect(std.math.isFinite(s.cpa_m));
 }
 
-test "the generator's target A: crossing to 300 m at 400 s" {
+test "the generator's target A: a 300 m CPA that starts beyond the gate" {
     // tools/nmea_gen.zig lays target A on a 300° course at 8 kn and places it
-    // so that at t = 400 s it is 300 m from own ship, which is making 5 kn on
-    // 030°, with the relative velocity square to that offset. Reconstructing
-    // the same scene here checks this solver against the geometry the
-    // synthetic log is built from — the run that must fire the alarm.
+    // so that 655 s along — PAST the end of its 600 second log — it is 300 m
+    // from own ship, which is making 5 kn on 075°, with the relative velocity
+    // square to that offset. Reconstructing the construction here checks this
+    // solver against the geometry the synthetic log is built from, and pins
+    // the property the whole replay turns on: at the first fix the approach is
+    // close enough but too far off in TIME, so the alarm does not fire until
+    // the TCPA has fallen under the gate.
     const own_sog = 5.0 * knot_mps;
-    const own_cog = 30.0;
+    const own_cog = 75.0;
     const tgt_sog = 8.0 * knot_mps;
     const tgt_cog = 300.0;
 
@@ -221,18 +224,32 @@ test "the generator's target A: crossing to 300 m at 400 s" {
     const tv = velocity(.{ .lat = base_lat, .lon = base_lon, .sog_mps = tgt_sog, .cog_deg = tgt_cog });
     const rel = [2]f64{ tv[0] - ov[0], tv[1] - ov[1] };
     const rel_len = @sqrt(rel[0] * rel[0] + rel[1] * rel[1]);
-    // 300 m square to the relative track, wound back 400 s along it.
-    const offset = [2]f64{ rel[1] * 300.0 / rel_len, -rel[0] * 300.0 / rel_len };
-    const start = [2]f64{ offset[0] - rel[0] * 400.0, offset[1] - rel[1] * 400.0 };
+    // 300 m square to the relative track, wound back along it.
+    const offset = [2]f64{ -rel[1] * 300.0 / rel_len, rel[0] * 300.0 / rel_len };
 
     const own = at(0, 0, own_sog, own_cog);
-    const other = at(start[0], start[1], tgt_sog, tgt_cog);
-    const s = solve(own, other);
+    const far = solve(own, at(
+        offset[0] - rel[0] * 655.0,
+        offset[1] - rel[1] * 655.0,
+        tgt_sog,
+        tgt_cog,
+    ));
+    try testing.expectApproxEqAbs(@as(f64, 655), far.tcpa_s.?, 1.0);
+    try testing.expectApproxEqAbs(@as(f64, 300), far.cpa_m, 1.0);
+    try testing.expect(far.range_m > 4000);
+    // Close enough, but not yet soon enough.
+    try testing.expect(far.cpa_m < 926);
+    try testing.expect(!far.dangerous(926, 600));
 
-    try testing.expectApproxEqAbs(@as(f64, 400), s.tcpa_s.?, 1.0);
-    try testing.expectApproxEqAbs(@as(f64, 300), s.cpa_m, 1.0);
-    try testing.expect(s.range_m > 1500);
-    try testing.expect(s.dangerous(926, 600));
+    // The same encounter a minute and a half later is the alarm.
+    const near = solve(own, at(
+        offset[0] - rel[0] * 560.0,
+        offset[1] - rel[1] * 560.0,
+        tgt_sog,
+        tgt_cog,
+    ));
+    try testing.expectApproxEqAbs(@as(f64, 560), near.tcpa_s.?, 1.0);
+    try testing.expect(near.dangerous(926, 600));
 }
 
 test "the gate: outside either limit is no alarm" {

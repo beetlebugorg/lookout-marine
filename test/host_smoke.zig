@@ -57,6 +57,45 @@ const OvSink = struct {
     }
 };
 
+fn countOccurrences(sink: *LogSink, needle: []const u8) usize {
+    sink.mu.lock();
+    defer sink.mu.unlock();
+    var n: usize = 0;
+    var rest: []const u8 = sink.text.items;
+    while (std.mem.indexOf(u8, rest, needle)) |i| {
+        n += 1;
+        rest = rest[i + needle.len ..];
+    }
+    return n;
+}
+
+/// One AIS_CHANGED payload of `n` targets, about 130 bytes each. `tick` shifts
+/// the numbers so no two events carry identical bytes.
+fn aisSnapshot(alloc: std.mem.Allocator, n: usize, tick: usize) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    try out.appendSlice(alloc, "{\"targets\":[");
+    for (0..n) |i| {
+        if (i > 0) try out.append(alloc, ',');
+        const k: f64 = @floatFromInt((i * 7 + tick) % 500);
+        try out.print(alloc,
+            \\{{"mmsi":{d},"lat":{d:.5},"lon":{d:.5},"sog":{d:.2},"cog":{d:.1},"heading":{d:.1},"name":"TARGET {d:0>6}","ts":{d},"age_ms":{d}}}
+        , .{
+            366000000 + i,
+            38.90 + k * 0.0001,
+            -76.55 + k * 0.0001,
+            k * 0.01,
+            k * 0.7,
+            k * 0.7 + 1.0,
+            i,
+            1_700_000_000_000 + @as(i64, @intCast(tick)) * 1000,
+            tick % 900,
+        });
+    }
+    try out.appendSlice(alloc, "]}");
+    return out.toOwnedSlice(alloc);
+}
+
 /// Write the pair `zig build plugins` installs into a scratch directory, and
 /// return the path the host loads from.
 fn stage(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
@@ -145,6 +184,71 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
     h.stop();
     try std.testing.expect(sink.has("shutdown after"));
     try std.testing.expectEqual(@as(usize, 0), ov.count());
+}
+
+// The arena regression. A payload big enough that parsing it needs more
+// scratch than the plugin's static buffer holds makes lk.zig grow linear
+// memory INSIDE the event. The first version of that arena abandoned the
+// region it grew out of and never rewound into it again, so every such event
+// leaked a region: the instance ran out of memory after about forty of them,
+// lk_alloc answered 0, and the host disabled the plugin for good.
+//
+// The subject is echo's AIS_CHANGED handler, which parses the whole snapshot
+// through `lk.targets` — the same path the ais plugin's rebuild takes. What is
+// asserted is not a byte count (the plugin cannot report one) but the
+// behaviour that count decides: 150 identical-sized events all arrive, all
+// finish, and none traps.
+test "a plugin survives repeated events whose scratch outgrows its arena" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try stage(alloc, &tmp);
+    defer alloc.free(dir_path);
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var ov = overlay.Store.init(alloc);
+    defer ov.deinit();
+    var sink = LogSink{ .alloc = alloc };
+    defer sink.text.deinit(alloc);
+
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{
+        .ctx = &ov,
+        .applyFn = OvSink.apply,
+        .removeFn = OvSink.remove,
+    });
+    defer br.deinit();
+    br.setLog(&sink, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{});
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
+
+    // 230 targets is a little over 30 kB — several times the 256 kB static
+    // arena once std.json has a Value tree for it.
+    const targets_per_event = 230;
+    const events = 150;
+    for (0..events) |tick| {
+        const payload = try aisSnapshot(alloc, targets_per_event, tick);
+        defer alloc.free(payload);
+        try std.testing.expect(payload.len > 28 * 1024);
+        br.push(echo.index, broker.Kind.ais_changed, 0, payload);
+        try std.testing.expectEqual(@as(usize, 1), h.pump());
+    }
+
+    try std.testing.expect(!sink.has("trapped"));
+    try std.testing.expect(!sink.has("disabled"));
+    // The plugin logs one line per snapshot naming how many targets it parsed,
+    // so the count is proof every event ran to the end of the handler — not
+    // merely that the host stayed up.
+    try std.testing.expectEqual(
+        @as(usize, events),
+        countOccurrences(&sink, std.fmt.comptimePrint("{d} ais targets", .{targets_per_event})),
+    );
 }
 
 test "the dispatch and I/O threads deliver a periodic timer and a fanout tick" {

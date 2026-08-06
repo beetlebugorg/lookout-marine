@@ -190,6 +190,15 @@ pub fn aisSubscribe() i32 {
 ///   * an allocation that outlives its event is a bug this arena will not
 ///     catch — put lasting state in a global.
 ///
+/// GROWTH DOES NOT ACCUMULATE. An event needing more scratch than the region
+/// holds grows linear memory, and the grown pages are contiguous with the end
+/// of that memory — so once the arena lives out there it is extended in place
+/// and every live pointer, mark and offset stays put. The one move is the
+/// first growth, off the static buffer: that buffer is left behind for the
+/// life of the instance, not once per event. Steady-state events of any size
+/// that fits therefore settle at the high-water mark of the largest single
+/// event and grow no further.
+///
 /// ADDRESS 0 IS NEVER RETURNED. The host reads a 0 from lk_alloc as "the
 /// plugin is out of memory", so the arena refuses to hand out the null app
 /// address even if the linker were to place its buffer there.
@@ -200,11 +209,18 @@ const Arena = struct {
     const wasm_page = 64 * 1024;
 
     var buf: [static_bytes]u8 align(16) = undefined;
-    /// Start of the region being bumped through. Marks and frees outside it
-    /// are ignored — see `release`.
+    /// Start of the region being bumped through: the static buffer until the
+    /// first growth, a run of grown pages after it.
     var base: usize = 0;
     var cur: usize = 0;
     var end: usize = 0;
+    /// Bumped every time `base` moves. A mark taken in an older region names
+    /// nothing in this one, so `release` rewinds to `base` instead — see there.
+    var region: u32 = 0;
+
+    /// Where the bump pointer stood, and in which region. Not a bare address:
+    /// an address alone cannot say whether the arena has moved under it.
+    const Mark = struct { region: u32, cur: usize };
 
     fn ensureInit() void {
         if (end != 0) return;
@@ -228,17 +244,28 @@ const Arena = struct {
         return @ptrFromInt(start);
     }
 
-    /// Grow linear memory and move the arena into the new pages. The tail of
-    /// the previous region is abandoned — a bump arena has nowhere to record
-    /// it — which costs at most one region per growth and keeps the pointer
-    /// arithmetic a single comparison.
+    /// Make room for `need` more bytes.
+    ///
+    /// When the region already ends at the end of linear memory — true of
+    /// every region this ever creates — the new pages land directly on top of
+    /// it and only `end` moves: no allocation is abandoned and no live pointer
+    /// changes. Otherwise (the static buffer, or another allocator having
+    /// grown memory in between) the arena moves into a fresh run of pages and
+    /// counts a new region.
     fn grow(need: usize) bool {
-        const pages = (need + wasm_page - 1) / wasm_page + 1;
-        const prev = @wasmMemoryGrow(0, pages);
+        const pages = (need + wasm_page - 1) / wasm_page;
+        if (@as(usize, @intCast(@wasmMemorySize(0))) * wasm_page == end) {
+            const prev = @wasmMemoryGrow(0, pages);
+            if (prev < 0) return false;
+            end += pages * wasm_page;
+            return true;
+        }
+        const prev = @wasmMemoryGrow(0, pages + 1);
         if (prev < 0) return false;
         base = @as(usize, @intCast(prev)) * wasm_page;
         cur = base;
-        end = base + pages * wasm_page;
+        end = base + (pages + 1) * wasm_page;
+        region +%= 1;
         return true;
     }
 
@@ -249,16 +276,19 @@ const Arena = struct {
         if (addr >= base and addr + mem.len == cur) cur = addr;
     }
 
-    fn mark() usize {
+    fn mark() Mark {
         ensureInit();
-        return cur;
+        return .{ .region = region, .cur = cur };
     }
 
-    /// Only rewinds within the CURRENT region: a growth since the mark was
-    /// taken left that region behind, and rewinding into it would hand out
-    /// addresses that overlap live data.
-    fn release(m: usize) void {
-        if (m >= base and m <= cur) cur = m;
+    /// Rewind to `m`. If the arena moved regions since the mark was taken,
+    /// everything the mark could name lives in the region that was left
+    /// behind, and is dead at this point too — so the rewind goes to the base
+    /// of the region in use, which reclaims the whole call either way.
+    fn release(m: Mark) void {
+        if (m.region != region) {
+            cur = base;
+        } else if (m.cur >= base and m.cur <= cur) cur = m.cur;
     }
 };
 

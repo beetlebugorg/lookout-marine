@@ -141,14 +141,16 @@ pub const Options = struct {
     shutdown_ms: u32 = 500,
 };
 
-/// Native stack for the dispatch thread. NOT a free choice: WAMR is built here
-/// with hardware bound checking, whose per-thread setup mprotects the guard
-/// page below the thread's stack, and on macOS that mprotect fails for stacks
-/// of 8 MiB and up — including Zig's 16 MiB default, which made every call
-/// from the dispatch thread trap with "thread signal env not inited". 2 MiB is
-/// well clear of the cliff and ample for the fast interpreter plus the JSON
-/// the natives parse. See PROTOTYPE-CONCERNS: building WAMR with
-/// WAMR_DISABLE_HW_BOUND_CHECK would remove the constraint outright.
+/// Native stack for the dispatch thread. Ample for the fast interpreter plus
+/// the JSON the natives parse, and small enough to be cheap per host.
+///
+/// It was once forced: with hardware bound checking on, WAMR's per-thread
+/// setup mprotects the guard page below the thread's stack, and on macOS that
+/// mprotect fails for stacks of 8 MiB and up — including Zig's 16 MiB default,
+/// which made every call from this thread trap with "thread signal env not
+/// inited". scripts/build-wamr.sh now builds with WAMR_DISABLE_HW_BOUND_CHECK,
+/// so any stack size works; this one is kept because it is a good size, not
+/// because it has to be.
 const dispatch_stack_bytes: usize = 2 * 1024 * 1024;
 
 /// WAMR keeps ONE runtime per process, and the native table is registered
@@ -415,10 +417,11 @@ pub const Host = struct {
     }
 
     fn dispatchMain(self: *Host) void {
-        // WAMR's interpreter keeps its stack boundary and signal handling per
-        // THREAD: a call from a thread with no runtime environment traps with
-        // "thread signal env not inited" instead of running. The load thread
-        // got one from initRuntime; this one has to ask.
+        // WAMR keeps the interpreter's native stack boundary per THREAD, and
+        // the load thread got its own from initRuntime. Cheap, and the
+        // documented way to enter wasm from a thread the runtime has not seen;
+        // without the hardware bound check it is no longer the difference
+        // between running and trapping.
         wasm.initThreadEnv() catch {
             self.br.say(broker.level_err, "host", "dispatch thread has no wasm runtime env; no events will be delivered", .{});
             return;

@@ -4,21 +4,33 @@
 //!
 //! 600 seconds at 1 Hz. Own ship sails a gentle S curve at 5 kn out of
 //! Annapolis harbour, reporting RMC, HDT, MWD and DPT every second. Three
-//! AIS targets share the water: A crosses and reaches a CPA near 300 m at
-//! t = 400 s so the ais plugin's alarm gate fires, B lies anchored and
-//! names itself with a two-part type 5, C is a class B leaving under
-//! type 18 with a type 24 A/B pair.
+//! AIS targets share the water, and between them they exercise all three
+//! sides of the ais plugin's alarm gate (CPA < 926 m, 0 < TCPA < 600 s):
+//!
+//!   A  closes on a 300° track at 8 kn toward a CPA near 300 m that falls at
+//!      t = 655 s — BEYOND the end of the log. Its TCPA therefore starts
+//!      above the gate's 600 s limit and crosses under it at t ≈ 45 s, so the
+//!      alarm fires mid-replay rather than on the first fix, and the target
+//!      stays inside the gate from the t = 50 s report to the end.
+//!   B  lies anchored 1.4 km NNW of the start, well over a kilometre abeam of
+//!      own ship's track: it never comes within 1249 m of any course own ship
+//!      steers, so it never gates. Names itself with a two-part type 5.
+//!   C  is a class B (type 18 with a type 24 A/B pair) leaving to the
+//!      south-east from a position already astern: its TCPA is negative from
+//!      t = 0, the "closest approach already happened" case.
 //!
 //! Everything here is deterministic — no clock, no randomness — so two runs
 //! produce identical bytes and a golden test can diff them.
 //!
-//! `tools/nmea0183` is a symlink to `plugins/nmea0183`: `zig run` refuses
-//! an `@import` that escapes the root file's directory, and the AIS encoder
-//! below has to share the parser's armoring and 6-bit text tables or the
-//! two could drift apart.
+//! `tools/nmea0183` and `tools/ais` are symlinks to the plugin directories:
+//! `zig run` refuses an `@import` that escapes the root file's directory, and
+//! this file has to share the parser's armoring and 6-bit text tables, and the
+//! ais plugin's CPA solver, or the scene could be verified against different
+//! arithmetic from the one the alarm runs on.
 
 const std = @import("std");
 const p = @import("nmea0183/parser.zig");
+const cpa = @import("ais/cpa.zig");
 
 // ---------------------------------------------------------------------------
 // The scene
@@ -80,10 +92,34 @@ fn velocity(course_deg: f64, speed_kn: f64) Vec {
 
 const own_speed_kn = 5.0;
 
-/// The S curve: a heading that swings 25° either side of 030° twice over
-/// the run, which turns the track without ever losing steerage.
+/// The S curve: the course made good swings 20° either side of 075° once over
+/// the run, which turns the track without ever losing steerage. 075 takes her
+/// out of the harbour and into open water, where the symbols the harness draws
+/// are not competing with the chart's own labels.
+///
+/// The period is longer than the log because own ship's course is one half of
+/// every CPA the plugin computes. A course that swings quickly makes the
+/// solver's answer swing with it — CPA and TCPA are extrapolations of the
+/// course held right now — and the scene's designed numbers stop meaning
+/// anything. At this rate the TCPA of a target 650 s away falls by about 1.2 s
+/// per second, close enough to the straight-line 1 s that the gate crossing
+/// lands where it was designed to.
+fn ownCourse(t: f64) f64 {
+    return 75.0 + 20.0 * @sin(2.0 * std.math.pi * t / 750.0);
+}
+
+/// How far own ship's head lies to the LEFT of the course she makes good: the
+/// tide sets her to starboard and she carries a crab angle to hold the track.
+///
+/// Ten degrees is a normal set in this water, and it is also what makes HDT and
+/// RMC's track made good two different numbers — without it the ownship
+/// plugin's heading line and its COG vector are the same line drawn twice, and
+/// a snapshot cannot show that both were drawn.
+const own_crab_deg = 10.0;
+
+/// What the compass reads: the course made good, less the crab angle.
 fn ownHeading(t: f64) f64 {
-    return 30.0 + 25.0 * @sin(2.0 * std.math.pi * t / 300.0);
+    return ownCourse(t) - own_crab_deg;
 }
 
 /// True wind, backing slowly through the run.
@@ -100,13 +136,18 @@ fn depth(t: f64) f64 {
 
 const transducer_offset_m = 0.30;
 
+/// How far the own-ship track is integrated. Past the end of the log, because
+/// target A's closest approach is laid out against a position own ship only
+/// reaches after the log has stopped.
+const track_s = 700;
+
 /// Own ship's position at each whole second, integrated from the heading.
-fn ownTrack() [duration_s + 1]Vec {
-    var track: [duration_s + 1]Vec = undefined;
+fn ownTrack() [track_s + 1]Vec {
+    var track: [track_s + 1]Vec = undefined;
     track[0] = .{};
     var t: usize = 0;
-    while (t < duration_s) : (t += 1) {
-        const v = velocity(ownHeading(@floatFromInt(t)), own_speed_kn);
+    while (t < track_s) : (t += 1) {
+        const v = velocity(ownCourse(@floatFromInt(t)), own_speed_kn);
         track[t + 1] = track[t].add(v);
     }
     return track;
@@ -127,21 +168,33 @@ const Target = struct {
     }
 };
 
-const cpa_time_s = 400.0;
+/// When target A's closest approach falls. PAST THE END OF THE LOG on
+/// purpose: a CPA inside the log puts the target under the gate's 600 s TCPA
+/// limit from the very first fix, and the alarm the harness has to watch fire
+/// would already have fired before the replay began. At 655 s the TCPA starts
+/// at about 653 s, crosses 600 s at t ≈ 45 s, and the alarm lands on the
+/// t = 50 s AIS report.
+const cpa_time_s = 655.0;
 const cpa_range_m = 300.0;
 
-/// Target A crosses own ship's track. Its line is placed so that at
-/// t = 400 s the range is `cpa_range_m` and the relative velocity is
-/// perpendicular to it — that instant is the CPA of the straight-line
-/// approximation, and own ship's slow turn moves the true minimum only a
-/// few metres.
+/// Target A closes on own ship's track from the north-east. Its line is placed
+/// so that at `cpa_time_s` the range is `cpa_range_m` and the relative
+/// velocity is perpendicular to it — that instant is the CPA of the
+/// straight-line approximation, and own ship's slow turn moves the true
+/// minimum only a little.
+///
+/// The offset is taken to the LEFT of the relative track (`perp` rotated the
+/// other way from the obvious one): both sides give the same designed CPA, but
+/// on this side own ship's turn and the target's approach bend the computed
+/// CPA the same way, and it stays inside the 926 m gate for the whole run
+/// instead of wandering out of it and re-arming the alarm.
 fn targetA(track: []const Vec) Target {
     const course = 300.0;
     const speed = 8.0;
     const v = velocity(course, speed);
-    const own_v = velocity(ownHeading(cpa_time_s), own_speed_kn);
+    const own_v = velocity(ownCourse(cpa_time_s), own_speed_kn);
     const rel = v.sub(own_v);
-    const perp = Vec{ .x = rel.y, .y = -rel.x };
+    const perp = Vec{ .x = -rel.y, .y = rel.x };
     const offset = perp.scale(cpa_range_m / perp.len());
     const at_cpa = track[@intFromFloat(cpa_time_s)].add(offset);
     return .{
@@ -155,10 +208,13 @@ fn targetA(track: []const Vec) Target {
     };
 }
 
-/// Target B: anchored north-east of the start, swinging on her chain.
+/// Target B: anchored 1.4 km north-north-west of the start, up the Severn,
+/// swinging on her chain. Laid abeam of own ship's track rather than near it:
+/// the closest any course own ship steers brings her is 1249 m, so she never
+/// enters the gate however long the replay runs.
 const target_b = Target{
     .mmsi = 366987650,
-    .start = .{ .x = 420.0, .y = 380.0 },
+    .start = .{ .x = -400.0, .y = 1350.0 },
     .velocity = .{},
     .course_deg = 0.0,
     .speed_kn = 0.0,
@@ -166,10 +222,13 @@ const target_b = Target{
     .nav_status = 1,
 };
 
-/// Target C: a class B leaving to the south-east.
+/// Target C: a class B leaving to the south-east from a position already
+/// astern of own ship. She opens from the first second, so her TCPA is
+/// negative throughout — the case the gate must refuse however small the CPA
+/// she passed at.
 const target_c = Target{
     .mmsi = 338111222,
-    .start = .{ .x = -260.0, .y = 540.0 },
+    .start = .{ .x = 500.0, .y = -600.0 },
     .velocity = velocity(135.0, 6.0),
     .course_deg = 135.0,
     .speed_kn = 6.0,
@@ -454,6 +513,7 @@ pub fn generate(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     while (t <= duration_s) : (t += 1) {
         const tf: f64 = @floatFromInt(t);
         const pos = track[t];
+        const cog = @mod(ownCourse(tf), 360.0);
         const hdg = @mod(ownHeading(tf), 360.0);
         const secs = start_hour * 3600 + t;
         const hh: u32 = @intCast((secs / 3600) % 24);
@@ -466,7 +526,7 @@ pub fn generate(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
             hh,                  mm,                                           ss,
             lat.deg,             lat.min,                                      lat.hemi,
             lon.deg,             lon.min,                                      lon.hemi,
-            own_speed_kn,        hdg,                                          date_ddmmyy,
+            own_speed_kn,        cog,                                          date_ddmmyy,
             @abs(variation_deg), @as(u8, if (variation_deg < 0) 'W' else 'E'),
         });
         try o.line('$', "HEHDT,{d:.1},T", .{hdg});
@@ -494,19 +554,72 @@ pub fn generate(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     }
 }
 
-/// The closest target A actually comes to own ship, and when. The scene
-/// aims for `cpa_range_m` at `cpa_time_s`; own ship's turn moves the real
-/// minimum a little, and the alarm the ais plugin must raise depends on
-/// where it lands, so the generator reports it.
-const Cpa = struct { range_m: f64, at_s: usize };
+// ---------------------------------------------------------------------------
+// What the alarm gate makes of the scene
+// ---------------------------------------------------------------------------
 
-fn targetACpa(track: []const Vec, a: Target) Cpa {
-    var best = Cpa{ .range_m = 1e18, .at_s = 0 };
-    for (track, 0..) |own, t| {
-        const r = a.at(@floatFromInt(t)).sub(own).len();
-        if (r < best.range_m) best = .{ .range_m = r, .at_s = t };
+/// How often each target transmits a position, and so how often the ais plugin
+/// recomputes. Only these instants can raise or clear an alarm.
+const ais_period_s = 10;
+
+/// The ais plugin's danger gate, repeated here so the generator can say what
+/// the log will do to it. The plugin owns the real numbers.
+const gate_cpa_m: f64 = 926.0;
+const gate_tcpa_s: f64 = 600.0;
+
+/// Own ship as the plugin sees her at whole second `t`: the position it
+/// integrated, the speed RMC reports, and the course RMC reports as track made
+/// good, which for this scene is the heading.
+fn ownState(track: []const Vec, t: usize) cpa.State {
+    const pos = track[t];
+    return .{
+        .lat = pos.lat(),
+        .lon = pos.lon(),
+        .sog_mps = own_speed_kn * knot_mps,
+        .cog_deg = @mod(ownCourse(@floatFromInt(t)), 360.0),
+    };
+}
+
+fn targetState(tg: Target, t: usize) cpa.State {
+    const pos = tg.at(@floatFromInt(t));
+    return .{
+        .lat = pos.lat(),
+        .lon = pos.lon(),
+        .sog_mps = tg.speed_kn * knot_mps,
+        .cog_deg = tg.course_deg,
+    };
+}
+
+/// What the gate does to one target across every report in the log.
+const GateScan = struct {
+    /// First and last report inside the gate, and whether every report between
+    /// them was too — a gap would re-arm the alarm and raise a second one.
+    first_s: ?usize = null,
+    last_s: ?usize = null,
+    contiguous: bool = true,
+    min_cpa_m: f64 = std.math.inf(f64),
+    max_cpa_m: f64 = 0,
+    max_tcpa_s: f64 = -std.math.inf(f64),
+    min_range_m: f64 = std.math.inf(f64),
+};
+
+fn scanGate(track: []const Vec, tg: Target) GateScan {
+    var s = GateScan{};
+    var gap_after_gate = false;
+    var t: usize = 0;
+    while (t <= duration_s) : (t += ais_period_s) {
+        const sol = cpa.solve(ownState(track, t), targetState(tg, t));
+        s.min_cpa_m = @min(s.min_cpa_m, sol.cpa_m);
+        s.max_cpa_m = @max(s.max_cpa_m, sol.cpa_m);
+        s.min_range_m = @min(s.min_range_m, sol.range_m);
+        if (sol.tcpa_s) |tc| s.max_tcpa_s = @max(s.max_tcpa_s, tc);
+        if (sol.dangerous(gate_cpa_m, gate_tcpa_s)) {
+            if (s.first_s == null) s.first_s = t;
+            if (gap_after_gate) s.contiguous = false;
+            s.last_s = t;
+        } else if (s.first_s != null) gap_after_gate = true;
     }
-    return best;
+    return s;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -520,18 +633,34 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = out.items });
 
     const track = ownTrack();
-    const cpa = targetACpa(&track, targetA(&track));
     var lines: usize = 0;
     for (out.items) |c| {
         if (c == '\n') lines += 1;
     }
-    var buf: [256]u8 = undefined;
+
+    var buf: [1024]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(init.io, &buf);
-    try stdout.interface.print(
-        "{s}: {d} lines, {d} bytes; target A CPA {d:.0} m at t={d} s\n",
-        .{ path, lines, out.items.len, cpa.range_m, cpa.at_s },
-    );
-    try stdout.interface.flush();
+    const w = &stdout.interface;
+    try w.print("{s}: {d} lines, {d} bytes, {d} s at 1 Hz\n", .{ path, lines, out.items.len, duration_s });
+    for ([_]struct { name: u8, tg: Target }{
+        .{ .name = 'A', .tg = targetA(&track) },
+        .{ .name = 'B', .tg = target_b },
+        .{ .name = 'C', .tg = target_c },
+    }) |e| {
+        const s = scanGate(&track, e.tg);
+        try w.print("  {c} {d}: ", .{ e.name, e.tg.mmsi });
+        if (s.first_s) |first| {
+            try w.print("in the alarm gate from t={d} s to t={d} s{s}", .{
+                first,
+                s.last_s.?,
+                if (s.contiguous) "" else " WITH A GAP — the alarm would raise twice",
+            });
+        } else {
+            try w.print("never in the alarm gate (max TCPA {d:.0} s)", .{s.max_tcpa_s});
+        }
+        try w.print("; CPA {d:.0}-{d:.0} m, closest range {d:.0} m\n", .{ s.min_cpa_m, s.max_cpa_m, s.min_range_m });
+    }
+    try w.flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -568,8 +697,20 @@ test "the generated log parses back to the scene it was built from" {
     var name_c_len: usize = 0;
     var call_c: [16]u8 = undefined;
     var call_c_len: usize = 0;
-    var min_range_m: f64 = 1e18;
-    var last_a: ?p.AisPosition = null;
+
+    // The gate, recomputed from the DECODED log with the ais plugin's own
+    // solver: what the alarm will do, not what the scene was designed to do.
+    // `t` is the second the last RMC named, and every AIS sentence in the log
+    // follows the RMC of its own second.
+    var t_now: usize = 0;
+    var own: ?cpa.State = null;
+    var a_gate_first: ?usize = null;
+    var a_gate_last: ?usize = null;
+    var a_gate_count: usize = 0;
+    var a_gate_gap = false;
+    var checked_a100 = false;
+    var checked_a410 = false;
+    var checked_c0 = false;
 
     // Feed in 23-byte chunks: no line boundary lines up with a chunk edge.
     var at: usize = 0;
@@ -580,12 +721,16 @@ test "the generated log parses back to the scene it was built from" {
             const s = try p.parse(line);
             switch (s) {
                 .rmc => |r| {
+                    t_now = rmc_count;
                     rmc_count += 1;
                     last_own = r;
                     try testing.expect(r.valid);
-                    if (last_a) |q| {
-                        min_range_m = @min(min_range_m, rangeM(r.lat.?, r.lon.?, q.lat.?, q.lon.?));
-                    }
+                    own = .{
+                        .lat = r.lat.?,
+                        .lon = r.lon.?,
+                        .sog_mps = r.sog_mps.?,
+                        .cog_deg = r.cog_true.?,
+                    };
                 },
                 .hdt => |h| {
                     hdt_count += 1;
@@ -607,19 +752,55 @@ test "the generated log parses back to the scene it was built from" {
                     const done = assembler.push(v) orelse continue;
                     switch (try p.decode(done.payload, done.fill, &text)) {
                         .position => |q| {
+                            const sol = cpa.solve(own.?, .{
+                                .lat = q.lat.?,
+                                .lon = q.lon.?,
+                                .sog_mps = q.sog_kn.? * knot_mps,
+                                .cog_deg = q.cog_deg.?,
+                            });
                             if (q.mmsi == a.mmsi) {
                                 seen_a += 1;
-                                last_a = q;
                                 try testing.expectApproxEqAbs(a.speed_kn, q.sog_kn.?, 0.05);
                                 try testing.expectApproxEqAbs(a.course_deg, q.cog_deg.?, 0.05);
+
+                                // The alarm edge: A must be OUTSIDE the gate on
+                                // the first fix — its closest approach falls
+                                // past the end of the log, so its TCPA starts
+                                // over the 600 s limit — and inside it from
+                                // t = 50 s on, without a gap that would raise a
+                                // second alarm.
+                                if (t_now == 0) {
+                                    try testing.expect(sol.tcpa_s.? > gate_tcpa_s);
+                                    try testing.expect(!sol.dangerous(gate_cpa_m, gate_tcpa_s));
+                                }
+                                if (sol.dangerous(gate_cpa_m, gate_tcpa_s)) {
+                                    if (a_gate_first == null) a_gate_first = t_now;
+                                    if (a_gate_last != null and t_now > a_gate_last.? + ais_period_s) a_gate_gap = true;
+                                    a_gate_last = t_now;
+                                    a_gate_count += 1;
+                                } else if (a_gate_first != null) a_gate_gap = true;
+                                if (t_now == 100 or t_now == 410) {
+                                    try testing.expect(sol.cpa_m < gate_cpa_m);
+                                    try testing.expect(sol.tcpa_s.? > 0 and sol.tcpa_s.? < gate_tcpa_s);
+                                    if (t_now == 100) checked_a100 = true else checked_a410 = true;
+                                }
                             } else if (q.mmsi == target_b.mmsi) {
                                 seen_b += 1;
                                 try testing.expectApproxEqAbs(0.0, q.sog_kn.?, 0.05);
                                 try testing.expectEqual(@as(u8, 1), q.nav_status.?);
+                                // Anchored a kilometre and more off the track:
+                                // never inside the gate on distance alone.
+                                try testing.expect(sol.cpa_m > gate_cpa_m);
+                                try testing.expect(!sol.dangerous(gate_cpa_m, gate_tcpa_s));
                             } else if (q.mmsi == target_c.mmsi) {
                                 seen_c += 1;
                                 try testing.expect(q.class_b);
                                 try testing.expectApproxEqAbs(target_c.speed_kn, q.sog_kn.?, 0.05);
+                                // Diverging from the first second: the closest
+                                // approach is always in the past.
+                                try testing.expect(sol.tcpa_s.? < 0);
+                                try testing.expect(!sol.dangerous(gate_cpa_m, gate_tcpa_s));
+                                if (t_now == 0) checked_c0 = true;
                             } else {
                                 try testing.expect(false);
                             }
@@ -669,14 +850,12 @@ test "the generated log parses back to the scene it was built from" {
     try testing.expectApproxEqAbs(track[duration_s].lon(), last.lon.?, 1e-4);
     try testing.expectApproxEqAbs(own_speed_kn * knot_mps, last.sog_mps.?, 0.03);
 
-    // The alarm gate the ais plugin uses is 926 m; target A must pass well
-    // inside it and near the designed 300 m.
-    try testing.expect(min_range_m > 200.0);
-    try testing.expect(min_range_m < 420.0);
-}
-
-fn rangeM(lat1: f64, lon1: f64, lat2: f64, lon2: f64) f64 {
-    const dx = (lon2 - lon1) * m_per_deg_lon;
-    const dy = (lat2 - lat1) * m_per_deg_lat;
-    return @sqrt(dx * dx + dy * dy);
+    // The alarm the harness watches for: one, on target A, at the report where
+    // its TCPA first falls under the gate's 600 s limit — and it holds from
+    // there to the last report, so nothing re-arms it.
+    try testing.expect(checked_a100 and checked_a410 and checked_c0);
+    try testing.expectEqual(@as(?usize, 50), a_gate_first);
+    try testing.expectEqual(@as(?usize, duration_s - ais_period_s), a_gate_last);
+    try testing.expect(!a_gate_gap);
+    try testing.expectEqual((duration_s - 50) / ais_period_s, a_gate_count);
 }

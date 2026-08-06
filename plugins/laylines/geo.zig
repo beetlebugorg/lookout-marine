@@ -46,16 +46,20 @@ pub fn wrapLon(deg: f64) f64 {
     return @mod(deg + 180.0, 360.0) - 180.0;
 }
 
-/// The bearing of the port-side layline: 45 degrees anticlockwise of the wind's
-/// from-direction.
+/// The port layline: the close-hauled course sailed on PORT TACK, wind over
+/// the port side, which is 45 degrees clockwise of the wind's from-direction.
+///
+/// The tack names the line, not the side of the wind it falls on. A boat
+/// close-hauled on port tack in a northerly (TWD 0) is heading 045; that is
+/// the port layline, even though it lies to the east of the wind.
 pub fn portBearingDeg(twd_deg: f64) f64 {
-    return normalizeDeg(twd_deg - close_hauled_deg);
+    return normalizeDeg(twd_deg + close_hauled_deg);
 }
 
-/// The bearing of the starboard-side layline: 45 degrees clockwise of the
-/// wind's from-direction.
+/// The starboard layline: the close-hauled course on STARBOARD TACK, wind over
+/// the starboard side, 45 degrees anticlockwise of the wind's from-direction.
 pub fn stbdBearingDeg(twd_deg: f64) f64 {
-    return normalizeDeg(twd_deg + close_hauled_deg);
+    return normalizeDeg(twd_deg - close_hauled_deg);
 }
 
 /// True when a fix can be the origin of a layline: both parts finite and on
@@ -203,12 +207,13 @@ test "a bearing out of range is the same leg as its folded form" {
 
 test "layline bearings straddle the wind by the close-hauled angle" {
     const t = std.testing;
-    try t.expectApproxEqAbs(@as(f64, 315), portBearingDeg(0), 1e-12);
-    try t.expectApproxEqAbs(@as(f64, 45), stbdBearingDeg(0), 1e-12);
-    try t.expectApproxEqAbs(@as(f64, 325), portBearingDeg(10), 1e-12);
-    try t.expectApproxEqAbs(@as(f64, 55), stbdBearingDeg(10), 1e-12);
-    try t.expectApproxEqAbs(@as(f64, 305), portBearingDeg(350), 1e-12);
-    try t.expectApproxEqAbs(@as(f64, 35), stbdBearingDeg(350), 1e-12);
+    // Port tack is the line clockwise of the wind: in a northerly, 045.
+    try t.expectApproxEqAbs(@as(f64, 45), portBearingDeg(0), 1e-12);
+    try t.expectApproxEqAbs(@as(f64, 315), stbdBearingDeg(0), 1e-12);
+    try t.expectApproxEqAbs(@as(f64, 55), portBearingDeg(10), 1e-12);
+    try t.expectApproxEqAbs(@as(f64, 325), stbdBearingDeg(10), 1e-12);
+    try t.expectApproxEqAbs(@as(f64, 35), portBearingDeg(350), 1e-12);
+    try t.expectApproxEqAbs(@as(f64, 305), stbdBearingDeg(350), 1e-12);
 }
 
 test "the pair is symmetric about the wind and 90 degrees apart" {
@@ -217,8 +222,8 @@ test "the pair is symmetric about the wind and 90 degrees apart" {
 
     try t.expectApproxEqAbs(layline_length_m, distanceM(annapolis, pair.port), 0.01);
     try t.expectApproxEqAbs(layline_length_m, distanceM(annapolis, pair.stbd), 0.01);
-    try t.expectApproxEqAbs(@as(f64, 165), initialBearingDeg(annapolis, pair.port), 1e-6);
-    try t.expectApproxEqAbs(@as(f64, 255), initialBearingDeg(annapolis, pair.stbd), 1e-6);
+    try t.expectApproxEqAbs(@as(f64, 255), initialBearingDeg(annapolis, pair.port), 1e-6);
+    try t.expectApproxEqAbs(@as(f64, 165), initialBearingDeg(annapolis, pair.stbd), 1e-6);
 
     // Two 1 nm legs 90 degrees apart: the chord is 1 nm * sqrt(2), give or take
     // the sphere's own curvature over a mile.
@@ -229,9 +234,10 @@ test "the pair is symmetric about the wind and 90 degrees apart" {
 test "a wind from the north puts the endpoints either side of the meridian" {
     const t = std.testing;
     const pair = endpoints(annapolis, 0, layline_length_m);
-    try t.expect(pair.port.lon < annapolis.lon);
-    try t.expect(pair.stbd.lon > annapolis.lon);
+    // Port tack heads 045, so it is the eastern of the two.
+    try t.expect(pair.port.lon > annapolis.lon);
+    try t.expect(pair.stbd.lon < annapolis.lon);
     try t.expect(pair.port.lat > annapolis.lat);
     try t.expectApproxEqAbs(pair.port.lat, pair.stbd.lat, 1e-12);
-    try t.expectApproxEqAbs(annapolis.lon - pair.port.lon, pair.stbd.lon - annapolis.lon, 1e-12);
+    try t.expectApproxEqAbs(pair.port.lon - annapolis.lon, annapolis.lon - pair.stbd.lon, 1e-12);
 }

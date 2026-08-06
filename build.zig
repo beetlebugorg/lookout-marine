@@ -413,6 +413,16 @@ pub fn build(b: *std.Build) void {
         "src/overlay.zig",
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",
+        "plugins/nmea0183/paths.zig",
+        "plugins/ownship/track.zig",
+        "plugins/ais/cpa.zig",
+        "plugins/laylines/geo.zig",
+        // The generator's round trip re-parses the log it writes and runs the
+        // ais plugin's own solver over it, so the scenario the harness replays
+        // is checked by the gate here rather than only by eye in the harness.
+        // It reaches parser.zig and cpa.zig through the tools/ symlinks, which
+        // is why their tests appear twice in the summary.
+        "tools/nmea_gen.zig",
     }) |path| {
         const mod = b.createModule(.{
             .root_source_file = b.path(path),
@@ -435,9 +445,11 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
     });
     const plugins_step = b.step("plugins", "Build the wasm plugin modules into zig-out/plugins");
-    // `echo` is the throwaway that proves the ABI end to end; the other four
-    // are PROTOTYPE.md's. A name with no main.zig yet is skipped, so a plugin
-    // agent adds one file and it builds.
+    // `echo` is BUILT but not installed: it is the host tests' fixture, not a
+    // plugin anybody runs. Installed beside the four real ones it would be
+    // loaded by the harness and draw its own symbol over own ship. The other
+    // four are PROTOTYPE.md's. A name with no main.zig yet is skipped, so a
+    // plugin agent adds one file and it builds.
     var echo_wasm: ?std.Build.LazyPath = null;
     for ([_][]const u8{ "echo", "nmea0183", "ownship", "ais", "laylines" }) |name| {
         const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
@@ -452,6 +464,11 @@ pub fn build(b: *std.Build) void {
         wasm_exe.entry = .disabled;
         wasm_exe.rdynamic = true;
 
+        if (std.mem.eql(u8, name, "echo")) {
+            echo_wasm = wasm_exe.getEmittedBin();
+            continue;
+        }
+
         const id = manifestId(b, name);
         plugins_step.dependOn(&b.addInstallFileWithDir(
             wasm_exe.getEmittedBin(),
@@ -464,7 +481,6 @@ pub fn build(b: *std.Build) void {
             .{ .custom = "plugins" },
             b.fmt("{s}.manifest.json", .{id}),
         ).step);
-        if (std.mem.eql(u8, name, "echo")) echo_wasm = wasm_exe.getEmittedBin();
     }
 
     // ---- wasm plugin host smoke tests ----

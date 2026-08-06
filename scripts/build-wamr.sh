@@ -80,6 +80,12 @@ CMAKE
 #     each one costs loader and interpreter code.
 #   * PIC: the archive is linked into liblookout_marine.a and from there into
 #     app binaries.
+#   * hardware bound check OFF: the alternative is WAMR installing
+#     process-wide SIGSEGV/SIGBUS handlers beside Metal's and tile57's, and
+#     mprotecting a guard page on every thread that calls into wasm — which
+#     fails on macOS for stacks >= 8 MiB, Zig's thread default being 16 MiB.
+#     Bounds are checked in the interpreter instead, at a few percent of
+#     interpreter speed.
 # 13.0 matches Zig's default macOS minimum, so ld64 raises no version warning.
 echo "wamr: configuring ($WAMR_TAG, $wamr_target, fast interpreter)"
 cmake -S "$src/lookout-embed" -B "$build" \
@@ -113,6 +119,7 @@ cmake -S "$src/lookout-embed" -B "$build" \
     -DWAMR_BUILD_MULTI_MEMORY=0 \
     -DWAMR_BUILD_MINI_LOADER=0 \
     -DWAMR_BUILD_DEBUG_INTERP=0 \
+    -DWAMR_DISABLE_HW_BOUND_CHECK=1 \
     >"$build.log" 2>&1 || { cat "$build.log" >&2; exit 1; }
 
 echo "wamr: building"
