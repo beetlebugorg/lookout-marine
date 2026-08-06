@@ -348,6 +348,41 @@ pub fn build(b: *std.Build) void {
     if (b.args) |a| run.addArgs(a);
     b.step("run", "Run the lookout demo").dependOn(&run.step);
 
+    // ---- the plugin replay harness ----
+    // lookout-plugin-dev: the core opened offscreen with the plugin host
+    // inside it, fed a recorded NMEA log over loopback. Only buildable where
+    // the plugin host is, since it drives that host directly.
+    const dev_step = b.step("plugin-dev", "Build the plugin replay harness (lookout-plugin-dev)");
+    if (plugins) {
+        const dev_mod = b.createModule(.{
+            .root_source_file = b.path("src/plugin_dev_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cfg.apply(dev_mod, true);
+        if (use_vk) dev_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
+        if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
+            dev_mod.linkSystemLibrary(l, .{});
+        if (backend == .metal) {
+            dev_mod.linkFramework("Metal", .{});
+            dev_mod.linkFramework("QuartzCore", .{});
+            dev_mod.linkFramework("Foundation", .{});
+        }
+        const dev = b.addExecutable(.{ .name = "lookout-plugin-dev", .root_module = dev_mod });
+        b.installArtifact(dev);
+        dev_step.dependOn(&b.addInstallArtifact(dev, .{}).step);
+    } else {
+        // Asked for and not possible: say which of the three reasons it is,
+        // the way -Dplugins does above.
+        dev_step.dependOn(&b.addFail(if (!plugins_host)
+            "plugin-dev: the wasm plugin host — and so this harness — is macOS-only in this prototype."
+        else if (!wamr_dist)
+            "plugin-dev: the harness needs the wasm plugin host. Run scripts/build-wamr.sh, then build again."
+        else
+            "plugin-dev: the harness drives the wasm plugin host, so it cannot be built with -Dplugins=false.").step);
+    }
+
     // ---- unit tests ----
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
@@ -376,6 +411,7 @@ pub fn build(b: *std.Build) void {
         "src/plugin/store.zig",
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
+        "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",
     }) |path| {
         const mod = b.createModule(.{

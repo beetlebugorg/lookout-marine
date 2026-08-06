@@ -1,0 +1,6 @@
+{
+  "id": "org.beetlebug.ownship",
+  "name": "Own ship",
+  "abi": 1,
+  "capabilities": ["vessel.read", "overlay.draw"]
+}

@@ -1,0 +1,6 @@
+{
+  "id": "org.beetlebug.nmea0183",
+  "name": "NMEA 0183",
+  "abi": 1,
+  "capabilities": ["net.tcp-client", "vessel.publish", "ais.publish"]
+}
