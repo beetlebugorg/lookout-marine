@@ -6,6 +6,9 @@
          HUD bar extending through the bottom safe area. Compose Material3
          brings its own styling, so this only has to be action-bar-free. -->
     <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <!-- Not black: the window shows through until the chart's first frame,
+             and a chart takes seconds to open. NODTA is what the engine clears
+             to, so the wait looks like an empty chart rather than a dead app. -->
+        <item name="android:windowBackground">@color/nodata</item>
     </style>
 </resources>

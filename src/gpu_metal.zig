@@ -23,6 +23,14 @@ pub const Uniforms = cc.tile57_gpu_uniforms;
 /// RGBA colour 0..1 (drop-in for the old SDL_FColor uses).
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
+/// One raster tile's texture. Opaque to src/raster.zig, which only ever holds
+/// and returns it.
+pub const RasterTex = *mc.lkm_tex;
+
+/// One tile of the raster underlay: its texture, and the six quad vertices for
+/// it in the frame's raster buffer.
+pub const RasterDraw = struct { tex: RasterTex, first: u32, count: u32 };
+
 /// Monotonic milliseconds from an arbitrary epoch (drop-in for SDL_GetTicks).
 pub fn ticksMs() i64 {
     var ts: std.c.timespec = undefined;
@@ -90,6 +98,14 @@ pub const Gpu = struct {
     glyph_tex: ?*mc.lkm_tex = null,
     glyph_bold_tex: ?*mc.lkm_tex = null,
     glyph_italic_tex: ?*mc.lkm_tex = null,
+    /// The raster underlay (src/raster.zig): world-space textured quads drawn
+    /// BEFORE the chart, one texture per tile. Reuses the sprite pipeline —
+    /// a raster tile IS a textured world-space quad with a tint — so no backend
+    /// carries a shader for it. Owned here; replaced whenever the visible tile
+    /// set changes, which is far less often than once per frame.
+    raster_buf: ?*mc.lkm_buf = null,
+    raster_draws: []RasterDraw = &.{},
+    raster_alloc: ?std.mem.Allocator = null,
     /// recordDraws outcome signature — a new line prints only when it changes.
     last_draw_log: u64 = 0,
     // Rolling frame-cost stats, printed once per STAT_FRAMES rendered frames:
@@ -197,6 +213,109 @@ pub const Gpu = struct {
     fn makeAtlasTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !*mc.lkm_tex {
         if (rgba.len < @as(usize, w) * h * 4) return error.MetalFailure;
         return mc.lkm_new_texture_rgba(self.ctx, rgba.ptr, w, h) orelse error.MetalFailure;
+    }
+
+    // ---- the raster underlay ----------------------------------------------
+
+    pub fn newRasterTexture(self: *Gpu, rgba: []const u8, w: u32, h: u32) !RasterTex {
+        return self.makeAtlasTexture(rgba, w, h);
+    }
+
+    pub fn freeRasterTexture(self: *Gpu, t: RasterTex) void {
+        _ = self;
+        mc.lkm_free_texture(t);
+    }
+
+    /// Adopt this frame's raster quads + per-tile draws. Replaces whatever was
+    /// held; the caller only calls this when the visible tile set changed.
+    pub fn setRasterFrame(self: *Gpu, quads: []const cc.tile57_gpu_quad, draws: []const RasterDraw) !void {
+        self.clearRasterFrame();
+        if (quads.len == 0 or draws.len == 0) return;
+        const a = self.raster_alloc orelse std.heap.c_allocator;
+        self.raster_alloc = a;
+        const bytes = std.mem.sliceAsBytes(quads);
+        self.raster_buf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+        self.raster_draws = try a.dupe(RasterDraw, draws);
+    }
+
+    pub fn clearRasterFrame(self: *Gpu) void {
+        if (self.raster_buf) |b| mc.lkm_free_buffer(b);
+        self.raster_buf = null;
+        if (self.raster_draws.len > 0) {
+            if (self.raster_alloc) |a| a.free(self.raster_draws);
+            self.raster_draws = &.{};
+        }
+    }
+
+    /// The depth that puts the underlay immediately IN FRONT OF the chart's
+    /// opaque area fills, and behind everything else.
+    ///
+    /// WHY THIS WORKS. The engine gives range i of N the depth (N-i)/(N+1) —
+    /// paint order, normalized. So a depth is a position in that order, and
+    /// picking one is picking a place to insert the picture. Just in front of
+    /// the LAST opaque area range means the picture hides the fills and nothing
+    /// else: every contour, symbol, light, sounding and label paints over it,
+    /// because they all paint after the fills and so sit closer.
+    ///
+    /// WHY IT IS BETTER THAN SUPPRESSING THE FILLS. This is PER PIXEL. The
+    /// chart keeps its depth shading everywhere the mariner has no picture, and
+    /// loses it only under one — including across a coverage edge, and around
+    /// every hole in a pyramid clipped to a coastline. No scene rebuild, and no
+    /// all-or-nothing decision about a whole view.
+    ///
+    /// 0.999 with no scene: behind everything, which is right when there is no
+    /// chart to sit in front of.
+    /// The depth that puts the underlay in front of the WHOLE chart, so the
+    /// chart falls out exactly where a picture covers and stays everywhere else.
+    /// Half the closest range's depth, so nothing the engine emits can be nearer.
+    pub fn rasterDepthFront(self: *const Gpu) f32 {
+        const s = self.scene orelse return 0.5;
+        const nr = s.ranges.len;
+        if (nr == 0) return 0.5;
+        return @floatCast(0.5 / @as(f64, @floatFromInt(nr + 1)));
+    }
+
+    pub fn rasterDepth(self: *const Gpu) f32 {
+        const s = self.scene orelse return 0.999;
+        if (s.ranges.len == 0) return 0.999;
+        var last: usize = 0;
+        var found = false;
+        for (s.ranges, 0..) |r, i| {
+            // flags bit 0 is OPAQUE: a pattern-less triangle range with every
+            // alpha at 255. Those are the fills that hide a picture.
+            if (r.kind == cc.TILE57_GPU_AREA and (r.flags & 1) != 0) {
+                last = i;
+                found = true;
+            }
+        }
+        if (!found) return 0.999;
+        const nr = s.ranges.len;
+        // The slot immediately after that range — the same formula the engine
+        // uses, evaluated one step later.
+        const d = @as(f64, @floatFromInt(nr - last - 1)) / @as(f64, @floatFromInt(nr + 1));
+        return @floatCast(d);
+    }
+
+    /// Draw the underlay: sprite pipeline, one draw per tile because each
+    /// carries its own texture. Runs BEFORE the chart, and WRITES depth — that
+    /// is what makes the chart's area fills lose the depth test exactly where a
+    /// picture covers them, and keep it everywhere else.
+    fn recordRaster(self: *Gpu, f: *mc.lkm_frame, u: Uniforms) void {
+        const buf = self.raster_buf orelse return;
+        if (self.raster_draws.len == 0) return;
+        mc.lkm_set_depth_mode(f, 1);
+        mc.lkm_set_pipeline(f, mc.LKM_PIPE_SPRITE);
+        mc.lkm_bind_vbuf(f, buf);
+        var uu = u;
+        // The underlay is BASE category and never scale-gated: it is the only
+        // thing on screen where the chart has nothing, so a category filter must
+        // not take it away.
+        uu.cat_mask = 0xFFFFFFFF;
+        mc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+        for (self.raster_draws) |d| {
+            mc.lkm_bind_texture(f, d.tex);
+            mc.lkm_draw(f, d.first, d.count);
+        }
     }
 
     // ---- the draw-ready scene from tile57 ----------------------------------
@@ -420,6 +539,10 @@ pub const Gpu = struct {
     // host gates by skipping the draw). The pattern anchor + per-cell period
     // ride the uniform.
     fn recordDraws(self: *Gpu, f: *mc.lkm_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+        // Before anything the chart draws, and before the early return below:
+        // where the chart has no data at all is exactly where the mariner most
+        // needs the picture, so a missing scene must not take the underlay away.
+        self.recordRaster(f, u);
         const s = if (self.scene) |*sc| sc else {
             if (self.last_draw_log != 0) {
                 self.last_draw_log = 0;
@@ -713,6 +836,7 @@ pub const Gpu = struct {
 
     pub fn deinit(self: *Gpu) void {
         self.freeScene();
+        self.clearRasterFrame();
         if (self.sprite_tex) |t| mc.lkm_free_texture(t);
         if (self.glyph_tex) |t| mc.lkm_free_texture(t);
         if (self.glyph_bold_tex) |t| mc.lkm_free_texture(t);

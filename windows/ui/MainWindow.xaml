@@ -293,6 +293,21 @@
                         Visibility="Collapsed">
                     <TextBlock x:Name="HudOverscaleText" FontSize="12" Text="×1.0" />
                 </Border>
+                <!-- the raster pill: shown while a raster chart set covers the
+                     view — amber when it is switched off, blue while it is
+                     drawn. The chevron is a promise: a press opens a list
+                     (MainWindow.Raster.cpp). -->
+                <Rectangle x:Name="RasterPillSep" Width="1" Height="20" Fill="#DDDDDD"
+                           Visibility="Collapsed" />
+                <Button x:Name="RasterPill" Padding="7,2" BorderThickness="0"
+                        CornerRadius="8" VerticalAlignment="Center"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Choose a raster chart">
+                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                        <TextBlock x:Name="RasterPillText" FontSize="12" FontWeight="Bold" Text="" />
+                        <FontIcon x:Name="RasterPillChevron" Glyph="&#xE70D;" FontSize="8" Opacity="0.7" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Border>
 

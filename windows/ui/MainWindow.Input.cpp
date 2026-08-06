@@ -110,6 +110,9 @@ namespace winrt::LookoutMarine::implementation
         case 't': lk_controller_toggle_text(controller); break;
         case 'S': lk_controller_toggle_soundings(controller); break;
         case 'd': lk_controller_toggle_other_category(controller); break;
+        case 'i': CycleRaster(); break;
+        case 'I': AddRasterFiles(); break;
+        case 'H': lk_controller_toggle_chart(controller); break;
         case 'f':
         {
             bool open = SearchBox().Visibility() == Visibility::Visible;

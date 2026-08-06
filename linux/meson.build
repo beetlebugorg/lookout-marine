@@ -78,6 +78,7 @@ sources = files(
   'src/lk-mariner.c',
   'src/lk-native-surface.c',
   'src/lk-pick-report.c',
+  'src/lk-raster.c',
   'src/lk-search.c',
   'src/lk-settings-window.c',
   'src/lk-store.c',

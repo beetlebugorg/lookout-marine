@@ -17,6 +17,14 @@ void     lk_store_save_view (const lookout_view *view);
 char **lk_store_load_recents (void);
 void   lk_store_note_recent (const char *path);
 
+/* The raster charts the mariner installed, in the order added, and the ones
+ * switched off. A raster chart must outlive both a change of ENC and a restart,
+ * so the list is persisted here and replayed into each chart the engine opens. */
+char **lk_store_load_raster_paths (void);
+void   lk_store_save_raster_paths (const char *const *paths);
+char **lk_store_load_raster_off (void);
+void   lk_store_save_raster_off (const char *const *paths);
+
 /* Mariner settings. Load overlays onto a struct already holding engine
  * defaults, so unknown/engine-only fields are left untouched. */
 void lk_store_save_mariner (const tile57_mariner *mariner);

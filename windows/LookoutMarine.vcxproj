@@ -112,6 +112,7 @@
     <ClCompile Include="ui\MainWindow.Loader.cpp" />
     <ClCompile Include="ui\MainWindow.Pick.cpp" />
     <ClCompile Include="ui\MainWindow.PickAux.cpp" />
+    <ClCompile Include="ui\MainWindow.Raster.cpp" />
     <ClCompile Include="ui\MainWindow.Scale.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />

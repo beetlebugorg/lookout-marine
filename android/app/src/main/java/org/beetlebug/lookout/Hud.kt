@@ -14,8 +14,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
@@ -61,16 +74,36 @@ fun ReadoutsCapsule(
     compact: Boolean,
     onScaleTap: () -> Unit,
     modifier: Modifier = Modifier,
+    raster: RasterState = RasterState(),
+    onRasterSelect: (Int) -> Unit = {},
+    onToggleChart: () -> Unit = {},
+    onAddRasterCharts: () -> Unit = {},
 ) {
+    // A phone will not take the whole row on one line: the position alone is
+    // 44% of its width, and the raster chart pill pushed it past the screen,
+    // where it lost its shape and clipped. So a narrow window takes TWO lines
+    // rather than dropping a readout — the position is the one a mariner may
+    // have to write down or pass over the radio, and it becomes the vessel's
+    // own once there is a GPS.
     Surface(
-        modifier = modifier.height(Chrome.capsule),
-        shape = CircleShape,
+        modifier = modifier.heightIn(min = Chrome.capsule),
+        // A capsule at one line and a rounded block at two: the radius is half
+        // the one-line height, so the settled shape is the capsule it has
+        // always been.
+        shape = RoundedCornerShape(Chrome.capsule / 2),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         tonalElevation = 2.dp,
         shadowElevation = 4.dp,
     ) {
+      Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          modifier = Modifier.padding(
+              horizontal = if (compact) 14.dp else 18.dp,
+              vertical = if (compact) 6.dp else 0.dp,
+          ),
+      ) {
         Row(
-            modifier = Modifier.padding(horizontal = if (compact) 14.dp else 18.dp),
+            modifier = if (compact) Modifier else Modifier.height(Chrome.capsule),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
         ) {
@@ -80,17 +113,16 @@ fun ReadoutsCapsule(
                 color = Color(0xFFF59E0B),
                 content = {},
             )
-            // The band is the first thing a mariner reads, and the first thing
-            // a narrow screen gives up.
-            if (!compact) {
-                Text(
-                    text = bandString(readouts.scaleDenominator),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
-                Separator()
-            }
+            // The band survives on a phone where the position does not: six
+            // characters against twenty-seven, and it is the one readout here
+            // that says how much the chart has generalised what it shows.
+            Text(
+                text = bandString(readouts.scaleDenominator),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Separator()
             Text(
                 text = scaleString(readouts.scaleDenominator),
                 style = MaterialTheme.typography.bodyMedium,
@@ -102,23 +134,169 @@ fun ReadoutsCapsule(
                     .clickable(onClick = onScaleTap)
                     .padding(horizontal = 5.dp, vertical = 3.dp),
             )
-            Separator()
-            Text(
-                text = String.format(Locale.US, "z%.1f", readouts.zoom),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-            Separator()
-            Text(
-                text = coordString(readouts.lat, readouts.lon),
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-            )
+            // The zoom is a number about the tile pyramid, not about the water.
+            // It is the first thing to go when the width runs out.
+            if (!compact) {
+                Separator()
+                Text(
+                    text = String.format(Locale.US, "z%.1f", readouts.zoom),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                Separator()
+                Text(
+                    text = coordString(readouts.lat, readouts.lon),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
+            }
             if (readouts.overscale > OVERSCALE_VISIBLE_AT) {
                 OverscaleBadge(readouts.overscale)
             }
+            // The raster-chart pill. It appears only where a raster chart is in
+            // view, at any zoom, and goes when the mariner leaves the coverage.
+            // Where they carry nothing there is nothing to press.
+            if (raster.visible.isNotEmpty()) {
+                Separator()
+                RasterPill(
+                    raster = raster,
+                    onSelect = onRasterSelect,
+                    onToggleChart = onToggleChart,
+                    onAdd = onAddRasterCharts,
+                )
+            }
+        }
+        if (compact) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 2.dp),
+            ) {
+                Text(
+                    text = coordString(readouts.lat, readouts.lon),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
+                Separator()
+                Text(
+                    text = String.format(Locale.US, "z%.1f", readouts.zoom),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+      }
+    }
+}
+
+/**
+ * Names the raster chart set drawn over this view and opens the list of what
+ * covers it.
+ *
+ * The COLOUR reports the raster chart, not the ENC: blue while the picture is
+ * drawn, amber while one is here and off. Hiding the ENC above it does not
+ * change the colour, because the picture is still drawn — the "ENC OFF" text
+ * carries that, and a warning colour there would say the picture was off when
+ * it is the only thing on screen.
+ */
+@Composable
+private fun RasterPill(
+    raster: RasterState,
+    onSelect: (Int) -> Unit,
+    onToggleChart: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val visible = raster.visible
+    // The set the pill NAMES: the drawn one when it is in view, otherwise the
+    // first one that is. Naming one set and reporting the state of another is
+    // how a pill comes to read "NAVIONICS | OFF" while Navionics is drawn.
+    val named = visible.firstOrNull { it.id == raster.active } ?: visible.firstOrNull()
+    val drawn = named != null && named.id == raster.active
+    val amber = Color(0xFFFFA726)
+    val tint = if (drawn) MaterialTheme.colorScheme.primary else amber
+    val stateWord = when {
+        !drawn -> "off"
+        raster.chartHidden -> "drawn, ENC hidden"
+        else -> "drawn"
+    }
+
+    Box {
+        Surface(
+            color = tint.copy(alpha = if (drawn) 0.18f else 0.28f),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { open = true }
+                .semantics {
+                    contentDescription = "Raster chart ${named?.name ?: ""}, $stateWord"
+                },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = (named?.name ?: "").uppercase(Locale.US),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = tint,
+                    maxLines = 1,
+                )
+                if (!drawn || raster.chartHidden) {
+                    Text("|", color = tint.copy(alpha = 0.5f),
+                         style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        text = if (!drawn) "OFF" else "ENC OFF",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = tint,
+                        maxLines = 1,
+                    )
+                }
+                // The chevron is a promise: a press opens a list. It is
+                // therefore always shown, because a press always does.
+                Icon(
+                    imageVector = Icons.Filled.ArrowDropDown,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            visible.forEach { set ->
+                DropdownMenuItem(
+                    text = { Text(set.name) },
+                    leadingIcon = {
+                        if (set.id == raster.active) {
+                            Icon(Icons.Filled.Check, contentDescription = null)
+                        }
+                    },
+                    onClick = { open = false; onSelect(set.id) },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("None") },
+                leadingIcon = {
+                    if (raster.active < 0) Icon(Icons.Filled.Check, contentDescription = null)
+                },
+                onClick = { open = false; onSelect(-1) },
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text(if (raster.chartHidden) "Show ENC Over Raster" else "Hide ENC Over Raster") },
+                onClick = { open = false; onToggleChart() },
+            )
+            DropdownMenuItem(
+                text = { Text("Add Raster Charts…") },
+                onClick = { open = false; onAdd() },
+            )
         }
     }
 }
@@ -261,31 +439,31 @@ fun IdentifyPanel(
 // ---- formatting -------------------------------------------------------------
 
 private fun coordString(lat: Double, lon: Double): String =
-    "${dms(lat, true)} ${dms(lon, false)}"
+    "${dm(lat, true)} ${dm(lon, false)}"
 
 /**
- * Degrees, minutes and seconds with a hemisphere. The longitude has three degree
- * digits, so a pair keeps its column width. It agrees with CoordFormat.dms
- * (macOS and iOS), lkw::FormatCoord (Windows) and lk_coord_format_dms (Linux).
+ * Degrees and DECIMAL MINUTES with a hemisphere. The longitude has three degree
+ * digits, so a pair keeps its column width. It agrees with CoordFormat.dm
+ * (macOS and iOS), lkw::FormatCoord (Windows) and lk_coord_format_dm (Linux).
  * Each host prints the same string.
+ *
+ * WHY NOT DEGREES, MINUTES AND SECONDS. Decimal minutes is what a mariner works
+ * in: it is what a GPS and a chartplotter show, what goes in the deck log, and
+ * what is passed over the radio. One minute of latitude is one nautical mile,
+ * so a decimal minute reads as distance directly. Seconds belong to surveying.
  */
-private fun dms(value: Double, isLat: Boolean): String {
+private fun dm(value: Double, isLat: Boolean): String {
     val hemi = if (isLat) (if (value >= 0) "N" else "S") else (if (value >= 0) "E" else "W")
     val a = abs(value)
     var deg = a.toInt()
-    var minutes = ((a - deg) * 60).toInt()
-    var seconds = ((a - deg) * 60 - minutes) * 60
-    // Carry the rounding. 59.96" prints as 60.0", which is the next minute.
-    if (Math.round(seconds * 10) >= 600) {
-        seconds = 0.0
-        minutes++
-    }
-    if (minutes >= 60) {
-        minutes = 0
+    var minutes = (a - deg) * 60
+    // Carry the rounding. 59.9996' prints as 60.000', which is the next degree.
+    if (Math.round(minutes * 1000) >= 60000) {
+        minutes = 0.0
         deg++
     }
-    val pattern = if (isLat) "%02d\u00B0%02d'%04.1f\"%s" else "%03d\u00B0%02d'%04.1f\"%s"
-    return String.format(Locale.US, pattern, deg, minutes, seconds, hemi)
+    val fmt = if (isLat) "%02d\u00B0%06.3f'%s" else "%03d\u00B0%06.3f'%s"
+    return String.format(Locale.US, fmt, deg, minutes, hemi)
 }
 
 /** The full 1:N with group separators: `1:13,267`, as every shell prints it. */

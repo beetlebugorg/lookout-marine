@@ -311,6 +311,122 @@ export fn lookout_aux_file(h: ?*lookout, cell: [*:0]const u8, name: [*:0]const u
 }
 
 // ---- convenience live toggles ----------------------------------------------
+/// Open a raster chart (satellite imagery or another picture chart the mariner
+/// supplied) and add it beneath the vector chart. See lookout.h.
+export fn lookout_raster_add(h: ?*lookout, path: ?[*:0]const u8) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const p = path orelse return 0;
+    return if (l.addRaster(std.mem.span(p))) 1 else 0;
+}
+
+/// Step to the next raster chart set, with "no picture" as one position. See lookout.h.
+export fn lookout_raster_cycle(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.cycleRaster();
+}
+
+/// The active set's name (borrowed, valid until the next raster call), or "".
+export fn lookout_raster_active_name(h: ?*lookout, out_len: ?*usize) [*:0]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    // The layer terminates its set names where it dupes them, so this borrows
+    // with no copy. Valid until the set list changes.
+    const n = l.rasterName();
+    if (out_len) |o| o.* = n.len;
+    return n.ptr;
+}
+
+/// 1 while the chart is drawing WITHOUT its opaque water and land fills because
+/// a picture is beneath THIS view. See lookout.h.
+export fn lookout_raster_over_chart(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.rasterOverChart()) 1 else 0;
+}
+
+/// The name of set `i`. Borrowed; valid until the set list changes. See lookout.h.
+export fn lookout_raster_set_name(h: ?*lookout, i: u32, out_len: ?*usize) [*:0]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const n = l.rasterSetName(i);
+    if (out_len) |o| o.* = n.len;
+    return n.ptr;
+}
+
+/// 1 when set `i` has enabled charts in view. See lookout.h.
+export fn lookout_raster_set_in_view(h: ?*lookout, i: u32) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.rasterSetInView(i)) 1 else 0;
+}
+
+/// The drawn set's index, or -1 when none is drawn. See lookout.h.
+export fn lookout_raster_active_index(h: ?*lookout) i32 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.rasterActiveIndex()) |i| @intCast(i) else -1;
+}
+
+/// Draw set `i`, or nothing when `i` is negative. See lookout.h.
+export fn lookout_raster_select(h: ?*lookout, i: i32) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.rasterSelect(if (i < 0) null else @intCast(i));
+}
+
+/// Turn one raster chart on or off without removing it. See lookout.h.
+export fn lookout_raster_set_enabled(h: ?*lookout, path: ?[*:0]const u8, enabled: c_int) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const p = path orelse return 0;
+    return if (l.setRasterEnabled(std.mem.span(p), enabled != 0)) 1 else 0;
+}
+
+export fn lookout_raster_enabled(h: ?*lookout, path: ?[*:0]const u8) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const p = path orelse return 0;
+    return if (l.rasterEnabled(std.mem.span(p))) 1 else 0;
+}
+
+/// The set that covers this view, DRAWN OR NOT. See lookout.h.
+export fn lookout_raster_available_name(h: ?*lookout, out_len: ?*usize) [*:0]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const n = l.rasterAvailableName();
+    if (out_len) |o| o.* = n.len;
+    return n.ptr;
+}
+
+/// Show or hide the vector chart; the picture beneath it stays. See lookout.h.
+export fn lookout_set_chart_hidden(h: ?*lookout, hidden: c_int) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setChartHidden(hidden != 0);
+}
+
+export fn lookout_toggle_chart(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.toggleChart();
+}
+
+export fn lookout_chart_hidden(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.chartHidden()) 1 else 0;
+}
+
+/// How many raster chart sets are installed. The cycle has this many positions plus
+/// one for "no picture". See lookout.h.
+export fn lookout_raster_set_count(h: ?*lookout) u32 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return @intCast(l.rasterSetCount());
+}
+
 export fn lookout_cycle_scheme(h: ?*lookout) void {
     const l = locked(h);
     defer l.apiUnlock();

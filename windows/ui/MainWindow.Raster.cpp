@@ -1,0 +1,309 @@
+// The raster underlay: the pill in the readout capsule, its menu, the add
+// flow, and the re-install of the stored list at every chart open. Mirrors
+// the macOS shell (HUDOverlay.swift rasterPill / AppModel.addRasterCharts).
+#include "pch.h"
+#include "MainWindow.xaml.h"
+
+#include <shobjidl.h>
+
+#include <algorithm>
+#include <cwctype>
+#include <filesystem>
+
+#include "lk_paths.h"
+#include "lk_store.h"
+
+using namespace winrt;
+using namespace Microsoft::UI::Xaml;
+
+namespace
+{
+    // The pill reports the raster chart, never the ENC: amber only while the
+    // set is switched off; hiding the ENC keeps it blue (the picture is still
+    // drawn). Matches the macOS Chrome.amber / Chrome.accent.
+    constexpr winrt::Windows::UI::Color kAmber{ 0xFF, 0xF5, 0x9E, 0x0B };
+    constexpr winrt::Windows::UI::Color kAccent{ 0xFF, 0x1B, 0x49, 0xC4 };
+
+    winrt::Windows::UI::Color WithAlpha(winrt::Windows::UI::Color c, double a)
+    {
+        c.A = (uint8_t)(a * 255.0 + 0.5);
+        return c;
+    }
+}
+
+namespace winrt::LookoutMarine::implementation
+{
+    // ---- the pill -----------------------------------------------------------
+
+    // The pill names the set drawn over this view when one is, else the first
+    // set covering the view. Naming one set and reporting the state of another
+    // is how a pill comes to read "NAVIONICS | OFF" while Navionics is drawn.
+    void MainWindow::UpdateRasterPill(lk_readout const &r)
+    {
+        int pill = -1;
+        bool drawn = false;
+        if (lk_controller_is_open(controller))
+        {
+            int count = lk_controller_raster_set_count(controller);
+            int active = lk_controller_raster_active_index(controller);
+            for (int i = 0; i < count; ++i)
+            {
+                if (!lk_controller_raster_set_in_view(controller, (unsigned)i))
+                    continue;
+                if (pill < 0)
+                    pill = i;
+                if (i == active)
+                {
+                    pill = i;
+                    break;
+                }
+            }
+            drawn = pill >= 0 && pill == active;
+        }
+
+        if (pill < 0)
+        {
+            if (!raster_pill_shown.empty())
+            {
+                raster_pill_shown.clear();
+                RasterPillSep().Visibility(Visibility::Collapsed);
+                RasterPill().Visibility(Visibility::Collapsed);
+            }
+            return;
+        }
+
+        char name[96];
+        lk_controller_raster_set_name(controller, (unsigned)pill, name, sizeof name);
+        std::wstring text = winrt::to_hstring(name).c_str();
+        for (auto &c : text)
+            c = (wchar_t)std::towupper(c);
+        if (!drawn)
+            text += L" | OFF";
+        else if (r.chart_hidden)
+            text += L" | ENC OFF";
+
+        if (text == raster_pill_shown)
+            return;
+        raster_pill_shown = text;
+
+        auto tint = drawn ? kAccent : kAmber;
+        RasterPillText().Text(text);
+        RasterPillText().Foreground(Media::SolidColorBrush{ tint });
+        RasterPillChevron().Foreground(Media::SolidColorBrush{ tint });
+        RasterPill().Background(Media::SolidColorBrush{ WithAlpha(tint, drawn ? 0.18 : 0.28) });
+        RasterPillSep().Visibility(Visibility::Visible);
+        RasterPill().Visibility(Visibility::Visible);
+    }
+
+    // The list the pill opens: every set covering this view with the drawn one
+    // marked, None, the ENC switch, and the way to more charts.
+    void MainWindow::ShowRasterMenu()
+    {
+        if (!lk_controller_is_open(controller))
+            return;
+
+        Controls::MenuFlyout menu;
+        int count = lk_controller_raster_set_count(controller);
+        int active = lk_controller_raster_active_index(controller);
+        for (int i = 0; i < count; ++i)
+        {
+            if (!lk_controller_raster_set_in_view(controller, (unsigned)i))
+                continue;
+            char name[96];
+            lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+            Controls::ToggleMenuFlyoutItem it;
+            it.Text(winrt::to_hstring(name));
+            it.IsChecked(i == active);
+            it.Click([this, i](auto &&, auto &&) {
+                lk_controller_raster_select(controller, i);
+                UpdateReadouts(true);
+            });
+            menu.Items().Append(it);
+        }
+
+        Controls::ToggleMenuFlyoutItem none;
+        none.Text(L"None");
+        none.IsChecked(active < 0);
+        none.Click([this](auto &&, auto &&) {
+            lk_controller_raster_select(controller, -1);
+            UpdateReadouts(true);
+        });
+        menu.Items().Append(none);
+
+        menu.Items().Append(Controls::MenuFlyoutSeparator{});
+
+        Controls::MenuFlyoutItem enc;
+        enc.Text(lk_controller_chart_hidden(controller) ? L"Show ENC Over Raster"
+                                                        : L"Hide ENC Over Raster");
+        enc.Click([this](auto &&, auto &&) {
+            lk_controller_toggle_chart(controller);
+            UpdateReadouts(true);
+        });
+        menu.Items().Append(enc);
+
+        Controls::MenuFlyoutItem add;
+        add.Text(L"Add Raster Charts…");
+        add.Click([this](auto &&, auto &&) { AddRasterFiles(); });
+        menu.Items().Append(add);
+
+        menu.ShowAt(RasterPill());
+    }
+
+    // Ctrl+I. With nothing installed the step means "I want a picture here" —
+    // open the picker instead of doing nothing.
+    void MainWindow::CycleRaster()
+    {
+        if (raster_paths.empty())
+        {
+            AddRasterFiles();
+            return;
+        }
+        lk_controller_raster_cycle(controller);
+    }
+
+    // ---- adding -------------------------------------------------------------
+
+    void MainWindow::AddRasterPaths(std::vector<std::string> const &paths)
+    {
+        if (paths.empty() || !lk_controller_is_open(controller))
+            return;
+
+        std::vector<std::string> failed;
+        std::string last_added;
+        for (auto const &p : paths)
+        {
+            if (std::find(raster_paths.begin(), raster_paths.end(), p) != raster_paths.end())
+                continue;
+            if (lk_controller_raster_add(controller, p.c_str()))
+            {
+                raster_paths.push_back(p);
+                lk_store_note_raster(p.c_str());
+                last_added = p;
+            }
+            else
+            {
+                failed.push_back(std::filesystem::path(p).filename().string());
+            }
+        }
+
+        // The chart just added is drawn if it covers the view: the mariner
+        // picked those files while looking at this water.
+        if (!last_added.empty())
+        {
+            std::string want = lkw::RasterSetNameFor(last_added);
+            int count = lk_controller_raster_set_count(controller);
+            for (int i = 0; i < count; ++i)
+            {
+                char name[96];
+                lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+                if (want == name && lk_controller_raster_set_in_view(controller, (unsigned)i))
+                {
+                    lk_controller_raster_select(controller, i);
+                    break;
+                }
+            }
+        }
+
+        UpdateReadouts(true);
+        if (SettingsPane().Visibility() == Visibility::Visible)
+            BuildSettingsPage();
+
+        // One batched alert: picking a folder of twenty must not ask twenty times.
+        if (failed.size() == 1)
+        {
+            ShowRasterError(winrt::to_hstring("Couldn't open " + failed.front() +
+                                              ".\nIt may not be a raster chart tile57 reads."));
+        }
+        else if (!failed.empty())
+        {
+            std::string msg = "Couldn't open " + std::to_string(failed.size()) + " of " +
+                              std::to_string(paths.size()) + " files:";
+            for (auto const &f : failed)
+                msg += "\n" + f;
+            ShowRasterError(winrt::to_hstring(msg));
+        }
+    }
+
+    fire_and_forget MainWindow::AddRasterFiles()
+    {
+        auto lifetime = get_strong();
+        Windows::Storage::Pickers::FileOpenPicker picker;
+        picker.as<::IInitializeWithWindow>()->Initialize(top_hwnd);
+        // .mbtiles first as the hint; * because the extension is only a hint —
+        // the engine decides, and greying out the mariner's own downloads
+        // would be worse than letting it say no.
+        picker.FileTypeFilter().Append(L".mbtiles");
+        picker.FileTypeFilter().Append(L"*");
+        auto files = co_await picker.PickMultipleFilesAsync();
+        if (files == nullptr || files.Size() == 0)
+            co_return;
+        std::vector<std::string> paths;
+        for (auto const &f : files)
+            paths.push_back(winrt::to_string(f.Path()));
+        AddRasterPaths(paths);
+    }
+
+    fire_and_forget MainWindow::AddRasterFolder()
+    {
+        auto lifetime = get_strong();
+        Windows::Storage::Pickers::FolderPicker picker;
+        picker.as<::IInitializeWithWindow>()->Initialize(top_hwnd);
+        picker.FileTypeFilter().Append(L"*");
+        auto folder = co_await picker.PickSingleFolderAsync();
+        if (folder == nullptr)
+            co_return;
+        auto paths = lkw::CollectRasterCharts(winrt::to_string(folder.Path()));
+        if (paths.empty())
+        {
+            ShowRasterError(L"No raster charts (.mbtiles) in that folder.");
+            co_return;
+        }
+        AddRasterPaths(paths);
+    }
+
+    fire_and_forget MainWindow::ShowRasterError(winrt::hstring msg)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(Root().XamlRoot());
+        dialog.Title(winrt::box_value(L"Raster Charts"));
+        dialog.Content(winrt::box_value(msg));
+        dialog.CloseButtonText(L"OK");
+        co_await dialog.ShowAsync();
+    }
+
+    // ---- re-install at every open -------------------------------------------
+
+    // A raster chart is attached to a lookout handle, and the open destroyed
+    // the old one — so the stored list is installed again with every chart,
+    // which is also what carries it across a restart. Failures are logged,
+    // never alerted: a missing SD card must not become a dialog at every
+    // launch.
+    void MainWindow::InstallStoredRasters()
+    {
+        raster_paths.clear();
+        int *enabled = nullptr;
+        char **paths = lk_store_load_rasters(&enabled);
+        if (paths == nullptr)
+            return;
+
+        int ok = 0, total = 0;
+        for (int i = 0; paths[i] != nullptr; ++i)
+        {
+            std::error_code ec;
+            if (!std::filesystem::exists(paths[i], ec))
+                continue; // stale entry: unplugged drive, deleted download
+            ++total;
+            raster_paths.push_back(paths[i]);
+            if (lk_controller_raster_add(controller, paths[i]))
+            {
+                ++ok;
+                if (!enabled[i])
+                    lk_controller_raster_set_enabled(controller, paths[i], 0);
+            }
+        }
+        lk_store_free_rasters(paths, enabled);
+        if (total > 0)
+            fprintf(stderr, "shell: raster %d/%d source(s) re-installed\n", ok, total);
+    }
+}

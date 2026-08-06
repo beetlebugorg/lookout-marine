@@ -3,6 +3,7 @@ package org.beetlebug.lookout
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +85,13 @@ class ChartController(private val appContext: Context) {
     /** The editable S-52 mariner state the settings sheet binds to. */
     val mariner = MarinerState()
 
+    /** The mariner's installed raster charts, persisted across opens. */
+    val rasterCharts = RasterCharts(appContext)
+
+    /** What the pill shows. Refreshed every pushed frame: `inView` moves. */
+    var raster by mutableStateOf(RasterState())
+        private set
+
     val isOpen: Boolean get() = lk != null
 
     // ---- lifecycle (called by LookoutView) ---------------------------------
@@ -107,6 +115,14 @@ class ChartController(private val appContext: Context) {
         l.setMariner(v, date)
         lastPushed = null
         restoreView(l)
+        // Replay the installed raster charts into the chart just opened. The
+        // engine holds what is open now; the mariner's own material has to
+        // survive a change of ENC, so it is installed again on every open.
+        for (p in rasterCharts.paths) {
+            if (!l.rasterAdd(p)) Log.w(TAG, "raster chart will not open: $p")
+            else if (!rasterCharts.isEnabled(p)) l.rasterSetEnabled(p, false)
+        }
+        pushRaster(l)
         val loaded = date
         main.post { mariner.loadFrom(v, loaded) }
     }
@@ -182,6 +198,10 @@ class ChartController(private val appContext: Context) {
                 main.post { dismissIdentify() }
             }
         }
+        // The pill appears and goes as the mariner sails in and out of the
+        // coverage, so this is read on the frame, not only when something is
+        // pressed. Cheap: a handful of calls over a handful of sets.
+        pushRaster(l)
         if (r == lastPushed) return
         lastPushed = r
         main.post {
@@ -194,6 +214,90 @@ class ChartController(private val appContext: Context) {
             lastSaveNs = frameTimeNanos
             saveView()
         }
+    }
+
+    // ---- raster charts -----------------------------------------------------
+
+    @Volatile private var lastRaster: RasterState? = null
+
+    /**
+     * Read the pill's state off the engine. RENDER THREAD ONLY, like the
+     * readouts: these are native calls, and the api lock is held for a frame.
+     */
+    private fun pushRaster(l: Lookout) {
+        val n = l.rasterSetCount()
+        val sets = ArrayList<RasterSet>(n)
+        for (i in 0 until n) {
+            sets.add(RasterSet(i, l.rasterSetName(i), l.rasterSetInView(i)))
+        }
+        val s = RasterState(
+            name = l.rasterActiveName(),
+            available = l.rasterAvailableName(),
+            active = l.rasterActiveIndex(),
+            sets = sets,
+            chartHidden = l.chartHidden(),
+        )
+        if (s == lastRaster) return
+        lastRaster = s
+        main.post { raster = s }
+    }
+
+    /**
+     * Install raster charts and draw the one just added, if it covers this
+     * view. The mariner picked those files while looking at this water.
+     */
+    fun addRasterCharts(newPaths: List<String>) {
+        val added = rasterCharts.add(newPaths)
+        if (added.isEmpty()) return
+        onEngine { l ->
+            var opened = 0
+            for (p in added) if (l.rasterAdd(p)) opened++
+            if (opened > 0) {
+                val name = RasterCharts.providerLabel(added.last())
+                val n = l.rasterSetCount()
+                for (i in 0 until n) {
+                    if (l.rasterSetName(i) == name && l.rasterSetInView(i)) {
+                        l.rasterSelect(i)
+                        break
+                    }
+                }
+            }
+            pushRaster(l)
+        }
+    }
+
+    /** Step to the next set covering the water in view, then to none. */
+    fun cycleRaster() = onEngine { l -> l.rasterCycle(); pushRaster(l) }
+
+    /** Draw set [i]. -1 turns off what is drawn over THIS view. */
+    fun selectRasterSet(i: Int) = onEngine { l -> l.rasterSelect(i); pushRaster(l) }
+
+    /** Hide the ENC wherever a raster chart covers, and show it again. */
+    fun toggleChart() = onEngine { l -> l.toggleChart(); pushRaster(l) }
+
+    /** Switch one chart off without removing it. */
+    fun setRasterEnabled(path: String, on: Boolean) {
+        rasterCharts.setEnabled(path, on)
+        onEngine { l -> l.rasterSetEnabled(path, on); pushRaster(l) }
+    }
+
+    /** Switch a whole provider's charts together. */
+    fun setRasterGroupEnabled(paths: List<String>, on: Boolean) {
+        paths.forEach { rasterCharts.setEnabled(it, on) }
+        onEngine { l ->
+            paths.forEach { l.rasterSetEnabled(it, on) }
+            pushRaster(l)
+        }
+    }
+
+    /**
+     * Forget a chart. The engine keeps it open until the next chart opens,
+     * because it has no remove: the list is what is replayed, so dropping it
+     * from the list is what removes it.
+     */
+    fun removeRasterChart(path: String) {
+        rasterCharts.remove(path)
+        onEngine { l -> l.rasterSetEnabled(path, false); pushRaster(l) }
     }
 
     // ---- mariner -----------------------------------------------------------
@@ -292,6 +396,8 @@ class ChartController(private val appContext: Context) {
     }
 
     private companion object {
+        const val TAG = "lookout"
+
         /** ~10 Hz: fast enough to feel live, slow enough not to drive layout. */
         const val PUSH_INTERVAL_NS = 100_000_000L
 

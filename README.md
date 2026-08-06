@@ -10,17 +10,17 @@ and switch between day and night.
 
 <table>
   <tr valign="top">
-    <td align="center"><b>macOS</b> · SwiftUI<br><img src="docs/docs/img/macos-day.png" width="300" alt="Annapolis Harbor on macOS, day scheme"></td>
-    <td align="center"><b>Linux</b> · GTK4<br><img src="docs/docs/img/linux-day.png" width="300" alt="Annapolis Harbor on Linux, day scheme"></td>
-    <td align="center"><b>Windows</b> · WinUI 3<br><img src="docs/docs/img/windows-day.png" width="300" alt="Annapolis Harbor on Windows, day scheme"></td>
+    <td align="center"><b>macOS</b> · SwiftUI<br><img src="docs/docs/img/macos-day.webp" width="300" alt="Annapolis Harbor on macOS, day scheme"></td>
+    <td align="center"><b>Linux</b> · GTK4<br><img src="docs/docs/img/linux-day.webp" width="300" alt="Annapolis Harbor on Linux, day scheme"></td>
+    <td align="center"><b>Windows</b> · WinUI 3<br><img src="docs/docs/img/windows-day.webp" width="300" alt="Annapolis Harbor on Windows, day scheme"></td>
   </tr>
 </table>
 
 <table>
   <tr valign="top">
-    <td align="center"><b>iPadOS</b> · SwiftUI<br><img src="docs/docs/img/ipad-day.png" width="230" alt="Annapolis Harbor on iPad, day scheme"></td>
-    <td align="center"><b>Android</b> · Jetpack Compose<br><img src="docs/docs/img/android-day.png" width="230" alt="Annapolis Harbor on Android, day scheme, with a pick report open"></td>
-    <td align="center"><b>iOS</b> · SwiftUI<br><img src="docs/docs/img/iphone-day.png" width="160" alt="Annapolis Harbor on iPhone, day scheme"></td>
+    <td align="center"><b>iPadOS</b> · SwiftUI<br><img src="docs/docs/img/ipad-day.webp" width="230" alt="Annapolis Harbor on iPad, day scheme"></td>
+    <td align="center"><b>Android</b> · Jetpack Compose<br><img src="docs/docs/img/android-day.webp" width="230" alt="Annapolis Harbor on Android, day scheme"></td>
+    <td align="center"><b>iOS</b> · SwiftUI<br><img src="docs/docs/img/iphone-day.webp" width="160" alt="Annapolis Harbor on iPhone, day scheme"></td>
   </tr>
 </table>
 
@@ -37,6 +37,13 @@ and switch between day and night.
   pre-rendered raster image, and no symbol is a look-alike. You get depth areas and
   contours, buoys and beacons with correct symbols, lights with sector lines,
   soundings, anchorage and restricted areas, and place names.
+- **It draws your satellite imagery under the chart.** Point it at the MBTiles
+  cruisers publish for poorly-charted coasts. The chart drops its depth and land
+  shading only where the imagery covers, so you keep the chart and still see the
+  water. Tap the pill in the readouts to step between providers — the same water
+  from Google, Bing and ArcGIS shows a different day, tide and cloud, and one of
+  them shows the bottom. See [Imagery](docs/docs/user-guide/imagery.md).
+
 - **It opens a whole coastline.** Point it at a folder of cells. The app maps each
   cell instead of loading it, so even a 1,700-cell library opens in milliseconds and
   is never fully resident. Tessellation runs on a worker thread, so the app stays

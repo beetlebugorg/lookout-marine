@@ -115,6 +115,20 @@ final class ChartController: NSObject {
             ? paths[0]
             : ((paths[0] as NSString).deletingLastPathComponent)
 
+        // Re-install the mariner's raster charts. A raster chart is attached to a
+        // lookout handle, and `close()` above destroyed the old one, so every
+        // open has to replay them — that is what makes a raster chart survive both
+        // switching charts and relaunching the app.
+        if let paths = model?.rasterPaths, !paths.isEmpty {
+            var ok = 0
+            for p in paths where addRaster(p) {
+                ok += 1
+                if model?.rasterOff.contains(p) == true { setRasterEnabled(p, false) }
+            }
+            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed")
+            model?.rasterName = rasterName()
+        }
+
         // Reopen where we left off. With nothing saved the opening view is the
         // engine's own (lookout_default_view) — the same policy every host gets,
         // rather than each shell inventing its own idea of "the initial view".
@@ -402,6 +416,67 @@ final class ChartController: NSObject {
     // MARK: - Convenience live toggles
 
     func cycleScheme()        { guard let h = handle else { return }; lookout_cycle_scheme(h); kick(); pushReadouts() }
+    /// Step to the next raster chart set, or to "no picture" after the last one. The
+    /// camera does not move and the chart scene is not rebuilt unless the
+    /// picture turns on or off, so a mariner comparing two providers over a reef
+    /// keeps their fix.
+    func cycleRaster()        { guard let h = handle else { return }; lookout_raster_cycle(h); kick(); pushReadouts() }
+    /// The active raster chart set's name, or "" for no picture. A shell MUST show
+    /// this: with a picture active the chart drops its opaque water and land
+    /// fills, which is a real reduction in what it is telling the mariner.
+    func rasterName() -> String {
+        guard let h = handle else { return "" }
+        var len = 0
+        guard let p = lookout_raster_active_name(h, &len), len > 0 else { return "" }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+    /// Hide or show the vector chart. The picture beneath it stays.
+    func toggleChart()        { guard let h = handle else { return }; lookout_toggle_chart(h); kick(); pushReadouts() }
+    func chartHidden() -> Bool { guard let h = handle else { return false }; return lookout_chart_hidden(h) != 0 }
+    /// Every set, with whether it is in view and which one is drawn. This is
+    /// what the pill's menu is built from — a mariner has to see what they
+    /// carry, not guess at it through a cycle.
+    struct RasterSet: Identifiable { let id: Int; let name: String; let inView: Bool }
+    func rasterSets() -> [RasterSet] {
+        guard let h = handle else { return [] }
+        let n = Int(lookout_raster_set_count(h))
+        return (0..<n).map { i in
+            var len = 0
+            let p = lookout_raster_set_name(h, UInt32(i), &len)
+            let name = (p != nil && len > 0)
+                ? String(decoding: UnsafeRawBufferPointer(start: p!, count: len), as: UTF8.self) : ""
+            return RasterSet(id: i, name: name,
+                             inView: lookout_raster_set_in_view(h, UInt32(i)) != 0)
+        }
+    }
+    func rasterActiveIndex() -> Int { guard let h = handle else { return -1 }; return Int(lookout_raster_active_index(h)) }
+    func rasterSelect(_ i: Int) { guard let h = handle else { return }; lookout_raster_select(h, Int32(i)); kick(); pushReadouts() }
+
+    /// Turn one raster chart on or off without removing it.
+    @discardableResult
+    func setRasterEnabled(_ path: String, _ on: Bool) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_raster_set_enabled(h, $0, on ? 1 : 0) != 0 }
+    }
+    /// The set covering this view, drawn or not — so the pill can say a picture
+    /// is here while it is off.
+    func rasterAvailableName() -> String {
+        guard let h = handle else { return "" }
+        var len = 0
+        guard let p = lookout_raster_available_name(h, &len), len > 0 else { return "" }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+    /// Is a picture beneath THIS view?
+    func rasterOverChart() -> Bool { guard let h = handle else { return false }; return lookout_raster_over_chart(h) != 0 }
+    /// How many raster chart sets the mariner has installed.
+    func rasterSetCount() -> Int { guard let h = handle else { return 0 }; return Int(lookout_raster_set_count(h)) }
+    /// Open a raster chart (satellite imagery or another picture chart) the
+    /// mariner supplied. The app offers no catalogue and no download.
+    @discardableResult
+    func addRaster(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_raster_add(h, $0) != 0 }
+    }
     func toggleText()         { guard let h = handle else { return }; lookout_toggle_text(h); kick() }
     func toggleSoundings()    { guard let h = handle else { return }; lookout_toggle_soundings(h); kick() }
     func toggleOtherCategory(){ guard let h = handle else { return }; lookout_toggle_other_category(h); kick() }
@@ -469,6 +544,19 @@ final class ChartController: NSObject {
         lastReadoutsAt = now
         var v = lookout_view()
         lookout_get_view(h, &v)
+        let over = rasterOverChart()
+        if model.rasterInView != over { model.rasterInView = over }
+        let hidden = chartHidden()
+        if model.chartHidden != hidden { model.chartHidden = hidden }
+        let avail = rasterAvailableName()
+        if model.rasterAvailable != avail { model.rasterAvailable = avail }
+        let sets = rasterSets()
+        if model.rasterSets.map(\.id) != sets.map(\.id)
+            || model.rasterSets.map(\.inView) != sets.map(\.inView) { model.rasterSets = sets }
+        let ai = rasterActiveIndex()
+        if model.rasterActive != ai { model.rasterActive = ai }
+        let active = rasterName()
+        if model.rasterName != active { model.rasterName = active }
         if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
         if model.centerLat != v.lat { model.centerLat = v.lat }
