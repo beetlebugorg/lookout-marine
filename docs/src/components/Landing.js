@@ -12,16 +12,80 @@ import Link from '@docusaurus/Link';
  * follows the chart.
  */
 
-/* Deep to dry. The percentages are the ramp's proportions from the mockup, not
-   depths — the band heights are a picture of the ladder, not a chart. */
-const BANDS = [
-  {token: 'var(--chart-depdw)', height: '34%'},
-  {token: 'var(--chart-depmd)', height: '16%'},
-  {token: 'var(--chart-depms)', height: '14%'},
-  {token: 'var(--chart-depvs)', height: '12%'},
-  {token: 'var(--chart-depit)', height: '6%'},
-  {token: 'var(--chart-landa)', height: 'auto', grow: true},
+/* The ramp is drawn as one inline SVG rather than six divs, because the band
+   edges are curved: a depth contour is a coastline-shaped line, not a rule.
+   preserveAspectRatio="none" lets the viewBox stretch to whatever width the
+   viewport is, so the curves lengthen rather than repeat, and the height stays
+   1:1 with the hero — the wave keeps the same amplitude in pixels at every
+   width. Everything stays vector, so it is crisp at any scale. */
+const VB_W = 1200;
+const VB_H = 560;
+
+/* One meander, shared by every edge. The offsets are fractions of each edge's
+   own amplitude, and the two ends are pinned to zero, so a band arrives at both
+   margins on its exact proportion — which is also what keeps the legends, and
+   the safety contour's label, sitting on their lines.
+   The shape is deliberately irregular: a coastline wanders, a sine wave does
+   not. Same quadratic vocabulary as assets/brand/lookout-beacon.svg. */
+const WAVE = [
+  [0.0, 0.0],
+  [0.09, -0.55],
+  [0.2, -0.95],
+  [0.32, -0.25],
+  [0.44, 0.65],
+  [0.56, 1.0],
+  [0.66, 0.45],
+  [0.74, -0.35],
+  [0.82, -0.7],
+  [0.9, -0.3],
+  [0.96, -0.05],
+  [1.0, 0.0],
 ];
+
+/* Deep to dry. `top` is the band's upper edge as a percentage of the hero, the
+   ramp's proportions from the mockup — not depths. `amp` is how far that edge
+   wanders, in pixels of the 560 design: ±9px on the safety contour easing to
+   ±5px on the drying line, so the thin intertidal band keeps its thickness.
+   `drift` slides the meander sideways a little per edge, so the contours nest
+   like real bathymetry instead of running parallel. */
+const BANDS = [
+  {token: 'var(--chart-depdw)', top: 0},
+  {token: 'var(--chart-depmd)', top: 34, amp: 11, drift: 0},
+  {token: 'var(--chart-depms)', top: 50, amp: 9, drift: 0.03},
+  {token: 'var(--chart-depvs)', top: 64, amp: 9, drift: -0.025},
+  {token: 'var(--chart-depit)', top: 76, amp: 6, drift: 0.05},
+  {token: 'var(--chart-landa)', top: 82, amp: 5.5, drift: 0.075},
+];
+
+/* A smooth chain of quadratics through the meander: each node is a control
+   point and the curve runs through the midpoints between them, which is how the
+   beacon's bands are drawn. Returns the edge alone — the caller closes it into
+   a band or strokes it as a contour. */
+function edgePath(top, amp, drift) {
+  const baseY = (top / 100) * VB_H;
+  const pts = WAVE.map(([t, o], i) => {
+    const end = i === 0 || i === WAVE.length - 1;
+    return [(end ? t : t + drift) * VB_W, baseY + o * amp];
+  });
+  /* The last node repeated, so the chain's final curve lands exactly on it. */
+  pts.push(pts[pts.length - 1]);
+
+  const n = (v) => Math.round(v * 10) / 10;
+  let d = `M ${n(pts[0][0])} ${n(pts[0][1])}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [cx, cy] = pts[i];
+    const [nx, ny] = pts[i + 1];
+    d += ` Q ${n(cx)} ${n(cy)} ${n((cx + nx) / 2)} ${n((cy + ny) / 2)}`;
+  }
+  return d;
+}
+
+/* Deepest first, each band filled from its own edge all the way down: the next
+   band paints over the surplus. Painter's order, so no seam can open between
+   two bands however the curves are tuned. */
+function bandPath(b) {
+  return `${edgePath(b.top, b.amp, b.drift)} L ${VB_W} ${VB_H} L 0 ${VB_H} Z`;
+}
 
 /* Soundings in FEET, whole numbers — a foot sounding is never fractional. Each
    one is plausible for the band it sits in and they shoal band by band toward
@@ -29,61 +93,73 @@ const BANDS = [
    Colour is the S-52 rule: SNDG1 (grey) for water deeper than the safety
    contour, SNDG2 (black) for everything inshore of it. The contour is at 34%,
    so `top` alone decides which side a sounding is on.
-   Positions avoid the info panel, which covers the left of the ramp. */
+   Positions avoid the two opaque objects on the ramp: the info panel over the
+   left of it, and the guide capsule across the top. */
 const SAFETY_CONTOUR_PCT = 34;
 
 const SOUNDINGS = [
-  /* DEPDW — deep water, outside the safety contour. Shoaling toward it. */
-  {v: '48', left: '9%', top: '7%'},
-  {v: '39', left: '26%', top: '9%'},
-  {v: '55', left: '71%', top: '9%'},
-  {v: '42', left: '60%', top: '22%'},
-  {v: '31', left: '88%', top: '27%'},
+  /* DEPDW — deep water, outside the safety contour. Shoaling toward it.
+     Nothing sits above 12%: the ramp runs to the top of the page now, and the
+     capsule floats there — opaque, and as wide as the viewport at the narrow
+     end of the desktop range, so anything higher would be swallowed. Nothing
+     to the left of the panel either, for the same reason. */
+  {v: '55', left: '58%', top: '13%'},
+  {v: '48', left: '76%', top: '12.5%'},
+  {v: '39', left: '90%', top: '17%'},
+  {v: '42', left: '66%', top: '21%'},
+  {v: '31', left: '86%', top: '28%'},
   /* DEPMD — just inshore of the safety contour. */
   {v: '24', left: '79%', top: '40%'},
-  {v: '21', left: '62%', top: '46%'},
+  {v: '21', left: '62%', top: '44%'},
   /* DEPMS */
   {v: '16', left: '93%', top: '56%'},
-  {v: '14', left: '70%', top: '60%'},
+  {v: '14', left: '70%', top: '58%'},
   /* DEPVS */
   {v: '9', left: '85%', top: '69%'},
-  {v: '7', left: '60%', top: '72%'},
-  /* DEPIT — drying heights on the intertidal band. */
-  {v: '2', left: '91%', top: '79%'},
-  {v: '1', left: '14%', top: '79%'},
+  {v: '7', left: '60%', top: '70%'},
+  /* DEPIT — drying heights on the intertidal band. It is the thinnest band and
+     its edges now wander, so these sit on the band's centre line. */
+  {v: '2', left: '91%', top: '77.6%'},
+  /* The panel's bottom edge crosses this band, so the left-hand drying height
+     is centred in the sliver of intertidal that shows beneath it. */
+  {v: '1', left: '14%', top: '78.4%'},
 ];
 
-/* The ramp's own names, each paired with what it means, so the legend reads
-   without an S-52 table to hand. Each is pinned to the thing it names — the
-   band it labels, or the contour line it sits on — rather than distributed down
-   the edge, which left them stranded mid-band. */
-const LADDER_LEGEND = [
-  {label: 'Depdw · deep water', top: '4%'},
-  {label: 'Safety contour', top: '34%'},
-  {label: 'Depit · intertidal', top: '77.5%'},
-  {label: 'Landa · dry land', top: '90%'},
-];
+/* The two contours the ramp implies: the safety contour at the top of DEPMD and
+   the shoal contour at the top of DEPVS. Each is the band edge it belongs to,
+   stroked — a contour and a band edge are the same line on a chart, so they
+   wander together. Both cross the whole hero; the info panel is opaque and
+   masks the stretch behind it. */
+const CONTOURS = [BANDS[1], BANDS[3]];
 
 export function DepthLadderHero() {
   return (
     <section className="lm-hero">
-      <div className="lm-hero__bands" aria-hidden="true">
-        {BANDS.map((b, i) => (
-          <div
-            key={i}
-            className="lm-hero__band"
-            style={{
-              background: b.token,
-              flex: b.grow ? '1' : `0 0 ${b.height}`,
-            }}
+      <svg
+        className="lm-hero__bands"
+        viewBox={`0 0 ${VB_W} ${VB_H}`}
+        preserveAspectRatio="none"
+        aria-hidden="true"
+        focusable="false">
+        {BANDS.map((b) =>
+          b.amp === undefined ? (
+            /* The deepest band is the ground the rest are painted onto. */
+            <rect key={b.token} x="0" y="0" width={VB_W} height={VB_H} style={{fill: b.token}} />
+          ) : (
+            <path key={b.token} d={bandPath(b)} style={{fill: b.token}} />
+          ),
+        )}
+        {CONTOURS.map((c) => (
+          <path
+            key={c.token}
+            d={edgePath(c.top, c.amp, c.drift)}
+            fill="none"
+            strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke"
+            style={{stroke: 'var(--chart-depcn)'}}
           />
         ))}
-      </div>
-
-      {/* The two contours the ramp implies: the deep contour and the safety
-          contour. Drawn only across the open water to the right of the copy. */}
-      <span className="lm-hero__contour" style={{top: '34%'}} aria-hidden="true" />
-      <span className="lm-hero__contour" style={{top: '62%'}} aria-hidden="true" />
+      </svg>
 
       {SOUNDINGS.map((s) => (
         <span
@@ -101,17 +177,6 @@ export function DepthLadderHero() {
           {s.v}
         </span>
       ))}
-
-      {LADDER_LEGEND.map((l) => (
-        <span key={l.label} className="lm-hero__legendItem" style={{top: l.top}} aria-hidden="true">
-          {l.label}
-        </span>
-      ))}
-
-      {/* A chart states its unit. So does this one. */}
-      <span className="lm-hero__unit" aria-hidden="true">
-        Soundings in feet
-      </span>
 
       {/* Option 1a's info box, floated on option 1b's ladder. It is opaque, so
           no band edge ever cuts through a line of type — the panel is the

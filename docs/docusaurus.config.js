@@ -116,31 +116,27 @@ const config = {
         ],
       },
       footer: {
-        style: 'dark',
+        // A flat list, not columns: Docusaurus renders it as one row of links,
+        // which is all a five-link footer needs. No `style: dark` either — the
+        // slab it paints is Infima's own navy, the one colour on the site that
+        // comes from no token; without it the footer takes --chrome-panel and
+        // ends the page on the same surface the rest of the chrome uses.
+        //
+        // Five links, each the shortest way to somewhere a visitor might
+        // actually want to go. Dropped: Introduction (this is the page it
+        // links to), Chart window (a page inside the user guide, reachable in
+        // two clicks), Building (likewise, inside the developer guide).
         links: [
+          {label: 'Getting started', to: '/user-guide/getting-started'},
+          {label: 'Developer guide', to: '/developer-guide/architecture'},
+          {label: 'Roadmap', to: '/roadmap'},
           {
-            title: 'Docs',
-            items: [
-              {label: 'Introduction', to: '/'},
-              {label: 'Getting started', to: '/user-guide/getting-started'},
-              {label: 'Chart window', to: '/user-guide/chart-window'},
-              {label: 'Architecture', to: '/developer-guide/architecture'},
-              {label: 'Building', to: '/developer-guide/macos'},
-              {label: 'Roadmap', to: '/roadmap'},
-            ],
+            label: 'GitHub',
+            href: 'https://github.com/beetlebugorg/lookout-marine',
           },
           {
-            title: 'More',
-            items: [
-              {
-                label: 'GitHub',
-                href: 'https://github.com/beetlebugorg/lookout-marine',
-              },
-              {
-                label: 'tile57 (the chart engine)',
-                href: 'https://github.com/beetlebugorg/tile57',
-              },
-            ],
+            label: 'Chart engine',
+            href: 'https://github.com/beetlebugorg/tile57',
           },
         ],
         copyright: `Copyright © ${new Date().getFullYear()} Jeremy Collins.`,
