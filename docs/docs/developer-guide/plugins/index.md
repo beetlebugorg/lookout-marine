@@ -38,8 +38,8 @@ object once and it stays until you replace it or delete it. Laylines, a guard
 ring, a route, an anchor-watch circle, a tide arrow, the track you have sailed.
 
 What a plugin does not do is touch the machine. Inside the module there is no
-socket, no file, no thread and no frame. You ask the host — Lookout's plugin
-runtime — and the host does it, if your manifest asked for the permission first.
+socket, no file, no thread and no frame. You ask the host, Lookout's plugin
+runtime. If your manifest asked for the permission, the host does it.
 
 ```
         the boat's network              the mariner's settings
@@ -75,8 +75,7 @@ boat, not administering software.
 
 ## What runs today
 
-The plugin layer is a prototype, on the `feat/plugins-prototype` branch. Four
-plugins ship with it and are the worked examples: `nmea0183` publishes, and
+The plugin layer is a prototype. Four plugins ship with it and are the worked examples: `nmea0183` publishes, and
 `ownship`, `ais` and `laylines` draw.
 
 Where you can run a plugin:

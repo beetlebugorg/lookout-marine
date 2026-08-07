@@ -18,8 +18,8 @@ further, there is a finished example of the same shape sitting in the tree.
 ## Before you start
 
 - **Zig 0.16.** The plugin-side library is Zig, and so is Lookout's build.
-- **A checkout of Lookout**, on the `feat/plugins-prototype` branch. Note the
-  commit you are on: the ABI is unstable, and this is what you will pin to.
+- **A checkout of Lookout.** Note the commit you are on: the ABI is unstable,
+  and this is what you will pin to.
 - **macOS.** It is the only platform where the whole loop — build, harness,
   app — has been run.
 - **A baked chart**, a `.pmtiles` file. If you do not have one,
