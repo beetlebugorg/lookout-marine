@@ -101,6 +101,8 @@ The open library, the recent ones, and the button to add more.
 
 ## Adding a connection
 
+![The Connections section of mariner settings on macOS](../img/settings-connections.webp)
+
 Where the boat's data comes from. You need none of this to read a chart. It is
 what puts your boat, your depth and the traffic around you on top of one.
 
