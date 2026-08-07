@@ -6,7 +6,7 @@
 //! store fans out at up to 10 Hz and a layline that twitches ten times a second
 //! is harder to read than one that steps once a second.
 //!
-//! Wind that is missing, cleared, or older than 30 s takes both lines off the
+//! Wind that is missing, cleared, or older than 5 s takes both lines off the
 //! chart and puts the plugin in `degraded`, because a layline from a wind
 //! reading half a minute old is a confident drawing of a guess. Position is
 //! held to the same window. Either recovers on the next good reading.
