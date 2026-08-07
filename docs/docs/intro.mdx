@@ -3,6 +3,9 @@ id: intro
 title: Lookout Marine
 slug: /
 sidebar_position: 0
+hide_table_of_contents: true
+# The hero carries the page's one h1. Without this Docusaurus adds a second.
+hide_title: true
 ---
 
 import macosDay from './img/macos-day.webp';
@@ -10,48 +13,34 @@ import linuxDay from './img/linux-day.webp';
 import windowsDay from './img/windows-day.webp';
 import ipadDay from './img/ipad-day.webp';
 import iphoneDay from './img/iphone-day.webp';
+import {DepthLadderHero, PlatformStrip, GuideCards} from '@site/src/components/Landing';
 
+<div className="lm-landing">
 
-# Lookout Marine
+<DepthLadderHero />
 
-A fast, native chartplotter for Mac, iPad, iPhone, Windows, Android and Linux. It
-draws official ENC charts with the IHO portrayal rules, straight to the GPU with
-Metal, Vulkan or Direct3D 12, and holds 60 fps.
+<PlatformStrip
+  shots={[
+    {name: 'macOS', toolkit: 'SwiftUI', src: macosDay, alt: 'Annapolis Harbor on macOS, day scheme'},
+    {name: 'Linux', toolkit: 'GTK4', src: linuxDay, alt: 'Annapolis Harbor on Linux, day scheme'},
+    {name: 'Windows', toolkit: 'WinUI 3', src: windowsDay, alt: 'Annapolis Harbor on Windows, day scheme'},
+  ]}
+  devices={[
+    {name: 'iPadOS', toolkit: 'SwiftUI', src: ipadDay, width: 300, alt: 'Annapolis Harbor on iPad, day scheme'},
+    {name: 'iOS', toolkit: 'SwiftUI', src: iphoneDay, width: 160, alt: 'Annapolis Harbor on iPhone, day scheme'},
+  ]}
+/>
 
-:::warning Not for navigation
-This is a prototype. It is not pixel-perfect and it makes no claim of ECDIS
-conformance.
-:::
+<GuideCards />
 
-<table>
-  <tr valign="top">
-    <td align="center"><b>macOS</b> · SwiftUI<br /><img src={macosDay} width="300" alt="Annapolis Harbor on macOS, day scheme" /></td>
-    <td align="center"><b>Linux</b> · GTK4<br /><img src={linuxDay} width="300" alt="Annapolis Harbor on Linux, day scheme" /></td>
-    <td align="center"><b>Windows</b> · WinUI 3<br /><img src={windowsDay} width="300" alt="Annapolis Harbor on Windows, day scheme" /></td>
-  </tr>
-</table>
+</div>
 
-<table>
-  <tr valign="top">
-    <td align="center"><b>iPadOS</b> · SwiftUI<br /><img src={ipadDay} width="230" alt="Annapolis Harbor on iPad, day scheme" /></td>
-    <td align="center"><b>iOS</b> · SwiftUI<br /><img src={iphoneDay} width="160" alt="Annapolis Harbor on iPhone, day scheme" /></td>
-  </tr>
-</table>
+<div className="lm-tail">
 
-## Guides
-
-**User guide** — how to use the app.
-
-- **[Getting started](user-guide/getting-started.md)** — get charts, bake them, open them.
-- **[Chart window](user-guide/chart-window.md)** — what each readout and control states.
-- **[Moving the chart](user-guide/moving-the-chart.md)** — gestures, keys, rotation, and going to a scale.
-- **[Mariner settings](user-guide/mariner-settings.md)** — colour scheme, display category, depths, text.
-
-**Developer guide** — how it is built.
-
-- **[Architecture](developer-guide/architecture.md)** — the shared Zig core, the C ABI, the GPU backends, and how to build the core.
-- One page per host, each with its prerequisites, its build and its gotchas: **[macOS, iPadOS and iOS](developer-guide/macos.md)**, **[Linux](developer-guide/linux.md)**, **[Windows](developer-guide/windows.md)**, **[Android](developer-guide/android.md)**.
-- **[Screenshot protocol](developer-guide/screenshots.md)** — the chart, the camera and the window size each host must use, so the frames compare.
+Lookout draws official ENC charts with the IHO portrayal rules, straight to the
+GPU with Metal, Vulkan or Direct3D 12. The chart is built once and then lives on
+the card, so panning, zooming, rotating and switching to the night palette never
+stall — and an idle chart costs no battery.
 
 **[Roadmap](roadmap.md)** — own ship, NMEA 0183, AIS, tracks and instruments.
 
@@ -61,3 +50,5 @@ The chart engine has its own documentation at
 To learn why the project has this structure — one core and several native shells
 written by AI — refer to
 [the README](https://github.com/beetlebugorg/lookout-marine#how-we-use-ai).
+
+</div>

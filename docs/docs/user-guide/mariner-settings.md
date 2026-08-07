@@ -4,6 +4,9 @@ title: Mariner settings
 sidebar_position: 4
 ---
 
+import AnnotatedShot from '@site/src/components/AnnotatedShot';
+import settingsDisplay from '../img/settings-display.webp';
+
 # Mariner settings
 
 The gear opens the settings. ⌘, (Ctrl+,) does the same. Every change applies to
@@ -11,7 +14,23 @@ the chart at once and is kept for the next time.
 
 ## Display
 
-![The Display tab](../img/settings-display.png)
+<AnnotatedShot
+  src={settingsDisplay}
+  alt="The Display section of mariner settings on macOS"
+  caption="The Display section on macOS. Markers use the S-52 mariner magenta, the same colour the app uses for a pick."
+  marks={[
+    {n: 1, x: 10.8, y: 50.7},
+    {n: 2, x: 20.8, y: 22.1, lead: 2.5},
+    {n: 3, x: 20.8, y: 60.3, lead: 2.5},
+    {n: 4, x: 20.8, y: 85.3, lead: 2.5},
+  ]}
+  legend={[
+    {n: 1, term: 'Sections', body: '— Display, Depths, Text, Charts, Vessels, Alarms and Advanced. Vessels and Alarms appear when a plugin fills them.'},
+    {n: 2, term: 'Colour scheme', body: '— day, dusk and night palettes switch instantly. The chrome follows the chart, not the OS, so night never blasts a white sheet at a dark-adapted helm.'},
+    {n: 3, term: 'Display category', body: '— how much of the chart is drawn. Base ⊂ Standard ⊂ Other.'},
+    {n: 4, term: 'Soundings', body: '— spot soundings switch independently of the category.'},
+  ]}
+/>
 
 **Colour scheme** — day, dusk or night. Night dims the whole palette for a dark
 wheelhouse. ⌘L steps through the three.
