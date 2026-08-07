@@ -19,13 +19,13 @@ the chart at once and is kept for the next time.
   alt="The Display section of mariner settings on macOS"
   caption="The Display section on macOS. Markers use the S-52 mariner magenta, the same colour the app uses for a pick."
   marks={[
-    {n: 1, x: 10.8, y: 50.7},
+    {n: 1, x: 10.8, y: 56.1},
     {n: 2, x: 20.8, y: 22.1, lead: 2.5},
     {n: 3, x: 20.8, y: 60.3, lead: 2.5},
     {n: 4, x: 20.8, y: 85.3, lead: 2.5},
   ]}
   legend={[
-    {n: 1, term: 'Sections', body: '— Display, Depths, Text, Charts, Vessels, Alarms and Advanced. Vessels and Alarms appear when a plugin fills them.'},
+    {n: 1, term: 'Sections', body: '— Display, Depths, Text, Charts, Vessels, Alarms, Connections and Advanced. Vessels, Alarms and Connections appear only while a plugin fills them.'},
     {n: 2, term: 'Colour scheme', body: '— day, dusk and night palettes switch instantly. The chrome follows the chart, not the OS, so night never blasts a white sheet at a dark-adapted helm.'},
     {n: 3, term: 'Display category', body: '— how much of the chart is drawn. Base ⊂ Standard ⊂ Other.'},
     {n: 4, term: 'Soundings', body: '— spot soundings switch independently of the category.'},
@@ -51,7 +51,7 @@ Other.
 
 ## Setting the safety contour and depth shading
 
-![The Depths tab](../img/settings-depths.png)
+![The Depths section of mariner settings on macOS](../img/settings-depths.webp)
 
 **Depth unit** — metres, feet or fathoms. It changes the numbers you type below,
 and the soundings.
@@ -80,7 +80,7 @@ water; it only marks the numbers.
 
 ## Choosing what text and symbols appear
 
-![The Text tab](../img/settings-text.png)
+![The Text section of mariner settings on macOS](../img/settings-text.webp)
 
 Feature names, light descriptions and other text can each be switched off when
 the chart gets busy. ⌘T switches all text.
@@ -95,7 +95,7 @@ a short leader. Useful on approach, noisy in a crowded harbour.
 
 ## Managing your chart library
 
-![The Charts tab](../img/settings-charts.webp)
+![The Charts section of mariner settings on macOS](../img/settings-charts.webp)
 
 The open library, the recent ones, and the button to add more.
 
@@ -129,7 +129,7 @@ for five seconds. You cannot yet choose which one wins.
 
 ## Changing the Advanced settings
 
-![The Advanced tab](../img/settings-advanced.png)
+![The Advanced section of mariner settings on macOS](../img/settings-advanced.webp)
 
 **Data quality overlay** — the zones of confidence, so you can see which surveys
 are old or sparse.
