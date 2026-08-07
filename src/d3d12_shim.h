@@ -35,6 +35,10 @@ enum {
      * pixel — the fills sit farther and lose the depth test where a picture
      * covers. Everything nearer (lines, symbols, text) still paints over it. */
     LKD_PIPE_RASTER = 4,
+    /* Plugin chart overlays (src/overlay.zig): position + colour vertices, 24 B
+     * stride, alpha blend, depth test without write. Its shader is the shim's
+     * own (LKD_OVERLAY_HLSL), not the engine's. */
+    LKD_PIPE_OVERLAY = 5,
 };
 
 #define LKD_ERR_LEN 256

@@ -47,6 +47,7 @@
 //! watchdog, which is why the tick period sets the watchdog's precision.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const wasm = @import("wasm.zig");
 const vstore = @import("store.zig");
 const ais_store = @import("aisstore.zig");
@@ -276,7 +277,7 @@ const Conn = struct {
     id: i64,
     plugin: u32,
     state: ConnState,
-    fd: std.c.fd_t = -1,
+    fd: net.Socket = net.invalid,
     /// Kept until the socket is connected: a resolver thread reads it, so the
     /// plugin's tcp_connect never blocks on DNS and neither does the I/O
     /// thread.
@@ -349,7 +350,8 @@ pub const Broker = struct {
     /// Self-pipe: a native run on the dispatch thread writes one byte so the
     /// I/O thread leaves poll at once instead of finishing its current wait.
     /// Without it a 5 ms timer set from inside an event could fire 100 ms late.
-    wake: [2]std.c.fd_t = .{ -1, -1 },
+    /// A pipe on POSIX, a loopback socket pair on Windows (see net.wakePair).
+    wake: [2]net.Socket = .{ net.invalid, net.invalid },
 
     next_tick: i64 = 0,
     last_ais_ms: i64 = 0,
@@ -376,7 +378,7 @@ pub const Broker = struct {
         }
         self.queues.deinit(self.alloc);
         for (self.conns.items) |*c| {
-            if (c.fd >= 0) _ = std.c.close(c.fd);
+            if (net.valid(c.fd)) net.close(c.fd);
             c.out.deinit(self.alloc);
             self.alloc.free(c.host);
         }
@@ -591,7 +593,7 @@ pub const Broker = struct {
                     continue;
                 }
                 var c = self.conns.orderedRemove(i);
-                if (c.fd >= 0) _ = std.c.close(c.fd);
+                if (net.valid(c.fd)) net.close(c.fd);
                 c.out.deinit(self.alloc);
                 self.alloc.free(c.host);
             }
@@ -663,9 +665,7 @@ pub const Broker = struct {
 
     pub fn start(self: *Broker) !void {
         if (self.io_thread != null) return;
-        if (std.c.pipe(&self.wake) != 0) return error.PipeFailed;
-        setNonBlocking(self.wake[0]);
-        setNonBlocking(self.wake[1]);
+        try net.wakePair(&self.wake);
         self.next_tick = monoMs() + tick_ms;
         self.stopping.store(false, .release);
         self.io_thread = try std.Thread.spawn(.{}, ioMain, .{self});
@@ -684,10 +684,8 @@ pub const Broker = struct {
         // to be gone before anything it owns is. The wake pipe stays open until
         // they are: the last thing each does is write to it.
         self.awaitResolvers();
-        for (self.wake) |fd| if (fd >= 0) {
-            _ = std.c.close(fd);
-        };
-        self.wake = .{ -1, -1 };
+        for (self.wake) |fd| if (net.valid(fd)) net.close(fd);
+        self.wake = .{ net.invalid, net.invalid };
     }
 
     fn awaitResolvers(self: *Broker) void {
@@ -703,13 +701,13 @@ pub const Broker = struct {
     }
 
     fn wakeIo(self: *Broker) void {
-        if (self.wake[1] < 0) return;
+        if (!net.valid(self.wake[1])) return;
         const one = [_]u8{0};
-        _ = std.c.write(self.wake[1], &one, 1);
+        _ = net.send(self.wake[1], &one);
     }
 
     fn ioMain(self: *Broker) void {
-        var fds: std.ArrayList(std.c.pollfd) = .empty;
+        var fds: std.ArrayList(net.pollfd) = .empty;
         defer fds.deinit(self.alloc);
         // Parallel to `fds` after the wake pipe: which connection each slot is.
         var owners: std.ArrayList(i64) = .empty;
@@ -718,11 +716,12 @@ pub const Broker = struct {
         while (!self.stopping.load(.acquire)) {
             self.startPending();
             const timeout = self.buildPollSet(&fds, &owners);
-            const n = std.posix.poll(fds.items, timeout) catch 0;
+            const n = net.poll(fds.items, timeout);
             if (n > 0) {
-                if (fds.items[0].revents != 0) drainPipe(self.wake[0]);
+                if (fds.items[0].revents != 0) net.drainWake(self.wake[0]);
                 self.serviceSockets(fds.items[1..], owners.items);
             }
+            if (net.poll_misses_connect_error) self.checkConnecting();
             self.fireTimers();
             self.fanout();
         }
@@ -795,7 +794,7 @@ pub const Broker = struct {
     fn resolveMain(req: *Resolve) void {
         const self = req.br;
         const host = req.host[0..req.host_len];
-        const fd: ?std.c.fd_t = dial(host, req.port) catch |e| blk: {
+        const fd: ?net.Socket = dial(host, req.port) catch |e| blk: {
             self.say(level_warn, "host", "tcp connect to {s}:{d} failed: {s}", .{ host, req.port, @errorName(e) });
             break :blk null;
         };
@@ -808,13 +807,13 @@ pub const Broker = struct {
     }
 
     /// Attach the socket to its connection, or report the failure as a close.
-    fn finishConn(self: *Broker, id: i64, plugin: u32, fd: ?std.c.fd_t) void {
+    fn finishConn(self: *Broker, id: i64, plugin: u32, fd: ?net.Socket) void {
         var gone = false;
         {
             self.mu.lock();
             defer self.mu.unlock();
             const idx = self.connIndexLocked(id) orelse {
-                if (fd) |f| _ = std.c.close(f);
+                if (fd) |f| net.close(f);
                 return;
             };
             if (fd) |f| {
@@ -842,20 +841,25 @@ pub const Broker = struct {
     /// left off its sockets, so its data backs up in the kernel receive buffer
     /// and from there onto the peer, and the host stops allocating events it
     /// cannot deliver. Only that plugin's sockets go quiet; a slow AIS plugin
-    /// does not stop the NMEA feed. Errors and hangups still arrive, because
-    /// poll reports those whether they were asked for or not.
-    fn buildPollSet(self: *Broker, fds: *std.ArrayList(std.c.pollfd), owners: *std.ArrayList(i64)) i32 {
+    /// does not stop the NMEA feed. On POSIX errors and hangups still arrive,
+    /// because poll reports those whether they were asked for or not; the loop
+    /// below says what Windows does instead.
+    fn buildPollSet(self: *Broker, fds: *std.ArrayList(net.pollfd), owners: *std.ArrayList(i64)) i32 {
         self.mu.lock();
         defer self.mu.unlock();
 
         fds.clearRetainingCapacity();
         owners.clearRetainingCapacity();
-        fds.append(self.alloc, .{ .fd = self.wake[0], .events = std.c.POLL.IN, .revents = 0 }) catch {};
+        fds.append(self.alloc, .{ .fd = self.wake[0], .events = net.POLL.IN, .revents = 0 }) catch {};
         for (self.conns.items) |*c| {
-            if (c.fd < 0 or c.closing) continue;
+            if (!net.valid(c.fd) or c.closing) continue;
             var events: i16 = 0;
-            if (!self.pausedLocked(c.plugin)) events |= std.c.POLL.IN;
-            if (c.state == .connecting or c.out.items.len > 0) events |= std.c.POLL.OUT;
+            if (!self.pausedLocked(c.plugin)) events |= net.POLL.IN;
+            if (c.state == .connecting or c.out.items.len > 0) events |= net.POLL.OUT;
+            // A paused socket with nothing to write asks for nothing. WSAPoll
+            // rejects such an entry, so Windows leaves it out and picks the
+            // error up on the pass after the plugin drains.
+            if (events == 0 and net.poll_needs_events) continue;
             fds.append(self.alloc, .{ .fd = c.fd, .events = events, .revents = 0 }) catch break;
             owners.append(self.alloc, c.id) catch break;
         }
@@ -888,7 +892,7 @@ pub const Broker = struct {
         return want;
     }
 
-    fn serviceSockets(self: *Broker, fds: []std.c.pollfd, owners: []const i64) void {
+    fn serviceSockets(self: *Broker, fds: []net.pollfd, owners: []const i64) void {
         for (fds, 0..) |pfd, i| {
             if (i >= owners.len) break;
             if (pfd.revents == 0) continue;
@@ -899,7 +903,7 @@ pub const Broker = struct {
 
     fn serviceOne(self: *Broker, id: i64, revents: i16) void {
         var plugin: u32 = 0;
-        var fd: std.c.fd_t = -1;
+        var fd: net.Socket = net.invalid;
         var state: ConnState = .open;
         {
             self.mu.lock();
@@ -913,10 +917,8 @@ pub const Broker = struct {
         }
 
         if (state == .connecting) {
-            var err: i32 = 0;
-            var len: std.c.socklen_t = @sizeOf(i32);
-            _ = std.c.getsockopt(fd, std.c.SOL.SOCKET, std.c.SO.ERROR, &err, &len);
-            if (err != 0 or (revents & (std.c.POLL.ERR | std.c.POLL.HUP | std.c.POLL.NVAL)) != 0) {
+            const err = net.soError(fd);
+            if (err != 0 or (revents & (net.POLL.ERR | net.POLL.HUP | net.POLL.NVAL)) != 0) {
                 self.closeConn(id, plugin, true);
                 return;
             }
@@ -930,26 +932,50 @@ pub const Broker = struct {
             return;
         }
 
-        if ((revents & std.c.POLL.OUT) != 0) self.flushConn(id);
+        if ((revents & net.POLL.OUT) != 0) self.flushConn(id);
 
-        if ((revents & std.c.POLL.IN) != 0) {
+        if ((revents & net.POLL.IN) != 0) {
             var buf: [read_chunk]u8 = undefined;
-            const n = std.c.read(fd, &buf, buf.len);
+            const n = net.recv(fd, &buf);
             if (n > 0) {
                 self.push(plugin, Kind.tcp_data, @bitCast(id), buf[0..@intCast(n)]);
             } else if (n == 0) {
                 self.closeConn(id, plugin, true);
                 return;
-            } else {
-                const e = std.c.errno(n);
-                if (e != .AGAIN and e != .INTR) {
-                    self.closeConn(id, plugin, true);
-                    return;
-                }
+            } else if (!net.retryable()) {
+                self.closeConn(id, plugin, true);
+                return;
             }
         }
-        if ((revents & (std.c.POLL.ERR | std.c.POLL.HUP | std.c.POLL.NVAL)) != 0) {
+        if ((revents & (net.POLL.ERR | net.POLL.HUP | net.POLL.NVAL)) != 0) {
             self.closeConn(id, plugin, true);
+        }
+    }
+
+    /// Ask every connecting socket whether it has failed. Windows only:
+    /// WSAPoll never reports a failed non-blocking connect — no POLLERR, no
+    /// POLLHUP — so without this a refused connect would sit in `connecting`
+    /// for ever. SO_ERROR does report it. The cap is a pass limit, not a
+    /// total: a connect left over is checked on the next pass, 100 ms later.
+    fn checkConnecting(self: *Broker) void {
+        var ids: [16]i64 = undefined;
+        var socks: [16]net.Socket = undefined;
+        var plugins: [16]u32 = undefined;
+        var n: usize = 0;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            for (self.conns.items) |*c| {
+                if (c.state != .connecting or c.closing or !net.valid(c.fd)) continue;
+                if (n == ids.len) break;
+                ids[n] = c.id;
+                socks[n] = c.fd;
+                plugins[n] = c.plugin;
+                n += 1;
+            }
+        }
+        for (0..n) |i| {
+            if (net.soError(socks[i]) != 0) self.closeConn(ids[i], plugins[i], true);
         }
     }
 
@@ -959,7 +985,7 @@ pub const Broker = struct {
         const idx = self.connIndexLocked(id) orelse return;
         const c = &self.conns.items[idx];
         while (c.out.items.len > 0) {
-            const n = std.c.write(c.fd, c.out.items.ptr, c.out.items.len);
+            const n = net.send(c.fd, c.out.items);
             if (n <= 0) return;
             const wrote: usize = @intCast(n);
             std.mem.copyForwards(u8, c.out.items[0 .. c.out.items.len - wrote], c.out.items[wrote..]);
@@ -975,7 +1001,7 @@ pub const Broker = struct {
             defer self.mu.unlock();
             const idx = self.connIndexLocked(id) orelse return;
             var c = self.conns.orderedRemove(idx);
-            if (c.fd >= 0) _ = std.c.close(c.fd);
+            if (net.valid(c.fd)) net.close(c.fd);
             c.out.deinit(self.alloc);
             self.alloc.free(c.host);
         }
@@ -1506,74 +1532,505 @@ pub fn unregisterNatives() void {
 
 /// Wall clock, milliseconds since the epoch: what a `ts` on the wire means and
 /// what the stores are stamped with. Zig 0.16 dropped std.time.milliTimestamp,
-/// so this is the same clock_gettime the rest of the core reads.
+/// so this reads the platform clock directly.
 pub fn wallMs() i64 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    if (builtin.os.tag == .windows) {
+        // FILETIME counts 100 ns ticks from 1601-01-01. 11644473600 seconds
+        // separate that epoch from the Unix one.
+        var ft: [2]u32 = .{ 0, 0 };
+        win.GetSystemTimeAsFileTime(&ft);
+        const ticks = (@as(u64, ft[1]) << 32) | ft[0];
+        return @intCast(@divTrunc(ticks, 10_000) -% 11_644_473_600_000);
+    } else {
+        var ts: std.c.timespec = undefined;
+        if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
+        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    }
 }
 
 /// Monotonic milliseconds: timer deadlines and fanout pacing, which must not
 /// jump when the clock is set.
 pub fn monoMs() i64 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return wallMs();
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    if (builtin.os.tag == .windows) {
+        // The performance counter is the monotonic clock on Windows.
+        // GetTickCount64 is monotonic too but steps by the 10-16 ms timer
+        // tick, which is coarse against a 5 ms plugin timer. The 128-bit
+        // multiply keeps a counter of years from overflowing.
+        var freq: i64 = 0;
+        var now: i64 = 0;
+        if (win.QueryPerformanceFrequency(&freq) == 0 or freq == 0) return wallMs();
+        _ = win.QueryPerformanceCounter(&now);
+        return @intCast(@divTrunc(@as(i128, now) * 1000, freq));
+    } else {
+        var ts: std.c.timespec = undefined;
+        if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return wallMs();
+        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    }
 }
 
 /// A kernel sleep. Zig 0.16's std.Thread.sleep wants an Io this layer does not
-/// take; the same extern the rest of the core uses (src/lock.zig).
+/// take; the same externs the rest of the core uses (src/lock.zig).
 pub fn sleepMs(ms: u32) void {
-    const p = struct {
-        extern "c" fn usleep(usec: u32) c_int;
-    };
-    _ = p.usleep(ms * 1000);
-}
-
-fn setNonBlocking(fd: std.c.fd_t) void {
-    const flags = std.c.fcntl(fd, std.c.F.GETFL, @as(c_int, 0));
-    if (flags < 0) return;
-    const nonblock: c_int = @bitCast(@as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
-    _ = std.c.fcntl(fd, std.c.F.SETFL, flags | nonblock);
-}
-
-fn drainPipe(fd: std.c.fd_t) void {
-    var buf: [64]u8 = undefined;
-    while (std.c.read(fd, &buf, buf.len) > 0) {}
+    if (builtin.os.tag == .windows) {
+        win.Sleep(ms);
+    } else {
+        const p = struct {
+            extern "c" fn usleep(usec: u32) c_int;
+        };
+        _ = p.usleep(ms * 1000);
+    }
 }
 
 /// Resolve `host` and start a non-blocking connect. The socket comes back
 /// mid-handshake; the I/O thread completes it on POLLOUT.
-fn dial(host: []const u8, port: u16) !std.c.fd_t {
-    var host_z: [256]u8 = undefined;
-    if (host.len >= host_z.len) return error.HostTooLong;
-    @memcpy(host_z[0..host.len], host);
-    host_z[host.len] = 0;
-    var port_z: [8]u8 = undefined;
-    const ps = try std.fmt.bufPrintZ(&port_z, "{d}", .{port});
-
-    var hints: std.c.addrinfo = std.mem.zeroes(std.c.addrinfo);
-    hints.family = std.c.AF.UNSPEC;
-    hints.socktype = std.c.SOCK.STREAM;
-    var res: ?*std.c.addrinfo = null;
-    if (std.c.getaddrinfo(@ptrCast(&host_z), ps.ptr, &hints, &res) != @as(std.c.EAI, @enumFromInt(0)))
-        return error.ResolveFailed;
-    const list = res orelse return error.ResolveFailed;
-    defer std.c.freeaddrinfo(list);
-
-    var it: ?*std.c.addrinfo = list;
-    while (it) |ai| : (it = ai.next) {
-        const addr = ai.addr orelse continue;
-        const fd = std.c.socket(@intCast(ai.family), @intCast(ai.socktype), @intCast(ai.protocol));
-        if (fd < 0) continue;
-        setNonBlocking(fd);
-        if (std.c.connect(fd, addr, ai.addrlen) == 0) return fd;
-        const e = std.c.errno(@as(c_int, -1));
-        if (e == .INPROGRESS or e == .INTR or e == .ALREADY) return fd;
-        _ = std.c.close(fd);
+fn dial(host: []const u8, port: u16) !net.Socket {
+    var addrs: [max_addrs]Addr = undefined;
+    const n = try net.resolve(host, port, &addrs);
+    for (addrs[0..n]) |*a| {
+        const s = net.socket(a);
+        if (!net.valid(s)) continue;
+        net.setNonBlocking(s);
+        if (net.connect(s, a)) return s;
+        net.close(s);
     }
     return error.ConnectFailed;
 }
+
+// ---- the socket layer --------------------------------------------------------
+//
+// Everything platform-specific about a plugin socket is here. The broker above
+// names `net` and nothing else, so the I/O thread reads the same on both.
+//
+// POSIX and Winsock disagree on three things that reach the caller. A handle is
+// a small signed fd on POSIX and an opaque unsigned SOCKET on Windows, so -1 is
+// not the sentinel and `>= 0` is not the test — hence `net.invalid` and
+// `net.valid`. An error is in errno on POSIX and in WSAGetLastError on Windows.
+// And read/write serve any POSIX fd but no Windows socket, which needs
+// recv/send. Two flags say where the two poll calls differ; the broker reads
+// them, so the difference is stated once.
+
+/// One resolved candidate address, copied out of the resolver's own list so
+/// that list is freed before the connect. 128 bytes is a sockaddr_storage.
+const Addr = struct {
+    family: i32,
+    socktype: i32,
+    protocol: i32,
+    len: u32,
+    raw: [128]u8 align(8),
+};
+
+/// Candidates kept per name. A name with more records than this keeps the
+/// first eight; the rest are not tried.
+const max_addrs = 8;
+
+const net = if (builtin.os.tag == .windows) net_windows else net_posix;
+
+const net_posix = struct {
+    pub const Socket = std.c.fd_t;
+    pub const invalid: Socket = -1;
+    pub const pollfd = std.c.pollfd;
+    pub const POLL = std.c.POLL;
+    /// poll reports a failed connect as POLLERR/POLLHUP, and accepts an entry
+    /// that asks for nothing.
+    pub const poll_misses_connect_error = false;
+    pub const poll_needs_events = false;
+
+    pub fn valid(s: Socket) bool {
+        return s >= 0;
+    }
+
+    pub fn poll(fds: []pollfd, timeout_ms: i32) usize {
+        return std.posix.poll(fds, timeout_ms) catch 0;
+    }
+
+    pub fn close(s: Socket) void {
+        _ = std.c.close(s);
+    }
+
+    pub fn setNonBlocking(s: Socket) void {
+        const flags = std.c.fcntl(s, std.c.F.GETFL, @as(c_int, 0));
+        if (flags < 0) return;
+        const nonblock: c_int = @bitCast(@as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
+        _ = std.c.fcntl(s, std.c.F.SETFL, flags | nonblock);
+    }
+
+    /// Bytes read, 0 for the peer's EOF, -1 for an error.
+    pub fn recv(s: Socket, buf: []u8) isize {
+        return std.c.read(s, buf.ptr, buf.len);
+    }
+
+    /// Bytes written, or -1.
+    pub fn send(s: Socket, buf: []const u8) isize {
+        return std.c.write(s, buf.ptr, buf.len);
+    }
+
+    /// Whether the last recv/send failed only because it would have blocked.
+    pub fn retryable() bool {
+        const e = std.c.errno(@as(c_int, -1));
+        return e == .AGAIN or e == .INTR;
+    }
+
+    pub fn soError(s: Socket) i32 {
+        var err: i32 = 0;
+        var len: std.c.socklen_t = @sizeOf(i32);
+        _ = std.c.getsockopt(s, std.c.SOL.SOCKET, std.c.SO.ERROR, &err, &len);
+        return err;
+    }
+
+    pub fn shutdownWrite(s: Socket) void {
+        _ = std.c.shutdown(s, 1);
+    }
+
+    pub fn resolve(host: []const u8, port: u16, out: *[max_addrs]Addr) !usize {
+        var host_z: [256]u8 = undefined;
+        if (host.len >= host_z.len) return error.HostTooLong;
+        @memcpy(host_z[0..host.len], host);
+        host_z[host.len] = 0;
+        var port_z: [8]u8 = undefined;
+        const ps = try std.fmt.bufPrintZ(&port_z, "{d}", .{port});
+
+        var hints: std.c.addrinfo = std.mem.zeroes(std.c.addrinfo);
+        hints.family = std.c.AF.UNSPEC;
+        hints.socktype = std.c.SOCK.STREAM;
+        var res: ?*std.c.addrinfo = null;
+        if (std.c.getaddrinfo(@ptrCast(&host_z), ps.ptr, &hints, &res) != @as(std.c.EAI, @enumFromInt(0)))
+            return error.ResolveFailed;
+        const list = res orelse return error.ResolveFailed;
+        defer std.c.freeaddrinfo(list);
+
+        var n: usize = 0;
+        var it: ?*std.c.addrinfo = list;
+        while (it) |ai| : (it = ai.next) {
+            if (n == out.len) break;
+            const addr = ai.addr orelse continue;
+            if (ai.addrlen > out[n].raw.len) continue;
+            out[n] = .{
+                .family = @intCast(ai.family),
+                .socktype = @intCast(ai.socktype),
+                .protocol = @intCast(ai.protocol),
+                .len = @intCast(ai.addrlen),
+                .raw = undefined,
+            };
+            @memcpy(out[n].raw[0..ai.addrlen], @as([*]const u8, @ptrCast(addr))[0..ai.addrlen]);
+            n += 1;
+        }
+        if (n == 0) return error.ResolveFailed;
+        return n;
+    }
+
+    pub fn socket(a: *const Addr) Socket {
+        return std.c.socket(@bitCast(a.family), @bitCast(a.socktype), @bitCast(a.protocol));
+    }
+
+    /// True when the socket is connected or the handshake is under way.
+    pub fn connect(s: Socket, a: *const Addr) bool {
+        if (std.c.connect(s, @ptrCast(&a.raw), a.len) == 0) return true;
+        const e = std.c.errno(@as(c_int, -1));
+        return e == .INPROGRESS or e == .INTR or e == .ALREADY;
+    }
+
+    pub fn wakePair(out: *[2]Socket) !void {
+        if (std.c.pipe(out) != 0) return error.PipeFailed;
+        setNonBlocking(out[0]);
+        setNonBlocking(out[1]);
+    }
+
+    pub fn drainWake(s: Socket) void {
+        var buf: [64]u8 = undefined;
+        while (recv(s, &buf) > 0) {}
+    }
+
+    /// A loopback listener on an ephemeral port. Test support only.
+    pub fn listen4(port_out: *u16) !Socket {
+        const s = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
+        if (!valid(s)) return error.SocketFailed;
+        errdefer close(s);
+        var yes: c_int = 1;
+        _ = std.c.setsockopt(s, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, &yes, @sizeOf(c_int));
+        var addr = std.c.sockaddr.in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
+        if (std.c.bind(s, @ptrCast(&addr), @sizeOf(@TypeOf(addr))) != 0) return error.BindFailed;
+        if (std.c.listen(s, 1) != 0) return error.ListenFailed;
+        var len: std.c.socklen_t = @sizeOf(@TypeOf(addr));
+        if (std.c.getsockname(s, @ptrCast(&addr), &len) != 0) return error.SockNameFailed;
+        port_out.* = std.mem.bigToNative(u16, addr.port);
+        return s;
+    }
+
+    pub fn accept(s: Socket) !Socket {
+        const peer = std.c.accept(s, null, null);
+        if (!valid(peer)) return error.AcceptFailed;
+        return peer;
+    }
+};
+
+/// kernel32 entry points. Declared here rather than taken from std: Zig 0.16's
+/// std.os.windows.kernel32 carries none of them, and the WINAPI convention is
+/// required for a correct x86 build (src/lock.zig takes the same posture).
+const win = struct {
+    extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
+    extern "kernel32" fn QueryPerformanceCounter(v: *i64) callconv(.winapi) i32;
+    extern "kernel32" fn QueryPerformanceFrequency(v: *i64) callconv(.winapi) i32;
+    extern "kernel32" fn GetSystemTimeAsFileTime(ft: *[2]u32) callconv(.winapi) void;
+};
+
+const net_windows = struct {
+    // ws2_32, declared here for the same reason as `win` above: Zig 0.16's
+    // std.os.windows.ws2_32 was cut back to types when sockets moved behind
+    // std.Io, and std.c's Windows socket declarations point at the members it
+    // no longer has.
+    const SOCKET = usize;
+    const socklen = i32;
+
+    const AF_INET: i32 = 2;
+    const AF_UNSPEC: i32 = 0;
+    const SOCK_STREAM: i32 = 1;
+    const SOL_SOCKET: i32 = 0xFFFF;
+    const SO_ERROR: i32 = 0x1007;
+    const IPPROTO_TCP: i32 = 6;
+    const TCP_NODELAY: i32 = 0x0001;
+    const SD_SEND: i32 = 1;
+    /// FIONBIO. The high bits are the IOC_IN|sizeof(u_long) encoding.
+    const FIONBIO: i32 = @bitCast(@as(u32, 0x8004667E));
+    const WSAEWOULDBLOCK: i32 = 10035;
+    const WSAEINPROGRESS: i32 = 10036;
+    const WSAEALREADY: i32 = 10037;
+    const WSAEINTR: i32 = 10004;
+
+    /// WSADATA as opaque bytes. Its field order differs between _WIN64 and
+    /// x86 and nothing here reads it, so the size is all that matters. The
+    /// real thing is about 400 bytes.
+    const WSADATA = extern struct { raw: [512]u8 align(8) = @splat(0) };
+
+    const sockaddr = extern struct { family: u16, data: [14]u8 };
+    const sockaddr_in = extern struct {
+        family: u16 = @intCast(AF_INET),
+        port: u16,
+        addr: u32,
+        zero: [8]u8 = @splat(0),
+    };
+
+    /// Windows orders ai_canonname before ai_addr (as Darwin does) and makes
+    /// ai_addrlen a size_t, so this cannot be std.c.addrinfo.
+    const addrinfo = extern struct {
+        flags: i32,
+        family: i32,
+        socktype: i32,
+        protocol: i32,
+        addrlen: usize,
+        canonname: ?[*:0]u8,
+        addr: ?*sockaddr,
+        next: ?*addrinfo,
+    };
+
+    /// A namespace so the exported names stay the real ws2_32 ones while this
+    /// module also has a `socket`, a `recv` and a `send` of its own.
+    const ws = struct {
+        extern "ws2_32" fn WSAStartup(version: u16, data: *WSADATA) callconv(.winapi) i32;
+        extern "ws2_32" fn WSAGetLastError() callconv(.winapi) i32;
+        extern "ws2_32" fn WSAPoll(fds: [*]pollfd, count: u32, timeout: i32) callconv(.winapi) i32;
+        extern "ws2_32" fn socket(af: i32, kind: i32, protocol: i32) callconv(.winapi) SOCKET;
+        extern "ws2_32" fn closesocket(s: SOCKET) callconv(.winapi) i32;
+        extern "ws2_32" fn ioctlsocket(s: SOCKET, cmd: i32, arg: *u32) callconv(.winapi) i32;
+        extern "ws2_32" fn recv(s: SOCKET, buf: [*]u8, len: i32, flags: i32) callconv(.winapi) i32;
+        extern "ws2_32" fn send(s: SOCKET, buf: [*]const u8, len: i32, flags: i32) callconv(.winapi) i32;
+        extern "ws2_32" fn connect(s: SOCKET, addr: *const sockaddr, len: socklen) callconv(.winapi) i32;
+        extern "ws2_32" fn bind(s: SOCKET, addr: *const sockaddr, len: socklen) callconv(.winapi) i32;
+        extern "ws2_32" fn listen(s: SOCKET, backlog: i32) callconv(.winapi) i32;
+        extern "ws2_32" fn accept(s: SOCKET, addr: ?*sockaddr, len: ?*socklen) callconv(.winapi) SOCKET;
+        extern "ws2_32" fn getsockname(s: SOCKET, addr: *sockaddr, len: *socklen) callconv(.winapi) i32;
+        extern "ws2_32" fn getsockopt(s: SOCKET, lvl: i32, opt: i32, val: [*]u8, len: *socklen) callconv(.winapi) i32;
+        extern "ws2_32" fn setsockopt(s: SOCKET, lvl: i32, opt: i32, val: [*]const u8, len: socklen) callconv(.winapi) i32;
+        extern "ws2_32" fn shutdown(s: SOCKET, how: i32) callconv(.winapi) i32;
+        extern "ws2_32" fn getaddrinfo(node: [*:0]const u8, service: [*:0]const u8, hints: *const addrinfo, res: *?*addrinfo) callconv(.winapi) i32;
+        extern "ws2_32" fn freeaddrinfo(ai: *addrinfo) callconv(.winapi) void;
+    };
+
+    pub const Socket = SOCKET;
+    /// INVALID_SOCKET. An unsigned handle, so this is not -1 and a valid
+    /// socket is not "greater than zero".
+    pub const invalid: Socket = ~@as(SOCKET, 0);
+
+    pub const pollfd = extern struct { fd: SOCKET, events: i16, revents: i16 };
+
+    pub const POLL = struct {
+        pub const RDNORM: i16 = 0x0100;
+        pub const RDBAND: i16 = 0x0200;
+        pub const IN: i16 = RDNORM | RDBAND;
+        pub const WRNORM: i16 = 0x0010;
+        pub const OUT: i16 = WRNORM;
+        pub const ERR: i16 = 0x0001;
+        pub const HUP: i16 = 0x0002;
+        pub const NVAL: i16 = 0x0004;
+    };
+
+    /// WSAPoll does not report a failed non-blocking connect, and it rejects
+    /// an entry whose events are zero. The broker works around both.
+    pub const poll_misses_connect_error = true;
+    pub const poll_needs_events = true;
+
+    pub fn valid(s: Socket) bool {
+        return s != invalid;
+    }
+
+    /// WSAStartup runs once per process, before any other ws2_32 call. It is
+    /// reference counted, so the flag keeps one count rather than making the
+    /// call safe. Nothing calls WSACleanup: Winsock goes down with the
+    /// process, and the host may start and stop many times inside one.
+    var started = std.atomic.Value(u32).init(0);
+
+    fn startup() void {
+        if (started.load(.acquire) == 2) return;
+        if (started.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null) {
+            var data: WSADATA = .{};
+            _ = ws.WSAStartup(0x0202, &data); // 2.2
+            started.store(2, .release);
+            return;
+        }
+        while (started.load(.acquire) != 2) win.Sleep(0);
+    }
+
+    pub fn poll(fds: []pollfd, timeout_ms: i32) usize {
+        const n = ws.WSAPoll(fds.ptr, @intCast(fds.len), timeout_ms);
+        return if (n > 0) @intCast(n) else 0;
+    }
+
+    pub fn close(s: Socket) void {
+        _ = ws.closesocket(s);
+    }
+
+    pub fn setNonBlocking(s: Socket) void {
+        var on: u32 = 1;
+        _ = ws.ioctlsocket(s, FIONBIO, &on);
+    }
+
+    pub fn recv(s: Socket, buf: []u8) isize {
+        const len: i32 = @intCast(@min(buf.len, std.math.maxInt(i32)));
+        return ws.recv(s, buf.ptr, len, 0);
+    }
+
+    pub fn send(s: Socket, buf: []const u8) isize {
+        const len: i32 = @intCast(@min(buf.len, std.math.maxInt(i32)));
+        return ws.send(s, buf.ptr, len, 0);
+    }
+
+    pub fn retryable() bool {
+        const e = ws.WSAGetLastError();
+        return e == WSAEWOULDBLOCK or e == WSAEINTR;
+    }
+
+    pub fn soError(s: Socket) i32 {
+        var err: i32 = 0;
+        var len: socklen = @sizeOf(i32);
+        _ = ws.getsockopt(s, SOL_SOCKET, SO_ERROR, @ptrCast(&err), &len);
+        return err;
+    }
+
+    pub fn shutdownWrite(s: Socket) void {
+        _ = ws.shutdown(s, SD_SEND);
+    }
+
+    pub fn resolve(host: []const u8, port: u16, out: *[max_addrs]Addr) !usize {
+        startup();
+        var host_z: [256]u8 = undefined;
+        if (host.len >= host_z.len) return error.HostTooLong;
+        @memcpy(host_z[0..host.len], host);
+        host_z[host.len] = 0;
+        var port_z: [8]u8 = undefined;
+        const ps = try std.fmt.bufPrintZ(&port_z, "{d}", .{port});
+
+        var hints: addrinfo = std.mem.zeroes(addrinfo);
+        hints.family = AF_UNSPEC;
+        hints.socktype = SOCK_STREAM;
+        var res: ?*addrinfo = null;
+        if (ws.getaddrinfo(@ptrCast(&host_z), ps.ptr, &hints, &res) != 0) return error.ResolveFailed;
+        const list = res orelse return error.ResolveFailed;
+        defer ws.freeaddrinfo(list);
+
+        var n: usize = 0;
+        var it: ?*addrinfo = list;
+        while (it) |ai| : (it = ai.next) {
+            if (n == out.len) break;
+            const addr = ai.addr orelse continue;
+            if (ai.addrlen > out[n].raw.len) continue;
+            out[n] = .{
+                .family = ai.family,
+                .socktype = ai.socktype,
+                .protocol = ai.protocol,
+                .len = @intCast(ai.addrlen),
+                .raw = undefined,
+            };
+            @memcpy(out[n].raw[0..ai.addrlen], @as([*]const u8, @ptrCast(addr))[0..ai.addrlen]);
+            n += 1;
+        }
+        if (n == 0) return error.ResolveFailed;
+        return n;
+    }
+
+    pub fn socket(a: *const Addr) Socket {
+        startup();
+        return ws.socket(a.family, a.socktype, a.protocol);
+    }
+
+    pub fn connect(s: Socket, a: *const Addr) bool {
+        if (ws.connect(s, @ptrCast(&a.raw), @intCast(a.len)) == 0) return true;
+        const e = ws.WSAGetLastError();
+        return e == WSAEWOULDBLOCK or e == WSAEINPROGRESS or e == WSAEALREADY;
+    }
+
+    /// A loopback socket pair, because Windows has no pipe a socket poll can
+    /// watch. The listener is on this thread's own loopback, so the blocking
+    /// connect completes into the accept backlog without waiting on anything.
+    /// The write end turns Nagle off: a one-byte wake must not wait for an ack.
+    pub fn wakePair(out: *[2]Socket) !void {
+        startup();
+        const lst = ws.socket(AF_INET, SOCK_STREAM, 0);
+        if (!valid(lst)) return error.PipeFailed;
+        defer close(lst);
+        var addr = sockaddr_in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
+        if (ws.bind(lst, @ptrCast(&addr), @sizeOf(sockaddr_in)) != 0) return error.PipeFailed;
+        if (ws.listen(lst, 1) != 0) return error.PipeFailed;
+        var len: socklen = @sizeOf(sockaddr_in);
+        if (ws.getsockname(lst, @ptrCast(&addr), &len) != 0) return error.PipeFailed;
+
+        const wr = ws.socket(AF_INET, SOCK_STREAM, 0);
+        if (!valid(wr)) return error.PipeFailed;
+        errdefer close(wr);
+        if (ws.connect(wr, @ptrCast(&addr), @sizeOf(sockaddr_in)) != 0) return error.PipeFailed;
+        const rd = ws.accept(lst, null, null);
+        if (!valid(rd)) return error.PipeFailed;
+
+        var yes: i32 = 1;
+        _ = ws.setsockopt(wr, IPPROTO_TCP, TCP_NODELAY, @ptrCast(&yes), @sizeOf(i32));
+        setNonBlocking(rd);
+        setNonBlocking(wr);
+        out.* = .{ rd, wr };
+    }
+
+    pub fn drainWake(s: Socket) void {
+        var buf: [64]u8 = undefined;
+        while (recv(s, &buf) > 0) {}
+    }
+
+    pub fn listen4(port_out: *u16) !Socket {
+        startup();
+        const s = ws.socket(AF_INET, SOCK_STREAM, 0);
+        if (!valid(s)) return error.SocketFailed;
+        errdefer close(s);
+        var addr = sockaddr_in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
+        if (ws.bind(s, @ptrCast(&addr), @sizeOf(sockaddr_in)) != 0) return error.BindFailed;
+        if (ws.listen(s, 1) != 0) return error.ListenFailed;
+        var len: socklen = @sizeOf(sockaddr_in);
+        if (ws.getsockname(s, @ptrCast(&addr), &len) != 0) return error.SockNameFailed;
+        port_out.* = std.mem.bigToNative(u16, addr.port);
+        return s;
+    }
+
+    pub fn accept(s: Socket) !Socket {
+        const peer = ws.accept(s, null, null);
+        if (!valid(peer)) return error.AcceptFailed;
+        return peer;
+    }
+};
 
 fn jsonNum(v: ?std.json.Value) ?f64 {
     const val = v orelse return null;
@@ -1822,10 +2279,10 @@ test "a plugin socket connects, carries bytes both ways, and reports the close" 
 
     // accept() blocks here until the I/O thread's connect lands.
     const peer = try srv.accept();
-    defer _ = std.c.close(peer);
+    defer net.close(peer);
     try t.expectEqual(Kind.tcp_connected, try expectEvent(&b, 2_000));
 
-    _ = std.c.write(peer, "$GPRMC,\r\n", 9);
+    _ = net.send(peer, "$GPRMC,\r\n");
     try t.expectEqual(Kind.tcp_data, try expectEvent(&b, 2_000));
 
     // ...and the other direction: what the plugin sends reaches the peer.
@@ -1834,13 +2291,13 @@ test "a plugin socket connects, carries bytes both ways, and reports the close" 
     var n: isize = 0;
     var waited: u32 = 0;
     while (n <= 0 and waited < 2_000) : (waited += 5) {
-        n = std.c.read(peer, &got, got.len);
+        n = net.recv(peer, &got);
         if (n <= 0) sleepMs(5);
     }
     try t.expectEqualStrings("ping", got[0..@intCast(n)]);
 
     // The peer hanging up is a TCP_CLOSED, and the connection is gone.
-    _ = std.c.shutdown(peer, 1); // SHUT_WR: our side reads EOF
+    net.shutdownWrite(peer); // our side then reads EOF
     try t.expectEqual(Kind.tcp_closed, try expectEvent(&b, 2_000));
     b.mu.lock();
     const remaining = b.conns.items.len;
@@ -1864,12 +2321,12 @@ test "a backed-up plugin stops being read from, and its neighbour does not" {
     // One socket each for two plugins.
     try t.expect(b.openConn(0, "127.0.0.1", srv.port) > 0);
     const peer0 = try srv.accept();
-    defer _ = std.c.close(peer0);
+    defer net.close(peer0);
     try t.expectEqual(Kind.tcp_connected, try expectEvent(&b, 2_000));
 
     try t.expect(b.openConn(1, "127.0.0.1", srv.port) > 0);
     const peer1 = try srv.accept();
-    defer _ = std.c.close(peer1);
+    defer net.close(peer1);
     var waited: u32 = 0;
     while (b.queuedFor(1) == 0 and waited < 2_000) : (waited += 5) sleepMs(5);
     const connected1 = b.popFor(1) orelse return error.NoEvent;
@@ -1881,8 +2338,8 @@ test "a backed-up plugin stops being read from, and its neighbour does not" {
     b.wakeIo();
     sleepMs(150);
 
-    _ = std.c.write(peer0, "$GPRMC,\r\n", 9);
-    _ = std.c.write(peer1, "$GPRMC,\r\n", 9);
+    _ = net.send(peer0, "$GPRMC,\r\n");
+    _ = net.send(peer1, "$GPRMC,\r\n");
     sleepMs(400);
 
     // Nothing was read for plugin 0 — its depth is exactly what was pushed —
@@ -1933,30 +2390,20 @@ fn expectEvent(b: *Broker, timeout_ms: u32) !u32 {
 
 /// A loopback listener on an ephemeral port, for the socket tests.
 const Listener = struct {
-    fd: std.c.fd_t,
+    fd: net.Socket,
     port: u16,
 
     fn open() !Listener {
-        const fd = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
-        if (fd < 0) return error.SocketFailed;
-        errdefer _ = std.c.close(fd);
-        var yes: c_int = 1;
-        _ = std.c.setsockopt(fd, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, &yes, @sizeOf(c_int));
-        var addr = std.c.sockaddr.in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
-        if (std.c.bind(fd, @ptrCast(&addr), @sizeOf(@TypeOf(addr))) != 0) return error.BindFailed;
-        if (std.c.listen(fd, 1) != 0) return error.ListenFailed;
-        var len: std.c.socklen_t = @sizeOf(@TypeOf(addr));
-        if (std.c.getsockname(fd, @ptrCast(&addr), &len) != 0) return error.SockNameFailed;
-        return .{ .fd = fd, .port = std.mem.bigToNative(u16, addr.port) };
+        var port: u16 = 0;
+        const fd = try net.listen4(&port);
+        return .{ .fd = fd, .port = port };
     }
 
-    fn accept(self: *Listener) !std.c.fd_t {
-        const peer = std.c.accept(self.fd, null, null);
-        if (peer < 0) return error.AcceptFailed;
-        return peer;
+    fn accept(self: *Listener) !net.Socket {
+        return net.accept(self.fd);
     }
 
     fn close(self: *Listener) void {
-        _ = std.c.close(self.fd);
+        net.close(self.fd);
     }
 };

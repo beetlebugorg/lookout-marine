@@ -3,11 +3,12 @@
 //! OR headless offscreen readback). All vector work happened in the engine —
 //! the frame phase here only updates a uniform and issues draws (spec §6).
 //!
-//! Windows-only by design: the D3D12 lives in d3d12_shim.c, shaders in
-//! shaders/lookout.hlsl (compiled at runtime). The Windows counterpart of
-//! gpu_metal.zig — the host attaches the swapchain (lookout_d3d12_swapchain)
-//! to its SwapChainPanel and keeps its own toolkit and event loop. WARP keeps
-//! it working on machines with no GPU driver.
+//! Windows-only by design: the D3D12 lives in d3d12_shim.c, the chart shaders
+//! in shaders/lookout.hlsl and the overlay shader in d3d12_shim.c itself (both
+//! compiled at runtime). The Windows counterpart of gpu_metal.zig — the host
+//! attaches the swapchain (lookout_d3d12_swapchain) to its SwapChainPanel and
+//! keeps its own toolkit and event loop. WARP keeps it working on machines
+//! with no GPU driver.
 const std = @import("std");
 const cc = @import("c.zig").c;
 const dc = @cImport(@cInclude("d3d12_shim.h"));
@@ -19,6 +20,15 @@ const hlsl_source = @embedFile("hlsl_src");
 /// shaders/lookout.hlsl. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig
 /// Uniforms, mirrored as tile57_gpu_uniforms); root.zig's ABI gate catches skew.
 pub const Uniforms = cc.tile57_gpu_uniforms;
+
+comptime {
+    // The overlay shader in d3d12_shim.c copies these two layouts by hand:
+    // `overlay_layout` pins the vertex offsets, `cbuffer U` the uniform block.
+    // HLSL has no static_assert (the Metal overlay shader has two), so this is
+    // the only compile-time check that the copies still match.
+    if (@sizeOf(ov.Vertex) != 24) @compileError("overlay.Vertex must be 24 B: d3d12 overlay_layout pins the stride");
+    if (@sizeOf(Uniforms) != 128) @compileError("tile57_gpu_uniforms must be 128 B: the overlay cbuffer copies it");
+}
 
 /// RGBA colour 0..1.
 pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
@@ -106,6 +116,17 @@ pub const Gpu = struct {
     glyph_tex: ?*dc.lkd_tex = null,
     glyph_bold_tex: ?*dc.lkd_tex = null,
     glyph_italic_tex: ?*dc.lkd_tex = null,
+    /// Chart overlays (src/overlay.zig): one triangle stream in world space,
+    /// coloured per vertex, drawn after everything else. Re-uploaded when the
+    /// store's generation moves — a plugin batch or a zoom step, not a frame.
+    overlay_buf: ?*dc.lkd_buf = null,
+    overlay_count: u32 = 0,
+    overlay_gen: u64 = 0, // 0 = nothing uploaded yet (a built store is >= 1)
+    /// The overlay pass's own frame uniform — the chart's, with the MVP and
+    /// wrap rebuilt for the overlay's origin. setOverlay writes it, and it is
+    /// the only thing that creates overlay_buf, so a buffer to draw always has
+    /// a uniform to draw it with.
+    overlay_u: Uniforms = std.mem.zeroes(Uniforms),
     /// recordDraws outcome signature — a new line prints only when it changes.
     last_draw_log: u64 = 0,
     // Rolling frame-cost stats, printed once per 120 rendered frames: CPU
@@ -246,24 +267,54 @@ pub const Gpu = struct {
         }
     }
 
-    // ---- chart overlays (not on this backend) -------------------------------
+    // ---- chart overlays ----------------------------------------------------
 
-    /// Overlay drawing is Metal-only in the plugin prototype (PROTOTYPE.md's
-    /// scope fence). The hook exists so the core's per-frame call site is
-    /// backend-independent: take the frame, say so once, draw nothing.
-    var overlay_told = false;
+    /// Adopt an overlay frame and the view it is drawn with. The BUFFER upload
+    /// is a no-op while the generation is unchanged, so the render thread may
+    /// call this every frame; the buffer is replaced wholesale otherwise (the
+    /// free is deferred until the frame fence passes it, so a frame in flight
+    /// keeps the bytes it drew from — same contract as the raster buffer). `u`
+    /// is taken every time: the vertices are relative to the frame's origin, so
+    /// the pass needs the MVP and wrap built for that origin, and the camera
+    /// moves every frame while the geometry does not.
     pub fn setOverlay(self: *Gpu, fr: ov.Frame, u: Uniforms) !void {
-        _ = self;
-        _ = fr;
-        _ = u;
-        if (!overlay_told) {
-            overlay_told = true;
-            std.debug.print("overlay: not implemented on this backend\n", .{});
-        }
+        self.overlay_u = u;
+        if (fr.generation == self.overlay_gen) return;
+        self.overlay_gen = fr.generation;
+        self.freeOverlayBuf();
+        if (fr.verts.len == 0) return;
+        const bytes = std.mem.sliceAsBytes(fr.verts);
+        self.overlay_buf = dc.lkd_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.D3d12Failure;
+        self.overlay_count = @intCast(fr.verts.len);
     }
 
+    /// Drop the overlay geometry (every plugin stopped, or teardown). The next
+    /// setOverlay re-uploads whatever the store then holds.
     pub fn clearOverlay(self: *Gpu) void {
-        _ = self;
+        self.freeOverlayBuf();
+        self.overlay_gen = 0;
+    }
+
+    fn freeOverlayBuf(self: *Gpu) void {
+        if (self.overlay_buf) |b| dc.lkd_free_buffer(b);
+        self.overlay_buf = null;
+        self.overlay_count = 0;
+    }
+
+    /// Draw the overlay LAST — after the raster underlay and the whole chart,
+    /// in the same command list. The overlay PSO holds the depth state (test,
+    /// no write), so this pass needs no depth-mode change: the shader emits
+    /// z = 0, the near plane, so nothing the chart wrote can hide plugin
+    /// content, and it writes no depth so plugin content cannot hide the chart.
+    /// The overlay carries its OWN uniform (setOverlay): the shader reads mvp
+    /// and wrap_x, and both are built for the overlay's origin, not the chart's.
+    fn recordOverlay(self: *Gpu, f: *dc.lkd_frame) void {
+        const buf = self.overlay_buf orelse return;
+        if (self.overlay_count == 0) return;
+        dc.lkd_set_pipeline(f, dc.LKD_PIPE_OVERLAY);
+        dc.lkd_bind_vbuf(f, buf);
+        dc.lkd_set_uniforms(f, &self.overlay_u, @sizeOf(Uniforms));
+        dc.lkd_draw(f, 0, self.overlay_count);
     }
 
     /// The depth that puts the underlay immediately IN FRONT OF the chart's
@@ -503,12 +554,20 @@ pub const Gpu = struct {
     }
 
     // ---- record one frame's draws into an open frame ------------------------
+    // The whole frame, in paint order: raster underlay and chart (recordScene),
+    // then the overlay on top. The overlay runs even when there is no scene —
+    // an own-ship symbol must not vanish because the chart is still loading.
+    fn recordDraws(self: *Gpu, f: *dc.lkd_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+        self.recordScene(f, u, text_on, sound_on);
+        self.recordOverlay(f);
+    }
+
     // Walk the ranges in paint order, switching pipeline per range: triangles ->
     // flat-colour (or pattern) pipeline; quads -> sprite or SDF pipeline.
     // `text_on`/`sound_on` drop those ranges live (the engine emits them; the
     // host gates by skipping the draw). The pattern anchor + per-cell period
     // ride the uniform.
-    fn recordDraws(self: *Gpu, f: *dc.lkd_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
+    fn recordScene(self: *Gpu, f: *dc.lkd_frame, u: Uniforms, text_on: bool, sound_on: bool) void {
         // Before the chart, and before any early return: where the chart has no
         // data is exactly where the mariner most needs the picture.
         self.recordRaster(f, u);
@@ -758,6 +817,7 @@ pub const Gpu = struct {
 
     pub fn deinit(self: *Gpu) void {
         self.clearRasterFrame();
+        self.clearOverlay();
         self.freeScene();
         if (self.sprite_tex) |t| dc.lkd_free_texture(t);
         if (self.glyph_tex) |t| dc.lkd_free_texture(t);

@@ -18,17 +18,37 @@ fn haveLocalTile57(b: *std.Build) bool {
 /// Where scripts/build-wamr.sh puts the wasm runtime for one target, and the
 /// argument that builds it. WAMR is built by cmake, not by this build: it is a
 /// large C project with its own option matrix, and the archive is a
-/// machine-local artifact. macOS, iOS device and iOS simulator are three
-/// different mach-o platforms, so each needs its own archive.
+/// machine-local artifact. Every platform and architecture pair needs its own
+/// archive; `mode` is the script argument that produces this one.
 const WamrDist = struct { dir: []const u8, mode: []const u8 };
 
 fn wamrDist(target: std.Build.ResolvedTarget) ?WamrDist {
-    return switch (target.result.os.tag) {
+    const t = target.result;
+    const android = t.abi == .android or t.abi == .androideabi;
+    return switch (t.os.tag) {
         .macos => .{ .dir = "vendor/wamr-dist", .mode = "macos" },
-        .ios => if (target.result.abi == .simulator)
+        .ios => if (t.abi == .simulator)
             WamrDist{ .dir = "vendor/wamr-dist-iossim", .mode = "iossim" }
         else
             WamrDist{ .dir = "vendor/wamr-dist-ios", .mode = "ios" },
+        // Android is os.tag .linux with an android abi, and bionic is not
+        // glibc, so it takes its own archive.
+        .linux => if (android) switch (t.cpu.arch) {
+            .aarch64 => WamrDist{ .dir = "vendor/wamr-dist-android-arm64", .mode = "android-arm64" },
+            else => null,
+        } else switch (t.cpu.arch) {
+            .x86_64 => WamrDist{ .dir = "vendor/wamr-dist-linux-x64", .mode = "linux-x64" },
+            .aarch64 => WamrDist{ .dir = "vendor/wamr-dist-linux-arm64", .mode = "linux-arm64" },
+            else => null,
+        },
+        // x86_64 only. windows/build-core.ps1 ships aarch64-windows-msvc, and
+        // the script builds no archive for it: a mingw archive does not meet
+        // an MSVC one. `scripts/build-wamr.sh windows-x64 --print-msvc` has the
+        // native recipe.
+        .windows => switch (t.cpu.arch) {
+            .x86_64 => WamrDist{ .dir = "vendor/wamr-dist-windows-x64", .mode = "windows-x64" },
+            else => null,
+        },
         else => null,
     };
 }
@@ -131,20 +151,23 @@ pub fn build(b: *std.Build) void {
         @panic("-Dbackend=vk targets Android, Linux and Windows; use metal on Apple");
     if (use_d3d12 and !is_windows)
         @panic("-Dbackend=d3d12 targets Windows only");
-    // The wasm plugin host (src/plugin/): on by default where it can build —
-    // an Apple target whose WAMR archive is present. Off elsewhere so a fresh
-    // clone, an Android build or a machine that has not run
-    // scripts/build-wamr.sh still builds the chart core. Asking for it without
-    // the archive is an error with the fix in it, not a silent skip.
+    // The wasm plugin host (src/plugin/). It builds for any target
+    // scripts/build-wamr.sh has an archive for, and it is ON BY DEFAULT ON
+    // APPLE ONLY. The Apple app links the runtime through the Xcode project
+    // already; the Linux, Windows and Android shells do not name libvmlib.a in
+    // their link lines yet, so a default there would break a build that works
+    // today. Those targets take -Dplugins=true. Asking for it without the
+    // archive is an error with the fix in it, not a silent skip.
     // iOS works because the runtime is the fast INTERPRETER: no JIT, so no
     // executable pages, and the hardware bound check is off, so no signal
-    // handlers of WAMR's own.
+    // handlers of WAMR's own. The same two settings serve Android, where the
+    // JVM owns SIGSEGV.
     const wamr = wamrDist(target);
     const wamr_dir = if (wamr) |w| w.dir else "vendor/wamr-dist";
     const wamr_dist = wamr != null and haveFile(b, b.fmt("{s}/lib/libvmlib.a", .{wamr_dir}));
     const plugins_host = wamr != null;
-    const want_plugins = b.option(bool, "plugins", "Build the wasm plugin host (macOS/iOS; needs scripts/build-wamr.sh)") orelse
-        (plugins_host and wamr_dist);
+    const want_plugins = b.option(bool, "plugins", "Build the wasm plugin host (needs the target's scripts/build-wamr.sh archive)") orelse
+        (is_apple and wamr_dist);
     const plugins = want_plugins and plugins_host and wamr_dist;
     // Asked for and not possible: a build error carrying the fix, not a panic
     // and not a silent skip that would leave the host quietly missing.
@@ -153,7 +176,7 @@ pub fn build(b: *std.Build) void {
     else if (wamr) |w|
         b.fmt("-Dplugins: {s}/lib/libvmlib.a is missing. Run `scripts/build-wamr.sh {s}` to build the pinned WAMR runtime for this target, then build again.", .{ w.dir, w.mode })
     else
-        "-Dplugins: the wasm plugin host runs on macOS and iOS in this prototype. scripts/build-wamr.sh builds no archive for this target.";
+        "-Dplugins: scripts/build-wamr.sh builds no WAMR archive for this target. It covers macos, ios, iossim, linux-x64, linux-arm64, windows-x64 and android-arm64.";
     const plugins_fail: ?*std.Build.Step = if (plugins_refusal) |msg| &b.addFail(msg).step else null;
     if (plugins_fail) |fail| b.getInstallStep().dependOn(fail);
 
@@ -335,6 +358,18 @@ pub fn build(b: *std.Build) void {
     const lib_step = b.step("lib", "Build the static core + headers only");
     lib_step.dependOn(&b.addInstallArtifact(lib, .{}).step);
     lib_step.dependOn(&b.addInstallLibFile(tile57_lib, "libtile57.a").step);
+    // Off Apple the static lib embeds neither archive (see addObjectFile
+    // above), so the wasm runtime rides beside libtile57.a for the shell to
+    // link. Nothing else in <prefix>/lib resolves the WAMR symbols.
+    if (plugins and !is_apple) {
+        const vmlib = b.path(b.fmt("{s}/lib/libvmlib.a", .{wamr_dir}));
+        b.getInstallStep().dependOn(&b.addInstallLibFile(vmlib, "libvmlib.a").step);
+        lib_step.dependOn(&b.addInstallLibFile(vmlib, "libvmlib.a").step);
+    }
+    // The refusal above hangs off the install step. `lib` is its own root, so
+    // without this a -Dplugins with no archive builds a core that quietly has
+    // no plugin host.
+    if (plugins_fail) |fail| lib_step.dependOn(fail);
 
     // ---- the demo executable + tests (host platforms only: an iOS cross-build
     // `-Dtarget=aarch64-ios` produces just the static libs for the app to link) ----
@@ -394,7 +429,7 @@ pub fn build(b: *std.Build) void {
         // Asked for and not possible: say which of the three reasons it is,
         // the way -Dplugins does above.
         dev_step.dependOn(&b.addFail(if (!plugins_host)
-            "plugin-dev: the wasm plugin host — and so this harness — runs on macOS and iOS in this prototype."
+            "plugin-dev: scripts/build-wamr.sh builds no WAMR archive for this target, so neither the plugin host nor this harness can be built for it."
         else if (!wamr_dist)
             b.fmt("plugin-dev: the harness needs the wasm plugin host. Run `scripts/build-wamr.sh {s}`, then build again.", .{wamr.?.mode})
         else

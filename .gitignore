@@ -18,7 +18,8 @@ docs/build/
 docs/.docusaurus/
 
 # WAMR: the pinned clone and the archives scripts/build-wamr.sh produces —
-# one dist per Apple platform (macos, ios, iossim).
+# one dist per platform and architecture (macos, ios, iossim, linux-x64,
+# linux-arm64, windows-x64, android-arm64).
 # Source, not artifacts — rebuild with scripts/build-wamr.sh.
 vendor/wamr/
 vendor/wamr-dist*/
