@@ -1,0 +1,7 @@
+{"name":"lookout test server","version":"1.8.2","timestamp":"2026-08-07T12:00:00.000Z","self":"vessels.urn:mrn:signalk:uuid:11111111-2222-4333-8444-555555555555","roles":["master","main"]}
+{"context":"vessels.urn:mrn:signalk:uuid:11111111-2222-4333-8444-555555555555","updates":[{"$source":"test.GP","timestamp":"2026-08-07T12:00:01.000Z","values":[{"path":"navigation.position","value":{"longitude":-76.4767,"latitude":38.9763}},{"path":"navigation.speedOverGround","value":2.5722}]}]}
+{"context":"vessels.urn:mrn:signalk:uuid:11111111-2222-4333-8444-555555555555","updates":[{"source":{"label":"test-compass","type":"NMEA2000","src":"017","pgn":127250},"values":[{"path":"navigation.headingTrue","value":1.5707963267948966},{"path":"environment.depth.belowTransducer","value":4.1}]}]}
+{"context":"vessels.urn:mrn:imo:mmsi:366982330","updates":[{"values":[{"path":"navigation.position","value":{"longitude":-76.434,"latitude":38.966}},{"path":"navigation.speedOverGround","value":2.1},{"path":"navigation.courseOverGroundTrue","value":5.235987755982988}]}]}
+{"context":"vessels.urn:mrn:imo:mmsi:366982330","updates":[{"values":[{"path":"","value":{"name":"BAY TRADER"}}]}]}
+{"context":"vessels.urn:mrn:signalk:uuid:11111111-2222-4333-8444-555555555555","updates":[{"values":[{"path":"electrical.batteries.house.voltage","value":12.9}]}]}
+{"context":"vessels.urn:mrn:signalk:uuid:99999999-8888-4777-8666-555555555555","updates":[{"values":[{"path":"navigation.speedOverGround","value":1.0}]}]}

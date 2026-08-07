@@ -468,6 +468,9 @@ pub fn build(b: *std.Build) void {
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
         "plugins/nmea0183/config.zig",
+        "plugins/signalk/delta.zig",
+        "plugins/signalk/transport.zig",
+        "plugins/signalk/config.zig",
         "plugins/ownship/track.zig",
         "plugins/ais/cpa.zig",
         "plugins/ais/vector.zig",
@@ -511,7 +514,10 @@ pub fn build(b: *std.Build) void {
     // The nmea0183 module is installed like the other three AND handed to the
     // multi-connection test below.
     var nmea_wasm: ?std.Build.LazyPath = null;
-    for ([_][]const u8{ "echo", "nmea0183", "ownship", "ais", "laylines" }) |name| {
+    // The signalk module is installed like the others AND handed to the
+    // Signal K host test below.
+    var signalk_wasm: ?std.Build.LazyPath = null;
+    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines" }) |name| {
         const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
         if (!haveFile(b, main_rel)) continue;
         const mod = b.createModule(.{
@@ -529,6 +535,7 @@ pub fn build(b: *std.Build) void {
             continue;
         }
         if (std.mem.eql(u8, name, "nmea0183")) nmea_wasm = wasm_exe.getEmittedBin();
+        if (std.mem.eql(u8, name, "signalk")) signalk_wasm = wasm_exe.getEmittedBin();
 
         const id = manifestId(b, name);
         plugins_step.dependOn(&b.addInstallFileWithDir(
@@ -644,6 +651,27 @@ pub fn build(b: *std.Build) void {
                 const nmea_run = b.addRunArtifact(b.addTest(.{ .root_module = nmea_mod }));
                 b.step("nmea-multi", "Run the multi-connection nmea0183 test").dependOn(&nmea_run.step);
                 test_step.dependOn(&nmea_run.step);
+
+                // The Signal K plugin against a loopback delta stream, and
+                // beside the nmea0183 plugin so the store's election between
+                // two sources of one path is exercised end to end.
+                if (signalk_wasm) |sbin| {
+                    const sk_mod = b.createModule(.{
+                        .root_source_file = b.path("test/signalk_host.zig"),
+                        .target = target,
+                        .optimize = optimize,
+                        .link_libc = true,
+                    });
+                    sk_mod.addImport("host", host_mod);
+                    sk_mod.addAnonymousImport("signalk_plugin_wasm", .{ .root_source_file = sbin });
+                    sk_mod.addAnonymousImport("signalk_manifest", .{ .root_source_file = b.path("plugins/signalk/manifest.json") });
+                    sk_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
+                    sk_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
+                    sk_mod.addAnonymousImport("signalk_deltas", .{ .root_source_file = b.path("test/signalk.deltas") });
+                    const sk_run = b.addRunArtifact(b.addTest(.{ .root_module = sk_mod }));
+                    b.step("signalk-host", "Run the Signal K stream + arbitration test").dependOn(&sk_run.step);
+                    test_step.dependOn(&sk_run.step);
+                }
             }
 
             // Time isolation: echo beside a plugin that stops answering. Like
