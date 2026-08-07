@@ -45,12 +45,10 @@ today, and `-Dplugins=true` with a WAMR archive elsewhere.
 | `--scheme day\|dusk\|night` | The palette. Default day. Run night to see what your colour tokens actually look like. |
 | `--print WHAT` | One of `all`, `deltas`, `overlay`, `alert`, `status`. Default `all`. |
 | `--set-config [SECONDS@]ID JSON` | Change a plugin's settings, optionally at a replay second. Repeatable, applied in order. |
+| `--grant-file [SECONDS@]ID PATH` | Hand a plugin a file, optionally at a replay second, and print the handle it was given. |
 | `-h`, `--help` | The usage text. |
 
-`--print deltas` and `--print overlay` also print every error line, so a filter
-never hides a trap. `--print status` and `--print alert` do not: they show their
-own stream only, so read the end-of-run summary and the exit code rather than
-taking a clean stream for a clean run.
+Every filter also prints every error line, so a filter never hides a trap.
 
 Exit code 0 only when at least one frame rendered and no plugin trapped; 1 for a
 trap or no frame; 2 for a bad invocation or a chart that will not open.
@@ -253,10 +251,16 @@ LOOKOUT_PLUGINS=$PWD/zig-out/plugins LOOKOUT_NMEA=127.0.0.1:10110 \
     open macos/build-mac/Build/Products/Debug/LookoutMarine.app
 ```
 
-Everything the plugin layer prints goes to stderr. On macOS that is the Xcode
-console, or the terminal you launched Lookout from. The Windows app is a
-Windows-subsystem binary with no console attached, so redirect stderr to a file
-there or you will see nothing at all.
+Everything the plugin layer prints goes to stderr. `open` detaches from your
+terminal, so capture it with `open --stderr /tmp/lookout.log ...` and tail the
+file, or launch the binary directly and keep it in the terminal:
+
+```bash
+macos/build-mac/Build/Products/Debug/LookoutMarine.app/Contents/MacOS/LookoutMarine
+```
+
+The Windows app is a Windows-subsystem binary with no console attached, so
+redirect stderr to a file there or you will see nothing at all.
 
 One more thing to expect from a live feed. An app that renders only when
 something changes can freeze your plugin's traffic on screen while nobody

@@ -1,13 +1,13 @@
 ---
-id: abi
-title: The ABI
+id: wire
+title: The wire protocol
 sidebar_position: 4
 ---
 
-# The ABI
+# The wire protocol
 
-This is the reference: every event your module can be handed, every call it can
-make, and the shape of every payload in between.
+This is the reference: every event your module can be handed, every call it
+can make, and the format of every payload in between.
 
 The boundary is deliberately narrow. Everything crossing it is either an integer
 or a `(pointer, length)` byte range in your module's own linear memory, and it is
@@ -217,7 +217,7 @@ Two consequences worth knowing.
   export instead. The warning is cosmetic; the module runs. A Go module exports
   `_initialize`, and the runtime calls it before anything else.
 
-## JSON shapes
+## JSON payloads
 
 ### publish
 
@@ -236,6 +236,8 @@ right now".
 **Every unit crossing this boundary is SI.** Your instrument's unit is your
 problem: convert knots to metres per second before you publish, leave degrees as
 degrees, and nothing downstream ever has to ask what unit it is holding.
+
+### Store paths
 
 | Path | Value | Unit |
 |---|---|---|
@@ -608,7 +610,7 @@ Two rules decide what you do NOT get:
 {
   "id": "org.beetlebug.ais",
   "name": "AIS targets",
-  "abi": 1,
+  "api": 1,
   "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"],
   "settings": {
     "groups": [
@@ -633,7 +635,7 @@ Two rules decide what you do NOT get:
 |---|---|---|
 | `id` | yes | 1 to 128 bytes. Your overlay namespace, your settings key, and the name Lookout knows you by. Reverse-DNS by convention. |
 | `name` | no | What Lookout would show a person. Defaults to the id. |
-| `abi` | yes | Must be 1. |
+| `api` | yes | Must be 1. |
 | `capabilities` | no | An array of the names above, plus `{"net.http": […]}` and `{"net.ws": […]}` for the two that carry a host list. Absent grants nothing. An unknown name refuses the manifest. |
 | `settings` | no | A v1 array of fields, or a v2 object of groups. At most 16 fields in total, and at most 16 columns in a list. |
 
@@ -720,7 +722,7 @@ every edit and delivered like any other setting.
 | List key | Rule |
 |---|---|
 | `key` | Required, 1 to 32 bytes. The key the array arrives under, and it may not collide with a field or another list. |
-| `item_fields` | Required, 1 to 16 columns, the same field shapes as above. A column called `id` refuses the manifest: the id is the host's. |
+| `item_fields` | Required, 1 to 16 columns, the same field kinds as above. A column called `id` refuses the manifest: the id is the host's. |
 | `footer` | The sentence under the section: what these rows are, and the one thing a mariner needs to know to fill one in. |
 | `add_label` | The wording on the button that adds a row — "Add Server", not "Add". |
 | `empty` | What the section says while it holds no rows. |
@@ -765,8 +767,8 @@ One item per row of a list, keyed by the row id:
 Lookout puts each item's line under its row and colours a dot from the state.
 The whole status, items included, is capped at 768 bytes and truncated past
 that, so keep a detail short. The item `state` is yours to name; Lookout that
-ships knows `connected`, `paused`, `reconnecting`, `unreachable` and
-`no_address`, and shows anything else as it is written.
+ships knows `connected`, `paused`, `reconnecting`, `unreachable`,
+`no_address` and `refused`, and shows anything else as it is written.
 
 ## How Lookout sees your plugin
 
@@ -832,7 +834,7 @@ the host ever calls.
 | `lk_abi` | `() -> u32` | The ABI version this module speaks. Must return 1. |
 | `lk_alloc` | `(len: u32) -> ptr` | Give the host `len` bytes to write an inbound payload into. **Returning 0 means out of memory**, and the host treats the call as a fault. |
 | `lk_free` | `(ptr, len: u32)` | The host is done with that buffer. |
-| `lk_start` | `(ptr, len: u32) -> i32` | Begin. The payload is `{"abi":1,"config":{…}}`. Non-zero refuses the start, and the plugin is not loaded. |
+| `lk_start` | `(ptr, len: u32) -> i32` | Begin. The payload is `{"abi":1,"config":{…}}`; the `abi` key is the wire's frozen name for the API version. Non-zero refuses the start, and the plugin is not loaded. |
 | `lk_event` | `(kind: u32, handle: u64, ptr, len: u32) -> i32` | Everything that happens. `handle` correlates: which timer, which socket. Non-zero is logged as a complaint and the plugin keeps running. |
 
 The host checks `lk_abi` at load and refuses a mismatch, because the same five

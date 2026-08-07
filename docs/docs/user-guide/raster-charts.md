@@ -85,19 +85,24 @@ one under the middle of the screen. If neither is under the middle, it works on
 the one filling most of the screen. The other coast is not changed. Centre the
 coast you want to work on, or zoom in to it.
 
-## Seeing whether a raster chart is drawn
+## Toggling raster charts
 
 The pill sits at the right of the readouts. It appears whenever **a raster chart
-is in view**, at any zoom, and it goes when you leave the coverage. Where you
-carry nothing there is nothing to press.
+is in view**, at any zoom, and it goes when you leave the coverage. If you have
+added no raster charts, it never appears.
 
 Sail into coverage with the raster chart switched off and the pill turns amber.
 It names the set and says that it is off:
 
 ![The pill above a raster chart that is switched off](../img/raster-pill-off.webp)
 
-Click the pill to open the list of what covers this view. Choose one and the
-pill turns blue:
+Click the pill to open the list of every set that covers this view. The list
+marks the one being drawn, followed by **None**, the ENC switch and **Add
+Raster Charts…**
+
+![The list the pill opens](../img/raster-pill-menu.webp)
+
+Choose a set and the pill turns blue:
 
 ![The pill above a raster chart that is drawn](../img/raster-pill-on.webp)
 
@@ -105,14 +110,6 @@ With the ENC hidden (⇧⌘H) the pill stays blue, because the raster chart is
 still drawn, and the text says which one is off:
 
 ![The pill with the ENC hidden above the raster chart](../img/raster-pill-chartoff.webp)
-
-## Toggling raster charts
-
-The chevron means the pill opens a list. The list holds every set that covers
-this view and marks the one being drawn, followed by **None**, the ENC switch
-and **Add Raster Charts…**
-
-![The list the pill opens](../img/raster-pill-menu.webp)
 
 Three ways to the same thing:
 
@@ -122,8 +119,8 @@ Three ways to the same thing:
 | ⌘I | Step to the next set covering this water, then to none, then round again. |
 | **Chart ▸ Raster Chart** | The same list, and **Next Raster Chart** for the step. |
 
-Use ⌘I over a reef. It opens nothing, so your eye keeps its fix and anything
-that moves between two providers is a real difference.
+⌘I opens no list, so you can keep your eyes on one spot on the chart while the
+imagery changes under it.
 
 ## Leaving the raster chart's coverage
 

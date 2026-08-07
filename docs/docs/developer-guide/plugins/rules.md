@@ -68,7 +68,7 @@ leaves its lines up is showing the mariner data it no longer has.
 
 ## Colours are tokens, never RGB
 
-An overlay object names one of [the seven colour tokens](abi.md#overlay). The
+An overlay object names one of [the seven colour tokens](wire.md#overlay). The
 core resolves the token you named into a colour for the day, the dusk and the
 night palette.
 
@@ -182,7 +182,7 @@ an aid at 600 s.
 
 ## A refused call returns -1 and logs
 
-A call your manifest did not ask for does not trap. The broker answers -1, counts
+A call your manifest did not ask for does not trap. Lookout returns -1, counts
 it, and writes `denied <call>: manifest does not request capability <name>`.
 
 *A plugin asking for something it was not given is misconfigured, not malicious,

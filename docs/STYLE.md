@@ -144,3 +144,15 @@ practice. These rules are checkable. Check them.
    per sentence, no cadence tricks.
 8. Technical terms, standard names and code identifiers are the dictionary;
    the rules above do not simplify them away.
+
+**No compressed-pronoun constructions.** "Your declarations take theirs"
+saves five words and costs a reread. Spell out both halves: "An event that
+belongs to one of your declarations goes to that declaration."
+
+**Name the developer's things as theirs.** "Lookout calls your `draw`
+function once a second", never "Lookout calls `draw`". A bare identifier is
+not an actor and not an object of a sentence; it is your `draw` function,
+your `inputs` declaration, your plugin's scene. When a table lists helper
+methods, the prose says they are helper methods. A section heading names what
+the reader does with the content, and its first sentence ties the content to
+what came before.

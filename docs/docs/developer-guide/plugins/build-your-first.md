@@ -23,7 +23,7 @@ line off own ship. You are going to write your own copy under your own id, so
 that yours is installed and you can change it without touching the reference.
 
 The walkthrough is in Zig.
-[The plugin SDK](library.md#the-entry-points) has the same entry points in
+[The plugin SDK](sdk/index.md) has the same entry points in
 Go and Rust, and
 [building the plugin in Go and in Rust](#building-the-plugin-in-go-and-in-rust)
 has those toolchains.
@@ -61,12 +61,12 @@ directory, is what the host loads.
 {
   "id": "org.example.downwind",
   "name": "Downwind line",
-  "abi": 1,
+  "api": 1,
   "capabilities": ["vessel.read", "overlay.draw"]
 }
 ```
 
-Use your own domain in the id. Only `name` is optional. `abi` must be 1; the
+Use your own domain in the id. Only `name` is optional. `api` must be 1; the
 host refuses anything else. Leave `capabilities` out and your plugin is granted
 nothing, which for this one means it cannot draw.
 
@@ -83,8 +83,8 @@ why you want to find them in the harness rather than at sea.
 Later you will want the settings block, which puts your own controls in the
 mariner's settings window. Declare it as a Zig struct and check it against the
 manifest in a test — see
-[declaring settings](library.md#declaring-settings-the-mariner-can-change).
-[The ABI reference](abi.md#the-manifest) has every other manifest field.
+[adding settings](sdk/settings.md).
+[The wire protocol](wire.md#the-manifest) has every other manifest field.
 
 ## Writing the module
 
@@ -104,8 +104,8 @@ comptime {
 }
 
 pub const inputs = struct {
-    pub const boat = lk.position("navigation.position", .{});
-    pub const twd = lk.number("environment.wind.directionTrue", .{ .label = "wind" });
+    pub const boat = lk.subscribePosition("navigation.position", .{});
+    pub const twd = lk.subscribeNumber("environment.wind.directionTrue", .{ .label = "wind" });
 };
 
 pub fn draw(c: *lk.Chart) void {
@@ -121,17 +121,20 @@ Four things in that listing are the shape of every drawing plugin you will
 write.
 
 - **`lk.plugin(@This())` at container scope.** It registers your plugin. It
-  reads what the module declares — here `inputs` and `draw` — and wires only
+  reads what your module declares, here `inputs` and `draw`, and wires only
   that. A declaration you leave out costs nothing.
-- **The `inputs` block is the subscription and the staleness window together.**
-  Lookout subscribes the plugin to both paths, records every value that arrives, and
-  ages it. `draw` runs only when both are inside their 5 s window; when either
-  one is not, the SDK takes the line off the chart and posts
-  `no position, no wind`. The `.label = "wind"` is the word that appears in that
-  list, in place of the path's last segment.
-- **`draw` describes the whole picture, every call.** The SDK compares it
-  with the last one and sends the difference. An object you did not draw this
-  call is taken off the chart. There is no delete call and no batch to build.
+- **The `inputs` block subscribes your plugin to both paths.** Lookout
+  records every value that arrives and stamps its age. Each input accepts a
+  freshness window, `max_age_ms`; neither declaration sets one here, so both
+  use the default of 5 seconds. Lookout calls your `draw` function only while
+  both readings are younger than their window. When one is not, Lookout takes
+  the line off the chart and posts `no position, no wind`. The
+  `.label = "wind"` is the word in that list, in place of the path's last
+  segment.
+- **Your `draw` function draws its entire view, every call.** Lookout
+  compares it with the last one and sends the difference. An object you did
+  not draw this call is taken off the chart. There is no delete call and no
+  batch to build.
 - **Anything that outlives an event is a global.** `lk.scratch()` is reset the
   moment your function returns. There is no heap, no free list and nothing to
   reclaim, so a pointer you keep past the end of a call is a use-after-free
@@ -145,7 +148,7 @@ way to notice that a fix went stale, because staleness is time passing rather
 than an event that arrives. Declare `pub const draw_rate_ms: i64 = 250` when you
 draw something that has to move smoothly.
 
-[The plugin SDK](library.md) is the full surface: the other input kinds, the
+[The plugin SDK](sdk/index.md) is the full surface: the other input kinds, the
 symbol and area calls, the settings struct, connections, and publishing.
 
 ## Compiling the plugin
@@ -176,8 +179,8 @@ zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
 ```
 
 `-fno-entry` because a plugin has no `main`, and `-rdynamic` so the linker keeps
-what `lk.plugin` declared. Rename the result to `<id>.wasm`, put
-`<id>.manifest.json` beside it, and the host will load it. Copying
+what `lk.plugin` declared. The command emits `root.wasm`. Rename it to
+`<id>.wasm`, put `<id>.manifest.json` beside it, and Lookout will load it. Copying
 `plugins/common/` into your own project works too: `lk2.zig` and the three files
 under it import only `std`.
 
@@ -194,9 +197,9 @@ sdk/go/examples/windline/         the same plugin in Go
 sdk/rust/examples/windline/       the same plugin in Rust
 ```
 
-All three libraries give you the same three tiers under the same names.
-[The entry points](library.md#the-entry-points) shows them side by side, and
-[the names in Zig, Go and Rust](library.md#the-names-in-zig-go-and-rust) is the
+All three SDKs give you the same API under the same names.
+[The plugin SDK](sdk/index.md) shows them side by side, and
+[the names in Zig, Go and Rust](sdk/index.md#the-names-in-zig-go-and-rust) is the
 name-by-name mapping and the three differences that are not cosmetic.
 
 Neither the Go nor the Rust module is built by `zig build`. You build it with
@@ -251,7 +254,7 @@ list are all testable there without a boat or an emulator.
 
 `std` works: `String`, `Vec`, `format!`, `SystemTime` and `println!` all do what
 you expect. `File::open`, `TcpStream::connect` and `thread::spawn` do not — see
-[the WASI floor](abi.md#the-wasi-floor) for the exact list. A panic traps the
+[the WASI floor](wire.md#the-wasi-floor) for the exact list. A panic traps the
 instance and the message reaches your log, so do not panic on data off the wire.
 
 The module is about 110 KB.
@@ -276,13 +279,20 @@ zig run tools/nmea_gen.zig -- test/annapolis.nmea      # write the replay log, o
 
 Point `--chart` at your own `.pmtiles` file, and `--view` at water you have a
 chart for. The plugins load in sorted filename order, the `nmea0183` plugin
-dials the loopback server, and the log plays at twenty times real time. Your
-plugin's lines in that run:
+dials the loopback server, and the log plays at twenty times real time.
+
+The plugin directory must hold a publishing plugin as well as yours.
+`zig-out/plugins` already carries `nmea0183`, which is what reads the replay
+and fills the store your inputs read from. A directory holding only your
+plugin sits at `waiting for position, wind` forever, because nothing is
+publishing.
+
+Your plugin's lines in that run:
 
 ```
 plugin org.example.downwind [info] status {"state":"starting","detail":"waiting for position, wind"}
 plugin org.example.downwind [info] started (Downwind line, source 6)
-t=    3.0s [info] org.example.downwind: status {"state":"running","detail":""}
+t=   19.0s [info] org.example.downwind: status {"state":"running","detail":""}
 ...
 overlay: 17 object(s)
   org.example.downwind/downwind: polyline warning 2 pts dashed
@@ -294,9 +304,11 @@ frames: 14 rendered, 1 alert(s) raised
 Read four things there.
 
 - **`waiting for position, wind`** is the SDK, before either reading has
-  arrived. It names both, and it names them from the input declarations. Three
-  seconds in the first fix and the first wind sentence have both landed and the
-  plugin goes to `running`.
+  arrived. It names both, and it names them from the input declarations. Once
+  the fix and the wind sentence have both landed inside their windows, the
+  plugin goes to `running`. The `t` stamps are replay seconds, and `--rate`
+  scales the log against the real staleness clocks, so the exact second moves
+  with the rate; [the dev harness](dev-harness.md) explains.
 - **The empty detail** is your `draw` saying nothing. Call `c.status(…)` in it
   and your own words appear there instead.
 - **The object inventory** near the end says what is actually on the chart,
@@ -323,15 +335,33 @@ export LOOKOUT_NMEA=127.0.0.1:10110
 open macos/build-mac/Build/Products/Debug/LookoutMarine.app   # or Run from Xcode
 ```
 
-`LOOKOUT_PLUGINS` names a directory of `<id>.wasm` + `<id>.manifest.json` pairs;
-the core loads and starts all of them while it opens the chart. `LOOKOUT_NMEA` is
+[The macOS page](../macos.md) covers building that app if you do not have it
+yet.
+
+`LOOKOUT_PLUGINS` names a directory of `<id>.wasm` + `<id>.manifest.json`
+pairs. Plugins load while a chart opens, so open one: a fresh install with no
+chart shows no plugins until you do, and `LOOKOUT_OPEN=/path/to/chart.pmtiles`
+opens one at launch. `LOOKOUT_NMEA` is
 the one piece of configuration the host owns rather than the mariner: it reaches
 the `nmea0183` plugin in its start config, and points it at your multiplexer or
 at a server replaying a log. An app that wants control of loading instead calls
 `lookout_plugins_load(h, dir)` and leaves the variable unset.
 
-A plugin that fails to load is logged and skipped, so Lookout still opens. Look
-for the reason on stderr:
+Nothing serves that port by itself. Point it at your gateway if you have one
+on the network, or replay the test log:
+
+```sh
+# serve test/annapolis.nmea on 10110, one sentence every 100 ms
+while true; do
+  (while IFS= read -r l; do printf '%s\r\n' "$l"; sleep 0.1; done \
+    < test/annapolis.nmea) | nc -l 10110
+done
+```
+
+A plugin that fails to load is logged and skipped, so Lookout still opens.
+The reason is on stderr, and `open` detaches from your terminal: launch the
+binary inside the app bundle directly, or pass `open --stderr /tmp/lookout.log`
+and tail the file. You will see:
 
 ```
 plugin org.example.downwind [error] load failed: ...
@@ -346,7 +376,7 @@ path at all, so only plugins bundled with Lookout can run.
 
 [Recipes](recipes.md) is a dozen more things a plugin can do, each with a
 complete short listing: a setting, a guard ring, AIS traffic, a connection list,
-an alarm, storage. [The plugin SDK](library.md) is the reference for
+an alarm, storage. [The plugin SDK](sdk/index.md) is the reference for
 everything those recipes call.
 
 The plugins that ship with Lookout are the worked examples, in rising order of

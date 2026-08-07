@@ -7,11 +7,14 @@ sidebar_position: 2
 # Recipes
 
 Each recipe is one thing you might want a plugin to do, the permissions it
-needs, and a complete short example. If a recipe runs longer than a screen, that
-is a problem with the API rather than the recipe — report it.
+needs, and a complete short example. If a recipe runs longer than a screen,
+that is a problem with the API rather than the recipe. Report it.
 
 Every listing below is the whole plugin except the manifest. There is no setup
 step, no event loop and no teardown; Lookout runs all three for every plugin.
+The imports, the manifest and the compile command are the ones
+[Build your first plugin](build-your-first.md) walks through; a recipe drops
+into that setup unchanged.
 
 ```zig
 const std = @import("std");
@@ -26,12 +29,12 @@ That `comptime` block registers your plugin. Nothing else has to be wired up.
 
 :::note Zig first, then Go and Rust
 
-Only the Zig SDK is settled. The **ABI** underneath it — the imports, the
-events, the WASI floor — is also settled, and a Go or Rust module that speaks it
-loads and runs today. The libraries in `sdk/go` and `sdk/rust`
-implement the same three tiers as the Zig one, and each recipe
-gains its Go and Rust listing as that lands. Read
-[the ABI](abi.md) for what those libraries are written against.
+Only the Zig SDK is settled. The wire protocol underneath it is also
+settled: the imports, the events, the WASI floor. A Go or Rust module that
+speaks it loads and runs today. The SDKs in `sdk/go` and `sdk/rust`
+implement the same API as the Zig one, and each recipe gains its Go and Rust
+listing as that lands. Read [the wire protocol](wire.md) for what those SDKs
+are written against.
 
 :::
 
@@ -44,6 +47,10 @@ default, and the manifest schema is generated from the same declaration, so a
 range cannot drift from the code that reads it.
 
 ```zig
+pub const inputs = struct {
+    pub const boat = lk.subscribePosition("navigation.position", .{});
+};
+
 pub const Settings = struct {
     pub const group = "Downwind line";
     pub const tab: lk.Tab = .display;
@@ -75,7 +82,7 @@ pub fn draw(c: *lk.Chart) void {
 
 `lk.settings(Settings)` reads the values in force: `f64` for a `lk.Num`, `bool`
 for a `lk.Flag`. A number outside its range is clamped before it reaches you,
-by the host and again by the SDK, so `s.length_nm` is always between 0.1
+by Lookout and again by the SDK, so `s.length_nm` is always between 0.1
 and 10.
 
 **Where it appears.** `tab` picks one of the mariner's settings tabs — display,
@@ -100,20 +107,21 @@ That test parses both sides and compares them, and it prints the JSON to paste
 in when they differ. `plugins/signalk/config.zig` does exactly this for a
 connection list.
 
-Reference: [the settings schema](abi.md#settings-schema-v2).
+Reference: [the settings schema](wire.md#settings-schema-v2).
 
 ## Reacting to boat data
 
 **Capabilities:** `vessel.read`.
 
 Declare what you read. Lookout delivers every value with its age, measured
-on the monotonic clock, and holds `draw` until everything is fresh.
+on the monotonic clock, and does not call your `draw` function until
+everything is fresh.
 
 ```zig
 pub const inputs = struct {
-    pub const boat = lk.position("navigation.position", .{});
-    pub const twd = lk.number("environment.wind.directionTrue", .{ .label = "wind" });
-    pub const sog = lk.number("navigation.speedOverGround", .{ .optional = true });
+    pub const boat = lk.subscribePosition("navigation.position", .{});
+    pub const twd = lk.subscribeNumber("environment.wind.directionTrue", .{ .label = "wind" });
+    pub const sog = lk.subscribeNumber("navigation.speedOverGround", .{ .optional = true });
 };
 
 pub fn draw(c: *lk.Chart) void {
@@ -140,7 +148,7 @@ input is the word that appears in that list.
 **The window is 5 seconds**, the same one the vessel store uses. Raise it per
 input with `.max_age_ms` for a reading that arrives less often.
 
-Reference: [STORE_CHANGED](abi.md#store_changed) and
+Reference: [STORE_CHANGED](wire.md#store_changed) and
 [vessel data goes stale after 5 seconds](rules.md#vessel-data-goes-stale-after-5-seconds).
 
 ## Drawing on the chart
@@ -196,7 +204,7 @@ that goes round it. Nothing here deletes anything.
 pub const draw_rate_ms: i64 = 250;
 
 pub const inputs = struct {
-    pub const boat = lk.position("navigation.position", .{});
+    pub const boat = lk.subscribePosition("navigation.position", .{});
 };
 
 pub const Settings = struct {
@@ -243,7 +251,7 @@ you.
 An area's ring is closed for you and needs at least three points; a line needs
 two.
 
-Reference: [the overlay payload](abi.md#overlay).
+Reference: [the overlay payload](wire.md#overlay).
 
 ## Showing details on hover or tap
 
@@ -277,7 +285,7 @@ pub fn draw(c: *lk.Chart) void {
 ```
 
 **The values are strings you have already formatted.** This is the one place
-units do not cross the ABI in SI: the core cannot know that a row called SOG
+units do not cross the wire in SI: Lookout cannot know that a row called SOG
 holds metres per second, so the plugin does the conversion and writes the unit
 into the text. Up to 16 rows, 96 bytes each.
 
@@ -285,7 +293,7 @@ into the text. Up to 16 rows, 96 bytes each.
 measure a touch against, so they carry no payload. The hit test measures to a
 symbol's anchor, within about 14 points.
 
-Reference: [the overlay payload](abi.md#overlay).
+Reference: [the overlay payload](wire.md#overlay).
 
 ## Watching AIS traffic
 
@@ -296,8 +304,8 @@ because no targets in range is a normal condition rather than a missing reading.
 
 ```zig
 pub const inputs = struct {
-    pub const boat = lk.position("navigation.position", .{});
-    pub const traffic = lk.ais(.{});
+    pub const boat = lk.subscribePosition("navigation.position", .{});
+    pub const traffic = lk.subscribeAis(.{});
 };
 
 /// Inside this, a target is worth colouring red.
@@ -337,7 +345,7 @@ Closest-approach maths — the passing distance and the time to it — is too lo
 for a recipe. `plugins/ais/cpa.zig` is the worked solver, a plain file with its
 own tests.
 
-Reference: [AIS_CHANGED](abi.md#ais_changed).
+Reference: [AIS_CHANGED](wire.md#ais_changed).
 
 ## Publishing from an instrument network
 
@@ -371,16 +379,16 @@ pub const Connections = lk.connections(.{
 
 /// TCP hands you whatever arrived, so reassembling a sentence is yours. One
 /// datagram off `net.udp` is already one message and needs none of this.
-pub fn onData(row: *Connections.Row, bytes: []const u8) void {
+pub fn onData(conn: *Connections.Connection, bytes: []const u8) void {
     for (bytes) |ch| {
         if (ch != '\r' and ch != '\n') {
-            row.state.line.append(&.{ch});
+            conn.state.line.append(&.{ch});
             continue;
         }
-        if (row.state.line.len > 0) {
-            row.count(1);
-            publish(row.state.line.text());
-            row.state.line.clear();
+        if (conn.state.line.len > 0) {
+            conn.count(1);
+            publish(conn.state.line.text());
+            conn.state.line.clear();
         }
     }
 }
@@ -394,20 +402,20 @@ fn publish(sentence: []const u8) void {
 }
 ```
 
-**What each hook is for.** `onData` is required. `onOpen(row)` runs when a
+**What each hook is for.** `onData` is required. `onOpen(conn)` runs when a
 stream comes up — send a subscription there, if the protocol needs one.
-`onClose(row)` runs when one ends. `rowNote(row)` adds a phrase after the rate
+`onClose(conn)` runs when one ends. `connectionNote(conn)` adds a phrase after the rate
 on that row's line.
 
-**`row.count(n)`** is how the rate gets into the status: the SDK turns it
+**`conn.count(n)`** is how the rate gets into the status: the SDK turns it
 into "42 msg/s" on the row and sums it for the plugin's line.
 
 **Dialling somewhere other than the row's address.** Declare `endpoint`:
 
 ```zig
-pub fn endpoint(row: *Connections.Row) lk.Endpoint {
-    if (!row.cols.websocket) return .{ .tcp = .{ .host = row.host.text(), .port = row.port } };
-    return .{ .ws = buildUrl(row) };
+pub fn endpoint(conn: *Connections.Connection) lk.Endpoint {
+    if (!conn.cols.websocket) return .{ .tcp = .{ .host = conn.host.text(), .port = conn.port } };
+    return .{ .ws = buildUrl(conn) };
 }
 ```
 
@@ -415,13 +423,13 @@ Return `.refused` with a sentence: the row stops retrying and shows that
 sentence as its status.
 
 **Extra columns** go in `.Extra`, a struct shaped like a settings group; their
-values arrive as `row.cols.<name>`. Rows are matched to sockets by the id the
+values arrive as `conn.cols.<name>`. Rows are matched to sockets by the id the
 shell assigned, so editing one row never disturbs another's connection.
 
 `plugins/signalk` is the worked example, over both TCP and a websocket, and
 `plugins/nmea0183` is a second one.
 
-Reference: [lists](abi.md#lists-a-group-the-mariner-adds-rows-to) and
+Reference: [lists](wire.md#lists-a-group-the-mariner-adds-rows-to) and
 [reconnecting is yours](rules.md#reconnecting-is-yours), which the SDK does
 for you once it owns the row.
 
@@ -452,7 +460,7 @@ once a second.
 today — no sound, no banner. Build the behaviour now; it will work when the
 chrome for it is built.
 
-Reference: [alert](abi.md#alert).
+Reference: [alert](wire.md#alert).
 
 ## Showing live status, per connection when there are rows
 
@@ -483,8 +491,8 @@ bucket — and the log stays readable.
 row id the shell assigned, and the plugin line above them counts what is up:
 `2 of 3 connected, 44 msg/s`.
 
-Reference: [chrome_status](abi.md#chrome_status),
-[status items](abi.md#status-items-one-line-per-row) and
+Reference: [chrome_status](wire.md#chrome_status),
+[status items](wire.md#status-items-one-line-per-row) and
 [never be silent](rules.md#never-be-silent).
 
 ## Keeping state between runs
@@ -506,7 +514,7 @@ A key is at most 128 bytes, a value 64 KiB, and a plugin's whole store 1 MiB
 over 256 keys. Writing an empty value deletes the key. Storage is data and not
 cache: it lives where the operating system will not delete it.
 
-Reference: [storage_get and storage_put](abi.md#storage_get-and-storage_put)
+Reference: [storage_get and storage_put](wire.md#storage_get-and-storage_put)
 and [storage is small, and it is yours alone](rules.md#storage-is-small-and-it-is-yours-alone).
 
 ## Fetching from the internet
@@ -514,9 +522,9 @@ and [storage is small, and it is yours alone](rules.md#storage-is-small-and-it-i
 **Capabilities:** `{"net.http": ["nomads.ncep.noaa.gov"]}` — the hosts by name,
 never a bare `net.http`.
 
-**Status: raw calls only.** The v2 library has no fetch helper yet. Use
-`lk.raw.httpGet` or `lk.raw.httpFetch`, and take the answer in a tier-3
-`onEvent` on `.http_response`.
+**Status: raw calls only.** The SDK has no fetch helper yet. Use
+`lk.raw.httpGet` or `lk.raw.httpFetch`, and take the answer in `onEvent`
+as `.http_response`.
 
 ```zig
 pub fn onEvent(e: lk.raw.Event) !void {
@@ -532,7 +540,7 @@ file, and cache what you fetched in storage, because a boat's connection is
 metered and often absent. There are no wildcards in the host list, and a
 redirect off the host is refused.
 
-Reference: [http_fetch](abi.md#http_fetch),
+Reference: [http_fetch](wire.md#http_fetch),
 [name every server you reach](rules.md#name-every-server-you-reach) and
 [ask for a range, not a file](rules.md#ask-for-a-range-not-a-file).
 
@@ -562,7 +570,7 @@ pub fn onEvent(e: lk.raw.Event) !void {
 Reads take an absolute offset and the handle has no cursor, so a decoder can
 seek freely. Eight handles per plugin, 1 MiB per read.
 
-Reference: [file_read and file_write](abi.md#file_read-and-file_write) and
+Reference: [file_read and file_write](wire.md#file_read-and-file_write) and
 [you cannot open a file](rules.md#you-cannot-open-a-file).
 
 ## Building an instrument display
@@ -593,7 +601,7 @@ number about it.
   finish, including the manifest, the build command and the harness.
 - [The rules](rules.md) collects the mistakes that cost a mariner something at
   sea. Read it before you copy any of the code above.
-- [The ABI](abi.md) is what the SDK is written against, and what a tier-3
+- [The wire protocol](wire.md) is what the SDK is written against, and what a raw
   plugin talks to directly.
 - [The dev harness](dev-harness.md) runs your plugin against a recorded log and
   renders the chart it drew.

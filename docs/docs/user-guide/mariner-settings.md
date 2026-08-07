@@ -26,7 +26,7 @@ the chart at once and is kept for the next time.
   ]}
   legend={[
     {n: 1, term: 'Sections', body: '— Display, Depths, Text, Charts, Vessels, Alarms, Connections and Advanced. Vessels, Alarms and Connections appear only while a plugin fills them.'},
-    {n: 2, term: 'Colour scheme', body: '— day, dusk and night palettes switch instantly. The chrome follows the chart, not the OS, so night never blasts a white sheet at a dark-adapted helm.'},
+    {n: 2, term: 'Colour scheme', body: '— day, dusk and night palettes switch instantly. The chrome follows the chart, not the OS, so at night the settings window is dark too.'},
     {n: 3, term: 'Display category', body: '— how much of the chart is drawn. Base ⊂ Standard ⊂ Other.'},
     {n: 4, term: 'Soundings', body: '— spot soundings switch independently of the category.'},
   ]}
@@ -63,7 +63,7 @@ and the soundings.
 - **Four shades**: very shallow, shallow, deep and very deep get their own tint,
   which reads better in pilotage water.
 
-**Safety contour** — your keel line. Water shallower than it is shaded as
+**Safety contour** — the depth your boat needs. Water shallower than it is shaded as
 unsafe, and the contour itself is drawn bold.
 
 The chart can only draw the contours it holds, usually 2, 5, 10, 20 and 30
@@ -75,8 +75,8 @@ you typed.
 **Shallow and deep contours** — where the four-shade tints change. They do not
 affect the safety contour.
 
-**Safety depth** — soundings at or shallower than this print bold. It shades no
-water; it only marks the numbers.
+**Safety depth** — soundings at or shallower than this print bold. It changes
+only the sounding numbers, not the water shading.
 
 ## Choosing what text and symbols appear
 
@@ -103,8 +103,8 @@ The open library, the recent ones, and the button to add more.
 
 ![The Connections section of mariner settings on macOS](../img/settings-connections.webp)
 
-Where the boat's data comes from. You need none of this to read a chart. It is
-what puts your boat, your depth and the traffic around you on top of one.
+Where the boat's data comes from. You need none of this to read a chart. A
+connection is what puts your boat, your depth and the traffic around you on it.
 
 There are two kinds of source and a section for each. A boat can have both, and
 more than one of either.

@@ -13,35 +13,35 @@ a fixed set of calls into Lookout.
 
 You write one to get something off your boat and onto the chart. **Zig, Go and
 Rust all run**, and so does any other toolchain that emits a wasm module the host
-can load — the ABI is the specification, and a language library is only a
+can load. The wire protocol is the specification, and a language SDK is only a
 convenience over it.
 
 | Language | Target | Module size |
 |---|---|---|
 | Zig | `wasm32-freestanding` | 75–150 KB |
 | Rust | `wasm32-wasip1`, `crate-type = ["cdylib"]` | ~120 KB |
-| Go 1.24+ | `GOOS=wasip1 GOARCH=wasm`, `-buildmode=c-shared` | ~3.4 MB |
+| Go 1.24+ | `GOOS=wasip1 GOARCH=wasm`, `-buildmode=c-shared` | about 4.6 MB |
 
 Go and Rust programs need WASI to start. The host provides a minimal version:
 clocks, random numbers, and stdout and stderr redirected to the plugin log. There
 is no file system and no network in it; real capabilities go through the
 `lookout` imports and your manifest.
-[The ABI page](abi.md#the-wasi-floor) lists exactly which WASI calls work.
+[The wire protocol page](wire.md#the-wasi-floor) lists exactly which WASI calls work.
 
-Only the Zig SDK, `plugins/common/lk.zig`, is settled. The Go and Rust
-libraries under `sdk/` implement the same three tiers as the Zig one, so
-write Zig today unless you are prepared to update your code as they change.
+Only the Zig SDK, `plugins/common/lk2.zig`, is settled. The Go and Rust
+SDKs under `sdk/` implement the same API as the Zig one, so write Zig today
+unless you are prepared to update your code as they change.
 
 One rule is the same in all three languages: **a plugin is single-threaded, and
 it runs only while the host is calling into it.** No background goroutines, no
 threads, no sleeping. Do the work in the handler and return; to wake up later,
 ask for a timer.
 
-The shortest path in is [Recipes](recipes.md): one page, a dozen things a plugin
-might do, and a complete short listing for each.
-[Build your first plugin](build-your-first.md) covers the same ground in more
-detail — a manifest, one file, and a dashed line drawn on a real chart.
-[The plugin SDK](library.md) is the reference both of them call, and it
+Start with [Build your first plugin](build-your-first.md): a manifest, one
+file, and a dashed line drawn on a real chart, with every command on the way.
+[Recipes](recipes.md) is what to read next, one page with a dozen things a
+plugin might do and a complete short listing for each.
+[The plugin SDK](sdk/index.md) is the reference both of them call, and it
 opens with the entry points in Zig, Go and Rust.
 
 ## What you can build
@@ -152,15 +152,16 @@ Built and usable today:
 - `lookout-plugin-dev`, a harness that runs your plugin against a recorded log
   and renders the result to a PNG.
 
-## The ABI is version 1 and unstable {#the-abi-is-version-0-and-unstable}
+## The wire protocol is version 1 and unstable {#the-abi-is-version-0-and-unstable}
 
-Your module reports the ABI version it speaks. It is 1, and the host refuses any
-module that reports another number. The number confirms that the module and the
-host agree on the ABI today; it does not promise the ABI will stay the same.
+Your module reports the protocol version it speaks. It is 1, and Lookout refuses
+any module that reports another number. The number confirms that the module and
+Lookout agree on the protocol today; it does not promise the protocol will stay
+the same.
 
-Everything on [the ABI page](abi.md) can change: event kinds, JSON shapes,
+Everything on [the wire protocol page](wire.md) can change: event kinds, payload formats,
 capability names, the manifest schema. There is no deprecation period and no
-compatibility shim, and the version number is not raised for every change — so a
+compatibility shim, and the version number is not raised for every change, so a
 plugin built against an older Lookout may still load and then misread what it is
 handed. What that means for you:
 
@@ -168,19 +169,19 @@ handed. What that means for you:
   newer one as work.
 - Re-run your plugin in [the dev harness](dev-harness.md) after every move. It
   prints the store, the overlay and the denied calls, which is where a silent
-  ABI change shows up first.
+  protocol change shows up first.
 - Expect the plugins in `plugins/` to change with the core. They are built
-  in the same tree, and the ABI changes when they need something different.
+  in the same tree, and the protocol changes when they need something different.
   Nothing is holding it still for an out-of-tree plugin yet.
 
 ## Where to go next
 
 | Page | What it is |
 |---|---|
-| [Recipes](recipes.md) | One recipe per thing you might want to do, with the permissions it needs |
 | [Build your first plugin](build-your-first.md) | The walkthrough in Zig: a directory, a manifest, a module, the harness, Lookout |
-| [The plugin SDK](library.md) | The API you write against: the entry points in three languages, inputs, drawing, settings, connections |
-| [The ABI](abi.md) | The reference under the SDK: imports, event kinds, JSON shapes, the manifest |
+| [Recipes](recipes.md) | One recipe per thing you might want to do, with the permissions it needs |
+| [The plugin SDK](sdk/index.md) | The API you write against: the entry points in three languages, inputs, drawing, settings, connections |
+| [The wire protocol](wire.md) | The reference under the SDK: imports, event kinds, payload formats, the manifest |
 | [The rules](rules.md) | The rules the host enforces, and the reason behind each one |
 | [The dev harness](dev-harness.md) | `lookout-plugin-dev`: the replay log, what it prints, and golden tests |
 
@@ -200,9 +201,9 @@ plugins/signalk/           a second publisher: a JSON line protocol, a unit conv
 plugins/ais/               targets, CPA/TCPA, the collision alarm, aids to navigation
 src/plugin/                the host: the imports, the grants, the stores, the watchdog
 
-sdk/rust/, sdk/go/       the Rust and Go bindings and their windline example — a
-                         the same tiers as the Zig library; read them for how a
-                         wasip1 module reaches the ABI, not for the API
+sdk/rust/, sdk/go/       the Rust and Go SDKs and their windline example;
+                         read them for how a wasip1 module speaks the wire
+                         protocol
 ```
 
 `nmea0183` and `signalk` are worth reading as a pair. They do the same job from
