@@ -49,8 +49,15 @@
   --ifm-link-color: var(--text-link);
   --ifm-link-hover-color: var(--text-link);
 
-  /* The page clears to NODTA; panels sit on it. */
-  --ifm-background-color: var(--surface-nodata);
+  /* Infima's own page ground, not the chart's. The chart ground is the
+     LANDING's idea, not the whole site's: a reference page is read for minutes
+     at a time and wants a neutral sheet behind the type, not #93aebb. Named
+     rather than left at Infima's `transparent`, because the capsule strip
+     clears to this and a transparent strip masks nothing. --chrome-panel is the
+     system's near-white (and its near-black by night): neutral, untinted, and
+     one step off the article's --chrome-surface, so the article still reads as
+     a panel sitting on a ground rather than dissolving into it. */
+  --ifm-background-color: var(--chrome-panel);
   --ifm-background-surface-color: var(--surface-chrome);
 
   --ifm-hr-border-color: var(--border-rule);
@@ -78,8 +85,16 @@
   --ifm-global-shadow-tl: var(--shadow-panel);
 
   /* The capsule is 44px tall and clears the window edge by the chrome margin,
-     top and bottom — that sum is the height the layout must reserve for it. */
-  --ifm-navbar-height: calc(var(--chrome-capsule-h) + var(--chrome-margin) * 2);
+     top and bottom: 76px, the zone the capsule itself occupies. */
+  --lm-capsule-zone: calc(var(--chrome-capsule-h) + var(--chrome-margin) * 2);
+  /* Below it, the distance over which the scrim lets go of the page — see the
+     capsule section. Content must not start inside it, or a heading would sit
+     permanently half-faded at the top of the page. */
+  --lm-scrim-fade: var(--space-11);
+  /* So the header reserves both. This one number is what Docusaurus offsets the
+     article, the sidebar, the page rail and every anchor jump by, which is why
+     the dissolve is part of it rather than something added afterwards. */
+  --ifm-navbar-height: calc(var(--lm-capsule-zone) + var(--lm-scrim-fade));
   --ifm-navbar-background-color: transparent;
   --ifm-navbar-shadow: none;
   --ifm-navbar-link-color: var(--text-primary);
@@ -108,17 +123,22 @@
   --ifm-color-primary-darker: #1d9cdd;
   --ifm-color-primary-lighter: #81caee;
 
-  --ifm-background-color: var(--surface-nodata);
+  /* The ground is deliberately NOT restated for dark: Infima's own #1b1b1d is
+     the standard dark page and it already sits one step off the article's
+     --chrome-surface, which is the separation the light rule is buying. */
   --ifm-background-surface-color: var(--surface-chrome);
   --ifm-footer-background-color: var(--chrome-panel);
 }
 
 /* ── the ground ─────────────────────────────────────────────────────────── */
 
-/* Panels are opaque and carry the product's one hairline and one panel shadow.
-   Nothing here is a system material: a material takes its colour from what is
-   behind it, which is exactly what the app refuses to do. */
-.main-wrapper {
+/* The chart ground belongs to the landing and nowhere else. On the landing the
+   ramp IS the page, so NODTA is the right thing behind it; on a guide page it
+   was tinting thirteen pages of reading matter chart-grey for no reason. Every
+   other route now clears to Infima's own background — near-white by day, its
+   standard near-black by night — and the panels below still carry the product's
+   one hairline and one panel shadow. */
+.main-wrapper:has(.lm-landing) {
   background: var(--surface-nodata);
 }
 
@@ -157,16 +177,48 @@
 /* ── the guide capsule (nav) ────────────────────────────────────────────── */
 
 /* The navbar is not a bar. It is the app's readout capsule: one opaque object,
-   floating clear of the top edge, holding the switch between the two guides.
-   The strip it floats in clears to NODTA, like the app's window, so an article
-   scrolling under the capsule is masked by chart ground rather than sliding
-   visibly behind it. The landing turns that transparent — see the landing
-   section, where the ramp is the ground the capsule floats on. */
+   holding the switch between the two guides.
+   On a documentation route it behaves like any docs header and nothing more:
+   Docusaurus's own sticky header, in the flow, its --ifm-navbar-height reserved
+   ahead of the content, which is the same height the sidebar and the page rail
+   offset themselves by. No absolute positioning, no negative margins, no
+   z-index of ours — those belong to the landing, where the capsule floats on
+   the hero, and they are scoped to it there.
+   The strip itself is transparent. What softens the scroll edge is the scrim
+   below, not a slab of colour. */
 .navbar {
   padding: var(--chrome-margin) var(--chrome-margin) 0;
-  background: var(--surface-nodata);
+  background: transparent;
   box-shadow: none;
   height: var(--ifm-navbar-height);
+}
+
+/* The scrim. A sticky header that carries an opaque band guillotines every line
+   of type that reaches it; one that carries nothing lets the type run into the
+   capsule. This is the third thing: the page's own ground, at full strength
+   across the capsule's zone and let go of over the --lm-scrim-fade below it, so
+   a line dissolves as it rises instead of being cut.
+   It fills the header box exactly, and the header box reserves both parts, so
+   nothing is ever parked inside the dissolve.
+   It is a child of the strip, so it inherits the strip's stickiness, and it
+   takes --ifm-background-color, so it is the right colour in either scheme
+   without being named twice. z-index -1 puts it under the capsule and still
+   above the article, because the strip is its own stacking context. */
+.navbar::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--ifm-navbar-height);
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    var(--ifm-background-color) 0,
+    var(--ifm-background-color) var(--lm-capsule-zone),
+    transparent var(--ifm-navbar-height)
+  );
 }
 
 .navbar__inner {
@@ -248,6 +300,103 @@
   background: var(--surface-chrome);
 }
 
+/* ── the footer ─────────────────────────────────────────────────────────── */
+
+/* One row: the links on the left, the copyright on the right. Docusaurus's
+   simple (uncolumned) footer emits .footer__links and .footer__bottom as
+   siblings inside .container, so the container is the row.
+   The surface is --chrome-panel, like every other piece of chrome, rather than
+   Infima's navy slab: that colour belongs to no token here, and in dark mode it
+   sat a few units off NODTA and stopped reading as a separate thing at all. One
+   hairline is what separates it from the page. */
+.footer {
+  --lm-footer-pad: clamp(var(--space-10), 5vw, 64px);
+  --ifm-footer-padding-vertical: var(--space-8);
+  --ifm-footer-padding-horizontal: var(--lm-footer-pad);
+  border-top: var(--hairline) solid var(--border-rule);
+}
+
+.footer .container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4) var(--space-9);
+}
+
+.footer__links {
+  margin-bottom: 0;
+}
+
+/* The theme emits the links and their interpuncts with no whitespace between
+   them, so an inline row has nowhere to break and simply overflows once it is
+   too long. A flex row gives every item its own break opportunity and packs
+   them left, past the `text--center` the theme puts on the wrapper. */
+.footer__links .footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: var(--space-3);
+}
+
+.footer__link-item {
+  font-size: var(--text-13);
+  line-height: var(--leading-snug);
+  /* A link is one label: "Developer guide" never breaks across two lines. */
+  white-space: nowrap;
+}
+
+.footer__link-separator {
+  margin: 0 var(--space-3);
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+/* The copyright is the row's right-hand end, not a centred line under it. */
+.footer__bottom {
+  text-align: right;
+}
+
+.footer__copyright {
+  font-size: var(--text-12);
+  color: var(--text-secondary);
+}
+
+/* Below 997px Infima breaks the links onto one line each, which turned a one-row
+   footer into five rows with the copyright stranded beside the first of them.
+   The flex row above already keeps them on one line; all that is left is to give
+   them the gap that Infima's dropped interpuncts leave behind, and to send the
+   copyright underneath instead of alongside. */
+@media (max-width: 996px) {
+  /* Infima drops the footer's side padding to zero here. Restating the gutter
+     inside a media query of our own is the only way to keep it: the production
+     build hoists every @media to the end of the sheet, so Infima's narrow rule
+     outranks our unqualified one there even though it loses in the dev server's
+     unminified order. Without this the links sit flush against the viewport in
+     the built site only. */
+  .footer {
+    --ifm-footer-padding-horizontal: var(--lm-footer-pad);
+  }
+
+  .footer .container {
+    justify-content: flex-start;
+    gap: var(--space-5) 0;
+  }
+
+  .footer__links .footer__links {
+    column-gap: var(--space-9);
+  }
+
+  .footer__link-item {
+    width: auto;
+  }
+
+  .footer__bottom {
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
+
 /* ── the rail ───────────────────────────────────────────────────────────── */
 
 /* Kept, against option 1d's no-rail mockup: thirteen pages need a standing
@@ -277,6 +426,68 @@
 
 .menu__link--active:not(.menu__link--sublist) {
   font-weight: var(--weight-semibold);
+}
+
+/* The depth pills, from canvas option 1c ("Band rail"): each guide is a depth
+   ramp, deep at the top and dry at the bottom, and every entry in it carries
+   the rung it sits on. 1c's whole band rail was not adopted — the standard
+   Docusaurus rail stays, see above — but its marker is, at the canvas's own
+   figures: a 4x18 bar, 2px radius, 10px before the label.
+   Drawn with a box, not an image, so it is an exact rectangle at any zoom, and
+   coloured from --chart-* so the night ramp arrives with the night scheme.
+   The rung is set on the <li>, and inherits, so a sub-entry that grows a pill
+   later already has its guide's colour to hand. */
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item {
+  --lm-rung: var(--chart-landf);
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item > .menu__link::before,
+.theme-doc-sidebar-item-category-level-1
+  > .menu__list
+  > .menu__list-item
+  > .menu__list-item-collapsible
+  > .menu__link::before {
+  content: '';
+  flex: none;
+  width: 4px;
+  height: 18px;
+  margin-right: var(--space-5);
+  border-radius: 2px;
+  background: var(--lm-rung);
+  /* The band's own contour, DEPCN, drawn round it. On a chart a depth band is
+     never a bare patch of colour and here it earns its keep twice: the night
+     ramp's deep rungs are #000 and #0f1b21, which on the rail's near-black
+     panel are no rung at all until something outlines them. */
+  box-shadow: inset 0 0 0 var(--hairline-thin) var(--chart-depcn);
+}
+
+/* Deep to dry, one rung per entry, restarting in each guide — the user guide's
+   five entries run out at the intertidal, the developer guide's seven carry on
+   up the beach. The seventh rung, LANDF, is the default set above, so it also
+   catches an eighth entry and a ninth: the ramp has no further band and
+   inventing one would say something about the chart that the chart does not. */
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item:nth-child(1) {
+  --lm-rung: var(--chart-depdw);
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item:nth-child(2) {
+  --lm-rung: var(--chart-depmd);
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item:nth-child(3) {
+  --lm-rung: var(--chart-depms);
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item:nth-child(4) {
+  --lm-rung: var(--chart-depvs);
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item:nth-child(5) {
+  --lm-rung: var(--chart-depit);
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list > .menu__list-item:nth-child(6) {
+  --lm-rung: var(--chart-landa);
 }
 
 /* ── the page rail (table of contents) ──────────────────────────────────── */
@@ -415,12 +626,29 @@ body:has(.lm-landing) .col {
   margin: 0;
 }
 
+/* Docusaurus pads that container with infima's padding-top--md and
+   padding-bottom--lg utilities, which carry !important and so survive the rule
+   above. On the landing they showed as strips of bare NODTA above the ramp and
+   below the last panel. */
+body:has(.lm-landing) [class*="docMainContainer"] > .container {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
 .main-wrapper:has(.lm-landing) .theme-doc-sidebar-container {
   display: none;
 }
 
 /* A landing page has nothing to be a breadcrumb to. */
 .main-wrapper:has(.lm-landing) .theme-doc-breadcrumbs {
+  display: none;
+}
+
+/* Nor a previous and a next page, nor an invitation to edit it: both belong to
+   a document being read, and both were leaving a tall band of bare NODTA
+   between the last card and the footer. */
+.main-wrapper:has(.lm-landing) .theme-doc-footer,
+.main-wrapper:has(.lm-landing) .pagination-nav {
   display: none;
 }
 
@@ -433,16 +661,23 @@ body:has(.lm-landing) .col {
 }
 
 /* On the landing the ground is the ramp itself, so the capsule floats on the
-   hero — option 1a — instead of on a NODTA strip. It is absolute rather than
-   sticky so it belongs to the hero and scrolls away with it, which is also
-   what stops hero copy sliding visibly behind a transparent bar. */
+   hero — option 1a — instead of sitting in a header strip. It is absolute
+   rather than sticky so it belongs to the hero and scrolls away with it, which
+   is also what stops hero copy sliding visibly behind it. This is the ONLY
+   route that moves the capsule out of the flow. */
 body:has(.lm-landing) .navbar {
   position: absolute;
   width: 100%;
-  background: transparent;
   /* The hero is positioned and comes later in the DOM, so without this the
      ramp paints over the capsule. */
   z-index: 200;
+}
+
+/* And no scrim: the ground here is the ramp, so a wash of page colour across
+   the top of it would be a band of the wrong thing over the chart. The capsule
+   scrolls away instead, which is the same problem solved by not having it. */
+body:has(.lm-landing) .navbar::before {
+  content: none;
 }
 
 .lm-landing {
@@ -461,25 +696,16 @@ body:has(.lm-landing) .navbar {
   overflow: hidden;
 }
 
+/* One SVG, stretched to the hero. The band edges and the two contours are paths
+   inside it (see Landing.js), so the curves stay crisp at any zoom and the
+   colours are still the --chart-* tokens, taken through `fill`/`stroke` — which
+   means dark mode swaps them exactly as it swaps a background. */
 .lm-hero__bands {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.lm-hero__band {
+  display: block;
   width: 100%;
-}
-
-/* The two contours the ramp implies. They cross the whole chart, as a contour
-   does; the info panel is opaque and masks the stretch behind it. */
-.lm-hero__contour {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 0;
-  border-top: 1.5px solid var(--chart-depcn);
+  height: 100%;
 }
 
 /* Colour is set per figure from --chart-sndg1/2, the S-52 rule. */
@@ -489,35 +715,11 @@ body:has(.lm-landing) .navbar {
   line-height: 1;
 }
 
-/* Each label is pinned to what it names — its band, or the contour line it sits
-   on — and centred on that position. */
-.lm-hero__legendItem {
-  position: absolute;
-  right: var(--space-11);
-  transform: translateY(-50%);
-  font-size: var(--text-9);
-  font-weight: var(--weight-semibold);
-  line-height: 1;
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  text-align: right;
-  color: var(--text-secondary);
-  pointer-events: none;
-}
-
-/* The chart's unit statement, bottom-right with the band legend. */
-.lm-hero__unit {
-  position: absolute;
-  right: var(--space-11);
-  bottom: var(--space-7);
-  font-size: var(--text-9);
-  font-weight: var(--weight-semibold);
-  line-height: 1;
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  pointer-events: none;
-}
+/* NO TEXT ON THE LADDER. The band names, the contour's name and the unit
+   statement all came off: a chart's colours and lines are the legend, and the
+   hero's only prose belongs in the info panel. What is left on the ground is
+   what a chart itself would carry — the bands, their edges, the two contour
+   lines, and the soundings. */
 
 /* Option 1a's info box: one opaque panel with the product's single hairline and
    single panel shadow, floated low-left on the ground. */
@@ -631,12 +833,20 @@ body:has(.lm-landing) .navbar {
    hero, the way option 1a lays the page out. */
 .lm-strip,
 .lm-cards {
-  padding: 44px var(--lm-landing-pad) 0;
+  padding: 32px var(--lm-landing-pad) 0;
   background: var(--chrome-panel);
 }
 
+/* The strip's last child carried a bottom margin through the section's zero
+   bottom padding — a collapsed margin, which showed as a stripe of bare NODTA
+   between the panel and the cards. The gap between the two is the cards'
+   padding-top and nothing else. */
+.lm-strip > :last-child {
+  margin-bottom: 0;
+}
+
 .lm-cards {
-  padding-bottom: 52px;
+  padding-bottom: 32px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-7);
@@ -648,7 +858,7 @@ body:has(.lm-landing) .navbar {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-4);
-  margin-bottom: var(--space-9);
+  margin-bottom: var(--space-8);
 }
 
 .lm-strip__title {
@@ -667,7 +877,7 @@ body:has(.lm-landing) .navbar {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--space-7);
-  margin-bottom: 34px;
+  margin-bottom: var(--space-10);
 }
 
 /* The framed handhelds keep their own proportions and sit centred under the
@@ -678,7 +888,7 @@ body:has(.lm-landing) .navbar {
   align-items: flex-end;
   justify-content: center;
   gap: 34px;
-  margin-bottom: 34px;
+  margin-bottom: var(--space-10);
 }
 
 .lm-device {
@@ -765,7 +975,7 @@ body:has(.lm-landing) .navbar {
 /* The tail prose carries the landing's remaining links. It continues the same
    panel the cards sit on, so the page ends on one surface. */
 .lm-tail {
-  padding: 0 clamp(var(--space-10), 5vw, 64px) 52px;
+  padding: 0 clamp(var(--space-10), 5vw, 64px) 32px;
   background: var(--chrome-panel);
 }
 
@@ -791,9 +1001,11 @@ body:has(.lm-landing) .navbar {
   /* The panel cannot float inside a fixed hero on a narrow screen — it is
      taller than the hero. The hero grows to the panel instead, and the bands
      (absolute, inset 0) fill whatever height that comes to. */
+  /* The capsule's own zone, not the header height: the landing has no scrim, so
+     it does not owe the dissolve any room. */
   .lm-hero {
     height: auto;
-    padding: calc(var(--ifm-navbar-height) + var(--space-6)) var(--space-8) var(--space-10);
+    padding: calc(var(--lm-capsule-zone) + var(--space-6)) var(--space-8) var(--space-10);
   }
 
   /* relative, not static: the bands are absolute and would otherwise paint
@@ -805,7 +1017,6 @@ body:has(.lm-landing) .navbar {
     width: auto;
   }
 
-  .lm-hero__legendItem,
   .lm-hero__sounding {
     display: none;
   }
