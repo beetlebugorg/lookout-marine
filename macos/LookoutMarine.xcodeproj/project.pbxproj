@@ -40,6 +40,7 @@
 		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
 		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
+		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
 		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
 		CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
@@ -90,6 +91,7 @@
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOS-UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		867B3D3BE969AB708C6FD1A6 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		8AE67031882048136AC3C4B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -155,6 +157,7 @@
 			isa = PBXGroup;
 			children = (
 				867B3D3BE969AB708C6FD1A6 /* AppModel.swift */,
+				8AE67031882048136AC3C4B2 /* Assets.xcassets */,
 				ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */,
 				2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */,
 				67B9484301248E7DF8AD6EE2 /* ChartView.swift */,
@@ -237,6 +240,7 @@
 			buildPhases = (
 				2F202FBCF2E8CB63456827BF /* Build Zig cores (lookout + tile57 dependency) */,
 				71524DC6FB6E9C34F9DB5322 /* Sources */,
+				EECEEC5E294F330C56C3B684 /* Resources */,
 				0CBF278F6CFCF0D8A5C98A7B /* Frameworks */,
 			);
 			buildRules = (
@@ -318,6 +322,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EECEEC5E294F330C56C3B684 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -459,7 +471,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -666,7 +678,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

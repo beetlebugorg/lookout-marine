@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive launcher icon (API 26 and up). The launcher supplies the mask,
+  so the two layers are square and the shape is not ours to choose.
+
+  The foreground is the mark full-bleed. That is deliberate: the mark is a chart
+  crop with no subject to centre and no edge that has to survive, so the mask
+  cropping into it reads as the chart continuing past the icon rather than as
+  clipping. The background is DEPDW, the S-52 deep-water blue, and shows only in
+  the parallax gap when a launcher slides the layers.
+
+  API 24 and 25 have no adaptive icons and fall back to mipmap/ic_launcher.png.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

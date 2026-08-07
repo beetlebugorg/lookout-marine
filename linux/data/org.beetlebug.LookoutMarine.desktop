@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=Lookout Marine
+GenericName=Chart Plotter
+Comment=Read baked S-57 and raster nautical charts
+# The icon is named, not pathed: it resolves against the hicolor theme, where
+# meson installs the PNG ladder and the scalable SVG under this same id.
+Icon=org.beetlebug.LookoutMarine
+# No field code. The app runs with G_APPLICATION_DEFAULT_FLAGS and handles no
+# open or command-line signal, so a %f or %U would hand GApplication an
+# argument it rejects. Charts are opened from inside the app.
+Exec=lookout-marine
+Terminal=false
+Categories=Education;Science;Geoscience;
+Keywords=chart;nautical;marine;navigation;S-57;ENC;
+StartupNotify=true
+# Wayland matches the surface's app_id to this file's name on its own. X11 sets
+# WM_CLASS from the program name instead, so name that too or the window and
+# the launcher entry stay unassociated and the taskbar shows a generic icon.
+StartupWMClass=lookout-marine

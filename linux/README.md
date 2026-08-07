@@ -84,3 +84,26 @@ chart the engine opens.
 | `src/lk-store.c` | Camera pose, recents and settings in one XDG keyfile |
 | `build-core.sh` | Builds the Zig core where meson expects its outputs |
 | `screenshots.sh` | The documentation screenshots, headless |
+| `data/` | The desktop entry and the hicolor icons `meson install` ships |
+
+## The app icon
+
+`meson install` puts the icon in the hicolor theme, which every icon theme
+inherits from:
+
+```
+<prefix>/share/icons/hicolor/<size>x<size>/apps/org.beetlebug.LookoutMarine.png
+<prefix>/share/icons/hicolor/scalable/apps/org.beetlebug.LookoutMarine.svg
+<prefix>/share/applications/org.beetlebug.LookoutMarine.desktop
+```
+
+Three things have to name the same string and do: the `Icon=` key in the desktop
+entry, `gtk_window_set_default_icon_name()` in `src/main.c`, and the installed
+filenames — all `org.beetlebug.LookoutMarine`, which is also `LK_APP_ID`.
+
+No icon cache is generated. GTK scans the theme directories when there is no
+cache, so the icon resolves from a plain `meson install`; distro packaging runs
+`gtk-update-icon-cache` in its own post-install step.
+
+Running from the build tree without installing leaves the icon unresolvable —
+there is nothing in the theme search path to find. That is expected.

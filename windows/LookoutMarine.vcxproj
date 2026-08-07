@@ -83,12 +83,16 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(LookoutCoreLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- user32: LoadImageW/SendMessageW/GetSystemMetrics, for the window icon
+           (MinimalCoreWin trims the default link libraries, so the Win32 ones
+           this shell uses are all named explicitly). -->
+      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClInclude Include="pch.h" />
+    <ClInclude Include="resource.h" />
     <!-- DependentUpon links the code-behind to its .xaml so the WinUI markup
          compiler emits the per-page <name>.xaml.g.h stub (InitializeComponent). -->
     <ClInclude Include="ui\App.xaml.h">
@@ -152,6 +156,14 @@
 
   <ItemGroup>
     <Manifest Include="app.manifest" />
+  </ItemGroup>
+
+  <!-- The app icon. Unpackaged, so it is a linked-in ICON resource rather than
+       a Package.appxmanifest Logo; LookoutMarine.ico sits next to the .rc and
+       rc.exe resolves it relative to the script. -->
+  <ItemGroup>
+    <ResourceCompile Include="LookoutMarine.rc" />
+    <None Include="LookoutMarine.ico" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Lookout Marine">
+<title>Lookout Marine</title>
+  <!-- "Beacon, quiet", sector lights off. From the design source (project
+       756ed7a7, symbol m-quiet, showSectors=false). S-52 tokens throughout. -->
+  <rect x="0" y="0" width="128" height="128" fill="#c9edff"/>
+  <path d="M0 46 Q28 56 46 74 Q64 92 78 128 H0 Z" fill="#82caff"/>
+  <path d="M0 74 Q18 82 32 96 Q44 108 50 128 H0 Z" fill="#61b7ff"/>
+  <path d="M0 74 Q18 82 32 96 Q44 108 50 128" fill="none" stroke="#4c5b63" stroke-width="2.2"/>
+  <path d="M0 96 Q12 102 20 112 Q26 120 28 128 H0 Z" fill="#bfbe8f" stroke="#4c5b63" stroke-width="1.8"/>
+  <g fill="none" stroke="#000000" stroke-width="1.7">
+    <rect x="31.2" y="69" width="5.6" height="5.8"/>
+    <path d="M31.2 74.8 L29 96"/>
+    <path d="M36.8 74.8 L39 96"/>
+    <path d="M24.9 96 H43.1"/>
+    <circle cx="34" cy="96" r="2" fill="#ffffff"/>
+  </g>
+</svg>

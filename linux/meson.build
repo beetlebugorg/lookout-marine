@@ -93,3 +93,37 @@ executable('lookout-marine',
   dependencies: deps,
   install: true,
 )
+
+# ---- desktop integration -----------------------------------------------------
+#
+# The app id is the icon name: main.c passes it to gtk_window_set_default_icon_name
+# and the .desktop file names it in Icon=, so all three resolve to the files
+# installed here. Everything lands in the hicolor theme, which is the fallback
+# every icon theme inherits from — an icon installed there is found whatever
+# theme the desktop is using.
+
+app_id = 'org.beetlebug.LookoutMarine'
+datadir = get_option('prefix') / get_option('datadir')
+
+# The sizes the brand pack rasterizes. No cache is generated: GTK falls back to
+# scanning the theme directories when index.theme has no cache, so the icon
+# resolves from a plain `meson install`. Distro packaging runs
+# gtk-update-icon-cache in its own post-install.
+foreach size : ['16', '32', '48', '64', '128', '256', '512']
+  dim = size + 'x' + size
+  install_data(
+    'data' / 'icons' / 'hicolor' / dim / 'apps' / (app_id + '.png'),
+    install_dir: datadir / 'icons' / 'hicolor' / dim / 'apps',
+  )
+endforeach
+
+# The scalable icon, for the sizes the ladder does not cover.
+install_data(
+  'data' / 'icons' / 'hicolor' / 'scalable' / 'apps' / (app_id + '.svg'),
+  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
+)
+
+install_data(
+  'data' / (app_id + '.desktop'),
+  install_dir: datadir / 'applications',
+)

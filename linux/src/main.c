@@ -211,6 +211,12 @@ int
 main (int argc, char *argv[])
 {
   g_set_application_name ("Lookout Marine");
+  /* The icon every window falls back to. The name is the app id, which is what
+   * meson installs the hicolor PNGs and the scalable SVG under and what the
+   * .desktop file's Icon= names, so the three agree. Wayland takes the icon
+   * from the .desktop file matched to the surface's app_id and never asks for
+   * this; X11 does, and without it the window carries no icon at all. */
+  gtk_window_set_default_icon_name (LK_APP_ID);
 
   g_autoptr (GtkApplication) app =
       gtk_application_new (LK_APP_ID, G_APPLICATION_DEFAULT_FLAGS);

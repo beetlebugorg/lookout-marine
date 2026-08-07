@@ -74,6 +74,26 @@ picture covers it. The pill at the right of the readouts opens the same list.
 | `src/lk_coord.*` | Coordinate go-to parser and DMS formatting |
 | `src/lk_paths.*`, `src/lk_format.*`, `src/lk_backdrop.*` | Chart discovery, HUD formatting, the transparent backdrop |
 | `build-core.ps1` | Builds the Zig core where the vcxproj expects its outputs |
+| `LookoutMarine.rc`, `resource.h` | The app icon as a Win32 ICON resource |
+| `LookoutMarine.ico` | The icon itself: 16/32/48/64/128/256 in one container |
+
+## The app icon
+
+This app is unpackaged (`WindowsPackageType=None`, `AppxPackage=false`), so
+there is no `Package.appxmanifest` and no `Logo` element to point at. The icon
+reaches the executable the classic way instead: `LookoutMarine.rc` declares it
+as `IDI_APPICON ICON "LookoutMarine.ico"` and the vcxproj compiles that with
+`ResourceCompile`. The id is 1, because Explorer, the taskbar and Alt-Tab show
+the ICON resource with the lowest id.
+
+That covers the executable. A window is separate — an HWND wears whatever
+`WM_SETICON` gave it — so `MainWindow`'s constructor loads the same resource at
+the system icon sizes and sets it on the window, or the titlebar keeps the stock
+WinUI mark. That is what `user32.lib` is in the link line for.
+
+Regenerate the `.ico` from the brand master with `assets/brand/mkico.py`, which
+packs the 256 frame as PNG and the rest as DIBs (ImageMagick's one-liner writes
+every frame uncompressed, tripling the file for no gain).
 
 Notes:
 

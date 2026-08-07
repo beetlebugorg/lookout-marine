@@ -14,6 +14,11 @@
 	<string>Lookout Marine</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- The app icon, from Assets.xcassets/AppIcon.appiconset. This plist is
+	     hand-written (GENERATE_INFOPLIST_FILE is NO), so the key actool would
+	     otherwise inject has to be named here. -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>

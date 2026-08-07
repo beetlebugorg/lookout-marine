@@ -8,6 +8,14 @@ zig-pkg/
 # The documentation images are tracked. The pattern must match a nested path:
 # "!docs/*.png" left docs/docs/img/*.png ignored.
 !docs/**/*.png
+# So is the app icon: the brand masters and every per-platform size generated
+# from them. These are sources for the build, not build output — a clone
+# without them cannot produce an app with an icon.
+!assets/brand/*.png
+!macos/LookoutMarine/Assets.xcassets/**/*.png
+!macos/LookoutMarine-iOS/Assets.xcassets/**/*.png
+!linux/data/icons/**/*.png
+!android/app/src/main/res/mipmap-*/*.png
 .DS_Store
 # Xcode / xcodegen build products and derived data (build, build-ios,
 # build-iosdev, DerivedData, …) — never tracked.

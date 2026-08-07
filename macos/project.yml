@@ -42,6 +42,11 @@ targets:
         INFOPLIST_FILE: LookoutMarine/Info.plist
         CODE_SIGN_ENTITLEMENTS: LookoutMarine/LookoutMarine.entitlements
         CODE_SIGN_STYLE: Automatic
+        # LookoutMarine/Assets.xcassets/AppIcon.appiconset — the squircle-masked
+        # macOS master at the ten sizes iconutil wants. actool compiles it into
+        # Assets.car AND writes AppIcon.icns into Resources, which is what
+        # CFBundleIconFile in Info.plist names.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
         # The Zig cores are built arm64-only (Apple Silicon) — without this a
         # Release build tries a universal binary and the x86_64 slice fails.
@@ -137,7 +142,13 @@ targets:
         excludes:
           - "Info.plist"
           - "LookoutMarine.entitlements"
-      # The launch screen background color (UILaunchScreen/UIColorName).
+          # The macOS icon catalog: its AppIcon is drawn on Apple's *macOS*
+          # grid (inset + squircle-masked) and its images carry the "mac"
+          # idiom, so it must not reach this target — iOS gets its own AppIcon
+          # in LookoutMarine-iOS/Assets.xcassets.
+          - "Assets.xcassets"
+      # The launch screen background color (UILaunchScreen/UIColorName) and the
+      # 1024 AppIcon.
       - path: LookoutMarine-iOS/Assets.xcassets
     settings:
       base:
@@ -149,9 +160,10 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: LookoutMarine-iOS/Info.plist
         CODE_SIGN_STYLE: Automatic
-        # The catalog holds the launch screen color only. Without this, the
-        # catalog compiler looks for an "AppIcon" set and fails.
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # LookoutMarine-iOS/Assets.xcassets/AppIcon.appiconset — one 1024
+        # square with no alpha channel, per Apple's single-size iOS slot. iOS
+        # applies the corner mask itself.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         # The Zig cores are built arm64-only (Apple Silicon simulators + all

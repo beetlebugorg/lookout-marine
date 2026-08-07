@@ -16,6 +16,17 @@
     <string>Lookout Marine</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- The app icon, from Assets.xcassets/AppIcon.appiconset.
+         CFBundleIconName is the real one: it names the catalog entry, and
+         Assets.car carries all ten renditions 16 through 512@2x.
+         CFBundleIconFile names the AppIcon.icns actool also emits into
+         Resources. That icns is a reduced legacy fallback — actool thins it to
+         the 16 and 128 slots — so it is not the icon anything modern reads,
+         only what a caller that predates asset catalogs would find. -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
