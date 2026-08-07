@@ -572,6 +572,18 @@ final class ChartController: NSObject {
         return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
     }
 
+    /// Offer a file the mariner opened to the plugins. True when one claims
+    /// that file type and now holds the file.
+    ///
+    /// False for a chart, for a type nobody claims, and for a build with no
+    /// plugin layer — so the caller has one fallback, not three.
+    func openFileForPlugins(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        let took = lookout_open_file(h, path) == 1
+        if took { kick() }
+        return took
+    }
+
     /// Push settings to a plugin. Applied live — the plugin redraws inside the
     /// call, so the chart is kicked to show it.
     @discardableResult

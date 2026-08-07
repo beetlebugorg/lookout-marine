@@ -191,6 +191,16 @@ export fn lookout_plugin_config_set(h: ?*lookout, id: [*:0]const u8, json: [*:0]
     return 0;
 }
 
+/// Offer a file the mariner opened to the plugins: 1 when one claimed the file
+/// type and now holds it, 0 when none does, -1 when the file was claimed and
+/// could not be given. Charts always answer 0. See lookout.h.
+export fn lookout_open_file(h: ?*lookout, path: [*:0]const u8) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const taken = l.openFileForPlugins(std.mem.span(path)) catch return -1;
+    return if (taken) 1 else 0;
+}
+
 /// What the plugin overlay says about the symbol nearest a LOGICAL point, as
 /// JSON: `{"title":"...","rows":[["key","value"],...]}`. NULL when no symbol
 /// with a payload is within about 14 pt of it.

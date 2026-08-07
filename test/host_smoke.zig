@@ -408,6 +408,201 @@ test "the dispatch and I/O threads deliver a periodic timer and a fanout tick" {
     try std.testing.expect(!sink.has("trapped"));
 }
 
+// ---------------------------------------------------------------------------
+// files the mariner opens
+// ---------------------------------------------------------------------------
+
+/// Stage the echo module under another id, with a manifest of the caller's
+/// making. The routing tests need plugins that CLAIM FILE TYPES, and what the
+/// module does with the file is beside the point — the subject is the path from
+/// the mariner's open panel to a handle the plugin can read.
+fn stageAs(tmp: *std.testing.TmpDir, id: []const u8, manifest: []const u8) !void {
+    var buf: [128]u8 = undefined;
+    try tmp.dir.writeFile(io, .{
+        .sub_path = try std.fmt.bufPrint(&buf, "{s}.wasm", .{id}),
+        .data = echo_wasm,
+    });
+    var buf2: [128]u8 = undefined;
+    try tmp.dir.writeFile(io, .{
+        .sub_path = try std.fmt.bufPrint(&buf2, "{s}.manifest.json", .{id}),
+        .data = manifest,
+    });
+}
+
+/// `vessel.read` and `overlay.draw` are what the echo module needs to start at
+/// all; `files` is what the claim rests on.
+const grib_id = "org.beetlebug.grib";
+const grib_manifest =
+    \\{"id":"org.beetlebug.grib","name":"Weather files","abi":1,
+    \\ "capabilities":["vessel.read","overlay.draw","files"],
+    \\ "file_types":[".grib2",".grb",".pmtiles"]}
+;
+
+const fixture_bytes = "GRIB\x02not really a weather file";
+
+test "a file the mariner opens reaches the plugin that claims its type" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try stage(alloc, &tmp);
+    defer alloc.free(dir_path);
+    try stageAs(&tmp, grib_id, grib_manifest);
+    // Two fixtures: one named the way a download arrives, one SHOUTED, so the
+    // case the mariner's disk holds cannot decide whether the file routes.
+    try tmp.dir.writeFile(io, .{ .sub_path = "gfs.grib2", .data = fixture_bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "WIND.GRB", .data = fixture_bytes });
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var ov = overlay.Store.init(alloc);
+    defer ov.deinit();
+    var sink = LogSink{ .alloc = alloc };
+    defer sink.text.deinit(alloc);
+
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{
+        .ctx = &ov,
+        .applyFn = OvSink.apply,
+        .removeFn = OvSink.remove,
+    });
+    defer br.deinit();
+    br.setLog(&sink, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{});
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    try std.testing.expectEqual(@as(usize, 2), h.count());
+    const grib = h.find(grib_id) orelse return error.GribNotLoaded;
+
+    // The registry a shell reads carries the claim, so an open panel can say
+    // what it now accepts without knowing what a plugin is.
+    var reg: std.ArrayList(u8) = .empty;
+    defer reg.deinit(alloc);
+    try h.registryJson(&reg);
+    try std.testing.expect(std.mem.indexOf(u8, reg.items, "\"file_types\":[\".grib2\",\".grb\",\".pmtiles\"]") != null);
+    // A plugin that claims none writes no key at all.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, reg.items, "\"file_types\""));
+
+    // A type NOBODY claims is not the plugin layer's business: the shell does
+    // with it whatever it did before there were plugins.
+    const notes = try std.fmt.allocPrint(alloc, "{s}/notes.txt", .{dir_path});
+    defer alloc.free(notes);
+    try std.testing.expect(!try h.openFile(notes));
+
+    // A CHART keeps the path it always took, even though this manifest claims
+    // .pmtiles. Nothing is granted and nothing is queued.
+    const chart = try std.fmt.allocPrint(alloc, "{s}/US5MD1MC.pmtiles", .{dir_path});
+    defer alloc.free(chart);
+    try std.testing.expect(!try h.openFile(chart));
+    try std.testing.expect(br.popFor(grib.index) == null);
+
+    // The claimed one routes, and FILE_OPENED carries the handle, the name the
+    // mariner would recognise, the size and the access.
+    const grib_path = try std.fmt.allocPrint(alloc, "{s}/gfs.grib2", .{dir_path});
+    defer alloc.free(grib_path);
+    try std.testing.expect(try h.openFile(grib_path));
+
+    const ev = br.popFor(grib.index) orelse return error.NoFileOpened;
+    defer br.freeEvent(ev);
+    try std.testing.expectEqual(broker.Kind.file_opened, ev.kind);
+    try std.testing.expect(ev.handle != 0);
+    var expected: [96]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        try std.fmt.bufPrint(&expected, "{{\"name\":\"gfs.grib2\",\"size\":{d},\"mode\":\"read\"}}", .{fixture_bytes.len}),
+        ev.payload,
+    );
+
+    // The handle the event carries is one `file_read` answers, which is the
+    // whole point of the grant.
+    var got: [64]u8 = undefined;
+    const n = br.fileRead(grib.index, @bitCast(ev.handle), 0, &got);
+    try std.testing.expectEqual(@as(i32, fixture_bytes.len), n);
+    try std.testing.expectEqualStrings(fixture_bytes, got[0..@intCast(n)]);
+
+    // The name on disk is SHOUTED and the manifest is not: the same plugin
+    // still gets it.
+    const shouted = try std.fmt.allocPrint(alloc, "{s}/WIND.GRB", .{dir_path});
+    defer alloc.free(shouted);
+    try std.testing.expect(try h.openFile(shouted));
+    const ev2 = br.popFor(grib.index) orelse return error.NoFileOpened;
+    defer br.freeEvent(ev2);
+    try std.testing.expectEqual(broker.Kind.file_opened, ev2.kind);
+    try std.testing.expect(std.mem.indexOf(u8, ev2.payload, "\"name\":\"WIND.GRB\"") != null);
+
+    // The plugin is entered with the event and does not trap on a kind it does
+    // not handle.
+    br.push(grib.index, broker.Kind.file_opened, ev2.handle, ev2.payload);
+    try std.testing.expectEqual(@as(usize, 1), h.pump());
+    try std.testing.expect(!sink.has("trapped"));
+
+    // A file that is not there is a refusal, not a silent nothing.
+    const missing = try std.fmt.allocPrint(alloc, "{s}/nowhere.grib2", .{dir_path});
+    defer alloc.free(missing);
+    try std.testing.expectError(error.FileNotFound, h.openFile(missing));
+}
+
+test "two plugins claiming one file type both lose it, and the log names them" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try stage(alloc, &tmp);
+    defer alloc.free(dir_path);
+    try stageAs(&tmp, grib_id, grib_manifest);
+    try stageAs(&tmp, "org.beetlebug.weather",
+        \\{"id":"org.beetlebug.weather","name":"Weather too","abi":1,
+        \\ "capabilities":["vessel.read","overlay.draw","files"],
+        \\ "file_types":[".grib2"]}
+    );
+    // A claim with no `files` behind it: the manifest is refused, so the plugin
+    // never loads and never competes for the type either.
+    try stageAs(&tmp, "org.beetlebug.ungranted",
+        \\{"id":"org.beetlebug.ungranted","name":"No grant","abi":1,
+        \\ "capabilities":["vessel.read","overlay.draw"],
+        \\ "file_types":[".grib2"]}
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "gfs.grib2", .data = fixture_bytes });
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var ov = overlay.Store.init(alloc);
+    defer ov.deinit();
+    var sink = LogSink{ .alloc = alloc };
+    defer sink.text.deinit(alloc);
+
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{
+        .ctx = &ov,
+        .applyFn = OvSink.apply,
+        .removeFn = OvSink.remove,
+    });
+    defer br.deinit();
+    br.setLog(&sink, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{});
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    try std.testing.expectEqual(@as(usize, 3), h.count()); // echo + the two granted
+    try std.testing.expect(h.find("org.beetlebug.ungranted") == null);
+    try std.testing.expect(sink.has("org.beetlebug.ungranted not loaded: BadManifest"));
+
+    const grib_path = try std.fmt.allocPrint(alloc, "{s}/gfs.grib2", .{dir_path});
+    defer alloc.free(grib_path);
+    try std.testing.expectError(host.Error.FileTypeConflict, h.openFile(grib_path));
+
+    // One line, both names: load order must not decide who reads the mariner's
+    // weather.
+    try std.testing.expect(sink.has(
+        ".grib2 is claimed by both org.beetlebug.grib and org.beetlebug.weather",
+    ));
+    // Neither was given anything.
+    try std.testing.expect(br.popFor(h.find(grib_id).?.index) == null);
+    try std.testing.expect(br.popFor(h.find("org.beetlebug.weather").?.index) == null);
+}
+
 test "every manifest the app ships parses under the real parser" {
     const a = std.testing.allocator;
     // A schema this parser refuses is a plugin that silently does not load,

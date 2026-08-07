@@ -63,6 +63,11 @@ const USAGE =
     \\                    The SECONDS@ prefix is the replay second to do it at;
     \\                    without one it happens before the replay starts.
     \\                    Repeatable, applied in the order given.
+    \\  --grant-file ID PATH  give a plugin one file to read, as the mariner's
+    \\                    open panel would, e.g.
+    \\                    --grant-file 30@org.beetlebug.grib gfs.grib2
+    \\                    The plugin gets FILE_OPENED with the handle. Same
+    \\                    SECONDS@ prefix, repeatable.
     \\  -h, --help        this help
     \\
 ;
@@ -542,27 +547,36 @@ fn scanPmtiles(alloc: std.mem.Allocator, dir: []const u8, out: *std.ArrayList([:
 // main
 // ---------------------------------------------------------------------------
 
-/// One `--set-config`: a settings change and the replay second to make it at.
+/// One thing to do TO a plugin at a replay second: a settings change, or a
+/// file the mariner would have chosen.
+///
 /// Proving a setting is applied HOT means changing it while the log is playing
-/// and watching the behaviour move, which is what the second is for.
-const Change = struct {
+/// and watching the behaviour move, which is what the second is for. A grant is
+/// timed for the same reason: a plugin that reads a file must go on serving the
+/// stream while it does.
+const Action = struct {
     at_s: f64 = 0,
+    kind: Kind,
     id: [:0]const u8,
-    json: [:0]const u8,
+    /// The settings object for `.config`, the file path for `.grant`.
+    arg: [:0]const u8,
     done: bool = false,
+
+    const Kind = enum { config, grant };
 };
 
-/// `[SECONDS@]ID`.
-fn parseChangeTarget(text: [:0]const u8) struct { at_s: f64, id: [:0]const u8 } {
+/// `[SECONDS@]ID`. `flag` names the option in the error, so a bad second says
+/// which argument it came from.
+fn parseActionTarget(flag: []const u8, text: [:0]const u8) struct { at_s: f64, id: [:0]const u8 } {
     const at = std.mem.indexOfScalar(u8, text, '@') orelse return .{ .at_s = 0, .id = text };
     const secs = std.fmt.parseFloat(f64, text[0..at]) catch
-        fail("--set-config: {s} is not a replay second", .{text[0..at]});
+        fail("{s}: {s} is not a replay second", .{ flag, text[0..at] });
     return .{ .at_s = secs, .id = text[at + 1 .. :0] };
 }
 
 const Args = struct {
     charts: std.ArrayList([:0]const u8) = .empty,
-    changes: std.ArrayList(Change) = .empty,
+    actions: std.ArrayList(Action) = .empty,
     plugins_dir: ?[:0]const u8 = null,
     replay_path: ?[]const u8 = null,
     rate: f64 = 1,
@@ -611,7 +625,7 @@ pub fn main(init: std.process.Init) !void {
 
     var a = Args{};
     defer a.charts.deinit(alloc);
-    defer a.changes.deinit(alloc);
+    defer a.actions.deinit(alloc);
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
@@ -658,12 +672,23 @@ pub fn main(init: std.process.Init) !void {
                 fail("--scheme wants day, dusk or night", .{});
             i += 1;
         } else if (std.mem.eql(u8, arg, "--set-config")) {
-            const target = parseChangeTarget(next orelse fail("--set-config needs a plugin id", .{}));
+            const target = parseActionTarget(arg, next orelse fail("--set-config needs a plugin id", .{}));
             if (i + 2 >= argv.len) fail("--set-config needs an id and a JSON object", .{});
-            try a.changes.append(alloc, .{
+            try a.actions.append(alloc, .{
                 .at_s = target.at_s,
+                .kind = .config,
                 .id = target.id,
-                .json = argv[i + 2][0.. :0],
+                .arg = argv[i + 2][0.. :0],
+            });
+            i += 2;
+        } else if (std.mem.eql(u8, arg, "--grant-file")) {
+            const target = parseActionTarget(arg, next orelse fail("--grant-file needs a plugin id", .{}));
+            if (i + 2 >= argv.len) fail("--grant-file needs an id and a file path", .{});
+            try a.actions.append(alloc, .{
+                .at_s = target.at_s,
+                .kind = .grant,
+                .id = target.id,
+                .arg = argv[i + 2][0.. :0],
             });
             i += 2;
         } else if (std.mem.eql(u8, arg, "--print")) {
@@ -789,13 +814,26 @@ pub fn main(init: std.process.Init) !void {
             warned_silent = true;
             emit("harness: nothing has connected to {s} after 5 s; the log is not being read\n", .{nmea});
         }
-        for (a.changes.items) |*c| {
+        for (a.actions.items) |*c| {
             if (c.done or state.replaySeconds() < c.at_s) continue;
             c.done = true;
-            if (l.setPluginConfig(std.mem.span(c.id.ptr), std.mem.span(c.json.ptr))) |_| {
-                emit("t={d:>7.1}s set-config {s} {s}\n", .{ state.replaySeconds(), c.id, c.json });
-            } else |e| {
-                emit("t={d:>7.1}s set-config {s} REFUSED: {s}\n", .{ state.replaySeconds(), c.id, @errorName(e) });
+            switch (c.kind) {
+                .config => if (l.setPluginConfig(std.mem.span(c.id.ptr), std.mem.span(c.arg.ptr))) |_| {
+                    emit("t={d:>7.1}s set-config {s} {s}\n", .{ state.replaySeconds(), c.id, c.arg });
+                } else |e| {
+                    emit("t={d:>7.1}s set-config {s} REFUSED: {s}\n", .{ state.replaySeconds(), c.id, @errorName(e) });
+                },
+                // The grant a mariner's open panel makes, driven from the
+                // command line. The handle printed is the one FILE_OPENED
+                // carries, so a plugin's own log lines can be read against it.
+                .grant => {
+                    const p = ps orelse fail("--grant-file needs a plugin layer; pass --plugins", .{});
+                    if (p.host.grantFile(std.mem.span(c.id.ptr), std.mem.span(c.arg.ptr), false)) |handle| {
+                        emit("t={d:>7.1}s grant-file {s} {s} FILE_OPENED handle {d}\n", .{ state.replaySeconds(), c.id, c.arg, handle });
+                    } else |e| {
+                        emit("t={d:>7.1}s grant-file {s} {s} REFUSED: {s}\n", .{ state.replaySeconds(), c.id, c.arg, @errorName(e) });
+                    }
+                },
             }
         }
         if (now >= next_poll) {

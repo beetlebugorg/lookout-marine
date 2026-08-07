@@ -80,6 +80,9 @@ pub const Error = error{
     BadConfig,
     /// `grantFile` named a plugin whose manifest did not ask for `files`.
     NotGranted,
+    /// Two manifests claim the file type the mariner opened. Neither gets the
+    /// file: see `openFile`.
+    FileTypeConflict,
     OutOfMemory,
 };
 
@@ -209,6 +212,10 @@ pub const default_event_budget_ms: i64 = 1000;
 /// A group may be a LIST instead of a set of fields:
 /// `{"label":"Connections","tab":"connections","list":{"key":"connections",
 ///   "item_fields":[{"key":"host","kind":"text"},…]}}`.
+///
+/// A manifest may also claim FILE TYPES: `"file_types":[".grib2",".grb"]`. The
+/// mariner opens one of those files the way they open a chart, and `openFile`
+/// hands it to this plugin.
 pub const Manifest = struct {
     id: []u8,
     name: []u8,
@@ -218,6 +225,10 @@ pub const Manifest = struct {
     /// the capability was granted, and a granted one is never empty.
     http_hosts: [][]u8 = &.{},
     ws_hosts: [][]u8 = &.{},
+    /// The file extensions this plugin claims, each lowercase and with the
+    /// leading dot. Empty unless the manifest declares some, and never
+    /// non-empty without the `files` capability.
+    file_types: [][]u8 = &.{},
     /// The settings schema, empty when the manifest declares none.
     settings: []Field = &.{},
     /// The repeating groups, empty when the manifest declares none.
@@ -226,11 +237,21 @@ pub const Manifest = struct {
     pub fn deinit(self: *Manifest, alloc: std.mem.Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
-        freeHosts(alloc, self.http_hosts);
-        freeHosts(alloc, self.ws_hosts);
+        freeStrings(alloc, self.http_hosts);
+        freeStrings(alloc, self.ws_hosts);
+        freeStrings(alloc, self.file_types);
         freeFields(alloc, self.settings, self.settings.len);
         freeLists(alloc, self.lists, self.lists.len);
         self.* = undefined;
+    }
+
+    /// True when this plugin claims `ext`, which must already be lowercase and
+    /// carry its dot — `fileExtension` gives it in that form.
+    pub fn claimsFileType(self: *const Manifest, ext: []const u8) bool {
+        for (self.file_types) |ft| {
+            if (std.mem.eql(u8, ft, ext)) return true;
+        }
+        return false;
     }
 
     pub fn field(self: *const Manifest, key: []const u8) ?usize {
@@ -368,8 +389,10 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     var caps = broker.Caps.initEmpty();
     var http_hosts: [][]u8 = &.{};
     var ws_hosts: [][]u8 = &.{};
-    errdefer freeHosts(alloc, http_hosts);
-    errdefer freeHosts(alloc, ws_hosts);
+    var file_types: [][]u8 = &.{};
+    errdefer freeStrings(alloc, http_hosts);
+    errdefer freeStrings(alloc, ws_hosts);
+    errdefer freeStrings(alloc, file_types);
     if (o.get("capabilities")) |c| {
         if (c != .array) return Error.BadManifest;
         for (c.array.items) |item| switch (item) {
@@ -385,7 +408,7 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
                 const cap = broker.Cap.fromName(kv.key_ptr.*) orelse return Error.BadManifest;
                 if (!cap.needsHosts()) return Error.BadManifest;
                 const hosts = try parseHosts(alloc, kv.value_ptr.*);
-                errdefer freeHosts(alloc, hosts);
+                errdefer freeStrings(alloc, hosts);
                 switch (cap) {
                     .net_http => {
                         if (http_hosts.len > 0) return Error.BadManifest;
@@ -401,6 +424,14 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
             },
             else => return Error.BadManifest,
         };
+    }
+
+    // The file types the plugin claims. `files` is what the grant actually
+    // rests on, so a manifest that claims a type without it is refused rather
+    // than loaded with a claim it could never act on.
+    if (o.get("file_types")) |v| {
+        if (!caps.contains(.files)) return Error.BadManifest;
+        file_types = try parseFileTypes(alloc, v);
     }
 
     const id_owned = try alloc.dupe(u8, id);
@@ -491,9 +522,78 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         .caps = caps,
         .http_hosts = http_hosts,
         .ws_hosts = ws_hosts,
+        .file_types = file_types,
         .settings = fields,
         .lists = lists,
     };
+}
+
+/// Most file types one plugin may claim. A plugin that answers for nine kinds
+/// of file is one whose grant sentence nobody can read.
+pub const max_file_types = 8;
+
+/// Longest file type, the dot counted. `.pmtiles` is eight bytes.
+pub const max_file_type = 16;
+
+/// The file types a `"file_types":[…]` entry names. Each must be written the
+/// way the routing compares them — lowercase, with the leading dot and nothing
+/// else — because a manifest that says ".GRIB2" or "grib2" would read as a
+/// claim and never match a file.
+///
+/// An empty list refuses the manifest: it is the same claim as not asking,
+/// written in a way that looks like asking.
+fn parseFileTypes(alloc: std.mem.Allocator, v: std.json.Value) ![][]u8 {
+    if (v != .array) return Error.BadManifest;
+    const items = v.array.items;
+    if (items.len == 0 or items.len > max_file_types) return Error.BadManifest;
+    const out = try alloc.alloc([]u8, items.len);
+    var built: usize = 0;
+    errdefer {
+        for (out[0..built]) |ft| alloc.free(ft);
+        alloc.free(out);
+    }
+    for (items) |item| {
+        const text = switch (item) {
+            .string => |s| s,
+            else => return Error.BadManifest,
+        };
+        if (text.len < 2 or text.len > max_file_type) return Error.BadManifest;
+        if (text[0] != '.') return Error.BadManifest;
+        // One extension, not a compound one: `.tar.gz` cannot be matched by the
+        // last-dot rule the routing uses, so it is refused instead of ignored.
+        for (text[1..]) |c| switch (c) {
+            'a'...'z', '0'...'9' => {},
+            else => return Error.BadManifest,
+        };
+        for (out[0..built]) |seen| {
+            if (std.mem.eql(u8, seen, text)) return Error.BadManifest;
+        }
+        out[built] = try alloc.dupe(u8, text);
+        built += 1;
+    }
+    return out;
+}
+
+/// The extensions the CHART side of the application owns: the baked vector
+/// cells the core opens, and the picture charts the raster layer adds. A plugin
+/// may name one, and it is never routed one — the mariner's charts keep the
+/// path they have always taken.
+const chart_extensions = [_][]const u8{ ".pmtiles", ".mbtiles" };
+
+/// The lowercase extension of `path`, dot included, written into `buf`.
+///
+/// Null when the name carries no dot, when the dot begins the name (`.profile`
+/// is a hidden file, not a file type), or when what follows is longer than a
+/// manifest may claim. macOS hands back the name the mariner's disk holds, so
+/// `GFS.GRIB2` and `gfs.grib2` must reach the same plugin.
+pub fn fileExtension(path: []const u8, buf: []u8) ?[]const u8 {
+    var base = path;
+    if (std.mem.lastIndexOfAny(u8, base, "/\\")) |slash| base = base[slash + 1 ..];
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return null;
+    if (dot == 0) return null;
+    const ext = base[dot..];
+    if (ext.len < 2 or ext.len > buf.len or ext.len > max_file_type) return null;
+    return std.ascii.lowerString(buf, ext);
 }
 
 /// Most hosts one capability may name. A plugin that needs nine servers is a
@@ -540,9 +640,10 @@ fn parseHosts(alloc: std.mem.Allocator, v: std.json.Value) ![][]u8 {
     return out;
 }
 
-fn freeHosts(alloc: std.mem.Allocator, hosts: [][]u8) void {
-    for (hosts) |h| alloc.free(h);
-    if (hosts.len > 0) alloc.free(hosts);
+/// The owned string lists a manifest holds: hosts, and file types.
+fn freeStrings(alloc: std.mem.Allocator, list: [][]u8) void {
+    for (list) |s| alloc.free(s);
+    if (list.len > 0) alloc.free(list);
 }
 
 /// Longest sentence a list may put around its rows. Room for two lines of
@@ -1127,15 +1228,59 @@ pub const Host = struct {
     /// `write` is true.
     ///
     /// THIS IS THE WHOLE FILESYSTEM. There is no `file_open` import, so a
-    /// plugin cannot name a path: every file it ever sees came through here.
-    /// What is missing is the chrome — a file picker, and the sentence a
-    /// mariner reads before choosing — which is application work. The seam is
-    /// built so that when the picker arrives, no plugin has to change.
+    /// plugin cannot name a path: every file it ever sees came through here,
+    /// because the mariner opened it or an operator passed `--grant-file`.
     pub fn grantFile(self: *Host, id: []const u8, path: []const u8, write: bool) !i64 {
         const e = self.entryFor(id) orelse return Error.UnknownPlugin;
         if (!e.manifest.caps.contains(.files)) return Error.NotGranted;
         if (!e.isLive()) return Error.UnknownPlugin;
         return self.br.grantFile(e.state.index, path, write);
+    }
+
+    /// Give the plugins a file the mariner opened. True when one took it, false
+    /// when no manifest claims that file type — the shell then does with the
+    /// file whatever it did before there were plugins.
+    ///
+    /// THE MARINER OPENS A FILE, NOT A PLUGIN. There is no menu of plugins to
+    /// choose from: a manifest claims `.grib2`, the mariner opens a .grib2 the
+    /// way they open a chart, and the plugin that claimed it gets read access
+    /// and a FILE_OPENED event. The mariner never learns a plugin was involved.
+    ///
+    /// A CHART IS STILL A CHART. An extension the chart side owns is never
+    /// offered to a plugin, so the path a .pmtiles takes is the path it always
+    /// took, whatever a manifest says.
+    ///
+    /// TWO CLAIMS ON ONE TYPE REFUSE BOTH, with one log line naming them. The
+    /// alternative is load order deciding which plugin reads the mariner's
+    /// weather, silently and differently on each machine. Asking the mariner
+    /// which one they meant needs consent chrome that does not exist yet.
+    pub fn openFile(self: *Host, path: []const u8) !bool {
+        var buf: [max_file_type]u8 = undefined;
+        const ext = fileExtension(path, &buf) orelse return false;
+        for (chart_extensions) |ce| {
+            if (std.mem.eql(u8, ce, ext)) return false;
+        }
+
+        var claimant: ?*Entry = null;
+        for (self.entries.items) |*e| {
+            if (!e.isLive()) continue;
+            if (!e.manifest.claimsFileType(ext)) continue;
+            if (claimant) |first| {
+                self.br.say(
+                    broker.level_err,
+                    "host",
+                    "{s} is claimed by both {s} and {s}; neither gets {s}",
+                    .{ ext, first.manifest.id, e.manifest.id, path },
+                );
+                return Error.FileTypeConflict;
+            }
+            claimant = e;
+        }
+        const e = claimant orelse return false;
+
+        const handle = try self.grantFile(e.manifest.id, path, false);
+        self.br.say(broker.level_info, e.manifest.id, "opened {s} (handle {d})", .{ path, handle });
+        return true;
     }
 
     /// Every loaded plugin, its state, its status line, and its settings
@@ -1157,6 +1302,18 @@ pub const Host = struct {
             // wrote, and the shell decides what to do with it.
             try out.appendSlice(alloc, ",\"status\":");
             try writeJsonString(out, alloc, e.state.status());
+            // The file types this plugin claims, written only when it claims
+            // some, so a plugin that opens no files writes the JSON it always
+            // wrote. A shell reads these to tell the mariner what its open
+            // panel now accepts.
+            if (e.manifest.file_types.len > 0) {
+                try out.appendSlice(alloc, ",\"file_types\":[");
+                for (e.manifest.file_types, 0..) |ft, k| {
+                    if (k > 0) try out.append(alloc, ',');
+                    try writeJsonString(out, alloc, ft);
+                }
+                try out.append(alloc, ']');
+            }
             try out.appendSlice(alloc, ",\"settings\":[");
             for (e.manifest.settings, e.values, 0..) |f, v, k| {
                 if (k > 0) try out.append(alloc, ',');
@@ -1732,6 +1889,71 @@ test "a net.http or net.ws grant carries the hosts it covers, and nothing else" 
         "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":\"a.example\"}]}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+}
+
+test "a manifest claims file types, lowercase and dotted, and only with files" {
+    const a = t.allocator;
+    var m = try parseManifest(a,
+        \\{"id":"org.beetlebug.grib","abi":1,"capabilities":["files"],
+        \\ "file_types":[".grib2",".grb"]}
+    );
+    defer m.deinit(a);
+    try t.expectEqual(@as(usize, 2), m.file_types.len);
+    try t.expectEqualStrings(".grib2", m.file_types[0]);
+    try t.expectEqualStrings(".grb", m.file_types[1]);
+    try t.expect(m.claimsFileType(".grb"));
+    try t.expect(!m.claimsFileType(".gpx"));
+
+    const bad = [_][]const u8{
+        // The claim rests on `files`: without it the plugin could not read a
+        // byte of what it asked for.
+        "{\"id\":\"x\",\"abi\":1,\"file_types\":[\".grib2\"]}",
+        // Written any way but the way the routing compares it.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".GRIB2\"]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\"grib2\"]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".tar.gz\"]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".\"]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".grib 2\"]}",
+        // Claiming nothing, written like a claim.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":\".grib2\"}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[1]}",
+        // The same type twice is a typo, not two claims.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".grb\",\".grb\"]}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+
+    // Nine types is past what a grant sentence can say.
+    var many: std.ArrayList(u8) = .empty;
+    defer many.deinit(a);
+    try many.appendSlice(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[");
+    for (0..max_file_types + 1) |i| {
+        if (i > 0) try many.append(a, ',');
+        try many.print(a, "\".t{d}\"", .{i});
+    }
+    try many.appendSlice(a, "]}");
+    try t.expectError(Error.BadManifest, parseManifest(a, many.items));
+
+    // A manifest that claims nothing keeps an empty list, not a null one.
+    var quiet = try parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"]}");
+    defer quiet.deinit(a);
+    try t.expectEqual(@as(usize, 0), quiet.file_types.len);
+}
+
+test "the extension is read from the name, lowercased, dot kept" {
+    var buf: [max_file_type]u8 = undefined;
+    try t.expectEqualStrings(".grib2", fileExtension("gfs.grib2", &buf).?);
+    try t.expectEqualStrings(".grib2", fileExtension("/Users/x/Downloads/GFS.GRIB2", &buf).?);
+    try t.expectEqualStrings(".grb", fileExtension("C:\\charts\\wind.GRB", &buf).?);
+    // A dot in a directory name is not the file's type.
+    try t.expectEqualStrings(".grib2", fileExtension("/x/v1.2/gfs.grib2", &buf).?);
+    try t.expect(fileExtension("/x/v1.2/README", &buf) == null);
+    // No dot, a name that is only a dot, a hidden file, and an extension no
+    // manifest could have claimed.
+    try t.expect(fileExtension("noextension", &buf) == null);
+    try t.expect(fileExtension("/x/.profile", &buf) == null);
+    try t.expect(fileExtension("trailing.", &buf) == null);
+    try t.expect(fileExtension("x.thisextensionistoolong", &buf) == null);
 }
 
 const ais_settings_manifest =

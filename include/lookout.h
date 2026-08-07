@@ -138,6 +138,28 @@ const char *lookout_plugin_config_get(lookout *h, const char *id, size_t *out_le
  * the JSON is not an object. Persisting the values is the shell's job. */
 int lookout_plugin_config_set(lookout *h, const char *id, const char *json);
 
+/* Offer a file the mariner opened to the plugins.
+ *
+ * A manifest claims file types — "file_types":[".grib2",".grb"] — and this
+ * gives the file to the plugin that claimed the extension of `path`, with read
+ * access to it. The mariner opens a weather file the way they open a chart and
+ * never learns a plugin was involved; the plugin declares the types it reads
+ * and never learns there was a file picker.
+ *
+ * Call it from every place your shell opens a file — the Open item, a drop on
+ * the window, a file the OS hands you at launch. lookout_plugins_json() carries
+ * each plugin's "file_types", which is what a picker names in its prompt.
+ *
+ * Returns 1 when a plugin took the file, 0 when no plugin claims that type, and
+ * -1 when one does and the file could not be given to it (two plugins claim the
+ * type, or the file cannot be read; the log line says which).
+ *
+ * A CHART ALWAYS ANSWERS 0, whatever a manifest claims, so charts keep the path
+ * they already take. On 0, do with the file what your shell did before there
+ * were plugins — a build with no plugin layer also answers 0, so one code path
+ * serves both. */
+int lookout_open_file(lookout *h, const char *path);
+
 /* What the plugin overlay says about the symbol nearest a LOGICAL point, as
  * JSON: {"title":"...","rows":[["key","value"],...]}. NULL when no symbol
  * carrying a payload is within about 14 pt of it. Use it for hover on a

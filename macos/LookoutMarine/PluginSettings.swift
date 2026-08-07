@@ -86,6 +86,10 @@ struct PluginInfo: Identifiable {
     var lists: [PluginListSchema] = []
     /// The rows the core holds, by list key. The window edits its own copy.
     var rows: [String: [PluginRow]] = [:]
+    /// The file extensions this plugin reads, ".grib2" and the like. The open
+    /// panel names them so the mariner knows it takes more than charts; the
+    /// core decides which plugin a chosen file goes to.
+    var fileTypes: [String] = []
 
     /// What the plugin says about each row of its lists, by row id.
     var statusItems: [String: PluginStatusItem] {
@@ -546,7 +550,8 @@ final class PluginSettings: ObservableObject {
                 status: o["status"] as? String ?? "",
                 fields: (o["settings"] as? [[String: Any]] ?? []).compactMap(field(from:)),
                 lists: (o["lists"] as? [[String: Any]] ?? []).compactMap { listSchema(from: $0, pluginID: id) },
-                rows: listRows(o, pluginID: id)
+                rows: listRows(o, pluginID: id),
+                fileTypes: o["file_types"] as? [String] ?? []
             )
         }
     }

@@ -1263,6 +1263,18 @@ pub const Lookout = struct {
         try ps.host.configSet(id, json);
     }
 
+    /// Offer a file the mariner opened to the plugins. True when one claimed
+    /// the file type and now has read access to it.
+    ///
+    /// False means no plugin wants it, and the shell should do what it did
+    /// before there were plugins — which is also what a build with no plugin
+    /// layer answers, so a shell needs no second code path for one.
+    pub fn openFileForPlugins(self: *Lookout, path: []const u8) !bool {
+        if (!plugins_on) return false;
+        const ps = self.plugins orelse return false;
+        return ps.host.openFile(path);
+    }
+
     // ---- follow mode --------------------------------------------------------
 
     /// Read the vessel store and recompute own ship's display position. Called

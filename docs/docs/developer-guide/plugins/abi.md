@@ -103,9 +103,8 @@ can report what it is doing and measure time without asking for one.
 
 **There is no `file_open`.** You cannot name a path. Every file handle you ever
 see arrived as a `FILE_OPENED` event because the host granted it, and the host
-grants one only when the application asks it to on a mariner's behalf. The
-picker that would ask is not built yet, so today the harness is what grants a
-file.
+grants one only when the application asks it to on a mariner's behalf. The application asks on the mariner's behalf when they open a file your
+manifest claims. See **File types** below.
 
 ### The capabilities
 
@@ -568,6 +567,38 @@ the bytes read, 0 at the end of the file, and -1 for a handle that is not yours.
 
 The host closes every handle you hold when you stop, so `file_close` matters
 only to a plugin that opens many files over a long run.
+
+
+### File types
+
+Name the extensions you read, and the mariner's Open command routes those files
+to you:
+
+    "capabilities": ["files"],
+    "file_types": [".grib2", ".grb"]
+
+The mariner opens a weather file the way they open a chart. They are not shown a
+list of plugins and never learn one was involved; you never learn there was a
+file picker. The host matches the extension, grants you read access, and sends
+`FILE_OPENED`.
+
+Write each type lowercase, with the leading dot and nothing else — `.grib2`, not
+`.GRIB2` and not `grib2`. A name in any other form refuses the manifest, because
+it would read as a claim and never match a file. The same applies to a compound
+extension such as `.tar.gz`: only the last dot is matched. Eight types is the
+most one plugin may claim.
+
+`file_types` needs the `files` capability. Without it the manifest is refused:
+the claim rests on the grant.
+
+Two rules decide what you do NOT get:
+
+- **A chart is always a chart.** `.pmtiles` and `.mbtiles` belong to the chart
+  side of the application and are never offered to a plugin, whatever a manifest
+  claims.
+- **Two plugins claiming one type both lose it.** Neither is given the file and
+  the log names both. Load order must not decide who reads the mariner's
+  weather.
 
 ## The manifest
 
