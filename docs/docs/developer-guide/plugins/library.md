@@ -1,25 +1,46 @@
 ---
 id: library
-title: The plugin library
+title: The plugin SDK
 sidebar_position: 3.5
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# The plugin library
+# The plugin SDK
 
-A plugin declares what it reads off the boat and describes what it draws. The
-library owns everything between those two: the subscription, the ageing, the
-timer, the difference between this scene and the last, the status line, the
-settings and the connections.
+Your plugin declares what it reads and provides a `draw` function. Lookout
+does the rest: it delivers each declared input, calls `draw` on a timer,
+puts the scene on the chart, dials your connections, and stores your
+settings.
+
+## Which way the data flows
+
+Everything a plugin does moves in one of two directions, and the vessel
+store sits in the middle.
+
+**In:** `inputs` are values your plugin reads from the store — the current
+position, the wind, the AIS targets. Declaring an input subscribes your plugin
+to it; there is no subscribe call. When your plugin starts, Lookout reads
+the declared inputs and delivers each path's values from then on. A connection list brings bytes in from
+the network. `onEvent` brings in anything else you asked the host for, such
+as an HTTP response or a file the mariner opened.
+
+**Out:** `draw` puts your scene on the chart. `publish` and the AIS upsert
+write values into the store. The status line and alerts go to the person at
+the helm.
+
+A source plugin faces the network: bytes in, publish out. A display plugin
+faces the chart: inputs in, draw out. The store connects them — the position
+`nmea0183` publishes is the position `ownship` declares as an input. One
+plugin can be both.
 
 There are three tiers. Tier 1 is a declaration of inputs and a `draw` function.
-Tier 2 adds a connection list, where the library holds the sockets and the
+Tier 2 adds a connection list, where Lookout holds the sockets and the
 plugin writes the parser. Tier 3 is one hook that receives every event the
 first two did not consume.
 
-Zig is where the API is decided. `plugins/common/lk2.zig` is the library, and
+Zig is where the API is decided. `plugins/common/lk2.zig` is the SDK, and
 its doc comments are the authority when this page and the code disagree. The Go
 and Rust libraries implement the same three tiers under the same names in each
 language's idiom.
@@ -83,7 +104,7 @@ impl lk::Plugin for Windline {}
 
 `lk.plugin` registers your plugin. It reads what the module declares and wires
 only that, so a module with nothing else registers, starts and does nothing.
-Add any of the three declarations below and the library wires that as well.
+Add any of the three declarations below and the SDK wires that as well.
 
 In Go, register from `init` or from a package-level variable. `main` never
 runs, and package `main` still needs an empty one to compile. In Rust the
@@ -187,7 +208,7 @@ impl lk::Plugin for Windline {
 </TabItem>
 </Tabs>
 
-That is a complete plugin. The library subscribes to both paths, records and
+That is a complete plugin. Lookout subscribes it to both paths, records and
 ages what arrives, runs `draw` once a second, and sends the difference between
 this scene and the last. When either reading passes its 5 s window the line
 comes off the chart and the status reads `no position, no wind`.
@@ -323,15 +344,15 @@ impl lk::Source<Servers> for SignalK {
 </Tabs>
 
 A connection list is a group of rows in the settings window that the mariner
-fills in and switches on and off. The library gives each row a socket, a
+fills in and switches on and off. The SDK gives each row a socket, a
 reconnect clock, a pause switch and a line of its own in the settings window.
 The plugin writes the protocol.
 
-Every row carries four columns the library owns: the name, the address, the
+Every row carries four columns Lookout owns: the name, the address, the
 port and the on switch. The `websocket` column above is the plugin's own, and
 so is the parse state each row keeps between reads.
 
-### Handling the rest of the events
+### Handling events yourself
 
 <Tabs groupId="plugin-language">
 <TabItem value="zig" label="Zig" default>
@@ -401,10 +422,12 @@ impl lk::Plugin for Probe {
 </TabItem>
 </Tabs>
 
-This hook is tier 3. A plugin that also declares inputs, `draw` or a connection
-list still gets it, and receives only what the library left over — so a
-drawing plugin can answer an HTTP response without giving up the scene diff.
-[Where the library stops](#where-the-library-stops) says what is behind it.
+This hook is tier 3. Declaring it does not switch the other tiers off: a
+plugin with inputs, `draw` or a connection list keeps them, and `onEvent`
+receives only the events the SDK did not already handle — an HTTP
+response, a datagram, a file the mariner opened.
+[Where the SDK stops](#where-the-library-stops) lists exactly what
+arrives here and what never does.
 
 ## The names in Zig, Go and Rust
 
@@ -443,7 +466,7 @@ The full listings for each language are in `sdk/go/ENTRYPOINTS.md` and
 
 **Capabilities:** `vessel.read`, and `ais.read` for the target set.
 
-Inputs are declared once. The library subscribes, records every value that
+Inputs are declared once. Lookout subscribes your plugin, records every value that
 arrives, ages it against the monotonic clock, and holds `draw` until every
 required one is inside its window.
 
@@ -481,20 +504,20 @@ The paths are the vessel store's own: `navigation.position`,
 
 | Call | Answers | Where it is correct |
 |---|---|---|
-| `get()` | the value | inside `draw`, where the library has already gated on freshness |
+| `get()` | the value | inside `draw`, where the SDK has already gated on freshness |
 | `fresh()` | `?T`, null past the window | anywhere, at any time |
 | `ageMs()` | `?i64` | anywhere |
 
 An optional input has no `get`. Calling it is a compile error that names both
 ways out: read it with `fresh()` and handle the null, or drop
-`.optional = true` and let the library hold the draw until the value arrives.
+`.optional = true` and let the SDK hold the draw until the value arrives.
 
 A tier-2 plugin reading an input from `onData` is outside the gate, so it uses
 `fresh()` there as well.
 
 ### What happens when a reading goes stale
 
-The library clears everything this plugin drew, skips the call to `draw`, and
+The SDK clears everything this plugin drew, skips the call to `draw`, and
 posts one degraded line naming every missing input at once: `no wind, no
 position`. Naming all of them matters, because a line that says only "no wind"
 while the GPS is also out sends the mariner to the wrong instrument. The word
@@ -522,13 +545,13 @@ never heard and heard as zero are different things at sea.
 | `name()` | `[]const u8` | |
 
 A target that stops being heard drops out of the set. Draw from the set each
-call and the library takes the symbol off the chart for you.
+call and the SDK takes the symbol off the chart for you.
 
 ## Drawing on the chart
 
 **Capabilities:** `overlay.draw`.
 
-`draw` runs on the library's timer, once a second unless the plugin declares
+`draw` runs on the SDK's timer, once a second unless the plugin declares
 `pub const draw_rate_ms: i64 = …`. Describe the whole picture every call. The
 library compares it with the last one: an object with the same id and the same
 shape is left alone, a changed one is replaced, and one you did not draw is
@@ -616,13 +639,13 @@ c.status("TWD {d:.0} deg", .{twd});          // working, and what it is doing
 c.degraded("the chart is out of date", .{}); // short of something, and which
 ```
 
-The library posts these once. The host logs every status text it has not seen
+The SDK posts these once. Lookout logs every status text it has not seen
 before, so a line that repeats at 1 Hz would be a log line a second; the
 library sends nothing while the text is unchanged. Round anything live before
 you print it, or the text changes every tick and the dedupe cannot help.
 
 Say nothing at all in `draw` and the plugin reads `running`. A missing input
-already produces the degraded line, so `c.degraded` is for what the library
+already produces the degraded line, so `c.degraded` is for what the SDK
 cannot see. Outside `draw`, `lk.say(.running, fmt, args)` posts the same line;
 the states are `starting`, `running`, `degraded` and `stopped`.
 
@@ -686,16 +709,16 @@ and read each with `lk.settings(Alarm)`. One plugin declares at most 16 fields,
 counting every group and every connection column.
 
 There is no scalar text setting. `lk.Text` outside a connection row is a
-compile error, because the host keeps no scalar string.
+compile error, because Lookout keeps no scalar string.
 
 Declare `pub fn onSettings() void` to recompute something after a change. You
-do not need it to redraw: the library re-reads the values and calls `draw`
+do not need it to redraw: the SDK re-reads the values and calls `draw`
 again the moment the mariner changes one.
 
 ### Checking the manifest against the struct
 
 The manifest is verified rather than generated. Put the settings in a file that
-imports only the library and test it:
+imports only the SDK and test it:
 
 ```zig
 test "the manifest ships the schema this file declares" {
@@ -716,7 +739,7 @@ Reference: [the settings schema](abi.md#settings-schema-v2).
 `vessel.publish` and `ais.publish` for what you put in the stores.
 
 One declaration gives the plugin a group of rows in the settings window and a
-socket per row. The library owns the list schema, the dialling, the reconnect
+socket per row. Lookout owns the list schema, the dialling, the reconnect
 clock, the failure count behind "unreachable", the pause switch, the per-row
 status item and the plugin's own status line.
 
@@ -751,7 +774,7 @@ pub const Connections = lk.connections(.{
 | `group` | required | the section heading in the settings window |
 | `tab` | `.connections` | which settings tab the group lands on |
 | `footer`, `empty`, `add_label` | empty | the list's own wording in the settings window |
-| `columns` | the library's wording | words the four standard columns and sets the port's range |
+| `columns` | the SDK's wording | words the four standard columns and sets the port's range |
 | `Extra` | `struct {}` | columns beyond the four, shaped like a settings group |
 | `State` | `struct {}` | per-row state the plugin keeps: a framer, a parser, an identity |
 | `reconnect_ms` | `2_000` | delay before a dropped connection is retried |
@@ -762,7 +785,7 @@ pub const Connections = lk.connections(.{
 | `no_answer_detail` | `"check the address"` | what a row says once it has read as unreachable |
 | `refused_detail` | `"the host refused this address"` | what a row says when the host would not dial it |
 
-Every row carries four columns the library owns — name, address, port and the
+Every row carries four columns Lookout owns — name, address, port and the
 on switch — plus whatever `Extra` declares. Rows are matched to sockets by the
 id the shell assigned, so editing one row never disturbs another's connection.
 Only an address change, a column change, a pause or a delete closes a socket. A
@@ -811,7 +834,7 @@ pub fn endpoint(row: *Connections.Row) lk.Endpoint {
 | `Connections.all()` | every row |
 | `Connections.byId(id)` | one row, or null |
 
-The library posts the plugin's status line and one item per row under the row
+The SDK posts the plugin's status line and one item per row under the row
 id: `connected`, `reconnecting`, `unreachable`, `paused`, `no_address` or
 `refused`. The plugin's own line counts what is up: `2 of 3 connected, 44
 msg/s`.
@@ -835,7 +858,7 @@ u.target(.{ .mmsi = 367123450, .at = at, .sog_mps = mps, .cog_deg = cog });
 _ = u.send();
 ```
 
-Both batches are stamped with the host's wall clock, which is what the store
+Both batches are stamped with Lookout's wall clock, which is what the store
 ages against. `send` answers the number of values the host took, or -1; an
 empty batch is not sent and answers 0.
 
@@ -865,12 +888,12 @@ mariner must act now and would not otherwise know; everything else is a status
 line. An alarm that fires when nothing is wrong gets switched off, and then the
 real one is not heard.
 
-## Where the library stops
+## Where the SDK stops
 
-Declare `pub fn onEvent(e: lk.raw.Event) !void` and every event the library did
+Declare `pub fn onEvent(e: lk.raw.Event) !void` and every event the SDK did
 not consume arrives there — timers you set yourself, HTTP responses, datagrams,
 websocket frames, a file the mariner handed over. `lk.raw` is the whole
-host-call surface under the library: storage, HTTP, UDP, files, sockets and
+host-call surface under the SDK: storage, HTTP, UDP, files, sockets and
 timers, each answering -1 when the manifest did not ask for it. A tier-1 or
 tier-2 plugin reaches all of it without giving up the inputs, the scene diff or
 the connections, so the hook is an addition to the tiers rather than a way out

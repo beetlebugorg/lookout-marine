@@ -14,7 +14,7 @@ drew and what it was denied, then writes the chart with your overlay on it to a
 PNG.
 
 Nothing about the plugin layer is simulated: it uses the same broker, stores,
-overlay engine and watchdog as the app. What is missing is the app window and a
+overlay engine and watchdog as Lookout. What is missing is Lookout window and a
 real boat.
 
 ```sh
@@ -254,7 +254,7 @@ LOOKOUT_PLUGINS=$PWD/zig-out/plugins LOOKOUT_NMEA=127.0.0.1:10110 \
 ```
 
 Everything the plugin layer prints goes to stderr. On macOS that is the Xcode
-console, or the terminal you launched the app from. The Windows app is a
+console, or the terminal you launched Lookout from. The Windows app is a
 Windows-subsystem binary with no console attached, so redirect stderr to a file
 there or you will see nothing at all.
 

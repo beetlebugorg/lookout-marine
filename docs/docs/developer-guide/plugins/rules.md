@@ -128,7 +128,7 @@ status line says why.
 *A chartplotter that keeps drawing the last position a crashed plugin published
 is worse than one that draws nothing.*
 
-There is no restart and no backoff. The plugin is gone until the app restarts.
+There is no restart and no backoff. The plugin is gone until Lookout restarts.
 
 ## Memory is capped at 16 MiB
 
@@ -258,7 +258,7 @@ into your buffer only when the value fits. A key that was never written answers
 ## You cannot open a file
 
 There is no `file_open`, and there never will be one. A file handle arrives as
-`FILE_OPENED` because a mariner chose that file and the application granted it.
+`FILE_OPENED` because a mariner chose that file and Lookoutlication granted it.
 
 *A plugin that could name a path could read the chart library, the settings and
 the saved credentials of every other plugin on the machine.*

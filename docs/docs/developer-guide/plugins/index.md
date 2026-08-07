@@ -9,7 +9,7 @@ sidebar_position: 1
 A plugin is a WebAssembly module and a small JSON manifest. You write the module
 and compile it to wasm. The manifest says who the plugin is and what it is
 allowed to do. Lookout loads the pair, runs the module in a sandbox, and gives it
-a fixed set of calls into the app.
+a fixed set of calls into Lookout.
 
 You write one to get something off your boat and onto the chart. **Zig, Go and
 Rust all run**, and so does any other toolchain that emits a wasm module the host
@@ -28,7 +28,7 @@ is no file system and no network in it; real capabilities go through the
 `lookout` imports and your manifest.
 [The ABI page](abi.md#the-wasi-floor) lists exactly which WASI calls work.
 
-Only the Zig library, `plugins/common/lk.zig`, is settled. The Go and Rust
+Only the Zig SDK, `plugins/common/lk.zig`, is settled. The Go and Rust
 libraries under `sdk/` implement the same three tiers as the Zig one, so
 write Zig today unless you are prepared to update your code as they change.
 
@@ -41,7 +41,7 @@ The shortest path in is [Recipes](recipes.md): one page, a dozen things a plugin
 might do, and a complete short listing for each.
 [Build your first plugin](build-your-first.md) covers the same ground in more
 detail — a manifest, one file, and a dashed line drawn on a real chart.
-[The plugin library](library.md) is the reference both of them call, and it
+[The plugin SDK](library.md) is the reference both of them call, and it
 opens with the entry points in Zig, Go and Rust.
 
 ## What you can build
@@ -114,7 +114,7 @@ Where you can run a plugin:
 | iOS, iPadOS | Runs on the simulator | Metal, seen on screen |
 | Linux | Compiles and links; no socket has carried a byte | Vulkan, run offscreen through MoltenVK, never on a Linux driver |
 | Windows | Compiles and links; never run | Direct3D 12, compiled, never rendered |
-| Android | No WAMR archive, and the app does not start the host yet | The Vulkan pass is in the APK; the plugin host is not |
+| Android | No WAMR archive, and Lookout does not start the host yet | The Vulkan pass is in the APK; the plugin host is not |
 
 Develop on macOS. It is the only platform where the whole loop has been run.
 
@@ -138,7 +138,7 @@ Built and usable today:
   payloads for hover and tap, and an own-ship anchor the core moves for you every
   frame.
 - Settings: number, toggle and text fields declared in your manifest, grouped
-  into the app's own settings tabs, applied hot without a restart.
+  into Lookout's own settings tabs, applied hot without a restart.
 - Lists: a group the mariner adds rows to, delivered as a JSON array with a
   stable id per row. The `nmea0183` and `signalk` plugins each use one to hold
   several TCP connections at once, each with its own socket and its own pause
@@ -178,9 +178,9 @@ handed. What that means for you:
 | Page | What it is |
 |---|---|
 | [Recipes](recipes.md) | One recipe per thing you might want to do, with the permissions it needs |
-| [Build your first plugin](build-your-first.md) | The walkthrough in Zig: a directory, a manifest, a module, the harness, the app |
-| [The plugin library](library.md) | The API you write against: the entry points in three languages, inputs, drawing, settings, connections |
-| [The ABI](abi.md) | The reference under the library: imports, event kinds, JSON shapes, the manifest |
+| [Build your first plugin](build-your-first.md) | The walkthrough in Zig: a directory, a manifest, a module, the harness, Lookout |
+| [The plugin SDK](library.md) | The API you write against: the entry points in three languages, inputs, drawing, settings, connections |
+| [The ABI](abi.md) | The reference under the SDK: imports, event kinds, JSON shapes, the manifest |
 | [The rules](rules.md) | The rules the host enforces, and the reason behind each one |
 | [The dev harness](dev-harness.md) | `lookout-plugin-dev`: the replay log, what it prints, and golden tests |
 

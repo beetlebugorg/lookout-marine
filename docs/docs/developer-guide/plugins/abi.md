@@ -103,7 +103,7 @@ can report what it is doing and measure time without asking for one.
 
 **There is no `file_open`.** You cannot name a path. Every file handle you ever
 see arrived as a `FILE_OPENED` event because the host granted it, and the host
-grants one only when the application asks it to on a mariner's behalf. The application asks on the mariner's behalf when they open a file your
+grants one only when Lookoutlication asks it to on a mariner's behalf. Lookoutlication asks on the mariner's behalf when they open a file your
 manifest claims. See **File types** below.
 
 ### The capabilities
@@ -190,7 +190,7 @@ them before debugging a call that failed.
 |---|---|
 | `clock_time_get`, `clock_res_get` | Real. `SystemTime::now()` and `time.Now()` agree with the host's `now_ms` to the millisecond. `Instant` and monotonic timing work. |
 | `random_get` | Real. Seeds Go's map hashing and Rust's `HashMap`, which is why both need it to boot. |
-| `fd_write` on 1 and 2 | Becomes log lines, one per line written. `println!`, `fmt.Println`, `eprintln!` and a Rust `fatal error` all arrive in the plugin layer's log — never on the terminal the app was launched from, and never in a file. A line over 512 bytes is cut. Any other descriptor is `EBADF`. |
+| `fd_write` on 1 and 2 | Becomes log lines, one per line written. `println!`, `fmt.Println`, `eprintln!` and a Rust `fatal error` all arrive in the plugin layer's log — never on the terminal Lookout was launched from, and never in a file. A line over 512 bytes is cut. Any other descriptor is `EBADF`. |
 | `args_*`, `environ_*` | Succeed and report nothing. Zero arguments, zero variables. |
 | `sched_yield` | Real, and pointless: there is nothing else to schedule. |
 | `proc_exit` | Real. It traps the instance, so a Rust panic or a Go `fatal error` fails the plugin loudly instead of half-running. |
@@ -202,7 +202,7 @@ them before debugging a call that failed.
 | `File::open`, `os.Open`, any path at all | `ENOENT` | **Zero preopened directories.** There is no root, so no path resolves — absolute or relative, read or write. `fd_prestat_get(3)` is `EBADF`, which is how the standard library discovers there is no filesystem. |
 | `read_dir`, `os.ReadDir` | `ENOENT` | Same. |
 | `TcpStream::connect`, `net.Dial` | `Unsupported` | No sockets. `sock_open` is refused before a descriptor exists. Use `tcp_connect` with the `net.tcp-client` capability. |
-| `env::var`, `os.Getenv` | not present | The environment is empty on purpose: the app's configuration is not the plugin's. Your settings arrive when the plugin starts and in `CONFIG_CHANGED`. |
+| `env::var`, `os.Getenv` | not present | The environment is empty on purpose: Lookout's configuration is not the plugin's. Your settings arrive when the plugin starts and in `CONFIG_CHANGED`. |
 | `thread::spawn`, `go func()` | `ENOTSUP`, or a goroutine that never runs | One thread, and it runs only while the host is calling your plugin. |
 | `thread::sleep`, `time.Sleep` | returns at once | `poll_oneoff` never waits. A thread parked in a sleep cannot see the watchdog, so a plugin that could sleep could hold its dispatch thread for as long as it liked. Sleeping is what `timer_set` is for. |
 | `fd_read` on stdin | end of file | Backed by the null device. |
@@ -381,7 +381,7 @@ two strings is dropped and the symbol still draws. **Values are strings you have
 already formatted for display** — the core cannot know that a row called SOG
 holds metres per second, so you write the number and the unit yourself. This is
 the only place the SI rule is broken, and it is deliberate. Lines and areas carry
-no payload: there is no single point to measure a hit to. The app
+no payload: there is no single point to measure a hit to. Lookout
 reads the payload back with `lookout_overlay_at`, which answers with the nearest
 symbol whose **anchor** is within about 14 pt of the point the mariner touched.
 
@@ -400,7 +400,7 @@ out of service.
 
 Your status is nearly the only thing you can put in front of a person away from
 the chart itself. Use it to say what you are doing, or what you are missing. It
-reaches the app through `lookout_plugins_json`. If your settings include a list,
+reaches Lookout through `lookout_plugins_json`. If your settings include a list,
 a status can also carry one line per row — see
 [status items](#status-items-one-line-per-row). There are no jobs, no progress
 and no alarm surface yet.
@@ -509,7 +509,7 @@ tell from text would parse them as JSON.
 ### storage_get and storage_put
 
 A key-value store of your own, one per plugin, that survives a restart. The host
-keeps it as a JSON file under the application's data directory — data, not
+keeps it as a JSON file under Lookoutlication's data directory — data, not
 cache, so nothing purges it when the disk runs low.
 
 `storage_get` uses a **two-call pattern**, because the host cannot allocate in
@@ -546,7 +546,7 @@ being loaded again.
 ### file_read and file_write
 
 There is no way to open a file. A handle arrives as `FILE_OPENED` because the
-mariner chose that file and the application asked the host to grant it:
+mariner chose that file and Lookoutlication asked the host to grant it:
 
 ```json
 {"name":"gfs.t00z.pgrb2.0p25.f000","size":12582912,"mode":"read"}
@@ -594,7 +594,7 @@ the claim rests on the grant.
 Two rules decide what you do NOT get:
 
 - **A chart is always a chart.** `.pmtiles` and `.mbtiles` belong to the chart
-  side of the application and are never offered to a plugin, whatever a manifest
+  side of Lookoutlication and are never offered to a plugin, whatever a manifest
   claims.
 - **Two plugins claiming one type both lose it.** Neither is given the file and
   the log names both. Load order must not decide who reads the mariner's
@@ -631,8 +631,8 @@ Two rules decide what you do NOT get:
 
 | Key | Required | Rule |
 |---|---|---|
-| `id` | yes | 1 to 128 bytes. Your overlay namespace, your settings key, and the name the app knows you by. Reverse-DNS by convention. |
-| `name` | no | What the app would show a person. Defaults to the id. |
+| `id` | yes | 1 to 128 bytes. Your overlay namespace, your settings key, and the name Lookout knows you by. Reverse-DNS by convention. |
+| `name` | no | What Lookout would show a person. Defaults to the id. |
 | `abi` | yes | Must be 1. |
 | `capabilities` | no | An array of the names above, plus `{"net.http": […]}` and `{"net.ws": […]}` for the two that carry a host list. Absent grants nothing. An unknown name refuses the manifest. |
 | `settings` | no | A v1 array of fields, or a v2 object of groups. At most 16 fields in total, and at most 16 columns in a list. |
@@ -677,7 +677,7 @@ A field:
 |---|---|---|
 | `key` | all | Required, 1 to 32 bytes, unique across the whole schema. The key in the config object. |
 | `kind` | all | `number`, `toggle`, or `text` inside a list. A `text` field outside a list refuses the manifest: a scalar value crosses the ABI as a number, and there is nowhere to keep a scalar string. |
-| `label` | all | What the app shows beside the control. Defaults to the key. |
+| `label` | all | What Lookout shows beside the control. Defaults to the key. |
 | `desc` | all | One sentence, in plain language, about what the setting does for the person at the helm. Shown under the control. Absent shows none. |
 | `unit` | number | Display only. The value crosses the ABI in the unit the schema names. |
 | `min`, `max` | number | Both required, and `max` must be greater than `min`. |
@@ -737,9 +737,9 @@ What you receive:
 {"connections":[{"id":"row-3f9c1a20","name":"Masthead","host":"10.0.0.9","port":2000,"enabled":true}]}
 ```
 
-- **Every row carries an `id`** the app assigned when the row was added, and it
+- **Every row carries an `id`** Lookout assigned when the row was added, and it
   does not change when the row is edited. Echo it back in your status items (see
-  below) so the app can put each line beside the right row.
+  below) so Lookout can put each line beside the right row.
 - Every column the schema declares is present in every row, in schema order.
   Numbers are clamped, text is capped at 128 bytes, a missing column takes its
   default, and a column nobody declared is dropped.
@@ -748,7 +748,7 @@ What you receive:
   array you receive.
 - A list starts **empty**. `lookout_plugin_config_get` and the registry both show it
   as `[]` until an app writes rows. (The one exception is `nmea0183`: the host
-  seeds row one from the address the app was started with, so a mariner sees the
+  seeds row one from the address Lookout was started with, so a mariner sees the
   source already feeding the chart.)
 
 ### Status items: one line per row
@@ -762,13 +762,13 @@ One item per row of a list, keyed by the row id:
           {"id":"row-8b02cc71","state":"paused","detail":"switched off"}]}
 ```
 
-The app puts each item's line under its row and colours a dot from the state.
+Lookout puts each item's line under its row and colours a dot from the state.
 The whole status, items included, is capped at 768 bytes and truncated past
-that, so keep a detail short. The item `state` is yours to name; the app that
+that, so keep a detail short. The item `state` is yours to name; Lookout that
 ships knows `connected`, `paused`, `reconnecting`, `unreachable` and
 `no_address`, and shows anything else as it is written.
 
-## How the app sees your plugin
+## How Lookout sees your plugin
 
 You never call these. They are in `include/lookout.h`, the C header an app uses
 to drive the chart core, and they are how a control in a settings window becomes
@@ -786,7 +786,7 @@ int  lookout_plugin_config_set(lookout *h, const char *id, const char *json);
 `lookout_plugins_json` is the registry: every loaded plugin with its id, name,
 whether it is live, its status line, each settings field with its label,
 description, unit, range, group, tab, default and the value in force, and each
-list with its columns and the rows in force. The app draws one control per field
+list with its columns and the rows in force. Lookout draws one control per field
 and one editable row per list entry, and knows nothing about what your plugin
 does, so your manifest schema is the whole of your user interface.
 
@@ -819,7 +819,7 @@ the chart.
 
 ## The raw module contract
 
-This section is for building a plugin WITHOUT the Zig library — from Go, Rust,
+This section is for building a plugin WITHOUT the Zig SDK — from Go, Rust,
 or any toolchain that emits wasm. With `lk.zig` you never touch any of this:
 `lk.registerPlugin(@This())` registers your plugin and routes the host's calls
 to the `start` and `onEvent` functions you write.

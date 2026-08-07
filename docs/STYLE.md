@@ -121,3 +121,26 @@ keep the old anchor on the new heading instead:
 ```md
 ## Writing the manifest {#the-manifest}
 ```
+
+## The grammar
+
+The docs use a controlled language, adapted from ASD-STE100 and plain-language
+practice. These rules are checkable. Check them.
+
+1. One thought per sentence. An instruction sentence has at most 20 words; a
+   description sentence has at most 25.
+2. Active voice, present tense. Name the actor. In the plugin guide there are
+   exactly two actors: your plugin (you) and Lookout. The SDK appears only
+   where the reader meets it: the import line.
+3. No em dashes. Use a period, a semicolon, a comma, or a new sentence.
+4. Do not define what a developer already knows. Do not explain a thing twice.
+   Open a page with the contract, not with definitions.
+5. One name per thing, everywhere: Lookout, the SDK, the store, the chart,
+   the harness. A second name for the same thing is a defect.
+6. No noun clusters over three words. Break them with prepositions.
+7. Banned register, with the recorded examples: trailing flourish clauses
+   ("…, which is the point"), invented vignettes ("so nobody spends an
+   afternoon…"), repetition for rhythm, personified components. Information
+   per sentence, no cadence tricks.
+8. Technical terms, standard names and code identifiers are the dictionary;
+   the rules above do not simplify them away.

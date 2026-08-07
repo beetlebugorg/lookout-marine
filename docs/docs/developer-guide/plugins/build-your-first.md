@@ -11,9 +11,9 @@ the boat, taken off the chart the moment the wind or the fix goes stale. It is
 twenty-four lines of Zig, header comment included.
 
 Small as it is, it has the shape every drawing plugin has. You declare what you
-read off the boat and you describe what you want on the chart. The library owns
+read off the boat and you describe what you want on the chart. Lookout owns
 everything else: the subscription, the staleness window, the redraw timer, the
-difference between this picture and the last one, and the status line the app
+difference between this picture and the last one, and the status line Lookout
 shows.
 
 `plugins/windline/` is this plugin, already in the tree. `zig build plugins`
@@ -23,7 +23,7 @@ line off own ship. You are going to write your own copy under your own id, so
 that yours is installed and you can change it without touching the reference.
 
 The walkthrough is in Zig.
-[The plugin library](library.md#the-entry-points) has the same entry points in
+[The plugin SDK](library.md#the-entry-points) has the same entry points in
 Go and Rust, and
 [building the plugin in Go and in Rust](#building-the-plugin-in-go-and-in-rust)
 has those toolchains.
@@ -88,7 +88,7 @@ manifest in a test — see
 
 ## Writing the module
 
-`plugins/common/lk2.zig` is the plugin library. You import it as `lk2`.
+`plugins/common/lk2.zig` is the plugin SDK. You import it as `lk2`.
 
 ```zig
 //! Downwind line: one dashed line 1 nm downwind from own ship.
@@ -124,12 +124,12 @@ write.
   reads what the module declares — here `inputs` and `draw` — and wires only
   that. A declaration you leave out costs nothing.
 - **The `inputs` block is the subscription and the staleness window together.**
-  The library subscribes to both paths, records every value that arrives, and
+  Lookout subscribes the plugin to both paths, records every value that arrives, and
   ages it. `draw` runs only when both are inside their 5 s window; when either
-  one is not, the library takes the line off the chart and posts
+  one is not, the SDK takes the line off the chart and posts
   `no position, no wind`. The `.label = "wind"` is the word that appears in that
   list, in place of the path's last segment.
-- **`draw` describes the whole picture, every call.** The library compares it
+- **`draw` describes the whole picture, every call.** The SDK compares it
   with the last one and sends the difference. An object you did not draw this
   call is taken off the chart. There is no delete call and no batch to build.
 - **Anything that outlives an event is a global.** `lk.scratch()` is reset the
@@ -138,14 +138,14 @@ write.
   nothing will catch. See
   [state lives in globals](rules.md#state-lives-in-globals).
 
-`draw` runs on the library's timer at 1 Hz, not on every reading. Boat data
+`draw` runs on the SDK's timer at 1 Hz, not on every reading. Boat data
 arrives at up to 10 Hz, and redrawing at that rate makes the core rebuild vertex
 buffers ten times a second for a line nobody can see move. It is also the only
 way to notice that a fix went stale, because staleness is time passing rather
 than an event that arrives. Declare `pub const draw_rate_ms: i64 = 250` when you
 draw something that has to move smoothly.
 
-[The plugin library](library.md) is the full surface: the other input kinds, the
+[The plugin SDK](library.md) is the full surface: the other input kinds, the
 symbol and area calls, the settings struct, connections, and publishing.
 
 ## Compiling the plugin
@@ -293,7 +293,7 @@ frames: 14 rendered, 1 alert(s) raised
 
 Read four things there.
 
-- **`waiting for position, wind`** is the library, before either reading has
+- **`waiting for position, wind`** is the SDK, before either reading has
   arrived. It names both, and it names them from the input declarations. Three
   seconds in the first fix and the first wind sentence have both landed and the
   plugin goes to `running`.
@@ -313,7 +313,7 @@ The exit code is 0 only if a frame rendered and no plugin trapped.
 [The dev harness](dev-harness.md) has every flag, the delta streams, and how to
 turn a run like this into a regression test.
 
-## Running the plugin in the app
+## Running the plugin in Lookout
 
 Two environment variables are the whole install story for now.
 
@@ -330,7 +330,7 @@ the `nmea0183` plugin in its start config, and points it at your multiplexer or
 at a server replaying a log. An app that wants control of loading instead calls
 `lookout_plugins_load(h, dir)` and leaves the variable unset.
 
-A plugin that fails to load is logged and skipped, so the app still opens. Look
+A plugin that fails to load is logged and skipped, so Lookout still opens. Look
 for the reason on stderr:
 
 ```
@@ -340,13 +340,13 @@ plugin host [error] plugins: downwind not loaded: BadManifest
 
 On the iOS simulator, which reads paths on the host machine, the same directory
 works through `SIMCTL_CHILD_LOOKOUT_PLUGINS`. On an iOS device there is no import
-path at all, so only plugins bundled with the app can run.
+path at all, so only plugins bundled with Lookout can run.
 
 ## What to read next
 
 [Recipes](recipes.md) is a dozen more things a plugin can do, each with a
 complete short listing: a setting, a guard ring, AIS traffic, a connection list,
-an alarm, storage. [The plugin library](library.md) is the reference for
+an alarm, storage. [The plugin SDK](library.md) is the reference for
 everything those recipes call.
 
 The plugins that ship with Lookout are the worked examples, in rising order of

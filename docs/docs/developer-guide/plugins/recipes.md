@@ -11,7 +11,7 @@ needs, and a complete short example. If a recipe runs longer than a screen, that
 is a problem with the API rather than the recipe — report it.
 
 Every listing below is the whole plugin except the manifest. There is no setup
-step, no event loop and no teardown, because the library owns all three.
+step, no event loop and no teardown; Lookout runs all three for every plugin.
 
 ```zig
 const std = @import("std");
@@ -26,7 +26,7 @@ That `comptime` block registers your plugin. Nothing else has to be wired up.
 
 :::note Zig first, then Go and Rust
 
-Only the Zig library is settled. The **ABI** underneath it — the imports, the
+Only the Zig SDK is settled. The **ABI** underneath it — the imports, the
 events, the WASI floor — is also settled, and a Go or Rust module that speaks it
 loads and runs today. The libraries in `sdk/go` and `sdk/rust`
 implement the same three tiers as the Zig one, and each recipe
@@ -75,15 +75,15 @@ pub fn draw(c: *lk.Chart) void {
 
 `lk.settings(Settings)` reads the values in force: `f64` for a `lk.Num`, `bool`
 for a `lk.Flag`. A number outside its range is clamped before it reaches you,
-by the host and again by the library, so `s.length_nm` is always between 0.1
+by the host and again by the SDK, so `s.length_nm` is always between 0.1
 and 10.
 
 **Where it appears.** `tab` picks one of the mariner's settings tabs — display,
 depths, text, charts, vessels, alarms, connections, advanced — and `group` is
-the heading inside it. The app shows a collision alarm limit under Alarms like
+the heading inside it. Lookout shows a collision alarm limit under Alarms like
 any other alarm setting. It does not say which plugin added it.
 
-**Reacting to a change.** You do not have to. The library re-reads the values
+**Reacting to a change.** You do not have to. The SDK re-reads the values
 and calls `draw` again the moment the mariner changes one. Declare
 `pub fn onSettings() void` if something other than the drawing has to be
 recomputed.
@@ -106,8 +106,8 @@ Reference: [the settings schema](abi.md#settings-schema-v2).
 
 **Capabilities:** `vessel.read`.
 
-Declare what you read. The library subscribes, records every value, ages it
-against the monotonic clock, and holds `draw` until everything is fresh.
+Declare what you read. Lookout delivers every value with its age, measured
+on the monotonic clock, and holds `draw` until everything is fresh.
 
 ```zig
 pub const inputs = struct {
@@ -131,7 +131,7 @@ pub fn draw(c: *lk.Chart) void {
 `get()` needs no null check. An optional one has no `get` at all, so calling it
 is a compile error; `fresh()` returns a `?f64` for you to check.
 
-**What happens when a reading goes stale.** The library takes everything this
+**What happens when a reading goes stale.** The SDK takes everything this
 plugin drew off the chart and posts `degraded`, naming every missing input at
 once: `no wind, no position`. A line that says only "no wind" while the GPS is
 also out sends the mariner to the wrong instrument. The `.label` you give an
@@ -148,8 +148,8 @@ Reference: [STORE_CHANGED](abi.md#store_changed) and
 **Capabilities:** `overlay.draw`, plus `vessel.read` for anything drawn off the
 boat's position.
 
-`draw` runs on the library's timer, once a second by default. Describe the
-whole picture every call: the library compares it with the last one, sends what
+`draw` runs on the SDK's timer, once a second by default. Describe the
+whole picture every call: the SDK compares it with the last one, sends what
 changed, and deletes what you did not draw. There is no delete call, no batch
 and no buffer.
 
@@ -234,7 +234,7 @@ pub fn draw(c: *lk.Chart) void {
 }
 ```
 
-Both objects are described in full on all four calls each second. The library
+Both objects are described in full on all four calls each second. The SDK
 sends the sweep because it moved; while the boat holds station it does not send
 the ring again. Take the ring out of `draw` — return early, or drop the setting
 to nothing — and it leaves the chart on the next call, with no delete call from
@@ -327,7 +327,7 @@ pub fn draw(c: *lk.Chart) void {
 ```
 
 A target that stops being heard drops out of the snapshot. It is then not
-drawn, and the library takes its symbol off the chart. You do not have to track
+drawn, and the SDK takes its symbol off the chart. You do not have to track
 expiry yourself.
 
 **`sog_mps` is metres per second**, whatever the wire format reported.
@@ -344,7 +344,7 @@ Reference: [AIS_CHANGED](abi.md#ais_changed).
 **Capabilities:** `net.tcp-client` or `net.udp` or `net.ws`, plus
 `vessel.publish` and `ais.publish` for what you put in the chart.
 
-Declare the connection list once. The library owns the settings rows, one
+Declare the connection list once. Lookout owns the settings rows, one
 socket per row, the reconnect clock, the pause switch and each row's line in
 the settings window. You write the parser.
 
@@ -399,7 +399,7 @@ stream comes up — send a subscription there, if the protocol needs one.
 `onClose(row)` runs when one ends. `rowNote(row)` adds a phrase after the rate
 on that row's line.
 
-**`row.count(n)`** is how the rate gets into the status: the library turns it
+**`row.count(n)`** is how the rate gets into the status: the SDK turns it
 into "42 msg/s" on the row and sums it for the plugin's line.
 
 **Dialling somewhere other than the row's address.** Declare `endpoint`:
@@ -422,7 +422,7 @@ shell assigned, so editing one row never disturbs another's connection.
 `plugins/nmea0183` is a second one.
 
 Reference: [lists](abi.md#lists-a-group-the-mariner-adds-rows-to) and
-[reconnecting is yours](rules.md#reconnecting-is-yours), which the library does
+[reconnecting is yours](rules.md#reconnecting-is-yours), which the SDK does
 for you once it owns the row.
 
 ## Raising an alarm, and when not to
@@ -466,19 +466,19 @@ pub fn draw(c: *lk.Chart) void {
 }
 ```
 
-**The library posts it once.** The host logs every status text it has not seen
-before, so a repeat at 1 Hz would be a log line a second. The library sends
+**The SDK posts it once.** The host logs every status text it has not seen
+before, so a repeat at 1 Hz would be a log line a second. The SDK sends
 nothing while the text is unchanged. Say nothing at all and the plugin reads
 `running`.
 
 **You rarely need `degraded`.** A missing declared input already produces it,
-naming the instrument. Use it for what the library cannot see.
+naming the instrument. Use it for what the SDK cannot see.
 
 **Round anything live.** A detail carrying a raw float changes every tick and is
 a new line every tick. Round it — `{d:.0}` on a wind direction, or a five-degree
 bucket — and the log stays readable.
 
-**A connection list writes its own.** The library posts one item per row —
+**A connection list writes its own.** The SDK posts one item per row —
 `connected`, `paused`, `reconnecting`, `unreachable`, `no_address` — under the
 row id the shell assigned, and the plugin line above them counts what is up:
 `2 of 3 connected, 44 msg/s`.
@@ -593,7 +593,7 @@ number about it.
   finish, including the manifest, the build command and the harness.
 - [The rules](rules.md) collects the mistakes that cost a mariner something at
   sea. Read it before you copy any of the code above.
-- [The ABI](abi.md) is what the library is written against, and what a tier-3
+- [The ABI](abi.md) is what the SDK is written against, and what a tier-3
   plugin talks to directly.
 - [The dev harness](dev-harness.md) runs your plugin against a recorded log and
   renders the chart it drew.
