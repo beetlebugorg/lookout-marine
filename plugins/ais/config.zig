@@ -159,7 +159,24 @@ test "the schema in manifest.json is the one this file reads" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
     const root = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), manifest, .{});
-    const fields = root.object.get("settings").?.array.items;
+
+    // Schema v2: the settings are groups, each naming the settings section it
+    // belongs in. Flatten them in declaration order — the keys and the ranges
+    // are what this file reads, whatever the shell does with the grouping.
+    const groups = root.object.get("settings").?.object.get("groups").?.array.items;
+    var flat: std.ArrayList(std.json.Value) = .empty;
+    defer flat.deinit(t.allocator);
+    for (groups) |g| {
+        // Every group names its section and its heading, and every field
+        // explains itself: the shell shows all three to the mariner.
+        try t.expect(g.object.get("tab").?.string.len > 0);
+        try t.expect(g.object.get("label").?.string.len > 0);
+        for (g.object.get("fields").?.array.items) |f| {
+            try t.expect(f.object.get("desc").?.string.len > 0);
+            try flat.append(t.allocator, f);
+        }
+    }
+    const fields = flat.items;
     try t.expectEqual(@as(usize, 5), fields.len);
 
     const want = [_]struct { key: []const u8, kind: []const u8, unit: []const u8, range: ?[2]f64 }{

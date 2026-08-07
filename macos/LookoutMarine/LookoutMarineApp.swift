@@ -235,13 +235,15 @@ struct ContentView: View {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespaces) })
-                let tabs = ["display": 0, "depths": 1, "text": 2, "charts": 3, "advanced": 4, "plugins": 5]
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     for item in want {
                         let part = item.split(separator: ":", maxSplits: 1).map(String.init)
                         switch part[0] {
+                        // settings:<section>, the section named as the core
+                        // names it (display, depths, text, charts, vessels,
+                        // alarms, connections, advanced).
                         case "settings":
-                            model.settingsTab = part.count > 1 ? (tabs[part[1]] ?? 0) : 0
+                            model.settingsTab = part.count > 1 ? part[1] : "display"
                             model.openSettings()
                         case "scale": model.beginScaleEntry()
                         // scheme:1 dusk, scheme:2 night — the chrome must

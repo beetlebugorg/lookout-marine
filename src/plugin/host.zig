@@ -80,6 +80,28 @@ pub const Error = error{
     OutOfMemory,
 };
 
+/// Where a settings group asks to be shown. These are TOPICS the shell owns,
+/// never plugin names: a mariner hunting the collision alarm finds it under
+/// Alarms, beside every other alarm, and never learns that a plugin put it
+/// there.
+///
+/// An unknown or absent target falls back to `advanced`, so a typo in a
+/// manifest cannot invent a tab of its own.
+pub const Tab = enum {
+    display,
+    depths,
+    text,
+    charts,
+    vessels,
+    alarms,
+    connections,
+    advanced,
+
+    pub fn fromName(s: []const u8) Tab {
+        return std.meta.stringToEnum(Tab, s) orelse .advanced;
+    }
+};
+
 /// One settings field a manifest declares. A shell renders these; the plugin
 /// receives their values and nothing else.
 ///
@@ -89,9 +111,17 @@ pub const Field = struct {
     key: []u8,
     /// What the shell shows beside the control. Defaults to the key.
     label: []u8,
+    /// One sentence on what the setting does for the person at the helm. Empty
+    /// when the manifest declares none.
+    desc: []u8,
     /// The unit of a number field, for display only: values cross the ABI in
     /// the unit the schema names.
     unit: []u8,
+    /// The section heading this field sits under, from its group. Empty when
+    /// the schema declares no groups.
+    group: []u8,
+    /// The tab the field's group asked for.
+    tab: Tab = .advanced,
     kind: Kind,
     min: f64 = 0,
     max: f64 = 0,
@@ -121,8 +151,13 @@ pub const default_event_budget_ms: i64 = 1000;
 
 /// A plugin's manifest.json:
 /// `{"id":"org.beetlebug.ais","name":"AIS","abi":1,"capabilities":[...],
-///   "settings":[{"key":"cpa_limit","kind":"number","unit":"m","min":93,
-///                "max":9260,"default":926}]}`.
+///   "settings":{"groups":[{"label":"Collision alarm","tab":"alarms","fields":[
+///     {"key":"cpa_limit","label":"Closest approach","desc":"Alarm when a
+///      vessel will pass closer than this.","kind":"number","unit":"m",
+///      "min":93,"max":9260,"default":926}]}]}}`.
+///
+/// Schema v1 — `"settings"` as a bare array of fields — still parses. Those
+/// fields carry no group and land on the fallback tab.
 pub const Manifest = struct {
     id: []u8,
     name: []u8,
@@ -147,8 +182,9 @@ pub const Manifest = struct {
 };
 
 /// One settings field out of a manifest. Everything the shell needs to draw a
-/// control, and everything `configSet` needs to police one.
-fn parseField(alloc: std.mem.Allocator, v: std.json.Value) !Field {
+/// control, and everything `configSet` needs to police one. `group` and `tab`
+/// come from the group the field was declared in.
+fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, tab: Tab) !Field {
     if (v != .object) return Error.BadManifest;
     const o = v.object;
     const key = switch (o.get("key") orelse return Error.BadManifest) {
@@ -169,18 +205,29 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value) !Field {
         .string => |s| s,
         else => "",
     };
+    const desc = switch (o.get("desc") orelse std.json.Value{ .string = "" }) {
+        .string => |s| s,
+        else => "",
+    };
 
     var f = Field{
         .key = try alloc.dupe(u8, key),
         .label = undefined,
+        .desc = undefined,
         .unit = undefined,
+        .group = undefined,
+        .tab = tab,
         .kind = kind,
     };
     errdefer alloc.free(f.key);
     f.label = try alloc.dupe(u8, label);
     errdefer alloc.free(f.label);
+    f.desc = try alloc.dupe(u8, desc);
+    errdefer alloc.free(f.desc);
     f.unit = try alloc.dupe(u8, unit);
     errdefer alloc.free(f.unit);
+    f.group = try alloc.dupe(u8, group);
+    errdefer alloc.free(f.group);
 
     switch (kind) {
         .number => {
@@ -255,20 +302,48 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     var fields: []Field = &.{};
     var built: usize = 0;
     errdefer freeFields(alloc, fields, built);
-    if (o.get("settings")) |sv| {
-        if (sv != .array) return Error.BadManifest;
-        if (sv.array.items.len > max_fields) return Error.BadManifest;
-        fields = try alloc.alloc(Field, sv.array.items.len);
-        for (sv.array.items) |item| {
-            fields[built] = try parseField(alloc, item);
-            built += 1;
-            // Two fields with one key would give the shell two controls over
-            // the same value.
-            for (fields[0 .. built - 1]) |g| {
-                if (std.mem.eql(u8, g.key, fields[built - 1].key)) return Error.BadManifest;
+    if (o.get("settings")) |sv| switch (sv) {
+        // v1: a bare array of fields, no groups, no tab.
+        .array => |arr| {
+            if (arr.items.len > max_fields) return Error.BadManifest;
+            fields = try alloc.alloc(Field, arr.items.len);
+            try appendFields(alloc, arr.items, "", .advanced, fields, &built);
+        },
+        // v2: groups, each naming its heading and the tab it belongs to. One
+        // plugin's settings may span tabs.
+        .object => |so| {
+            const groups = switch (so.get("groups") orelse return Error.BadManifest) {
+                .array => |g| g.items,
+                else => return Error.BadManifest,
+            };
+            var total: usize = 0;
+            for (groups) |gv| {
+                const go = switch (gv) {
+                    .object => |x| x,
+                    else => return Error.BadManifest,
+                };
+                total += switch (go.get("fields") orelse return Error.BadManifest) {
+                    .array => |a| a.items.len,
+                    else => return Error.BadManifest,
+                };
             }
-        }
-    }
+            if (total > max_fields) return Error.BadManifest;
+            fields = try alloc.alloc(Field, total);
+            for (groups) |gv| {
+                const go = gv.object;
+                const label = switch (go.get("label") orelse std.json.Value{ .string = "" }) {
+                    .string => |s| s,
+                    else => "",
+                };
+                const tab = switch (go.get("tab") orelse std.json.Value{ .string = "" }) {
+                    .string => |s| Tab.fromName(s),
+                    else => .advanced,
+                };
+                try appendFields(alloc, go.get("fields").?.array.items, label, tab, fields, &built);
+            }
+        },
+        else => return Error.BadManifest,
+    };
     return .{
         .id = id_owned,
         .name = name_owned,
@@ -278,11 +353,33 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     };
 }
 
+/// Parse one group's fields into `fields`, from `built` on. Two fields with one
+/// key would give the shell two controls over the same value, so a repeat
+/// refuses the manifest.
+fn appendFields(
+    alloc: std.mem.Allocator,
+    items: []const std.json.Value,
+    group: []const u8,
+    tab: Tab,
+    fields: []Field,
+    built: *usize,
+) !void {
+    for (items) |item| {
+        fields[built.*] = try parseField(alloc, item, group, tab);
+        built.* += 1;
+        for (fields[0 .. built.* - 1]) |g| {
+            if (std.mem.eql(u8, g.key, fields[built.* - 1].key)) return Error.BadManifest;
+        }
+    }
+}
+
 fn freeFields(alloc: std.mem.Allocator, fields: []Field, built: usize) void {
     for (fields[0..built]) |f| {
         alloc.free(f.key);
         alloc.free(f.label);
+        alloc.free(f.desc);
         alloc.free(f.unit);
+        alloc.free(f.group);
     }
     if (fields.len > 0) alloc.free(fields);
 }
@@ -698,24 +795,7 @@ pub const Host = struct {
             try out.appendSlice(alloc, ",\"settings\":[");
             for (e.manifest.settings, e.values, 0..) |f, v, k| {
                 if (k > 0) try out.append(alloc, ',');
-                try out.appendSlice(alloc, "{\"key\":");
-                try writeJsonString(out, alloc, f.key);
-                try out.appendSlice(alloc, ",\"label\":");
-                try writeJsonString(out, alloc, f.label);
-                try out.print(alloc, ",\"kind\":\"{s}\"", .{@tagName(f.kind)});
-                if (f.unit.len > 0) {
-                    try out.appendSlice(alloc, ",\"unit\":");
-                    try writeJsonString(out, alloc, f.unit);
-                }
-                switch (f.kind) {
-                    .number => try out.print(alloc, ",\"min\":{d},\"max\":{d},\"default\":{d},\"value\":{d}", .{
-                        f.min, f.max, f.default_value, v,
-                    }),
-                    .toggle => try out.print(alloc, ",\"default\":{s},\"value\":{s}", .{
-                        boolText(f.default_value), boolText(v),
-                    }),
-                }
-                try out.append(alloc, '}');
+                try writeFieldJson(out, alloc, f, v);
             }
             try out.appendSlice(alloc, "]}");
         }
@@ -1016,6 +1096,42 @@ fn writeSettings(
     }
 }
 
+/// One field of the registry JSON: the control to draw, where to draw it, and
+/// the value in force. Keys a schema does not declare are left out, so a v1
+/// manifest still writes what it always wrote.
+fn writeFieldJson(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Field, v: f64) !void {
+    try out.appendSlice(alloc, "{\"key\":");
+    try writeJsonString(out, alloc, f.key);
+    try out.appendSlice(alloc, ",\"label\":");
+    try writeJsonString(out, alloc, f.label);
+    if (f.desc.len > 0) {
+        try out.appendSlice(alloc, ",\"desc\":");
+        try writeJsonString(out, alloc, f.desc);
+    }
+    try out.print(alloc, ",\"kind\":\"{s}\"", .{@tagName(f.kind)});
+    if (f.unit.len > 0) {
+        try out.appendSlice(alloc, ",\"unit\":");
+        try writeJsonString(out, alloc, f.unit);
+    }
+    // Where the shell puts the control. The group is the section heading, left
+    // out when the schema declares none. The tab is always written, and always
+    // resolved, so every shell reads one answer.
+    if (f.group.len > 0) {
+        try out.appendSlice(alloc, ",\"group\":");
+        try writeJsonString(out, alloc, f.group);
+    }
+    try out.print(alloc, ",\"tab\":\"{s}\"", .{@tagName(f.tab)});
+    switch (f.kind) {
+        .number => try out.print(alloc, ",\"min\":{d},\"max\":{d},\"default\":{d},\"value\":{d}", .{
+            f.min, f.max, f.default_value, v,
+        }),
+        .toggle => try out.print(alloc, ",\"default\":{s},\"value\":{s}", .{
+            boolText(f.default_value), boolText(v),
+        }),
+    }
+    try out.append(alloc, '}');
+}
+
 /// A quoted, escaped JSON string. A manifest is a file on disk and a status
 /// line is text a plugin wrote; neither may break the shape of what it lands
 /// in.
@@ -1149,4 +1265,87 @@ test "a settings schema parses, and a malformed field refuses the manifest" {
     );
     defer clamped.deinit(a);
     try t.expectEqual(@as(f64, 10), clamped.settings[0].default_value);
+
+    // v1 fields have no group and no tab of their own.
+    try t.expectEqualStrings("", m.settings[0].desc);
+    try t.expectEqualStrings("", m.settings[0].group);
+    try t.expectEqual(Tab.advanced, m.settings[0].tab);
+}
+
+const v2_manifest =
+    \\{"id":"org.beetlebug.ais","name":"AIS targets","abi":1,
+    \\ "settings":{"groups":[
+    \\  {"label":"Collision alarm","tab":"alarms","fields":[
+    \\   {"key":"cpa_limit","label":"Closest approach","desc":"Alarm when a vessel will pass closer than this.",
+    \\    "kind":"number","unit":"m","min":93,"max":9260,"default":926},
+    \\   {"key":"cpa_alarm","label":"Collision alarm","kind":"toggle","default":true}]},
+    \\  {"label":"AIS targets","tab":"vessels","fields":[
+    \\   {"key":"vector_min","label":"Course vectors","kind":"number","unit":"min","min":1,"max":24,"default":6}]},
+    \\  {"fields":[
+    \\   {"key":"spare","label":"Spare","kind":"toggle","default":false}]}]}}
+;
+
+test "a v2 schema carries labels, descriptions, groups and tabs" {
+    const a = t.allocator;
+    var m = try parseManifest(a, v2_manifest);
+    defer m.deinit(a);
+    try t.expectEqual(@as(usize, 4), m.settings.len);
+
+    // One plugin's settings span tabs: the alarm group asks for Alarms, the
+    // presentation group for Vessels.
+    try t.expectEqualStrings("Closest approach", m.settings[0].label);
+    try t.expectEqualStrings("Alarm when a vessel will pass closer than this.", m.settings[0].desc);
+    try t.expectEqualStrings("Collision alarm", m.settings[0].group);
+    try t.expectEqual(Tab.alarms, m.settings[0].tab);
+    try t.expectEqual(Tab.alarms, m.settings[1].tab);
+    try t.expectEqualStrings("AIS targets", m.settings[2].group);
+    try t.expectEqual(Tab.vessels, m.settings[2].tab);
+
+    // A group that names neither heading nor tab, and a field that names no
+    // description, fall back rather than refuse.
+    try t.expectEqual(Tab.advanced, m.settings[3].tab);
+    try t.expectEqualStrings("", m.settings[3].group);
+    try t.expectEqualStrings("", m.settings[3].desc);
+
+    // An unknown tab is a typo, not a new tab.
+    var unknown = try parseManifest(a,
+        \\{"id":"x","abi":1,"settings":{"groups":[{"label":"G","tab":"weather",
+        \\ "fields":[{"key":"a","kind":"toggle","default":true}]}]}}
+    );
+    defer unknown.deinit(a);
+    try t.expectEqual(Tab.advanced, unknown.settings[0].tab);
+
+    // A v2 block with no groups array, a group that is not an object, and a
+    // group with no fields.
+    const bad = [_][]const u8{
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"fields\":[]}}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[\"G\"]}}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"label\":\"G\"}]}}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+}
+
+test "the registry JSON carries the schema the shell renders" {
+    const a = t.allocator;
+    var m = try parseManifest(a, v2_manifest);
+    defer m.deinit(a);
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    for (m.settings) |f| try writeFieldJson(&json, a, f, f.default_value);
+    const s = json.items;
+    try t.expect(std.mem.indexOf(u8, s, "\"desc\":\"Alarm when a vessel will pass closer than this.\"") != null);
+    try t.expect(std.mem.indexOf(u8, s, "\"group\":\"Collision alarm\",\"tab\":\"alarms\"") != null);
+    try t.expect(std.mem.indexOf(u8, s, "\"group\":\"AIS targets\",\"tab\":\"vessels\"") != null);
+    // Nothing declared: no desc key, no group key, and the fallback tab.
+    try t.expect(std.mem.indexOf(u8, s, "{\"key\":\"spare\",\"label\":\"Spare\",\"kind\":\"toggle\",\"tab\":\"advanced\"," ++
+        "\"default\":false,\"value\":false}") != null);
+
+    // v1 keeps the shape it always wrote, with the tab added.
+    var v1 = try parseManifest(a, ais_settings_manifest);
+    defer v1.deinit(a);
+    json.clearRetainingCapacity();
+    try writeFieldJson(&json, a, v1.settings[0], 926);
+    try t.expectEqualStrings("{\"key\":\"cpa_limit\",\"label\":\"CPA limit\",\"kind\":\"number\",\"unit\":\"m\"," ++
+        "\"tab\":\"advanced\",\"min\":93,\"max\":9260,\"default\":926,\"value\":926}", json.items);
 }

@@ -163,9 +163,11 @@ final class AppModel: ObservableObject {
     /// the container and opened, a raster chart is added to the underlay.
     @Published var showRasterImporter = false
     @Published var showSettings = false
-    /// Which settings tab shows: 0 Display, 1 Depths, 2 Text, 3 Charts,
-    /// 4 Advanced. The screenshot hook sets it.
-    @Published var settingsTab = 0
+    /// Which settings section shows, by its core name — "display", "depths",
+    /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
+    /// name no section answers to falls back to Display. The screenshot hook
+    /// sets it.
+    @Published var settingsTab = "display"
 
     // MARK: Search
     @Published var searchOpen = false

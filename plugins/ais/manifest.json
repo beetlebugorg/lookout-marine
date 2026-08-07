@@ -3,11 +3,25 @@
   "name": "AIS targets",
   "abi": 1,
   "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"],
-  "settings": [
-    {"key": "cpa_limit", "label": "CPA limit", "kind": "number", "unit": "m", "min": 93, "max": 9260, "default": 926},
-    {"key": "tcpa_limit", "label": "TCPA limit", "kind": "number", "unit": "min", "min": 1, "max": 60, "default": 10},
-    {"key": "cpa_alarm", "label": "Collision alarm", "kind": "toggle", "default": true},
-    {"key": "vector_min", "label": "Target vectors", "kind": "number", "unit": "min", "min": 1, "max": 24, "default": 6},
-    {"key": "min_sog", "label": "Hide targets under", "kind": "number", "unit": "kn", "min": 0, "max": 5, "default": 0}
-  ]
+  "settings": {
+    "groups": [
+      {
+        "label": "Collision alarm",
+        "tab": "alarms",
+        "fields": [
+          {"key": "cpa_limit", "label": "Closest approach (CPA)", "desc": "Alarm when a vessel will pass closer than this.", "kind": "number", "unit": "m", "min": 93, "max": 9260, "default": 926},
+          {"key": "tcpa_limit", "label": "Time to closest approach (TCPA)", "desc": "Alarm only when that pass is this soon or sooner.", "kind": "number", "unit": "min", "min": 1, "max": 60, "default": 10},
+          {"key": "cpa_alarm", "label": "Collision alarm", "desc": "Sound the alarm and colour the vessel red. Off silences both.", "kind": "toggle", "default": true}
+        ]
+      },
+      {
+        "label": "AIS targets",
+        "tab": "vessels",
+        "fields": [
+          {"key": "vector_min", "label": "Course vectors", "desc": "How far ahead of each vessel its course line is drawn.", "kind": "number", "unit": "min", "min": 1, "max": 24, "default": 6},
+          {"key": "min_sog", "label": "Hide targets under", "desc": "Leave out vessels slower than this. Zero shows every one, moored ships included.", "kind": "number", "unit": "kn", "min": 0, "max": 5, "default": 0}
+        ]
+      }
+    ]
+  }
 }

@@ -34,6 +34,15 @@ enum MarinerDisplayCategory: Int, CaseIterable, Identifiable {
     case base = 0, standard = 1, other = 2
     var id: Int { rawValue }
     var label: String { ["Base", "Standard", "Other"][rawValue] }
+    /// What picking this one puts on the chart. Each category contains the one
+    /// before it (S-52 §10.2), so each line says what it ADDS.
+    var desc: String {
+        [
+            "Coastline, safety contour, dangers and traffic lanes — never hidden",
+            "Adds buoys, beacons, lights, restricted areas and ferry routes",
+            "Adds spot soundings, contour labels, seabed quality and cables",
+        ][rawValue]
+    }
 }
 
 enum MarinerBoundaryStyle: Int, CaseIterable, Identifiable {
@@ -46,6 +55,13 @@ enum MarinerSoundings: Int, CaseIterable, Identifiable {
     case followCategory = 0, forceOn = 1, forceOff = 2
     var id: Int { rawValue }
     var label: String { ["Follow category", "Always on", "Always off"][rawValue] }
+    var desc: String {
+        [
+            "Drawn when the category includes them, which is Other",
+            "Spot depths, whatever the category",
+            "No spot depths, whatever the category",
+        ][rawValue]
+    }
 }
 
 @MainActor

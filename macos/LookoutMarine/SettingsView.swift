@@ -1,9 +1,12 @@
-//  SettingsView.swift — the S-52 mariner settings, tabbed on BOTH platforms
-//  (Display / Depths / Text & Symbols / Advanced — the mariner thinks in those
-//  groups). macOS sizes the tab window itself; iOS lets the sheet size the
-//  TabView (the old fixed 460x430 frame fought the sheet). One MarinerSettings
-//  model behind both: bind() loads the engine state, edits auto-apply
-//  (debounced) and SAVE.
+//  SettingsView.swift — the mariner settings window: a SIDEBAR of sections on
+//  macOS (Display / Depths / Text / Charts / … / Advanced), the same sections
+//  as tabs in the iOS sheet. One MarinerSettings model behind both: bind()
+//  loads the engine state, edits auto-apply (debounced) and SAVE.
+//
+//  The sidebar is a slot list, not a fixed menu. The four core sections and
+//  Advanced always exist; Vessels, Alarms and Connections appear only while
+//  something puts settings in them, and today that something is a plugin. The
+//  mariner is never told which: AIS settings are chart settings.
 //
 //  The Depths section explains the S-52 shading model instead of assuming it:
 //  the single most-reported "bug" was a safety-contour change not turning
@@ -12,6 +15,30 @@
 //  model visible where the knobs are.
 
 import SwiftUI
+
+/// One entry in the sidebar. `core` sections are the app's own and are always
+/// listed; the rest are listed only while they hold something. The ids are the
+/// core's section names (src/plugin/host.zig, `Tab`), so a plugin and the shell
+/// mean the same thing by "alarms".
+struct SettingsSection: Identifiable {
+    let id: String
+    let label: String
+    let icon: String
+    let core: Bool
+
+    /// Every section, in the order the sidebar shows them. Advanced is last:
+    /// it is where anything unclaimed lands.
+    static let all: [SettingsSection] = [
+        .init(id: "display", label: "Display", icon: "paintpalette", core: true),
+        .init(id: "depths", label: "Depths", icon: "water.waves", core: true),
+        .init(id: "text", label: "Text", icon: "textformat", core: true),
+        .init(id: "charts", label: "Charts", icon: "map", core: true),
+        .init(id: "vessels", label: "Vessels", icon: "ferry", core: false),
+        .init(id: "alarms", label: "Alarms", icon: "bell", core: false),
+        .init(id: "connections", label: "Connections", icon: "antenna.radiowaves.left.and.right", core: false),
+        .init(id: "advanced", label: "Advanced", icon: "slider.horizontal.3", core: true),
+    ]
+}
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
@@ -26,103 +53,69 @@ struct SettingsView: View {
             }
     }
 
+    private var sections: [SettingsSection] {
+        let filled = p.populatedTabs
+        return SettingsSection.all.filter { $0.core || filled.contains($0.id) }
+    }
+
+    /// The section on screen. A section can go away — a plugin that never came
+    /// up takes its section with it — so a stale selection falls back.
+    private var selected: String {
+        sections.contains { $0.id == model.settingsTab } ? model.settingsTab : "display"
+    }
+
     @ViewBuilder private var content: some View {
-        // The presenting sheet (iOS) supplies the Done button.
-        TabView(selection: $model.settingsTab) {
-            Form { DisplaySections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Display", systemImage: "paintpalette") }.tag(0)
-            Form { DepthsSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Depths", systemImage: "water.waves") }.tag(1)
-            Form { SymbolsSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Text", systemImage: "textformat") }.tag(2)
-            Form { ChartsSections(model: model) }.formStyle(.grouped)
-                .tabItem { Label("Charts", systemImage: "map") }.tag(3)
-            Form { PluginsSections(p: p) }.formStyle(.grouped)
-                .tabItem { Label("Plugins", systemImage: "puzzlepiece.extension") }.tag(5)
-            Form { AdvancedSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }.tag(4)
-        }
         #if os(macOS)
-        // The six tab labels need this width. In a narrower window macOS
-        // collapses the tab bar into an overflow menu.
-        .frame(minWidth: 760, minHeight: 560)
+        NavigationSplitView {
+            List(sections, selection: $model.settingsTab) { s in
+                Label(s.label, systemImage: s.icon)
+            }
+            .navigationSplitViewColumnWidth(min: 168, ideal: 178, max: 220)
+            // No collapse control: the list IS the navigation, and a window
+            // with it hidden has no way back to another section.
+            .toolbar(removing: .sidebarToggle)
+            // The one thing the whole window promises. It stands under the
+            // list rather than repeating in every section.
+            .safeAreaInset(edge: .bottom) {
+                Text("Applies at once · kept for next launch")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } detail: {
+            pane(selected)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 720, minHeight: 560)
+        #else
+        // The presenting sheet supplies the Done button.
+        TabView(selection: $model.settingsTab) {
+            ForEach(sections) { s in
+                pane(s.id)
+                    .tabItem { Label(s.label, systemImage: s.icon) }
+                    .tag(s.id)
+            }
+        }
         #endif
     }
-}
 
-// MARK: - Plugins
-
-/// One section per plugin, built from the settings schema its manifest
-/// declared. Nothing here names a plugin or a setting: a number field with a
-/// unit and a range, and a toggle, are the whole vocabulary the core hands
-/// over.
-private struct PluginsSections: View {
-    @ObservedObject var p: PluginSettings
-
-    var body: some View {
-        if p.plugins.isEmpty {
-            Section {
-                Text("No plugins loaded").foregroundStyle(.secondary)
-            } footer: {
-                Text("Plugins draw own ship, the AIS traffic and the laylines. "
-                     + "They start with the chart.").captionFooter()
+    /// One section's form: the app's own settings for it, then whatever a
+    /// plugin contributed to the same section.
+    @ViewBuilder private func pane(_ id: String) -> some View {
+        Form {
+            switch id {
+            case "display": DisplaySections(m: m)
+            case "depths": DepthsSections(m: m)
+            case "text": SymbolsSections(m: m)
+            case "charts": ChartsSections(model: model)
+            case "advanced": AdvancedSections(m: m)
+            default: EmptyView()
             }
+            PluginSections(p: p, tab: id)
         }
-        ForEach(p.plugins) { plugin in
-            Section {
-                if plugin.fields.isEmpty {
-                    Text("Nothing to configure").foregroundStyle(.secondary)
-                } else {
-                    ForEach(plugin.fields) { f in
-                        switch f.kind {
-                        case .toggle:
-                            Toggle(f.label, isOn: p.toggle(plugin.id, f.key))
-                        case .number:
-                            PluginNumberRow(field: f, value: p.number(plugin.id, f.key))
-                        }
-                    }
-                    if p.isChanged(plugin.id) {
-                        Button("Reset to defaults") { p.resetToDefaults(plugin.id) }
-                    }
-                }
-            } header: {
-                HStack {
-                    Text(plugin.name)
-                    if !plugin.live {
-                        Text("stopped").font(.caption).foregroundStyle(.red)
-                    }
-                }
-            } footer: {
-                Text(plugin.statusDetail.isEmpty ? plugin.id : plugin.statusDetail)
-                    .captionFooter()
-            }
-        }
-    }
-}
-
-/// A number a plugin asked for: typed or stepped, inside the range the schema
-/// declares, with its unit beside it. Same shape as the depth rows, because a
-/// mariner should not have to learn a second kind of number field.
-private struct PluginNumberRow: View {
-    let field: PluginField
-    @Binding var value: Double
-
-    var body: some View {
-        LabeledContent(field.label) {
-            HStack(spacing: 6) {
-                TextField("", value: $value, format: .number.precision(.fractionLength(0...2)))
-                    .labelsHidden()
-                    .frame(width: 68)
-                    .multilineTextAlignment(.trailing)
-                    #if os(iOS)
-                    .keyboardType(.decimalPad)
-                    #endif
-                Stepper("", value: $value, in: field.min...field.max, step: field.step)
-                    .labelsHidden()
-                Text(field.unit).foregroundStyle(.secondary)
-                    .frame(width: 24, alignment: .leading)
-            }
-        }
+        .formStyle(.grouped)
     }
 }
 
@@ -259,22 +252,33 @@ private struct DisplaySections: View {
     @ObservedObject var m: MarinerSettings
     var body: some View {
         Section {
-            Picker("Color scheme", selection: $m.scheme) {
-                ForEach(MarinerScheme.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-        } footer: { Text("Day, dusk and night palettes switch instantly.").captionFooter() }
+            SchemeSwatches(scheme: $m.scheme)
+        } header: {
+            SectionHead("Colour scheme", hint: "⌘L steps")
+        } footer: {
+            Text("The palettes switch instantly. Night keeps your eyes dark-adapted.").captionFooter()
+        }
 
         Section {
-            Picker("Display category", selection: $m.displayCategory) {
-                ForEach(MarinerDisplayCategory.allCases) { Text($0.label).tag($0) }
+            ForEach(MarinerDisplayCategory.allCases) { c in
+                ChoiceRow(title: c.label, desc: c.desc, selected: m.displayCategory == c) {
+                    m.displayCategory = c
+                }
             }
-            .pickerStyle(.segmented)
-            Picker("Soundings", selection: $m.soundings) {
-                ForEach(MarinerSoundings.allCases) { Text($0.label).tag($0) }
+        } header: {
+            SectionHead("Display category", hint: "⌘D adds Other")
+        } footer: {
+            Text("Each category contains the one before it.").captionFooter()
+        }
+
+        Section {
+            ForEach(MarinerSoundings.allCases) { s in
+                ChoiceRow(title: s.label, desc: s.desc, selected: m.soundings == s) {
+                    m.soundings = s
+                }
             }
-        } header: { Text("Detail") } footer: {
-            Text("Base ⊂ Standard ⊂ Other. Spot soundings switch independently of the category.").captionFooter()
+        } header: {
+            SectionHead("Soundings", hint: "⌘⇧S steps")
         }
     }
 }
