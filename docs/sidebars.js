@@ -27,6 +27,17 @@ const sidebars = {
         'developer-guide/windows',
         'developer-guide/android',
         'developer-guide/screenshots',
+        {
+          type: 'category',
+          label: 'Plugins',
+          link: {type: 'doc', id: 'developer-guide/plugins/index'},
+          items: [
+            'developer-guide/plugins/build-your-first',
+            'developer-guide/plugins/abi',
+            'developer-guide/plugins/rules',
+            'developer-guide/plugins/dev-harness',
+          ],
+        },
       ],
     },
     'roadmap',
