@@ -10,6 +10,37 @@ sidebar_position: 1
 This is a prototype. Keep your official charts and your paper backup.
 :::
 
+## Building the app from source
+
+There are no downloads yet: no App Store build, no installer, no release
+binary. Today you build the app yourself. When releases exist, this section
+becomes download links.
+
+**macOS is the proven platform.** You need Xcode, free from the Mac App Store,
+and two command-line tools, from [Homebrew](https://brew.sh):
+
+```sh
+brew install zig xcodegen
+```
+
+Then clone the repository and build the Mac app:
+
+```sh
+git clone https://github.com/beetlebugorg/lookout-marine.git
+cd lookout-marine/macos && xcodegen generate && cd ..
+macos/build.sh mac Release
+open macos/build-mac/Build/Products/Release/LookoutMarine.app
+```
+
+The first build compiles the chart engine as well as the app, so give it a few
+minutes. After that, the last two commands are the whole rebuild.
+
+On another platform, follow the developer guide instead. It carries the same
+short recipe for [Linux](../developer-guide/linux.md#building-and-running),
+[Windows](../developer-guide/windows.md#building-and-running),
+[Android](../developer-guide/android.md#building-and-running) and
+[iPhone and iPad](../developer-guide/macos.md#building-and-running).
+
 ## Getting your charts
 
 The app does not come with charts. NOAA publishes the ENC cells of United States
@@ -21,7 +52,9 @@ Most other hydrographic offices sell their ENCs, and most sell them encrypted
 with S-63, which the app cannot read yet. Any unencrypted S-57 cell works,
 whoever published it.
 
-Prepare them one time with the tile57 tool:
+Prepare them one time with the tile57 tool. It is a separate program: clone
+[tile57](https://github.com/beetlebugorg/tile57) and run `zig build`, which
+writes `zig-out/bin/tile57`.
 
 ```sh
 tile57 bake CELL.000 -o out/      # one cell
