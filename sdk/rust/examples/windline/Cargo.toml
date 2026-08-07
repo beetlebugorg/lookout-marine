@@ -1,0 +1,14 @@
+[package]
+name = "windline"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+# cdylib is what makes wasm-ld keep the five exports and emit a reactor with
+# no _start. The file name is fixed by cargo; rename the artifact to the
+# plugin's id when you copy it into a plugin directory.
+crate-type = ["cdylib"]
+
+[dependencies]
+lookout = { path = "../../lookout" }

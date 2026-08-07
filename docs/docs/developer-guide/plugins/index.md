@@ -7,25 +7,48 @@ sidebar_position: 1
 # Plugins
 
 A plugin is a WebAssembly module and a small JSON manifest. You write the module
-and compile it to `wasm32-freestanding`. The manifest says who the plugin is and
-what it is allowed to do. Lookout loads the pair, runs the module in a sandbox,
-and lends it a fixed set of calls into the app.
+and compile it to wasm. The manifest says who the plugin is and what it is
+allowed to do. Lookout loads the pair, runs the module in a sandbox, and lends it
+a fixed set of calls into the app.
 
-You write one to get something off your boat and onto the chart. In practice that
-means Zig today, or any toolchain that can emit a freestanding wasm module —
-there is no WASI yet, so the Go and Rust standard libraries will not boot.
+You write one to get something off your boat and onto the chart. **Zig, Go and
+Rust all run**, and so does any other toolchain that emits a wasm module with the
+five exports — the ABI is the specification, and a language library is only a
+convenience over it.
+
+| Language | Target | Module size |
+|---|---|---|
+| Zig | `wasm32-freestanding` | 75–150 KB |
+| Rust | `wasm32-wasip1`, `crate-type = ["cdylib"]` | ~120 KB |
+| Go 1.24+ | `GOOS=wasip1 GOARCH=wasm`, `-buildmode=c-shared` | ~3.4 MB |
+
+Go and Rust boot because the host answers WASI. It answers it with almost
+nothing — clocks, randomness, and stdout and stderr as log lines — and every
+real capability still goes through the `lookout` imports and your manifest.
+[The ABI page](abi.md#the-wasi-floor) spells out the floor exactly, so nobody
+spends an afternoon debugging a missing preopen.
+
+Only the Zig library, `plugins/common/lk.zig`, is settled. The Go and Rust
+libraries under `sdk/` prove their language boots and are being rewritten, so
+write Zig today unless you are willing to move with them.
+
+One rule is the same in all three languages and it is not a style preference:
+**a plugin is single-threaded, and it runs only while the host is inside one of
+your exports.** No background goroutines, no threads, no sleeping. Do the work in
+the handler and return; to wake up later, ask for a timer.
 
 The shortest path in is [Build your first plugin](build-your-first.md): a
-manifest, one Zig file, and a dashed line drawn on a real chart.
+manifest, one file, and a dashed line drawn on a real chart.
 
 ## What you can build
 
 There are two jobs. Most plugins do one of them; some do both.
 
 **Publish.** Turn a data source into values the whole app can use. Your plugin
-opens a TCP connection to the multiplexer on the boat's network, parses what
-comes back, and writes readings into the **vessel store** — Lookout's single
-table of current boat data, keyed by path: `navigation.position`,
+opens a TCP connection to something on the boat's network — a NMEA 0183
+multiplexer, a Signal K server — parses what comes back, and writes readings
+into the **vessel store** — Lookout's single table of current boat data, keyed
+by path: `navigation.position`,
 `environment.depth.belowTransducer`, and so on. It can write AIS contacts into
 the **AIS store** the same way, keyed by MMSI. Position, heading, course and
 speed in the vessel store are what put the boat on the chart and drive follow
@@ -47,7 +70,7 @@ runtime. If your manifest asked for the permission, the host does it.
                 ▼                                ▼
    ┌───────────────────────────────────────────────────────┐
    │  your plugin:  <id>.wasm  +  <id>.manifest.json       │
-   │  wasm32-freestanding · no WASI · single-threaded      │
+   │  Zig, Go or Rust · single-threaded · WASI floor only  │
    └──────────────┬────────────────────────────────────────┘
                   │  five exports out, fifteen imports in,
                   │  every import checked against your manifest
@@ -75,8 +98,9 @@ boat, not administering software.
 
 ## What runs today
 
-The plugin layer is a prototype. Four plugins ship with it and are the worked examples: `nmea0183` publishes, and
-`ownship`, `ais` and `laylines` draw.
+The plugin layer is a prototype. Five plugins ship with it and are the worked
+examples: `nmea0183` and `signalk` publish, and `ownship`, `ais` and `laylines`
+draw.
 
 Where you can run a plugin:
 
@@ -100,6 +124,10 @@ present; elsewhere it needs `-Dplugins=true`.
 Built and usable today:
 
 - The five exports, the fifteen `lookout` imports, and the seven capabilities.
+- WASI preview1, bounded to a language floor — no filesystem, no sockets, no
+  environment, no sleeping. It is what lets a Go or Rust module boot at all. The
+  same `windline` plugin has been run in the harness in Zig, in Go and in Rust
+  against the same replay.
 - The vessel store, with an election between competing sources and one 5 s
   staleness window, and the AIS store, MMSI-keyed and aged.
 - The retained overlay: symbols, polylines, polygons, colour tokens, pick
@@ -108,8 +136,10 @@ Built and usable today:
 - Settings: number, toggle and text fields declared in your manifest, grouped
   into the app's own settings tabs, applied hot without a restart.
 - Lists: a group the mariner adds rows to, delivered as a JSON array with a
-  stable id per row. The `nmea0183` plugin uses one to hold several TCP
-  connections at once, each with its own socket and its own pause switch.
+  stable id per row. The `nmea0183` and `signalk` plugins each use one to hold
+  several TCP connections at once, each with its own socket and its own pause
+  switch. Both file their list under the same settings tab, so one Connections
+  page holds a section per plugin.
 - Per-row status: a status may carry an `items` array, one entry per row, so an
   app can show "connected, 44 msg/s" beside one connection and "paused" beside
   another.
@@ -134,7 +164,7 @@ handed. What that means for you:
 - Re-run your plugin in [the dev harness](dev-harness.md) after every move. It
   prints the store, the overlay and the denied calls, which is where a silent
   ABI change shows up first.
-- Expect the four plugins in `plugins/` to change with the core. They are built
+- Expect the plugins in `plugins/` to change with the core. They are built
   in the same tree, the ABI is shaped by what they need, and it is changed when
   they need something different. Nobody is holding it still for an out-of-tree
   plugin yet.
@@ -158,9 +188,19 @@ plugins/common/lk.zig      the plugin-side library: the externs, a scratch arena
 plugins/laylines/          two close-hauled lines from the true wind — the simplest one
 plugins/ownship/           the boat: symbol, heading line, course vector, track
 plugins/nmea0183/          TCP clients, NMEA 0183 and AIVDM parsing, publishing, a settings list
+plugins/signalk/           a second publisher: a JSON line protocol, a unit conversion, one seam per transport
 plugins/ais/               targets, CPA/TCPA, the collision alarm, aids to navigation
 src/plugin/                the host: the imports, the grants, the stores, the watchdog
+
+sdk/rust/, sdk/go/       the Rust and Go bindings and their windline example — a
+                         PROVISIONAL surface, being rewritten; read them for how a
+                         wasip1 module reaches the ABI, not for the API
 ```
+
+`nmea0183` and `signalk` are worth reading as a pair. They do the same job from
+two protocols and land in the same stores, so what differs between them is the
+part that is yours to write: the wire format, the units, and what a source does
+when it cannot tell whose data it is holding.
 
 Read `src/plugin/` when this documentation and Lookout disagree with each other.
 The code is the one that is right.

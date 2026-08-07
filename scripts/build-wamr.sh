@@ -31,9 +31,10 @@
 # directory is per platform and architecture, not per ABI, so the two Windows
 # x64 archives share one and the last one written wins.
 #
-# Idempotent per target: returns at once when that archive and its headers are
-# already there. Force a rebuild with `rm -rf vendor/wamr-dist-<target>`; force
-# a re-clone with `rm -rf vendor/wamr`.
+# Idempotent per target: returns at once when that archive, its headers and its
+# WAMR_VERSION stamp all match what this script builds now. A dist from an older
+# feature set is rebuilt, not reused. Force a rebuild anyway with
+# `rm -rf vendor/wamr-dist-<target>`; force a re-clone with `rm -rf vendor/wamr`.
 set -euo pipefail
 
 # Pinned WAMR release. Tag and commit move together; the commit is verified
@@ -41,6 +42,13 @@ set -euo pipefail
 WAMR_TAG="WAMR-2.4.5"
 WAMR_COMMIT="25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 WAMR_URL="https://github.com/bytecodealliance/wasm-micro-runtime"
+
+# Written into <dist>/WAMR_VERSION and compared on the next run. It names the
+# feature set, not the release: a dist built before libc-wasi went on holds a
+# runtime that cannot instantiate a Go or Rust plugin, and it is otherwise
+# indistinguishable from a current one. Bump this string whenever wamr_flags
+# changes in a way a built archive cannot show.
+WAMR_FEATURES="interp+wasi"
 
 # Deployment minimums. 13.0 matches Zig's default macOS minimum, so ld64 raises
 # no version warning. 15.0 is the app's stated iOS floor (macos/README.md); the
@@ -68,8 +76,15 @@ esac
 #   * fast interpreter only — no AOT, no JIT of either flavour. On iOS this is
 #     not a preference: the OS refuses executable pages to an App Store app, so
 #     the interpreter is the only runtime that can ship there.
-#   * no WASI: plugins are wasm32-freestanding and reach the outside world
-#     only through the `lookout` import module.
+#   * libc-wasi ON, and it is a LANGUAGE FLOOR, not a capability surface. The
+#     Go and Rust standard libraries do not boot without wasi_snapshot_preview1
+#     resolving, so the runtime has to answer it. What a plugin can reach
+#     through it is decided in src/plugin/wasm.zig, not here: zero filesystem
+#     preopens, no argv, no environment, stdio backed by the null device, and
+#     an override table that turns fd_write into a log line, refuses sock_open
+#     and bounds the poll_oneoff sleep. Real I/O stays behind the `lookout`
+#     import module. Zig plugins are still wasm32-freestanding and import none
+#     of this; WASI is additive.
 #   * libc-builtin ON: the small printf/memory builtins a module may import.
 #   * bulk memory, reference types and extended const expressions ON because
 #     the Zig wasm32 default CPU (lime1) emits them; SIMD, tail call, GC,
@@ -106,7 +121,7 @@ wamr_flags=(
     -DWAMR_BUILD_JIT=0
     -DWAMR_BUILD_FAST_JIT=0
     -DWAMR_BUILD_LIBC_BUILTIN=1
-    -DWAMR_BUILD_LIBC_WASI=0
+    -DWAMR_BUILD_LIBC_WASI=1
     -DWAMR_BUILD_LIBC_UVWASI=0
     -DWAMR_BUILD_LIB_PTHREAD=0
     -DWAMR_BUILD_LIB_WASI_THREADS=0
@@ -231,6 +246,31 @@ ndk_sysroot() {
     return 1
 }
 
+# A defect in the pinned tree, in a file only libc-wasi compiles. Three comment
+# lines in core/shared/platform/windows/win_file.c end with a backslash and a
+# trailing space. clang splices the next source line into the comment and the
+# code after it stops parsing:
+#
+#     win_file.c:1300:20: error: expected identifier
+#
+# MSVC does not splice across the space, so upstream never sees it; the mingw
+# cross build here is clang and does. Nothing depended on this file before
+# libc-wasi went on, which is why the Windows target built until now.
+#
+# The fix puts one character after the backslash so the line no longer ends in
+# one. It is a comment, so the character is arbitrary. Idempotent, and re-applied
+# after every clone.
+fix_win_file_comments() {
+    local f="$src/core/shared/platform/windows/win_file.c"
+    [ -f "$f" ] || return 0
+    grep -q '//.*\\[[:space:]]\+$' "$f" || return 0
+    echo "wamr: patching trailing backslashes in ${f#$src/} (see fix_win_file_comments)"
+    # Through a temporary rather than sed -i: the two seds spell that flag
+    # differently, and the Linux host that cross-builds these targets has the
+    # other one.
+    sed -E 's,(//.*\\)[[:space:]]+$,\1.,' "$f" >"$f.lookout-tmp" && mv "$f.lookout-tmp" "$f"
+}
+
 ensure_src() {
     if [ ! -d "$src/.git" ]; then
         echo "wamr: cloning $WAMR_TAG into vendor/wamr"
@@ -244,6 +284,8 @@ ensure_src() {
         echo "               Delete vendor/wamr and re-run to get the pinned tree." >&2
         exit 1
     fi
+
+    fix_win_file_comments
 
     # The runtime archive is not a target WAMR ships: product-mini builds an iwasm
     # executable and links vmlib into it. This project file adds vmlib alone from
@@ -383,9 +425,16 @@ build_one() {
             ;;
     esac
 
+    local stamp="$WAMR_TAG $WAMR_COMMIT $WAMR_FEATURES $t"
     if [ -f "$dist/lib/libvmlib.a" ] && [ -f "$dist/include/wasm_export.h" ]; then
-        echo "wamr: ${dist#$root/} already built ($(cat "$dist/WAMR_VERSION" 2>/dev/null || echo unknown))"
-        return 0
+        local have
+        have=$(cat "$dist/WAMR_VERSION" 2>/dev/null || echo unknown)
+        if [ "$have" = "$stamp" ]; then
+            echo "wamr: ${dist#$root/} already built ($have)"
+            return 0
+        fi
+        echo "wamr: ${dist#$root/} is '$have', this script builds '$stamp' — rebuilding"
+        rm -rf "$dist"
     fi
 
     ensure_src
@@ -434,7 +483,7 @@ build_one() {
     mkdir -p "$dist/lib" "$dist/include"
     cp "$build/libvmlib.a" "$dist/lib/libvmlib.a"
     cp "$src"/core/iwasm/include/*.h "$dist/include/"
-    echo "$WAMR_TAG $WAMR_COMMIT $t" >"$dist/WAMR_VERSION"
+    echo "$stamp" >"$dist/WAMR_VERSION"
 
     echo "wamr: ${dist#$root/}/lib/libvmlib.a ($(du -h "$dist/lib/libvmlib.a" | cut -f1)) from $WAMR_TAG"
 }

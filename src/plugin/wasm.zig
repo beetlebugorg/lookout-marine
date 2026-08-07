@@ -4,7 +4,10 @@
 //! This file knows nothing about what a plugin does. It is the mechanical
 //! layer: the broker supplies the native functions, the host supplies the
 //! module bytes and the lifecycle. The runtime is the fast interpreter built
-//! by scripts/build-wamr.sh (no AOT, no JIT, no WASI).
+//! by scripts/build-wamr.sh (no AOT, no JIT).
+//!
+//! WASI is compiled in and bounded here — see the WASI section below. It is a
+//! floor for language runtimes, not a way out of the sandbox.
 //!
 //! Nothing here is thread-safe, with ONE exception: `Instance.terminate` is
 //! meant to be called from another thread while a call is in flight, and is
@@ -21,6 +24,7 @@
 //!     it was taken for, never stored.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const c = @cImport({
     @cInclude("wasm_export.h");
@@ -68,9 +72,12 @@ pub fn initRuntime() Error!void {
     args.mem_alloc_type = c.Alloc_With_System_Allocator;
     args.running_mode = c.Mode_Interp;
     if (!c.wasm_runtime_full_init(&args)) return error.RuntimeInit;
+    errdefer c.wasm_runtime_destroy();
+    try wasiInit();
 }
 
 pub fn deinitRuntime() void {
+    wasiDeinit();
     c.wasm_runtime_destroy();
 }
 
@@ -173,6 +180,252 @@ pub fn sliceOf(inst: c.wasm_module_inst_t, off: u32, len: u32) Error![]u8 {
     return @as([*]u8, @ptrCast(native))[0..len];
 }
 
+// ---- WASI: a language floor, not a capability surface ----
+//
+// Go and Rust do not produce a module that runs without WASI. Their runtimes
+// import wasi_snapshot_preview1 before any of your code executes, and a module
+// with an unresolved import does not instantiate. So the runtime answers WASI,
+// and this section decides what the answer is.
+//
+// The answer, in one line: clocks, randomness and two log streams. Nothing
+// else. Concretely —
+//
+//   * NO FILESYSTEM. Zero preopened directories, so fd_prestat_get(3) is EBADF
+//     and path_open has no directory descriptor to open from. There is no
+//     path a plugin can name.
+//   * NO SOCKETS. WAMR's WASI carries a socket family that preview1 itself
+//     does not define. sock_connect, sock_bind and sock_addr_resolve are
+//     already refused by WAMR's empty address and name-lookup pools, but
+//     sock_open still creates a real kernel socket before anything checks
+//     where it may go — a file-descriptor leak with no legitimate use here.
+//     It is overridden below and returns ENOTSUP.
+//   * NO ENVIRONMENT, NO ARGUMENTS. Both lists are empty, so a plugin cannot
+//     read the app's configuration or its command line.
+//   * NO SLEEPING. poll_oneoff reports success and no events, and never
+//     waits. WAMR implements a one-clock poll as clock_nanosleep on the
+//     calling thread, and a thread parked in a syscall does not see the
+//     watchdog's terminate flag — the interpreter tests that flag, and the
+//     interpreter is not running. A plugin that slept would therefore hold its
+//     dispatch thread for as long as it liked. With the wait removed, a
+//     time.Sleep becomes a spin, and a spin the watchdog can kill. Waiting is
+//     what the `timer_set` import is for.
+//     It reports SUCCESS rather than ENOTSUP because Go's runtime treats a
+//     failed poll_oneoff as fatal: `fatal error: wasi_snapshot_preview1.
+//     poll_oneoff`, and no Go plugin would boot.
+//   * STDOUT AND STDERR ARE LOG LINES. fd_write is overridden and delivers to
+//     `stdio_sink`; the bytes never reach a descriptor.
+//   * THE THREE STANDARD DESCRIPTORS ARE THE NULL DEVICE. Belt and braces
+//     under the fd_write override: fd_read(0) cannot eat the app's stdin, and
+//     no metadata call on 1 or 2 can touch a file the app redirected them to.
+//   * clock_time_get, clock_res_get, random_get and sched_yield work. They are
+//     the floor the languages actually need.
+//
+// The overrides work because WAMR resolves an import by walking its registered
+// symbol tables from the most recently registered backwards, and takes the
+// first table that HAS the name. Registering fd_write, poll_oneoff and
+// sock_open under the WASI module names after wasm_runtime_full_init puts them
+// in front of WAMR's own table for those three, and leaves every other WASI
+// call resolving to WAMR.
+
+/// Which of a plugin's two output streams a line came from.
+pub const Stream = enum { out, err };
+
+/// Where a plugin's WASI stdout and stderr go. `user_data` is what
+/// Instance.setUserData put on the calling instance — the broker's per-plugin
+/// state — so a sink can name the plugin the line came from.
+///
+/// Set it once, after initRuntime and before the first module runs. Until it
+/// is set, lines go to the host's own stderr with a prefix: a println is a
+/// diagnostic, and a diagnostic that disappears is worse than one in the wrong
+/// place.
+pub const StdioSink = *const fn (user_data: ?*anyopaque, stream: Stream, line: []const u8) void;
+pub var stdio_sink: ?StdioSink = null;
+
+/// Longest line a sink is handed. It matches the cap the plugin library puts
+/// on its own log lines. A longer line is cut, not split.
+const max_stdio_line: usize = 512;
+
+/// The WASI preview1 error numbers this file returns.
+const wasi_errno = struct {
+    const success: u32 = 0;
+    const badf: u32 = 8;
+    const fault: u32 = 21;
+    const notsup: u32 = 58;
+};
+
+/// `__wasi_ciovec_t` as it lies in the module's linear memory: an app address
+/// and a length.
+const IovecApp = extern struct { buf_offset: u32, buf_len: u32 };
+
+/// A handle on the null device, or -1 when there is none. WAMR backs WASI's
+/// three standard descriptors with it. One handle serves every instance and it
+/// stays open for the runtime's life, which is safe: WAMR never closes a
+/// descriptor it was handed as stdio.
+///
+/// -1 tells WAMR to use the platform default, which is the app's own stdin,
+/// stdout and stderr. The fd_write override keeps output away from them even
+/// then, so the loss is only the belt-and-braces half.
+var null_handle: i64 = -1;
+
+var wasi_syms = nativeSymbols(&.{
+    .{ .name = "fd_write", .func = @ptrCast(&wasiFdWrite), .signature = "(i*i*)i" },
+    .{ .name = "poll_oneoff", .func = @ptrCast(&wasiPollOneoff), .signature = "(**i*)i" },
+    .{ .name = "sock_open", .func = @ptrCast(&wasiSockOpen), .signature = "(iii*)i" },
+});
+
+/// Both names WAMR answers WASI on. preview1 is what Go and Rust emit;
+/// wasi_unstable is preview0, and it is overridden too so that importing the
+/// older name is not a way around the three overrides.
+const wasi_modules = [_][:0]const u8{ "wasi_snapshot_preview1", "wasi_unstable" };
+
+fn wasiInit() Error!void {
+    null_handle = openNullDevice();
+    for (wasi_modules) |name| try registerNatives(name, &wasi_syms);
+}
+
+fn wasiDeinit() void {
+    for (wasi_modules) |name| unregisterNatives(name, &wasi_syms);
+    closeNullDevice();
+    null_handle = -1;
+}
+
+/// The raw OS handle WAMR wants, which is a file descriptor on POSIX and a
+/// HANDLE on Windows. Opened here rather than through std.Io, which in Zig
+/// 0.16 needs an Io implementation this layer has no business holding.
+fn openNullDevice() i64 {
+    if (builtin.os.tag == .windows) {
+        const w = std.os.windows;
+        const h = w.kernel32.CreateFileW(
+            std.unicode.utf8ToUtf16LeStringLiteral("NUL"),
+            w.GENERIC_READ | w.GENERIC_WRITE,
+            w.FILE_SHARE_READ | w.FILE_SHARE_WRITE,
+            null,
+            w.OPEN_EXISTING,
+            0,
+            null,
+        );
+        if (h == w.INVALID_HANDLE_VALUE) return -1;
+        return @bitCast(@as(u64, @intFromPtr(h)));
+    }
+    const fd = std.c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
+    return if (fd < 0) -1 else @intCast(fd);
+}
+
+fn closeNullDevice() void {
+    if (null_handle < 0) return;
+    if (builtin.os.tag == .windows) {
+        _ = std.os.windows.kernel32.CloseHandle(@ptrFromInt(@as(usize, @intCast(null_handle))));
+    } else {
+        _ = std.c.close(@intCast(null_handle));
+    }
+}
+
+/// Give a loaded module the WASI context described at the top of this section.
+/// WAMR reads these at instantiation, so they are set on the module and not on
+/// the instance. Every pointer is null and every count is zero on purpose:
+/// there is nothing to preopen, nothing to map, no environment and no argv.
+fn setWasiFloor(handle: c.wasm_module_t) void {
+    c.wasm_runtime_set_wasi_args_ex(
+        handle,
+        null, // dir_list
+        0,
+        null, // map_dir_list
+        0,
+        null, // env
+        0,
+        null, // argv
+        0,
+        null_handle,
+        null_handle,
+        null_handle,
+    );
+}
+
+/// fd_write(fd, iovs, iovs_len, nwritten). Writes to 1 and 2 become log lines
+/// and everything else is EBADF, which is what a descriptor that was never
+/// opened deserves.
+///
+/// A write is logged as it arrives. One `println` is one write in both Go and
+/// Rust, so one println is one line; a plugin that writes half a line in one
+/// call and the rest in the next gets two lines, which is a fair price for
+/// holding no per-instance buffer.
+fn wasiFdWrite(
+    env: c.wasm_exec_env_t,
+    fd: u32,
+    iovs: ?[*]const IovecApp,
+    iovs_len: u32,
+    nwritten: ?*u32,
+) callconv(.c) u32 {
+    const inst = callerInstance(env);
+    // WAMR's `*` conversion validates one byte of each pointer argument, so
+    // the real extent is checked here, exactly as WAMR's own wrapper does.
+    const out = nwritten orelse return wasi_errno.fault;
+    if (!c.wasm_runtime_validate_native_addr(inst, out, @sizeOf(u32))) return wasi_errno.fault;
+    const vec = iovs orelse return wasi_errno.fault;
+    const vec_bytes = @as(u64, iovs_len) * @sizeOf(IovecApp);
+    if (vec_bytes != 0 and
+        !c.wasm_runtime_validate_native_addr(inst, @constCast(@as(*const anyopaque, @ptrCast(vec))), vec_bytes))
+        return wasi_errno.fault;
+    if (fd != 1 and fd != 2) return wasi_errno.badf;
+
+    const stream: Stream = if (fd == 2) .err else .out;
+    var written: u32 = 0;
+    for (vec[0..iovs_len]) |v| {
+        const bytes = sliceOf(inst, v.buf_offset, v.buf_len) catch return wasi_errno.fault;
+        writeStdio(env, stream, bytes);
+        written +%= v.buf_len;
+    }
+    out.* = written;
+    return wasi_errno.success;
+}
+
+fn writeStdio(env: c.wasm_exec_env_t, stream: Stream, bytes: []const u8) void {
+    const user_data = callerUserData(env);
+    var rest = bytes;
+    while (rest.len != 0) {
+        const nl = std.mem.indexOfScalar(u8, rest, '\n');
+        var line = if (nl) |i| rest[0..i] else rest;
+        rest = if (nl) |i| rest[i + 1 ..] else rest[rest.len..];
+        if (line.len != 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+        if (line.len == 0) continue;
+        if (line.len > max_stdio_line) line = line[0..max_stdio_line];
+        if (stdio_sink) |sink| {
+            sink(user_data, stream, line);
+        } else {
+            std.debug.print("plugin {s}: {s}\n", .{ if (stream == .err) "stderr" else "stdout", line });
+        }
+    }
+}
+
+/// poll_oneoff(in, out, nsubscriptions, nevents). Answers "nothing is ready"
+/// at once and never waits; see the note on sleeping above. `out` is left
+/// untouched, which is correct for zero events.
+fn wasiPollOneoff(
+    env: c.wasm_exec_env_t,
+    _: ?*const anyopaque,
+    _: ?*anyopaque,
+    _: u32,
+    nevents: ?*u32,
+) callconv(.c) u32 {
+    const out = nevents orelse return wasi_errno.fault;
+    if (!c.wasm_runtime_validate_native_addr(callerInstance(env), out, @sizeOf(u32)))
+        return wasi_errno.fault;
+    out.* = 0;
+    return wasi_errno.success;
+}
+
+/// sock_open(poolfd, af, socktype, sockfd). Refused: a plugin's only route to
+/// the network is the broker's `tcp_connect`, which is grant-checked.
+fn wasiSockOpen(
+    _: c.wasm_exec_env_t,
+    _: u32,
+    _: u32,
+    _: u32,
+    _: ?*u32,
+) callconv(.c) u32 {
+    return wasi_errno.notsup;
+}
+
 // ---- modules and instances ----
 
 pub const Module = struct {
@@ -184,6 +437,10 @@ pub const Module = struct {
     pub fn load(bytes: []u8, err: *ErrBuf) Error!Module {
         const handle = c.wasm_runtime_load(bytes.ptr, @intCast(bytes.len), &err.bytes, err.bytes.len) orelse
             return error.LoadFailed;
+        // Harmless for a wasm32-freestanding module, which imports no WASI at
+        // all: the context is built at instantiation either way and this one
+        // reaches nothing.
+        setWasiFloor(handle);
         return .{ .handle = handle };
     }
 
@@ -215,6 +472,15 @@ const abi_exports = struct {
     const start = "lk_start";
     const event = "lk_event";
 };
+
+// REACTOR INITIALISATION IS WAMR'S JOB, NOT THIS FILE'S. A Go module's
+// `_initialize` is where the Go runtime starts its scheduler and runs every
+// package's `init`, and it must run before any other export. WAMR calls it
+// inside wasm_runtime_instantiate for any module that imports WASI, exactly
+// once. Calling it here as well made Go abort with "randinit twice" — its
+// scheduler had already started. Rust's cdylib exports no `_initialize`;
+// wasm-ld calls its constructors from the top of each export instead. A Zig
+// wasm32-freestanding plugin has nothing to initialise.
 
 /// A (app address, length) range inside a plugin's linear memory.
 pub const Buf = struct {

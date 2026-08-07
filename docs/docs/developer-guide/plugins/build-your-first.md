@@ -15,9 +15,16 @@ batch, and a status line the app can show. It is the `laylines` plugin that ship
 with Lookout, cut down to one line instead of two — so when you want to go
 further, there is a finished example of the same shape sitting in the tree.
 
+The walkthrough is in Zig, which is the only language whose plugin-side library
+is settled. Go and Rust modules load and run — see
+[the same plugin in Go, and in Rust](#the-same-plugin-in-go-and-in-rust) for the
+toolchains and the build commands — but their libraries are being rewritten, so
+read the Zig listing first for the shape of the thing.
+
 ## Before you start
 
-- **Zig 0.16.** The plugin-side library is Zig, and so is Lookout's build.
+- **Zig 0.16.** Lookout's build is Zig, and so is the walkthrough. A Go or Rust
+  plugin still needs it, to build the harness you will run the plugin in.
 - **A checkout of Lookout.** Note the commit you are on: the ABI is unstable,
   and this is what you will pin to.
 - **macOS.** It is the only platform where the whole loop — build, harness,
@@ -259,7 +266,7 @@ each one is a rule with a reason behind it.
 of directory names in `build.zig`, so add yours:
 
 ```zig
-for ([_][]const u8{ "echo", "nmea0183", "ownship", "ais", "laylines", "windline" }) |name| {
+for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline" }) |name| {
 ```
 
 Then:
@@ -285,6 +292,84 @@ zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
 linker keeps the five exports. Rename the result to `<id>.wasm`, put
 `<id>.manifest.json` beside it, and the host will load it. Copying
 `plugins/common/lk.zig` into your own project works too — it imports only `std`.
+
+## The same plugin in Go, and in Rust
+
+Zig is not the only way in. The plugin above exists in all three languages, line
+for line, so you can read the one you already know:
+
+```
+plugins/windline/                 the Zig listing above
+sdk/go/examples/windline/         the same plugin in Go
+sdk/rust/examples/windline/       the same plugin in Rust
+```
+
+Neither is built by `zig build`. You build the module with your own toolchain and
+drop the pair into a plugin directory yourself — which is what an out-of-tree
+plugin does anyway.
+
+:::caution The Go and Rust libraries are being rewritten
+
+The **ABI** below — the five exports, the imports, the WASI floor — is settled,
+and a Go or Rust module that speaks it loads and runs today. The plugin-side
+libraries in `sdk/` are not settled: the whole plugin-facing API is being
+simplified, and `sdk/go/lookout` and `sdk/rust/lookout` will be rewritten to the
+new shape rather than kept as they are. Read them as working proof that the
+language boots, not as an API to build on. This page will grow the walkthrough in
+each language when that shape lands.
+
+:::
+
+### Go
+
+Go 1.24 or later. `GOOS=wasip1 GOARCH=wasm` with `-buildmode=c-shared` emits a
+reactor module, and `//go:wasmexport` and `//go:wasmimport` bind the ABI.
+
+```sh
+cd sdk/go/examples/windline
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o windline.wasm .
+
+cp windline.wasm    ../../../../zig-out/plugins/org.example.windline.go.wasm
+cp manifest.json    ../../../../zig-out/plugins/org.example.windline.go.manifest.json
+```
+
+Three things a Go author has to know whatever the library looks like, and none of
+them is optional.
+
+- **`main` never runs.** A reactor is initialised by `_initialize`, which runs
+  package initialisation and then hands control back. Package `main` still needs
+  a `main` function to compile; leave it empty and do your setup in an `init`
+  function or in the plugin's own start.
+- **Goroutines make no progress after you return.** There is one thread and it is
+  only inside your module while the host is calling it. No background workers, no
+  `time.Sleep` — it returns at once rather than sleeping, so a sleep loop is a
+  spin loop and the watchdog will kill it. Ask the host for a timer.
+- **The module is about 3.4 MB**, whatever the plugin does; that is the Go
+  runtime. `tinygo build -target=wasip1` emits tens of kilobytes from the same
+  source, with the usual TinyGo standard library caveats.
+
+### Rust
+
+`wasm32-wasip1`, `crate-type = ["cdylib"]`. Add the target once with
+`rustup target add wasm32-wasip1`.
+
+```sh
+cd sdk/rust
+cargo build --release --target wasm32-wasip1
+
+cp target/wasm32-wasip1/release/windline.wasm \
+   ../../zig-out/plugins/org.example.windline.rs.wasm
+cp examples/windline/manifest.json \
+   ../../zig-out/plugins/org.example.windline.rs.manifest.json
+```
+
+`std` works: `String`, `Vec`, `format!`, `SystemTime` and `println!` all do what
+you expect. `File::open`, `TcpStream::connect` and `thread::spawn` do not — see
+[the WASI floor](abi.md#the-wasi-floor) for the exact list, and read it before
+you spend an afternoon on a path that cannot resolve. A panic traps the instance
+and the message reaches your log, so do not panic on data off the wire.
+
+The module is about 120 KB, near the Zig one.
 
 ## Run it in the harness
 
@@ -366,10 +451,11 @@ path at all, so only plugins bundled with the app can run.
 
 ## Then read the rules
 
-The four plugins that ship with Lookout are the worked examples, in rising order
-of difficulty: `laylines` draws; `ownship` draws and uses the own-ship anchor;
-`nmea0183` opens a socket, reassembles a stream and publishes; `ais` adds
-settings, an alarm and pick payloads.
+The plugins that ship with Lookout are the worked examples, in rising order of
+difficulty: `laylines` draws; `ownship` draws and uses the own-ship anchor;
+`nmea0183` opens a socket, reassembles a stream and publishes; `signalk` does
+the same from a JSON protocol, converts its units and keeps its transport
+behind a seam; `ais` adds settings, an alarm and pick payloads.
 
 Before you copy one, read [the rules](rules.md). Every rule there is a mistake
 that costs a mariner something at sea.

@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["lookout", "examples/windline"]
+
+# Release is what a plugin ships: the module is interpreted, so every wasm
+# instruction the optimiser removes is an instruction the interpreter does not
+# execute. Size matters too — the module is copied into linear memory whole.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,11 @@
+[package]
+name = "lookout"
+version = "0.1.0"
+edition = "2021"
+description = "The plugin side of the Lookout ABI"
+publish = false
+
+# No dependencies, on purpose. A plugin SDK that pulls a crate tree makes the
+# module bigger, the build slower and the supply chain longer, and the ABI is
+# small enough not to need one. Add serde to YOUR plugin if you want it.
+[dependencies]

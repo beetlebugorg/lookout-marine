@@ -1,0 +1,1 @@
+/Users/claude/Projects/lookout-marine/sdk/rust/target/wasm32-wasip1/release/windline.wasm: /Users/claude/Projects/lookout-marine/sdk/rust/examples/windline/src/lib.rs /Users/claude/Projects/lookout-marine/sdk/rust/lookout/src/json.rs /Users/claude/Projects/lookout-marine/sdk/rust/lookout/src/lib.rs
