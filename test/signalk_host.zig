@@ -11,7 +11,10 @@
 //!     reopens it;
 //!   - the store arbitrates between this plugin and the nmea0183 plugin when
 //!     both hold the same path, and fails over to the second one when the
-//!     first goes stale.
+//!     first goes stale;
+//!   - the SAME plugin reads the same server over a websocket, through the
+//!     host's `ws_connect` import and its RFC 6455 framing, and puts the same
+//!     numbers in the store.
 //!
 //! The plugins arrive as anonymous imports, like plugins/echo does for
 //! host_smoke: importing host.zig must never drag a plugin binary into the
@@ -54,6 +57,10 @@ const nav_staleness_ms: i64 = 1_000;
 /// One pretend Signal K server. It writes the hello on accept, waits for a
 /// subscription, then replays the recorded deltas in a loop.
 const Server = struct {
+    /// True to speak the websocket at `/signalk/v1/stream` instead of the
+    /// plain TCP stream. The recorded deltas and the hello are the same; only
+    /// the framing differs.
+    ws: bool = false,
     fd: std.c.fd_t = -1,
     port: u16 = 0,
     thread: ?std.Thread = null,
@@ -100,7 +107,8 @@ const Server = struct {
             var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, recorded, "\n"), '\n');
             const hello = lines.next() orelse continue;
             if (lines.rest().len == 0) continue;
-            if (!writeLine(peer, hello)) continue;
+            if (self.ws and !self.upgrade(peer)) continue;
+            if (!self.send(peer, hello)) continue;
             if (!self.awaitSubscribe(peer)) continue;
             _ = self.subscribed.fetchAdd(1, .monotonic);
 
@@ -113,16 +121,53 @@ const Server = struct {
                 while (it.next()) |line| {
                     if (line.len == 0) continue;
                     if (self.stop.load(.acquire)) break :stream;
-                    if (!writeLine(peer, line)) break :stream;
+                    if (!self.send(peer, line)) break :stream;
                     broker.sleepMs(40);
                 }
             }
         }
     }
 
-    /// Read until the client asks for something. A Signal K TCP stream starts
-    /// with no subscription, so a plugin that never sends one gets no deltas
-    /// and this test times out.
+    /// One document, framed the way this server's transport frames it.
+    fn send(self: *Server, peer: std.c.fd_t, doc: []const u8) bool {
+        return if (self.ws) writeWsText(peer, doc) else writeLine(peer, doc);
+    }
+
+    /// The RFC 6455 handshake, from the server's side. The accept hash is
+    /// computed with the host's own `acceptFor`, which is the thing under
+    /// test on the other end of the socket.
+    fn upgrade(self: *Server, peer: std.c.fd_t) bool {
+        var head: [2048]u8 = undefined;
+        var used: usize = 0;
+        const until = broker.monoMs() + deadline_ms;
+        while (std.mem.indexOf(u8, head[0..used], "\r\n\r\n") == null) {
+            if (self.stop.load(.acquire) or broker.monoMs() > until or used == head.len) return false;
+            var fds = [_]std.c.pollfd{.{ .fd = peer, .events = std.c.POLL.IN, .revents = 0 }};
+            if ((std.posix.poll(&fds, 50) catch return false) <= 0) continue;
+            const n = std.c.read(peer, head[used..].ptr, head.len - used);
+            if (n <= 0) return false;
+            used += @intCast(n);
+        }
+        const text = head[0..used];
+        // The path is the spec's, and a plugin that dialled the web page
+        // instead of the stream would show up here.
+        if (std.mem.indexOf(u8, text, "GET /signalk/v1/stream") == null) return false;
+        const at = std.ascii.indexOfIgnoreCase(text, "sec-websocket-key:") orelse return false;
+        const rest = text[at + "sec-websocket-key:".len ..];
+        const end = std.mem.indexOf(u8, rest, "\r\n") orelse return false;
+        const key = std.mem.trim(u8, rest[0..end], " \t");
+        var accept: [28]u8 = undefined;
+        host.webio.acceptFor(key, &accept);
+
+        var reply: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&reply, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\n\r\n", .{accept}) catch return false;
+        return writeAll(peer, msg);
+    }
+
+    /// Read until the client asks for something. A Signal K stream starts with
+    /// no subscription on either transport, so a plugin that never sends one
+    /// gets no deltas and this test times out.
     fn awaitSubscribe(self: *Server, peer: std.c.fd_t) bool {
         const until = broker.monoMs() + deadline_ms;
         var buf: [512]u8 = undefined;
@@ -134,13 +179,18 @@ const Server = struct {
             const got = std.c.read(peer, buf[len..].ptr, buf.len - len);
             if (got <= 0) return false;
             len += @intCast(got);
-            const line = std.mem.sliceTo(buf[0..len], '\n');
-            if (line.len == len) continue; // no terminator yet
-            const trimmed = std.mem.trimEnd(u8, line, "\r");
-            const keep = @min(trimmed.len, self.first_request.len);
-            @memcpy(self.first_request[0..keep], trimmed[0..keep]);
+            var frame: [512]u8 = undefined;
+            const asked = if (self.ws)
+                (readWsText(buf[0..len], &frame) orelse continue)
+            else blk: {
+                const line = std.mem.sliceTo(buf[0..len], '\n');
+                if (line.len == len) continue; // no terminator yet
+                break :blk std.mem.trimEnd(u8, line, "\r");
+            };
+            const keep = @min(asked.len, self.first_request.len);
+            @memcpy(self.first_request[0..keep], asked[0..keep]);
             self.first_request_len.store(@intCast(keep), .release);
-            return std.mem.indexOf(u8, trimmed, "\"subscribe\"") != null;
+            return std.mem.indexOf(u8, asked, "\"subscribe\"") != null;
         }
         return false;
     }
@@ -213,6 +263,45 @@ fn noSigPipe(peer: std.c.fd_t) void {
         var yes: c_int = 1;
         _ = std.c.setsockopt(peer, std.c.SOL.SOCKET, std.c.SO.NOSIGPIPE, &yes, @sizeOf(c_int));
     }
+}
+
+/// One unmasked server text frame. A server frame is never masked (RFC 6455
+/// section 5.1), and a client that unmasked one anyway would pass this test
+/// while failing against a real server.
+fn writeWsText(fd: std.c.fd_t, payload: []const u8) bool {
+    var head: [4]u8 = undefined;
+    var n: usize = 0;
+    head[0] = 0x81;
+    if (payload.len < 126) {
+        head[1] = @intCast(payload.len);
+        n = 2;
+    } else {
+        head[1] = 126;
+        std.mem.writeInt(u16, head[2..4], @intCast(payload.len), .big);
+        n = 4;
+    }
+    return writeAll(fd, head[0..n]) and writeAll(fd, payload);
+}
+
+/// One MASKED client text frame out of `raw`, unmasked into `out`. Null while
+/// the frame is not all there yet, and null for an unmasked frame — a client
+/// must mask, and this test is the thing that says so.
+fn readWsText(raw: []const u8, out: []u8) ?[]const u8 {
+    if (raw.len < 2) return null;
+    if (raw[0] & 0x0f != 0x1) return null;
+    if (raw[1] & 0x80 == 0) return null;
+    var len: usize = raw[1] & 0x7f;
+    var at: usize = 2;
+    if (len == 126) {
+        if (raw.len < 4) return null;
+        len = std.mem.readInt(u16, raw[2..4], .big);
+        at = 4;
+    }
+    if (raw.len < at + 4 + len or len > out.len) return null;
+    const mask = raw[at .. at + 4];
+    const body = raw[at + 4 .. at + 4 + len];
+    for (body, 0..) |c, i| out[i] = c ^ mask[i & 3];
+    return out[0..len];
 }
 
 fn writeLine(fd: std.c.fd_t, line: []const u8) bool {
@@ -354,11 +443,16 @@ fn plugDir(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir, comptime which: e
 }
 
 fn serverRow(alloc: std.mem.Allocator, out: *std.ArrayList(u8), port: u16, enabled: bool) !void {
+    return serverRowKind(alloc, out, port, enabled, false);
+}
+
+fn serverRowKind(alloc: std.mem.Allocator, out: *std.ArrayList(u8), port: u16, enabled: bool, ws: bool) !void {
     out.clearRetainingCapacity();
     try out.print(
         alloc,
-        "{{\"servers\":[{{\"id\":\"s-main\",\"name\":\"Boat server\",\"host\":\"127.0.0.1\",\"port\":{d},\"enabled\":{s}}}]}}",
-        .{ port, if (enabled) "true" else "false" },
+        "{{\"servers\":[{{\"id\":\"s-main\",\"name\":\"Boat server\",\"host\":\"127.0.0.1\"," ++
+            "\"port\":{d},\"websocket\":{s},\"enabled\":{s}}}]}}",
+        .{ port, if (ws) "true" else "false", if (enabled) "true" else "false" },
     );
 }
 
@@ -555,4 +649,115 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
     try must(!rig.log.has("trapped"), "nothing trapped");
     try must(!rig.log.has("denied"), "no grant was refused");
     try std.testing.expectEqual(@as(u32, 0), sk_plugin.denied);
+}
+
+test "the same server over its websocket feeds the same chart" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try plugDir(alloc, &tmp, .sk);
+    defer alloc.free(dir_path);
+
+    var sk = Server{ .ws = true };
+    try sk.open();
+    defer sk.close();
+
+    var rig = try Rig.init(alloc, dir_path);
+    defer rig.deinit();
+    try rig.h.start();
+
+    var cfg: std.ArrayList(u8) = .empty;
+    defer cfg.deinit(alloc);
+    try serverRowKind(alloc, &cfg, sk.port, true, true);
+    try rig.h.configSet(sk_id, cfg.items);
+
+    // Everything between the plugin and the store is the TCP path's. What is
+    // different is underneath: a handshake with an accept hash, masked client
+    // frames, unmasked server frames, and the host reassembling each message
+    // before the plugin sees a byte.
+    try waitFor("own ship in the store over the websocket", rig.vessels, struct {
+        fn ready(v: *vstore.Store) bool {
+            return number(v, heading_path) != null and reading(v, position_path) != null;
+        }
+    }.ready);
+    try must(sk.subscribed.load(.monotonic) >= 1, "the plugin subscribed over the websocket");
+
+    // The subscription arrived as ONE websocket message with no line
+    // terminator: a message is already a document, and a CR LF inside it
+    // would be two bytes of noise a server has to strip.
+    const req = sk.request();
+    try must(std.mem.indexOf(u8, req, "\"context\":\"*\"") != null, "the subscription asks for every context");
+    try must(std.mem.indexOfAny(u8, req, "\r\n") == null, "the websocket subscription carries no terminator");
+
+    try std.testing.expectApproxEqAbs(@as(f64, 90.0), number(rig.vessels, heading_path).?, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 2.5722), number(rig.vessels, sog_path).?, 1e-9);
+    const pos = reading(rig.vessels, position_path).?;
+    try must(pos.value == .position, "the position is a position");
+    try std.testing.expectApproxEqAbs(@as(f64, 38.9763), pos.value.position.lat, 1e-9);
+
+    try waitFor("the AIS target over the websocket", rig.ais, struct {
+        fn ready(a: *aisstore.AisStore) bool {
+            const g = a.get(366982330) orelse return false;
+            return g.name() != null and g.cog != null;
+        }
+    }.ready);
+    try std.testing.expectEqualStrings("BAY TRADER", rig.ais.get(366982330).?.name().?);
+
+    const plugin = rig.h.find(sk_id) orelse return error.PluginNotLoaded;
+    try waitFor("the row to read connected", plugin, struct {
+        fn ready(p: *broker.Plugin) bool {
+            return std.mem.indexOf(u8, p.status(), "\"state\":\"connected\"") != null;
+        }
+    }.ready);
+
+    // Pausing closes the websocket the same way it closes a socket, and
+    // resuming dials a second one.
+    try serverRowKind(alloc, &cfg, sk.port, false, true);
+    try rig.h.configSet(sk_id, cfg.items);
+    try waitFor("the websocket row to read paused", plugin, struct {
+        fn ready(p: *broker.Plugin) bool {
+            return std.mem.indexOf(u8, p.status(), "\"state\":\"paused\"") != null;
+        }
+    }.ready);
+    try serverRowKind(alloc, &cfg, sk.port, true, true);
+    try rig.h.configSet(sk_id, cfg.items);
+    try waitFor("a second websocket subscription after resume", &sk, struct {
+        fn ready(s: *Server) bool {
+            return s.subscribed.load(.monotonic) >= 2;
+        }
+    }.ready);
+
+    try must(!rig.log.has("trapped"), "the plugin never trapped");
+    try must(!rig.log.has("denied "), "no call was refused a grant");
+}
+
+test "a websocket to a server off this boat's network is refused by the grant" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try plugDir(alloc, &tmp, .sk);
+    defer alloc.free(dir_path);
+
+    var rig = try Rig.init(alloc, dir_path);
+    defer rig.deinit();
+    try rig.h.start();
+
+    // The manifest grants `local`, which is this boat's own network. A public
+    // Signal K server is outside it, and the refusal happens before a socket
+    // opens rather than after the plugin has sent anything.
+    var cfg: std.ArrayList(u8) = .empty;
+    defer cfg.deinit(alloc);
+    try cfg.appendSlice(alloc, "{\"servers\":[{\"id\":\"s-far\",\"name\":\"Demo\"," ++
+        "\"host\":\"demo.signalk.org\",\"port\":80,\"websocket\":true,\"enabled\":true}]}");
+    try rig.h.configSet(sk_id, cfg.items);
+
+    const plugin = rig.h.find(sk_id) orelse return error.PluginNotLoaded;
+    try waitFor("the refusal to reach the row's line", plugin, struct {
+        fn ready(p: *broker.Plugin) bool {
+            return std.mem.indexOf(u8, p.status(), "not on this boat's network") != null;
+        }
+    }.ready);
+    try must(rig.log.has("is not in the manifest's net.ws host list"), "the log names the host that was refused");
 }

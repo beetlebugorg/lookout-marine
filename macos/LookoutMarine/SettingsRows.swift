@@ -141,7 +141,7 @@ struct PluginListSections: View {
             Section {
                 let rows = p.rows(list)
                 if rows.isEmpty {
-                    Text("No connections yet.")
+                    Text(list.empty.isEmpty ? "Nothing here yet." : list.empty)
                         .foregroundStyle(.secondary)
                 }
                 ForEach(rows) { row in
@@ -154,15 +154,19 @@ struct PluginListSections: View {
                 Button {
                     p.addRow(list)
                 } label: {
-                    Label("Add Connection", systemImage: "plus")
+                    Label(list.addLabel.isEmpty ? "Add" : list.addLabel, systemImage: "plus")
                 }
             } header: {
                 SectionHead(list.group)
             } footer: {
-                Text("Give the address of your instrument network's gateway. "
-                     + "Most WiFi gateways serve NMEA 0183 on port 10110. "
-                     + "Everything switched on here feeds the same chart.")
-                    .font(.caption).foregroundStyle(.secondary)
+                // The plugin's sentence, never the window's. Connections holds
+                // two lists now — NMEA gateways and Signal K servers — and a
+                // line about WiFi gateways under a list of Signal K servers is
+                // an instruction that sends the mariner to the wrong port.
+                if !list.footer.isEmpty {
+                    Text(list.footer)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -228,7 +232,19 @@ struct PluginRowEditor: View {
                     }
                     .padding(.leading, Self.childInset)
                 case .toggle:
-                    EmptyView() // the pause switch is in the header, where it is read
+                    // Every toggle but the row's own on/off switch, which is
+                    // drawn on the row's line where it is read at a glance.
+                    if f.key == rowSwitch?.key {
+                        EmptyView()
+                    } else {
+                        DescribedRow(title: f.label, desc: f.desc) {
+                            Toggle("", isOn: p.cellToggle(list, rowID, f.key))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
+                        .padding(.leading, Self.childInset)
+                    }
                 }
             }
             Button(role: .destructive) {
@@ -238,6 +254,18 @@ struct PluginRowEditor: View {
             }
             .padding(.leading, Self.childInset)
         }
+    }
+
+    /// The column the list named as the row's on/off switch, or its first
+    /// toggle. Named rather than positional since a list grew a second toggle:
+    /// "the first toggle is the pause switch" put the Signal K transport
+    /// switch on the row's line and hid the one that pauses it.
+    private var rowSwitch: PluginField? {
+        if !list.switchKey.isEmpty,
+           let named = list.itemFields.first(where: { $0.key == list.switchKey && $0.kind == .toggle }) {
+            return named
+        }
+        return list.itemFields.first(where: { $0.kind == .toggle })
     }
 
     /// The line the mariner reads: state, name, and the pause switch. Clicking
@@ -271,7 +299,7 @@ struct PluginRowEditor: View {
 
             // The pause switch: off closes the socket and stops the retries,
             // on dials again. Outside the button, or it could not be touched.
-            if let sw = list.itemFields.first(where: { $0.kind == .toggle }) {
+            if let sw = rowSwitch {
                 Toggle("", isOn: p.cellToggle(list, rowID, sw.key))
                     .labelsHidden()
                     .toggleStyle(.switch)

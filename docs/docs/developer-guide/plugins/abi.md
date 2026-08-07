@@ -6,43 +6,35 @@ sidebar_position: 3
 
 # The ABI
 
-This is the reference: every export your module provides, every call it can make,
-every event it can be handed, and the shape of every payload in between.
+This is the reference: every event your module can be handed, every call it can
+make, the shape of every payload in between, and — at the end — the raw module
+contract a toolchain other than Zig implements by hand.
 
-The boundary is deliberately narrow. Your module is **wasm32-freestanding**: no
-WASI, no filesystem, no threads, and no clock except the two the host lends you.
-Everything crossing the boundary is either an integer or a `(pointer, length)`
-byte range in your module's own linear memory, and it is always copied — you are
-never handed a pointer into the host's memory. Text is UTF-8, and anything
-structured is JSON.
+The boundary is deliberately narrow. Everything crossing it is either an integer
+or a `(pointer, length)` byte range in your module's own linear memory, and it is
+always copied — you are never handed a pointer into the host's memory. Text is
+UTF-8, and anything structured is JSON.
+
+Your module is `wasm32-freestanding` (Zig) or `wasm32-wasip1` (Go, Rust). Either
+loads. The WASI a wasip1 module gets is a floor for its language runtime and
+nothing more: [the WASI floor](#the-wasi-floor) below says exactly what works and
+what does not.
 
 Three files in Lookout are the real contract, and they win any argument with this
 page: `plugins/common/lk.zig` is the plugin side, `src/plugin/broker.zig`
-implements every import, and `src/plugin/host.zig` parses every manifest.
+implements every import, and `src/plugin/host.zig` parses every manifest. The Go
+and Rust libraries in `sdk/` mirror `lk.zig`; `src/plugin/wasm.zig` bounds WASI.
 
 The ABI version is **1**, and it is unstable —
 [what that means for you](index.md#the-abi-is-version-0-and-unstable).
 
-## The five exports
-
-Every plugin provides exactly these. `lk.registerPlugin` writes all five for you.
-
-| Export | Signature | Meaning |
-|---|---|---|
-| `lk_abi` | `() -> u32` | The ABI version this module speaks. Must return 1. |
-| `lk_alloc` | `(len: u32) -> ptr` | Give the host `len` bytes to write an inbound payload into. **Returning 0 means out of memory**, and the host treats the call as a fault. |
-| `lk_free` | `(ptr, len: u32)` | The host is done with that buffer. |
-| `lk_start` | `(ptr, len: u32) -> i32` | Begin. The payload is `{"abi":1,"config":{…}}`. Non-zero refuses the start, and the plugin is not loaded. |
-| `lk_event` | `(kind: u32, handle: u64, ptr, len: u32) -> i32` | Everything that happens. `handle` correlates: which timer, which socket. Non-zero is logged as a complaint and the plugin keeps running. |
-
-The host checks `lk_abi` at load and refuses a mismatch, because the same five
-names could mean something else in another version.
-
 ## Event kinds
 
-One entry point, one enum, delivered one at a time per plugin from that plugin's
-own FIFO. **An unknown kind must be ignored and answered 0** — that tolerance is
-what lets the host add an event without breaking a module built today.
+Everything that happens to your plugin arrives here. The host delivers one event
+at a time, from that plugin's own FIFO, into the one handler you write — in Zig
+that is `onEvent`, and each kind below is one branch of it. **Your handler must
+ignore a kind it does not know and answer 0**; that tolerance is what lets the
+host add an event without breaking a module built today.
 
 | # | Kind | `handle` | Payload |
 |---|---|---|---|
@@ -51,12 +43,24 @@ what lets the host add an event without breaking a module built today.
 | 4 | `TCP_CONNECTED` | The connection id | empty |
 | 5 | `TCP_DATA` | The connection id | Raw bytes, one event per socket read, at most 8192 bytes. Reassembling lines is yours. |
 | 6 | `TCP_CLOSED` | The connection id | empty. Sent when the peer or an error ended it — not when you called `tcp_close`. |
+| 7 | `UDP_DATA` | The socket id `udp_open` returned | One datagram, raw. |
+| 8 | `HTTP_RESPONSE` | The request id `http_fetch` returned | An envelope: `u32 json_len`, the head JSON, then the raw body. See [http_fetch](#http_fetch). |
+| 9 | `FILE_OPENED` | The file handle | `{"name":"gfs.grib2","size":12582912,"mode":"read"}`. The mariner chose a file and the host granted it to you. |
 | 10 | `STORE_CHANGED` | 0 | `{"values":[…]}`, subscribed paths only, coalesced to at most 10 Hz |
 | 11 | `AIS_CHANGED` | 0 | `{"targets":[…]}`, the whole target set, at most 2 Hz and only when something moved |
+| 12 | `WS_OPEN` | The connection id | `{"protocol":"v1.signalk"}` — the subprotocol the server chose, empty when it chose none. |
+| 13 | `WS_DATA` | The connection id | One whole text message. The host joins the fragments, so this is never half of one. |
+| 14 | `WS_CLOSED` | The connection id | `{"code":1000,"reason":"…"}`. The last event on that connection, whoever ended it. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
 
 Kind 2 is unassigned. `SHUTDOWN` ignores the queue cap: a plugin in trouble is
 exactly the one that must hear it.
+
+**One datagram is one event.** The host never joins two `UDP_DATA` payloads and
+never splits one, so a plugin parsing NMEA over UDP does not reassemble anything
+— which is the opposite of `TCP_DATA`, where you must. A datagram over 8192 bytes
+is dropped whole and logged, because half a sentence looks to a parser exactly
+like a short one.
 
 ## The imports
 
@@ -81,10 +85,28 @@ not trap.
 | `timer_cancel` | `(id: i64)` | — | Nothing. Cancelling another plugin's timer does nothing. |
 | `subscribe` | `(ptr, len) -> i32` | `vessel.read` | The number of paths, or -1. The payload is `["navigation.position",…]`. **One subscription per plugin**: calling again replaces the list. |
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
+| `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. Port 0 takes an ephemeral one. |
+| `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** — the host resolves no name here — so `255.255.255.255` works and `gateway.local` does not. |
+| `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
+| `http_fetch` | `(ptr, len) -> i64` | `net.http` + its host list | A request id at once, or -1. The host fetches on a thread of its own and delivers exactly one `HTTP_RESPONSE` carrying that id. |
+| `ws_connect` | `(ptr, len) -> i64` | `net.ws` + its host list | A connection id at once, or -1. The host performs the handshake and delivers `WS_OPEN`, then `WS_DATA` per message, then `WS_CLOSED`. |
+| `ws_send` | `(id: i64, ptr, len) -> i32` | `net.ws` | Bytes queued, or -1. Text messages only. The host writes the frame on the connection's own thread, so this returns at once however slow the peer is. |
+| `ws_close` | `(id: i64)` | `net.ws` | Nothing. The host sends the close frame and still delivers `WS_CLOSED`. |
+| `storage_get` | `(kptr, klen, vptr, vcap) -> i32` | `storage` | The value's size in bytes, or -1 when there is no such key. The host writes into your buffer only when the value fits it — see [storage_get and storage_put](#storage_get-and-storage_put). |
+| `storage_put` | `(kptr, klen, vptr, vlen) -> i32` | `storage` | 0, or -1 when a cap is in the way. An empty value deletes the key. The host has written the file before this returns. |
+| `file_read` | `(handle: i64, offset: i64, ptr, cap) -> i32` | `files` | Bytes read, 0 at the end of the file, or -1. `offset` is absolute: a handle has no cursor to move. |
+| `file_write` | `(handle: i64, ptr, len) -> i32` | `files` | Bytes appended, or -1 for a read handle, or one that is not yours. |
+| `file_close` | `(handle: i64)` | `files` | Nothing. The host also closes every handle you hold when you stop. |
 
 Timers, status lines, the log and the clocks need no capability. They are
 baseline plumbing: a plugin that cannot say what it is doing is worse than one
 that can.
+
+**There is no `file_open`.** You cannot name a path. Every file handle you ever
+see arrived as a `FILE_OPENED` event because the host granted it, and the host
+grants one only when the application asks it to on a mariner's behalf. The
+picker that would ask is not built yet, so today the harness is what grants a
+file.
 
 ### The capabilities
 
@@ -96,14 +118,111 @@ that can.
 | `ais.read` | `ais_subscribe` — receive `AIS_CHANGED` snapshots |
 | `overlay.draw` | `overlay` — retained objects on the chart |
 | `alerts.raise` | `alert` |
-| `net.tcp-client` | `tcp_connect`, `tcp_send` |
+| `net.tcp-client` | `tcp_connect`, `tcp_send`, `tcp_close` |
+| `net.udp` | `udp_open`, `udp_send`, `udp_close` |
+| `net.http` | `http_fetch` — **to the hosts the grant names, and no others** |
+| `net.ws` | `ws_connect`, `ws_send`, `ws_close` — **to the hosts the grant names, and no others** |
+| `storage` | `storage_get`, `storage_put` — a key-value store of your own |
+| `files` | `file_read`, `file_write`, `file_close`, on handles the host granted |
 
 An unknown capability name refuses the whole plugin. A typo in a grant would
 otherwise be a permission silently lost at sea, so it is a load error instead —
 check your spelling against the table above.
 
-A capability is all-or-nothing. There is no subtree restriction: `vessel.publish`
-grants every path, not `navigation.*`.
+Most capabilities are all-or-nothing. There is no subtree restriction:
+`vessel.publish` grants every path, not `navigation.*`.
+
+**`net.http` and `net.ws` are the exception: each carries a list of hosts.** You
+write the grant as an object rather than a name, and the plugin may reach the
+servers on that list and nothing else:
+
+```json
+"capabilities": ["storage", {"net.http": ["nomads.ncep.noaa.gov"]},
+                            {"net.ws": ["demo.signalk.org"]}]
+```
+
+The reason is what a mariner is being asked to agree to. "This plugin may reach
+the internet" is not a sentence anybody can weigh; "this plugin may reach
+nomads.ncep.noaa.gov" is. So the bare names `"net.http"` and `"net.ws"` refuse
+the manifest, and so does an empty list.
+
+| Rule | Detail |
+|---|---|
+| Match | Exact hostname, case-insensitive. The port and the path are not part of it. |
+| Wildcards | None. `*.noaa.gov` refuses the manifest. Name each server. |
+| Form | A hostname, never a URL: no scheme, no path, no trailing slash. |
+| Count | 1 to 8 hosts per capability. |
+| Redirects | The host follows a redirect only while it stays on the same host, so a fetch can never leave the list by being sent somewhere. |
+
+**`local` is the one entry that is not a hostname.** It grants *this boat's own
+network*: loopback, the private IPv4 ranges, IPv6 unique-local and link-local,
+and the `.local` names mDNS serves. Nothing public matches it, however that
+name resolves.
+
+```json
+"capabilities": [{"net.ws": ["local"]}]
+```
+
+Write it when the server is a **mariner's setting** rather than something you
+chose — a Signal K server lives at whatever the boat's network calls it, and no
+manifest can know that address in advance. The sentence a mariner weighs is
+still a real one: this plugin may reach servers on the boat's network, and not
+the internet.
+
+The check runs on the text of the URL, before any name lookup, so a public name
+that happens to resolve to a private address is still refused.
+
+The host checks the URL you pass against the list before it opens any socket. A
+URL outside it returns -1 and logs a refusal naming the host, exactly as a
+missing capability does.
+
+## The WASI floor
+
+Go and Rust do not compile a module that runs without WASI. Their runtimes import
+`wasi_snapshot_preview1` before a line of your code executes, and a module with an
+unresolved import does not instantiate. So the host answers WASI — and this
+section is the whole answer.
+
+**WASI is a floor for language runtimes. It is not a capability surface.** Every
+real thing a plugin does still goes through a `lookout` import and is still
+checked against your manifest. Read the two lists below before you debug
+anything: an afternoon spent looking for a missing preopen is an afternoon spent
+looking for something that was never there.
+
+**What works**
+
+| Call | Behaviour |
+|---|---|
+| `clock_time_get`, `clock_res_get` | Real. `SystemTime::now()` and `time.Now()` agree with the host's `now_ms` to the millisecond. `Instant` and monotonic timing work. |
+| `random_get` | Real. Seeds Go's map hashing and Rust's `HashMap`, which is why both need it to boot. |
+| `fd_write` on 1 and 2 | Becomes log lines, one per line written. `println!`, `fmt.Println`, `eprintln!` and a Rust `fatal error` all arrive in the plugin layer's log — never on the terminal the app was launched from, and never in a file. A line over 512 bytes is cut. Any other descriptor is `EBADF`. |
+| `args_*`, `environ_*` | Succeed and report nothing. Zero arguments, zero variables. |
+| `sched_yield` | Real, and pointless: there is nothing else to schedule. |
+| `proc_exit` | Real. It traps the instance, so a Rust panic or a Go `fatal error` fails the plugin loudly instead of half-running. |
+
+**What does not**
+
+| You wrote | You get | Why |
+|---|---|---|
+| `File::open`, `os.Open`, any path at all | `ENOENT` | **Zero preopened directories.** There is no root, so no path resolves — absolute or relative, read or write. `fd_prestat_get(3)` is `EBADF`, which is how the standard library discovers there is no filesystem. |
+| `read_dir`, `os.ReadDir` | `ENOENT` | Same. |
+| `TcpStream::connect`, `net.Dial` | `Unsupported` | No sockets. `sock_open` is refused before a descriptor exists. Use `tcp_connect` with the `net.tcp-client` capability. |
+| `env::var`, `os.Getenv` | not present | The environment is empty on purpose: the app's configuration is not the plugin's. Your settings arrive in `lk_start` and in `CONFIG_CHANGED`. |
+| `thread::spawn`, `go func()` | `ENOTSUP`, or a goroutine that never runs | One thread, and it runs only inside your exports. |
+| `thread::sleep`, `time.Sleep` | returns at once | `poll_oneoff` never waits. A thread parked in a sleep cannot see the watchdog, so a plugin that could sleep could hold its dispatch thread for as long as it liked. Sleeping is what `timer_set` is for. |
+| `fd_read` on stdin | end of file | Backed by the null device. |
+
+Two consequences worth knowing.
+
+- **A sleep becomes a spin, and the watchdog kills a spin.** Turning
+  `time.Sleep(2 * time.Second)` into a busy loop is not an accident; it is how
+  the single-thread rule is enforced rather than merely documented. Write a
+  timer.
+- **A Rust `cdylib` makes WAMR print `warning: a module with WASI apis should be
+  either a command or a reactor` once at load.** It exports neither `_start` nor
+  `_initialize` because `wasm-ld` calls its constructors from the top of each
+  export instead. The warning is cosmetic; the module runs. A Go module exports
+  `_initialize`, and the runtime calls it before anything else.
 
 ## JSON shapes
 
@@ -314,6 +433,150 @@ want to know" and "act now".
 An unreadable severity is not a reason to be quiet. The host also keeps the last
 alert per plugin, up to 400 bytes.
 
+### http_fetch
+
+```json
+{"method":"GET","url":"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs.pl?file=gfs.t00z",
+ "headers":{"accept":"application/octet-stream"},"range":"bytes=0-1048575"}
+```
+
+Only `url` is required. `method` is `GET` or `HEAD` — the host refuses anything
+else, because a plugin that can POST can send your data somewhere and no marine
+use here needs one. `headers` is optional and each name and value must be
+printable ASCII. `range` is an HTTP range expression and is the way past the
+body cap.
+
+The host resolves, connects, negotiates TLS and reads the body on a thread of
+its own, so neither your dispatch thread nor the host's I/O thread waits for a
+server. It then delivers **exactly one** `HTTP_RESPONSE` per request id, whether
+the fetch worked or not, so you never have to time a request out yourself.
+
+The payload is an envelope, because one event carries one payload and you need
+both the head and the body:
+
+```
+u32 json_len (little-endian) | head JSON | raw body bytes
+```
+
+```json
+{"status":200,"url":"https://nomads.ncep.noaa.gov/…","headers":{"content-type":"application/octet-stream","content-length":"1048576"}}
+```
+
+Header names are lower-cased, so look for `content-length`, not
+`Content-Length`. `url` is where the body actually came from, after any
+redirect. A fetch that never reached a server answers `"status":0` with an
+`"error"` beside it naming what stopped it, and an empty body:
+
+```json
+{"status":0,"url":"https://nomads.ncep.noaa.gov/…","headers":{},"error":"ConnectFailed"}
+```
+
+| Limit | Value |
+|---|---|
+| Body | 4 MiB. Over it the fetch fails with `BodyTooLarge` rather than truncating. **Use `range` for anything bigger** — a 200 MB GRIB is 200 requests, and each one is an event you can act on. |
+| Redirects | 5, and each must stay on the same host. One that leaves fails with `RedirectOffHost`. |
+| In flight | 4 across every plugin. A fifth returns -1 at once; try again from a timer. |
+| Read and connect | 20 s each. |
+| Connection reuse | None. One fetch is one connection. |
+
+TLS is Zig's own, with the platform's root certificates. There is no HTTP/2, no
+cookie jar, no authentication and no compressed transfer encoding.
+
+### ws_connect
+
+```json
+{"url":"wss://demo.signalk.org/signalk/v1/stream?subscribe=none",
+ "protocols":["v1.signalk"]}
+```
+
+Only `url` is required; `protocols` is the subprotocol list the host offers in
+the handshake. The host dials, performs the RFC 6455 handshake — accept hash
+checked — and then owns the connection on a thread of its own.
+
+What you get:
+
+- **`WS_OPEN`** once, carrying the subprotocol the server chose.
+- **`WS_DATA`** per message. The host reassembles fragments, so a message split
+  across ten frames arrives as one payload. It answers every ping with a pong
+  itself: you never see one, and a connection stays alive while your plugin is
+  busy.
+- **`WS_CLOSED`** once, at the end, whoever ended it. `code` is the RFC 6455
+  close code; `code` 0 means the connection never opened and `reason` names what
+  stopped it — `HandshakeRefused`, `ConnectFailed`, `TlsFailed`.
+
+`ws_send` takes one **text** message and queues it; the connection's own thread
+writes the masked frame. An incoming **binary** message is dropped with a log
+line, because `WS_DATA` is text by contract and a plugin handed bytes it cannot
+tell from text would parse them as JSON.
+
+| Limit | Value |
+|---|---|
+| Message | 1 MiB, in or out |
+| Queued to send | 64 messages or 256 KiB, whichever comes first. Over either, `ws_send` returns -1. |
+| Reconnecting | Yours. The host never retries, exactly as with TCP. |
+
+### storage_get and storage_put
+
+A key-value store of your own, one per plugin, that survives a restart. The host
+keeps it as a JSON file under the application's data directory — data, not
+cache, so nothing purges it when the disk runs low.
+
+`storage_get` uses a **two-call pattern**, because the host cannot allocate in
+your memory. Call it with a zero-length buffer to learn the size, then call it
+again with a buffer that big:
+
+```zig
+const size = lk.storageSize("last_run") orelse return;   // no such key
+var buf: [64]u8 = undefined;
+if (size > buf.len) return;
+const value = lk.storageGet("last_run", buf[0..size]) orelse return;
+```
+
+The return is the value's size in bytes, or -1 when there is no such key. The
+host writes into your buffer only when the value fits it, so a short buffer
+costs you a size and nothing else.
+
+A value is **bytes**, not text: store a packed struct if you like. An empty
+value deletes the key — that is the delete, and there is no separate import for
+it. A key must be printable ASCII with no quote and no backslash, because it
+goes into that JSON file as itself.
+
+| Limit | Value |
+|---|---|
+| Key | 128 bytes, printable ASCII |
+| One value | 64 KiB |
+| Total per plugin | 1 MiB, and 256 keys |
+| Durability | `storage_put` has written the file before it returns |
+
+Another plugin's store is another file. You cannot read it and you cannot
+overwrite it. What you stored survives your plugin trapping, being disabled and
+being loaded again.
+
+### file_read and file_write
+
+There is no way to open a file. A handle arrives as `FILE_OPENED` because the
+mariner chose that file and the application asked the host to grant it:
+
+```json
+{"name":"gfs.t00z.pgrb2.0p25.f000","size":12582912,"mode":"read"}
+```
+
+`name` is the file's name with no directory: you are told what you were given,
+not where it lives. `mode` is `read` or `write`.
+
+`file_read` takes an **absolute offset** — the handle has no cursor, so two
+reads never interfere and a plugin decoding a GRIB can seek freely. It returns
+the bytes read, 0 at the end of the file, and -1 for a handle that is not yours.
+`file_write` appends to a write handle and returns the bytes written.
+
+| Limit | Value |
+|---|---|
+| Open handles | 8 per plugin |
+| One read | 1 MiB |
+
+The host closes every handle you hold when you stop, so `file_close` matters
+only to a plugin that opens many files over a long run.
+
 ## The manifest
 
 `<id>.manifest.json`, beside `<id>.wasm`.
@@ -348,7 +611,7 @@ alert per plugin, up to 400 bytes.
 | `id` | yes | 1 to 128 bytes. Your overlay namespace, your settings key, and the name the app knows you by. Reverse-DNS by convention. |
 | `name` | no | What the app would show a person. Defaults to the id. |
 | `abi` | yes | Must be 1. |
-| `capabilities` | no | An array of the names above. Absent grants nothing. An unknown name refuses the manifest. |
+| `capabilities` | no | An array of the names above, plus `{"net.http": […]}` and `{"net.ws": […]}` for the two that carry a host list. Absent grants nothing. An unknown name refuses the manifest. |
 | `settings` | no | A v1 array of fields, or a v2 object of groups. At most 16 fields in total, and at most 16 columns in a list. |
 
 There is no `limits` block. Memory, time and queue budgets are the host's, they
@@ -425,13 +688,25 @@ every edit and delivered like any other setting.
      {"key": "name",    "label": "Name",    "kind": "text", "optional": true},
      {"key": "host",    "label": "Address", "kind": "text", "default": ""},
      {"key": "port",    "label": "Port",    "kind": "number", "min": 1, "max": 65535, "default": 10110},
-     {"key": "enabled", "label": "On",      "kind": "toggle", "default": true}]}}]}
+     {"key": "enabled", "label": "On",      "kind": "toggle", "default": true}],
+   "footer": "Give the address of your instrument network's gateway.",
+   "empty": "No gateways yet.", "add_label": "Add Gateway", "switch_key": "enabled"}}]}
 ```
 
 | List key | Rule |
 |---|---|
 | `key` | Required, 1 to 32 bytes. The key the array arrives under, and it may not collide with a field or another list. |
 | `item_fields` | Required, 1 to 16 columns, the same field shapes as above. A column called `id` refuses the manifest: the id is the host's. |
+| `footer` | The sentence under the section: what these rows are, and the one thing a mariner needs to know to fill one in. |
+| `add_label` | The wording on the button that adds a row — "Add Server", not "Add". |
+| `empty` | What the section says while it holds no rows. |
+| `switch_key` | Which toggle column is the row's own on/off switch, drawn on the row's line rather than inside it. Absent means the first toggle column. Naming a column the list does not declare, or one that is not a toggle, refuses the manifest. |
+
+The last four are optional; the three strings are at most 240 bytes each, and a
+longer one is cut. **Write them.** A tab can hold two lists — Connections holds
+NMEA gateways and Signal K servers — and without your own wording both wear
+whatever the application picked, which means one of them tells the mariner the
+wrong port.
 
 What you receive:
 
@@ -519,3 +794,28 @@ of sleeping until the mariner touches something. If an app skips that, your
 plugin keeps running but nothing it draws reaches the screen until someone pans
 the chart. That is worth knowing before you spend an afternoon debugging a
 plugin that turns out to be working.
+
+## The raw module contract
+
+This section is for building a plugin WITHOUT the Zig library — from Go, Rust,
+or any toolchain that emits wasm. With `lk.zig` you never touch any of this:
+`lk.registerPlugin(@This())` generates all five exports and connects `lk_start`
+and `lk_event` to the `start` and `onEvent` functions you write.
+
+Your compiled module must export these five functions. They are the only part
+the host ever calls.
+
+| Export | Signature | Meaning |
+|---|---|---|
+| `lk_abi` | `() -> u32` | The ABI version this module speaks. Must return 1. |
+| `lk_alloc` | `(len: u32) -> ptr` | Give the host `len` bytes to write an inbound payload into. **Returning 0 means out of memory**, and the host treats the call as a fault. |
+| `lk_free` | `(ptr, len: u32)` | The host is done with that buffer. |
+| `lk_start` | `(ptr, len: u32) -> i32` | Begin. The payload is `{"abi":1,"config":{…}}`. Non-zero refuses the start, and the plugin is not loaded. |
+| `lk_event` | `(kind: u32, handle: u64, ptr, len: u32) -> i32` | Everything that happens. `handle` correlates: which timer, which socket. Non-zero is logged as a complaint and the plugin keeps running. |
+
+The host checks `lk_abi` at load and refuses a mismatch, because the same five
+names could mean something else in another version.
+
+Nothing else about the boundary changes with the toolchain. The imports, the
+event kinds, the JSON and the manifest above are the whole contract; the Go and
+Rust libraries in `sdk/` are conveniences over exactly the same five exports.

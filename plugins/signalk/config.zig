@@ -108,6 +108,10 @@ pub fn fromValue(v: std.json.Value) Rows {
         r.host.set(str(o.get("host")) orelse "");
         const p = int(o.get("port")) orelse default_port;
         r.port = if (p >= port_range[0] and p <= port_range[1]) @intCast(p) else 0;
+        r.kind = switch (o.get("websocket") orelse std.json.Value{ .bool = false }) {
+            .bool => |b| if (b) transport.Kind.ws else transport.Kind.tcp,
+            else => transport.Kind.tcp,
+        };
         r.enabled = switch (o.get("enabled") orelse std.json.Value{ .bool = true }) {
             .bool => |b| b,
             else => true,
@@ -205,11 +209,16 @@ test "missing columns take their defaults, and an absent list is no rows" {
     try t.expectEqual(@as(usize, 0), parse("{\"connections\":[{\"id\":\"c1\",\"host\":\"h\"}]}").len);
 }
 
-test "every row is TCP until the schema grows a column for the transport" {
-    const rows = parse("{\"servers\":[{\"id\":\"s1\",\"host\":\"h\",\"transport\":\"ws\"}]}");
-    try t.expectEqual(@as(usize, 1), rows.len);
-    try t.expectEqual(transport.Kind.tcp, rows.slice()[0].kind);
-    try t.expect(rows.slice()[0].kind.available());
+test "the websocket column picks the transport, and TCP is what a row without it gets" {
+    const on = parse("{\"servers\":[{\"id\":\"s1\",\"host\":\"h\",\"websocket\":true}]}");
+    try t.expectEqual(transport.Kind.ws, on.slice()[0].kind);
+
+    // Absent, and a value of the wrong type, both mean the plain stream: a row
+    // a shell wrote badly must not silently change transport.
+    const off = parse("{\"servers\":[{\"id\":\"s1\",\"host\":\"h\"}," ++
+        "{\"id\":\"s2\",\"host\":\"h\",\"websocket\":\"yes\"}]}");
+    try t.expectEqual(transport.Kind.tcp, off.slice()[0].kind);
+    try t.expectEqual(transport.Kind.tcp, off.slice()[1].kind);
 }
 
 test "more rows than the plugin can hold are dropped, not wrapped" {
@@ -243,6 +252,7 @@ test "the list schema in manifest.json is the one this file reads" {
         .{ .key = "name", .kind = "text" },
         .{ .key = "host", .kind = "text" },
         .{ .key = "port", .kind = "number" },
+        .{ .key = "websocket", .kind = "toggle" },
         .{ .key = "enabled", .kind = "toggle" },
     };
     const items = list.get("item_fields").?.array.items;

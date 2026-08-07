@@ -88,6 +88,10 @@ pub fn onEvent(e: lk.Event) !void {
             lk.logf(.info, "shutdown after {d} ticks", .{ticks});
             lk.status("stopped", "shut down", .{});
         },
+        // An event kind this fixture asks for nothing about. The ABI says an
+        // unknown kind is ignored, and a switch with no else arm is a plugin
+        // that stops compiling every time the host grows one.
+        else => {},
     }
 }
 

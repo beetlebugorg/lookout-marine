@@ -148,6 +148,15 @@ struct PluginListSchema: Identifiable {
     let tab: String
     /// The columns of one row.
     let itemFields: [PluginField]
+    /// The plugin's own wording around its rows. Empty when the manifest
+    /// declared none, in which case the window falls back to a generic line:
+    /// two lists on one tab must not share one plugin's sentences.
+    let footer: String
+    let empty: String
+    let addLabel: String
+    /// Which toggle column is the row's own on/off switch. Empty means the
+    /// first toggle column, which is what a list with one toggle wants.
+    let switchKey: String
 
     var id: String { "\(pluginID)/\(key)" }
 }
@@ -550,7 +559,11 @@ final class PluginSettings: ObservableObject {
             key: key,
             group: o["group"] as? String ?? "",
             tab: o["tab"] as? String ?? "advanced",
-            itemFields: (o["item_fields"] as? [[String: Any]] ?? []).compactMap(field(from:))
+            itemFields: (o["item_fields"] as? [[String: Any]] ?? []).compactMap(field(from:)),
+            footer: o["footer"] as? String ?? "",
+            empty: o["empty"] as? String ?? "",
+            addLabel: o["add_label"] as? String ?? "",
+            switchKey: o["switch_key"] as? String ?? ""
         )
     }
 

@@ -57,6 +57,10 @@ const unreachable_after: u32 = 3;
 /// a truncated identity against nothing.
 const max_identity = 128;
 
+/// Longest websocket URL built for a row: the scheme, an address of up to 253
+/// bytes, a port and the spec's path.
+const max_url = 320;
+
 /// What one connection is doing, in the words the mariner reads.
 const State = enum {
     connected,
@@ -126,16 +130,20 @@ const Conn = struct {
     }
 
     fn closeSocket(self: *Conn) void {
-        if (self.sock >= 0) lk.tcpClose(self.sock);
+        if (self.sock >= 0) switch (self.row.kind) {
+            .tcp => lk.tcpClose(self.sock),
+            .ws => lk.wsClose(self.sock),
+        };
         self.sock = -1;
         if (self.retry_timer >= 0) lk.timerCancel(self.retry_timer);
         self.retry_timer = -1;
         self.rate = 0;
     }
 
-    /// Ask for a connection. The result arrives later as `.tcp_connected` or
-    /// `.tcp_closed`; only an outright refusal is visible here, and it is
-    /// retried on the same clock as a dropped connection.
+    /// Ask for a connection. The result arrives later — `.tcp_connected` or
+    /// `.ws_open`, and `.tcp_closed` or `.ws_closed` — so only an outright
+    /// refusal is visible here, and it is retried on the same clock as a
+    /// dropped connection.
     fn open(self: *Conn) void {
         if (!self.row.enabled) {
             self.state = .paused;
@@ -145,17 +153,61 @@ const Conn = struct {
             self.state = .no_address;
             return;
         }
-        // NOTE. The second transport lands here. A websocket row calls a
-        // `ws_connect` import instead, and everything below this line — the
-        // framer, the subscription, the parsing, the status — is unchanged.
-        // The host has no such import yet. See CONCERNS.
-        if (!self.row.kind.available()) {
-            self.state = .no_transport;
-            return;
-        }
-        self.sock = lk.tcpConnect(self.row.host.text(), self.row.port);
+        // The two transports differ here and nowhere else: the framer, the
+        // subscription, the mapping and the status are the same after this.
+        self.sock = switch (self.row.kind) {
+            .tcp => lk.tcpConnect(self.row.host.text(), self.row.port),
+            .ws => blk: {
+                var url_buf: [max_url]u8 = undefined;
+                const url = transport.wsUrl(&url_buf, self.row.host.text(), self.row.port) orelse
+                    break :blk @as(i64, -1);
+                break :blk lk.wsConnect(url, &.{});
+            },
+        };
         if (self.sock < 0) {
             self.sock = -1;
+            // A REFUSED ws_connect is not a failed connect: a connect that
+            // fails comes back later as `.ws_closed`. -1 means the host would
+            // not make the call at all, and the only reason it does that is
+            // the grant — the manifest covers this boat's own network, and a
+            // server out on the internet is not on it. Retrying that is a
+            // refusal every two seconds for ever, so the row stops and says
+            // what is wrong.
+            if (self.row.kind == .ws) {
+                self.state = .no_transport;
+                return;
+            }
+            self.noteFailure();
+            self.scheduleRetry();
+        }
+    }
+
+    /// Everything a stream opening does, whichever transport carried it. The
+    /// server writes its hello unasked and its deltas only after a
+    /// subscription, so the stream really starts at the send.
+    fn opened(self: *Conn) void {
+        self.state = .connected;
+        self.failures = 0;
+        // A partial document and an identity from the last connection have
+        // nothing to do with this one.
+        self.framer.reset();
+        self.self_id.set("");
+        self.last_docs = self.framer.stats.docs;
+        self.rate = 0;
+        switch (self.row.kind) {
+            .tcp => _ = lk.tcpSend(self.sock, transport.subscribe_all),
+            // A websocket message is already one document, so the CR LF the
+            // TCP framing needs would be two bytes of noise inside it.
+            .ws => _ = lk.wsSend(self.sock, transport.subscribe_body),
+        }
+    }
+
+    /// Everything a stream ending does, whichever transport carried it.
+    fn ended(self: *Conn) void {
+        self.sock = -1;
+        // The close of a row the mariner just switched off is not a failure,
+        // and must not read as one for the moment before the status settles.
+        if (self.row.enabled and self.row.usable()) {
             self.noteFailure();
             self.scheduleRetry();
         }
@@ -163,7 +215,7 @@ const Conn = struct {
 
     fn scheduleRetry(self: *Conn) void {
         if (self.retry_timer >= 0) return;
-        if (!self.row.enabled or !self.row.usable() or !self.row.kind.available()) return;
+        if (!self.row.enabled or !self.row.usable()) return;
         const id = lk.timerSet(reconnect_ms, false);
         if (id >= 0) self.retry_timer = id;
     }
@@ -186,7 +238,7 @@ const Conn = struct {
             else
                 out.print("{d} deltas/s", .{self.rate}),
             .no_answer => out.raw("check the address"),
-            .no_transport => out.raw("websocket not built"),
+            .no_transport => out.raw("websocket refused; the server is not on this boat's network"),
             .reconnecting, .paused, .no_address => {},
         }
     }
@@ -218,17 +270,7 @@ pub fn onEvent(e: lk.Event) !void {
         },
         .tcp_connected => |id| {
             const c = bySocket(id) orelse return;
-            c.state = .connected;
-            c.failures = 0;
-            // A partial document and an identity from the last connection have
-            // nothing to do with this one.
-            c.framer.reset();
-            c.self_id.set("");
-            c.last_docs = c.framer.stats.docs;
-            c.rate = 0;
-            // The server writes its hello unasked. It writes deltas only after
-            // a subscription, so the stream starts here.
-            _ = lk.tcpSend(id, transport.subscribe_all);
+            c.opened();
             postStatus();
         },
         .tcp_data => |d| {
@@ -237,14 +279,24 @@ pub fn onEvent(e: lk.Event) !void {
         },
         .tcp_closed => |id| {
             const c = bySocket(id) orelse return;
-            c.sock = -1;
-            // The close of a row the mariner just switched off is not a
-            // failure, and must not read as one for the moment before the
-            // status settles.
-            if (c.row.enabled and c.row.usable()) {
-                c.noteFailure();
-                c.scheduleRetry();
-            }
+            c.ended();
+            postStatus();
+        },
+        // The websocket side of the same three. The host reassembles a
+        // message's frames and answers the pings, so one payload here is one
+        // whole document and the framer passes it straight through.
+        .ws_open => |w| {
+            const c = bySocket(w.conn) orelse return;
+            c.opened();
+            postStatus();
+        },
+        .ws_data => |w| {
+            const c = bySocket(w.conn) orelse return;
+            consume(c, w.text);
+        },
+        .ws_closed => |w| {
+            const c = bySocket(w.conn) orelse return;
+            c.ended();
             postStatus();
         },
         .timer => |id| {

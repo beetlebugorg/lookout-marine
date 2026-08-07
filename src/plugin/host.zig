@@ -52,6 +52,7 @@ pub const wasm = @import("wasm.zig");
 pub const store = @import("store.zig");
 pub const aisstore = @import("aisstore.zig");
 pub const broker = @import("broker.zig");
+pub const webio = @import("webio.zig");
 
 const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -77,6 +78,8 @@ pub const Error = error{
     /// The config JSON is not an object, or a field it names does not match
     /// the kind the schema declares.
     BadConfig,
+    /// `grantFile` named a plugin whose manifest did not ask for `files`.
+    NotGranted,
     OutOfMemory,
 };
 
@@ -161,6 +164,17 @@ pub const List = struct {
     tab: Tab,
     /// The columns of one row.
     items: []Field,
+    /// The sentence under the section: what these rows are and what a mariner
+    /// needs to know to fill one in. Empty when the manifest declares none.
+    footer: []u8 = &.{},
+    /// What the section says when it holds no rows yet.
+    empty: []u8 = &.{},
+    /// The wording on the button that adds a row, for example "Add Server".
+    add_label: []u8 = &.{},
+    /// Which toggle column is the row's own on/off switch — the one a shell
+    /// draws on the row's line rather than inside it. Empty means the first
+    /// toggle column, which is what a list with one toggle wants.
+    switch_key: []u8 = &.{},
 };
 
 /// Most rows one list may hold, and the longest row id kept. Eight NMEA
@@ -200,6 +214,10 @@ pub const Manifest = struct {
     name: []u8,
     abi: u32,
     caps: broker.Caps,
+    /// The hosts `net.http` named, and the hosts `net.ws` named. Empty unless
+    /// the capability was granted, and a granted one is never empty.
+    http_hosts: [][]u8 = &.{},
+    ws_hosts: [][]u8 = &.{},
     /// The settings schema, empty when the manifest declares none.
     settings: []Field = &.{},
     /// The repeating groups, empty when the manifest declares none.
@@ -208,6 +226,8 @@ pub const Manifest = struct {
     pub fn deinit(self: *Manifest, alloc: std.mem.Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
+        freeHosts(alloc, self.http_hosts);
+        freeHosts(alloc, self.ws_hosts);
         freeFields(alloc, self.settings, self.settings.len);
         freeLists(alloc, self.lists, self.lists.len);
         self.* = undefined;
@@ -341,16 +361,46 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         else => return Error.BadManifest,
     };
 
+    // A capability is a NAME, or a one-key object whose value is the list of
+    // hosts the grant covers: `{"net.http":["nomads.ncep.noaa.gov"]}`. The
+    // object form exists because "may reach the internet" is not a permission
+    // a mariner can weigh, and "may reach nomads.ncep.noaa.gov" is.
     var caps = broker.Caps.initEmpty();
+    var http_hosts: [][]u8 = &.{};
+    var ws_hosts: [][]u8 = &.{};
+    errdefer freeHosts(alloc, http_hosts);
+    errdefer freeHosts(alloc, ws_hosts);
     if (o.get("capabilities")) |c| {
         if (c != .array) return Error.BadManifest;
-        for (c.array.items) |item| {
-            const text = switch (item) {
-                .string => |s| s,
-                else => return Error.BadManifest,
-            };
-            caps.insert(broker.Cap.fromName(text) orelse return Error.BadManifest);
-        }
+        for (c.array.items) |item| switch (item) {
+            .string => |text| {
+                const cap = broker.Cap.fromName(text) orelse return Error.BadManifest;
+                if (cap.needsHosts()) return Error.BadManifest;
+                caps.insert(cap);
+            },
+            .object => |entry| {
+                if (entry.count() != 1) return Error.BadManifest;
+                var it = entry.iterator();
+                const kv = it.next().?;
+                const cap = broker.Cap.fromName(kv.key_ptr.*) orelse return Error.BadManifest;
+                if (!cap.needsHosts()) return Error.BadManifest;
+                const hosts = try parseHosts(alloc, kv.value_ptr.*);
+                errdefer freeHosts(alloc, hosts);
+                switch (cap) {
+                    .net_http => {
+                        if (http_hosts.len > 0) return Error.BadManifest;
+                        http_hosts = hosts;
+                    },
+                    .net_ws => {
+                        if (ws_hosts.len > 0) return Error.BadManifest;
+                        ws_hosts = hosts;
+                    },
+                    else => unreachable,
+                }
+                caps.insert(cap);
+            },
+            else => return Error.BadManifest,
+        };
     }
 
     const id_owned = try alloc.dupe(u8, id);
@@ -439,9 +489,76 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         .name = name_owned,
         .abi = abi,
         .caps = caps,
+        .http_hosts = http_hosts,
+        .ws_hosts = ws_hosts,
         .settings = fields,
         .lists = lists,
     };
+}
+
+/// Most hosts one capability may name. A plugin that needs nine servers is a
+/// plugin nobody can read the grant sentence for.
+pub const max_hosts = 8;
+
+/// The hosts a `{"net.http":[…]}` entry names. An empty list refuses the
+/// manifest: it is the same grant as not asking, written in a way that looks
+/// like asking.
+fn parseHosts(alloc: std.mem.Allocator, v: std.json.Value) ![][]u8 {
+    if (v != .array) return Error.BadManifest;
+    const items = v.array.items;
+    if (items.len == 0 or items.len > max_hosts) return Error.BadManifest;
+    const out = try alloc.alloc([]u8, items.len);
+    var built: usize = 0;
+    errdefer {
+        for (out[0..built]) |h| alloc.free(h);
+        alloc.free(out);
+    }
+    for (items) |item| {
+        const text = switch (item) {
+            .string => |s| s,
+            else => return Error.BadManifest,
+        };
+        // `local` is the one entry that is not a hostname: it grants this
+        // boat's own network, for a plugin whose server is a mariner's setting.
+        if (std.mem.eql(u8, text, broker.local_token)) {
+            out[built] = try alloc.dupe(u8, text);
+            built += 1;
+            continue;
+        }
+        // Otherwise a hostname, not a URL and not a pattern: no scheme, no
+        // path, no port and no wildcard. The check is against what the URL's
+        // host resolves to, so anything else could never match and would read
+        // as a grant that does nothing.
+        if (text.len == 0 or text.len > 253) return Error.BadManifest;
+        for (text) |c| switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '.', '-', ':' => {},
+            else => return Error.BadManifest,
+        };
+        out[built] = try alloc.dupe(u8, text);
+        built += 1;
+    }
+    return out;
+}
+
+fn freeHosts(alloc: std.mem.Allocator, hosts: [][]u8) void {
+    for (hosts) |h| alloc.free(h);
+    if (hosts.len > 0) alloc.free(hosts);
+}
+
+/// Longest sentence a list may put around its rows. Room for two lines of
+/// caption and no more: a settings section is not documentation.
+pub const max_list_text = 240;
+
+/// One optional string of a list's own wording. Anything that is not a string,
+/// or is too long, reads as absent — a caption is never worth refusing a
+/// manifest over.
+fn listText(o: std.json.ObjectMap, key: []const u8) []const u8 {
+    const v = o.get(key) orelse return "";
+    const s = switch (v) {
+        .string => |text| text,
+        else => return "",
+    };
+    return if (s.len > max_list_text) s[0..max_list_text] else s;
 }
 
 /// One repeating group: the key its rows are stored under, and the fields one
@@ -469,6 +586,17 @@ fn parseList(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, tab
     errdefer alloc.free(l.key);
     l.group = try alloc.dupe(u8, group);
     errdefer alloc.free(l.group);
+    // The three sentences the settings window puts around the rows. They belong
+    // to the plugin because only the plugin knows what a row IS: two lists on
+    // one tab would otherwise both wear whichever one the application hard-coded.
+    l.footer = try alloc.dupe(u8, listText(o, "footer"));
+    errdefer alloc.free(l.footer);
+    l.empty = try alloc.dupe(u8, listText(o, "empty"));
+    errdefer alloc.free(l.empty);
+    l.add_label = try alloc.dupe(u8, listText(o, "add_label"));
+    errdefer alloc.free(l.add_label);
+    l.switch_key = try alloc.dupe(u8, listText(o, "switch_key"));
+    errdefer alloc.free(l.switch_key);
 
     const items = try alloc.alloc(Field, raw.len);
     var built: usize = 0;
@@ -477,6 +605,12 @@ fn parseList(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, tab
     // `id` is the host's, on every row. A column of that name would fight it.
     for (items) |f| {
         if (std.mem.eql(u8, f.key, "id")) return Error.BadManifest;
+    }
+    // A switch that names a column the list does not have, or one that is not
+    // a toggle, would leave the shell drawing no switch at all.
+    if (l.switch_key.len > 0) {
+        const at = fieldIndex(items, l.switch_key) orelse return Error.BadManifest;
+        if (items[at].kind != .toggle) return Error.BadManifest;
     }
     l.items = items;
     return l;
@@ -525,6 +659,10 @@ fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
     for (lists[0..built]) |l| {
         alloc.free(l.key);
         alloc.free(l.group);
+        alloc.free(l.footer);
+        alloc.free(l.empty);
+        alloc.free(l.add_label);
+        alloc.free(l.switch_key);
         freeFields(alloc, l.items, l.items.len);
     }
     if (lists.len > 0) alloc.free(lists);
@@ -622,8 +760,22 @@ fn runtimeAcquire() !void {
         try wasm.initRuntime();
         errdefer wasm.deinitRuntime();
         try broker.registerNatives();
+        wasm.stdio_sink = stdioToLog;
     }
     runtime_refs += 1;
+}
+
+/// A plugin's WASI stdout and stderr, as log lines under that plugin's id.
+///
+/// A Go or Rust runtime prints to stdout before any plugin code runs — a panic,
+/// a runtime warning — and those lines are the only sign of what went wrong.
+/// `user_data` is the broker's per-plugin state, which is what lets the line
+/// carry the plugin's name instead of arriving anonymously on the host's own
+/// stderr. stdout goes out at info and stderr at warn: a language runtime uses
+/// stderr for what it wants somebody to read.
+fn stdioToLog(user_data: ?*anyopaque, stream: wasm.Stream, line: []const u8) void {
+    const p: *broker.Plugin = @ptrCast(@alignCast(user_data orelse return));
+    p.broker.say(if (stream == .err) broker.level_warn else broker.level_info, p.id, "{s}", .{line});
 }
 
 fn runtimeRelease() void {
@@ -632,8 +784,12 @@ fn runtimeRelease() void {
     if (runtime_refs == 0) return;
     runtime_refs -= 1;
     if (runtime_refs != 0) return;
+    wasm.stdio_sink = null;
     broker.unregisterNatives();
     wasm.deinitRuntime();
+    // Process-wide, like the runtime: the last plugin layer out gives the root
+    // certificates back.
+    webio.deinitCaBundle();
 }
 
 pub const Host = struct {
@@ -810,6 +966,8 @@ pub const Host = struct {
             .id = manifest.id,
             .source = self.next_source,
             .caps = manifest.caps,
+            .http_hosts = manifest.http_hosts,
+            .ws_hosts = manifest.ws_hosts,
         };
         inst.setUserData(state);
 
@@ -962,6 +1120,24 @@ pub const Host = struct {
         self.br.say(broker.level_info, id, "config {s}", .{payload.items});
     }
 
+    // -- files the mariner chose ------------------------------------------------
+
+    /// Hand one plugin one file, and tell it with a FILE_OPENED event carrying
+    /// the handle. The plugin may then `file_read` it, or `file_write` it when
+    /// `write` is true.
+    ///
+    /// THIS IS THE WHOLE FILESYSTEM. There is no `file_open` import, so a
+    /// plugin cannot name a path: every file it ever sees came through here.
+    /// What is missing is the chrome — a file picker, and the sentence a
+    /// mariner reads before choosing — which is application work. The seam is
+    /// built so that when the picker arrives, no plugin has to change.
+    pub fn grantFile(self: *Host, id: []const u8, path: []const u8, write: bool) !i64 {
+        const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+        if (!e.manifest.caps.contains(.files)) return Error.NotGranted;
+        if (!e.isLive()) return Error.UnknownPlugin;
+        return self.br.grantFile(e.state.index, path, write);
+    }
+
     /// Every loaded plugin, its state, its status line, and its settings
     /// schema with the value in force. This is what a shell reads to draw a
     /// settings pane; it never has to know what a plugin is for.
@@ -999,6 +1175,21 @@ pub const Host = struct {
                     if (l.group.len > 0) {
                         try out.appendSlice(alloc, ",\"group\":");
                         try writeJsonString(out, alloc, l.group);
+                    }
+                    // The plugin's own wording, written only when it declared
+                    // some, so a manifest that says nothing writes the JSON it
+                    // always wrote and the application keeps its own default.
+                    for ([_][2][]const u8{
+                        .{ "footer", l.footer },
+                        .{ "empty", l.empty },
+                        .{ "add_label", l.add_label },
+                        .{ "switch_key", l.switch_key },
+                    }) |pair| {
+                        if (pair[1].len == 0) continue;
+                        try out.append(alloc, ',');
+                        try writeJsonString(out, alloc, pair[0]);
+                        try out.append(alloc, ':');
+                        try writeJsonString(out, alloc, pair[1]);
                     }
                     try out.print(alloc, ",\"tab\":\"{s}\",\"item_fields\":[", .{@tagName(l.tab)});
                     for (l.items, 0..) |f, j| {
@@ -1499,8 +1690,48 @@ test "a manifest is refused rather than half-read" {
     try t.expectError(Error.BadManifest, parseManifest(a, "{\"abi\":1}"));
     try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\"}"));
     // An unknown capability is a typo in a grant, so the plugin does not load.
-    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.udp\"]}"));
+    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.mqtt\"]}"));
     try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":\"vessel.read\"}"));
+}
+
+test "a net.http or net.ws grant carries the hosts it covers, and nothing else" {
+    const a = t.allocator;
+    var m = try parseManifest(a,
+        \\{"id":"org.beetlebug.grib","abi":1,"capabilities":[
+        \\  {"net.http":["nomads.ncep.noaa.gov","opendap.nasa.gov"]},
+        \\  {"net.ws":["demo.signalk.org"]},
+        \\  "storage","files","net.udp"]}
+    );
+    defer m.deinit(a);
+    try t.expect(m.caps.contains(.net_http));
+    try t.expect(m.caps.contains(.net_ws));
+    try t.expect(m.caps.contains(.storage));
+    try t.expect(m.caps.contains(.files));
+    try t.expect(m.caps.contains(.net_udp));
+    try t.expectEqual(@as(usize, 2), m.http_hosts.len);
+    try t.expectEqualStrings("nomads.ncep.noaa.gov", m.http_hosts[0]);
+    try t.expectEqualStrings("opendap.nasa.gov", m.http_hosts[1]);
+    try t.expectEqual(@as(usize, 1), m.ws_hosts.len);
+    try t.expectEqualStrings("demo.signalk.org", m.ws_hosts[0]);
+
+    const bad = [_][]const u8{
+        // A bare net.http is "may reach anything", which no manifest may ask
+        // for, and an empty list is the same grant written longer.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.http\"]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.ws\"]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[]}]}",
+        // A capability that reaches no named server takes no list.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"storage\":[\"a.example\"]}]}",
+        // A URL, a wildcard and a path are not hostnames.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"https://a.example\"]}]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"*.example\"]}]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"a.example/x\"]}]}",
+        // One entry, one capability; and one list per capability.
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"a.example\"],\"net.ws\":[\"b.example\"]}]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"a.example\"]},{\"net.http\":[\"b.example\"]}]}",
+        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":\"a.example\"}]}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 }
 
 const ais_settings_manifest =
@@ -1642,7 +1873,10 @@ test "a v2 schema carries labels, descriptions, groups and tabs" {
 const list_manifest =
     \\{"id":"org.beetlebug.nmea0183","name":"NMEA 0183","abi":1,
     \\ "settings":{"groups":[
-    \\  {"label":"Connections","tab":"connections","list":{"key":"connections","item_fields":[
+    \\  {"label":"Connections","tab":"connections","list":{"key":"connections",
+    \\   "footer":"Most WiFi gateways serve NMEA 0183 on port 10110.",
+    \\   "empty":"No gateways yet.","add_label":"Add Gateway","switch_key":"enabled",
+    \\   "item_fields":[
     \\   {"key":"name","label":"Name","kind":"text","optional":true},
     \\   {"key":"host","label":"Address","desc":"The gateway on your network.","kind":"text","default":"127.0.0.1"},
     \\   {"key":"port","label":"Port","kind":"number","min":1,"max":65535,"default":10110},
@@ -1660,6 +1894,13 @@ test "a list group parses, and its rows are policed like any other setting" {
     try t.expectEqualStrings("connections", l.key);
     try t.expectEqualStrings("Connections", l.group);
     try t.expectEqual(Tab.connections, l.tab);
+    // The wording around the rows belongs to the plugin, because only the
+    // plugin knows what a row is. Two lists on one tab would otherwise both
+    // wear whichever sentence the application hard-coded.
+    try t.expectEqualStrings("Most WiFi gateways serve NMEA 0183 on port 10110.", l.footer);
+    try t.expectEqualStrings("No gateways yet.", l.empty);
+    try t.expectEqualStrings("Add Gateway", l.add_label);
+    try t.expectEqualStrings("enabled", l.switch_key);
     try t.expectEqual(@as(usize, 4), l.items.len);
     try t.expectEqual(Field.Kind.text, l.items[0].kind);
     try t.expect(l.items[0].optional);
@@ -1727,6 +1968,12 @@ test "a list is refused when it fights another key, and text needs a row" {
         // A column called id would fight the one the host writes.
         "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":" ++
             "[{\"key\":\"id\",\"kind\":\"text\"}]}}]}}",
+        // A switch naming a column the list does not have, and one naming a
+        // column that is not a toggle: either leaves the shell with no switch.
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"switch_key\":\"nope\"," ++
+            "\"item_fields\":[{\"key\":\"on\",\"kind\":\"toggle\",\"default\":true}]}}]}}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"switch_key\":\"h\"," ++
+            "\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",
         // A list key that a field already uses, and two lists with one key.
         "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"fields\":[{\"key\":\"c\",\"kind\":\"toggle\",\"default\":true}]}," ++
             "{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",

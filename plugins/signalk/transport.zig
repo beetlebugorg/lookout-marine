@@ -1,16 +1,15 @@
 //! How a Signal K stream is carried, and how its bytes become whole JSON
 //! documents.
 //!
-//! Signal K defines two streaming transports. This file names both. Only the
-//! TCP one is built.
+//! Signal K defines two streaming transports. Both are built.
 //!
 //!   * `tcp` — "Streaming over TCP", Signal K 1.8.2, Streaming API. The server
 //!     writes one JSON message per line, terminated CR LF. A document is
 //!     framed by the line, not by a length or a checksum.
-//!   * `ws` — the websocket at `/signalk/v1/stream`. The host has no websocket
-//!     import, so a row that asks for it is refused with a line of its own.
-//!     When the import lands, a websocket frame is already one whole document,
-//!     which is why `Framer` in `.ws` mode passes a chunk straight through.
+//!   * `ws` — the websocket at `/signalk/v1/stream`. The host reassembles a
+//!     message's frames before the plugin sees it, so one payload is already
+//!     one whole document and `Framer` in `.ws` mode passes it straight
+//!     through.
 //!
 //! The only import is `std`, so `zig test transport.zig` runs natively while
 //! the same file compiles into the wasm module.
@@ -21,12 +20,24 @@ const std = @import("std");
 pub const Kind = enum {
     tcp,
     ws,
-
-    /// True while the host can carry this transport.
-    pub fn available(self: Kind) bool {
-        return self == .tcp;
-    }
 };
+
+/// Where a Signal K server serves its websocket. Signal K 1.8.2, Streaming API.
+pub const ws_path = "/signalk/v1/stream";
+
+/// The port the reference server serves its websocket on, beside the web page.
+pub const default_ws_port: u16 = 3000;
+
+/// `ws://host:port/signalk/v1/stream` into `buf`, or null when it does not fit.
+///
+/// Plain `ws`, not `wss`: this is a server on the boat's own network, which is
+/// what the manifest's `local` grant covers and what a Signal K server serves
+/// without a certificate.
+pub fn wsUrl(buf: []u8, host: []const u8, port: u16) ?[]const u8 {
+    var w = std.Io.Writer.fixed(buf);
+    w.print("ws://{s}:{d}{s}", .{ host, port, ws_path }) catch return null;
+    return w.buffered();
+}
 
 /// The port a Signal K server SHOULD serve its TCP stream on. Signal K 1.8.2,
 /// Urls and Ports. It is the ASCII codes of S and K.
@@ -53,7 +64,12 @@ pub const max_doc = 8192;
 /// not change; a repeat is a store write that elects the same number again,
 /// and at one server per row it is what fills the host's event queue first.
 pub const subscribe_all =
-    "{\"context\":\"*\",\"subscribe\":[{\"path\":\"*\",\"policy\":\"instant\",\"minPeriod\":200}]}\r\n";
+    subscribe_body ++ "\r\n";
+
+/// The same subscription with no line terminator, for a websocket: one message
+/// is already one document, so a CR LF inside it is two bytes of noise.
+pub const subscribe_body =
+    "{\"context\":\"*\",\"subscribe\":[{\"path\":\"*\",\"policy\":\"instant\",\"minPeriod\":200}]}";
 
 /// Reassembles whole JSON documents from arbitrary byte chunks.
 ///
@@ -242,9 +258,13 @@ test "a websocket frame is already one document" {
     try t.expectEqual(@as(u64, 1), f.stats.docs);
 }
 
-test "only the tcp transport is available today" {
-    try t.expect(Kind.tcp.available());
-    try t.expect(!Kind.ws.available());
+test "a websocket URL is the server's address and the spec's path" {
+    var buf: [64]u8 = undefined;
+    try t.expectEqualStrings("ws://10.0.0.9:3000/signalk/v1/stream", wsUrl(&buf, "10.0.0.9", 3000).?);
+    // A buffer too small answers null rather than a truncated address that
+    // would dial the wrong thing.
+    var small: [8]u8 = undefined;
+    try t.expect(wsUrl(&small, "10.0.0.9", 3000) == null);
 }
 
 test "the subscription is one line of the shape the spec's schema requires" {

@@ -10,6 +10,10 @@
         "tab": "connections",
         "list": {
           "key": "connections",
+          "footer": "Give the address of your instrument network's gateway. Most WiFi gateways serve NMEA 0183 on port 10110. Everything switched on here feeds the same chart.",
+          "empty": "No gateways yet.",
+          "add_label": "Add Gateway",
+          "switch_key": "enabled",
           "item_fields": [
             {"key": "name", "label": "Name", "desc": "What you call this source. Leave it empty to show the address.", "kind": "text", "optional": true},
             {"key": "host", "label": "Address", "desc": "The name or IP address of the instrument network's gateway.", "kind": "text", "default": ""},

@@ -72,7 +72,7 @@ runtime. If your manifest asked for the permission, the host does it.
    │  your plugin:  <id>.wasm  +  <id>.manifest.json       │
    │  Zig, Go or Rust · single-threaded · WASI floor only  │
    └──────────────┬────────────────────────────────────────┘
-                  │  five exports out, fifteen imports in,
+                  │  five exports out, twenty-seven imports in,
                   │  every import checked against your manifest
                   ▼
    ┌───────────────────────────────────────────────────────┐
@@ -123,7 +123,8 @@ present; elsewhere it needs `-Dplugins=true`.
 
 Built and usable today:
 
-- The five exports, the fifteen `lookout` imports, and the seven capabilities.
+- The five exports, the twenty-seven `lookout` imports, and the twelve
+  capabilities.
 - WASI preview1, bounded to a language floor — no filesystem, no sockets, no
   environment, no sleeping. It is what lets a Go or Rust module boot at all. The
   same `windline` plugin has been run in the harness in Zig, in Go and in Rust

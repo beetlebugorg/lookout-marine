@@ -2,7 +2,7 @@
   "id": "org.beetlebug.signalk",
   "name": "Signal K",
   "abi": 1,
-  "capabilities": ["net.tcp-client", "vessel.publish", "ais.publish"],
+  "capabilities": ["net.tcp-client", {"net.ws": ["local"]}, "vessel.publish", "ais.publish"],
   "settings": {
     "groups": [
       {
@@ -10,10 +10,15 @@
         "tab": "connections",
         "list": {
           "key": "servers",
+          "footer": "A Signal K server sends the whole boat as one stream of updates on port 8375. Give its address, and everything switched on here feeds the same chart.",
+          "empty": "No servers yet.",
+          "add_label": "Add Server",
+          "switch_key": "enabled",
           "item_fields": [
             {"key": "name", "label": "Name", "desc": "What you call this server. Leave it empty to show the address.", "kind": "text", "optional": true},
             {"key": "host", "label": "Address", "desc": "The name or IP address of the Signal K server.", "kind": "text", "default": ""},
             {"key": "port", "label": "Port", "desc": "Most Signal K servers stream on port 8375. Port 3000 is the web page, not the stream.", "kind": "number", "min": 1, "max": 65535, "default": 8375},
+            {"key": "websocket", "label": "WebSocket", "desc": "Read the WebSocket stream instead of the plain one. The reference server serves it on port 3000.", "kind": "toggle", "default": false},
             {"key": "enabled", "label": "On", "desc": "Off closes the stream and stops reconnecting.", "kind": "toggle", "default": true}
           ]
         }

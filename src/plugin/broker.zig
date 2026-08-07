@@ -1,4 +1,4 @@
-//! The host side of the plugin ABI: the fifteen native functions a plugin
+//! The host side of the plugin ABI: the twenty-seven native functions a plugin
 //! imports from module `lookout`, the grants that gate them, and the one I/O
 //! thread that owns sockets, timers and the subscriber fanout.
 //!
@@ -51,6 +51,13 @@ const builtin = @import("builtin");
 const wasm = @import("wasm.zig");
 const vstore = @import("store.zig");
 const ais_store = @import("aisstore.zig");
+const net = @import("net.zig");
+const webio = @import("webio.zig");
+
+const win = net.win;
+const Addr = net.Addr;
+const max_addrs = net.max_addrs;
+const io = std.Io.Threaded.global_single_threaded.io();
 
 pub const Lock = vstore.Lock;
 pub const SourceId = vstore.SourceId;
@@ -63,8 +70,14 @@ pub const Kind = struct {
     pub const tcp_connected: u32 = 4;
     pub const tcp_data: u32 = 5;
     pub const tcp_closed: u32 = 6;
+    pub const udp_data: u32 = 7;
+    pub const http_response: u32 = 8;
+    pub const file_opened: u32 = 9;
     pub const store_changed: u32 = 10;
     pub const ais_changed: u32 = 11;
+    pub const ws_open: u32 = 12;
+    pub const ws_data: u32 = 13;
+    pub const ws_closed: u32 = 14;
     pub const shutdown: u32 = 99;
 };
 
@@ -99,23 +112,41 @@ fn defaultLog(ctx: ?*anyopaque, level: u32, plugin: []const u8, msg: []const u8)
 /// The manifest's capability vocabulary. A plugin is granted a subset.
 pub const Cap = enum {
     net_tcp_client,
+    net_udp,
+    net_http,
+    net_ws,
     vessel_publish,
     ais_publish,
     vessel_read,
     ais_read,
     overlay_draw,
     alerts_raise,
+    storage,
+    files,
 
     pub fn name(self: Cap) []const u8 {
         return switch (self) {
             .net_tcp_client => "net.tcp-client",
+            .net_udp => "net.udp",
+            .net_http => "net.http",
+            .net_ws => "net.ws",
             .vessel_publish => "vessel.publish",
             .ais_publish => "ais.publish",
             .vessel_read => "vessel.read",
             .ais_read => "ais.read",
             .overlay_draw => "overlay.draw",
             .alerts_raise => "alerts.raise",
+            .storage => "storage",
+            .files => "files",
         };
+    }
+
+    /// True when the capability is meaningless without a list of hosts. A
+    /// manifest that asks for one of these as a bare name is refused: "may
+    /// reach any server on the internet" is not a sentence a mariner can
+    /// consent to, and an empty list is the same grant written shorter.
+    pub fn needsHosts(self: Cap) bool {
+        return self == .net_http or self == .net_ws;
     }
 
     pub fn fromName(text: []const u8) ?Cap {
@@ -195,6 +226,12 @@ pub const Plugin = struct {
     /// This plugin's provenance in the vessel and AIS stores.
     source: SourceId,
     caps: Caps,
+    /// The hostnames `http_fetch` may reach, from the manifest's `net.http`
+    /// grant. Borrowed from the host's manifest, like `id`. Empty means the
+    /// plugin may reach nothing, which is what an ungranted plugin has.
+    http_hosts: []const []const u8 = &.{},
+    /// The same for `ws_connect`, from the `net.ws` grant.
+    ws_hosts: []const []const u8 = &.{},
     /// False once the plugin has trapped or been shut down: natives from an
     /// in-flight call still work, but nothing new is delivered.
     enabled: bool = true,
@@ -294,6 +331,18 @@ const Conn = struct {
     closing: bool = false,
 };
 
+/// One bound UDP port. There is no connection and no state: a datagram in is
+/// an event, a datagram out is one call.
+const Udp = struct {
+    id: i64,
+    plugin: u32,
+    fd: net.Socket,
+    /// The port actually bound, which is not the one asked for when the plugin
+    /// asked for 0.
+    port: u16,
+    closing: bool = false,
+};
+
 const Timer = struct {
     id: i64,
     plugin: u32,
@@ -313,15 +362,53 @@ pub const ais_min_interval_ms: i64 = 500;
 /// reassembles lines itself.
 const read_chunk = 8192;
 
+/// Longest datagram delivered as a UDP_DATA event.
+///
+/// One datagram is one event. A 9 KB datagram is dropped, not split.
+pub const udp_max_datagram = 8192;
+
 /// Native stack for a resolver thread. It runs getaddrinfo and connect and
 /// nothing else — it never enters wasm — so it needs far less than the
 /// 16 MiB Zig would otherwise reserve per attempt.
 const resolver_stack_bytes: usize = 512 * 1024;
 
-/// How long `stop` waits for the resolver threads before it says so. They are
+/// Native stack for a fetch or a WebSocket thread. Larger than a resolver's:
+/// TLS puts four record buffers of about 16 KiB each on the heap but keeps
+/// working state on the stack, and the certificate chain walk is recursive.
+const worker_stack_bytes: usize = 1024 * 1024;
+
+/// How long `stop` waits for the worker threads before it says so. They are
 /// detached and call back into the broker, so the wait itself is not optional;
 /// the line exists because a dead nameserver makes it a long one.
-const resolver_wait_warn_ms: u32 = 1000;
+const worker_wait_warn_ms: u32 = 1000;
+
+/// Fetches allowed at once across every plugin. Each holds a thread and a TLS
+/// session of about 70 KiB, and a chartplotter downloading four things at once
+/// is already doing more than one mariner asked for.
+pub const http_max_inflight: u32 = 4;
+
+/// Largest response body a fetch will hold. Over this the fetch fails and says
+/// so: a plugin that wants a 200 MB GRIB asks for it in ranges.
+pub const http_max_body: usize = 4 * 1024 * 1024;
+
+/// Longest `http_fetch` or `ws_connect` request JSON accepted.
+const request_json_max = 8 * 1024;
+
+/// WebSocket frames `ws_send` will hold for one connection's own thread, and
+/// the bytes they may total. Over either, `ws_send` refuses: a plugin writing
+/// faster than the socket drains is told so rather than growing the heap.
+const ws_max_queued_frames = 64;
+const ws_max_queued_bytes = 256 * 1024;
+
+/// A key, a value, the keys one plugin may hold and the bytes they may total.
+pub const storage_max_key = 128;
+pub const storage_max_value = 64 * 1024;
+pub const storage_max_keys = 256;
+pub const storage_max_total = 1024 * 1024;
+
+/// Open files one plugin may hold, and the most one `file_read` returns.
+pub const files_per_plugin = 8;
+pub const file_read_max = 1024 * 1024;
 
 // ---- the broker ------------------------------------------------------------
 
@@ -340,16 +427,35 @@ pub const Broker = struct {
 
     plugins: std.ArrayList(*Plugin) = .empty,
     conns: std.ArrayList(Conn) = .empty,
+    udps: std.ArrayList(Udp) = .empty,
     timers: std.ArrayList(Timer) = .empty,
-    next_conn: i64 = 1,
+    /// Fetches and WebSockets in flight, each owned by its own thread and
+    /// listed here only so `dropPlugin` and `stop` can reach it.
+    fetches: std.ArrayList(*Fetch) = .empty,
+    wss: std.ArrayList(*Ws) = .empty,
+    /// One key-value store per plugin, loaded from disk on first use.
+    kv: std.ArrayList(KvStore) = .empty,
+    /// Files the host granted to plugins.
+    files: std.ArrayList(FileHandle) = .empty,
+    /// Where the per-plugin key-value files live, or null when no writable
+    /// place could be found — in which case storage works and is forgotten at
+    /// shutdown.
+    storage_dir: ?[]u8 = null,
+    storage_dir_resolved: bool = false,
+    /// ONE counter for every handle a plugin holds: connections, UDP ports,
+    /// fetches, WebSockets and files. A plugin can therefore never confuse two
+    /// of its own handles, and a log line naming a number names one thing.
+    next_id: i64 = 1,
     next_timer: i64 = 1,
 
     io_thread: ?std.Thread = null,
     stopping: std.atomic.Value(bool) = .init(false),
-    /// Resolver threads still running. `stop` waits for it to reach zero: they
-    /// are detached and they call back into this broker, so it must outlive
-    /// them.
-    resolvers: std.atomic.Value(u32) = .init(0),
+    /// Detached worker threads still running: name lookups, fetches and
+    /// WebSockets. `stop` waits for it to reach zero, because every one of them
+    /// calls back into this broker and it must outlive them.
+    workers: std.atomic.Value(u32) = .init(0),
+    /// Fetches running now, against `http_max_inflight`.
+    fetching: u32 = 0,
     /// Self-pipe: a native run on the dispatch thread writes one byte so the
     /// I/O thread leaves poll at once instead of finishing its current wait.
     /// Without it a 5 ms timer set from inside an event could fire 100 ms late.
@@ -386,7 +492,20 @@ pub const Broker = struct {
             self.alloc.free(c.host);
         }
         self.conns.deinit(self.alloc);
+        for (self.udps.items) |u| {
+            if (net.valid(u.fd)) net.close(u.fd);
+        }
+        self.udps.deinit(self.alloc);
         self.timers.deinit(self.alloc);
+        // `stop` waited for every worker, so these two lists are empty; the
+        // deinit is here so a broker that never started still frees them.
+        self.fetches.deinit(self.alloc);
+        self.wss.deinit(self.alloc);
+        for (self.kv.items) |*store| store.deinit(self.alloc);
+        self.kv.deinit(self.alloc);
+        for (self.files.items) |*f| f.file.close(io);
+        self.files.deinit(self.alloc);
+        if (self.storage_dir) |d| self.alloc.free(d);
         self.plugins.deinit(self.alloc);
         self.* = undefined;
     }
@@ -601,11 +720,41 @@ pub const Broker = struct {
                 self.alloc.free(c.host);
             }
             i = 0;
+            while (i < self.udps.items.len) {
+                if (self.udps.items[i].plugin != index) {
+                    i += 1;
+                    continue;
+                }
+                const u = self.udps.orderedRemove(i);
+                if (net.valid(u.fd)) net.close(u.fd);
+            }
+            i = 0;
             while (i < self.timers.items.len) {
                 if (self.timers.items[i].plugin == index) {
                     _ = self.timers.orderedRemove(i);
                 } else i += 1;
             }
+            i = 0;
+            while (i < self.files.items.len) {
+                if (self.files.items[i].plugin != index) {
+                    i += 1;
+                    continue;
+                }
+                var f = self.files.orderedRemove(i);
+                f.file.close(io);
+            }
+            // A fetch and a WebSocket are owned by their own threads, so they
+            // are told to stop rather than freed here. Each unwinds, finds
+            // itself cancelled and delivers nothing.
+            for (self.fetches.items) |f| {
+                if (f.plugin == index) f.cancelLocked();
+            }
+            for (self.wss.items) |w| {
+                if (w.plugin == index) w.cancelLocked();
+            }
+            // What it stored stays on disk. A plugin that traps and is loaded
+            // again next time must find its settings where it left them.
+            self.dropKvLocked(index);
         }
         if (id.len > 0) self.overlay.remove(id);
         self.vessels.clearSource(source, now_ms);
@@ -622,8 +771,8 @@ pub const Broker = struct {
         if (hostname.len == 0 or hostname.len > 255) return -1;
         const owned = self.alloc.dupe(u8, hostname) catch return -1;
         self.mu.lock();
-        const id = self.next_conn;
-        self.next_conn += 1;
+        const id = self.next_id;
+        self.next_id += 1;
         self.conns.append(self.alloc, .{
             .id = id,
             .plugin = plugin,
@@ -676,31 +825,48 @@ pub const Broker = struct {
 
     pub fn stop(self: *Broker) void {
         const th = self.io_thread orelse {
-            self.awaitResolvers();
+            // A broker that was never started can still have workers: a native
+            // run during `lk_start` reaches this file before the I/O thread
+            // exists.
+            self.stopWorkers();
+            self.awaitWorkers();
             return;
         };
         self.stopping.store(true, .release);
         self.wakeIo();
         th.join();
         self.io_thread = null;
-        // The resolvers write into this broker and are detached, so they have
-        // to be gone before anything it owns is. The wake pipe stays open until
+        // The workers write into this broker and are detached, so they have to
+        // be gone before anything it owns is. The wake pipe stays open until
         // they are: the last thing each does is write to it.
-        self.awaitResolvers();
+        self.stopWorkers();
+        self.awaitWorkers();
         for (self.wake) |fd| if (net.valid(fd)) net.close(fd);
         self.wake = .{ net.invalid, net.invalid };
     }
 
-    fn awaitResolvers(self: *Broker) void {
+    fn awaitWorkers(self: *Broker) void {
         var waited: u32 = 0;
         var said = false;
-        while (self.resolvers.load(.acquire) > 0) : (waited += 2) {
-            if (!said and waited >= resolver_wait_warn_ms) {
+        while (self.workers.load(.acquire) > 0) : (waited += 2) {
+            if (!said and waited >= worker_wait_warn_ms) {
                 said = true;
-                self.say(level_warn, "host", "waiting for {d} name lookup(s) to finish", .{self.resolvers.load(.acquire)});
+                self.say(level_warn, "host", "waiting for {d} network worker(s) to finish", .{self.workers.load(.acquire)});
             }
             sleepMs(2);
         }
+    }
+
+    /// Tell every fetch and every WebSocket to give up, and shut down their
+    /// sockets so a thread parked in a blocking read returns at once instead of
+    /// waiting out its 20 s timeout. The threads free themselves; nothing here
+    /// joins one, because a peer that stopped answering must not be able to
+    /// hold the application open.
+    fn stopWorkers(self: *Broker) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.fetches.items) |f| f.cancelLocked();
+        for (self.wss.items) |w| w.cancelLocked();
     }
 
     fn wakeIo(self: *Broker) void {
@@ -712,8 +878,8 @@ pub const Broker = struct {
     fn ioMain(self: *Broker) void {
         var fds: std.ArrayList(net.pollfd) = .empty;
         defer fds.deinit(self.alloc);
-        // Parallel to `fds` after the wake pipe: which connection each slot is.
-        var owners: std.ArrayList(i64) = .empty;
+        // Parallel to `fds` after the wake pipe: which socket each slot is.
+        var owners: std.ArrayList(Owner) = .empty;
         defer owners.deinit(self.alloc);
 
         while (!self.stopping.load(.acquire)) {
@@ -779,9 +945,9 @@ pub const Broker = struct {
 
             // Counted before the spawn: `stop` waits on this, and the thread
             // may finish before spawn even returns.
-            _ = self.resolvers.fetchAdd(1, .acq_rel);
+            _ = self.workers.fetchAdd(1, .acq_rel);
             const th = std.Thread.spawn(.{ .stack_size = resolver_stack_bytes }, resolveMain, .{req}) catch |e| {
-                _ = self.resolvers.fetchSub(1, .acq_rel);
+                _ = self.workers.fetchSub(1, .acq_rel);
                 self.alloc.destroy(req);
                 self.say(level_warn, "host", "no thread to resolve a connect: {s}", .{@errorName(e)});
                 self.finishConn(id, plugin, null);
@@ -797,7 +963,7 @@ pub const Broker = struct {
     fn resolveMain(req: *Resolve) void {
         const self = req.br;
         const host = req.host[0..req.host_len];
-        const fd: ?net.Socket = dial(host, req.port) catch |e| blk: {
+        const fd: ?net.Socket = net.dial(host, req.port) catch |e| blk: {
             self.say(level_warn, "host", "tcp connect to {s}:{d} failed: {s}", .{ host, req.port, @errorName(e) });
             break :blk null;
         };
@@ -806,7 +972,7 @@ pub const Broker = struct {
         // built, so say so rather than waiting out the tick.
         self.wakeIo();
         self.alloc.destroy(req);
-        _ = self.resolvers.fetchSub(1, .acq_rel);
+        _ = self.workers.fetchSub(1, .acq_rel);
     }
 
     /// Attach the socket to its connection, or report the failure as a close.
@@ -847,7 +1013,7 @@ pub const Broker = struct {
     /// does not stop the NMEA feed. On POSIX errors and hangups still arrive,
     /// because poll reports those whether they were asked for or not; the loop
     /// below says what Windows does instead.
-    fn buildPollSet(self: *Broker, fds: *std.ArrayList(net.pollfd), owners: *std.ArrayList(i64)) i32 {
+    fn buildPollSet(self: *Broker, fds: *std.ArrayList(net.pollfd), owners: *std.ArrayList(Owner)) i32 {
         self.mu.lock();
         defer self.mu.unlock();
 
@@ -864,7 +1030,18 @@ pub const Broker = struct {
             // error up on the pass after the plugin drains.
             if (events == 0 and net.poll_needs_events) continue;
             fds.append(self.alloc, .{ .fd = c.fd, .events = events, .revents = 0 }) catch break;
-            owners.append(self.alloc, c.id) catch break;
+            owners.append(self.alloc, .{ .id = c.id, .udp = false }) catch break;
+        }
+        // A UDP port has nothing to connect and nothing queued to write, so it
+        // only ever asks to read — and the same backpressure rule applies: a
+        // plugin behind on its queue stops being handed datagrams, which the
+        // kernel then drops at the socket instead of the host dropping them at
+        // a full queue.
+        for (self.udps.items) |*u| {
+            if (!net.valid(u.fd) or u.closing) continue;
+            if (self.pausedLocked(u.plugin)) continue;
+            fds.append(self.alloc, .{ .fd = u.fd, .events = net.POLL.IN, .revents = 0 }) catch break;
+            owners.append(self.alloc, .{ .id = u.id, .udp = true }) catch break;
         }
 
         const now = monoMs();
@@ -895,11 +1072,15 @@ pub const Broker = struct {
         return want;
     }
 
-    fn serviceSockets(self: *Broker, fds: []net.pollfd, owners: []const i64) void {
+    fn serviceSockets(self: *Broker, fds: []net.pollfd, owners: []const Owner) void {
         for (fds, 0..) |pfd, i| {
             if (i >= owners.len) break;
             if (pfd.revents == 0) continue;
-            self.serviceOne(owners[i], pfd.revents);
+            if (owners[i].udp) {
+                self.serviceUdp(owners[i].id);
+                continue;
+            }
+            self.serviceOne(owners[i].id, pfd.revents);
         }
         self.reapClosing();
     }
@@ -1028,6 +1209,261 @@ pub const Broker = struct {
         }
     }
 
+    // -- UDP, as the natives use it ------------------------------------------
+
+    /// Bind a UDP port and hand back its id. There is no connect and no
+    /// handshake, so unlike `openConn` this either works now or fails now.
+    pub fn openUdp(self: *Broker, plugin: u32, port: u16) i64 {
+        const fd = net.udpBind(port) catch |e| {
+            self.say(level_warn, self.idOf(plugin), "udp_open {d}: {s}", .{ port, @errorName(e) });
+            return -1;
+        };
+        const bound = net.udpPort(fd);
+        self.mu.lock();
+        const id = self.next_id;
+        self.next_id += 1;
+        self.udps.append(self.alloc, .{ .id = id, .plugin = plugin, .fd = fd, .port = bound }) catch {
+            self.mu.unlock();
+            net.close(fd);
+            return -1;
+        };
+        self.mu.unlock();
+        self.wakeIo();
+        return id;
+    }
+
+    /// Send one datagram. `host` must be an IP LITERAL: a name would need a
+    /// resolver, and this runs on the plugin's own dispatch thread where a
+    /// blocking lookup would eat the watchdog budget. 255.255.255.255 works,
+    /// which is what NMEA over UDP uses.
+    pub fn sendUdp(self: *Broker, plugin: u32, id: i64, data: []const u8, host: []const u8, port: u16) i32 {
+        if (data.len > udp_max_datagram) return -1;
+        var addrs: [max_addrs]Addr = undefined;
+        const n = net.resolveNumeric(host, port, &addrs) catch {
+            self.say(level_warn, self.idOf(plugin), "udp_send: {s} is not an IP address", .{host});
+            return -1;
+        };
+        self.mu.lock();
+        var fd: net.Socket = net.invalid;
+        for (self.udps.items) |u| {
+            if (u.id == id and u.plugin == plugin and !u.closing) fd = u.fd;
+        }
+        self.mu.unlock();
+        if (!net.valid(fd)) return -1;
+
+        const wrote = net.udpSendTo(fd, data, &addrs[0]);
+        if (wrote < 0) return -1;
+        _ = n;
+        return @intCast(wrote);
+    }
+
+    /// Close a UDP port the plugin opened. Reaped by the I/O thread, with no
+    /// event: the plugin asked, so it already knows.
+    pub fn closeUdp(self: *Broker, plugin: u32, id: i64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        var i: usize = 0;
+        while (i < self.udps.items.len) : (i += 1) {
+            const u = self.udps.items[i];
+            if (u.id != id or u.plugin != plugin) continue;
+            _ = self.udps.orderedRemove(i);
+            if (net.valid(u.fd)) net.close(u.fd);
+            return;
+        }
+    }
+
+    /// One datagram off one bound port, on the I/O thread.
+    ///
+    /// The buffer is one byte over the cap so an oversize datagram is visible:
+    /// recvfrom truncates silently, and a plugin handed the first 8192 bytes of
+    /// a 9 KB NMEA burst would parse a corrupt sentence and never know.
+    fn serviceUdp(self: *Broker, id: i64) void {
+        var fd: net.Socket = net.invalid;
+        var plugin: u32 = 0;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            for (self.udps.items) |u| {
+                if (u.id == id and !u.closing) {
+                    fd = u.fd;
+                    plugin = u.plugin;
+                }
+            }
+        }
+        if (!net.valid(fd)) return;
+
+        var buf: [udp_max_datagram + 1]u8 = undefined;
+        while (true) {
+            const n = net.udpRecv(fd, &buf);
+            if (n < 0) return;
+            if (n > udp_max_datagram) {
+                self.say(level_warn, self.idOf(plugin), "udp: dropped a datagram over {d} bytes", .{udp_max_datagram});
+                continue;
+            }
+            self.push(plugin, Kind.udp_data, @bitCast(id), buf[0..@intCast(n)]);
+            // One pass reads what is queued; the poll loop comes back for more.
+            return;
+        }
+    }
+
+    fn idOf(self: *Broker, plugin: u32) []const u8 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.idOfLocked(plugin);
+    }
+
+    // -- HTTP, as the natives use it -----------------------------------------
+
+    /// Start a fetch on a thread of its own and hand back its id. Everything
+    /// slow — the name lookup, the TLS handshake, the body — happens there, so
+    /// neither the plugin's dispatch thread nor the I/O thread waits for a
+    /// server.
+    pub fn startFetch(self: *Broker, plugin: u32, req: FetchRequest) i64 {
+        const f = self.alloc.create(Fetch) catch return -1;
+        f.* = .{ .br = self, .id = 0, .plugin = plugin, .req = req };
+
+        self.mu.lock();
+        if (self.fetching >= http_max_inflight) {
+            self.mu.unlock();
+            self.say(level_warn, self.idOf(plugin), "http_fetch refused: {d} fetches already running", .{self.fetching});
+            f.req.deinit(self.alloc);
+            self.alloc.destroy(f);
+            return -1;
+        }
+        const id = self.next_id;
+        self.next_id += 1;
+        f.id = id;
+        self.fetches.append(self.alloc, f) catch {
+            self.mu.unlock();
+            f.req.deinit(self.alloc);
+            self.alloc.destroy(f);
+            return -1;
+        };
+        self.fetching += 1;
+        self.mu.unlock();
+
+        _ = self.workers.fetchAdd(1, .acq_rel);
+        const th = std.Thread.spawn(.{ .stack_size = worker_stack_bytes }, fetchMain, .{f}) catch |e| {
+            _ = self.workers.fetchSub(1, .acq_rel);
+            self.say(level_warn, self.idOf(plugin), "http_fetch: no thread: {s}", .{@errorName(e)});
+            self.retireFetch(f);
+            return -1;
+        };
+        th.detach();
+        return id;
+    }
+
+    /// Take a fetch out of the list and free it. Called by its own thread, and
+    /// by `startFetch` when the thread could not be made.
+    fn retireFetch(self: *Broker, f: *Fetch) void {
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            for (self.fetches.items, 0..) |item, i| {
+                if (item == f) {
+                    _ = self.fetches.orderedRemove(i);
+                    break;
+                }
+            }
+            if (self.fetching > 0) self.fetching -= 1;
+        }
+        f.req.deinit(self.alloc);
+        self.alloc.destroy(f);
+    }
+
+    // -- WebSocket, as the natives use it -------------------------------------
+
+    /// Open a WebSocket on a thread of its own and hand back its id. The
+    /// handshake happens there; the plugin hears WS_OPEN or WS_CLOSED.
+    pub fn openWs(self: *Broker, plugin: u32, url: []u8, protocols: []u8) i64 {
+        const w = self.alloc.create(Ws) catch {
+            self.alloc.free(url);
+            self.alloc.free(protocols);
+            return -1;
+        };
+        w.* = .{ .br = self, .id = 0, .plugin = plugin, .url = url, .protocols = protocols };
+
+        self.mu.lock();
+        const id = self.next_id;
+        self.next_id += 1;
+        w.id = id;
+        self.wss.append(self.alloc, w) catch {
+            self.mu.unlock();
+            w.free(self.alloc);
+            return -1;
+        };
+        self.mu.unlock();
+
+        _ = self.workers.fetchAdd(1, .acq_rel);
+        const th = std.Thread.spawn(.{ .stack_size = worker_stack_bytes }, wsMain, .{w}) catch |e| {
+            _ = self.workers.fetchSub(1, .acq_rel);
+            self.say(level_warn, self.idOf(plugin), "ws_connect: no thread: {s}", .{@errorName(e)});
+            self.retireWs(w);
+            return -1;
+        };
+        th.detach();
+        return id;
+    }
+
+    /// Queue one text message for a WebSocket's own thread to write. The write
+    /// itself never happens here: a TLS record must be produced by one thread
+    /// at a time, and the dispatch thread has a watchdog budget to keep.
+    pub fn sendWs(self: *Broker, plugin: u32, id: i64, text: []const u8) i32 {
+        if (text.len > webio.max_message) return -1;
+        const owned = self.alloc.dupe(u8, text) catch return -1;
+        self.mu.lock();
+        const w = self.wsForLocked(plugin, id) orelse {
+            self.mu.unlock();
+            self.alloc.free(owned);
+            return -1;
+        };
+        if (w.out.items.len >= ws_max_queued_frames or w.out_bytes + owned.len > ws_max_queued_bytes) {
+            self.mu.unlock();
+            self.alloc.free(owned);
+            return -1;
+        }
+        w.out.append(self.alloc, owned) catch {
+            self.mu.unlock();
+            self.alloc.free(owned);
+            return -1;
+        };
+        w.out_bytes += owned.len;
+        w.wakeLocked();
+        self.mu.unlock();
+        return @intCast(text.len);
+    }
+
+    /// Ask a WebSocket to close. Its thread sends the close frame and answers
+    /// with WS_CLOSED, so a plugin sees the same event whoever started it.
+    pub fn closeWs(self: *Broker, plugin: u32, id: i64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const w = self.wsForLocked(plugin, id) orelse return;
+        w.closing = true;
+        w.wakeLocked();
+    }
+
+    fn wsForLocked(self: *Broker, plugin: u32, id: i64) ?*Ws {
+        for (self.wss.items) |w| {
+            if (w.id == id and w.plugin == plugin and !w.cancelled) return w;
+        }
+        return null;
+    }
+
+    fn retireWs(self: *Broker, w: *Ws) void {
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            for (self.wss.items, 0..) |item, i| {
+                if (item == w) {
+                    _ = self.wss.orderedRemove(i);
+                    break;
+                }
+            }
+        }
+        w.free(self.alloc);
+    }
+
     fn fireTimers(self: *Broker) void {
         const now = monoMs();
         while (true) {
@@ -1057,6 +1493,204 @@ pub const Broker = struct {
                 self.pushLocked(plugin, Kind.timer, @bitCast(id), "");
             }
         }
+    }
+
+    // -- storage --------------------------------------------------------------
+
+    /// Point the per-plugin key-value files at a directory the application
+    /// owns. Call before `start`. Without it the broker finds the platform's
+    /// own place for data that must survive; if there is none, storage still
+    /// works and is forgotten at shutdown.
+    ///
+    /// This is DATA, not cache. `lookout_set_cache_dir` names a directory the
+    /// operating system may purge, and a plugin's saved settings must not live
+    /// where a low-disk sweep can take them.
+    pub fn setStorageDir(self: *Broker, path: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (self.storage_dir) |d| self.alloc.free(d);
+        self.storage_dir = self.alloc.dupe(u8, path) catch null;
+        self.storage_dir_resolved = true;
+    }
+
+    /// The directory in force, resolved once. Null when nothing writable was
+    /// found, which is said out loud the first time a plugin stores anything.
+    fn storageDirLocked(self: *Broker) ?[]const u8 {
+        if (!self.storage_dir_resolved) {
+            self.storage_dir_resolved = true;
+            self.storage_dir = defaultStorageDir(self.alloc);
+            if (self.storage_dir == null) {
+                self.say(level_warn, "host", "no writable data directory: plugin storage is memory only", .{});
+            }
+        }
+        return self.storage_dir;
+    }
+
+    /// This plugin's store, loaded from its file the first time it is asked
+    /// for. A file that will not parse is logged and treated as empty rather
+    /// than refused: a plugin that cannot start because its saved state is
+    /// corrupt is worse than one that starts with none.
+    fn kvForLocked(self: *Broker, plugin: u32) ?*KvStore {
+        for (self.kv.items) |*store| {
+            if (store.plugin == plugin) return store;
+        }
+        const id = self.idOfLocked(plugin);
+        self.kv.append(self.alloc, .{ .plugin = plugin, .id = id }) catch return null;
+        const store = &self.kv.items[self.kv.items.len - 1];
+        const dir = self.storageDirLocked() orelse return store;
+        store.load(self.alloc, dir) catch |e| {
+            self.say(level_warn, id, "storage: {s}.json not read: {s}", .{ id, @errorName(e) });
+        };
+        return store;
+    }
+
+    /// The size of the value under `key`, or -1 when there is none. `out` is
+    /// written only when the value FITS: the two-call pattern is to ask with a
+    /// zero-length buffer, then ask again with one the right size.
+    pub fn storageGet(self: *Broker, plugin: u32, key: []const u8, out: []u8) i32 {
+        if (key.len == 0 or key.len > storage_max_key) return -1;
+        self.mu.lock();
+        defer self.mu.unlock();
+        const store = self.kvForLocked(plugin) orelse return -1;
+        const value = store.get(key) orelse return -1;
+        if (value.len <= out.len) @memcpy(out[0..value.len], value);
+        return @intCast(value.len);
+    }
+
+    /// Write `value` under `key`, or delete the key when `value` is empty.
+    /// Returns 0, or -1 when a cap is in the way.
+    pub fn storagePut(self: *Broker, plugin: u32, key: []const u8, value: []const u8) i32 {
+        if (key.len == 0 or key.len > storage_max_key or !printableKey(key)) return -1;
+        if (value.len > storage_max_value) return -1;
+        self.mu.lock();
+        defer self.mu.unlock();
+        const store = self.kvForLocked(plugin) orelse return -1;
+        store.put(self.alloc, key, value) catch |e| {
+            self.say(level_warn, store.id, "storage_put {s}: {s}", .{ key, @errorName(e) });
+            return -1;
+        };
+        const dir = self.storageDirLocked() orelse return 0;
+        // Write through. A put is a mariner changing something, not a data
+        // stream, so the cost is a few hundred microseconds a few times an
+        // hour, and nothing is lost if the application is killed.
+        store.save(self.alloc, dir) catch |e| {
+            self.say(level_warn, store.id, "storage: {s}.json not written: {s}", .{ store.id, @errorName(e) });
+            return -1;
+        };
+        return 0;
+    }
+
+    /// Forget a plugin's in-memory store. The FILE stays: a plugin that
+    /// trapped must find its settings again next time it loads.
+    fn dropKvLocked(self: *Broker, plugin: u32) void {
+        for (self.kv.items, 0..) |*store, i| {
+            if (store.plugin != plugin) continue;
+            store.deinit(self.alloc);
+            _ = self.kv.orderedRemove(i);
+            return;
+        }
+    }
+
+    // -- files ----------------------------------------------------------------
+
+    /// Give one plugin one file, and tell it with a FILE_OPENED event. This is
+    /// the ONLY way a plugin reaches the filesystem: there is no `file_open`
+    /// import, so a path a mariner did not choose cannot be opened.
+    ///
+    /// The picker that would call this is chrome nobody has built. The API is
+    /// here so that when it is built, nothing about the ABI has to change — and
+    /// so a plugin like the GRIB reader can be driven from the harness today.
+    pub fn grantFile(self: *Broker, plugin: u32, path: []const u8, write: bool) !i64 {
+        const cwd = std.Io.Dir.cwd();
+        const file = if (write)
+            try cwd.createFile(io, path, .{})
+        else
+            try cwd.openFile(io, path, .{});
+        errdefer file.close(io);
+        const size: u64 = if (write) 0 else blk: {
+            const st = file.stat(io) catch break :blk 0;
+            break :blk st.size;
+        };
+
+        var id: i64 = 0;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            var held: usize = 0;
+            for (self.files.items) |f| {
+                if (f.plugin == plugin) held += 1;
+            }
+            if (held >= files_per_plugin) return error.TooManyFiles;
+            id = self.next_id;
+            self.next_id += 1;
+            try self.files.append(self.alloc, .{ .id = id, .plugin = plugin, .file = file, .write = write });
+        }
+
+        var json: [512]u8 = undefined;
+        var w = std.Io.Writer.fixed(&json);
+        w.writeAll("{\"name\":") catch {};
+        writeJsonStringTo(&w, baseName(path));
+        w.print(",\"size\":{d},\"mode\":\"{s}\"}}", .{ size, if (write) "write" else "read" }) catch {};
+        self.push(plugin, Kind.file_opened, @bitCast(id), w.buffered());
+        return id;
+    }
+
+    /// Read from a granted file at an absolute offset. Returns the bytes read,
+    /// 0 at end of file, or -1.
+    pub fn fileRead(self: *Broker, plugin: u32, handle: i64, offset: i64, out: []u8) i32 {
+        if (offset < 0) return -1;
+        const file = self.fileFor(plugin, handle) orelse return -1;
+        const n = file.readPositionalAll(io, out, @intCast(offset)) catch return -1;
+        return @intCast(n);
+    }
+
+    /// Append to a granted write file. Returns the bytes written, or -1.
+    pub fn fileWrite(self: *Broker, plugin: u32, handle: i64, data: []const u8) i32 {
+        self.mu.lock();
+        var file: ?std.Io.File = null;
+        var at: u64 = 0;
+        var slot: ?*FileHandle = null;
+        for (self.files.items) |*f| {
+            if (f.id == handle and f.plugin == plugin and f.write) {
+                file = f.file;
+                at = f.written;
+                slot = f;
+            }
+        }
+        self.mu.unlock();
+        const f = file orelse return -1;
+        f.writePositionalAll(io, data, at) catch return -1;
+        self.mu.lock();
+        defer self.mu.unlock();
+        // Re-found rather than kept: the list may have moved while the write
+        // was in flight, and the handle may have been revoked under it.
+        for (self.files.items) |*item| {
+            if (item.id == handle and item.plugin == plugin) item.written = at + data.len;
+        }
+        return @intCast(data.len);
+    }
+
+    /// Give a granted file back. The host also closes every handle a plugin
+    /// holds when it retires, so this is politeness rather than hygiene — but a
+    /// plugin that opens a GRIB an hour needs it.
+    pub fn fileClose(self: *Broker, plugin: u32, handle: i64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.files.items, 0..) |*f, i| {
+            if (f.id != handle or f.plugin != plugin) continue;
+            f.file.close(io);
+            _ = self.files.orderedRemove(i);
+            return;
+        }
+    }
+
+    fn fileFor(self: *Broker, plugin: u32, handle: i64) ?std.Io.File {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.files.items) |f| {
+            if (f.id == handle and f.plugin == plugin) return f.file;
+        }
+        return null;
     }
 
     // -- the fanout tick -----------------------------------------------------
@@ -1141,6 +1775,573 @@ pub const Broker = struct {
     }
 };
 
+/// Which socket a poll slot belongs to. A UDP port and a TCP connection share
+/// one id space, so the flag says which list to look in rather than which id
+/// range to compare against.
+const Owner = struct { id: i64, udp: bool };
+
+// ---- an HTTP fetch in flight --------------------------------------------------
+
+/// What `http_fetch` was asked for, copied out of the plugin's memory: the
+/// worker thread outlives the call that started it.
+const FetchRequest = struct {
+    method: []u8,
+    url: []u8,
+    range: []u8,
+    headers: []webio.Header,
+
+    fn deinit(self: *FetchRequest, alloc: std.mem.Allocator) void {
+        alloc.free(self.method);
+        alloc.free(self.url);
+        alloc.free(self.range);
+        for (self.headers) |h| {
+            alloc.free(h.name);
+            alloc.free(h.value);
+        }
+        if (self.headers.len > 0) alloc.free(self.headers);
+        self.* = undefined;
+    }
+};
+
+/// One fetch, owned by its own thread and listed in the broker only so it can
+/// be cancelled. `fd` and `cancelled` are guarded by the broker's `mu`.
+const Fetch = struct {
+    br: *Broker,
+    id: i64,
+    plugin: u32,
+    req: FetchRequest,
+    fd: net.Socket = net.invalid,
+    cancelled: bool = false,
+
+    /// Give up. Shutting the socket down — rather than closing it — makes the
+    /// worker's blocking read return at once while the descriptor stays valid
+    /// under the thread that owns it.
+    fn cancelLocked(self: *Fetch) void {
+        self.cancelled = true;
+        if (net.valid(self.fd)) net.shutdownBoth(self.fd);
+    }
+};
+
+/// Told by webio which socket the fetch is using, and told again with
+/// `net.invalid` before that socket is closed. Both happen under `mu`, which is
+/// what makes `cancelLocked` safe: it either sees a live descriptor and shuts
+/// it down, or sees none and does nothing.
+fn fetchSocket(ctx: ?*anyopaque, fd: net.Socket) void {
+    const f: *Fetch = @ptrCast(@alignCast(ctx orelse return));
+    f.br.mu.lock();
+    defer f.br.mu.unlock();
+    f.fd = fd;
+}
+
+fn fetchMain(f: *Fetch) void {
+    const br = f.br;
+    defer {
+        br.retireFetch(f);
+        _ = br.workers.fetchSub(1, .acq_rel);
+    }
+    var resp = webio.fetch(br.alloc, .{
+        .method = f.req.method,
+        .url = f.req.url,
+        .headers = f.req.headers,
+        .range = f.req.range,
+        .max_body = http_max_body,
+        .socket_ctx = f,
+        .onSocket = fetchSocket,
+    }) catch |e| {
+        deliverFetchError(f, @errorName(e));
+        return;
+    };
+    defer resp.deinit();
+    deliverFetch(f, &resp);
+}
+
+/// True when the plugin that asked is gone, or the host is shutting down. A
+/// cancelled fetch delivers nothing: the queue it would push into is being torn
+/// down, and an event nobody will handle is worse than no event.
+fn fetchCancelled(f: *Fetch) bool {
+    f.br.mu.lock();
+    defer f.br.mu.unlock();
+    return f.cancelled;
+}
+
+/// `u32 json_len | status+headers JSON | raw body`. One buffer, because a
+/// plugin needs both halves and the ABI carries one payload per event.
+fn deliverFetch(f: *Fetch, resp: *webio.Response) void {
+    if (fetchCancelled(f)) return;
+    const alloc = f.br.alloc;
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(alloc);
+    json.print(alloc, "{{\"status\":{d},\"url\":", .{resp.status}) catch return;
+    writeJsonString(&json, alloc, resp.url) catch return;
+    json.appendSlice(alloc, ",\"headers\":{") catch return;
+    for (resp.headers, 0..) |h, i| {
+        if (i > 0) json.append(alloc, ',') catch return;
+        writeJsonString(&json, alloc, h.name) catch return;
+        json.append(alloc, ':') catch return;
+        writeJsonString(&json, alloc, h.value) catch return;
+    }
+    json.appendSlice(alloc, "}}") catch return;
+
+    var payload = alloc.alloc(u8, 4 + json.items.len + resp.body.len) catch return;
+    defer alloc.free(payload);
+    std.mem.writeInt(u32, payload[0..4], @intCast(json.items.len), .little);
+    @memcpy(payload[4 .. 4 + json.items.len], json.items);
+    @memcpy(payload[4 + json.items.len ..], resp.body);
+    f.br.push(f.plugin, Kind.http_response, @bitCast(f.id), payload);
+}
+
+/// A fetch that never produced a response answers with status 0 and the reason.
+/// The plugin still gets exactly one HTTP_RESPONSE per request id, so nothing
+/// has to time a request out on its own.
+fn deliverFetchError(f: *Fetch, reason: []const u8) void {
+    f.br.say(level_warn, f.br.idOf(f.plugin), "http_fetch {s}: {s}", .{ f.req.url, reason });
+    if (fetchCancelled(f)) return;
+    var buf: [768]u8 = undefined;
+    var w = std.Io.Writer.fixed(buf[4..]);
+    w.writeAll("{\"status\":0,\"url\":") catch return;
+    writeJsonStringTo(&w, f.req.url);
+    w.writeAll(",\"headers\":{},\"error\":") catch return;
+    writeJsonStringTo(&w, reason);
+    w.writeAll("}") catch return;
+    const json_len = w.buffered().len;
+    std.mem.writeInt(u32, buf[0..4], @intCast(json_len), .little);
+    f.br.push(f.plugin, Kind.http_response, @bitCast(f.id), buf[0 .. 4 + json_len]);
+}
+
+// ---- a WebSocket in flight ----------------------------------------------------
+
+/// One WebSocket, owned by its own thread. Everything here except `br`, `id`,
+/// `plugin`, `url` and `protocols` is guarded by the broker's `mu`.
+///
+/// The thread reads; `ws_send` only QUEUES. One thread produces every outgoing
+/// frame, which is what keeps two TLS records from being encrypted at once, and
+/// it means a plugin's `ws_send` returns in microseconds however slow the peer
+/// is.
+const Ws = struct {
+    br: *Broker,
+    id: i64,
+    plugin: u32,
+    url: []u8,
+    protocols: []u8,
+    fd: net.Socket = net.invalid,
+    /// Wakes the connection's thread out of poll when there is something to
+    /// write or the connection must close.
+    wake: [2]net.Socket = .{ net.invalid, net.invalid },
+    out: std.ArrayList([]u8) = .empty,
+    out_bytes: usize = 0,
+    closing: bool = false,
+    cancelled: bool = false,
+
+    fn cancelLocked(self: *Ws) void {
+        self.cancelled = true;
+        self.closing = true;
+        self.wakeLocked();
+        if (net.valid(self.fd)) net.shutdownBoth(self.fd);
+    }
+
+    fn wakeLocked(self: *Ws) void {
+        if (!net.valid(self.wake[1])) return;
+        const one = [_]u8{0};
+        _ = net.send(self.wake[1], &one);
+    }
+
+    fn free(self: *Ws, alloc: std.mem.Allocator) void {
+        for (self.out.items) |m| alloc.free(m);
+        self.out.deinit(alloc);
+        alloc.free(self.url);
+        alloc.free(self.protocols);
+        for (self.wake) |fd| {
+            if (net.valid(fd)) net.close(fd);
+        }
+        alloc.destroy(self);
+    }
+};
+
+/// How long the connection's thread waits in poll before looking at its own
+/// flags again. A wake byte cuts it short, so this only bounds the case where
+/// the wake pair could not be made.
+const ws_poll_ms: i32 = 200;
+
+fn wsMain(w: *Ws) void {
+    const br = w.br;
+    defer {
+        br.retireWs(w);
+        _ = br.workers.fetchSub(1, .acq_rel);
+    }
+
+    const url = webio.Url.parse(w.url) catch |e| {
+        wsClosed(w, 0, @errorName(e));
+        return;
+    };
+    const stream = webio.Stream.open(br.alloc, url) catch |e| {
+        wsClosed(w, 0, @errorName(e));
+        return;
+    };
+    {
+        br.mu.lock();
+        defer br.mu.unlock();
+        w.fd = stream.fd;
+    }
+    defer {
+        {
+            br.mu.lock();
+            defer br.mu.unlock();
+            w.fd = net.invalid;
+        }
+        stream.close();
+    }
+
+    var hs: webio.Handshake = .{};
+    webio.wsHandshake(stream, url, w.protocols, &hs) catch |e| {
+        wsClosed(w, 0, @errorName(e));
+        return;
+    };
+    {
+        var open_json: [128]u8 = undefined;
+        var ow = std.Io.Writer.fixed(&open_json);
+        ow.writeAll("{\"protocol\":") catch {};
+        writeJsonStringTo(&ow, hs.chosen());
+        ow.writeAll("}") catch {};
+        if (!wsCancelled(w)) br.push(w.plugin, Kind.ws_open, @bitCast(w.id), ow.buffered());
+    }
+
+    var msg: std.ArrayList(u8) = .empty;
+    defer msg.deinit(br.alloc);
+    var msg_op: webio.Opcode = .continuation;
+    var code: u16 = 1006;
+    var reason: []const u8 = "";
+    var reason_buf: [125]u8 = undefined;
+
+    loop: while (true) {
+        if (!wsDrainOut(w, stream)) break;
+        {
+            br.mu.lock();
+            const want_close = w.closing;
+            const cancelled = w.cancelled;
+            br.mu.unlock();
+            if (cancelled) return;
+            if (want_close) {
+                webio.writeFrame(stream, .close, &[_]u8{ 0x03, 0xe8 }) catch {};
+                code = 1000;
+                break;
+            }
+        }
+
+        // Decrypted bytes can be waiting inside the TLS reader while the socket
+        // itself has nothing new, so ask the stream before asking the kernel.
+        if (!stream.hasBuffered()) {
+            var fds = [_]net.pollfd{
+                .{ .fd = stream.fd, .events = net.POLL.IN, .revents = 0 },
+                .{ .fd = w.wake[0], .events = net.POLL.IN, .revents = 0 },
+            };
+            const n = if (net.valid(w.wake[0])) net.poll(&fds, ws_poll_ms) else net.poll(fds[0..1], ws_poll_ms);
+            if (n == 0) continue;
+            if (net.valid(w.wake[0]) and fds[1].revents != 0) net.drainWake(w.wake[0]);
+            if (fds[0].revents == 0) continue;
+        }
+
+        const r = stream.reader();
+        const head = webio.readFrameHead(r) catch |e| {
+            reason = @errorName(e);
+            break;
+        };
+        switch (head.opcode) {
+            .ping, .pong, .close => {
+                const payload = r.take(@intCast(head.len)) catch break;
+                switch (head.opcode) {
+                    .ping => webio.writeFrame(stream, .pong, payload) catch break :loop,
+                    .close => {
+                        const c = webio.closePayload(payload);
+                        code = c.code;
+                        const n = @min(c.reason.len, reason_buf.len);
+                        @memcpy(reason_buf[0..n], c.reason[0..n]);
+                        reason = reason_buf[0..n];
+                        webio.writeFrame(stream, .close, payload) catch {};
+                        break :loop;
+                    },
+                    else => {},
+                }
+            },
+            .text, .binary => {
+                // A new data frame while a fragment is still open is the one
+                // interleaving RFC 6455 forbids.
+                if (msg.items.len > 0) {
+                    reason = "ProtocolError";
+                    break;
+                }
+                msg_op = head.opcode;
+                webio.readPayloadInto(br.alloc, r, &msg, @intCast(head.len)) catch |e| {
+                    reason = @errorName(e);
+                    break;
+                };
+                if (head.fin) wsMessage(w, msg_op, msg.items) else continue;
+                msg.clearRetainingCapacity();
+            },
+            .continuation => {
+                webio.readPayloadInto(br.alloc, r, &msg, @intCast(head.len)) catch |e| {
+                    reason = @errorName(e);
+                    break;
+                };
+                if (msg.items.len > webio.max_message) {
+                    reason = "MessageTooLarge";
+                    break;
+                }
+                if (!head.fin) continue;
+                wsMessage(w, msg_op, msg.items);
+                msg.clearRetainingCapacity();
+            },
+            else => {
+                reason = "ProtocolError";
+                break;
+            },
+        }
+    }
+    wsClosed(w, code, reason);
+}
+
+/// Write whatever `ws_send` queued. False when the socket would not take it,
+/// which ends the connection.
+fn wsDrainOut(w: *Ws, stream: *webio.Stream) bool {
+    while (true) {
+        var next: ?[]u8 = null;
+        {
+            w.br.mu.lock();
+            defer w.br.mu.unlock();
+            if (w.out.items.len > 0) {
+                const frame = w.out.orderedRemove(0);
+                w.out_bytes -= frame.len;
+                next = frame;
+            }
+        }
+        const frame = next orelse return true;
+        defer w.br.alloc.free(frame);
+        webio.writeFrame(stream, .text, frame) catch return false;
+    }
+}
+
+/// One reassembled message. A binary message is dropped with a line: the ABI
+/// carries WS_DATA as text, and a plugin handed bytes it cannot tell from text
+/// would parse them as JSON.
+fn wsMessage(w: *Ws, opcode: webio.Opcode, payload: []const u8) void {
+    if (opcode != .text) {
+        w.br.say(level_warn, w.br.idOf(w.plugin), "ws: dropped a {d}-byte binary message", .{payload.len});
+        return;
+    }
+    if (wsCancelled(w)) return;
+    w.br.push(w.plugin, Kind.ws_data, @bitCast(w.id), payload);
+}
+
+fn wsCancelled(w: *Ws) bool {
+    w.br.mu.lock();
+    defer w.br.mu.unlock();
+    return w.cancelled;
+}
+
+/// The one event every WebSocket ends with, whether it failed to connect, was
+/// closed by the peer or was closed by the plugin. `code` 0 means it never
+/// opened and `reason` names what stopped it.
+fn wsClosed(w: *Ws, code: u16, reason: []const u8) void {
+    if (wsCancelled(w)) return;
+    var buf: [256]u8 = undefined;
+    var out = std.Io.Writer.fixed(&buf);
+    out.print("{{\"code\":{d},\"reason\":", .{code}) catch return;
+    writeJsonStringTo(&out, reason);
+    out.writeAll("}") catch return;
+    w.br.push(w.plugin, Kind.ws_closed, @bitCast(w.id), out.buffered());
+}
+
+// ---- per-plugin storage -------------------------------------------------------
+
+const KvEntry = struct { key: []u8, value: []u8 };
+
+/// One plugin's key-value store, in memory and in `<dir>/<id>.json`.
+///
+/// The file holds base64 values because a value is BYTES: a plugin may store a
+/// packed struct or a compressed blob, and JSON has no way to say so. Keys stay
+/// literal, which is why they are limited to printable ASCII.
+const KvStore = struct {
+    plugin: u32,
+    id: []const u8,
+    entries: std.ArrayList(KvEntry) = .empty,
+    /// Key and value bytes held, against `storage_max_total`.
+    bytes: usize = 0,
+    loaded: bool = false,
+
+    fn deinit(self: *KvStore, alloc: std.mem.Allocator) void {
+        for (self.entries.items) |e| {
+            alloc.free(e.key);
+            alloc.free(e.value);
+        }
+        self.entries.deinit(alloc);
+        self.* = undefined;
+    }
+
+    fn get(self: *const KvStore, key: []const u8) ?[]const u8 {
+        for (self.entries.items) |e| {
+            if (std.mem.eql(u8, e.key, key)) return e.value;
+        }
+        return null;
+    }
+
+    fn put(self: *KvStore, alloc: std.mem.Allocator, key: []const u8, value: []const u8) !void {
+        for (self.entries.items, 0..) |*e, i| {
+            if (!std.mem.eql(u8, e.key, key)) continue;
+            // An empty value is a delete. It saves a `storage_del` import for
+            // the one thing a plugin needs it for: forgetting a preference.
+            if (value.len == 0) {
+                self.bytes -= e.key.len + e.value.len;
+                alloc.free(e.key);
+                alloc.free(e.value);
+                _ = self.entries.orderedRemove(i);
+                return;
+            }
+            if (self.bytes - e.value.len + value.len > storage_max_total) return error.StorageFull;
+            const owned = try alloc.dupe(u8, value);
+            self.bytes = self.bytes - e.value.len + value.len;
+            alloc.free(e.value);
+            e.value = owned;
+            return;
+        }
+        if (value.len == 0) return;
+        if (self.entries.items.len >= storage_max_keys) return error.TooManyKeys;
+        if (self.bytes + key.len + value.len > storage_max_total) return error.StorageFull;
+        const k = try alloc.dupe(u8, key);
+        errdefer alloc.free(k);
+        const v = try alloc.dupe(u8, value);
+        errdefer alloc.free(v);
+        try self.entries.append(alloc, .{ .key = k, .value = v });
+        self.bytes += key.len + value.len;
+    }
+
+    fn fileName(self: *const KvStore, buf: []u8) []const u8 {
+        // A manifest id is reverse-DNS, but nothing checks that, so anything
+        // that could leave the directory becomes an underscore.
+        const n = @min(self.id.len, buf.len - 5);
+        for (self.id[0..n], 0..) |c, i| buf[i] = switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => c,
+            else => '_',
+        };
+        @memcpy(buf[n .. n + 5], ".json");
+        return buf[0 .. n + 5];
+    }
+
+    fn load(self: *KvStore, alloc: std.mem.Allocator, dir: []const u8) !void {
+        if (self.loaded) return;
+        self.loaded = true;
+        var name_buf: [192]u8 = undefined;
+        const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, self.fileName(&name_buf) });
+        defer alloc.free(path);
+        const text = std.Io.Dir.cwd().readFileAlloc(io, path, alloc, .limited(storage_max_total * 2)) catch |e| switch (e) {
+            error.FileNotFound => return,
+            else => return e,
+        };
+        defer alloc.free(text);
+
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, text, .{});
+        defer parsed.deinit();
+        if (parsed.value != .object) return error.BadStorageFile;
+        const list = parsed.value.object.get("kv") orelse return;
+        if (list != .array) return error.BadStorageFile;
+        const dec = std.base64.standard.Decoder;
+        for (list.array.items) |item| {
+            if (item != .object) continue;
+            const key = switch (item.object.get("k") orelse continue) {
+                .string => |s| s,
+                else => continue,
+            };
+            const b64 = switch (item.object.get("b64") orelse continue) {
+                .string => |s| s,
+                else => continue,
+            };
+            const size = dec.calcSizeForSlice(b64) catch continue;
+            if (size == 0 or size > storage_max_value) continue;
+            const value = try alloc.alloc(u8, size);
+            defer alloc.free(value);
+            dec.decode(value, b64) catch continue;
+            self.put(alloc, key, value) catch continue;
+        }
+    }
+
+    fn save(self: *KvStore, alloc: std.mem.Allocator, dir: []const u8) !void {
+        var name_buf: [192]u8 = undefined;
+        const name = self.fileName(&name_buf);
+        const cwd = std.Io.Dir.cwd();
+        cwd.createDirPath(io, dir) catch {};
+
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(alloc);
+        try out.appendSlice(alloc, "{\"v\":1,\"kv\":[");
+        const enc = std.base64.standard.Encoder;
+        var b64: [4 * ((storage_max_value + 2) / 3) + 4]u8 = undefined;
+        for (self.entries.items, 0..) |e, i| {
+            if (i > 0) try out.append(alloc, ',');
+            try out.appendSlice(alloc, "{\"k\":");
+            try writeJsonString(&out, alloc, e.key);
+            try out.appendSlice(alloc, ",\"b64\":\"");
+            try out.appendSlice(alloc, enc.encode(&b64, e.value));
+            try out.appendSlice(alloc, "\"}");
+        }
+        try out.appendSlice(alloc, "]}");
+
+        // Written beside the real file and renamed over it, so a power cut
+        // during a save loses the change rather than the whole store.
+        const tmp = try std.fmt.allocPrint(alloc, "{s}/{s}.tmp", .{ dir, name });
+        defer alloc.free(tmp);
+        const final = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name });
+        defer alloc.free(final);
+        try cwd.writeFile(io, .{ .sub_path = tmp, .data = out.items });
+        try cwd.rename(tmp, cwd, final, io);
+    }
+};
+
+/// `<data root>/lookout/plugins`, the platform's own place for data that must
+/// survive. Deliberately NOT the cache root `lookout_set_cache_dir` names: a
+/// cache is purgeable and a mariner's saved plugin state is not.
+fn defaultStorageDir(alloc: std.mem.Allocator) ?[]u8 {
+    if (builtin.os.tag == .windows) {
+        const appdata = std.c.getenv("APPDATA") orelse return null;
+        const s = std.mem.span(appdata);
+        if (s.len == 0) return null;
+        return std.fmt.allocPrint(alloc, "{s}\\lookout\\plugins", .{s}) catch null;
+    }
+    if (std.c.getenv("XDG_DATA_HOME")) |x| {
+        const s = std.mem.span(x);
+        if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout/plugins", .{s}) catch null;
+    }
+    const home = std.mem.span(std.c.getenv("HOME") orelse return null);
+    if (home.len == 0) return null;
+    return switch (builtin.os.tag) {
+        .macos, .ios => std.fmt.allocPrint(alloc, "{s}/Library/Application Support/lookout/plugins", .{home}) catch null,
+        else => std.fmt.allocPrint(alloc, "{s}/.local/share/lookout/plugins", .{home}) catch null,
+    };
+}
+
+/// A storage key is printable ASCII with no quote and no backslash. It goes
+/// into a JSON file as itself, and a key that could break that shape is a key
+/// nobody could read back.
+fn printableKey(key: []const u8) bool {
+    for (key) |c| {
+        if (c < 0x20 or c > 0x7e or c == '"' or c == '\\') return false;
+    }
+    return true;
+}
+
+/// One granted file. There is no `file_open` import: every one of these was
+/// handed over by the host on a mariner's behalf.
+const FileHandle = struct {
+    id: i64,
+    plugin: u32,
+    file: std.Io.File,
+    write: bool,
+    /// Bytes written so far, so `file_write` appends without a seek.
+    written: u64 = 0,
+};
+
+fn baseName(path: []const u8) []const u8 {
+    const cut = std.mem.lastIndexOfAny(u8, path, "/\\") orelse return path;
+    return path[cut + 1 ..];
+}
+
 // ---- JSON the host writes ---------------------------------------------------
 
 /// `{"values":[{"path":..,"value":..,"ts":..,"age_ms":..}]}`.
@@ -1194,6 +2395,22 @@ fn writeAisChanged(out: *std.ArrayList(u8), alloc: std.mem.Allocator, targets: [
         try out.print(alloc, ",\"ts\":{d},\"age_ms\":{d}}}", .{ tg.ts_ms, now - tg.ts_ms });
     }
     try out.appendSlice(alloc, "]}");
+}
+
+/// The same escaping, into a fixed writer. Overflow is dropped: every caller
+/// here is building a one-line envelope into a stack buffer.
+fn writeJsonStringTo(w: *std.Io.Writer, s: []const u8) void {
+    w.writeByte('"') catch return;
+    for (s) |c| switch (c) {
+        '"' => w.writeAll("\\\"") catch return,
+        '\\' => w.writeAll("\\\\") catch return,
+        '\n' => w.writeAll("\\n") catch return,
+        '\r' => w.writeAll("\\r") catch return,
+        '\t' => w.writeAll("\\t") catch return,
+        0...8, 11, 12, 14...31 => w.print("\\u{x:0>4}", .{c}) catch return,
+        else => w.writeByte(c) catch return,
+    };
+    w.writeByte('"') catch return;
 }
 
 fn writeJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
@@ -1504,6 +2721,322 @@ fn hostAisSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
     return 0;
 }
 
+// -- UDP ----------------------------------------------------------------------
+
+fn hostUdpOpen(env: wasm.c.wasm_exec_env_t, port: u32) callconv(.c) i64 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .net_udp, "udp_open")) return -1;
+    if (port > 65535) return -1;
+    return p.broker.openUdp(p.index, @intCast(port));
+}
+
+fn hostUdpSend(
+    env: wasm.c.wasm_exec_env_t,
+    id: i64,
+    ptr: [*c]const u8,
+    len: u32,
+    host_ptr: [*c]const u8,
+    host_len: u32,
+    port: u32,
+) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .net_udp, "udp_send")) return -1;
+    if (port == 0 or port > 65535) return -1;
+    return p.broker.sendUdp(p.index, id, bytes(ptr, len), bytes(host_ptr, host_len), @intCast(port));
+}
+
+fn hostUdpClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
+    const p = caller(env) orelse return;
+    if (!allow(p, .net_udp, "udp_close")) return;
+    p.broker.closeUdp(p.index, id);
+}
+
+// -- the host allowlist ---------------------------------------------------------
+
+/// The one host-list entry that is not a hostname. It grants THIS BOAT'S OWN
+/// NETWORK and nothing beyond it.
+///
+/// A plugin whose server is a mariner's setting cannot have that address in its
+/// manifest — a Signal K server lives at whatever the boat's network calls it.
+/// Naming every private address instead would be a manifest nobody could read.
+/// So `local` is the grant for "a server on the network this boat is on", which
+/// is a sentence a mariner can weigh, and it still refuses the internet.
+pub const local_token = "local";
+
+/// Whether a URL's host is on the boat's own network. Judged from the TEXT, not
+/// from what it resolves to: the check runs before any lookup, and a resolver
+/// answer could change between the check and the connect.
+///
+/// It covers loopback, the three RFC 1918 ranges, RFC 3927 link-local, IPv6
+/// loopback, RFC 4193 unique-local and IPv6 link-local, and the `.local` names
+/// mDNS serves. A public name is not local however it resolves.
+pub fn isLocalHost(host: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return true;
+    if (host.len > 6 and std.ascii.endsWithIgnoreCase(host, ".local")) return true;
+    if (std.mem.eql(u8, host, "::1")) return true;
+
+    if (std.mem.indexOfScalar(u8, host, ':') != null) {
+        // An IPv6 literal. fc00::/7 is unique-local, fe80::/10 link-local.
+        var lower: [8]u8 = undefined;
+        const n = @min(host.len, lower.len);
+        _ = std.ascii.lowerString(lower[0..n], host[0..n]);
+        const head = lower[0..n];
+        if (std.mem.startsWith(u8, head, "fc") or std.mem.startsWith(u8, head, "fd")) return true;
+        if (std.mem.startsWith(u8, head, "fe8") or std.mem.startsWith(u8, head, "fe9")) return true;
+        if (std.mem.startsWith(u8, head, "fea") or std.mem.startsWith(u8, head, "feb")) return true;
+        return false;
+    }
+
+    var parts: [4]u8 = undefined;
+    var count: usize = 0;
+    var it = std.mem.splitScalar(u8, host, '.');
+    while (it.next()) |piece| {
+        if (count == parts.len) return false;
+        parts[count] = std.fmt.parseInt(u8, piece, 10) catch return false;
+        count += 1;
+    }
+    if (count != 4) return false;
+    return switch (parts[0]) {
+        10, 127 => true,
+        172 => parts[1] >= 16 and parts[1] <= 31,
+        192 => parts[1] == 168,
+        169 => parts[1] == 254,
+        else => false,
+    };
+}
+
+/// Whether this plugin's manifest named the host in `url`.
+///
+/// The grant is per HOST, not per capability: `net.http` on its own grants
+/// nothing, and the allowlist is what the mariner consented to. Matching is
+/// exact and case-insensitive. There are no wildcards: a plugin that needs two
+/// servers names two servers, and nobody has to reason about what `*.noaa.gov`
+/// covers at three in the morning.
+fn allowUrl(p: *Plugin, cap: Cap, call: []const u8, url_text: []const u8) bool {
+    if (!allow(p, cap, call)) return false;
+    const url = webio.Url.parse(url_text) catch {
+        p.broker.say(level_warn, p.id, "{s}: {s} is not a URL this host can fetch", .{ call, url_text });
+        return false;
+    };
+    const hosts = if (cap == .net_http) p.http_hosts else p.ws_hosts;
+    for (hosts) |h| {
+        if (std.mem.eql(u8, h, local_token)) {
+            if (isLocalHost(url.host)) return true;
+            continue;
+        }
+        if (webio.sameHost(h, url.host)) return true;
+    }
+    p.denied += 1;
+    p.broker.denied += 1;
+    p.broker.say(level_err, p.id, "denied {s}: {s} is not in the manifest's {s} host list", .{ call, url.host, cap.name() });
+    return false;
+}
+
+// -- HTTP -----------------------------------------------------------------------
+
+/// `{"method":"GET","url":"https://…","headers":{"accept":"*/*"},"range":"bytes=0-1023"}`.
+/// Only `url` is required.
+fn hostHttpFetch(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i64 {
+    const p = caller(env) orelse return -1;
+    const text = bytes(ptr, len);
+    if (text.len == 0 or text.len > request_json_max) return -1;
+    const alloc = p.broker.alloc;
+
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, text, .{}) catch {
+        _ = allow(p, .net_http, "http_fetch");
+        p.broker.say(level_warn, p.id, "http_fetch: malformed JSON", .{});
+        return -1;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return -1;
+    const o = parsed.value.object;
+    const url = switch (o.get("url") orelse return -1) {
+        .string => |s| s,
+        else => return -1,
+    };
+    if (!allowUrl(p, .net_http, "http_fetch", url)) return -1;
+
+    const method = switch (o.get("method") orelse std.json.Value{ .string = "GET" }) {
+        .string => |s| s,
+        else => "GET",
+    };
+    // GET and HEAD only. A plugin that can POST can exfiltrate, and nothing in
+    // the marine use cases needs one.
+    if (!std.mem.eql(u8, method, "GET") and !std.mem.eql(u8, method, "HEAD")) {
+        p.broker.say(level_warn, p.id, "http_fetch: method {s} is not GET or HEAD", .{method});
+        return -1;
+    }
+    const range = switch (o.get("range") orelse std.json.Value{ .string = "" }) {
+        .string => |s| s,
+        else => "",
+    };
+
+    var req = FetchRequest{
+        .method = alloc.dupe(u8, method) catch return -1,
+        .url = undefined,
+        .range = undefined,
+        .headers = &.{},
+    };
+    req.url = alloc.dupe(u8, url) catch {
+        alloc.free(req.method);
+        return -1;
+    };
+    req.range = alloc.dupe(u8, range) catch {
+        alloc.free(req.method);
+        alloc.free(req.url);
+        return -1;
+    };
+    if (o.get("headers")) |hv| {
+        if (hv == .object) {
+            var list: std.ArrayList(webio.Header) = .empty;
+            var it = hv.object.iterator();
+            while (it.next()) |kv| {
+                const value = switch (kv.value_ptr.*) {
+                    .string => |s| s,
+                    else => continue,
+                };
+                if (!safeHeader(kv.key_ptr.*) or !safeHeader(value)) continue;
+                const name = alloc.dupe(u8, kv.key_ptr.*) catch break;
+                const val = alloc.dupe(u8, value) catch {
+                    alloc.free(name);
+                    break;
+                };
+                list.append(alloc, .{ .name = name, .value = val }) catch {
+                    alloc.free(name);
+                    alloc.free(val);
+                    break;
+                };
+            }
+            req.headers = list.toOwnedSlice(alloc) catch &.{};
+        }
+    }
+    return p.broker.startFetch(p.index, req);
+}
+
+/// A header name or value with a control byte in it could inject a second
+/// header. Anything that is not printable ASCII is dropped, header and all.
+fn safeHeader(text: []const u8) bool {
+    if (text.len == 0 or text.len > 256) return false;
+    for (text) |c| {
+        if (c < 0x20 or c > 0x7e or c == ':') return false;
+    }
+    return true;
+}
+
+// -- WebSocket ------------------------------------------------------------------
+
+/// `{"url":"wss://…","protocols":["v1.signalk"]}`. Only `url` is required.
+fn hostWsConnect(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i64 {
+    const p = caller(env) orelse return -1;
+    const text = bytes(ptr, len);
+    if (text.len == 0 or text.len > request_json_max) return -1;
+    const alloc = p.broker.alloc;
+
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, text, .{}) catch {
+        _ = allow(p, .net_ws, "ws_connect");
+        p.broker.say(level_warn, p.id, "ws_connect: malformed JSON", .{});
+        return -1;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return -1;
+    const url = switch (parsed.value.object.get("url") orelse return -1) {
+        .string => |s| s,
+        else => return -1,
+    };
+    if (!allowUrl(p, .net_ws, "ws_connect", url)) return -1;
+
+    // The subprotocols go out as one comma-separated header, which is how RFC
+    // 6455 writes a list.
+    var protocols: std.ArrayList(u8) = .empty;
+    defer protocols.deinit(alloc);
+    if (parsed.value.object.get("protocols")) |pv| {
+        if (pv == .array) {
+            for (pv.array.items) |item| {
+                const name = switch (item) {
+                    .string => |s| s,
+                    else => continue,
+                };
+                if (!safeHeader(name)) continue;
+                if (protocols.items.len > 0) protocols.appendSlice(alloc, ", ") catch break;
+                protocols.appendSlice(alloc, name) catch break;
+            }
+        }
+    }
+    const url_owned = alloc.dupe(u8, url) catch return -1;
+    const proto_owned = alloc.dupe(u8, protocols.items) catch {
+        alloc.free(url_owned);
+        return -1;
+    };
+    return p.broker.openWs(p.index, url_owned, proto_owned);
+}
+
+fn hostWsSend(env: wasm.c.wasm_exec_env_t, id: i64, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .net_ws, "ws_send")) return -1;
+    return p.broker.sendWs(p.index, id, bytes(ptr, len));
+}
+
+fn hostWsClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
+    const p = caller(env) orelse return;
+    if (!allow(p, .net_ws, "ws_close")) return;
+    p.broker.closeWs(p.index, id);
+}
+
+// -- storage ---------------------------------------------------------------------
+
+fn hostStorageGet(
+    env: wasm.c.wasm_exec_env_t,
+    kptr: [*c]const u8,
+    klen: u32,
+    vptr: [*c]u8,
+    vcap: u32,
+) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .storage, "storage_get")) return -1;
+    const out: []u8 = if (vcap == 0 or vptr == null) &[_]u8{} else vptr[0..vcap];
+    return p.broker.storageGet(p.index, bytes(kptr, klen), out);
+}
+
+fn hostStoragePut(
+    env: wasm.c.wasm_exec_env_t,
+    kptr: [*c]const u8,
+    klen: u32,
+    vptr: [*c]const u8,
+    vlen: u32,
+) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .storage, "storage_put")) return -1;
+    return p.broker.storagePut(p.index, bytes(kptr, klen), bytes(vptr, vlen));
+}
+
+// -- files -------------------------------------------------------------------------
+
+fn hostFileRead(
+    env: wasm.c.wasm_exec_env_t,
+    handle: i64,
+    offset: i64,
+    ptr: [*c]u8,
+    cap: u32,
+) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .files, "file_read")) return -1;
+    if (cap == 0 or ptr == null) return 0;
+    const want = @min(cap, file_read_max);
+    return p.broker.fileRead(p.index, handle, offset, ptr[0..want]);
+}
+
+fn hostFileWrite(env: wasm.c.wasm_exec_env_t, handle: i64, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .files, "file_write")) return -1;
+    return p.broker.fileWrite(p.index, handle, bytes(ptr, len));
+}
+
+fn hostFileClose(env: wasm.c.wasm_exec_env_t, handle: i64) callconv(.c) void {
+    const p = caller(env) orelse return;
+    if (!allow(p, .files, "file_close")) return;
+    p.broker.fileClose(p.index, handle);
+}
+
 /// The symbol table, exactly PROTOTYPE.md's frozen import list. WAMR keeps the
 /// array pointer rather than copying, so this is a container-level var.
 var natives = wasm.nativeSymbols(&.{
@@ -1522,6 +3055,18 @@ var natives = wasm.nativeSymbols(&.{
     .{ .name = "timer_cancel", .func = @ptrCast(&hostTimerCancel), .signature = "(I)" },
     .{ .name = "subscribe", .func = @ptrCast(&hostSubscribe), .signature = "(*~)i" },
     .{ .name = "ais_subscribe", .func = @ptrCast(&hostAisSubscribe), .signature = "()i" },
+    .{ .name = "udp_open", .func = @ptrCast(&hostUdpOpen), .signature = "(i)I" },
+    .{ .name = "udp_send", .func = @ptrCast(&hostUdpSend), .signature = "(I*~*~i)i" },
+    .{ .name = "udp_close", .func = @ptrCast(&hostUdpClose), .signature = "(I)" },
+    .{ .name = "http_fetch", .func = @ptrCast(&hostHttpFetch), .signature = "(*~)I" },
+    .{ .name = "ws_connect", .func = @ptrCast(&hostWsConnect), .signature = "(*~)I" },
+    .{ .name = "ws_send", .func = @ptrCast(&hostWsSend), .signature = "(I*~)i" },
+    .{ .name = "ws_close", .func = @ptrCast(&hostWsClose), .signature = "(I)" },
+    .{ .name = "storage_get", .func = @ptrCast(&hostStorageGet), .signature = "(*~*~)i" },
+    .{ .name = "storage_put", .func = @ptrCast(&hostStoragePut), .signature = "(*~*~)i" },
+    .{ .name = "file_read", .func = @ptrCast(&hostFileRead), .signature = "(II*~)i" },
+    .{ .name = "file_write", .func = @ptrCast(&hostFileWrite), .signature = "(I*~)i" },
+    .{ .name = "file_close", .func = @ptrCast(&hostFileClose), .signature = "(I)" },
 });
 
 /// Register the import table under module name `lookout`. Process-global, like
@@ -1588,457 +3133,6 @@ pub fn sleepMs(ms: u32) void {
     }
 }
 
-/// Resolve `host` and start a non-blocking connect. The socket comes back
-/// mid-handshake; the I/O thread completes it on POLLOUT.
-fn dial(host: []const u8, port: u16) !net.Socket {
-    var addrs: [max_addrs]Addr = undefined;
-    const n = try net.resolve(host, port, &addrs);
-    for (addrs[0..n]) |*a| {
-        const s = net.socket(a);
-        if (!net.valid(s)) continue;
-        net.setNonBlocking(s);
-        if (net.connect(s, a)) return s;
-        net.close(s);
-    }
-    return error.ConnectFailed;
-}
-
-// ---- the socket layer --------------------------------------------------------
-//
-// Everything platform-specific about a plugin socket is here. The broker above
-// names `net` and nothing else, so the I/O thread reads the same on both.
-//
-// POSIX and Winsock disagree on three things that reach the caller. A handle is
-// a small signed fd on POSIX and an opaque unsigned SOCKET on Windows, so -1 is
-// not the sentinel and `>= 0` is not the test — hence `net.invalid` and
-// `net.valid`. An error is in errno on POSIX and in WSAGetLastError on Windows.
-// And read/write serve any POSIX fd but no Windows socket, which needs
-// recv/send. Two flags say where the two poll calls differ; the broker reads
-// them, so the difference is stated once.
-
-/// One resolved candidate address, copied out of the resolver's own list so
-/// that list is freed before the connect. 128 bytes is a sockaddr_storage.
-const Addr = struct {
-    family: i32,
-    socktype: i32,
-    protocol: i32,
-    len: u32,
-    raw: [128]u8 align(8),
-};
-
-/// Candidates kept per name. A name with more records than this keeps the
-/// first eight; the rest are not tried.
-const max_addrs = 8;
-
-const net = if (builtin.os.tag == .windows) net_windows else net_posix;
-
-const net_posix = struct {
-    pub const Socket = std.c.fd_t;
-    pub const invalid: Socket = -1;
-    pub const pollfd = std.c.pollfd;
-    pub const POLL = std.c.POLL;
-    /// poll reports a failed connect as POLLERR/POLLHUP, and accepts an entry
-    /// that asks for nothing.
-    pub const poll_misses_connect_error = false;
-    pub const poll_needs_events = false;
-
-    pub fn valid(s: Socket) bool {
-        return s >= 0;
-    }
-
-    pub fn poll(fds: []pollfd, timeout_ms: i32) usize {
-        return std.posix.poll(fds, timeout_ms) catch 0;
-    }
-
-    pub fn close(s: Socket) void {
-        _ = std.c.close(s);
-    }
-
-    pub fn setNonBlocking(s: Socket) void {
-        const flags = std.c.fcntl(s, std.c.F.GETFL, @as(c_int, 0));
-        if (flags < 0) return;
-        const nonblock: c_int = @bitCast(@as(u32, @bitCast(std.c.O{ .NONBLOCK = true })));
-        _ = std.c.fcntl(s, std.c.F.SETFL, flags | nonblock);
-    }
-
-    /// Bytes read, 0 for the peer's EOF, -1 for an error.
-    pub fn recv(s: Socket, buf: []u8) isize {
-        return std.c.read(s, buf.ptr, buf.len);
-    }
-
-    /// Bytes written, or -1.
-    pub fn send(s: Socket, buf: []const u8) isize {
-        return std.c.write(s, buf.ptr, buf.len);
-    }
-
-    /// Whether the last recv/send failed only because it would have blocked.
-    pub fn retryable() bool {
-        const e = std.c.errno(@as(c_int, -1));
-        return e == .AGAIN or e == .INTR;
-    }
-
-    pub fn soError(s: Socket) i32 {
-        var err: i32 = 0;
-        var len: std.c.socklen_t = @sizeOf(i32);
-        _ = std.c.getsockopt(s, std.c.SOL.SOCKET, std.c.SO.ERROR, &err, &len);
-        return err;
-    }
-
-    pub fn shutdownWrite(s: Socket) void {
-        _ = std.c.shutdown(s, 1);
-    }
-
-    pub fn resolve(host: []const u8, port: u16, out: *[max_addrs]Addr) !usize {
-        var host_z: [256]u8 = undefined;
-        if (host.len >= host_z.len) return error.HostTooLong;
-        @memcpy(host_z[0..host.len], host);
-        host_z[host.len] = 0;
-        var port_z: [8]u8 = undefined;
-        const ps = try std.fmt.bufPrintZ(&port_z, "{d}", .{port});
-
-        var hints: std.c.addrinfo = std.mem.zeroes(std.c.addrinfo);
-        hints.family = std.c.AF.UNSPEC;
-        hints.socktype = std.c.SOCK.STREAM;
-        var res: ?*std.c.addrinfo = null;
-        if (std.c.getaddrinfo(@ptrCast(&host_z), ps.ptr, &hints, &res) != @as(std.c.EAI, @enumFromInt(0)))
-            return error.ResolveFailed;
-        const list = res orelse return error.ResolveFailed;
-        defer std.c.freeaddrinfo(list);
-
-        var n: usize = 0;
-        var it: ?*std.c.addrinfo = list;
-        while (it) |ai| : (it = ai.next) {
-            if (n == out.len) break;
-            const addr = ai.addr orelse continue;
-            if (ai.addrlen > out[n].raw.len) continue;
-            out[n] = .{
-                .family = @intCast(ai.family),
-                .socktype = @intCast(ai.socktype),
-                .protocol = @intCast(ai.protocol),
-                .len = @intCast(ai.addrlen),
-                .raw = undefined,
-            };
-            @memcpy(out[n].raw[0..ai.addrlen], @as([*]const u8, @ptrCast(addr))[0..ai.addrlen]);
-            n += 1;
-        }
-        if (n == 0) return error.ResolveFailed;
-        return n;
-    }
-
-    pub fn socket(a: *const Addr) Socket {
-        return std.c.socket(@bitCast(a.family), @bitCast(a.socktype), @bitCast(a.protocol));
-    }
-
-    /// True when the socket is connected or the handshake is under way.
-    pub fn connect(s: Socket, a: *const Addr) bool {
-        if (std.c.connect(s, @ptrCast(&a.raw), a.len) == 0) return true;
-        const e = std.c.errno(@as(c_int, -1));
-        return e == .INPROGRESS or e == .INTR or e == .ALREADY;
-    }
-
-    pub fn wakePair(out: *[2]Socket) !void {
-        if (std.c.pipe(out) != 0) return error.PipeFailed;
-        setNonBlocking(out[0]);
-        setNonBlocking(out[1]);
-    }
-
-    pub fn drainWake(s: Socket) void {
-        var buf: [64]u8 = undefined;
-        while (recv(s, &buf) > 0) {}
-    }
-
-    /// A loopback listener on an ephemeral port. Test support only.
-    pub fn listen4(port_out: *u16) !Socket {
-        const s = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
-        if (!valid(s)) return error.SocketFailed;
-        errdefer close(s);
-        var yes: c_int = 1;
-        _ = std.c.setsockopt(s, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, &yes, @sizeOf(c_int));
-        var addr = std.c.sockaddr.in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
-        if (std.c.bind(s, @ptrCast(&addr), @sizeOf(@TypeOf(addr))) != 0) return error.BindFailed;
-        if (std.c.listen(s, 1) != 0) return error.ListenFailed;
-        var len: std.c.socklen_t = @sizeOf(@TypeOf(addr));
-        if (std.c.getsockname(s, @ptrCast(&addr), &len) != 0) return error.SockNameFailed;
-        port_out.* = std.mem.bigToNative(u16, addr.port);
-        return s;
-    }
-
-    pub fn accept(s: Socket) !Socket {
-        const peer = std.c.accept(s, null, null);
-        if (!valid(peer)) return error.AcceptFailed;
-        return peer;
-    }
-};
-
-/// kernel32 entry points. Declared here rather than taken from std: Zig 0.16's
-/// std.os.windows.kernel32 carries none of them, and the WINAPI convention is
-/// required for a correct x86 build (src/lock.zig takes the same posture).
-const win = struct {
-    extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
-    extern "kernel32" fn QueryPerformanceCounter(v: *i64) callconv(.winapi) i32;
-    extern "kernel32" fn QueryPerformanceFrequency(v: *i64) callconv(.winapi) i32;
-    extern "kernel32" fn GetSystemTimeAsFileTime(ft: *[2]u32) callconv(.winapi) void;
-};
-
-const net_windows = struct {
-    // ws2_32, declared here for the same reason as `win` above: Zig 0.16's
-    // std.os.windows.ws2_32 was cut back to types when sockets moved behind
-    // std.Io, and std.c's Windows socket declarations point at the members it
-    // no longer has.
-    const SOCKET = usize;
-    const socklen = i32;
-
-    const AF_INET: i32 = 2;
-    const AF_UNSPEC: i32 = 0;
-    const SOCK_STREAM: i32 = 1;
-    const SOL_SOCKET: i32 = 0xFFFF;
-    const SO_ERROR: i32 = 0x1007;
-    const IPPROTO_TCP: i32 = 6;
-    const TCP_NODELAY: i32 = 0x0001;
-    const SD_SEND: i32 = 1;
-    /// FIONBIO. The high bits are the IOC_IN|sizeof(u_long) encoding.
-    const FIONBIO: i32 = @bitCast(@as(u32, 0x8004667E));
-    const WSAEWOULDBLOCK: i32 = 10035;
-    const WSAEINPROGRESS: i32 = 10036;
-    const WSAEALREADY: i32 = 10037;
-    const WSAEINTR: i32 = 10004;
-
-    /// WSADATA as opaque bytes. Its field order differs between _WIN64 and
-    /// x86 and nothing here reads it, so the size is all that matters. The
-    /// real thing is about 400 bytes.
-    const WSADATA = extern struct { raw: [512]u8 align(8) = @splat(0) };
-
-    const sockaddr = extern struct { family: u16, data: [14]u8 };
-    const sockaddr_in = extern struct {
-        family: u16 = @intCast(AF_INET),
-        port: u16,
-        addr: u32,
-        zero: [8]u8 = @splat(0),
-    };
-
-    /// Windows orders ai_canonname before ai_addr (as Darwin does) and makes
-    /// ai_addrlen a size_t, so this cannot be std.c.addrinfo.
-    const addrinfo = extern struct {
-        flags: i32,
-        family: i32,
-        socktype: i32,
-        protocol: i32,
-        addrlen: usize,
-        canonname: ?[*:0]u8,
-        addr: ?*sockaddr,
-        next: ?*addrinfo,
-    };
-
-    /// A namespace so the exported names stay the real ws2_32 ones while this
-    /// module also has a `socket`, a `recv` and a `send` of its own.
-    const ws = struct {
-        extern "ws2_32" fn WSAStartup(version: u16, data: *WSADATA) callconv(.winapi) i32;
-        extern "ws2_32" fn WSAGetLastError() callconv(.winapi) i32;
-        extern "ws2_32" fn WSAPoll(fds: [*]pollfd, count: u32, timeout: i32) callconv(.winapi) i32;
-        extern "ws2_32" fn socket(af: i32, kind: i32, protocol: i32) callconv(.winapi) SOCKET;
-        extern "ws2_32" fn closesocket(s: SOCKET) callconv(.winapi) i32;
-        extern "ws2_32" fn ioctlsocket(s: SOCKET, cmd: i32, arg: *u32) callconv(.winapi) i32;
-        extern "ws2_32" fn recv(s: SOCKET, buf: [*]u8, len: i32, flags: i32) callconv(.winapi) i32;
-        extern "ws2_32" fn send(s: SOCKET, buf: [*]const u8, len: i32, flags: i32) callconv(.winapi) i32;
-        extern "ws2_32" fn connect(s: SOCKET, addr: *const sockaddr, len: socklen) callconv(.winapi) i32;
-        extern "ws2_32" fn bind(s: SOCKET, addr: *const sockaddr, len: socklen) callconv(.winapi) i32;
-        extern "ws2_32" fn listen(s: SOCKET, backlog: i32) callconv(.winapi) i32;
-        extern "ws2_32" fn accept(s: SOCKET, addr: ?*sockaddr, len: ?*socklen) callconv(.winapi) SOCKET;
-        extern "ws2_32" fn getsockname(s: SOCKET, addr: *sockaddr, len: *socklen) callconv(.winapi) i32;
-        extern "ws2_32" fn getsockopt(s: SOCKET, lvl: i32, opt: i32, val: [*]u8, len: *socklen) callconv(.winapi) i32;
-        extern "ws2_32" fn setsockopt(s: SOCKET, lvl: i32, opt: i32, val: [*]const u8, len: socklen) callconv(.winapi) i32;
-        extern "ws2_32" fn shutdown(s: SOCKET, how: i32) callconv(.winapi) i32;
-        extern "ws2_32" fn getaddrinfo(node: [*:0]const u8, service: [*:0]const u8, hints: *const addrinfo, res: *?*addrinfo) callconv(.winapi) i32;
-        extern "ws2_32" fn freeaddrinfo(ai: *addrinfo) callconv(.winapi) void;
-    };
-
-    pub const Socket = SOCKET;
-    /// INVALID_SOCKET. An unsigned handle, so this is not -1 and a valid
-    /// socket is not "greater than zero".
-    pub const invalid: Socket = ~@as(SOCKET, 0);
-
-    pub const pollfd = extern struct { fd: SOCKET, events: i16, revents: i16 };
-
-    pub const POLL = struct {
-        pub const RDNORM: i16 = 0x0100;
-        pub const RDBAND: i16 = 0x0200;
-        pub const IN: i16 = RDNORM | RDBAND;
-        pub const WRNORM: i16 = 0x0010;
-        pub const OUT: i16 = WRNORM;
-        pub const ERR: i16 = 0x0001;
-        pub const HUP: i16 = 0x0002;
-        pub const NVAL: i16 = 0x0004;
-    };
-
-    /// WSAPoll does not report a failed non-blocking connect, and it rejects
-    /// an entry whose events are zero. The broker works around both.
-    pub const poll_misses_connect_error = true;
-    pub const poll_needs_events = true;
-
-    pub fn valid(s: Socket) bool {
-        return s != invalid;
-    }
-
-    /// WSAStartup runs once per process, before any other ws2_32 call. It is
-    /// reference counted, so the flag keeps one count rather than making the
-    /// call safe. Nothing calls WSACleanup: Winsock goes down with the
-    /// process, and the host may start and stop many times inside one.
-    var started = std.atomic.Value(u32).init(0);
-
-    fn startup() void {
-        if (started.load(.acquire) == 2) return;
-        if (started.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null) {
-            var data: WSADATA = .{};
-            _ = ws.WSAStartup(0x0202, &data); // 2.2
-            started.store(2, .release);
-            return;
-        }
-        while (started.load(.acquire) != 2) win.Sleep(0);
-    }
-
-    pub fn poll(fds: []pollfd, timeout_ms: i32) usize {
-        const n = ws.WSAPoll(fds.ptr, @intCast(fds.len), timeout_ms);
-        return if (n > 0) @intCast(n) else 0;
-    }
-
-    pub fn close(s: Socket) void {
-        _ = ws.closesocket(s);
-    }
-
-    pub fn setNonBlocking(s: Socket) void {
-        var on: u32 = 1;
-        _ = ws.ioctlsocket(s, FIONBIO, &on);
-    }
-
-    pub fn recv(s: Socket, buf: []u8) isize {
-        const len: i32 = @intCast(@min(buf.len, std.math.maxInt(i32)));
-        return ws.recv(s, buf.ptr, len, 0);
-    }
-
-    pub fn send(s: Socket, buf: []const u8) isize {
-        const len: i32 = @intCast(@min(buf.len, std.math.maxInt(i32)));
-        return ws.send(s, buf.ptr, len, 0);
-    }
-
-    pub fn retryable() bool {
-        const e = ws.WSAGetLastError();
-        return e == WSAEWOULDBLOCK or e == WSAEINTR;
-    }
-
-    pub fn soError(s: Socket) i32 {
-        var err: i32 = 0;
-        var len: socklen = @sizeOf(i32);
-        _ = ws.getsockopt(s, SOL_SOCKET, SO_ERROR, @ptrCast(&err), &len);
-        return err;
-    }
-
-    pub fn shutdownWrite(s: Socket) void {
-        _ = ws.shutdown(s, SD_SEND);
-    }
-
-    pub fn resolve(host: []const u8, port: u16, out: *[max_addrs]Addr) !usize {
-        startup();
-        var host_z: [256]u8 = undefined;
-        if (host.len >= host_z.len) return error.HostTooLong;
-        @memcpy(host_z[0..host.len], host);
-        host_z[host.len] = 0;
-        var port_z: [8]u8 = undefined;
-        const ps = try std.fmt.bufPrintZ(&port_z, "{d}", .{port});
-
-        var hints: addrinfo = std.mem.zeroes(addrinfo);
-        hints.family = AF_UNSPEC;
-        hints.socktype = SOCK_STREAM;
-        var res: ?*addrinfo = null;
-        if (ws.getaddrinfo(@ptrCast(&host_z), ps.ptr, &hints, &res) != 0) return error.ResolveFailed;
-        const list = res orelse return error.ResolveFailed;
-        defer ws.freeaddrinfo(list);
-
-        var n: usize = 0;
-        var it: ?*addrinfo = list;
-        while (it) |ai| : (it = ai.next) {
-            if (n == out.len) break;
-            const addr = ai.addr orelse continue;
-            if (ai.addrlen > out[n].raw.len) continue;
-            out[n] = .{
-                .family = ai.family,
-                .socktype = ai.socktype,
-                .protocol = ai.protocol,
-                .len = @intCast(ai.addrlen),
-                .raw = undefined,
-            };
-            @memcpy(out[n].raw[0..ai.addrlen], @as([*]const u8, @ptrCast(addr))[0..ai.addrlen]);
-            n += 1;
-        }
-        if (n == 0) return error.ResolveFailed;
-        return n;
-    }
-
-    pub fn socket(a: *const Addr) Socket {
-        startup();
-        return ws.socket(a.family, a.socktype, a.protocol);
-    }
-
-    pub fn connect(s: Socket, a: *const Addr) bool {
-        if (ws.connect(s, @ptrCast(&a.raw), @intCast(a.len)) == 0) return true;
-        const e = ws.WSAGetLastError();
-        return e == WSAEWOULDBLOCK or e == WSAEINPROGRESS or e == WSAEALREADY;
-    }
-
-    /// A loopback socket pair, because Windows has no pipe a socket poll can
-    /// watch. The listener is on this thread's own loopback, so the blocking
-    /// connect completes into the accept backlog without waiting on anything.
-    /// The write end turns Nagle off: a one-byte wake must not wait for an ack.
-    pub fn wakePair(out: *[2]Socket) !void {
-        startup();
-        const lst = ws.socket(AF_INET, SOCK_STREAM, 0);
-        if (!valid(lst)) return error.PipeFailed;
-        defer close(lst);
-        var addr = sockaddr_in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
-        if (ws.bind(lst, @ptrCast(&addr), @sizeOf(sockaddr_in)) != 0) return error.PipeFailed;
-        if (ws.listen(lst, 1) != 0) return error.PipeFailed;
-        var len: socklen = @sizeOf(sockaddr_in);
-        if (ws.getsockname(lst, @ptrCast(&addr), &len) != 0) return error.PipeFailed;
-
-        const wr = ws.socket(AF_INET, SOCK_STREAM, 0);
-        if (!valid(wr)) return error.PipeFailed;
-        errdefer close(wr);
-        if (ws.connect(wr, @ptrCast(&addr), @sizeOf(sockaddr_in)) != 0) return error.PipeFailed;
-        const rd = ws.accept(lst, null, null);
-        if (!valid(rd)) return error.PipeFailed;
-
-        var yes: i32 = 1;
-        _ = ws.setsockopt(wr, IPPROTO_TCP, TCP_NODELAY, @ptrCast(&yes), @sizeOf(i32));
-        setNonBlocking(rd);
-        setNonBlocking(wr);
-        out.* = .{ rd, wr };
-    }
-
-    pub fn drainWake(s: Socket) void {
-        var buf: [64]u8 = undefined;
-        while (recv(s, &buf) > 0) {}
-    }
-
-    pub fn listen4(port_out: *u16) !Socket {
-        startup();
-        const s = ws.socket(AF_INET, SOCK_STREAM, 0);
-        if (!valid(s)) return error.SocketFailed;
-        errdefer close(s);
-        var addr = sockaddr_in{ .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f00_0001) };
-        if (ws.bind(s, @ptrCast(&addr), @sizeOf(sockaddr_in)) != 0) return error.BindFailed;
-        if (ws.listen(s, 1) != 0) return error.ListenFailed;
-        var len: socklen = @sizeOf(sockaddr_in);
-        if (ws.getsockname(s, @ptrCast(&addr), &len) != 0) return error.SockNameFailed;
-        port_out.* = std.mem.bigToNative(u16, addr.port);
-        return s;
-    }
-
-    pub fn accept(s: Socket) !Socket {
-        const peer = ws.accept(s, null, null);
-        if (!valid(peer)) return error.AcceptFailed;
-        return peer;
-    }
-};
-
 fn jsonNum(v: ?std.json.Value) ?f64 {
     const val = v orelse return null;
     return switch (val) {
@@ -2102,7 +3196,12 @@ test "capability names round-trip" {
     for (std.enums.values(Cap)) |c| {
         try t.expectEqual(c, Cap.fromName(c.name()).?);
     }
-    try t.expect(Cap.fromName("net.udp") == null);
+    try t.expect(Cap.fromName("net.mqtt") == null);
+    // Only the two that reach a named server take a host list.
+    try t.expect(Cap.net_http.needsHosts());
+    try t.expect(Cap.net_ws.needsHosts());
+    try t.expect(!Cap.net_tcp_client.needsHosts());
+    try t.expect(!Cap.storage.needsHosts());
 }
 
 test "STORE_CHANGED carries values, and a cleared path as a bare null" {
@@ -2414,3 +3513,913 @@ const Listener = struct {
         net.close(self.fd);
     }
 };
+
+// ---- the tests for the mediated I/O ------------------------------------------
+//
+// Every one of these runs a real server on loopback rather than a mock, so what
+// is proved is the wire and not a stub: a datagram through the kernel, an HTTP
+// head parsed off a socket, an RFC 6455 handshake with its accept hash, a file
+// on disk. No test here reaches the network, and none needs python.
+
+/// The four stores every broker test needs, in one place.
+const Fixture = struct {
+    vessels: vstore.Store,
+    ais: ais_store.AisStore,
+    br: Broker,
+
+    fn init(alloc: std.mem.Allocator) !*Fixture {
+        const self = try alloc.create(Fixture);
+        self.* = .{
+            .vessels = try vstore.Store.init(alloc),
+            .ais = ais_store.AisStore.init(alloc),
+            .br = undefined,
+        };
+        self.br = Broker.init(alloc, &self.vessels, &self.ais, .{});
+        self.br.setLog(null, silentLog);
+        return self;
+    }
+
+    fn deinit(self: *Fixture, alloc: std.mem.Allocator) void {
+        self.br.deinit();
+        self.ais.deinit();
+        self.vessels.deinit();
+        alloc.destroy(self);
+    }
+};
+
+/// The next event for one plugin, or an error. The caller frees the payload.
+fn nextEvent(b: *Broker, plugin: u32, timeout_ms: u32) !Event {
+    var waited: u32 = 0;
+    while (waited < timeout_ms) : (waited += 5) {
+        if (b.popFor(plugin)) |e| return e;
+        sleepMs(5);
+    }
+    return error.NoEvent;
+}
+
+test "a bound UDP port turns each datagram into one event, and drops an oversize one" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+
+    const id = b.openUdp(0, 0);
+    try t.expect(id > 0);
+    b.mu.lock();
+    const port = b.udps.items[0].port;
+    b.mu.unlock();
+    try t.expect(port != 0);
+
+    // A second port stands in for the instrument on the network.
+    const sender = try net.udpBind(0);
+    defer net.close(sender);
+    var addrs: [max_addrs]Addr = undefined;
+    _ = try net.resolveNumeric("127.0.0.1", port, &addrs);
+
+    _ = net.udpSendTo(sender, "$GPRMC,123519,A\r\n", &addrs[0]);
+    const e = try nextEvent(b, 0, 2_000);
+    defer b.freeEvent(e);
+    try t.expectEqual(Kind.udp_data, e.kind);
+    try t.expectEqual(@as(u64, @bitCast(id)), e.handle);
+    try t.expectEqualStrings("$GPRMC,123519,A\r\n", e.payload);
+
+    // One datagram is one event. A datagram over the cap is dropped whole
+    // rather than delivered truncated, which would look like a valid short
+    // sentence to a parser.
+    var big: [udp_max_datagram + 100]u8 = undefined;
+    @memset(&big, 'x');
+    _ = net.udpSendTo(sender, &big, &addrs[0]);
+    _ = net.udpSendTo(sender, "after", &addrs[0]);
+    const after = try nextEvent(b, 0, 2_000);
+    defer b.freeEvent(after);
+    try t.expectEqualStrings("after", after.payload);
+
+    // A datagram exactly at the cap still goes through.
+    _ = net.udpSendTo(sender, big[0..udp_max_datagram], &addrs[0]);
+    const at_cap = try nextEvent(b, 0, 2_000);
+    defer b.freeEvent(at_cap);
+    try t.expectEqual(@as(usize, udp_max_datagram), at_cap.payload.len);
+}
+
+test "udp_send reaches a port, and refuses a name it would have to resolve" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+
+    const id = b.openUdp(0, 0);
+    try t.expect(id > 0);
+
+    const peer = try net.udpBind(0);
+    defer net.close(peer);
+    const peer_port = net.udpPort(peer);
+
+    try t.expectEqual(@as(i32, 5), b.sendUdp(0, id, "hello", "127.0.0.1", peer_port));
+    var buf: [64]u8 = undefined;
+    var got: isize = -1;
+    var waited: u32 = 0;
+    while (got <= 0 and waited < 2_000) : (waited += 5) {
+        got = net.udpRecv(peer, &buf);
+        if (got <= 0) sleepMs(5);
+    }
+    try t.expectEqualStrings("hello", buf[0..@intCast(got)]);
+
+    // A name would need a resolver, and this runs on the plugin's own thread
+    // under the watchdog's budget. Literals only.
+    try t.expectEqual(@as(i32, -1), b.sendUdp(0, id, "hello", "localhost", peer_port));
+    // Another plugin's port is not this plugin's to send from.
+    try t.expectEqual(@as(i32, -1), b.sendUdp(1, id, "hello", "127.0.0.1", peer_port));
+    // A datagram over the cap never leaves.
+    var big: [udp_max_datagram + 1]u8 = undefined;
+    try t.expectEqual(@as(i32, -1), b.sendUdp(0, id, &big, "127.0.0.1", peer_port));
+
+    b.closeUdp(0, id);
+    b.mu.lock();
+    const left = b.udps.items.len;
+    b.mu.unlock();
+    try t.expectEqual(@as(usize, 0), left);
+}
+
+// -- the scratch HTTP server ----------------------------------------------------
+
+/// 36 bytes, so a range is easy to read by eye in a failure.
+const test_body = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+/// A loopback HTTP/1.1 server for the fetch tests. One thread, one connection
+/// at a time, a canned reply per path, and Range honoured on /plain.
+const TestHttp = struct {
+    alloc: std.mem.Allocator,
+    fd: net.Socket,
+    port: u16,
+    th: ?std.Thread = null,
+    stopping: std.atomic.Value(bool) = .init(false),
+    /// Requests answered, so a test can prove a redirect made two.
+    served: std.atomic.Value(u32) = .init(0),
+
+    fn open(alloc: std.mem.Allocator) !*TestHttp {
+        const self = try alloc.create(TestHttp);
+        var port: u16 = 0;
+        const fd = try net.listen4(&port);
+        net.setNonBlocking(fd);
+        self.* = .{ .alloc = alloc, .fd = fd, .port = port };
+        self.th = try std.Thread.spawn(.{ .stack_size = 512 * 1024 }, run, .{self});
+        return self;
+    }
+
+    fn close(self: *TestHttp) void {
+        self.stopping.store(true, .release);
+        if (self.th) |th| th.join();
+        net.close(self.fd);
+        self.alloc.destroy(self);
+    }
+
+    fn run(self: *TestHttp) void {
+        while (!self.stopping.load(.acquire)) {
+            var fds = [_]net.pollfd{.{ .fd = self.fd, .events = net.POLL.IN, .revents = 0 }};
+            if (net.poll(&fds, 20) == 0) continue;
+            const peer = net.accept(self.fd) catch continue;
+            defer net.close(peer);
+            self.serve(peer);
+        }
+    }
+
+    fn serve(self: *TestHttp, peer: net.Socket) void {
+        // macOS hands an accepted socket the listener's O_NONBLOCK, so a read
+        // here would fail with EAGAIN before the request had arrived and the
+        // server would answer nothing at all. Blocking, with a deadline so a
+        // broken test cannot hang the suite.
+        net.setBlocking(peer);
+        net.setTimeouts(peer, 3_000);
+        var head: [4096]u8 = undefined;
+        var used: usize = 0;
+        while (std.mem.indexOf(u8, head[0..used], "\r\n\r\n") == null) {
+            if (used == head.len) return;
+            const n = net.recv(peer, head[used..]);
+            if (n <= 0) return;
+            used += @intCast(n);
+        }
+        _ = self.served.fetchAdd(1, .acq_rel);
+        const text = head[0..used];
+        const line_end = std.mem.indexOf(u8, text, "\r\n") orelse return;
+        var it = std.mem.tokenizeScalar(u8, text[0..line_end], ' ');
+        _ = it.next() orelse return; // method
+        const target = it.next() orelse return;
+
+        var out: [1024]u8 = undefined;
+        if (std.mem.eql(u8, target, "/plain")) {
+            if (rangeOf(text)) |r| {
+                const from = @min(r[0], test_body.len);
+                const to = @min(r[1] + 1, test_body.len);
+                const slice = test_body[from..to];
+                const msg = std.fmt.bufPrint(&out, "HTTP/1.1 206 Partial Content\r\ncontent-type: text/plain\r\n" ++
+                    "content-range: bytes {d}-{d}/{d}\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n{s}", .{
+                    from, to - 1, test_body.len, slice.len, slice,
+                }) catch return;
+                _ = net.send(peer, msg);
+                return;
+            }
+            const msg = std.fmt.bufPrint(&out, "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n" ++
+                "content-length: {d}\r\nconnection: close\r\n\r\n{s}", .{ test_body.len, test_body }) catch return;
+            _ = net.send(peer, msg);
+        } else if (std.mem.eql(u8, target, "/chunked")) {
+            _ = net.send(peer, "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n" ++
+                "a\r\n0123456789\r\n1a\r\nabcdefghijklmnopqrstuvwxyz\r\n0\r\n\r\n");
+        } else if (std.mem.eql(u8, target, "/moved")) {
+            _ = net.send(peer, "HTTP/1.1 302 Found\r\nlocation: /plain\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        } else if (std.mem.eql(u8, target, "/away")) {
+            _ = net.send(peer, "HTTP/1.1 302 Found\r\nlocation: http://elsewhere.invalid/x\r\n" ++
+                "content-length: 0\r\nconnection: close\r\n\r\n");
+        } else if (std.mem.eql(u8, target, "/huge")) {
+            _ = net.send(peer, "HTTP/1.1 200 OK\r\ncontent-length: 99999999\r\nconnection: close\r\n\r\n");
+        } else {
+            _ = net.send(peer, "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        }
+    }
+
+    /// `bytes=a-b` out of a request head, or null.
+    fn rangeOf(text: []const u8) ?[2]usize {
+        const at = std.ascii.indexOfIgnoreCase(text, "range: bytes=") orelse return null;
+        const rest = text[at + "range: bytes=".len ..];
+        const end = std.mem.indexOf(u8, rest, "\r\n") orelse return null;
+        const dash = std.mem.indexOfScalar(u8, rest[0..end], '-') orelse return null;
+        const from = std.fmt.parseInt(usize, rest[0..dash], 10) catch return null;
+        const to = std.fmt.parseInt(usize, rest[dash + 1 .. end], 10) catch return null;
+        return .{ from, to };
+    }
+};
+
+/// Start a fetch and wait for its HTTP_RESPONSE, split back into the JSON head
+/// and the raw body the envelope carries.
+const FetchResult = struct {
+    event: Event,
+    json: []const u8,
+    body: []const u8,
+};
+
+fn fetchOnce(b: *Broker, url: []const u8, range: []const u8) !FetchResult {
+    const alloc = b.alloc;
+    const req = FetchRequest{
+        .method = try alloc.dupe(u8, "GET"),
+        .url = try alloc.dupe(u8, url),
+        .range = try alloc.dupe(u8, range),
+        .headers = &.{},
+    };
+    const id = b.startFetch(0, req);
+    if (id <= 0) return error.FetchRefused;
+    const e = try nextEvent(b, 0, 10_000);
+    if (e.kind != Kind.http_response) {
+        b.freeEvent(e);
+        return error.WrongEvent;
+    }
+    const json_len = std.mem.readInt(u32, e.payload[0..4], .little);
+    return .{
+        .event = e,
+        .json = e.payload[4 .. 4 + json_len],
+        .body = e.payload[4 + json_len ..],
+    };
+}
+
+test "a fetch answers with one enveloped event carrying status, headers and body" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+    const srv = try TestHttp.open(a);
+    defer srv.close();
+
+    var url: [64]u8 = undefined;
+    const plain = try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/plain", .{srv.port});
+
+    const r = try fetchOnce(b, plain, "");
+    defer b.freeEvent(r.event);
+    try t.expect(std.mem.indexOf(u8, r.json, "\"status\":200") != null);
+    try t.expect(std.mem.indexOf(u8, r.json, "\"content-type\":\"text/plain\"") != null);
+    try t.expect(std.mem.indexOf(u8, r.json, plain) != null);
+    try t.expectEqualStrings(test_body, r.body);
+    // The envelope's length prefix is what splits the two halves, so the two
+    // slices must account for the whole payload.
+    try t.expectEqual(4 + r.json.len + r.body.len, r.event.payload.len);
+}
+
+test "a Range request comes back as 206 with only the bytes it asked for" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+    const srv = try TestHttp.open(a);
+    defer srv.close();
+
+    var url: [64]u8 = undefined;
+    const plain = try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/plain", .{srv.port});
+
+    const r = try fetchOnce(b, plain, "bytes=10-19");
+    defer b.freeEvent(r.event);
+    try t.expect(std.mem.indexOf(u8, r.json, "\"status\":206") != null);
+    try t.expect(std.mem.indexOf(u8, r.json, "\"content-range\":\"bytes 10-19/36\"") != null);
+    try t.expectEqualStrings("abcdefghij", r.body);
+}
+
+test "a chunked body reassembles and a same-host redirect is followed" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+    const srv = try TestHttp.open(a);
+    defer srv.close();
+
+    var url: [64]u8 = undefined;
+    const r = try fetchOnce(b, try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/chunked", .{srv.port}), "");
+    defer b.freeEvent(r.event);
+    try t.expect(std.mem.indexOf(u8, r.json, "\"status\":200") != null);
+    try t.expectEqualStrings(test_body, r.body);
+
+    var url2: [64]u8 = undefined;
+    const moved = try fetchOnce(b, try std.fmt.bufPrint(&url2, "http://127.0.0.1:{d}/moved", .{srv.port}), "");
+    defer b.freeEvent(moved.event);
+    try t.expect(std.mem.indexOf(u8, moved.json, "\"status\":200") != null);
+    try t.expectEqualStrings(test_body, moved.body);
+    // The redirect really was two requests, and the final URL is the one the
+    // body came from rather than the one the plugin asked for.
+    try t.expectEqual(@as(u32, 3), srv.served.load(.acquire));
+    try t.expect(std.mem.indexOf(u8, moved.json, "/plain") != null);
+}
+
+test "a fetch that fails still answers exactly once, with status 0 and a reason" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+    const srv = try TestHttp.open(a);
+    defer srv.close();
+
+    var url: [64]u8 = undefined;
+    // A redirect that leaves the host would leave the manifest's allowlist with
+    // it, so the fetch stops instead of following.
+    const away = try fetchOnce(b, try std.fmt.bufPrint(&url, "http://127.0.0.1:{d}/away", .{srv.port}), "");
+    defer b.freeEvent(away.event);
+    try t.expect(std.mem.indexOf(u8, away.json, "\"status\":0") != null);
+    try t.expect(std.mem.indexOf(u8, away.json, "RedirectOffHost") != null);
+    try t.expectEqual(@as(usize, 0), away.body.len);
+
+    // A body over the cap is refused by its content-length, before a byte of it
+    // is read. Range is the documented way past this.
+    var url2: [64]u8 = undefined;
+    const huge = try fetchOnce(b, try std.fmt.bufPrint(&url2, "http://127.0.0.1:{d}/huge", .{srv.port}), "");
+    defer b.freeEvent(huge.event);
+    try t.expect(std.mem.indexOf(u8, huge.json, "BodyTooLarge") != null);
+
+    // Nothing listening at all is the same shape: one event, status 0.
+    const dead = try fetchOnce(b, "http://127.0.0.1:9/nothing", "");
+    defer b.freeEvent(dead.event);
+    try t.expect(std.mem.indexOf(u8, dead.json, "\"status\":0") != null);
+}
+
+// -- the scratch WebSocket server -------------------------------------------------
+
+/// A loopback RFC 6455 server for the WebSocket tests. It performs the real
+/// handshake — accept hash included — then runs one script: a fragmented text
+/// message, a ping, an echo of whatever the client sends, and a close.
+const TestWs = struct {
+    alloc: std.mem.Allocator,
+    fd: net.Socket,
+    port: u16,
+    th: ?std.Thread = null,
+    stopping: std.atomic.Value(bool) = .init(false),
+    /// Set when the client answered the ping with a matching pong.
+    got_pong: std.atomic.Value(bool) = .init(false),
+    /// What the client sent, so a test can prove ws_send masked it correctly.
+    echoed: [128]u8 = @splat(0),
+    echoed_len: std.atomic.Value(usize) = .init(0),
+
+    fn open(alloc: std.mem.Allocator) !*TestWs {
+        const self = try alloc.create(TestWs);
+        var port: u16 = 0;
+        const fd = try net.listen4(&port);
+        net.setNonBlocking(fd);
+        self.* = .{ .alloc = alloc, .fd = fd, .port = port };
+        self.th = try std.Thread.spawn(.{ .stack_size = 512 * 1024 }, run, .{self});
+        return self;
+    }
+
+    fn close(self: *TestWs) void {
+        self.stopping.store(true, .release);
+        if (self.th) |th| th.join();
+        net.close(self.fd);
+        self.alloc.destroy(self);
+    }
+
+    fn run(self: *TestWs) void {
+        while (!self.stopping.load(.acquire)) {
+            var fds = [_]net.pollfd{.{ .fd = self.fd, .events = net.POLL.IN, .revents = 0 }};
+            if (net.poll(&fds, 20) == 0) continue;
+            const peer = net.accept(self.fd) catch continue;
+            defer net.close(peer);
+            self.serve(peer) catch {};
+            return;
+        }
+    }
+
+    fn serve(self: *TestWs, peer: net.Socket) !void {
+        // Blocking for the handshake, for the reason TestHttp.serve gives.
+        net.setBlocking(peer);
+        net.setTimeouts(peer, 3_000);
+        var head: [2048]u8 = undefined;
+        var used: usize = 0;
+        while (std.mem.indexOf(u8, head[0..used], "\r\n\r\n") == null) {
+            if (used == head.len) return error.HeadTooLong;
+            const n = net.recv(peer, head[used..]);
+            if (n <= 0) return error.Closed;
+            used += @intCast(n);
+        }
+        const text = head[0..used];
+        const at = std.ascii.indexOfIgnoreCase(text, "sec-websocket-key:") orelse return error.NoKey;
+        const rest = text[at + "sec-websocket-key:".len ..];
+        const end = std.mem.indexOf(u8, rest, "\r\n") orelse return error.NoKey;
+        const key = std.mem.trim(u8, rest[0..end], " \t");
+        var accept: [28]u8 = undefined;
+        webio.acceptFor(key, &accept);
+
+        var reply: [256]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&reply, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\nSec-WebSocket-Protocol: v1.signalk\r\n\r\n", .{accept});
+        _ = net.send(peer, msg);
+
+        // One message in two fragments: a text frame that is not final, then a
+        // continuation that is. A client that treats each frame as a message
+        // would report two halves of a JSON object.
+        _ = net.send(peer, &[_]u8{ 0x01, 0x07 } ++ "{\"upda".* ++ [_]u8{'t'});
+        _ = net.send(peer, &[_]u8{ 0x80, 0x08 } ++ "es\":[1]}".*);
+        // A ping the client must answer with the same payload.
+        _ = net.send(peer, &[_]u8{ 0x89, 0x04 } ++ "ping".*);
+
+        // Non-blocking again for the script: the loop below polls for the
+        // client's pong and its message rather than waiting for either.
+        net.setNonBlocking(peer);
+        // Read whatever the client sends: its pong, then its text message.
+        var buf: [512]u8 = undefined;
+        var deadline: u32 = 0;
+        while (deadline < 4_000) : (deadline += 5) {
+            const n = net.recv(peer, &buf);
+            if (n <= 0) {
+                if (n == 0) break;
+                sleepMs(5);
+                continue;
+            }
+            var i: usize = 0;
+            while (i + 2 <= @as(usize, @intCast(n))) {
+                const opcode = buf[i] & 0x0f;
+                const masked = (buf[i + 1] & 0x80) != 0;
+                const len: usize = buf[i + 1] & 0x7f;
+                var at2 = i + 2;
+                var mask: [4]u8 = .{ 0, 0, 0, 0 };
+                if (masked) {
+                    @memcpy(&mask, buf[at2 .. at2 + 4]);
+                    at2 += 4;
+                }
+                var payload: [128]u8 = undefined;
+                const keep = @min(len, payload.len);
+                for (0..keep) |k| payload[k] = buf[at2 + k] ^ mask[k & 3];
+                // A client frame is always masked. An unmasked one would be a
+                // protocol error, and this asserts the client got it right.
+                if (!masked) return error.UnmaskedClientFrame;
+                if (opcode == 0xa and std.mem.eql(u8, payload[0..keep], "ping")) {
+                    self.got_pong.store(true, .release);
+                } else if (opcode == 0x1) {
+                    @memcpy(self.echoed[0..keep], payload[0..keep]);
+                    self.echoed_len.store(keep, .release);
+                    // Echo it back so the plugin side sees a round trip.
+                    var frame: [136]u8 = undefined;
+                    frame[0] = 0x81;
+                    frame[1] = @intCast(keep);
+                    @memcpy(frame[2 .. 2 + keep], payload[0..keep]);
+                    _ = net.send(peer, frame[0 .. 2 + keep]);
+                } else if (opcode == 0x8) {
+                    _ = net.send(peer, &[_]u8{ 0x88, 0x02, 0x03, 0xe8 });
+                    return;
+                }
+                i = at2 + len;
+            }
+        }
+    }
+};
+
+test "a WebSocket opens, reassembles a fragmented message, answers a ping and closes" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+    const srv = try TestWs.open(a);
+    defer srv.close();
+
+    var url: [64]u8 = undefined;
+    const text = try std.fmt.bufPrint(&url, "ws://127.0.0.1:{d}/signalk/v1/stream", .{srv.port});
+    const id = b.openWs(0, try a.dupe(u8, text), try a.dupe(u8, "v1.signalk"));
+    try t.expect(id > 0);
+
+    const opened = try nextEvent(b, 0, 5_000);
+    defer b.freeEvent(opened);
+    try t.expectEqual(Kind.ws_open, opened.kind);
+    try t.expectEqual(@as(u64, @bitCast(id)), opened.handle);
+    // The server chose a subprotocol and the host reports which.
+    try t.expectEqualStrings("{\"protocol\":\"v1.signalk\"}", opened.payload);
+
+    // Two frames, one message: the plugin never learns it was fragmented.
+    const data = try nextEvent(b, 0, 5_000);
+    defer b.freeEvent(data);
+    try t.expectEqual(Kind.ws_data, data.kind);
+    try t.expectEqualStrings("{\"updates\":[1]}", data.payload);
+
+    // The ping was answered by the connection's own thread, with no plugin
+    // involved and no event raised.
+    var waited: u32 = 0;
+    while (!srv.got_pong.load(.acquire) and waited < 3_000) : (waited += 5) sleepMs(5);
+    try t.expect(srv.got_pong.load(.acquire));
+
+    // ws_send masks its frame, the server unmasks it and echoes it back.
+    try t.expectEqual(@as(i32, 6), b.sendWs(0, id, "hello!"));
+    const echo = try nextEvent(b, 0, 5_000);
+    defer b.freeEvent(echo);
+    try t.expectEqual(Kind.ws_data, echo.kind);
+    try t.expectEqualStrings("hello!", echo.payload);
+
+    // The plugin closing gets the same WS_CLOSED any other ending gets.
+    b.closeWs(0, id);
+    const closed = try nextEvent(b, 0, 5_000);
+    defer b.freeEvent(closed);
+    try t.expectEqual(Kind.ws_closed, closed.kind);
+    try t.expect(std.mem.indexOf(u8, closed.payload, "\"code\":1000") != null);
+
+    // Another plugin's socket is not this plugin's to write to or close.
+    try t.expectEqual(@as(i32, -1), b.sendWs(1, id, "no"));
+}
+
+test "a WebSocket that cannot connect answers WS_CLOSED with code 0 and a reason" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    try b.start();
+
+    const id = b.openWs(0, try a.dupe(u8, "ws://127.0.0.1:9/none"), try a.dupe(u8, ""));
+    try t.expect(id > 0);
+    const closed = try nextEvent(b, 0, 10_000);
+    defer b.freeEvent(closed);
+    try t.expectEqual(Kind.ws_closed, closed.kind);
+    try t.expect(std.mem.indexOf(u8, closed.payload, "\"code\":0") != null);
+}
+
+// -- storage -----------------------------------------------------------------------
+
+/// A directory of this test's own under the system temporary directory, removed
+/// on the way out.
+fn scratchDir(alloc: std.mem.Allocator, name: []const u8) ![]u8 {
+    const base = if (std.c.getenv("TMPDIR")) |x| std.mem.span(x) else "/tmp";
+    const trimmed = if (base.len > 1 and base[base.len - 1] == '/') base[0 .. base.len - 1] else base;
+    const path = try std.fmt.allocPrint(alloc, "{s}/lookout-plugin-test-{s}-{d}", .{ trimmed, name, monoMs() });
+    try std.Io.Dir.cwd().createDirPath(io, path);
+    return path;
+}
+
+fn removeScratch(path: []const u8) void {
+    std.Io.Dir.cwd().deleteTree(io, path) catch {};
+}
+
+test "a plugin's storage round-trips, caps what it holds and survives a restart" {
+    const a = t.allocator;
+    const dir = try scratchDir(a, "storage");
+    defer a.free(dir);
+    defer removeScratch(dir);
+
+    var value: [64]u8 = undefined;
+    {
+        const fx = try Fixture.init(a);
+        defer fx.deinit(a);
+        const b = &fx.br;
+        b.setStorageDir(dir);
+        var p = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.grib", .source = 1, .caps = Caps.initEmpty() };
+        try b.registerPlugin(&p);
+
+        // Absent is -1, not zero: a key that was never written and a key
+        // written empty must not read the same.
+        try t.expectEqual(@as(i32, -1), b.storageGet(0, "last_run", &value));
+        try t.expectEqual(@as(i32, 0), b.storagePut(0, "last_run", "1754400000123"));
+
+        // The two-call pattern: ask with nothing, learn the size, ask again.
+        try t.expectEqual(@as(i32, 13), b.storageGet(0, "last_run", &[_]u8{}));
+        try t.expectEqual(@as(i32, 13), b.storageGet(0, "last_run", &value));
+        try t.expectEqualStrings("1754400000123", value[0..13]);
+
+        // Bytes, not text: a value with a zero and a quote in it comes back
+        // exactly as it went in.
+        try t.expectEqual(@as(i32, 0), b.storagePut(0, "blob", "a\x00b\"c\\d"));
+        try t.expectEqual(@as(i32, 7), b.storageGet(0, "blob", &value));
+        try t.expectEqualStrings("a\x00b\"c\\d", value[0..7]);
+
+        // An empty value is a delete.
+        try t.expectEqual(@as(i32, 0), b.storagePut(0, "blob", ""));
+        try t.expectEqual(@as(i32, -1), b.storageGet(0, "blob", &value));
+
+        // The caps. A key too long, a value too long, and a key that would
+        // break the JSON file it lands in.
+        var long_key: [storage_max_key + 1]u8 = @splat('k');
+        try t.expectEqual(@as(i32, -1), b.storagePut(0, &long_key, "x"));
+        const big = try a.alloc(u8, storage_max_value + 1);
+        defer a.free(big);
+        @memset(big, 'v');
+        try t.expectEqual(@as(i32, -1), b.storagePut(0, "big", big));
+        try t.expectEqual(@as(i32, 0), b.storagePut(0, "big", big[0..storage_max_value]));
+        try t.expectEqual(@as(i32, -1), b.storagePut(0, "new\nline", "x"));
+
+        // The total. A megabyte of 64 KiB values is sixteen of them, less the
+        // keys and what is already stored, and the one that would go over is
+        // refused rather than evicting anything.
+        var key_buf: [16]u8 = undefined;
+        var filled: usize = 1;
+        while (filled < 64) : (filled += 1) {
+            const key = try std.fmt.bufPrint(&key_buf, "fill{d}", .{filled});
+            if (b.storagePut(0, key, big[0..storage_max_value]) != 0) break;
+        }
+        try t.expect(filled < 64);
+        b.mu.lock();
+        const held = b.kv.items[0].bytes;
+        b.mu.unlock();
+        try t.expect(held <= storage_max_total);
+        try t.expect(held + storage_max_value > storage_max_total);
+    }
+
+    // A new broker, the same directory: what the plugin stored is still there.
+    {
+        const fx = try Fixture.init(a);
+        defer fx.deinit(a);
+        const b = &fx.br;
+        b.setStorageDir(dir);
+        var p = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.grib", .source = 1, .caps = Caps.initEmpty() };
+        try b.registerPlugin(&p);
+        try t.expectEqual(@as(i32, 13), b.storageGet(0, "last_run", &value));
+        try t.expectEqualStrings("1754400000123", value[0..13]);
+        // And the key that was deleted is still deleted.
+        try t.expectEqual(@as(i32, -1), b.storageGet(0, "blob", &value));
+    }
+
+    // Another plugin's store is another file: one plugin cannot read or
+    // overwrite what another saved.
+    {
+        const fx = try Fixture.init(a);
+        defer fx.deinit(a);
+        const b = &fx.br;
+        b.setStorageDir(dir);
+        var other = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.other", .source = 1, .caps = Caps.initEmpty() };
+        try b.registerPlugin(&other);
+        try t.expectEqual(@as(i32, -1), b.storageGet(0, "last_run", &value));
+    }
+}
+
+// -- files ---------------------------------------------------------------------------
+
+test "a granted file reads at an offset, a granted write file appends, and a close ends it" {
+    const a = t.allocator;
+    const dir = try scratchDir(a, "files");
+    defer a.free(dir);
+    defer removeScratch(dir);
+
+    const src = try std.fmt.allocPrint(a, "{s}/gfs.grib2", .{dir});
+    defer a.free(src);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = src, .data = test_body });
+
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    const handle = try b.grantFile(0, src, false);
+    try t.expect(handle > 0);
+    // The grant arrives as an event, so a plugin learns about a file the same
+    // way it learns about everything else.
+    const opened = try nextEvent(b, 0, 1_000);
+    defer b.freeEvent(opened);
+    try t.expectEqual(Kind.file_opened, opened.kind);
+    try t.expectEqual(@as(u64, @bitCast(handle)), opened.handle);
+    try t.expectEqualStrings("{\"name\":\"gfs.grib2\",\"size\":36,\"mode\":\"read\"}", opened.payload);
+
+    var buf: [16]u8 = undefined;
+    try t.expectEqual(@as(i32, 10), b.fileRead(0, handle, 10, buf[0..10]));
+    try t.expectEqualStrings("abcdefghij", buf[0..10]);
+    // A read past the end is zero bytes, not an error: that is how a plugin
+    // chunking a GRIB knows it is done.
+    try t.expectEqual(@as(i32, 0), b.fileRead(0, handle, test_body.len, &buf));
+    // Another plugin's handle, and a negative offset.
+    try t.expectEqual(@as(i32, -1), b.fileRead(1, handle, 0, &buf));
+    try t.expectEqual(@as(i32, -1), b.fileRead(0, handle, -1, &buf));
+
+    const out = try std.fmt.allocPrint(a, "{s}/out.kap", .{dir});
+    defer a.free(out);
+    const wh = try b.grantFile(0, out, true);
+    const wopened = try nextEvent(b, 0, 1_000);
+    defer b.freeEvent(wopened);
+    try t.expectEqualStrings("{\"name\":\"out.kap\",\"size\":0,\"mode\":\"write\"}", wopened.payload);
+    try t.expectEqual(@as(i32, 5), b.fileWrite(0, wh, "hello"));
+    try t.expectEqual(@as(i32, 6), b.fileWrite(0, wh, " there"));
+    // A read handle is not a write handle.
+    try t.expectEqual(@as(i32, -1), b.fileWrite(0, handle, "no"));
+    b.fileClose(0, wh);
+    try t.expectEqual(@as(i32, -1), b.fileWrite(0, wh, "gone"));
+
+    var written: [32]u8 = undefined;
+    const got = try std.Io.Dir.cwd().readFile(io, out, &written);
+    try t.expectEqualStrings("hello there", got);
+
+    // A plugin holds eight files at most.
+    var opened_count: usize = 1;
+    while (opened_count < 32) : (opened_count += 1) {
+        _ = b.grantFile(0, src, false) catch break;
+    }
+    try t.expectEqual(files_per_plugin, opened_count);
+}
+
+test "dropping a plugin closes its UDP ports and its files" {
+    const a = t.allocator;
+    const dir = try scratchDir(a, "drop");
+    defer a.free(dir);
+    defer removeScratch(dir);
+    const src = try std.fmt.allocPrint(a, "{s}/x.bin", .{dir});
+    defer a.free(src);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = src, .data = "x" });
+
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+    var p = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.gone", .source = 1, .caps = Caps.initEmpty() };
+    try b.registerPlugin(&p);
+
+    try t.expect(b.openUdp(0, 0) > 0);
+    const handle = try b.grantFile(0, src, false);
+    b.dropPlugin(0, 0);
+
+    b.mu.lock();
+    const udps = b.udps.items.len;
+    const files = b.files.items.len;
+    b.mu.unlock();
+    try t.expectEqual(@as(usize, 0), udps);
+    try t.expectEqual(@as(usize, 0), files);
+    var buf: [4]u8 = undefined;
+    try t.expectEqual(@as(i32, -1), b.fileRead(0, handle, 0, &buf));
+}
+
+// -- the grants ------------------------------------------------------------------------
+
+test "every mediated call is refused without its capability, and named in the log" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var p = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.greedy", .source = 1, .caps = Caps.initEmpty() };
+    const gated = [_]Cap{ .net_udp, .net_http, .net_ws, .storage, .files };
+    for (gated, 0..) |cap, i| {
+        try t.expect(!allow(&p, cap, cap.name()));
+        try t.expectEqual(@as(u32, @intCast(i + 1)), p.denied);
+    }
+    // The same call with the grant in place is allowed and counts nothing.
+    p.caps.insert(.storage);
+    try t.expect(allow(&p, .storage, "storage_get"));
+    try t.expectEqual(@as(u32, gated.len), p.denied);
+}
+
+test "a URL outside the manifest's host list is refused before a socket opens" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var caps = Caps.initEmpty();
+    caps.insert(.net_http);
+    caps.insert(.net_ws);
+    var p = Plugin{
+        .broker = b,
+        .index = 0,
+        .id = "org.beetlebug.grib",
+        .source = 1,
+        .caps = caps,
+        .http_hosts = &.{"nomads.ncep.noaa.gov"},
+        .ws_hosts = &.{"demo.signalk.org"},
+    };
+
+    try t.expect(allowUrl(&p, .net_http, "http_fetch", "https://nomads.ncep.noaa.gov/cgi-bin/x.pl?f=1"));
+    // The match is on the host and ignores case, the port and the path.
+    try t.expect(allowUrl(&p, .net_http, "http_fetch", "http://NOMADS.ncep.NOAA.gov:8080/other"));
+    try t.expectEqual(@as(u32, 0), p.denied);
+
+    // A neighbouring name, a subdomain and the other capability's host are all
+    // outside the list: there are no wildcards and no shared list.
+    try t.expect(!allowUrl(&p, .net_http, "http_fetch", "https://nomads.ncep.noaa.gov.evil.test/x"));
+    try t.expect(!allowUrl(&p, .net_http, "http_fetch", "https://tiles.ncep.noaa.gov/x"));
+    try t.expect(!allowUrl(&p, .net_http, "http_fetch", "https://demo.signalk.org/x"));
+    try t.expect(!allowUrl(&p, .net_ws, "ws_connect", "wss://nomads.ncep.noaa.gov/x"));
+    try t.expectEqual(@as(u32, 4), p.denied);
+
+    // Something that is not a URL is refused too, and is not counted as a
+    // grant violation: it is a plugin with a bug, not one exceeding its grant.
+    try t.expect(!allowUrl(&p, .net_http, "http_fetch", "nomads.ncep.noaa.gov"));
+    try t.expectEqual(@as(u32, 4), p.denied);
+    try t.expect(!allowUrl(&p, .net_http, "http_fetch", "ftp://nomads.ncep.noaa.gov/x"));
+
+    // A plugin with the capability and no hosts can reach nothing, which is
+    // what an ungranted plugin looks like from here.
+    var bare = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.bare", .source = 1, .caps = caps };
+    try t.expect(!allowUrl(&bare, .net_http, "http_fetch", "https://nomads.ncep.noaa.gov/x"));
+}
+
+test "the fetch count is capped, and a refused fetch frees what it was given" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    // The count is set by hand rather than by racing four real fetches: a
+    // connect to a closed port is refused in microseconds, so a timing version
+    // of this test would sometimes find a slot free and prove nothing.
+    b.mu.lock();
+    b.fetching = http_max_inflight;
+    b.mu.unlock();
+
+    const req = FetchRequest{
+        .method = try a.dupe(u8, "GET"),
+        .url = try a.dupe(u8, "http://127.0.0.1:9/x"),
+        .range = try a.dupe(u8, ""),
+        .headers = &.{},
+    };
+    try t.expectEqual(@as(i64, -1), b.startFetch(0, req));
+    // The refusal took the request with it: what the plugin handed over is
+    // owned by the broker from the call on, and the testing allocator fails
+    // this test if the refusal path forgot it.
+    b.mu.lock();
+    const listed = b.fetches.items.len;
+    b.fetching = 0;
+    b.mu.unlock();
+    try t.expectEqual(@as(usize, 0), listed);
+}
+
+test "each handle a plugin holds is a different number" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    // Connections, UDP ports, WebSockets and files come out of ONE counter, so
+    // a plugin can never be handed the same number twice and a log line naming
+    // a handle names one thing.
+    const conn = b.openConn(0, "127.0.0.1", 10110);
+    const udp = b.openUdp(0, 0);
+    const ws = b.openWs(0, try a.dupe(u8, "ws://127.0.0.1:9/x"), try a.dupe(u8, ""));
+    try t.expect(conn > 0 and udp > 0 and ws > 0);
+    try t.expect(conn != udp and udp != ws and conn != ws);
+}
+
+test "the local token grants this boat's network and not the internet" {
+    // Loopback, the three private ranges, link-local and the mDNS names.
+    for ([_][]const u8{
+        "localhost",      "LocalHost",     "127.0.0.1",     "10.0.0.9",
+        "10.255.255.254", "172.16.0.1",    "172.31.255.1",  "192.168.1.9",
+        "169.254.3.4",    "signalk.local", "SignalK.Local", "::1",
+        "fd00::1",        "fe80::1",
+    }) |h| try t.expect(isLocalHost(h));
+
+    // Everything else, including the addresses next to a private range and a
+    // public name that could resolve into one.
+    for ([_][]const u8{
+        "nomads.ncep.noaa.gov",    "8.8.8.8",     "172.15.0.1", "172.32.0.1",
+        "192.169.1.1",             "11.0.0.1",    "local",      "notlocal",
+        "example.local.evil.test", "2001:db8::1", "",
+    }) |h| try t.expect(!isLocalHost(h));
+}
+
+test "a local grant lets a mariner's own server through and stops a public one" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+
+    var caps = Caps.initEmpty();
+    caps.insert(.net_ws);
+    var p = Plugin{
+        .broker = &fx.br,
+        .index = 0,
+        .id = "org.beetlebug.signalk",
+        .source = 1,
+        .caps = caps,
+        .ws_hosts = &.{local_token},
+    };
+
+    // The address a mariner types for the server on their own boat.
+    try t.expect(allowUrl(&p, .net_ws, "ws_connect", "ws://10.0.0.9:8375/signalk/v1/stream"));
+    try t.expect(allowUrl(&p, .net_ws, "ws_connect", "ws://signalk.local:3000/signalk/v1/stream"));
+    try t.expectEqual(@as(u32, 0), p.denied);
+    // A server somewhere else is still refused: `local` is not a wildcard.
+    try t.expect(!allowUrl(&p, .net_ws, "ws_connect", "wss://demo.signalk.org/signalk/v1/stream"));
+    try t.expectEqual(@as(u32, 1), p.denied);
+}

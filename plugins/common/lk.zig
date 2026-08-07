@@ -67,6 +67,18 @@ const host = struct {
     extern "lookout" fn timer_cancel(id: i64) void;
     extern "lookout" fn subscribe(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn ais_subscribe() i32;
+    extern "lookout" fn udp_open(port: u32) i64;
+    extern "lookout" fn udp_send(id: i64, ptr: [*]const u8, len: u32, host_ptr: [*]const u8, host_len: u32, port: u32) i32;
+    extern "lookout" fn udp_close(id: i64) void;
+    extern "lookout" fn http_fetch(ptr: [*]const u8, len: u32) i64;
+    extern "lookout" fn ws_connect(ptr: [*]const u8, len: u32) i64;
+    extern "lookout" fn ws_send(id: i64, ptr: [*]const u8, len: u32) i32;
+    extern "lookout" fn ws_close(id: i64) void;
+    extern "lookout" fn storage_get(kptr: [*]const u8, klen: u32, vptr: [*]u8, vcap: u32) i32;
+    extern "lookout" fn storage_put(kptr: [*]const u8, klen: u32, vptr: [*]const u8, vlen: u32) i32;
+    extern "lookout" fn file_read(handle: i64, offset: i64, ptr: [*]u8, cap: u32) i32;
+    extern "lookout" fn file_write(handle: i64, ptr: [*]const u8, len: u32) i32;
+    extern "lookout" fn file_close(handle: i64) void;
 };
 
 pub const Level = enum(u32) { debug = 0, info = 1, warn = 2, err = 3 };
@@ -172,6 +184,192 @@ pub fn subscribePaths(paths: []const []const u8) i32 {
 /// at most twice a second and only when something moved.
 pub fn aisSubscribe() i32 {
     return host.ais_subscribe();
+}
+
+// ---------------------------------------------------------------------------
+// UDP
+// ---------------------------------------------------------------------------
+
+/// Bind a UDP port. Returns a socket id, or -1. Every datagram that arrives
+/// becomes one `.udp_data` event carrying that id; a datagram over 8192 bytes
+/// is dropped rather than split. Port 0 takes an ephemeral one, which you can
+/// send from but cannot tell anybody about.
+pub fn udpOpen(port: u16) i64 {
+    return host.udp_open(port);
+}
+
+/// Send one datagram. `address` is an IP LITERAL — the host will not resolve a
+/// name here — so "192.168.1.255" and "255.255.255.255" work and "gateway.local"
+/// does not. Returns the bytes sent, or -1.
+pub fn udpSend(id: i64, data: []const u8, address: []const u8, port: u16) i32 {
+    return host.udp_send(id, data.ptr, @intCast(data.len), address.ptr, @intCast(address.len), port);
+}
+
+pub fn udpClose(id: i64) void {
+    host.udp_close(id);
+}
+
+// ---------------------------------------------------------------------------
+// HTTP
+// ---------------------------------------------------------------------------
+
+/// One request header.
+pub const HttpHeader = struct { name: []const u8, value: []const u8 };
+
+/// What `httpFetch` sends. Only `url` matters for most callers.
+pub const HttpRequest = struct {
+    /// `GET` or `HEAD`. The host refuses anything else.
+    method: []const u8 = "GET",
+    url: []const u8,
+    headers: []const HttpHeader = &.{},
+    /// `bytes=0-1048575`, or empty. This is the way to read a file larger than
+    /// the 4 MiB body cap: ask for it a range at a time.
+    range: []const u8 = "",
+};
+
+/// Start a fetch. Returns a request id at once, or -1 when the manifest does
+/// not name the URL's host. The answer arrives later as one `.http_response`
+/// event carrying that id — one event per request, whether it worked or not.
+pub fn httpFetch(req: HttpRequest) i64 {
+    var buf: [2048]u8 = undefined;
+    var b = Buf.init(&buf);
+    b.raw("{\"method\":");
+    b.str(req.method);
+    b.raw(",\"url\":");
+    b.str(req.url);
+    if (req.range.len > 0) {
+        b.raw(",\"range\":");
+        b.str(req.range);
+    }
+    if (req.headers.len > 0) {
+        b.raw(",\"headers\":{");
+        for (req.headers, 0..) |h, i| {
+            if (i > 0) b.raw(",");
+            b.str(h.name);
+            b.raw(":");
+            b.str(h.value);
+        }
+        b.raw("}");
+    }
+    b.raw("}");
+    if (b.overflowed) {
+        logf(.warn, "http_fetch dropped: the request did not fit", .{});
+        return -1;
+    }
+    const json = b.bytes();
+    return host.http_fetch(json.ptr, @intCast(json.len));
+}
+
+/// Fetch one URL with no headers and no range.
+pub fn httpGet(url: []const u8) i64 {
+    return httpFetch(.{ .url = url });
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket
+// ---------------------------------------------------------------------------
+
+/// Open a WebSocket. Returns a connection id at once, or -1 when the manifest
+/// does not name the URL's host. The handshake happens on the host's own
+/// thread: you get `.ws_open` when it succeeds, `.ws_closed` when it does not,
+/// and `.ws_data` for every text message after that.
+///
+/// RECONNECTING IS YOURS, exactly as it is for TCP: the host never retries.
+pub fn wsConnect(url: []const u8, protocols: []const []const u8) i64 {
+    var buf: [1024]u8 = undefined;
+    var b = Buf.init(&buf);
+    b.raw("{\"url\":");
+    b.str(url);
+    if (protocols.len > 0) {
+        b.raw(",\"protocols\":[");
+        for (protocols, 0..) |p, i| {
+            if (i > 0) b.raw(",");
+            b.str(p);
+        }
+        b.raw("]");
+    }
+    b.raw("}");
+    if (b.overflowed) {
+        logf(.warn, "ws_connect dropped: the request did not fit", .{});
+        return -1;
+    }
+    const json = b.bytes();
+    return host.ws_connect(json.ptr, @intCast(json.len));
+}
+
+/// Queue one TEXT message. Returns the bytes queued, or -1 when the connection
+/// is not yours, is not open, or is already holding more than it can write.
+/// The write itself happens on the host's thread, so this returns at once
+/// however slow the peer is.
+pub fn wsSend(id: i64, text: []const u8) i32 {
+    return host.ws_send(id, text.ptr, @intCast(text.len));
+}
+
+/// Ask the host to close a WebSocket. You still get `.ws_closed`.
+pub fn wsClose(id: i64) void {
+    host.ws_close(id);
+}
+
+// ---------------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------------
+
+/// How big the value under `key` is, or null when there is none. Use this when
+/// you do not know how much room to give `storageGet`.
+pub fn storageSize(key: []const u8) ?usize {
+    var none: [1]u8 = undefined;
+    const n = host.storage_get(key.ptr, @intCast(key.len), &none, 0);
+    return if (n < 0) null else @intCast(n);
+}
+
+/// Read the value under `key` into `out`. Returns the bytes read, null when
+/// there is no such key, and null when the value is longer than `out` — ask
+/// `storageSize` first if that is possible.
+pub fn storageGet(key: []const u8, out: []u8) ?[]u8 {
+    if (out.len == 0) return null;
+    const n = host.storage_get(key.ptr, @intCast(key.len), out.ptr, @intCast(out.len));
+    if (n < 0) return null;
+    const size: usize = @intCast(n);
+    if (size > out.len) return null;
+    return out[0..size];
+}
+
+/// Write `value` under `key`. Returns 0, or -1 when a cap is in the way: a key
+/// over 128 bytes, a value over 64 KiB, or more than 1 MiB in total. The value
+/// is BYTES, not text, and it is on disk before this returns.
+pub fn storagePut(key: []const u8, value: []const u8) i32 {
+    return host.storage_put(key.ptr, @intCast(key.len), value.ptr, @intCast(value.len));
+}
+
+/// Forget a key. An empty value IS the delete; there is no separate import.
+pub fn storageDelete(key: []const u8) i32 {
+    var none: [1]u8 = undefined;
+    return host.storage_put(key.ptr, @intCast(key.len), &none, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+/// Read from a file the host granted you, at an absolute offset. Returns the
+/// bytes read, an empty slice at the end of the file, or null on an error.
+/// There is no way to open a file: every handle arrived as `.file_opened`.
+pub fn fileRead(handle: i64, offset: i64, out: []u8) ?[]u8 {
+    if (out.len == 0) return out[0..0];
+    const n = host.file_read(handle, offset, out.ptr, @intCast(out.len));
+    if (n < 0) return null;
+    return out[0..@intCast(n)];
+}
+
+/// Append to a granted write file. Returns the bytes written, or -1.
+pub fn fileWrite(handle: i64, data: []const u8) i32 {
+    return host.file_write(handle, data.ptr, @intCast(data.len));
+}
+
+/// Give a granted file back. The host closes everything you hold when you stop,
+/// so this matters only if you open many files over a long run.
+pub fn fileClose(handle: i64) void {
+    host.file_close(handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +534,53 @@ pub fn scratch() std.mem.Allocator {
 
 pub const TcpData = struct { conn: i64, bytes: []const u8 };
 
+/// One datagram off a UDP port. One datagram is one event: the host never
+/// joins two and never splits one.
+pub const UdpData = struct { sock: i64, bytes: []const u8 };
+
+/// The answer to one `httpFetch`. `status` is 0 when the fetch never reached a
+/// server, and `head` then carries an `"error"` naming what stopped it.
+pub const HttpResponse = struct {
+    request: i64,
+    status: u16,
+    /// `{"status":200,"url":…,"headers":{…}}`, or with `"error"` beside them.
+    head: []const u8,
+    /// The response body, exactly as it arrived. Empty for a failure.
+    body: []const u8,
+
+    /// One header's value, by its LOWER-CASE name. The host lower-cases every
+    /// name it writes, so `"content-length"` finds `Content-Length`.
+    pub fn header(self: HttpResponse, name: []const u8) ?[]const u8 {
+        const root = std.json.parseFromSliceLeaky(std.json.Value, scratch(), self.head, .{}) catch return null;
+        if (root != .object) return null;
+        const headers = root.object.get("headers") orelse return null;
+        if (headers != .object) return null;
+        return jstr(headers.object.get(name) orelse return null);
+    }
+};
+
+/// A WebSocket that opened. `protocol` is the subprotocol the server chose, or
+/// empty when it chose none.
+pub const WsOpen = struct { conn: i64, protocol: []const u8 };
+
+/// One reassembled TEXT message. The host joins the fragments and answers the
+/// pings, so what arrives here is a whole message and nothing else.
+pub const WsData = struct { conn: i64, text: []const u8 };
+
+/// A WebSocket that ended. `code` is the RFC 6455 close code, or 0 when the
+/// connection never opened — in which case `reason` names what stopped it.
+pub const WsClosed = struct { conn: i64, code: u16, reason: []const u8 };
+
+/// A file the mariner chose and the host handed over. `handle` is what
+/// `fileRead` and `fileWrite` take.
+pub const FileOpened = struct {
+    handle: i64,
+    name: []const u8,
+    size: u64,
+    /// True when you may write to it. A read handle refuses `fileWrite`.
+    writable: bool,
+};
+
 /// What `onEvent` receives. The payload slices point into the arena and are
 /// gone when your handler returns; copy anything you keep.
 pub const Event = union(enum) {
@@ -348,12 +593,18 @@ pub const Event = union(enum) {
     tcp_connected: i64,
     tcp_data: TcpData,
     tcp_closed: i64,
+    udp_data: UdpData,
+    http_response: HttpResponse,
+    file_opened: FileOpened,
     /// `{"values":[{"path":..,"value":..,"ts":..,"age_ms":..}]}`. A value of
     /// null means the path has NO value any more — the source was cleared —
     /// not that it published a null. `readings` parses it.
     store_changed: []const u8,
     /// `{"targets":[...]}`, the full set. `targets` parses it.
     ais_changed: []const u8,
+    ws_open: WsOpen,
+    ws_data: WsData,
+    ws_closed: WsClosed,
     /// Last thing you will ever be handed. Close sockets, post a final status.
     shutdown,
 };
@@ -370,9 +621,54 @@ const kind_timer: u32 = 3;
 const kind_tcp_connected: u32 = 4;
 const kind_tcp_data: u32 = 5;
 const kind_tcp_closed: u32 = 6;
+const kind_udp_data: u32 = 7;
+const kind_http_response: u32 = 8;
+const kind_file_opened: u32 = 9;
 const kind_store_changed: u32 = 10;
 const kind_ais_changed: u32 = 11;
+const kind_ws_open: u32 = 12;
+const kind_ws_data: u32 = 13;
+const kind_ws_closed: u32 = 14;
 const kind_shutdown: u32 = 99;
+
+/// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
+/// event carries both because a plugin needs both and the ABI carries one
+/// payload per event.
+fn parseHttpResponse(request: i64, payload: []const u8) HttpResponse {
+    if (payload.len < 4) return .{ .request = request, .status = 0, .head = "", .body = "" };
+    const json_len = std.mem.readInt(u32, payload[0..4], .little);
+    if (4 + @as(usize, json_len) > payload.len)
+        return .{ .request = request, .status = 0, .head = "", .body = "" };
+    const head = payload[4 .. 4 + json_len];
+    return .{
+        .request = request,
+        .status = statusOf(head),
+        .head = head,
+        .body = payload[4 + json_len ..],
+    };
+}
+
+/// `"status":<n>` out of the head, by scan rather than by parse: every
+/// HTTP_RESPONSE runs through here and the head is one line of the host's own
+/// JSON, not a document.
+fn statusOf(head: []const u8) u16 {
+    const at = std.mem.indexOf(u8, head, "\"status\":") orelse return 0;
+    var i = at + "\"status\":".len;
+    var value: u32 = 0;
+    while (i < head.len and head[i] >= '0' and head[i] <= '9') : (i += 1) {
+        value = value * 10 + (head[i] - '0');
+        if (value > 0xffff) return 0;
+    }
+    return @intCast(value);
+}
+
+/// A one-line JSON object out of the host, read with the scratch arena. Used
+/// for the small envelopes: WS_OPEN, WS_CLOSED and FILE_OPENED.
+fn envelope(payload: []const u8) ?std.json.Value {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, scratch(), payload, .{}) catch return null;
+    if (root != .object) return null;
+    return root;
+}
 
 /// Emit the five ABI exports and wire them to `P.start` and `P.onEvent`.
 /// Call once, at container scope, from the plugin's root file:
@@ -429,8 +725,36 @@ pub fn registerPlugin(comptime P: type) void {
                 kind_tcp_connected => .{ .tcp_connected = id },
                 kind_tcp_data => .{ .tcp_data = .{ .conn = id, .bytes = payload } },
                 kind_tcp_closed => .{ .tcp_closed = id },
+                kind_udp_data => .{ .udp_data = .{ .sock = id, .bytes = payload } },
+                kind_http_response => .{ .http_response = parseHttpResponse(id, payload) },
+                kind_file_opened => blk: {
+                    const root = envelope(payload) orelse return 0;
+                    const mode = jstr(root.object.get("mode") orelse .{ .string = "read" }) orelse "read";
+                    break :blk .{ .file_opened = .{
+                        .handle = id,
+                        .name = jstr(root.object.get("name") orelse .{ .string = "" }) orelse "",
+                        .size = @intCast(@max(jintOpt(root.object.get("size")) orelse 0, 0)),
+                        .writable = std.mem.eql(u8, mode, "write"),
+                    } };
+                },
                 kind_store_changed => .{ .store_changed = payload },
                 kind_ais_changed => .{ .ais_changed = payload },
+                kind_ws_open => blk: {
+                    const root = envelope(payload) orelse return 0;
+                    break :blk .{ .ws_open = .{
+                        .conn = id,
+                        .protocol = jstr(root.object.get("protocol") orelse .{ .string = "" }) orelse "",
+                    } };
+                },
+                kind_ws_data => .{ .ws_data = .{ .conn = id, .text = payload } },
+                kind_ws_closed => blk: {
+                    const root = envelope(payload) orelse return 0;
+                    break :blk .{ .ws_closed = .{
+                        .conn = id,
+                        .code = @intCast(std.math.clamp(jintOpt(root.object.get("code")) orelse 0, 0, 0xffff)),
+                        .reason = jstr(root.object.get("reason") orelse .{ .string = "" }) orelse "",
+                    } };
+                },
                 kind_shutdown => .shutdown,
                 // The ABI says an unknown kind is ignored and answered 0. A
                 // future host must be able to add events without breaking a
