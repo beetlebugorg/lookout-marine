@@ -467,6 +467,7 @@ pub fn build(b: *std.Build) void {
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
+        "plugins/nmea0183/config.zig",
         "plugins/ownship/track.zig",
         "plugins/ais/cpa.zig",
         "plugins/ais/vector.zig",
@@ -507,6 +508,9 @@ pub fn build(b: *std.Build) void {
     // four are PROTOTYPE.md's. A name with no main.zig yet is skipped, so a
     // plugin agent adds one file and it builds.
     var echo_wasm: ?std.Build.LazyPath = null;
+    // The nmea0183 module is installed like the other three AND handed to the
+    // multi-connection test below.
+    var nmea_wasm: ?std.Build.LazyPath = null;
     for ([_][]const u8{ "echo", "nmea0183", "ownship", "ais", "laylines" }) |name| {
         const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
         if (!haveFile(b, main_rel)) continue;
@@ -524,6 +528,7 @@ pub fn build(b: *std.Build) void {
             echo_wasm = wasm_exe.getEmittedBin();
             continue;
         }
+        if (std.mem.eql(u8, name, "nmea0183")) nmea_wasm = wasm_exe.getEmittedBin();
 
         const id = manifestId(b, name);
         plugins_step.dependOn(&b.addInstallFileWithDir(
@@ -613,10 +618,33 @@ pub fn build(b: *std.Build) void {
             host_smoke_mod.addImport("overlay", ov_mod);
             host_smoke_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
             host_smoke_mod.addAnonymousImport("echo_manifest", .{ .root_source_file = b.path("plugins/echo/manifest.json") });
+            // The manifests the app ships, so the test can prove the real
+            // parser accepts them. A schema the parser refuses is a plugin
+            // that silently does not load.
+            host_smoke_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
+            host_smoke_mod.addAnonymousImport("ais_manifest", .{ .root_source_file = b.path("plugins/ais/manifest.json") });
 
             const host_smoke_run = b.addRunArtifact(b.addTest(.{ .root_module = host_smoke_mod }));
             b.step("host-smoke", "Run the plugin host + broker end-to-end test").dependOn(&host_smoke_run.step);
             test_step.dependOn(&host_smoke_run.step);
+
+            // Several connections at once: the real nmea0183 module against two
+            // loopback gateways. It needs the plugin's own .wasm, which is
+            // built above for installation; the LazyPath is captured there.
+            if (nmea_wasm) |nbin| {
+                const nmea_mod = b.createModule(.{
+                    .root_source_file = b.path("test/nmea_multi.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                });
+                nmea_mod.addImport("host", host_mod);
+                nmea_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
+                nmea_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
+                const nmea_run = b.addRunArtifact(b.addTest(.{ .root_module = nmea_mod }));
+                b.step("nmea-multi", "Run the multi-connection nmea0183 test").dependOn(&nmea_run.step);
+                test_step.dependOn(&nmea_run.step);
+            }
 
             // Time isolation: echo beside a plugin that stops answering. Like
             // echo, the spinner is BUILT and never installed — it is a fixture

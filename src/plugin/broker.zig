@@ -1,4 +1,4 @@
-//! The host side of the plugin ABI: the sixteen native functions a plugin
+//! The host side of the plugin ABI: the fifteen native functions a plugin
 //! imports from module `lookout`, the grants that gate them, and the one I/O
 //! thread that owns sockets, timers and the subscriber fanout.
 //!
@@ -171,9 +171,14 @@ pub const WatchdogSink = struct {
 
 // ---- per-plugin state ------------------------------------------------------
 
-/// Longest chrome status text kept per plugin. PROTOTYPE.md's chrome is one
-/// string; anything longer is truncated rather than allocated per update.
-pub const max_status = 160;
+/// Longest chrome status text kept per plugin. Anything longer is truncated
+/// rather than allocated per update.
+///
+/// One line needs a fraction of this. The room is for a status that carries an
+/// `items` array — one entry per row of a settings LIST, which is how the
+/// nmea0183 plugin reports each connection separately. Eight connections of
+/// `{"id":…,"state":…,"detail":…}` fit with the envelope.
+pub const max_status = 768;
 /// Longest alert text kept per plugin (severity + title + body, as posted).
 pub const max_alert = 400;
 
@@ -303,8 +308,6 @@ const Timer = struct {
 pub const tick_ms: i64 = 100;
 /// AIS_CHANGED is specified at <=2 Hz.
 pub const ais_min_interval_ms: i64 = 500;
-/// Targets not heard from for this long go on the fanout tick.
-pub const ais_evict_ms: i64 = 600_000;
 
 /// Read chunk for a plugin socket. One TCP_DATA event per read; the plugin
 /// reassembles lines itself.
@@ -1417,6 +1420,10 @@ fn hostTcpSend(env: wasm.c.wasm_exec_env_t, id: i64, ptr: [*c]const u8, len: u32
 
 fn hostTcpClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
     const p = caller(env) orelse return;
+    // Closing a socket the plugin already holds is harmless, but the contract
+    // says every net import is checked per call, and a contract with one
+    // exception is a contract nobody trusts.
+    if (!allow(p, .net_tcp_client, "tcp_close")) return;
     p.broker.requestClose(p.index, id);
 }
 

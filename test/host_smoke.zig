@@ -19,6 +19,8 @@ const aisstore = host.aisstore;
 
 const echo_wasm = @embedFile("echo_plugin_wasm");
 const echo_manifest = @embedFile("echo_manifest");
+const nmea_manifest = @embedFile("nmea_manifest");
+const ais_manifest = @embedFile("ais_manifest");
 
 const echo_id = "org.beetlebug.echo";
 const io = std.Io.Threaded.global_single_threaded.io();
@@ -233,7 +235,7 @@ test "a settings change reaches the plugin and changes what it draws" {
     try h.registryJson(&json);
     try std.testing.expect(std.mem.indexOf(u8, json.items, "\"key\":\"draw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json.items, "\"kind\":\"toggle\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"default\":true,\"value\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"default\":true,\"tab\":\"advanced\",\"value\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, json.items, "\"min\":0.5,\"max\":3") != null);
 
     json.clearRetainingCapacity();
@@ -404,4 +406,15 @@ test "the dispatch and I/O threads deliver a periodic timer and a fanout tick" {
     try std.testing.expectEqual(@as(usize, 0), ov.count()); // shutdown cleared it
     try std.testing.expect(sink.has("navigation.position age"));
     try std.testing.expect(!sink.has("trapped"));
+}
+
+test "every manifest the app ships parses under the real parser" {
+    const a = std.testing.allocator;
+    // A schema this parser refuses is a plugin that silently does not load,
+    // and the harness then waits forever for a connection nobody makes.
+    inline for (.{ nmea_manifest, ais_manifest, echo_manifest }) |text| {
+        var m = try host.parseManifest(a, text);
+        defer m.deinit(a);
+        try std.testing.expect(m.id.len > 0);
+    }
 }

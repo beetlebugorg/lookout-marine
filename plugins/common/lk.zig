@@ -1014,7 +1014,13 @@ pub fn status(state: []const u8, comptime detail_fmt: []const u8, args: anytype)
     statusJson(b.bytes());
 }
 
-pub const Severity = enum { alarm, warning, caution };
+/// How loud an alert is. The host maps these to log levels: alarm at error,
+/// warning at warn, notice and caution at info.
+///
+/// `notice` is the name the ruling used and the one to write in new code;
+/// `caution` is the same tier under the name this file shipped with, kept so
+/// the plugins that use it still build. The host has always accepted both.
+pub const Severity = enum { alarm, warning, notice, caution };
 
 /// Raise an alert. Needs `alerts.raise`; -1 means the grant is missing or the
 /// payload did not fit.

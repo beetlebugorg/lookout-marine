@@ -50,7 +50,10 @@ struct SettingsView: View {
             .onAppear {
                 m.bind(to: model.controller)
                 p.bind(to: model.controller)
+                // A connection's line moves on its own while the window is up.
+                p.startPolling()
             }
+            .onDisappear { p.stopPolling() }
     }
 
     private var sections: [SettingsSection] {
@@ -114,6 +117,7 @@ struct SettingsView: View {
             default: EmptyView()
             }
             PluginSections(p: p, tab: id)
+            PluginListSections(p: p, tab: id)
         }
         .formStyle(.grouped)
     }

@@ -127,13 +127,14 @@ fn logSink(ctx: ?*anyopaque, level: u32, plugin: []const u8, msg: []const u8) vo
     if (std.mem.indexOf(u8, msg, "trapped") != null or
         std.mem.startsWith(u8, msg, "disabled:")) st.trapped.store(true, .monotonic);
 
-    const show = switch (st.print) {
+    // A trap, a refused grant or a rejected batch is a diagnostic, not a data
+    // stream: it prints under EVERY filter. Without this a plugin that died
+    // during --print status looks like a plugin that said nothing.
+    const show = level >= broker.level_err or switch (st.print) {
         .all => true,
         .alert => is_alert,
         .status => is_status,
-        // A trap, a refused grant or a rejected batch is a diagnostic, not a
-        // data stream: it prints under every filter.
-        .deltas, .overlay => level >= broker.level_err,
+        .deltas, .overlay => false,
     };
     if (!show) return;
     emit("t={d:>7.1}s [{s}] {s}: {s}\n", .{ st.replaySeconds(), levelName(level), plugin, msg });

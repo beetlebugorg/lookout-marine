@@ -2,5 +2,22 @@
   "id": "org.beetlebug.nmea0183",
   "name": "NMEA 0183",
   "abi": 1,
-  "capabilities": ["net.tcp-client", "vessel.publish", "ais.publish"]
+  "capabilities": ["net.tcp-client", "vessel.publish", "ais.publish"],
+  "settings": {
+    "groups": [
+      {
+        "label": "Connections",
+        "tab": "connections",
+        "list": {
+          "key": "connections",
+          "item_fields": [
+            {"key": "name", "label": "Name", "desc": "What you call this source. Leave it empty to show the address.", "kind": "text", "optional": true},
+            {"key": "host", "label": "Address", "desc": "The name or IP address of the instrument network's gateway.", "kind": "text", "default": ""},
+            {"key": "port", "label": "Port", "desc": "Most WiFi gateways serve NMEA 0183 on port 10110.", "kind": "number", "min": 1, "max": 65535, "default": 10110},
+            {"key": "enabled", "label": "On", "desc": "Off closes the connection and stops reconnecting.", "kind": "toggle", "default": true}
+          ]
+        }
+      }
+    ]
+  }
 }

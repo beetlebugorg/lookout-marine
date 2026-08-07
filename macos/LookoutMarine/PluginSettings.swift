@@ -17,7 +17,14 @@
 //
 //  Persistence is field-by-field under one versioned key, not the JSON the core
 //  returned: the schema belongs to the plugin and may change, and a saved value
-//  for a field that no longer exists is simply never applied.
+//  for a field that no longer exists is simply never applied. A LIST persists
+//  under its own key, as the JSON array of rows the plugin will be given.
+//
+//  A list is a setting the mariner adds ROWS to — the NMEA connections are the
+//  first. The rows are the shell's: it assigns each one an id when it is added,
+//  keeps the id for the row's whole life, and sends the whole array on every
+//  edit. The plugin reports each row's state back under the same id, which is
+//  how "connected, 44 msg/s" finds its way to the right line on screen.
 
 import Foundation
 import Combine
@@ -25,7 +32,7 @@ import SwiftUI
 
 /// One control, as the manifest declared it.
 struct PluginField: Identifiable {
-    enum Kind: String { case number, toggle }
+    enum Kind: String { case number, toggle, text }
 
     let key: String
     let label: String
@@ -40,6 +47,10 @@ struct PluginField: Identifiable {
     let min: Double
     let max: Double
     let defaultValue: Double
+    /// A text field's default, and whether it may be left empty. Both are only
+    /// meaningful inside a list row.
+    let defaultText: String
+    let optional: Bool
     /// The value in force. A toggle is 0 or 1.
     var value: Double
 
@@ -67,10 +78,117 @@ struct PluginInfo: Identifiable {
     let id: String
     let name: String
     let live: Bool
-    /// The plugin's own status line, `{"state":"running","detail":"..."}`. Not
-    /// shown in settings: a mariner does not manage plugins. It goes to the log.
-    let status: String
+    /// The plugin's own status line, `{"state":"running","detail":"...",
+    /// "items":[…]}`. The line itself is not shown in settings — a mariner does
+    /// not manage plugins — but the ITEMS are: one per row of a list.
+    var status: String
     var fields: [PluginField]
+    var lists: [PluginListSchema] = []
+    /// The rows the core holds, by list key. The window edits its own copy.
+    var rows: [String: [PluginRow]] = [:]
+
+    /// What the plugin says about each row of its lists, by row id.
+    var statusItems: [String: PluginStatusItem] {
+        guard let d = status.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let items = o["items"] as? [[String: Any]]
+        else { return [:] }
+        var out: [String: PluginStatusItem] = [:]
+        for it in items {
+            guard let id = it["id"] as? String else { continue }
+            out[id] = PluginStatusItem(
+                id: id,
+                state: it["state"] as? String ?? "",
+                detail: it["detail"] as? String ?? ""
+            )
+        }
+        return out
+    }
+}
+
+/// What one row of a list is doing, in the plugin's own words.
+struct PluginStatusItem {
+    let id: String
+    /// "connected", "paused", "reconnecting", "unreachable", "no_address".
+    let state: String
+    let detail: String
+
+    /// The line under the row: "connected · 44 msg/s".
+    var line: String {
+        let name = Self.words[state] ?? state
+        return detail.isEmpty ? name : "\(name) · \(detail)"
+    }
+
+    /// Green while it is working, grey while it is switched off, amber while
+    /// it is trying, red when it has given up.
+    var tint: Color {
+        switch state {
+        case "connected": return .green
+        case "paused": return .secondary
+        case "reconnecting": return .orange
+        default: return .red
+        }
+    }
+
+    private static let words = [
+        "connected": "Connected",
+        "paused": "Paused",
+        "reconnecting": "Reconnecting",
+        "unreachable": "Unreachable",
+        "no_address": "No address",
+    ]
+}
+
+/// A repeating group the mariner adds rows to.
+struct PluginListSchema: Identifiable {
+    let pluginID: String
+    let key: String
+    /// The section heading, and the settings section it lands in.
+    let group: String
+    let tab: String
+    /// The columns of one row.
+    let itemFields: [PluginField]
+
+    var id: String { "\(pluginID)/\(key)" }
+}
+
+/// One value in a row. A row is not a settings field: it holds text as well as
+/// numbers and toggles, so it cannot ride in the scalar `Double`.
+enum PluginValue: Equatable {
+    case number(Double)
+    case toggle(Bool)
+    case text(String)
+
+    init(_ raw: Any?, _ f: PluginField) {
+        switch f.kind {
+        case .number: self = .number((raw as? NSNumber)?.doubleValue ?? f.defaultValue)
+        case .toggle: self = .toggle(raw as? Bool ?? (f.defaultValue != 0))
+        case .text: self = .text(raw as? String ?? f.defaultText)
+        }
+    }
+
+    var number: Double { if case let .number(v) = self { return v }; return 0 }
+    var isOn: Bool { if case let .toggle(v) = self { return v }; return false }
+    var text: String { if case let .text(v) = self { return v }; return "" }
+
+    var json: String {
+        switch self {
+        case let .number(v): return PluginSettings.trimmed(v)
+        case let .toggle(v): return v ? "true" : "false"
+        case let .text(v): return PluginSettings.jsonString(v)
+        }
+    }
+}
+
+/// One row of a list. The id is the shell's and never changes once assigned:
+/// the plugin echoes it in its status so each row's line finds its row.
+struct PluginRow: Identifiable, Equatable {
+    var id: String
+    var cells: [String: PluginValue]
+
+    func text(_ key: String) -> String { cells[key]?.text ?? "" }
+    func number(_ key: String) -> Double { cells[key]?.number ?? 0 }
+    func isOn(_ key: String) -> Bool { cells[key]?.isOn ?? false }
 }
 
 /// One heading's worth of controls inside a settings section — the unit the
@@ -92,19 +210,58 @@ final class PluginSettings: ObservableObject {
 
     private weak var controller: ChartController?
     private var applyCancellable: AnyCancellable?
+    private var pollCancellable: AnyCancellable?
+    /// Fires on an EDIT, never on a status poll: applying must be caused by
+    /// the mariner, not by a plugin reporting its rate.
+    private let edits = PassthroughSubject<Void, Never>()
 
     private static let defaultsKey = "plugins.v1"
+    /// The rows of every list, as JSON per plugin and list key. Separate from
+    /// `plugins.v1` because a row is not a number: one key, one shape.
+    private static let listsKey = "plugins.lists.v1"
 
     // MARK: - Binding
 
     /// Load the schemas from the live chart, then auto-apply and save edits.
     func bind(to controller: ChartController?) {
-        applyCancellable = nil                       // don't echo the load below
         self.controller = controller
         plugins = Self.parse(controller?.pluginsJSON())
-        applyCancellable = objectWillChange
+        guard applyCancellable == nil else { return }
+        applyCancellable = edits
             .debounce(for: .milliseconds(60), scheduler: RunLoop.main)
             .sink { [weak self] in self?.applyAndSave() }
+    }
+
+    /// An edit happened. Debounced so a stepper drag does not push per tick.
+    private func edited() { edits.send() }
+
+    // MARK: - Live status
+
+    /// Watch what the plugins report, while the settings window is open. A
+    /// connection's line has to move on its own: "reconnecting" that never
+    /// becomes "connected" is how a mariner learns the address is wrong.
+    ///
+    /// Only the STATUS is taken from the poll. The values and rows on screen
+    /// are the mariner's, and overwriting those mid-edit would fight the
+    /// keyboard.
+    func startPolling() {
+        guard pollCancellable == nil else { return }
+        pollCancellable = Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.refreshStatus() }
+    }
+
+    func stopPolling() {
+        pollCancellable?.cancel()
+        pollCancellable = nil
+    }
+
+    private func refreshStatus() {
+        let fresh = Self.parse(controller?.pluginsJSON())
+        for (i, p) in plugins.enumerated() {
+            guard let f = fresh.first(where: { $0.id == p.id }), f.status != p.status else { continue }
+            plugins[i].status = f.status
+        }
     }
 
     // MARK: - What each settings section holds
@@ -126,9 +283,82 @@ final class PluginSettings: ObservableObject {
         return out
     }
 
-    /// The sections that have something in them.
+    /// The sections that have something in them — a group of controls, or a
+    /// list the mariner can add rows to.
     var populatedTabs: Set<String> {
         Set(plugins.flatMap { $0.fields }.map(\.tab))
+            .union(plugins.flatMap { $0.lists }.map(\.tab))
+    }
+
+    /// The lists that land in one section, in load order.
+    func lists(tab: String) -> [PluginListSchema] {
+        plugins.flatMap { $0.lists }.filter { $0.tab == tab }
+    }
+
+    // MARK: - Rows of a list
+
+    func rows(_ list: PluginListSchema) -> [PluginRow] {
+        plugins.first { $0.id == list.pluginID }?.rows[list.key] ?? []
+    }
+
+    /// The plugin's line for one row: what that connection is doing now.
+    func status(_ list: PluginListSchema, _ rowID: String) -> PluginStatusItem? {
+        plugins.first { $0.id == list.pluginID }?.statusItems[rowID]
+    }
+
+    /// Add a row on the schema's defaults. The id is minted here and never
+    /// changes again: it is what the plugin's status items point at.
+    func addRow(_ list: PluginListSchema) {
+        guard let pi = plugins.firstIndex(where: { $0.id == list.pluginID }) else { return }
+        var cells: [String: PluginValue] = [:]
+        for f in list.itemFields { cells[f.key] = PluginValue(nil, f) }
+        let row = PluginRow(id: "row-" + UUID().uuidString.prefix(8).lowercased(), cells: cells)
+        plugins[pi].rows[list.key, default: []].append(row)
+        edited()
+    }
+
+    func removeRow(_ list: PluginListSchema, _ rowID: String) {
+        guard let pi = plugins.firstIndex(where: { $0.id == list.pluginID }) else { return }
+        plugins[pi].rows[list.key]?.removeAll { $0.id == rowID }
+        edited()
+    }
+
+    func setCell(_ list: PluginListSchema, _ rowID: String, _ key: String, _ value: PluginValue) {
+        guard let pi = plugins.firstIndex(where: { $0.id == list.pluginID }),
+              let ri = plugins[pi].rows[list.key]?.firstIndex(where: { $0.id == rowID }),
+              let f = list.itemFields.first(where: { $0.key == key })
+        else { return }
+        // The core clamps too. Doing it here as well keeps the control and the
+        // value it shows in step without a round trip.
+        let clamped: PluginValue
+        switch value {
+        case let .number(v): clamped = .number(Swift.min(Swift.max(v, f.min), f.max))
+        default: clamped = value
+        }
+        if plugins[pi].rows[list.key]?[ri].cells[key] == clamped { return }
+        plugins[pi].rows[list.key]?[ri].cells[key] = clamped
+        edited()
+    }
+
+    func cellText(_ list: PluginListSchema, _ rowID: String, _ key: String) -> Binding<String> {
+        Binding(
+            get: { self.rows(list).first { $0.id == rowID }?.text(key) ?? "" },
+            set: { self.setCell(list, rowID, key, .text($0)) }
+        )
+    }
+
+    func cellNumber(_ list: PluginListSchema, _ rowID: String, _ key: String) -> Binding<Double> {
+        Binding(
+            get: { self.rows(list).first { $0.id == rowID }?.number(key) ?? 0 },
+            set: { self.setCell(list, rowID, key, .number($0)) }
+        )
+    }
+
+    func cellToggle(_ list: PluginListSchema, _ rowID: String, _ key: String) -> Binding<Bool> {
+        Binding(
+            get: { self.rows(list).first { $0.id == rowID }?.isOn(key) ?? false },
+            set: { self.setCell(list, rowID, key, .toggle($0)) }
+        )
     }
 
     func value(_ pluginID: String, _ key: String) -> Double? {
@@ -144,6 +374,7 @@ final class PluginSettings: ObservableObject {
         let clamped = f.kind == .toggle ? (v != 0 ? 1 : 0) : Swift.min(Swift.max(v, f.min), f.max)
         if clamped == f.value { return }
         plugins[pi].fields[fi].value = clamped
+        edited()
     }
 
     /// A binding for one control. Writing it moves the published model, which
@@ -165,12 +396,16 @@ final class PluginSettings: ObservableObject {
     /// Put one group back on the defaults its manifest declared. The group is
     /// what the mariner sees, so it is what the reset acts on: resetting the
     /// collision alarm must not move the target vectors in another section.
+    /// A LIST is not touched by this. A reset puts the controls back where the
+    /// manifest had them; it does not throw away the connections the mariner
+    /// typed in, which nothing else could get back.
     func resetToDefaults(_ group: PluginGroup) {
         guard let pi = plugins.firstIndex(where: { $0.id == group.pluginID }) else { return }
         for f in group.fields {
             guard let fi = plugins[pi].fields.firstIndex(where: { $0.key == f.key }) else { continue }
             plugins[pi].fields[fi].value = plugins[pi].fields[fi].defaultValue
         }
+        edited()
     }
 
     /// True while any field of this group is off its manifest default.
@@ -183,40 +418,97 @@ final class PluginSettings: ObservableObject {
     private func applyAndSave() {
         guard let controller else { return }
         var saved: [String: [String: Double]] = [:]
-        for p in plugins where !p.fields.isEmpty {
-            controller.setPluginConfig(p.id, Self.configJSON(p.fields))
+        var savedRows: [String: [String: String]] = [:]
+        for p in plugins where !p.fields.isEmpty || !p.lists.isEmpty {
+            controller.setPluginConfig(p.id, Self.configJSON(p.fields, p.lists, p.rows))
             var one: [String: Double] = [:]
             for f in p.fields { one[f.key] = f.value }
-            saved[p.id] = one
+            if !one.isEmpty { saved[p.id] = one }
+            var lists: [String: String] = [:]
+            for l in p.lists { lists[l.key] = Self.rowsJSON(l, p.rows[l.key] ?? []) }
+            if !lists.isEmpty { savedRows[p.id] = lists }
         }
         UserDefaults.standard.set(saved, forKey: Self.defaultsKey)
+        UserDefaults.standard.set(savedRows, forKey: Self.listsKey)
     }
 
     /// Push the saved settings into the plugins that just came up. Called once
     /// per chart open, after the plugin layer exists. A saved key the schema no
     /// longer declares is ignored by the core.
     static func applySaved(to controller: ChartController) {
-        guard let saved = UserDefaults.standard.dictionary(forKey: defaultsKey) else { return }
-        for p in parse(controller.pluginsJSON()) where !p.fields.isEmpty {
-            guard let one = saved[p.id] as? [String: Double] else { continue }
+        let saved = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
+        let savedRows = UserDefaults.standard.dictionary(forKey: listsKey) ?? [:]
+        if saved.isEmpty && savedRows.isEmpty { return }
+        for p in parse(controller.pluginsJSON()) where !p.fields.isEmpty || !p.lists.isEmpty {
             var fields = p.fields
-            for i in fields.indices {
-                if let v = one[fields[i].key] { fields[i].value = v }
+            if let one = saved[p.id] as? [String: Double] {
+                for i in fields.indices {
+                    if let v = one[fields[i].key] { fields[i].value = v }
+                }
             }
-            controller.setPluginConfig(p.id, configJSON(fields))
+            // A saved list REPLACES what the core holds, including the row the
+            // host seeded from LOOKOUT_NMEA: the mariner's list is the truth
+            // once there is one.
+            var body = configBody(fields)
+            for l in p.lists {
+                guard let text = (savedRows[p.id] as? [String: String])?[l.key] else { continue }
+                body.append("\"\(l.key)\":\(text)")
+            }
+            if body.isEmpty { continue }
+            controller.setPluginConfig(p.id, "{" + body.joined(separator: ",") + "}")
         }
     }
 
-    /// `{"cpa_limit":926,"cpa_alarm":true}` — a toggle crosses as a JSON bool,
-    /// which is the only shape the core accepts for one.
-    static func configJSON(_ fields: [PluginField]) -> String {
-        let body = fields.map { f -> String in
+    /// `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — a toggle
+    /// crosses as a JSON bool, which is the only shape the core accepts for
+    /// one, and a list crosses as its whole array of rows.
+    static func configJSON(_ fields: [PluginField],
+                           _ lists: [PluginListSchema] = [],
+                           _ rows: [String: [PluginRow]] = [:]) -> String {
+        var body = configBody(fields)
+        for l in lists { body.append("\"\(l.key)\":\(rowsJSON(l, rows[l.key] ?? []))") }
+        return "{" + body.joined(separator: ",") + "}"
+    }
+
+    private static func configBody(_ fields: [PluginField]) -> [String] {
+        fields.map { f -> String in
             switch f.kind {
             case .toggle: return "\"\(f.key)\":\(f.isOn ? "true" : "false")"
             case .number: return "\"\(f.key)\":\(trimmed(f.value))"
+            case .text: return "\"\(f.key)\":\"\""  // never a scalar; see the core
             }
         }
-        return "{" + body.joined(separator: ",") + "}"
+    }
+
+    /// A list as the core takes it: every row, every column the schema
+    /// declares, and the row id the shell assigned.
+    static func rowsJSON(_ list: PluginListSchema, _ rows: [PluginRow]) -> String {
+        let body = rows.map { row -> String in
+            var cells = ["\"id\":\(jsonString(row.id))"]
+            for f in list.itemFields {
+                let v = row.cells[f.key] ?? PluginValue(nil, f)
+                cells.append("\"\(f.key)\":\(v.json)")
+            }
+            return "{" + cells.joined(separator: ",") + "}"
+        }
+        return "[" + body.joined(separator: ",") + "]"
+    }
+
+    /// A quoted, escaped JSON string. A host name is whatever was typed.
+    nonisolated static func jsonString(_ s: String) -> String {
+        var out = "\""
+        for c in s.unicodeScalars {
+            switch c {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if c.value < 0x20 { out += String(format: "\\u%04x", c.value) } else { out.unicodeScalars.append(c) }
+            }
+        }
+        return out + "\""
     }
 
     /// A number with no trailing ".0": the core takes either, and a settings
@@ -243,9 +535,39 @@ final class PluginSettings: ObservableObject {
                 name: o["name"] as? String ?? id,
                 live: o["live"] as? Bool ?? false,
                 status: o["status"] as? String ?? "",
-                fields: (o["settings"] as? [[String: Any]] ?? []).compactMap(field(from:))
+                fields: (o["settings"] as? [[String: Any]] ?? []).compactMap(field(from:)),
+                lists: (o["lists"] as? [[String: Any]] ?? []).compactMap { listSchema(from: $0, pluginID: id) },
+                rows: listRows(o, pluginID: id)
             )
         }
+    }
+
+    /// One repeating group's schema: what a row holds and where the rows show.
+    private static func listSchema(from o: [String: Any], pluginID: String) -> PluginListSchema? {
+        guard let key = o["key"] as? String else { return nil }
+        return PluginListSchema(
+            pluginID: pluginID,
+            key: key,
+            group: o["group"] as? String ?? "",
+            tab: o["tab"] as? String ?? "advanced",
+            itemFields: (o["item_fields"] as? [[String: Any]] ?? []).compactMap(field(from:))
+        )
+    }
+
+    /// The rows in force for every list of one plugin, keyed by list key.
+    private static func listRows(_ o: [String: Any], pluginID: String) -> [String: [PluginRow]] {
+        var out: [String: [PluginRow]] = [:]
+        for l in o["lists"] as? [[String: Any]] ?? [] {
+            guard let key = l["key"] as? String else { continue }
+            let fields = (l["item_fields"] as? [[String: Any]] ?? []).compactMap(field(from:))
+            out[key] = (l["rows"] as? [[String: Any]] ?? []).compactMap { row in
+                guard let id = row["id"] as? String else { return nil }
+                var cells: [String: PluginValue] = [:]
+                for f in fields { cells[f.key] = PluginValue(row[f.key], f) }
+                return PluginRow(id: id, cells: cells)
+            }
+        }
+        return out
     }
 
     private static func field(from o: [String: Any]) -> PluginField? {
@@ -253,7 +575,7 @@ final class PluginSettings: ObservableObject {
               let kindText = o["kind"] as? String,
               let kind = PluginField.Kind(rawValue: kindText)
         else { return nil }
-        let value: Double, fallback: Double
+        var value: Double = 0, fallback: Double = 0
         switch kind {
         case .toggle:
             value = (o["value"] as? Bool ?? false) ? 1 : 0
@@ -261,6 +583,8 @@ final class PluginSettings: ObservableObject {
         case .number:
             value = (o["value"] as? NSNumber)?.doubleValue ?? 0
             fallback = (o["default"] as? NSNumber)?.doubleValue ?? value
+        case .text:
+            break // a text field only ever lives in a row; its value is there
         }
         // A schema that declares no label, description, group or section still
         // renders: the key names the control and the core's fallback section
@@ -276,6 +600,8 @@ final class PluginSettings: ObservableObject {
             min: (o["min"] as? NSNumber)?.doubleValue ?? 0,
             max: (o["max"] as? NSNumber)?.doubleValue ?? 1,
             defaultValue: fallback,
+            defaultText: o["default"] as? String ?? "",
+            optional: o["optional"] as? Bool ?? false,
             value: value
         )
     }

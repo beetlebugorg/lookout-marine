@@ -113,6 +113,10 @@ struct PluginSections: View {
                         }
                     case .number:
                         PluginNumberRow(field: f, value: p.number(g.pluginID, f.key))
+                    case .text:
+                        // Only ever a column of a list; the core refuses a
+                        // scalar one. Nothing to draw here.
+                        EmptyView()
                     }
                 }
                 if p.isChanged(g) {
@@ -122,6 +126,201 @@ struct PluginSections: View {
                 SectionHead(g.title)
             }
         }
+    }
+}
+
+/// The lists a plugin put in this section: connections, and anything else
+/// there can be more than one of. One Section per list, with the rows the
+/// mariner keeps and a control to add another.
+struct PluginListSections: View {
+    @ObservedObject var p: PluginSettings
+    let tab: String
+
+    var body: some View {
+        ForEach(p.lists(tab: tab)) { list in
+            Section {
+                let rows = p.rows(list)
+                if rows.isEmpty {
+                    Text("No connections yet.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(rows) { row in
+                    // A row with no address cannot work yet, so it opens
+                    // itself: the mariner has to type one, and hunting for a
+                    // disclosure triangle to find that out is not a task.
+                    PluginRowEditor(p: p, list: list, rowID: row.id,
+                                    startOpen: row.text("host").isEmpty)
+                }
+                Button {
+                    p.addRow(list)
+                } label: {
+                    Label("Add Connection", systemImage: "plus")
+                }
+            } header: {
+                SectionHead(list.group)
+            } footer: {
+                Text("Give the address of your instrument network's gateway. "
+                     + "Most WiFi gateways serve NMEA 0183 on port 10110. "
+                     + "Everything switched on here feeds the same chart.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// One row of a list: what it is called, what it is doing right now, a switch
+/// that pauses it, and — folded away until it is wanted — the address behind
+/// it. The mariner reads the first line and touches nothing else most days.
+///
+/// The chevron is DRAWN HERE rather than taken from a DisclosureGroup. A
+/// disclosure centres its chevron on the whole label, and this label is two
+/// lines deep, so the chevron floated half a line below the dot and the title
+/// — out of step with every other row in this window, where the leading
+/// control sits on the title's line. The rows that open are ordinary Form
+/// rows, so they get the window's own separators.
+struct PluginRowEditor: View {
+    @ObservedObject var p: PluginSettings
+    let list: PluginListSchema
+    let rowID: String
+    var startOpen = false
+    @State private var open = false
+
+    private var row: PluginRow? { p.rows(list).first { $0.id == rowID } }
+
+    /// What the mariner named it, or the address it dials.
+    private var title: String {
+        guard let row else { return "" }
+        let name = row.text("name")
+        if !name.isEmpty { return name }
+        let host = row.text("host")
+        if host.isEmpty { return "New connection" }
+        return "\(host):\(PluginSettings.trimmed(row.number("port")))"
+    }
+
+    /// How far the opened rows sit inside their row's leading edge, so they
+    /// read as belonging to it. The platform insets a disclosure's children to
+    /// its label, and this is that distance: the chevron (9) and the state dot
+    /// (8) and the two 8pt gaps and the 2pt the dot's frame adds.
+    private static let childInset: CGFloat = 35
+
+    var body: some View {
+        header
+        if open {
+            ForEach(list.itemFields) { f in
+                switch f.kind {
+                case .text:
+                    DescribedRow(title: f.label, desc: f.desc) {
+                        CommitTextField(
+                            placeholder: f.optional ? "Optional" : "",
+                            value: p.cellText(list, rowID, f.key)
+                        )
+                        .frame(width: 190)
+                        .textFieldStyle(.roundedBorder)
+                    }
+                    .padding(.leading, Self.childInset)
+                case .number:
+                    DescribedRow(title: f.label, desc: f.desc) {
+                        TextField("", value: p.cellNumber(list, rowID, f.key), format: .number.grouping(.never))
+                            .labelsHidden()
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    .padding(.leading, Self.childInset)
+                case .toggle:
+                    EmptyView() // the pause switch is in the header, where it is read
+                }
+            }
+            Button(role: .destructive) {
+                p.removeRow(list, rowID)
+            } label: {
+                Label("Remove Connection", systemImage: "trash")
+            }
+            .padding(.leading, Self.childInset)
+        }
+    }
+
+    /// The line the mariner reads: state, name, and the pause switch. Clicking
+    /// anywhere but the switch opens the address behind it.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button {
+                open.toggle()
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .frame(width: 9)
+                    StatusDot(item: p.status(list, rowID))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                        Text(p.status(list, rowID)?.line ?? "not started")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityHint(open ? "Hide the address" : "Show the address")
+
+            // The pause switch: off closes the socket and stops the retries,
+            // on dials again. Outside the button, or it could not be touched.
+            if let sw = list.itemFields.first(where: { $0.kind == .toggle }) {
+                Toggle("", isOn: p.cellToggle(list, rowID, sw.key))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help(sw.desc)
+            }
+        }
+        .onAppear { if startOpen { open = true } }
+    }
+}
+
+/// A text field that commits when the mariner is FINISHED — on return, or when
+/// the field loses focus. Not per keystroke: an address pushed letter by letter
+/// would have the plugin dialling "1", then "10", then "10.0" on the way to
+/// "10.0.0.9".
+struct CommitTextField: View {
+    let placeholder: String
+    @Binding var value: String
+    @State private var draft: String = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $draft)
+            .labelsHidden()
+            .multilineTextAlignment(.trailing)
+            .focused($editing)
+            .onSubmit { value = draft }
+            .onChange(of: editing) { _, nowEditing in
+                if nowEditing { draft = value } else { value = draft }
+            }
+            .onChange(of: value) { _, fresh in
+                if !editing { draft = fresh }
+            }
+            .onAppear { draft = value }
+    }
+}
+
+/// The coloured dot beside a row: green working, grey paused, amber trying,
+/// red given up. Colour is never the only signal — the words are right beside
+/// it — because a colour alone fails a mariner who cannot tell red from green.
+private struct StatusDot: View {
+    let item: PluginStatusItem?
+
+    var body: some View {
+        Circle()
+            .fill(item?.tint ?? Color.secondary)
+            .frame(width: 8, height: 8)
+            .padding(.top, 4)
+            .accessibilityLabel(item?.line ?? "not started")
     }
 }
 

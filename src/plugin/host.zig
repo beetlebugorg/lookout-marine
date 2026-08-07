@@ -127,13 +127,46 @@ pub const Field = struct {
     max: f64 = 0,
     /// A toggle's default is 0 or 1.
     default_value: f64 = 0,
+    /// A text field's default. Empty for the other kinds.
+    default_text: []u8 = &.{},
+    /// A text field the mariner may leave empty. The shell says so; the plugin
+    /// decides what an empty one means.
+    optional: bool = false,
 
-    pub const Kind = enum { number, toggle };
+    /// `text` is only legal inside a LIST: a scalar value crosses the ABI as a
+    /// number, and there is nowhere to keep a scalar string.
+    pub const Kind = enum { number, toggle, text };
 };
 
 /// Longest settings schema a manifest may declare. A pane a mariner has to
 /// scroll past is a pane nobody reads at sea.
 pub const max_fields = 16;
+
+/// Longest text value the host keeps. A host name is 253 bytes at most; this
+/// holds any of them plus a name a mariner would type.
+pub const max_text_bytes = 128;
+
+/// A group the mariner adds ROWS to — connections, waypoints, anything there
+/// can be more than one of. The config value of `key` is a JSON array of row
+/// objects, replaced whole on every edit, and delivered like any other setting
+/// through CONFIG_CHANGED.
+///
+/// Every row carries an `id` the shell assigns when it adds the row. The plugin
+/// echoes that id in its status items, which is how one row's "connected" is
+/// told from another's.
+pub const List = struct {
+    key: []u8,
+    /// The section heading, from the group's label.
+    group: []u8,
+    tab: Tab,
+    /// The columns of one row.
+    items: []Field,
+};
+
+/// Most rows one list may hold, and the longest row id kept. Eight NMEA
+/// gateways is already more than any boat this prototype targets.
+pub const max_list_rows = 8;
+pub const max_row_id = 32;
 
 /// How long a plugin may stay inside ONE module call before the watchdog
 /// terminates it.
@@ -158,6 +191,10 @@ pub const default_event_budget_ms: i64 = 1000;
 ///
 /// Schema v1 — `"settings"` as a bare array of fields — still parses. Those
 /// fields carry no group and land on the fallback tab.
+///
+/// A group may be a LIST instead of a set of fields:
+/// `{"label":"Connections","tab":"connections","list":{"key":"connections",
+///   "item_fields":[{"key":"host","kind":"text"},…]}}`.
 pub const Manifest = struct {
     id: []u8,
     name: []u8,
@@ -165,17 +202,27 @@ pub const Manifest = struct {
     caps: broker.Caps,
     /// The settings schema, empty when the manifest declares none.
     settings: []Field = &.{},
+    /// The repeating groups, empty when the manifest declares none.
+    lists: []List = &.{},
 
     pub fn deinit(self: *Manifest, alloc: std.mem.Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
         freeFields(alloc, self.settings, self.settings.len);
+        freeLists(alloc, self.lists, self.lists.len);
         self.* = undefined;
     }
 
     pub fn field(self: *const Manifest, key: []const u8) ?usize {
         for (self.settings, 0..) |f, i| {
             if (std.mem.eql(u8, f.key, key)) return i;
+        }
+        return null;
+    }
+
+    pub fn list(self: *const Manifest, key: []const u8) ?usize {
+        for (self.lists, 0..) |l, i| {
+            if (std.mem.eql(u8, l.key, key)) return i;
         }
         return null;
     }
@@ -210,6 +257,11 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, ta
         else => "",
     };
 
+    const default_text = switch (o.get("default") orelse std.json.Value{ .string = "" }) {
+        .string => |s| if (s.len <= max_text_bytes) s else return Error.BadManifest,
+        else => "",
+    };
+
     var f = Field{
         .key = try alloc.dupe(u8, key),
         .label = undefined,
@@ -218,6 +270,10 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, ta
         .group = undefined,
         .tab = tab,
         .kind = kind,
+        .optional = switch (o.get("optional") orelse std.json.Value{ .bool = false }) {
+            .bool => |b| b,
+            else => false,
+        },
     };
     errdefer alloc.free(f.key);
     f.label = try alloc.dupe(u8, label);
@@ -228,6 +284,8 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, ta
     errdefer alloc.free(f.unit);
     f.group = try alloc.dupe(u8, group);
     errdefer alloc.free(f.group);
+    f.default_text = try alloc.dupe(u8, if (kind == .text) default_text else "");
+    errdefer alloc.free(f.default_text);
 
     switch (kind) {
         .number => {
@@ -244,6 +302,9 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, ta
                 else => return Error.BadManifest,
             };
         },
+        // A text field needs no range and may declare no default at all: an
+        // empty string is a usable starting point for a host name.
+        .text => f.max = max_text_bytes,
     }
     return f;
 }
@@ -298,10 +359,14 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     errdefer alloc.free(name_owned);
 
     // `built` counts the fields already allocated, so a malformed field
-    // halfway down the schema frees exactly the ones before it.
+    // halfway down the schema frees exactly the ones before it. `lists_built`
+    // does the same for the repeating groups.
     var fields: []Field = &.{};
     var built: usize = 0;
     errdefer freeFields(alloc, fields, built);
+    var lists: []List = &.{};
+    var lists_built: usize = 0;
+    errdefer freeLists(alloc, lists, lists_built);
     if (o.get("settings")) |sv| switch (sv) {
         // v1: a bare array of fields, no groups, no tab.
         .array => |arr| {
@@ -310,18 +375,24 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
             try appendFields(alloc, arr.items, "", .advanced, fields, &built);
         },
         // v2: groups, each naming its heading and the tab it belongs to. One
-        // plugin's settings may span tabs.
+        // plugin's settings may span tabs. A group holds `fields`, or a `list`
+        // the mariner adds rows to.
         .object => |so| {
             const groups = switch (so.get("groups") orelse return Error.BadManifest) {
                 .array => |g| g.items,
                 else => return Error.BadManifest,
             };
             var total: usize = 0;
+            var list_count: usize = 0;
             for (groups) |gv| {
                 const go = switch (gv) {
                     .object => |x| x,
                     else => return Error.BadManifest,
                 };
+                if (go.get("list")) |_| {
+                    list_count += 1;
+                    continue;
+                }
                 total += switch (go.get("fields") orelse return Error.BadManifest) {
                     .array => |a| a.items.len,
                     else => return Error.BadManifest,
@@ -329,6 +400,7 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
             }
             if (total > max_fields) return Error.BadManifest;
             fields = try alloc.alloc(Field, total);
+            if (list_count > 0) lists = try alloc.alloc(List, list_count);
             for (groups) |gv| {
                 const go = gv.object;
                 const label = switch (go.get("label") orelse std.json.Value{ .string = "" }) {
@@ -339,18 +411,82 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
                     .string => |s| Tab.fromName(s),
                     else => .advanced,
                 };
+                if (go.get("list")) |lv| {
+                    lists[lists_built] = try parseList(alloc, lv, label, tab);
+                    lists_built += 1;
+                    continue;
+                }
                 try appendFields(alloc, go.get("fields").?.array.items, label, tab, fields, &built);
+            }
+            // One key, one value: a list may not shadow a field or another
+            // list, or a config object would have to carry both.
+            for (lists[0..lists_built], 0..) |l, i| {
+                if (fieldIndex(fields[0..built], l.key) != null) return Error.BadManifest;
+                for (lists[0..i]) |g| {
+                    if (std.mem.eql(u8, g.key, l.key)) return Error.BadManifest;
+                }
             }
         },
         else => return Error.BadManifest,
     };
+    // A text value has nowhere to live outside a row: the scalar settings cross
+    // the ABI as numbers.
+    for (fields[0..built]) |f| {
+        if (f.kind == .text) return Error.BadManifest;
+    }
     return .{
         .id = id_owned,
         .name = name_owned,
         .abi = abi,
         .caps = caps,
         .settings = fields,
+        .lists = lists,
     };
+}
+
+/// One repeating group: the key its rows are stored under, and the fields one
+/// row holds.
+fn parseList(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, tab: Tab) !List {
+    if (v != .object) return Error.BadManifest;
+    const o = v.object;
+    const key = switch (o.get("key") orelse return Error.BadManifest) {
+        .string => |s| s,
+        else => return Error.BadManifest,
+    };
+    if (key.len == 0 or key.len > 32) return Error.BadManifest;
+    const raw = switch (o.get("item_fields") orelse return Error.BadManifest) {
+        .array => |a| a.items,
+        else => return Error.BadManifest,
+    };
+    if (raw.len == 0 or raw.len > max_fields) return Error.BadManifest;
+
+    var l = List{
+        .key = try alloc.dupe(u8, key),
+        .group = undefined,
+        .tab = tab,
+        .items = &.{},
+    };
+    errdefer alloc.free(l.key);
+    l.group = try alloc.dupe(u8, group);
+    errdefer alloc.free(l.group);
+
+    const items = try alloc.alloc(Field, raw.len);
+    var built: usize = 0;
+    errdefer freeFields(alloc, items, built);
+    try appendFields(alloc, raw, group, tab, items, &built);
+    // `id` is the host's, on every row. A column of that name would fight it.
+    for (items) |f| {
+        if (std.mem.eql(u8, f.key, "id")) return Error.BadManifest;
+    }
+    l.items = items;
+    return l;
+}
+
+fn fieldIndex(fields: []const Field, key: []const u8) ?usize {
+    for (fields, 0..) |f, i| {
+        if (std.mem.eql(u8, f.key, key)) return i;
+    }
+    return null;
 }
 
 /// Parse one group's fields into `fields`, from `built` on. Two fields with one
@@ -380,8 +516,18 @@ fn freeFields(alloc: std.mem.Allocator, fields: []Field, built: usize) void {
         alloc.free(f.desc);
         alloc.free(f.unit);
         alloc.free(f.group);
+        alloc.free(f.default_text);
     }
     if (fields.len > 0) alloc.free(fields);
+}
+
+fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
+    for (lists[0..built]) |l| {
+        alloc.free(l.key);
+        alloc.free(l.group);
+        freeFields(alloc, l.items, l.items.len);
+    }
+    if (lists.len > 0) alloc.free(lists);
 }
 
 /// One loaded plugin, and the thread that runs it.
@@ -398,6 +544,10 @@ pub const Entry = struct {
     /// order. Guarded by the host's `cfg_mu`: a shell writes these from its own
     /// thread while the plugin runs.
     values: []f64 = &.{},
+    /// The rows in force for each list of `manifest.lists`, in the same order,
+    /// each an owned JSON array. Empty rows are `[]`. Guarded by `cfg_mu` with
+    /// `values`.
+    rows: [][]u8 = &.{},
     /// Cleared when the plugin trapped, was terminated, or was shut down.
     /// Atomic: its own dispatch thread writes it, the watchdog on the I/O
     /// thread and the harness read it.
@@ -520,6 +670,7 @@ pub const Host = struct {
             e.module.deinit();
             self.alloc.free(e.bytes);
             if (e.values.len > 0) self.alloc.free(e.values);
+            freeRows(self.alloc, e.rows, e.rows.len);
             e.manifest.deinit(self.alloc);
             self.alloc.destroy(e.state);
         }
@@ -598,6 +749,33 @@ pub const Host = struct {
         errdefer if (values.len > 0) self.alloc.free(values);
         for (manifest.settings, values) |f, *v| v.* = f.default_value;
 
+        // A list starts empty. The plugin decides what no rows means — the
+        // nmea0183 plugin seeds one from LOOKOUT_NMEA — and a shell that has
+        // rows saved sends them with `configSet` once the plugin is up.
+        const rows = try self.alloc.alloc([]u8, manifest.lists.len);
+        var rows_built: usize = 0;
+        errdefer freeRows(self.alloc, rows, rows_built);
+        while (rows_built < rows.len) : (rows_built += 1) {
+            rows[rows_built] = try self.alloc.dupe(u8, "[]");
+        }
+
+        // The second and last nmea0183 line in the host, beside the host/port
+        // injection in `startJson`: the address the app was started with
+        // becomes connection ONE, so the settings window shows the source the
+        // mariner is already receiving instead of an empty list. A shell that
+        // has rows saved overwrites this the moment it pushes them.
+        if (std.mem.endsWith(u8, manifest.id, "nmea0183") and self.opts.nmea_host.len > 0) {
+            if (manifest.list("connections")) |li| {
+                const seeded = try std.fmt.allocPrint(
+                    self.alloc,
+                    "[{{\"id\":\"lookout-nmea\",\"name\":\"\",\"host\":\"{s}\",\"port\":{d},\"enabled\":true}}]",
+                    .{ self.opts.nmea_host, self.opts.nmea_port },
+                );
+                self.alloc.free(rows[li]);
+                rows[li] = seeded;
+            }
+        }
+
         const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{stem});
         defer self.alloc.free(wasm_name);
         const raw = try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
@@ -655,7 +833,7 @@ pub const Host = struct {
             self.br.removePlugin(state);
         }
 
-        const cfg = try self.startJson(&manifest, values);
+        const cfg = try self.startJson(&manifest, values, rows);
         defer self.alloc.free(cfg);
         const rc = inst.start(cfg) catch |e| {
             self.reportTrap(&inst, manifest.id, "lk_start");
@@ -674,6 +852,7 @@ pub const Host = struct {
             .inst = inst,
             .state = state,
             .values = values,
+            .rows = rows,
         });
         self.br.say(broker.level_info, manifest.id, "started ({s}, source {d})", .{ manifest.name, state.source });
         _ = dir_path;
@@ -689,7 +868,7 @@ pub const Host = struct {
     /// their current values, so a plugin reads one shape at start and at every
     /// CONFIG_CHANGED. nmea0183's host and port ride in the same object: they
     /// are configuration the host owns rather than the mariner.
-    fn startJson(self: *Host, manifest: *const Manifest, values: []const f64) ![]u8 {
+    fn startJson(self: *Host, manifest: *const Manifest, values: []const f64, rows: []const []u8) ![]u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.alloc);
         try out.print(self.alloc, "{{\"abi\":{d},\"config\":{{", .{abi_version});
@@ -698,7 +877,7 @@ pub const Host = struct {
             try out.print(self.alloc, "\"host\":\"{s}\",\"port\":{d}", .{ self.opts.nmea_host, self.opts.nmea_port });
             first = false;
         }
-        try writeSettings(&out, self.alloc, manifest.settings, values, first);
+        try writeSettings(&out, self.alloc, manifest, values, rows, first);
         try out.appendSlice(self.alloc, "}}");
         return out.toOwnedSlice(self.alloc);
     }
@@ -720,7 +899,7 @@ pub const Host = struct {
         defer self.cfg_mu.unlock();
         const e = self.entryFor(id) orelse return Error.UnknownPlugin;
         try out.append(self.alloc, '{');
-        try writeSettings(out, self.alloc, e.manifest.settings, e.values, true);
+        try writeSettings(out, self.alloc, &e.manifest, e.values, e.rows, true);
         try out.append(self.alloc, '}');
     }
 
@@ -746,11 +925,19 @@ pub const Host = struct {
             self.cfg_mu.lock();
             defer self.cfg_mu.unlock();
             const e = self.entryFor(id) orelse return Error.UnknownPlugin;
-            if (e.manifest.settings.len == 0) return Error.BadConfig;
+            if (e.manifest.settings.len == 0 and e.manifest.lists.len == 0) return Error.BadConfig;
             index = e.state.index;
 
             var it = parsed.value.object.iterator();
             while (it.next()) |kv| {
+                // A list arrives whole: the shell sends every row it wants to
+                // keep, so a removed row is simply absent from the array.
+                if (e.manifest.list(kv.key_ptr.*)) |li| {
+                    const text = try normalizeRows(self.alloc, e.manifest.lists[li], kv.value_ptr.*);
+                    self.alloc.free(e.rows[li]);
+                    e.rows[li] = text;
+                    continue;
+                }
                 const at = e.manifest.field(kv.key_ptr.*) orelse continue;
                 const f = e.manifest.settings[at];
                 switch (f.kind) {
@@ -762,10 +949,12 @@ pub const Host = struct {
                         .bool => |b| if (b) 1 else 0,
                         else => return Error.BadConfig,
                     },
+                    // Only inside a row, and parseManifest refused it here.
+                    .text => unreachable,
                 }
             }
             try payload.append(self.alloc, '{');
-            try writeSettings(&payload, self.alloc, e.manifest.settings, e.values, true);
+            try writeSettings(&payload, self.alloc, &e.manifest, e.values, e.rows, true);
             try payload.append(self.alloc, '}');
         }
 
@@ -797,7 +986,34 @@ pub const Host = struct {
                 if (k > 0) try out.append(alloc, ',');
                 try writeFieldJson(out, alloc, f, v);
             }
-            try out.appendSlice(alloc, "]}");
+            try out.append(alloc, ']');
+            // The repeating groups: what one row holds, and the rows in force.
+            // Written only when the manifest declares one, so a plugin without
+            // lists writes the JSON it always wrote.
+            if (e.manifest.lists.len > 0) {
+                try out.appendSlice(alloc, ",\"lists\":[");
+                for (e.manifest.lists, e.rows, 0..) |l, text, k| {
+                    if (k > 0) try out.append(alloc, ',');
+                    try out.appendSlice(alloc, "{\"key\":");
+                    try writeJsonString(out, alloc, l.key);
+                    if (l.group.len > 0) {
+                        try out.appendSlice(alloc, ",\"group\":");
+                        try writeJsonString(out, alloc, l.group);
+                    }
+                    try out.print(alloc, ",\"tab\":\"{s}\",\"item_fields\":[", .{@tagName(l.tab)});
+                    for (l.items, 0..) |f, j| {
+                        if (j > 0) try out.append(alloc, ',');
+                        try out.append(alloc, '{');
+                        try writeFieldCore(out, alloc, f);
+                        try out.append(alloc, '}');
+                    }
+                    try out.appendSlice(alloc, "],\"rows\":");
+                    try out.appendSlice(alloc, text);
+                    try out.append(alloc, '}');
+                }
+                try out.append(alloc, ']');
+            }
+            try out.append(alloc, '}');
         }
         try out.appendSlice(alloc, "]}");
     }
@@ -1075,32 +1291,116 @@ fn boolText(v: f64) []const u8 {
     return if (v != 0) "true" else "false";
 }
 
-/// `"key":value` for each field, comma-separated. `first` says whether the
-/// object it is going into is still empty.
+/// `"key":value` for each field and `"key":[rows]` for each list,
+/// comma-separated. `first` says whether the object it is going into is still
+/// empty.
 fn writeSettings(
     out: *std.ArrayList(u8),
     alloc: std.mem.Allocator,
-    fields: []const Field,
+    m: *const Manifest,
     values: []const f64,
+    rows: []const []u8,
     first: bool,
 ) !void {
     var lead = first;
-    for (fields, values) |f, v| {
+    for (m.settings, values) |f, v| {
         if (!lead) try out.append(alloc, ',');
         lead = false;
         try writeJsonString(out, alloc, f.key);
         switch (f.kind) {
             .number => try out.print(alloc, ":{d}", .{v}),
             .toggle => try out.print(alloc, ":{s}", .{boolText(v)}),
+            .text => unreachable, // never a scalar; see parseManifest
         }
+    }
+    for (m.lists, rows) |l, text| {
+        if (!lead) try out.append(alloc, ',');
+        lead = false;
+        try writeJsonString(out, alloc, l.key);
+        try out.append(alloc, ':');
+        try out.appendSlice(alloc, text);
     }
 }
 
-/// One field of the registry JSON: the control to draw, where to draw it, and
-/// the value in force. Keys a schema does not declare are left out, so a v1
-/// manifest still writes what it always wrote.
-fn writeFieldJson(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Field, v: f64) !void {
-    try out.appendSlice(alloc, "{\"key\":");
+/// Rewrite a list the shell sent into the rows the plugin will see: every
+/// column the schema declares, in schema order, clamped and capped, with the
+/// row's id kept.
+///
+/// The rules match the scalar ones. A number out of range is clamped, not
+/// refused; a missing column takes its default; a column the schema does not
+/// declare is dropped. A row is dropped only if it is not an object, and rows
+/// past `max_list_rows` are dropped: a boat with nine NMEA gateways is a
+/// misconfiguration, not a use case.
+fn normalizeRows(alloc: std.mem.Allocator, l: List, v: std.json.Value) ![]u8 {
+    if (v != .array) return Error.BadConfig;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    try out.append(alloc, '[');
+    var written: usize = 0;
+    for (v.array.items) |rv| {
+        if (written >= max_list_rows) break;
+        const ro = switch (rv) {
+            .object => |o| o,
+            else => continue,
+        };
+        if (written > 0) try out.append(alloc, ',');
+        // The id is the shell's, and it is what a status item points at. A row
+        // that arrives without one gets its position, so the plugin always has
+        // something to echo.
+        try out.appendSlice(alloc, "{\"id\":");
+        const id = switch (ro.get("id") orelse std.json.Value{ .string = "" }) {
+            .string => |s| if (s.len > max_row_id) s[0..max_row_id] else s,
+            else => "",
+        };
+        if (id.len > 0) {
+            try writeJsonString(&out, alloc, id);
+        } else {
+            try out.print(alloc, "\"row{d}\"", .{written + 1});
+        }
+        for (l.items) |f| {
+            try out.append(alloc, ',');
+            try writeJsonString(&out, alloc, f.key);
+            try out.append(alloc, ':');
+            const cell = ro.get(f.key);
+            switch (f.kind) {
+                .number => {
+                    const n = jsonNumber(cell) orelse f.default_value;
+                    try out.print(alloc, "{d}", .{std.math.clamp(n, f.min, f.max)});
+                },
+                .toggle => {
+                    const b = switch (cell orelse std.json.Value{ .bool = f.default_value != 0 }) {
+                        .bool => |x| x,
+                        else => f.default_value != 0,
+                    };
+                    try out.appendSlice(alloc, if (b) "true" else "false");
+                },
+                .text => {
+                    const s = switch (cell orelse std.json.Value{ .string = f.default_text }) {
+                        .string => |x| x,
+                        else => f.default_text,
+                    };
+                    try writeJsonString(&out, alloc, if (s.len > max_text_bytes) s[0..max_text_bytes] else s);
+                },
+            }
+        }
+        try out.append(alloc, '}');
+        written += 1;
+    }
+    try out.append(alloc, ']');
+    return out.toOwnedSlice(alloc);
+}
+
+fn freeRows(alloc: std.mem.Allocator, rows: [][]u8, built: usize) void {
+    for (rows[0..built]) |r| alloc.free(r);
+    if (rows.len > 0) alloc.free(rows);
+}
+
+/// What a control IS: the label, the sentence under it, the kind, the unit and
+/// the limits. Shared by a scalar field and a list's columns. Keys a schema
+/// does not declare are left out, so a v1 manifest still writes what it always
+/// wrote.
+fn writeFieldCore(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Field) !void {
+    try out.appendSlice(alloc, "\"key\":");
     try writeJsonString(out, alloc, f.key);
     try out.appendSlice(alloc, ",\"label\":");
     try writeJsonString(out, alloc, f.label);
@@ -1113,6 +1413,23 @@ fn writeFieldJson(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Field, v
         try out.appendSlice(alloc, ",\"unit\":");
         try writeJsonString(out, alloc, f.unit);
     }
+    if (f.optional) try out.appendSlice(alloc, ",\"optional\":true");
+    switch (f.kind) {
+        .number => try out.print(alloc, ",\"min\":{d},\"max\":{d},\"default\":{d}", .{ f.min, f.max, f.default_value }),
+        .toggle => try out.print(alloc, ",\"default\":{s}", .{boolText(f.default_value)}),
+        .text => {
+            try out.appendSlice(alloc, ",\"default\":");
+            try writeJsonString(out, alloc, f.default_text);
+            try out.print(alloc, ",\"max_len\":{d}", .{max_text_bytes});
+        },
+    }
+}
+
+/// One scalar field of the registry JSON: what the control is, where the shell
+/// puts it, and the value in force.
+fn writeFieldJson(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Field, v: f64) !void {
+    try out.append(alloc, '{');
+    try writeFieldCore(out, alloc, f);
     // Where the shell puts the control. The group is the section heading, left
     // out when the schema declares none. The tab is always written, and always
     // resolved, so every shell reads one answer.
@@ -1122,12 +1439,9 @@ fn writeFieldJson(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Field, v
     }
     try out.print(alloc, ",\"tab\":\"{s}\"", .{@tagName(f.tab)});
     switch (f.kind) {
-        .number => try out.print(alloc, ",\"min\":{d},\"max\":{d},\"default\":{d},\"value\":{d}", .{
-            f.min, f.max, f.default_value, v,
-        }),
-        .toggle => try out.print(alloc, ",\"default\":{s},\"value\":{s}", .{
-            boolText(f.default_value), boolText(v),
-        }),
+        .number => try out.print(alloc, ",\"value\":{d}", .{v}),
+        .toggle => try out.print(alloc, ",\"value\":{s}", .{boolText(v)}),
+        .text => unreachable, // never a scalar; see parseManifest
     }
     try out.append(alloc, '}');
 }
@@ -1209,13 +1523,13 @@ test "the start payload carries the ABI, and NMEA config only for nmea0183" {
 
     var nm = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.nmea0183\",\"abi\":1}");
     defer nm.deinit(t.allocator);
-    const nmea = try h.startJson(&nm, &.{});
+    const nmea = try h.startJson(&nm, &.{}, &.{});
     defer t.allocator.free(nmea);
     try t.expectEqualStrings("{\"abi\":1,\"config\":{\"host\":\"10.0.0.4\",\"port\":2000}}", nmea);
 
     var om = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.ownship\",\"abi\":1}");
     defer om.deinit(t.allocator);
-    const other = try h.startJson(&om, &.{});
+    const other = try h.startJson(&om, &.{}, &.{});
     defer t.allocator.free(other);
     try t.expectEqualStrings("{\"abi\":1,\"config\":{}}", other);
 
@@ -1223,7 +1537,7 @@ test "the start payload carries the ABI, and NMEA config only for nmea0183" {
     // CONFIG_CHANGED later carries.
     var am = try parseManifest(t.allocator, ais_settings_manifest);
     defer am.deinit(t.allocator);
-    const with = try h.startJson(&am, &.{ 926, 1 });
+    const with = try h.startJson(&am, &.{ 926, 1 }, &.{});
     defer t.allocator.free(with);
     try t.expectEqualStrings("{\"abi\":1,\"config\":{\"cpa_limit\":926,\"cpa_alarm\":true}}", with);
 }
@@ -1325,6 +1639,103 @@ test "a v2 schema carries labels, descriptions, groups and tabs" {
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 }
 
+const list_manifest =
+    \\{"id":"org.beetlebug.nmea0183","name":"NMEA 0183","abi":1,
+    \\ "settings":{"groups":[
+    \\  {"label":"Connections","tab":"connections","list":{"key":"connections","item_fields":[
+    \\   {"key":"name","label":"Name","kind":"text","optional":true},
+    \\   {"key":"host","label":"Address","desc":"The gateway on your network.","kind":"text","default":"127.0.0.1"},
+    \\   {"key":"port","label":"Port","kind":"number","min":1,"max":65535,"default":10110},
+    \\   {"key":"enabled","label":"On","kind":"toggle","default":true}]}}]}}
+;
+
+test "a list group parses, and its rows are policed like any other setting" {
+    const a = t.allocator;
+    var m = try parseManifest(a, list_manifest);
+    defer m.deinit(a);
+    try t.expectEqual(@as(usize, 0), m.settings.len);
+    try t.expectEqual(@as(usize, 1), m.lists.len);
+
+    const l = m.lists[0];
+    try t.expectEqualStrings("connections", l.key);
+    try t.expectEqualStrings("Connections", l.group);
+    try t.expectEqual(Tab.connections, l.tab);
+    try t.expectEqual(@as(usize, 4), l.items.len);
+    try t.expectEqual(Field.Kind.text, l.items[0].kind);
+    try t.expect(l.items[0].optional);
+    try t.expectEqualStrings("127.0.0.1", l.items[1].default_text);
+    try t.expectEqual(@as(usize, 0), m.list("connections").?);
+
+    // A row keeps its id, takes the schema's order, clamps a number, drops a
+    // column nobody declared, and fills in what is missing.
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const ja = arena.allocator();
+    const rows = try normalizeRows(
+        a,
+        l,
+        try std.json.parseFromSliceLeaky(std.json.Value, ja,
+            \\[{"id":"c1","name":"Masthead","host":"10.0.0.9","port":99999,"enabled":false,"junk":1},
+            \\ {"host":"nav.local"}]
+        , .{ .allocate = .alloc_if_needed }),
+    );
+    defer a.free(rows);
+    try t.expectEqualStrings(
+        "[{\"id\":\"c1\",\"name\":\"Masthead\",\"host\":\"10.0.0.9\",\"port\":65535,\"enabled\":false}," ++
+            "{\"id\":\"row2\",\"name\":\"\",\"host\":\"nav.local\",\"port\":10110,\"enabled\":true}]",
+        rows,
+    );
+
+    // Rows past the cap are dropped, and a row that is not an object is not a
+    // row at all.
+    var many: std.ArrayList(u8) = .empty;
+    defer many.deinit(a);
+    try many.append(a, '[');
+    for (0..max_list_rows + 3) |i| {
+        if (i > 0) try many.append(a, ',');
+        try many.print(a, "{{\"host\":\"h{d}\"}}", .{i});
+    }
+    try many.appendSlice(a, ",7]");
+    const capped = try normalizeRows(a, l, try std.json.parseFromSliceLeaky(std.json.Value, ja, many.items, .{}));
+    defer a.free(capped);
+    try t.expectEqual(max_list_rows, std.mem.count(u8, capped, "\"host\":"));
+
+    // A list that is not an array is a shell fault, not a clamp.
+    try t.expectError(Error.BadConfig, normalizeRows(a, l, .{ .bool = true }));
+
+    // The registry JSON carries the schema of one row and the rows in force.
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try json.append(a, '{');
+    try writeFieldCore(&json, a, l.items[1]);
+    try json.append(a, '}');
+    try t.expectEqualStrings(
+        "{\"key\":\"host\",\"label\":\"Address\",\"desc\":\"The gateway on your network.\"," ++
+            "\"kind\":\"text\",\"default\":\"127.0.0.1\",\"max_len\":128}",
+        json.items,
+    );
+}
+
+test "a list is refused when it fights another key, and text needs a row" {
+    const a = t.allocator;
+    const bad = [_][]const u8{
+        // A scalar text field has nowhere to keep its value.
+        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"text\"}]}",
+        // A list with no key, and one with no columns.
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"item_fields\":[]}}]}}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":[]}}]}}",
+        // A column called id would fight the one the host writes.
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":" ++
+            "[{\"key\":\"id\",\"kind\":\"text\"}]}}]}}",
+        // A list key that a field already uses, and two lists with one key.
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"fields\":[{\"key\":\"c\",\"kind\":\"toggle\",\"default\":true}]}," ++
+            "{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",
+        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}," ++
+            "{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+}
+
 test "the registry JSON carries the schema the shell renders" {
     const a = t.allocator;
     var m = try parseManifest(a, v2_manifest);
@@ -1338,8 +1749,8 @@ test "the registry JSON carries the schema the shell renders" {
     try t.expect(std.mem.indexOf(u8, s, "\"group\":\"Collision alarm\",\"tab\":\"alarms\"") != null);
     try t.expect(std.mem.indexOf(u8, s, "\"group\":\"AIS targets\",\"tab\":\"vessels\"") != null);
     // Nothing declared: no desc key, no group key, and the fallback tab.
-    try t.expect(std.mem.indexOf(u8, s, "{\"key\":\"spare\",\"label\":\"Spare\",\"kind\":\"toggle\",\"tab\":\"advanced\"," ++
-        "\"default\":false,\"value\":false}") != null);
+    try t.expect(std.mem.indexOf(u8, s, "{\"key\":\"spare\",\"label\":\"Spare\",\"kind\":\"toggle\"," ++
+        "\"default\":false,\"tab\":\"advanced\",\"value\":false}") != null);
 
     // v1 keeps the shape it always wrote, with the tab added.
     var v1 = try parseManifest(a, ais_settings_manifest);
@@ -1347,5 +1758,5 @@ test "the registry JSON carries the schema the shell renders" {
     json.clearRetainingCapacity();
     try writeFieldJson(&json, a, v1.settings[0], 926);
     try t.expectEqualStrings("{\"key\":\"cpa_limit\",\"label\":\"CPA limit\",\"kind\":\"number\",\"unit\":\"m\"," ++
-        "\"tab\":\"advanced\",\"min\":93,\"max\":9260,\"default\":926,\"value\":926}", json.items);
+        "\"min\":93,\"max\":9260,\"default\":926,\"tab\":\"advanced\",\"value\":926}", json.items);
 }
