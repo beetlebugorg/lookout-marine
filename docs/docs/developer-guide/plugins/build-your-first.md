@@ -7,19 +7,26 @@ sidebar_position: 3
 # Build your first plugin
 
 You are going to draw a dashed line on a chart: one nautical mile downwind from
-the boat, taken off the chart the moment the wind or the fix goes stale.
+the boat, taken off the chart the moment the wind or the fix goes stale. It is
+twenty-four lines of Zig, header comment included.
 
-It is a small plugin, but it touches everything a drawing plugin ever needs:
-subscribing to boat data, a timer, state that survives between events, an overlay
-batch, and a status line the app can show. It is the `laylines` plugin that ships
-with Lookout, cut down to one line instead of two — so when you want to go
-further, there is a finished example of the same shape sitting in the tree.
+Small as it is, it has the shape every drawing plugin has. You declare what you
+read off the boat and you describe what you want on the chart. The library owns
+everything else: the subscription, the staleness window, the redraw timer, the
+difference between this picture and the last one, and the status line the app
+shows.
 
-The walkthrough is in Zig, which is the only language whose plugin-side library
-is settled. Go and Rust modules load and run — see
-[building the plugin in Go and in Rust](#building-the-plugin-in-go-and-in-rust) for the
-toolchains and the build commands — but their libraries are being rewritten, so
-read the Zig listing first for the shape of the thing.
+`plugins/windline/` is this plugin, already in the tree. `zig build plugins`
+compiles it and does not install it: it is the worked example the recipes are
+checked against, and installed beside the shipped plugins it would draw a second
+line off own ship. You are going to write your own copy under your own id, so
+that yours is installed and you can change it without touching the reference.
+
+The walkthrough is in Zig.
+[The plugin library](library.md#the-entry-points) has the same entry points in
+Go and Rust, and
+[building the plugin in Go and in Rust](#building-the-plugin-in-go-and-in-rust)
+has those toolchains.
 
 ## Before you start
 
@@ -38,7 +45,7 @@ read the Zig listing first for the shape of the thing.
 A plugin is a directory with two files in it.
 
 ```
-plugins/windline/
+plugins/downwind/
   manifest.json     who it is, and what it may do
   main.zig          the module
 ```
@@ -52,213 +59,94 @@ directory, is what the host loads.
 
 ```json
 {
-  "id": "org.example.windline",
+  "id": "org.example.downwind",
   "name": "Downwind line",
   "abi": 1,
   "capabilities": ["vessel.read", "overlay.draw"]
 }
 ```
 
-Only `name` is optional. `abi` must be 1; the host refuses anything else. Leave
-`capabilities` out and your plugin is granted nothing, which for this one means
-it cannot draw.
+Use your own domain in the id. Only `name` is optional. `abi` must be 1; the
+host refuses anything else. Leave `capabilities` out and your plugin is granted
+nothing, which for this one means it cannot draw.
 
 A **capability** is a permission. Most of what your module can ask the host to do
 sits behind one — logging, the clocks and timers do not — and the host checks
 every call against this list. Here you are asking for the two you need: read boat
 data, and draw. You are not asking for `net.tcp-client` or `alerts.raise`, so if
-you called `tcp_connect` or `alert` they would be refused.
+you called either it would be refused.
 
 Ask for the least you need. Refusals cost you nothing today beyond a `-1` and a
 log line, but [the rules](rules.md#a-refused-call-returns--1-and-logs) explain
 why you want to find them in the harness rather than at sea.
 
 Later you will want the settings block, which puts your own controls in the
-mariner's settings window. That is in
-[the ABI reference](abi.md#the-manifest), along with every other manifest field.
+mariner's settings window. Declare it as a Zig struct and check it against the
+manifest in a test — see
+[declaring settings](library.md#declaring-settings-the-mariner-can-change).
+[The ABI reference](abi.md#the-manifest) has every other manifest field.
 
 ## Writing the module
 
-`plugins/common/lk.zig` is the plugin side of the ABI. It writes the five wasm
-exports for you, routes two of them to functions you write, and hands you a
-scratch allocator, JSON readers for what the host sends, and JSON builders for
-what you send back.
+`plugins/common/lk2.zig` is the plugin library. You import it as `lk2`.
 
 ```zig
-//! Windline: one dashed line downwind from own ship, 1 nm long.
+//! Downwind line: one dashed line 1 nm downwind from own ship.
 //!
-//! The plugin keeps the last position and the last true wind in globals and
-//! redraws from a 1 Hz timer, because the store fans out at up to 10 Hz and a
-//! line that twitches ten times a second is harder to read than one that steps
-//! once a second. Data older than the 5 s staleness window takes the line off
-//! the chart.
+//! The whole plugin. The library subscribes, ages both readings against the
+//! 5 s window, runs `draw` once a second, and takes the line off the chart and
+//! says which instrument is missing when either one goes stale.
 
-const std = @import("std");
-const lk = @import("lk");
+const lk = @import("lk2");
 
 comptime {
-    lk.registerPlugin(@This());
+    lk.plugin(@This());
 }
 
-const id_line = "windline";
-const max_age_ms: i64 = 5_000;
-const redraw_ms: i64 = 1000;
-const length_m: f64 = 1852.0;
-const earth_radius_m: f64 = 6371008.8;
-
-/// A value and enough to age it between events: the host stamps `age_ms` at
-/// delivery, and the monotonic clock carries it on from there.
-const Sample = struct {
-    have: bool = false,
-    at_mono_ms: i64 = 0,
-    age_at_ms: i64 = 0,
-
-    fn stamp(self: *Sample, age_ms: i64) void {
-        self.have = true;
-        self.at_mono_ms = lk.monoMs();
-        self.age_at_ms = age_ms;
-    }
-
-    fn fresh(self: Sample, mono_ms: i64) bool {
-        return self.have and self.age_at_ms + (mono_ms - self.at_mono_ms) <= max_age_ms;
-    }
+pub const inputs = struct {
+    pub const boat = lk.position("navigation.position", .{});
+    pub const twd = lk.number("environment.wind.directionTrue", .{ .label = "wind" });
 };
 
-var pos: Sample = .{};
-var lat: f64 = 0;
-var lon: f64 = 0;
-
-var wind: Sample = .{};
-var twd_deg: f64 = 0;
-
-var timer_id: i64 = -1;
-var drawn = false;
-
-/// The chrome only hears about a change of state: the host logs every status
-/// line it has not seen, so a 1 Hz repeat would be a 1 Hz log line.
-const State = enum { starting, running, degraded, stopped };
-var state: State = .starting;
-
-fn say(next: State, comptime detail: []const u8) void {
-    if (state == next) return;
-    state = next;
-    lk.status(@tagName(next), detail, .{});
-}
-
-pub fn start(s: lk.Start) !void {
-    _ = s;
-    if (lk.subscribePaths(&.{ "navigation.position", "environment.wind.directionTrue" }) < 0)
-        return error.SubscribeRefused;
-    timer_id = lk.timerSet(redraw_ms, true);
-    if (timer_id < 0) return error.TimerRefused;
-    lk.status("starting", "waiting for wind and position", .{});
-}
-
-pub fn onEvent(e: lk.Event) !void {
-    switch (e) {
-        .store_changed => |payload| take(payload),
-        .timer => |id| if (id == timer_id) redraw(),
-        .shutdown => {
-            if (timer_id >= 0) lk.timerCancel(timer_id);
-            clearLine();
-            say(.stopped, "shut down");
-        },
-        else => {},
-    }
-}
-
-/// Record what the store sent. Nothing draws here; the timer does that.
-fn take(payload: []const u8) void {
-    for (lk.readings(payload)) |r| {
-        if (std.mem.eql(u8, r.path, "navigation.position")) {
-            if (r.removed()) {
-                pos.have = false;
-                continue;
-            }
-            const p = r.position() orelse continue;
-            lat = p[0];
-            lon = p[1];
-            pos.stamp(r.age_ms);
-        } else if (std.mem.eql(u8, r.path, "environment.wind.directionTrue")) {
-            if (r.removed()) {
-                wind.have = false;
-                continue;
-            }
-            const v = r.number() orelse continue;
-            if (!std.math.isFinite(v)) continue;
-            twd_deg = v;
-            wind.stamp(r.age_ms);
-        }
-    }
-}
-
-fn redraw() void {
-    const mono = lk.monoMs();
-    if (!pos.fresh(mono) or !wind.fresh(mono)) {
-        clearLine();
-        say(.degraded, "no wind or no position");
-        return;
-    }
-
+pub fn draw(c: *lk.Chart) void {
+    const from = inputs.boat.get();
     // The wind direction is where the wind blows FROM, so downwind is the
     // reciprocal.
-    const end = destination(lat, lon, twd_deg + 180.0, length_m);
-    const pts = [2][2]f64{ .{ lon, lat }, .{ end[0], end[1] } };
-
-    var buf: [512]u8 = undefined;
-    var ov = lk.Overlay.init(&buf);
-    ov.polyline(id_line, &pts, 1.5, .warning, true);
-    if (ov.send() < 0) return;
-    drawn = true;
-    say(.running, "downwind line drawn");
-}
-
-/// Take the line off the chart. Idempotent: nothing is sent once it is gone.
-fn clearLine() void {
-    if (!drawn) return;
-    var buf: [128]u8 = undefined;
-    var ov = lk.Overlay.init(&buf);
-    ov.del(id_line);
-    _ = ov.send();
-    drawn = false;
-}
-
-/// Great-circle destination, `{ lon, lat }`. A sphere, not the ellipsoid the
-/// chart is drawn on: the error over 1 nm is under 4 m.
-fn destination(from_lat: f64, from_lon: f64, bearing_deg: f64, distance_m: f64) [2]f64 {
-    const lat1 = std.math.degreesToRadians(from_lat);
-    const lon1 = std.math.degreesToRadians(from_lon);
-    const brg = std.math.degreesToRadians(bearing_deg);
-    const d = distance_m / earth_radius_m;
-    const lat2 = std.math.asin(@sin(lat1) * @cos(d) + @cos(lat1) * @sin(d) * @cos(brg));
-    const lon2 = lon1 + std.math.atan2(
-        @sin(brg) * @sin(d) * @cos(lat1),
-        @cos(d) - @sin(lat1) * @sin(lat2),
-    );
-    return .{ std.math.radiansToDegrees(lon2), std.math.radiansToDegrees(lat2) };
+    const to = from.destination(inputs.twd.get() + 180, lk.nm(1));
+    c.line("downwind", &.{ from, to }, .{ .color = .warning, .dash = true });
 }
 ```
 
-Four things in that listing are the shape of every plugin you will write, and
-each one is a rule with a reason behind it.
+Four things in that listing are the shape of every drawing plugin you will
+write.
 
-- **`registerPlugin(@This())` at container scope.** It writes `lk_abi`,
-  `lk_alloc`, `lk_free`, `lk_start` and `lk_event`, and routes the last two to
-  your `start` and `onEvent`. An event kind it does not recognise is answered `0`
-  without ever reaching you, so a future Lookout that adds an event will not
-  break the module you build today.
+- **`lk.plugin(@This())` at container scope.** It registers your plugin. It
+  reads what the module declares — here `inputs` and `draw` — and wires only
+  that. A declaration you leave out costs nothing.
+- **The `inputs` block is the subscription and the staleness window together.**
+  The library subscribes to both paths, records every value that arrives, and
+  ages it. `draw` runs only when both are inside their 5 s window; when either
+  one is not, the library takes the line off the chart and posts
+  `no position, no wind`. The `.label = "wind"` is the word that appears in that
+  list, in place of the path's last segment.
+- **`draw` describes the whole picture, every call.** The library compares it
+  with the last one and sends the difference. An object you did not draw this
+  call is taken off the chart. There is no delete call and no batch to build.
 - **Anything that outlives an event is a global.** `lk.scratch()` is reset the
-  moment your handler returns. There is no heap, no free list and nothing to
-  reclaim, so a pointer you keep past the end of a handler is a use-after-free
+  moment your function returns. There is no heap, no free list and nothing to
+  reclaim, so a pointer you keep past the end of a call is a use-after-free
   nothing will catch. See
   [state lives in globals](rules.md#state-lives-in-globals).
-- **The timer draws, not the event.** Boat data arrives at up to 10 Hz and only
-  updates globals here. Redrawing at 1 Hz keeps the core from rebuilding vertex
-  buffers ten times a second, and it is also the only way to notice that a fix
-  went stale — staleness is time passing, not an event that arrives.
-- **A batch that cannot be built is not sent.** `lk.Overlay` writes into a buffer
-  you own, remembers an overflow, and refuses the whole batch at `send` rather
-  than posting half a line.
+
+`draw` runs on the library's timer at 1 Hz, not on every reading. Boat data
+arrives at up to 10 Hz, and redrawing at that rate makes the core rebuild vertex
+buffers ten times a second for a line nobody can see move. It is also the only
+way to notice that a fix went stale, because staleness is time passing rather
+than an event that arrives. Declare `pub const draw_rate_ms: i64 = 250` when you
+draw something that has to move smoothly.
+
+[The plugin library](library.md) is the full surface: the other input kinds, the
+symbol and area calls, the settings struct, connections, and publishing.
 
 ## Compiling the plugin
 
@@ -266,7 +154,7 @@ each one is a rule with a reason behind it.
 of directory names in `build.zig`, so add yours:
 
 ```zig
-for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline" }) |name| {
+for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline", "downwind" }) |name| {
 ```
 
 Then:
@@ -274,29 +162,31 @@ Then:
 ```sh
 zig build plugins
 ls zig-out/plugins/
-# org.example.windline.manifest.json
-# org.example.windline.wasm
+# org.example.downwind.manifest.json
+# org.example.downwind.wasm
 ```
 
 There is no out-of-tree plugin project yet: no template, no package format and
-no `lkplug pack`. Building outside the tree means doing the same thing by hand,
-from any toolchain that emits wasm — the contract is the five exports and the
-import table, nothing more. With Zig it is one command:
+no `lkplug pack`. Building outside the tree means doing the same thing by hand.
+With Zig it is one command:
 
 ```sh
 zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
-    --dep lk -Mroot=main.zig -Mlk=/path/to/lookout-marine/plugins/common/lk.zig
+    --dep lk2 -Mroot=main.zig -Mlk2=/path/to/lookout-marine/plugins/common/lk2.zig
 ```
 
-`-fno-entry` because a plugin is a reactor with no `main`, and `-rdynamic` so the
-linker keeps the five exports. Rename the result to `<id>.wasm`, put
+`-fno-entry` because a plugin has no `main`, and `-rdynamic` so the linker keeps
+what `lk.plugin` declared. Rename the result to `<id>.wasm`, put
 `<id>.manifest.json` beside it, and the host will load it. Copying
-`plugins/common/lk.zig` into your own project works too — it imports only `std`.
+`plugins/common/` into your own project works too: `lk2.zig` and the three files
+under it import only `std`.
+
+The module is about 80 KB.
 
 ## Building the plugin in Go and in Rust
 
-Zig is not the only way in. The plugin above exists in all three languages, line
-for line, so you can read the one you already know:
+Zig is not the only way in. The plugin above exists in all three languages, so
+you can read the one you already know:
 
 ```
 plugins/windline/                 the Zig listing above
@@ -304,56 +194,48 @@ sdk/go/examples/windline/         the same plugin in Go
 sdk/rust/examples/windline/       the same plugin in Rust
 ```
 
-Neither is built by `zig build`. You build the module with your own toolchain and
-drop the pair into a plugin directory yourself — which is what an out-of-tree
-plugin does anyway.
+All three libraries give you the same three tiers under the same names.
+[The entry points](library.md#the-entry-points) shows them side by side, and
+[the names in Zig, Go and Rust](library.md#the-names-in-zig-go-and-rust) is the
+name-by-name mapping and the three differences that are not cosmetic.
 
-:::caution The Go and Rust libraries are being rewritten
-
-The **ABI** below — the five exports, the imports, the WASI floor — is settled,
-and a Go or Rust module that speaks it loads and runs today. The plugin-side
-libraries in `sdk/` are not settled: the whole plugin-facing API is being
-simplified, and `sdk/go/lookout` and `sdk/rust/lookout` will be rewritten to the
-new shape rather than kept as they are. Read them as working proof that the
-language boots, not as an API to build on. This page will grow the walkthrough in
-each language when that shape lands.
-
-:::
+Neither the Go nor the Rust module is built by `zig build`. You build it with
+your own toolchain and drop the pair into a plugin directory yourself, which is
+what an out-of-tree plugin does anyway.
 
 ### Building in Go
 
 Go 1.24 or later. `GOOS=wasip1 GOARCH=wasm` with `-buildmode=c-shared` emits a
-reactor module, and `//go:wasmexport` and `//go:wasmimport` bind the ABI.
+reactor module.
 
 ```sh
 cd sdk/go/examples/windline
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o windline.wasm .
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o org.example.windline.go.wasm .
 
-cp windline.wasm    ../../../../zig-out/plugins/org.example.windline.go.wasm
-cp manifest.json    ../../../../zig-out/plugins/org.example.windline.go.manifest.json
+cp org.example.windline.go.wasm ../../../../zig-out/plugins/
+cp manifest.json ../../../../zig-out/plugins/org.example.windline.go.manifest.json
 ```
 
-Three things a Go author has to know whatever the library looks like, and none of
-them is optional.
+Three things a Go author has to know.
 
 - **`main` never runs.** A reactor is initialised by `_initialize`, which runs
   package initialisation and then hands control back. Package `main` still needs
-  a `main` function to compile; leave it empty and do your setup in an `init`
-  function or in the plugin's own start.
+  a `main` function to compile; leave it empty and register in an `init`
+  function or in a package-level variable.
 - **Goroutines make no progress after you return.** There is one thread and it is
   only inside your module while the host is calling it. No background workers, no
-  `time.Sleep` — it returns at once rather than sleeping, so a sleep loop is a
-  spin loop and the watchdog will kill it. Ask the host for a timer.
-- **The module is about 3.4 MB**, whatever the plugin does; that is the Go
+  `time.Sleep` — it fails rather than sleeping, so a sleep loop is a spin loop
+  and the watchdog will kill it. Ask the host for a timer.
+- **The module is about 4.6 MB**, whatever the plugin does; that is the Go
   runtime. `tinygo build -target=wasip1` emits tens of kilobytes from the same
   source, with the usual TinyGo standard library caveats.
 
 ### Building in Rust
 
-`wasm32-wasip1`, `crate-type = ["cdylib"]`. Add the target once with
-`rustup target add wasm32-wasip1`.
+`wasm32-wasip1`, `crate-type = ["cdylib"]`. Add the target once.
 
 ```sh
+rustup target add wasm32-wasip1
 cd sdk/rust
 cargo build --release --target wasm32-wasip1
 
@@ -363,13 +245,16 @@ cp examples/windline/manifest.json \
    ../../zig-out/plugins/org.example.windline.rs.manifest.json
 ```
 
+`cargo test` runs on your own machine, off wasm, where every host call answers
+"refused". The geodesy, the scene diff, the settings schema and the connection
+list are all testable there without a boat or an emulator.
+
 `std` works: `String`, `Vec`, `format!`, `SystemTime` and `println!` all do what
 you expect. `File::open`, `TcpStream::connect` and `thread::spawn` do not — see
-[the WASI floor](abi.md#the-wasi-floor) for the exact list, and read it before
-you spend an afternoon on a path that cannot resolve. A panic traps the instance
-and the message reaches your log, so do not panic on data off the wire.
+[the WASI floor](abi.md#the-wasi-floor) for the exact list. A panic traps the
+instance and the message reaches your log, so do not panic on data off the wire.
 
-The module is about 120 KB, near the Zig one.
+The module is about 110 KB.
 
 ## Running the plugin in the harness
 
@@ -386,34 +271,42 @@ zig run tools/nmea_gen.zig -- test/annapolis.nmea      # write the replay log, o
     --chart ~/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles \
     --plugins zig-out/plugins \
     --replay test/annapolis.nmea --rate 20 --until 60 \
-    --view -76.4767,38.9763,15 --png windline.png --print status
+    --view -76.4767,38.9763,15 --png downwind.png --print status
 ```
 
 Point `--chart` at your own `.pmtiles` file, and `--view` at water you have a
 chart for. The plugins load in sorted filename order, the `nmea0183` plugin
-dials the loopback server, and the log plays at twenty times real time. The run
-above prints:
+dials the loopback server, and the log plays at twenty times real time. Your
+plugin's lines in that run:
 
 ```
-plugin org.example.windline [info] started (Downwind line, source 5)
-t=    0.0s [info] org.example.windline: status {"state":"degraded","detail":"no wind or no position"}
-t=   20.0s [info] org.example.windline: status {"state":"running","detail":"downwind line drawn"}
+plugin org.example.downwind [info] status {"state":"starting","detail":"waiting for position, wind"}
+plugin org.example.downwind [info] started (Downwind line, source 6)
+t=    3.0s [info] org.example.downwind: status {"state":"running","detail":""}
 ...
-  org.example.windline/windline: polyline warning 2 pts dashed
-plugin org.example.windline: live, 0 denied call(s), status {"state":"running","detail":"downwind line drawn"}
+overlay: 17 object(s)
+  org.example.downwind/downwind: polyline warning 2 pts dashed
+plugin org.example.downwind: live, 0 denied call(s), status {"state":"running","detail":""}
 replay: 61 group(s), 275 line(s), 60.0 s at 20x, 1 connection(s)
 frames: 14 rendered, 1 alert(s) raised
 ```
 
-Read three things there.
+Read four things there.
 
-- **The object inventory** near the end says what is actually on the chart, under
-  the id the host gave it: `<your plugin id>/<your object id>`.
+- **`waiting for position, wind`** is the library, before either reading has
+  arrived. It names both, and it names them from the input declarations. Three
+  seconds in the first fix and the first wind sentence have both landed and the
+  plugin goes to `running`.
+- **The empty detail** is your `draw` saying nothing. Call `c.status(…)` in it
+  and your own words appear there instead.
+- **The object inventory** near the end says what is actually on the chart,
+  under the id the host gave it: `<your plugin id>/<your object id>`.
 - **`0 denied call(s)`** means your manifest asked for everything your plugin
   used. Any other number is a capability you forgot.
-- **`windline.png`** is the chart with your overlay drawn on it. Open it. It is
-  the only way to find out that your line is in the wrong place, or the wrong
-  colour, or a thousand miles away because you swapped a lat and a lon.
+
+`downwind.png` is the chart with your overlay drawn on it. Open it. It is the
+only way to find out that your line is in the wrong place, or the wrong colour,
+or a thousand miles away because you swapped a lat and a lon.
 
 The exit code is 0 only if a frame rendered and no plugin trapped.
 
@@ -441,8 +334,8 @@ A plugin that fails to load is logged and skipped, so the app still opens. Look
 for the reason on stderr:
 
 ```
-plugin org.example.windline [error] load failed: ...
-plugin host [error] plugins: windline not loaded: BadManifest
+plugin org.example.downwind [error] load failed: ...
+plugin host [error] plugins: downwind not loaded: BadManifest
 ```
 
 On the iOS simulator, which reads paths on the host machine, the same directory
@@ -451,11 +344,17 @@ path at all, so only plugins bundled with the app can run.
 
 ## What to read next
 
+[Recipes](recipes.md) is a dozen more things a plugin can do, each with a
+complete short listing: a setting, a guard ring, AIS traffic, a connection list,
+an alarm, storage. [The plugin library](library.md) is the reference for
+everything those recipes call.
+
 The plugins that ship with Lookout are the worked examples, in rising order of
-difficulty: `laylines` draws; `ownship` draws and uses the own-ship anchor;
-`nmea0183` opens a socket, reassembles a stream and publishes; `signalk` does
-the same from a JSON protocol, converts its units and keeps its transport
-behind a seam; `ais` adds settings, an alarm and pick payloads.
+difficulty: `laylines` draws two lines from the same two readings as yours;
+`ownship` draws the boat and keeps a track between calls; `nmea0183` opens
+sockets the mariner configures, reassembles a stream and publishes; `signalk`
+does the same from a JSON protocol over two transports; `ais` adds settings, an
+alarm and pick payloads.
 
 Before you copy one, read [the rules](rules.md). Every rule there is a mistake
 that costs a mariner something at sea.

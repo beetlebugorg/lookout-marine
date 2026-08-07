@@ -29,7 +29,7 @@ That `comptime` block registers your plugin. Nothing else has to be wired up.
 Only the Zig library is settled. The **ABI** underneath it — the imports, the
 events, the WASI floor — is also settled, and a Go or Rust module that speaks it
 loads and runs today. The libraries in `sdk/go` and `sdk/rust`
-are being rewritten onto the same three tiers as the Zig one, and each recipe
+implement the same three tiers as the Zig one, and each recipe
 gains its Go and Rust listing as that lands. Read
 [the ABI](abi.md) for what those libraries are written against.
 
@@ -462,7 +462,7 @@ Reference: [alert](abi.md#alert).
 pub fn draw(c: *lk.Chart) void {
     c.status("TWD {d:.0} deg", .{wind});
     // or, when something is wrong that is not a missing input:
-    c.degraded("the chart is out of date");
+    c.degraded("the chart is out of date", .{});
 }
 ```
 

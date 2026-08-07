@@ -267,6 +267,10 @@ pub fn settingsJson(comptime spec_list: anytype) []const u8 {
         const text = build();
 
         fn build() []const u8 {
+            // Every range and default is an f64 formatted at comptime, and one
+            // of those costs most of the default 3000-branch quota. A schema
+            // holds up to `max_fields` fields of three numbers each.
+            @setEvalBranchQuota(4_000 * max_fields);
             comptime {
                 var out: []const u8 = "{\"groups\":[";
                 var total = 0;

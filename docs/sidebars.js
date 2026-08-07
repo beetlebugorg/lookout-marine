@@ -34,6 +34,7 @@ const sidebars = {
           items: [
             'developer-guide/plugins/recipes',
             'developer-guide/plugins/build-your-first',
+            'developer-guide/plugins/library',
             'developer-guide/plugins/abi',
             'developer-guide/plugins/rules',
             'developer-guide/plugins/dev-harness',

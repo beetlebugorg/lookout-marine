@@ -2,7 +2,7 @@
 name = "lookout"
 version = "0.1.0"
 edition = "2021"
-description = "The plugin side of the Lookout ABI"
+description = "The Lookout plugin API: inputs, draw, settings and connections"
 publish = false
 
 # No dependencies, on purpose. A plugin SDK that pulls a crate tree makes the

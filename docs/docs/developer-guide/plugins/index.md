@@ -29,7 +29,7 @@ is no file system and no network in it; real capabilities go through the
 [The ABI page](abi.md#the-wasi-floor) lists exactly which WASI calls work.
 
 Only the Zig library, `plugins/common/lk.zig`, is settled. The Go and Rust
-libraries under `sdk/` show that those languages work and are being rewritten, so
+libraries under `sdk/` implement the same three tiers as the Zig one, so
 write Zig today unless you are prepared to update your code as they change.
 
 One rule is the same in all three languages: **a plugin is single-threaded, and
@@ -41,6 +41,8 @@ The shortest path in is [Recipes](recipes.md): one page, a dozen things a plugin
 might do, and a complete short listing for each.
 [Build your first plugin](build-your-first.md) covers the same ground in more
 detail — a manifest, one file, and a dashed line drawn on a real chart.
+[The plugin library](library.md) is the reference both of them call, and it
+opens with the entry points in Zig, Go and Rust.
 
 ## What you can build
 
@@ -177,7 +179,8 @@ handed. What that means for you:
 |---|---|
 | [Recipes](recipes.md) | One recipe per thing you might want to do, with the permissions it needs |
 | [Build your first plugin](build-your-first.md) | The walkthrough in Zig: a directory, a manifest, a module, the harness, the app |
-| [The ABI](abi.md) | The reference: imports, event kinds, JSON shapes, the manifest |
+| [The plugin library](library.md) | The API you write against: the entry points in three languages, inputs, drawing, settings, connections |
+| [The ABI](abi.md) | The reference under the library: imports, event kinds, JSON shapes, the manifest |
 | [The rules](rules.md) | The rules the host enforces, and the reason behind each one |
 | [The dev harness](dev-harness.md) | `lookout-plugin-dev`: the replay log, what it prints, and golden tests |
 
@@ -198,7 +201,7 @@ plugins/ais/               targets, CPA/TCPA, the collision alarm, aids to navig
 src/plugin/                the host: the imports, the grants, the stores, the watchdog
 
 sdk/rust/, sdk/go/       the Rust and Go bindings and their windline example — a
-                         PROVISIONAL surface, being rewritten; read them for how a
+                         the same tiers as the Zig library; read them for how a
                          wasip1 module reaches the ABI, not for the API
 ```
 
