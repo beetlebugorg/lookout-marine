@@ -6,14 +6,25 @@ sidebar_position: 2
 
 # Build your first plugin
 
-This page builds one plugin end to end: a dashed line one nautical mile downwind
-from the boat, taken off the chart when the wind or the fix goes stale. It is
-`plugins/laylines/` with one line instead of two, and it uses every part of the
-ABI a drawing plugin needs — subscribe, a timer, globals, an overlay batch, a
-status line.
+You are going to draw a dashed line on a chart: one nautical mile downwind from
+the boat, taken off the chart the moment the wind or the fix goes stale.
 
-You need **Zig 0.16** and a checkout of the repository. Everything below was run
-against `feat/plugins-prototype`.
+It is a small plugin, but it touches everything a drawing plugin ever needs:
+subscribing to boat data, a timer, state that survives between events, an overlay
+batch, and a status line the app can show. It is the `laylines` plugin that ships
+with Lookout, cut down to one line instead of two — so when you want to go
+further, there is a finished example of the same shape sitting in the tree.
+
+## Before you start
+
+- **Zig 0.16.** The plugin-side library is Zig, and so is Lookout's build.
+- **A checkout of Lookout**, on the `feat/plugins-prototype` branch. Note the
+  commit you are on: the ABI is unstable, and this is what you will pin to.
+- **macOS.** It is the only platform where the whole loop — build, harness,
+  app — has been run.
+- **A baked chart**, a `.pmtiles` file. If you do not have one,
+  [Get your charts](../../user-guide/getting-started.md#get-your-charts) takes
+  about ten minutes.
 
 ## The directory
 
@@ -25,10 +36,10 @@ plugins/windline/
   main.zig          the module
 ```
 
-The names are fixed by the build: `zig build plugins` reads `manifest.json` for
-the plugin's id, compiles `main.zig`, and installs the pair into `zig-out/plugins`
-as `<id>.wasm` and `<id>.manifest.json`. That pair, in one directory, is what the
-host loads.
+Those names are fixed by Lookout's build: `zig build plugins` reads
+`manifest.json` for the plugin's id, compiles `main.zig`, and installs the pair
+into `zig-out/plugins` as `<id>.wasm` and `<id>.manifest.json`. That pair, in one
+directory, is what the host loads.
 
 ## The manifest
 
@@ -41,20 +52,30 @@ host loads.
 }
 ```
 
-Four fields, and only `name` is optional. `abi` must be 1; the host refuses
-anything else. The capabilities are the two this plugin uses: it reads vessel
-values and it draws. It asks for nothing else, so `tcp_connect` and `alert` would
-be refused if it called them — [the rules](rules.md) explain why that is the
-posture you want.
+Only `name` is optional. `abi` must be 1; the host refuses anything else. Leave
+`capabilities` out and your plugin is granted nothing, which for this one means
+it cannot draw.
 
-The full manifest, including the settings schema that puts a control in the
-mariner's settings window, is in [the ABI reference](abi.md#the-manifest).
+A **capability** is a permission. Most of what your module can ask the host to do
+sits behind one — logging, the clocks and timers do not — and the host checks
+every call against this list. Here you are asking for the two you need: read boat
+data, and draw. You are not asking for `net.tcp-client` or `alerts.raise`, so if
+you called `tcp_connect` or `alert` they would be refused.
+
+Ask for the least you need. Refusals cost you nothing today beyond a `-1` and a
+log line, but [the rules](rules.md#a-refused-call-returns--1-and-logs) explain
+why you want to find them in the harness rather than at sea.
+
+Later you will want the settings block, which puts your own controls in the
+mariner's settings window. That is in
+[the ABI reference](abi.md#the-manifest), along with every other manifest field.
 
 ## The module
 
-`plugins/common/lk.zig` is the plugin side of the ABI. It emits the five exports,
-routes them to two functions you write, and gives you a scratch allocator, JSON
-readers for what the host sends, and JSON builders for what you send back.
+`plugins/common/lk.zig` is the plugin side of the ABI. It writes the five wasm
+exports for you, routes two of them to functions you write, and hands you a
+scratch allocator, JSON readers for what the host sends, and JSON builders for
+what you send back.
 
 ```zig
 //! Windline: one dashed line downwind from own ship, 1 nm long.
@@ -211,29 +232,31 @@ fn destination(from_lat: f64, from_lon: f64, bearing_deg: f64, distance_m: f64) 
 }
 ```
 
-Four things in that listing are the whole shape of a plugin, and each one is a
-rule with a reason behind it:
+Four things in that listing are the shape of every plugin you will write, and
+each one is a rule with a reason behind it.
 
-- **`registerPlugin(@This())` at container scope.** It emits `lk_abi`,
+- **`registerPlugin(@This())` at container scope.** It writes `lk_abi`,
   `lk_alloc`, `lk_free`, `lk_start` and `lk_event`, and routes the last two to
   your `start` and `onEvent`. An event kind it does not recognise is answered `0`
-  without reaching you, so a host that grows a new event does not break a module
-  built today.
-- **Every value that outlives an event is a global.** `lk.scratch()` is reset the
-  moment your handler returns. There is no heap, there is no free list, and there
-  is nothing to reclaim. See [state lives in globals](rules.md#state-lives-in-globals).
-- **The timer draws, not the event.** `store_changed` arrives at up to 10 Hz and
-  only updates globals here. Republishing at 1 Hz keeps the core from rebuilding
-  vertex buffers ten times a second, and it is also the only way to notice that a
-  fix went stale — that is time passing, not an event.
+  without ever reaching you, so a future Lookout that adds an event will not
+  break the module you build today.
+- **Anything that outlives an event is a global.** `lk.scratch()` is reset the
+  moment your handler returns. There is no heap, no free list and nothing to
+  reclaim, so a pointer you keep past the end of a handler is a use-after-free
+  nothing will catch. See
+  [state lives in globals](rules.md#state-lives-in-globals).
+- **The timer draws, not the event.** Boat data arrives at up to 10 Hz and only
+  updates globals here. Redrawing at 1 Hz keeps the core from rebuilding vertex
+  buffers ten times a second, and it is also the only way to notice that a fix
+  went stale — staleness is time passing, not an event that arrives.
 - **A batch that cannot be built is not sent.** `lk.Overlay` writes into a buffer
   you own, remembers an overflow, and refuses the whole batch at `send` rather
   than posting half a line.
 
 ## Compile it
 
-`zig build plugins` builds the plugins **in the tree**. It walks a fixed list of
-directory names in `build.zig`, so add yours:
+`zig build plugins` builds plugins **in Lookout's tree**. It walks a fixed list
+of directory names in `build.zig`, so add yours:
 
 ```zig
 for ([_][]const u8{ "echo", "nmea0183", "ownship", "ais", "laylines", "windline" }) |name| {
@@ -248,11 +271,10 @@ ls zig-out/plugins/
 # org.example.windline.wasm
 ```
 
-That is honest about where the prototype is: there is no out-of-tree plugin
-project, no package format and no `lkplug pack`. An out-of-tree author does the
-same thing by hand, from any toolchain that emits wasm. The contract is five
-exports and the import table, nothing more — see [the ABI](abi.md). With Zig, one
-command does it:
+There is no out-of-tree plugin project yet: no template, no package format and
+no `lkplug pack`. Building outside the tree means doing the same thing by hand,
+from any toolchain that emits wasm — the contract is the five exports and the
+import table, nothing more. With Zig it is one command:
 
 ```sh
 zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
@@ -266,14 +288,14 @@ linker keeps the five exports. Rename the result to `<id>.wasm`, put
 
 ## Run it in the harness
 
-`lookout-plugin-dev` is the core opened offscreen with the plugin host inside it,
-plus a loopback TCP listener that serves a recorded NMEA log to whichever plugin
-dials it. It is the fastest way to see a plugin work, and the only way to see it
-work without a Mac app.
+The **dev harness** is Lookout's chart core running offscreen with the real
+plugin host inside it, plus a loopback TCP server that plays a recorded NMEA log
+to whichever plugin dials it. It is the fastest way to see your plugin work, and
+the only way to see it work without building a Mac app.
 
 ```sh
 zig build plugin-dev
-zig run tools/nmea_gen.zig -- test/annapolis.nmea      # the replay log, once
+zig run tools/nmea_gen.zig -- test/annapolis.nmea      # write the replay log, once
 
 ./zig-out/bin/lookout-plugin-dev \
     --chart ~/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles \
@@ -282,8 +304,10 @@ zig run tools/nmea_gen.zig -- test/annapolis.nmea      # the replay log, once
     --view -76.4767,38.9763,15 --png windline.png --print status
 ```
 
-The plugins load in sorted file order, the `nmea0183` plugin connects to the
-listener, and the log plays at twenty times real time. What the run above prints:
+Point `--chart` at your own `.pmtiles` file, and `--view` at water you have a
+chart for. The plugins load in sorted filename order, the `nmea0183` plugin
+dials the loopback server, and the log plays at twenty times real time. The run
+above prints:
 
 ```
 plugin org.example.windline [info] started (Downwind line, source 5)
@@ -296,30 +320,36 @@ replay: 61 group(s), 275 line(s), 60.0 s at 20x, 1 connection(s)
 frames: 14 rendered, 1 alert(s) raised
 ```
 
-Three things to read there. The **object inventory** at the end says what is on
-the chart, with the host's namespaced id (`<plugin id>/<your id>`). **`0 denied
-call(s)`** means the manifest asked for everything the plugin used; any other
-number is a grant you forgot. And **`windline.png`** is the chart with the
-overlay on it, which is the only way to find out that your line is in the wrong
-place. The exit code is 0 only if a frame rendered and no plugin trapped.
+Read three things there.
+
+- **The object inventory** near the end says what is actually on the chart, under
+  the id the host gave it: `<your plugin id>/<your object id>`.
+- **`0 denied call(s)`** means your manifest asked for everything your plugin
+  used. Any other number is a capability you forgot.
+- **`windline.png`** is the chart with your overlay drawn on it. Open it. It is
+  the only way to find out that your line is in the wrong place, or the wrong
+  colour, or a thousand miles away because you swapped a lat and a lon.
+
+The exit code is 0 only if a frame rendered and no plugin trapped.
 
 [The dev harness](dev-harness.md) has every flag, the delta streams, and how to
-turn a run into a golden test.
+turn a run like this into a regression test.
 
 ## Run it in the app
 
-Two environment variables are the prototype's whole install story.
+Two environment variables are the whole install story for now.
 
 ```sh
 export LOOKOUT_PLUGINS=/path/to/lookout-marine/zig-out/plugins
 export LOOKOUT_NMEA=127.0.0.1:10110
-open macos/build/LookoutMarine.app        # or Run from Xcode
+open macos/build-mac/Build/Products/Debug/LookoutMarine.app   # or Run from Xcode
 ```
 
 `LOOKOUT_PLUGINS` names a directory of `<id>.wasm` + `<id>.manifest.json` pairs;
-the core loads and starts them while it opens the chart. `LOOKOUT_NMEA` is the
-one piece of configuration the host owns rather than the mariner: it reaches the
-`nmea0183` plugin in its start config. A shell that wants control instead calls
+the core loads and starts all of them while it opens the chart. `LOOKOUT_NMEA` is
+the one piece of configuration the host owns rather than the mariner: it reaches
+the `nmea0183` plugin in its start config, and points it at your multiplexer or
+at a server replaying a log. An app that wants control of loading instead calls
 `lookout_plugins_load(h, dir)` and leaves the variable unset.
 
 A plugin that fails to load is logged and skipped, so the app still opens. Look
@@ -330,14 +360,16 @@ plugin org.example.windline [error] load failed: ...
 plugin host [error] plugins: windline not loaded: BadManifest
 ```
 
-On iOS the simulator reads host paths, so the same directory works from
-`SIMCTL_CHILD_LOOKOUT_PLUGINS`. On a device there is no import path at all:
-[iOS ships bundled plugins only](index.md#what-exists-today).
+On the iOS simulator, which reads paths on the host machine, the same directory
+works through `SIMCTL_CHILD_LOOKOUT_PLUGINS`. On an iOS device there is no import
+path at all, so only plugins bundled with the app can run.
 
 ## Then read the rules
 
-The four first-party plugins are the worked examples, in rising order of
-difficulty: `laylines` (draws), `ownship` (draws, with the own-ship anchor),
-`nmea0183` (a socket, reassembly, publishing) and `ais` (settings, alarms, pick
-payloads). Before you copy one, read [the rules](rules.md): every one of them is
-a mistake that costs a mariner something at sea.
+The four plugins that ship with Lookout are the worked examples, in rising order
+of difficulty: `laylines` draws; `ownship` draws and uses the own-ship anchor;
+`nmea0183` opens a socket, reassembles a stream and publishes; `ais` adds
+settings, an alarm and pick payloads.
+
+Before you copy one, read [the rules](rules.md). Every rule there is a mistake
+that costs a mariner something at sea.

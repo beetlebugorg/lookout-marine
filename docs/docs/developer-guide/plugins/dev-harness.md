@@ -6,11 +6,16 @@ sidebar_position: 5
 
 # The dev harness
 
-`lookout-plugin-dev` is the chart core opened offscreen with the real plugin host
-inside it, and a loopback TCP listener standing in for the boat's NMEA
-multiplexer. Nothing about the plugin layer is simulated: the same broker, the
-same stores, the same overlay engine, the same watchdog. What it removes is the
-app shell, the window, and the boat.
+`lookout-plugin-dev` runs your plugin without an app and without a boat. It is
+Lookout's chart core opened offscreen with the real plugin host inside it, plus a
+loopback TCP server standing in for a NMEA multiplexer. Give it a chart, a plugin
+directory and a recorded log, and it prints what your plugin published, what it
+drew and what it was denied, then writes the chart with your overlay on it to a
+PNG.
+
+Nothing about the plugin layer is simulated: the same broker, the same stores,
+the same overlay engine, the same watchdog. What is missing is the window and the
+water.
 
 ```sh
 zig build plugin-dev            # zig-out/bin/lookout-plugin-dev
@@ -35,7 +40,7 @@ today, and `-Dplugins=true` with a WAMR archive elsewhere.
 | `--rate X` | Replay speed, times real time. Default 1. `0` serves as fast as the socket takes it. |
 | `--until S` | Stop after S replay **seconds**. Default: the whole log. |
 | `--png PATH` | The snapshot written at `--until`. Default `plugin-dev.png`. |
-| `--view lon,lat,zoom[,rot]` | The camera. Default: fit the chart. The rotation is there because overlay geometry under a turned camera is only verifiable by rendering one. |
+| `--view lon,lat,zoom[,rot]` | The camera. Default: fit the chart. Use the rotation at least once — geometry that looks right north-up can still be wrong under a turned camera, and rendering one is the only way to find out. |
 | `--width W --height H` | Render size in pixels. Default 1600x1200. |
 | `--scheme day\|dusk\|night` | The palette. Default day. Run night to see what your colour tokens actually look like. |
 | `--print WHAT` | One of `all`, `deltas`, `overlay`, `alert`, `status`. Default `all`. |
@@ -53,11 +58,11 @@ trap or no frame; 2 for a bad invocation or a chart that will not open.
 
 ## How the plugins find the log
 
-The listener binds `127.0.0.1` on a port the kernel picks, then the harness sets
-`LOOKOUT_NMEA` and `LOOKOUT_PLUGINS` **before** the core is created — the core
-reads both while it opens the chart, which is where the plugin layer is built and
-started. Nothing else configures the plugins, and several harnesses can run at
-once.
+You configure nothing for this to work. The listener binds `127.0.0.1` on a port
+the kernel picks, and the harness sets `LOOKOUT_NMEA` and `LOOKOUT_PLUGINS`
+**before** the core is created; the core reads both while it opens the chart,
+which is where the plugin layer is built and started. Because the port is chosen
+at run time, several harnesses can run at once without colliding.
 
 The log is served group by group, paced by its own timestamps at `rate` times
 real time, and the socket is then held open: an EOF would send the `nmea0183`
@@ -76,9 +81,8 @@ testing.
 
 ## The replay log
 
-`tools/nmea_gen.zig` writes the log the first-party plugins are verified against.
-It is deterministic — no clock, no randomness — so two runs produce identical
-bytes.
+`tools/nmea_gen.zig` writes the log the shipped plugins are verified against. It
+is deterministic — no clock, no randomness — so two runs produce identical bytes.
 
 ```sh
 zig run tools/nmea_gen.zig -- test/annapolis.nmea
@@ -90,8 +94,9 @@ course so the heading line and the course vector are two visibly different lines
 Three AIS targets exercise all three sides of the `ais` plugin's alarm gate — one
 crosses into it at about t = 50 s and stays, one lies anchored 1.4 km abeam and
 never gates, one is a class B already departing with a negative TCPA. Two aids to
-navigation report type 21. The file is gitignored; a small fixture of about twenty
-lines is committed for the parser's unit tests.
+navigation report type 21.
+
+The log itself is not in the repository — run the command above to write it.
 
 Any recording works: `--replay` reads a plain NMEA 0183 log. A capture from your
 own boat is the best test data there is.
@@ -111,8 +116,9 @@ made before the run starts proves nothing. Each change prints when it lands:
 t=  200.0s set-config org.beetlebug.ais {"cpa_limit":100}
 ```
 
-A refused change prints `set-config … REFUSED: <error>` and the run continues with
-exit code 0. That is a known gap: a refused config should fail the run.
+A refused change prints `set-config … REFUSED: <error>` and the run continues
+with exit code 0. Read the output rather than trusting the exit code here: a
+refused config does not fail the run today.
 
 ## Reading what it prints
 
@@ -173,19 +179,20 @@ replay: 61 group(s), 275 line(s), 60.0 s at 20x, 1 connection(s)
 frames: 14 rendered, 1 alert(s) raised
 ```
 
-Three numbers to read every time. **`live`** — anything else means the plugin
-trapped or was killed, and the status line says why. **`denied call(s)`** — any
-number but zero is a capability the manifest forgot. **`alert(s) raised`** — the
-count the alarm test turns on.
+Three things to read every time. **`live`** — anything else means the plugin
+trapped or was killed, and the status line beside it says why. **`denied
+call(s)`** — any number but zero is a capability your manifest forgot.
+**`alert(s) raised`** — how many alerts came out of the whole run, which is the
+number to pin if you are testing an alarm.
 
 The PNG is the other half. A plugin can publish and draw perfectly and still put
 its line in the wrong place, or in a colour that vanishes at night, and only the
 render says so. Run `--scheme night` as well as day.
 
-Two known limits of the print streams: they miss the lines the plugin layer emits
-**before** the chart is open (module load and `lk_start` go to stderr through the
-broker's default sink), and the harness reads private host fields because no
-public query exists.
+One thing the print streams miss: everything the plugin layer says **before** the
+chart is open. Module load and `lk_start` go straight to stderr, so if your
+plugin never appears in any stream at all, look further up the terminal — the
+reason it did not load is up there.
 
 ## Golden tests
 
@@ -203,8 +210,9 @@ zig run tools/nmea_gen.zig -- test/annapolis.nmea
 diff expected.txt actual.txt
 ```
 
-The tail — the object inventory, the per-plugin line and the alert count — was
-byte-identical across repeated runs here, which makes it the part worth pinning.
+The tail — the object inventory, the per-plugin line and the alert count — is
+byte-identical across repeated runs, which is what makes it the part worth
+pinning.
 What is **not** stable: the `t=` stamps, the `age` columns, the frame count, and
 anything whose size depends on wall-clock time (the own-ship track keeps one point
 per real second, so `--rate 20` gives a shorter track than `--rate 1`). Either
@@ -217,10 +225,13 @@ sort:
 sed -E 's/^t= *[0-9.]+s //' run.txt | grep '^overlay [+-]' | sort
 ```
 
-That comparison also held across runs. And for pure logic — a parser, a CPA
-solver, geodesy — do not use the harness at all: keep it in a file with no
-`@import("lk")` and unit-test it natively, the way `plugins/nmea0183/parser.zig`
-and `plugins/ais/cpa.zig` do. `zig build test` runs those directly.
+That comparison is stable across runs too.
+
+For pure logic — a parser, a CPA solver, geodesy — do not use the harness at all.
+Keep that code in a file that does not `@import("lk")` and unit-test it natively,
+the way `plugins/nmea0183/parser.zig` and `plugins/ais/cpa.zig` do — `zig build
+test` runs those directly. A native test is faster to run and you can put a
+debugger on it, which you cannot do inside the interpreter.
 
 ## The same loop inside the app
 
@@ -229,9 +240,9 @@ change:
 
 | Variable | Effect |
 |---|---|
-| `LOOKOUT_PLUGINS=<dir>` | Load and start every `<id>.wasm` + `<id>.manifest.json` pair in the directory while the chart opens. A shell that wants control calls `lookout_plugins_load` instead and leaves this unset. |
+| `LOOKOUT_PLUGINS=<dir>` | Load and start every `<id>.wasm` + `<id>.manifest.json` pair in the directory while the chart opens. An app that wants control of loading calls `lookout_plugins_load` instead and leaves this unset. |
 | `LOOKOUT_NMEA=host:port` | Where the `nmea0183` plugin dials. It arrives in that plugin's start config. |
-| `LOOKOUT_OPEN=<chart\|dir>` | Open a chart at startup — from [the screenshot protocol](../screenshots.md), and useful here for the same reason. |
+| `LOOKOUT_OPEN=<chart\|dir>` | Open a chart at startup, so you do not have to pick one by hand on every launch. |
 | `LOOKOUT_VIEW=lon,lat,zoom[,rot]` | The first camera position. |
 
 On the iOS simulator they are `SIMCTL_CHILD_LOOKOUT_PLUGINS` and friends, and the
@@ -240,15 +251,17 @@ server serving the same log at a fixed port is enough:
 
 ```sh
 LOOKOUT_PLUGINS=$PWD/zig-out/plugins LOOKOUT_NMEA=127.0.0.1:10110 \
-    open macos/build/LookoutMarine.app
+    open macos/build-mac/Build/Products/Debug/LookoutMarine.app
 ```
 
 Everything the plugin layer prints goes to stderr. On macOS that is the Xcode
-console or the terminal that launched the app; the Windows shell is a
-Windows-subsystem application with no console, so a run there has to redirect
-stderr to a file or see nothing at all.
+console, or the terminal you launched the app from. The Windows app is a
+Windows-subsystem binary with no console attached, so redirect stderr to a file
+there or you will see nothing at all.
 
-One thing to know before you watch a live feed in the app: a render-on-demand
-shell can freeze plugin traffic while nobody touches the machine. macOS polls
-`lookout_needs_redraw` while `lookout_plugins_active` is 1 and is fixed; the GTK
-and Windows shells copy the old display-link pattern and are not.
+One last thing, before you sit and watch a live feed. An app that renders only
+when something changes can freeze your plugin's traffic on screen while nobody
+touches the machine — your plugin is still running, but the picture stops
+updating. The Mac app polls for redraws while any plugin is active and does not
+have this problem; the GTK and Windows apps still do. Pan the chart to force a
+frame, or test on macOS.

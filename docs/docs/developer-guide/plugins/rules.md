@@ -6,8 +6,12 @@ sidebar_position: 4
 
 # The rules
 
-Each of these is a rule the host enforces or a mistake it cannot catch for you.
-Each one has a reason, and the reason is always the same kind of reason: a
+Some of these the host enforces on you. The rest are mistakes it cannot catch,
+and those are the expensive ones — a plugin that breaks one of them usually still
+runs, still draws, and is quietly wrong.
+
+Skim the headings now and come back when one bites. Under each rule, the line in
+*italics* is the reason it exists, and the reason is always the same shape: a
 chartplotter that draws something wrong is worse than one that draws nothing.
 
 ## State lives in globals
@@ -52,9 +56,10 @@ Record what the event gave you, and draw from a 1 Hz timer.
 
 ## Deletes before sets
 
-`lk.Overlay` refuses a `del` after a `symbol` or a `polyline` and says so in the
-log. The host applies every delete before every set whatever the order in the
-JSON, so the builder only makes the two agree.
+The host applies every delete before every set, whatever order they are in inside
+the JSON. `lk.Overlay` makes you write them that way round too: it refuses a `del`
+that comes after a `symbol` or a `polyline`, and says so in the log, so that what
+you read matches what happens.
 
 *One batch that deletes a stale target and sets a fresh one with the same id must
 mean "replace", never "delete what I just drew".*
@@ -64,8 +69,9 @@ leaves its lines up is telling the mariner a lie about data it no longer has.
 
 ## Colours are tokens, never RGB
 
-An overlay object names one of the seven tokens. The core resolves it for the
-day, dusk and night palette.
+An overlay object names one of [the seven colour tokens](abi.md#overlay). The
+core resolves the token you named into a colour for the day, the dusk and the
+night palette.
 
 *A mariner on a night passage has dark-adapted eyes, and one plugin with a
 hard-coded `#FF0000` costs twenty minutes of night vision.*
@@ -82,9 +88,9 @@ though every AIS message and every mariner says knots.
 converting downstream is a question every consumer has to ask and one of them
 will get wrong.*
 
-The single exception is a pick payload, whose rows are display strings the plugin
-formats itself, because the core cannot know that a row called SOG holds metres
-per second. That is a known hole, not a pattern to copy.
+The single exception is a pick payload, whose rows are display strings you format
+yourself, because the core cannot know that a row called SOG holds metres per
+second. It is the one place the rule is broken. Do not take it as a pattern.
 
 ## One event at a time, and return promptly
 
@@ -106,11 +112,12 @@ call comes back as a trap, and the plugin goes down the ordinary fault path.
 *Time isolation is what keeps a slow weather plugin from delaying a collision
 alarm.*
 
-One second is enormous for an event handler — the first-party four take
-microseconds. The kill lands between 1000 ms and 1100 ms, because the precision
-is one tick. The budget covers **one call**: a plugin that takes 900 ms on every
-event is never stopped and is 900 ms late forever. The watchdog does not cover
-`lk_start`, which runs on the loading thread before the I/O thread exists.
+One second is enormous for an event handler — the four plugins that ship with
+Lookout take microseconds. The kill lands between 1000 ms and 1100 ms, because
+the precision is one tick. The budget covers **one call**: a plugin that takes
+900 ms on every event is never stopped and is 900 ms late forever. The watchdog
+does not cover `lk_start`, which runs on the loading thread before the I/O thread
+exists.
 
 ## A plugin that traps is disabled, not retried
 
@@ -170,8 +177,9 @@ one number for every path means nobody has to remember which.*
 Age it on with `mono_ms`, never with the wall clock: a GPS that sets the boat's
 clock mid-passage must not make a good fix look ten minutes old. AIS is a
 different mechanism with different numbers, because ships report on minute
-scales: the store evicts a vessel at 600 s and an aid to navigation at 1800 s,
-and the `ais` plugin stops drawing a vessel at 180 s and an aid at 600 s.
+scales. The store evicts a vessel at 600 s and an aid to navigation at 1800 s,
+and the `ais` plugin that ships with Lookout stops drawing a vessel at 180 s and
+an aid at 600 s.
 
 ## A refused call returns -1 and logs
 
@@ -181,18 +189,20 @@ it, and writes `denied <call>: manifest does not request capability <name>`.
 *A plugin asking for something it was not given is misconfigured, not malicious,
 and a stack trace would hide the misconfiguration.*
 
-Check the returns. `subscribe` returning -1 means the plugin will receive nothing
-at all, forever, and the right response is to fail `start` — a plugin that starts
-successfully and then sits deaf is the worst of the three outcomes.
+Check the returns. `subscribe` coming back -1 means you will receive nothing at
+all, ever, and the right response is to fail `start`: a plugin that starts
+cleanly and then sits deaf is the worst of the three outcomes.
 
-The dev harness prints `N denied call(s)` per plugin at the end of a run. It
-should be zero.
+[The dev harness](dev-harness.md) prints `N denied call(s)` per plugin at the end
+of every run. It should be zero. If it is not, the fix is almost always one more
+name in your manifest's `capabilities`.
 
 ## Reconnecting is yours
 
 `tcp_connect` returns an id at once and the outcome arrives as `TCP_CONNECTED` or
 `TCP_CLOSED`. **The host never retries.** A closed socket stays closed until you
-open another one, on a timer, with a backoff you choose — `nmea0183` uses 2 s.
+open another one, on a timer, with a backoff you choose. The `nmea0183` plugin
+that ships with Lookout waits 2 s.
 
 Reassembly is yours too: one `TCP_DATA` event is one socket read of at most 8192
 bytes, which has no relationship to the line boundaries in what the peer sent.
@@ -205,16 +215,17 @@ wildcards: name the exact paths.
 
 ## Never be silent
 
-The through-line of every rule above. When a plugin cannot do its job, it says
-so, in the place a person will look:
+The through-line of every rule above. When your plugin cannot do its job, say so,
+in the place a person will look:
 
 - Post a `degraded` status line and name **every** missing input. "no wind" while
   the GPS is also out sends the mariner after the wrong instrument.
 - Take the drawing off the chart. Stale geometry drawn confidently is the failure
   mode that puts a boat on a rock.
-- Say when a choice was made, not just when something broke. The `ais` plugin's
-  status reads "alarms off" instead of a count of zero, because a mariner must
-  see that the silence is chosen rather than broken.
+- Say when a choice was made, not just when something broke. With its alarm
+  switched off, the `ais` plugin posts "alarms off" rather than a count of zero,
+  because a mariner has to be able to see that the silence was chosen and not
+  broken.
 - Post a status only on a transition. The host logs every line it has not seen,
   so a 1 Hz repeat is a 1 Hz log line, and a log nobody can read is another way
   of being silent.
