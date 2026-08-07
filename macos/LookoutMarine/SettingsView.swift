@@ -36,6 +36,9 @@ struct SettingsSection: Identifiable {
         .init(id: "vessels", label: "Vessels", icon: "ferry", core: false),
         .init(id: "alarms", label: "Alarms", icon: "bell", core: false),
         .init(id: "connections", label: "Connections", icon: "antenna.radiowaves.left.and.right", core: false),
+        // Plugins is the one section that talks ABOUT plugins: install,
+        // grants, uninstall. It is the app's own, not a slot a schema fills.
+        .init(id: "plugins", label: "Plugins", icon: "puzzlepiece.extension", core: true),
         .init(id: "advanced", label: "Advanced", icon: "slider.horizontal.3", core: true),
     ]
 }
@@ -113,6 +116,7 @@ struct SettingsView: View {
             case "depths": DepthsSections(m: m)
             case "text": SymbolsSections(m: m)
             case "charts": ChartsSections(model: model)
+            case "plugins": PluginsManageSections(p: p, model: model)
             case "advanced": AdvancedSections(m: m)
             default: EmptyView()
             }

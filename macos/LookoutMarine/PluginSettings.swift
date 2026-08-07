@@ -73,15 +73,35 @@ struct PluginField: Identifiable {
     }
 }
 
+/// One capability a plugin's manifest asked for, in the consent sheet's own
+/// words, with the switch state the mariner holds over it.
+struct PluginCapability: Identifiable {
+    let cap: String
+    /// The consent sentence, worded by the core so every shell says the same
+    /// thing: "Read AIS traffic."
+    let sentence: String
+    let hosts: [String]
+    var granted: Bool
+
+    var id: String { cap }
+}
+
 /// One loaded plugin and the controls it asked for.
 struct PluginInfo: Identifiable {
     let id: String
     let name: String
+    /// The manifest's version string, or empty when it declares none.
+    let version: String
+    /// "bundled", "installed" or "developer". Only an installed plugin offers
+    /// Uninstall; a developer copy says so beside its status.
+    let origin: String
     let live: Bool
     /// The plugin's own status line, `{"state":"running","detail":"...",
-    /// "items":[…]}`. The line itself is not shown in settings — a mariner does
-    /// not manage plugins — but the ITEMS are: one per row of a list.
+    /// "items":[…]}`. The Plugins section shows the line; the ITEMS go to the
+    /// list rows elsewhere in settings.
     var status: String
+    /// The manifest's capabilities in consent wording, with the grant state.
+    var capabilities: [PluginCapability]
     var fields: [PluginField]
     var lists: [PluginListSchema] = []
     /// The rows the core holds, by list key. The window edits its own copy.
@@ -90,6 +110,44 @@ struct PluginInfo: Identifiable {
     /// panel names them so the mariner knows it takes more than charts; the
     /// core decides which plugin a chosen file goes to.
     var fileTypes: [String] = []
+
+    /// The line under the plugin's name in the Plugins section: the state in a
+    /// word, then the plugin's own detail. A dead plugin says so whatever its
+    /// last words were.
+    var statusLine: String {
+        guard live else { return "Stopped" }
+        guard let d = status.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+        else { return "Running" }
+        let state = o["state"] as? String ?? ""
+        let detail = o["detail"] as? String ?? ""
+        let word = Self.stateWords[state] ?? (state.isEmpty ? "Running" : state)
+        return detail.isEmpty ? word : "\(word) · \(detail)"
+    }
+
+    /// Green while it works, amber while degraded, red when it broke, grey
+    /// when it stopped. The same palette the connection rows use.
+    var statusTint: Color {
+        guard live else { return .secondary }
+        guard let d = status.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+        else { return .green }
+        switch o["state"] as? String ?? "" {
+        case "running", "": return .green
+        case "starting": return .secondary
+        case "degraded": return .orange
+        case "stopped": return .secondary
+        default: return .red
+        }
+    }
+
+    private static let stateWords = [
+        "running": "Running",
+        "starting": "Starting",
+        "degraded": "Degraded",
+        "disabled": "Disabled",
+        "stopped": "Stopped",
+    ]
 
     /// What the plugin says about each row of its lists, by row id.
     var statusItems: [String: PluginStatusItem] {
@@ -275,6 +333,42 @@ final class PluginSettings: ObservableObject {
             guard let f = fresh.first(where: { $0.id == p.id }), f.status != p.status else { continue }
             plugins[i].status = f.status
         }
+    }
+
+    // MARK: - Install, grants, uninstall
+
+    /// Re-read the registry whole. After an install or an uninstall the plugin
+    /// LIST changed, not just a status line.
+    func reload() {
+        plugins = Self.parse(controller?.pluginsJSON())
+    }
+
+    /// The switch over one grant. Flipping it off revokes live — the plugin
+    /// keeps running and the call it lost simply answers -1 — and flipping it
+    /// back restores it. The state persists beside the plugin.
+    func grant(_ pluginID: String, _ cap: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                self.plugins.first { $0.id == pluginID }?
+                    .capabilities.first { $0.cap == cap }?.granted ?? false
+            },
+            set: { self.setGrant(pluginID, cap, $0) }
+        )
+    }
+
+    private func setGrant(_ pluginID: String, _ cap: String, _ on: Bool) {
+        guard let controller, controller.setPluginGrant(pluginID, cap, on),
+              let pi = plugins.firstIndex(where: { $0.id == pluginID }),
+              let ci = plugins[pi].capabilities.firstIndex(where: { $0.cap == cap })
+        else { return }
+        plugins[pi].capabilities[ci].granted = on
+    }
+
+    /// Uninstall: the core removes the directory, the plugin's storage and
+    /// everything it drew; the window drops the row.
+    func uninstall(_ pluginID: String) {
+        guard let controller, controller.uninstallPlugin(pluginID) else { return }
+        reload()
     }
 
     // MARK: - What each settings section holds
@@ -546,8 +640,19 @@ final class PluginSettings: ObservableObject {
             return PluginInfo(
                 id: id,
                 name: o["name"] as? String ?? id,
+                version: o["version"] as? String ?? "",
+                origin: o["origin"] as? String ?? "bundled",
                 live: o["live"] as? Bool ?? false,
                 status: o["status"] as? String ?? "",
+                capabilities: (o["capabilities"] as? [[String: Any]] ?? []).compactMap { c in
+                    guard let cap = c["cap"] as? String else { return nil }
+                    return PluginCapability(
+                        cap: cap,
+                        sentence: c["sentence"] as? String ?? cap,
+                        hosts: c["hosts"] as? [String] ?? [],
+                        granted: c["granted"] as? Bool ?? true
+                    )
+                },
                 fields: (o["settings"] as? [[String: Any]] ?? []).compactMap(field(from:)),
                 lists: (o["lists"] as? [[String: Any]] ?? []).compactMap { listSchema(from: $0, pluginID: id) },
                 rows: listRows(o, pluginID: id),

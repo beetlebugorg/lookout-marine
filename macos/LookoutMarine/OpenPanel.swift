@@ -82,6 +82,14 @@ extension AppModel {
     /// The core answers which — the app never matches extensions itself, so
     /// every shell routes the same file the same way.
     func openFileOrChart(_ path: String) {
+        #if os(macOS)
+        // A plugin package goes to consent, never to the chart engine. The
+        // extension is the package's own, so this is routing, not sniffing.
+        if path.lowercased().hasSuffix(".lkplug") {
+            beginPluginInstall(path)
+            return
+        }
+        #endif
         if controller?.openFileForPlugins(path) == true { return }
         openChart(path)
     }

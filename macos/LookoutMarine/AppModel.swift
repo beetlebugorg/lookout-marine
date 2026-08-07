@@ -52,6 +52,54 @@ final class AppModel: ObservableObject {
     @Published var openError: String?
     private var openSeq = 0
 
+    // MARK: Plugin install
+    /// The package on the consent sheet: set by beginPluginInstall, cleared by
+    /// Install or Cancel. The sheet presents while this is non-nil.
+    @Published var pendingInstall: PluginPackage?
+    /// The sentence of the last refused install, for its own alert — an
+    /// install refusal is not a chart error.
+    @Published var installError: String?
+    /// A .lkplug opened before any chart was: kept until the chart (and with
+    /// it the plugin layer) is up, then inspected.
+    var pendingInstallPath: String?
+
+    /// Start the install flow: read the package, and put what it asks for in
+    /// front of the mariner. Every entry point lands here — Finder, a drop on
+    /// the window, and Settings > Plugins > Install Plugin….
+    func beginPluginInstall(_ path: String) {
+        guard hasChart, let controller else {
+            pendingInstallPath = path
+            return
+        }
+        guard let json = controller.inspectPlugin(path) else {
+            installError = "The plugin layer could not start."
+            return
+        }
+        let pkg = PluginPackage.parse(json, path: path)
+        if let err = pkg.error {
+            installError = err
+            return
+        }
+        pendingInstall = pkg
+    }
+
+    /// The Install button: the consent happened, so the package goes in and
+    /// starts drawing. A refusal lands in its own alert.
+    func confirmPluginInstall() {
+        guard let pkg = pendingInstall else { return }
+        pendingInstall = nil
+        if let err = controller?.installPlugin(pkg.path) {
+            installError = err
+        }
+    }
+
+    /// A .lkplug that arrived before the chart did, now that the chart is up.
+    func drainPendingInstall() {
+        guard hasChart, let path = pendingInstallPath else { return }
+        pendingInstallPath = nil
+        beginPluginInstall(path)
+    }
+
     // MARK: Startup loader state
     /// True from the moment an open is scheduled until lookout_open returns —
     /// covers the synchronous open (a 7k-cell library takes seconds).

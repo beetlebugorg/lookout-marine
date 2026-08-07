@@ -47,6 +47,7 @@
 //! draws nothing.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const wasm = @import("wasm.zig");
 pub const store = @import("store.zig");
@@ -56,9 +57,9 @@ pub const webio = @import("webio.zig");
 
 const io = std.Io.Threaded.global_single_threaded.io();
 
-/// The ABI version this host speaks. A module reporting anything else is not
+/// The API version this host speaks. A module reporting anything else is not
 /// loaded — the exports may have the same names and a different meaning.
-pub const abi_version: u32 = 1;
+pub const api_version: u32 = 1;
 
 /// Largest plugin module accepted. The prototype's plugins are tens of KiB;
 /// the cap is here so a stray file in the plugin directory cannot be read into
@@ -66,23 +67,35 @@ pub const abi_version: u32 = 1;
 pub const max_module_bytes: usize = 8 * 1024 * 1024;
 pub const max_manifest_bytes: usize = 64 * 1024;
 
+/// Longest version string a manifest may carry. "2024.12.31-rc1" is 14 bytes.
+pub const max_version_bytes: usize = 32;
+
 pub const Error = error{
     BadManifest,
-    AbiMismatch,
+    ApiMismatch,
     StartRefused,
-    /// A plugin cannot be loaded once the dispatch threads are running: they
-    /// hold pointers into the registry, which growing it would invalidate.
-    AlreadyStarted,
     /// `configSet` named an id no plugin here answers to.
     UnknownPlugin,
     /// The config JSON is not an object, or a field it names does not match
     /// the kind the schema declares.
     BadConfig,
-    /// `grantFile` named a plugin whose manifest did not ask for `files`.
+    /// `grantFile` named a plugin whose manifest did not ask for `files`, or
+    /// `grantSet` named a capability the manifest never asked for.
     NotGranted,
     /// Two manifests claim the file type the mariner opened. Neither gets the
     /// file: see `openFile`.
     FileTypeConflict,
+    /// A .lkplug was refused. The sentence saying why — the one the shell
+    /// shows — is in `installMessage`.
+    PackageRefused,
+    /// `uninstall` named a bundled or developer plugin. Only what install put
+    /// on disk can be taken off it.
+    NotInstalled,
+    /// `grantSet` named a capability no manifest could declare.
+    UnknownCapability,
+    /// This platform has no per-user plugin directory and `Options.install_root`
+    /// was not set (Android's files dir has no path in the environment).
+    NoInstallRoot,
     OutOfMemory,
 };
 
@@ -120,7 +133,7 @@ pub const Field = struct {
     /// One sentence on what the setting does for the person at the helm. Empty
     /// when the manifest declares none.
     desc: []u8,
-    /// The unit of a number field, for display only: values cross the ABI in
+    /// The unit of a number field, for display only: values cross the API in
     /// the unit the schema names.
     unit: []u8,
     /// The section heading this field sits under, from its group. Empty when
@@ -139,7 +152,7 @@ pub const Field = struct {
     /// decides what an empty one means.
     optional: bool = false,
 
-    /// `text` is only legal inside a LIST: a scalar value crosses the ABI as a
+    /// `text` is only legal inside a LIST: a scalar value crosses the API as a
     /// number, and there is nowhere to keep a scalar string.
     pub const Kind = enum { number, toggle, text };
 };
@@ -200,7 +213,7 @@ pub const max_row_id = 32;
 pub const default_event_budget_ms: i64 = 1000;
 
 /// A plugin's manifest.json:
-/// `{"id":"org.beetlebug.ais","name":"AIS","abi":1,"capabilities":[...],
+/// `{"id":"org.beetlebug.ais","name":"AIS","api":1,"capabilities":[...],
 ///   "settings":{"groups":[{"label":"Collision alarm","tab":"alarms","fields":[
 ///     {"key":"cpa_limit","label":"Closest approach","desc":"Alarm when a
 ///      vessel will pass closer than this.","kind":"number","unit":"m",
@@ -219,7 +232,11 @@ pub const default_event_budget_ms: i64 = 1000;
 pub const Manifest = struct {
     id: []u8,
     name: []u8,
-    abi: u32,
+    /// The manifest's `"version"` string, or empty when it declares none. The
+    /// consent sheet and the settings rows show it; the host compares it only
+    /// to say that a reinstall is a downgrade.
+    version: []u8 = &.{},
+    api: u32,
     caps: broker.Caps,
     /// The hosts `net.http` named, and the hosts `net.ws` named. Empty unless
     /// the capability was granted, and a granted one is never empty.
@@ -237,6 +254,7 @@ pub const Manifest = struct {
     pub fn deinit(self: *Manifest, alloc: std.mem.Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
+        if (self.version.len > 0) alloc.free(self.version);
         freeStrings(alloc, self.http_hosts);
         freeStrings(alloc, self.ws_hosts);
         freeStrings(alloc, self.file_types);
@@ -377,8 +395,15 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         .string => |s| s,
         else => id,
     };
-    const abi: u32 = switch (o.get("abi") orelse return Error.BadManifest) {
+    const api: u32 = switch (o.get("api") orelse return Error.BadManifest) {
         .integer => |i| if (i >= 0 and i <= std.math.maxInt(u32)) @intCast(i) else return Error.BadManifest,
+        else => return Error.BadManifest,
+    };
+    // The version is a label the mariner reads, not a scheme the host enforces.
+    // Anything that is not a short string refuses the manifest: a version that
+    // cannot be shown is a typo, not a version.
+    const version = switch (o.get("version") orelse std.json.Value{ .string = "" }) {
+        .string => |s| if (s.len <= max_version_bytes) s else return Error.BadManifest,
         else => return Error.BadManifest,
     };
 
@@ -438,6 +463,8 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     errdefer alloc.free(id_owned);
     const name_owned = try alloc.dupe(u8, name);
     errdefer alloc.free(name_owned);
+    const version_owned: []u8 = if (version.len > 0) try alloc.dupe(u8, version) else &.{};
+    errdefer if (version_owned.len > 0) alloc.free(version_owned);
 
     // `built` counts the fields already allocated, so a malformed field
     // halfway down the schema frees exactly the ones before it. `lists_built`
@@ -511,14 +538,15 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         else => return Error.BadManifest,
     };
     // A text value has nowhere to live outside a row: the scalar settings cross
-    // the ABI as numbers.
+    // the API as numbers.
     for (fields[0..built]) |f| {
         if (f.kind == .text) return Error.BadManifest;
     }
     return .{
         .id = id_owned,
         .name = name_owned,
-        .abi = abi,
+        .version = version_owned,
+        .api = api,
         .caps = caps,
         .http_hosts = http_hosts,
         .ws_hosts = ws_hosts,
@@ -769,7 +797,17 @@ fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
     if (lists.len > 0) alloc.free(lists);
 }
 
+/// Where a plugin came from. It decides two things: whether Settings offers
+/// Uninstall (only `installed`), and who wins an id collision — the first
+/// origin loaded keeps the id, and the app loads the developer directory
+/// before the installed set.
+pub const Origin = enum { bundled, installed, developer };
+
 /// One loaded plugin, and the thread that runs it.
+///
+/// Heap-allocated, one address for its whole life: the dispatch thread and
+/// the watchdog hold the pointer while the registry list grows under them,
+/// which is what lets a plugin install while the chart runs.
 pub const Entry = struct {
     manifest: Manifest,
     /// WAMR loads the module in place and keeps referring to this buffer.
@@ -806,6 +844,20 @@ pub const Entry = struct {
     /// Set once everything the plugin contributed has been dropped, so the
     /// clean-up runs exactly once whichever path reaches it.
     retired: std.atomic.Value(bool) = .init(false),
+    /// Where this plugin came from; see `Origin`.
+    origin: Origin = .bundled,
+    /// The capabilities in force: the manifest's set minus what the mariner
+    /// switched off in Settings. `state.caps` is always a copy of this.
+    grants: broker.Caps = broker.Caps.initEmpty(),
+    /// The directory this plugin was loaded from, owned. For an installed
+    /// plugin that is its own directory under the install root — the one
+    /// `uninstall` deletes; for a flat set it is the shared directory, which
+    /// is only ever read.
+    dir: []u8 = &.{},
+    /// True once `uninstall` tore the instance down. The slot stays — indices
+    /// tag queued events and must keep meaning — but everything heavy is
+    /// freed, and every walk over the registry skips the tombstone.
+    removed: bool = false,
 
     pub fn isLive(self: *const Entry) bool {
         return self.live.load(.acquire);
@@ -824,6 +876,10 @@ pub const Options = struct {
     /// The watchdog's budget for one module call. See
     /// `default_event_budget_ms`.
     event_budget_ms: i64 = default_event_budget_ms,
+    /// Where installed plugins live, overriding the platform's own place
+    /// (install.md's table). Tests point it at scratch; a platform with no
+    /// path in the environment (Android) must set it.
+    install_root: []const u8 = "",
 };
 
 /// Longest disable reason kept. It has to fit inside the JSON status line the
@@ -897,9 +953,23 @@ pub const Host = struct {
     alloc: std.mem.Allocator,
     br: *broker.Broker,
     opts: Options,
-    entries: std.ArrayList(Entry) = .empty,
+    /// The registry. Pointers, not values: an entry's address must survive
+    /// the list growing while dispatch threads and the watchdog hold it.
+    entries: std.ArrayList(*Entry) = .empty,
+    /// Guards the LIST itself — append on install, the tombstone flip on
+    /// uninstall — against the watchdog iterating it on the I/O thread.
+    /// Everything else that walks the registry runs on the shell's API
+    /// thread, which the C ABI already serializes.
+    reg_mu: store.Lock = .{},
     /// True between `start` and `stop`, while the dispatch threads exist.
     started: bool = false,
+    /// The sentence the last refused install left behind, for the shell to
+    /// show. NUL-terminated so the C ABI can hand it out borrowed.
+    install_msg: [max_install_msg:0]u8 = @splat(0),
+    install_msg_len: usize = 0,
+    /// The install root in force, resolved once from `opts.install_root` or
+    /// the platform default. Null until something needed it.
+    root_cache: ?[]u8 = null,
     /// True between the first successful load and deinit.
     runtime_held: bool = false,
     /// Source ids are handed out in load order, which the vessel store reads
@@ -922,16 +992,23 @@ pub const Host = struct {
         // thread. `stop` joined that thread; clearing the hook keeps a broker
         // restarted without a host from reaching freed entries.
         self.br.setWatchdog(null, null);
-        for (self.entries.items) |*e| {
-            e.inst.deinit();
-            e.module.deinit();
-            self.alloc.free(e.bytes);
+        for (self.entries.items) |e| {
+            // An uninstalled entry already gave its instance, module and
+            // bytes back; the rest is freed here like everyone else's.
+            if (!e.removed) {
+                e.inst.deinit();
+                e.module.deinit();
+                self.alloc.free(e.bytes);
+            }
             if (e.values.len > 0) self.alloc.free(e.values);
             freeRows(self.alloc, e.rows, e.rows.len);
+            if (e.dir.len > 0) self.alloc.free(e.dir);
             e.manifest.deinit(self.alloc);
             self.alloc.destroy(e.state);
+            self.alloc.destroy(e);
         }
         self.entries.deinit(self.alloc);
+        if (self.root_cache) |r| self.alloc.free(r);
         if (self.runtime_held) {
             runtimeRelease();
             self.runtime_held = false;
@@ -940,65 +1017,124 @@ pub const Host = struct {
     }
 
     pub fn count(self: *const Host) usize {
-        return self.entries.items.len;
+        var n: usize = 0;
+        for (self.entries.items) |e| {
+            if (!e.removed) n += 1;
+        }
+        return n;
     }
 
     /// The plugin state by manifest id, for the harness and the tests.
     pub fn find(self: *Host, id: []const u8) ?*broker.Plugin {
-        for (self.entries.items) |*e| {
-            if (std.mem.eql(u8, e.manifest.id, id)) return e.state;
-        }
-        return null;
+        const e = self.entryFor(id) orelse return null;
+        return e.state;
     }
 
     // -- loading -------------------------------------------------------------
 
-    /// Load every plugin in `dir`: each is a `<id>.manifest.json` and the
-    /// `<id>.wasm` beside it, which is what `zig build plugins` installs. A
-    /// plugin that fails to load is logged and skipped — one bad module must
-    /// not take the others down with it.
+    /// Load every plugin in `dir`, in two layouts at once:
+    ///
+    ///   - flat: `<id>.manifest.json` + `<id>.wasm`, which is what `zig build
+    ///     plugins` installs and what LOOKOUT_PLUGINS points at;
+    ///   - installed: `<id>/manifest.json` + `<id>/<id>.wasm`, which is what
+    ///     `installPackage` writes under the install root.
+    ///
+    /// A plugin that fails to load is logged and skipped — one bad module must
+    /// not take the others down with it. An id already in the registry is
+    /// skipped too, so whoever loads first keeps the id; the app loads the
+    /// developer directory before the installed set, which is what makes the
+    /// developer copy win.
     ///
     /// Load order is the sorted file order, and load order IS source priority
-    /// in the vessel store, so it is deterministic across machines.
+    /// in the vessel store, so it is deterministic across machines. Loading
+    /// while the dispatch threads run is fine: entries are stable pointers,
+    /// and a new plugin gets its thread the moment it is appended.
     pub fn loadDir(self: *Host, dir_path: []const u8) !void {
-        // The dispatch threads hold pointers into `entries`; appending to it
-        // now could move them. Load first, then start.
-        if (self.started) return Error.AlreadyStarted;
         var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |e| {
             self.br.say(broker.level_warn, "host", "plugins: cannot open {s}: {s}", .{ dir_path, @errorName(e) });
             return e;
         };
         defer dir.close(io);
 
+        // A flat directory is the developer override when it IS the override:
+        // same path the environment names. Everything else flat is bundled.
+        const flat_origin: Origin = blk: {
+            const raw = std.c.getenv("LOOKOUT_PLUGINS") orelse break :blk .bundled;
+            break :blk if (std.mem.eql(u8, std.mem.span(raw), dir_path)) .developer else .bundled;
+        };
+
         var names: std.ArrayList([]u8) = .empty;
+        var subdirs: std.ArrayList([]u8) = .empty;
         defer {
             for (names.items) |n| self.alloc.free(n);
             names.deinit(self.alloc);
+            for (subdirs.items) |n| self.alloc.free(n);
+            subdirs.deinit(self.alloc);
         }
         var it = dir.iterate();
         while (try it.next(io)) |ent| {
-            if (ent.kind == .directory) continue;
+            if (ent.kind == .directory) {
+                if (ent.name.len == 0 or ent.name[0] == '.') continue;
+                try subdirs.append(self.alloc, try self.alloc.dupe(u8, ent.name));
+                continue;
+            }
             if (!std.mem.endsWith(u8, ent.name, manifest_suffix)) continue;
             try names.append(self.alloc, try self.alloc.dupe(u8, ent.name));
         }
         std.mem.sort([]u8, names.items, {}, lessName);
+        std.mem.sort([]u8, subdirs.items, {}, lessName);
 
         for (names.items) |n| {
             const stem = n[0 .. n.len - manifest_suffix.len];
-            self.loadOne(dir, dir_path, stem, n) catch |e| {
+            self.loadOne(dir, stem, n, flat_origin, dir_path) catch |e| {
                 self.br.say(broker.level_err, "host", "plugins: {s} not loaded: {s}", .{ stem, @errorName(e) });
+            };
+        }
+        for (subdirs.items) |n| {
+            self.loadInstalledOne(dir_path, n) catch |e| {
+                self.br.say(broker.level_err, "host", "plugins: {s} not loaded: {s}", .{ n, @errorName(e) });
             };
         }
     }
 
     const manifest_suffix = ".manifest.json";
 
-    fn loadOne(self: *Host, dir: std.Io.Dir, dir_path: []const u8, stem: []const u8, manifest_name: []const u8) !void {
+    /// One installed plugin: `<root>/<name>/manifest.json` beside its module.
+    /// A subdirectory with no manifest is not a plugin and is left alone.
+    fn loadInstalledOne(self: *Host, root_path: []const u8, name: []const u8) !void {
+        const dir_path = try std.fs.path.join(self.alloc, &.{ root_path, name });
+        defer self.alloc.free(dir_path);
+        var sub = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return;
+        defer sub.close(io);
+        const probe = sub.openFile(io, "manifest.json", .{}) catch return;
+        probe.close(io);
+        try self.loadOne(sub, "", "manifest.json", .installed, dir_path);
+    }
+
+    /// Read, validate, instantiate and start one plugin. `stem` names the
+    /// module file (`<stem>.wasm`); empty means the manifest's id names it,
+    /// which is the installed layout. `plugin_dir` is copied into the entry;
+    /// the caller keeps its own.
+    fn loadOne(self: *Host, dir: std.Io.Dir, stem: []const u8, manifest_name: []const u8, origin: Origin, plugin_dir: []const u8) !void {
         const manifest_text = try dir.readFileAlloc(io, manifest_name, self.alloc, .limited(max_manifest_bytes));
         defer self.alloc.free(manifest_text);
         var manifest = try parseManifest(self.alloc, manifest_text);
         errdefer manifest.deinit(self.alloc);
-        if (manifest.abi != abi_version) return Error.AbiMismatch;
+        if (manifest.api != api_version) return Error.ApiMismatch;
+
+        // First loaded keeps the id. The status the mariner reads says which
+        // copy is running, so a developer set beside an installed one is not a
+        // mystery.
+        if (self.entryFor(manifest.id)) |have| {
+            self.br.say(
+                broker.level_warn,
+                manifest.id,
+                "already loaded ({s} copy wins); {s} copy skipped",
+                .{ @tagName(have.origin), @tagName(origin) },
+            );
+            manifest.deinit(self.alloc);
+            return;
+        }
 
         // Every setting starts at its schema default. A shell that has one
         // saved sends it with `configSet` once the plugin is up.
@@ -1033,10 +1169,34 @@ pub const Host = struct {
             }
         }
 
-        const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{stem});
+        // Flat layout names the module after the file stem; the installed
+        // layout names it after the manifest's id, which is authoritative.
+        const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{if (stem.len > 0) stem else manifest.id});
         defer self.alloc.free(wasm_name);
         const raw = try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
         defer self.alloc.free(raw);
+
+        // The grants in force: what the manifest asked for, minus whatever the
+        // mariner switched off. The file lives beside the wasm — `grants.json`
+        // in an installed plugin's directory, `<id>.grants.json` in a flat one
+        // — and its absence means everything the manifest asked for.
+        const grants = blk: {
+            var name_buf: [160]u8 = undefined;
+            const grants_name = if (stem.len > 0)
+                std.fmt.bufPrint(&name_buf, "{s}.grants.json", .{manifest.id}) catch break :blk manifest.caps
+            else
+                grants_file;
+            const text = dir.readFileAlloc(io, grants_name, self.alloc, .limited(max_grants_bytes)) catch
+                break :blk manifest.caps;
+            defer self.alloc.free(text);
+            const saved = parseGrants(self.alloc, text) orelse {
+                // A permissions file that will not parse grants NOTHING.
+                // Failing open is the one wrong answer here.
+                self.br.say(broker.level_err, manifest.id, "{s} is unreadable; granting nothing until it is rewritten", .{grants_name});
+                break :blk broker.Caps.initEmpty();
+            };
+            break :blk saved.intersectWith(manifest.caps);
+        };
 
         // WAMR patches the bytecode in place and keeps pointing at it, so the
         // module gets its own aligned, writable copy for the instance's life.
@@ -1066,16 +1226,16 @@ pub const Host = struct {
             .index = @intCast(self.entries.items.len),
             .id = manifest.id,
             .source = self.next_source,
-            .caps = manifest.caps,
+            .caps = grants,
             .http_hosts = manifest.http_hosts,
             .ws_hosts = manifest.ws_hosts,
         };
         inst.setUserData(state);
 
-        const reported = try inst.abiVersion();
-        if (reported != abi_version) {
-            self.br.say(broker.level_err, manifest.id, "lk_abi reported {d}, host speaks {d}", .{ reported, abi_version });
-            return Error.AbiMismatch;
+        const reported = try inst.apiVersion();
+        if (reported != api_version) {
+            self.br.say(broker.level_err, manifest.id, "lk_abi reported {d}, host speaks {d}", .{ reported, api_version });
+            return Error.ApiMismatch;
         }
 
         // Priority order in the vessel store is registration order, and the
@@ -1103,8 +1263,11 @@ pub const Host = struct {
             return Error.StartRefused;
         }
 
-        self.next_source += 1;
-        try self.entries.append(self.alloc, .{
+        const dir_owned: []u8 = if (plugin_dir.len > 0) try self.alloc.dupe(u8, plugin_dir) else &.{};
+        errdefer if (dir_owned.len > 0) self.alloc.free(dir_owned);
+        const entry = try self.alloc.create(Entry);
+        errdefer self.alloc.destroy(entry);
+        entry.* = .{
             .manifest = manifest,
             .bytes = bytes,
             .module = module,
@@ -1112,9 +1275,22 @@ pub const Host = struct {
             .state = state,
             .values = values,
             .rows = rows,
-        });
+            .origin = origin,
+            .grants = grants,
+            .dir = dir_owned,
+        };
+
+        self.next_source += 1;
+        {
+            self.reg_mu.lock();
+            defer self.reg_mu.unlock();
+            try self.entries.append(self.alloc, entry);
+        }
         self.br.say(broker.level_info, manifest.id, "started ({s}, source {d})", .{ manifest.name, state.source });
-        _ = dir_path;
+        // Loaded hot: the dispatch threads are already running, so this
+        // plugin gets its own at once instead of waiting for a start() that
+        // already happened.
+        if (self.started) self.spawnDispatch(state.index);
     }
 
     fn ensureRuntime(self: *Host) !void {
@@ -1130,7 +1306,7 @@ pub const Host = struct {
     fn startJson(self: *Host, manifest: *const Manifest, values: []const f64, rows: []const []u8) ![]u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.alloc);
-        try out.print(self.alloc, "{{\"abi\":{d},\"config\":{{", .{abi_version});
+        try out.print(self.alloc, "{{\"abi\":{d},\"config\":{{", .{api_version});
         var first = true;
         if (std.mem.endsWith(u8, manifest.id, "nmea0183")) {
             try out.print(self.alloc, "\"host\":\"{s}\",\"port\":{d}", .{ self.opts.nmea_host, self.opts.nmea_port });
@@ -1144,8 +1320,8 @@ pub const Host = struct {
     // -- settings --------------------------------------------------------------
 
     fn entryFor(self: *Host, id: []const u8) ?*Entry {
-        for (self.entries.items) |*e| {
-            if (std.mem.eql(u8, e.manifest.id, id)) return e;
+        for (self.entries.items) |e| {
+            if (!e.removed and std.mem.eql(u8, e.manifest.id, id)) return e;
         }
         return null;
     }
@@ -1262,8 +1438,8 @@ pub const Host = struct {
         }
 
         var claimant: ?*Entry = null;
-        for (self.entries.items) |*e| {
-            if (!e.isLive()) continue;
+        for (self.entries.items) |e| {
+            if (e.removed or !e.isLive()) continue;
             if (!e.manifest.claimsFileType(ext)) continue;
             if (claimant) |first| {
                 self.br.say(
@@ -1291,17 +1467,59 @@ pub const Host = struct {
         defer self.cfg_mu.unlock();
         const alloc = self.alloc;
         try out.appendSlice(alloc, "{\"plugins\":[");
-        for (self.entries.items, 0..) |*e, i| {
-            if (i > 0) try out.append(alloc, ',');
+        var written: usize = 0;
+        for (self.entries.items) |e| {
+            if (e.removed) continue;
+            if (written > 0) try out.append(alloc, ',');
+            written += 1;
             try out.appendSlice(alloc, "{\"id\":");
             try writeJsonString(out, alloc, e.manifest.id);
             try out.appendSlice(alloc, ",\"name\":");
             try writeJsonString(out, alloc, e.manifest.name);
+            try out.appendSlice(alloc, ",\"version\":");
+            try writeJsonString(out, alloc, e.manifest.version);
+            // Where the plugin came from. The shell reads it two ways: only
+            // an "installed" row offers Uninstall, and a "developer" row says
+            // "developer copy" beside its status.
+            try out.print(alloc, ",\"origin\":\"{s}\"", .{@tagName(e.origin)});
             try out.print(alloc, ",\"live\":{s}", .{if (e.isLive()) "true" else "false"});
             // The status line is a string, not an object: it is text a plugin
             // wrote, and the shell decides what to do with it.
             try out.appendSlice(alloc, ",\"status\":");
             try writeJsonString(out, alloc, e.state.status());
+            // Every capability the manifest asked for, its consent sentence,
+            // and whether the mariner currently grants it. The wording lives
+            // here so every shell shows the same sentence.
+            try out.appendSlice(alloc, ",\"capabilities\":[");
+            var caps_written: usize = 0;
+            for (sentence_order) |cap| {
+                if (!e.manifest.caps.contains(cap)) continue;
+                if (caps_written > 0) try out.append(alloc, ',');
+                caps_written += 1;
+                try out.appendSlice(alloc, "{\"cap\":");
+                try writeJsonString(out, alloc, cap.name());
+                try out.appendSlice(alloc, ",\"sentence\":");
+                var sentence: std.ArrayList(u8) = .empty;
+                defer sentence.deinit(alloc);
+                try writeSentence(&sentence, alloc, cap, &e.manifest);
+                try writeJsonString(out, alloc, sentence.items);
+                const hosts: []const []u8 = switch (cap) {
+                    .net_http => e.manifest.http_hosts,
+                    .net_ws => e.manifest.ws_hosts,
+                    else => &.{},
+                };
+                if (hosts.len > 0) {
+                    try out.appendSlice(alloc, ",\"hosts\":[");
+                    for (hosts, 0..) |h, k| {
+                        if (k > 0) try out.append(alloc, ',');
+                        try writeJsonString(out, alloc, h);
+                    }
+                    try out.append(alloc, ']');
+                }
+                try out.print(alloc, ",\"granted\":{s}", .{if (e.grants.contains(cap)) "true" else "false"});
+                try out.append(alloc, '}');
+            }
+            try out.append(alloc, ']');
             // The file types this plugin claims, written only when it claims
             // some, so a plugin that opens no files writes the JSON it always
             // wrote. A shell reads these to tell the mariner what its open
@@ -1366,33 +1584,408 @@ pub const Host = struct {
         try out.appendSlice(alloc, "]}");
     }
 
+    // -- install and consent ---------------------------------------------------
+
+    /// The install root in force, created on first use and cached: the
+    /// override from `Options`, else install.md's per-platform directory.
+    pub fn installRoot(self: *Host) Error![]const u8 {
+        if (self.root_cache) |r| return r;
+        const root: []u8 = if (self.opts.install_root.len > 0)
+            self.alloc.dupe(u8, self.opts.install_root) catch return Error.OutOfMemory
+        else
+            installRootAlloc(self.alloc) orelse return Error.NoInstallRoot;
+        std.Io.Dir.cwd().createDirPath(io, root) catch {};
+        self.root_cache = root;
+        return root;
+    }
+
+    /// The sentence the last refused install left for the mariner. Borrowed;
+    /// overwritten by the next install or inspect.
+    pub fn installMessage(self: *const Host) [:0]const u8 {
+        return self.install_msg[0..self.install_msg_len :0];
+    }
+
+    /// The refusal text for `err`, for a shell that got an error the message
+    /// buffer does not already describe (an allocation failure, a load error).
+    pub fn installErrorText(self: *Host, err: anyerror) [:0]const u8 {
+        if (err != Error.PackageRefused) {
+            self.setInstallMessage("The install failed: {s}.", .{@errorName(err)});
+        }
+        return self.installMessage();
+    }
+
+    /// Truncation keeps the head of the sentence, which is the part that says
+    /// what happened.
+    fn setInstallMessage(self: *Host, comptime fmt: []const u8, args: anytype) void {
+        const kept = std.fmt.bufPrint(self.install_msg[0..max_install_msg], fmt, args) catch
+            self.install_msg[0..max_install_msg];
+        self.install_msg_len = kept.len;
+        self.install_msg[kept.len] = 0;
+    }
+
+    /// Write the mariner's sentence and refuse.
+    fn refuse(self: *Host, comptime fmt: []const u8, args: anytype) Error {
+        self.setInstallMessage(fmt, args);
+        return Error.PackageRefused;
+    }
+
+    /// A validated package, unpacked into a temporary directory under the
+    /// install root (same volume, so placing it is one rename).
+    const Unpacked = struct {
+        manifest: Manifest,
+        tmp_path: []u8,
+    };
+
+    /// Open a .lkplug, check it holds exactly `manifest.json` and the
+    /// manifest's `<id>.wasm` — anything else refuses by name — and unpack it.
+    /// Every refusal sets `installMessage` to the sentence the shell shows.
+    fn unpackToTemp(self: *Host, path: []const u8) !Unpacked {
+        const root = try self.installRoot();
+        const cwd = std.Io.Dir.cwd();
+
+        var file = cwd.openFile(io, path, .{}) catch |e|
+            return self.refuse("Cannot open {s}: {s}.", .{ pkgBaseName(path), @errorName(e) });
+        defer file.close(io);
+        var rbuf: [4096]u8 = undefined;
+        var fr = file.reader(io, &rbuf);
+
+        var it = std.zip.Iterator.init(&fr) catch
+            return self.refuse("{s} is not a plugin package this host can read.", .{pkgBaseName(path)});
+
+        // Pass one, the members by name. The module's name is checked against
+        // the manifest's id after the manifest is read.
+        var manifest_entry: ?std.zip.Iterator.Entry = null;
+        var wasm_entry: ?std.zip.Iterator.Entry = null;
+        var wasm_name_buf: [max_zip_name]u8 = undefined;
+        var wasm_name: []const u8 = "";
+        var name_buf: [max_zip_name]u8 = undefined;
+        while (it.next() catch return self.refuse("{s} is not a plugin package this host can read.", .{pkgBaseName(path)})) |entry| {
+            if (entry.filename_len > name_buf.len)
+                return self.refuse("The package holds a name longer than any plugin file's.", .{});
+            const name = name_buf[0..entry.filename_len];
+            fr.seekTo(entry.header_zip_offset + @sizeOf(std.zip.CentralDirectoryFileHeader)) catch
+                return self.refuse("{s} is not a plugin package this host can read.", .{pkgBaseName(path)});
+            fr.interface.readSliceAll(name) catch
+                return self.refuse("{s} is not a plugin package this host can read.", .{pkgBaseName(path)});
+            if (std.mem.eql(u8, name, "manifest.json")) {
+                if (manifest_entry != null) return self.refuse("The package holds manifest.json twice.", .{});
+                if (entry.uncompressed_size > max_manifest_bytes)
+                    return self.refuse("The manifest is larger than a manifest can be.", .{});
+                manifest_entry = entry;
+                continue;
+            }
+            if (std.mem.endsWith(u8, name, ".wasm") and std.mem.indexOfAny(u8, name, "/\\") == null) {
+                if (wasm_entry != null)
+                    return self.refuse("The package holds two modules: {s} and {s}.", .{ wasm_name, name });
+                if (entry.uncompressed_size > max_module_bytes)
+                    return self.refuse("The module is larger than a plugin may be.", .{});
+                @memcpy(wasm_name_buf[0..name.len], name);
+                wasm_name = wasm_name_buf[0..name.len];
+                wasm_entry = entry;
+                continue;
+            }
+            // install.md's rule: anything else refuses the install BY NAME.
+            return self.refuse("The package holds {s}; a plugin package holds only manifest.json and its module.", .{name});
+        }
+        const me = manifest_entry orelse return self.refuse("The package holds no manifest.json.", .{});
+        const we = wasm_entry orelse return self.refuse("The package holds no wasm module.", .{});
+
+        // Unpack into a scratch directory beside the real ones, so a refusal
+        // deletes one directory and a success is one rename. The name only
+        // has to dodge a concurrent install of the same second, and the C ABI
+        // serializes installs anyway; extraction creates exclusively, so a
+        // stale leftover refuses rather than mixes.
+        const stamp: u64 = @bitCast(broker.wallMs() *% 1_000 +% broker.monoMs());
+        var tmp_name_buf: [40]u8 = undefined;
+        const tmp_name = std.fmt.bufPrint(&tmp_name_buf, ".install-{x}", .{stamp}) catch unreachable;
+        const tmp_path = try std.fs.path.join(self.alloc, &.{ root, tmp_name });
+        errdefer self.alloc.free(tmp_path);
+        cwd.createDirPath(io, tmp_path) catch |e|
+            return self.refuse("Cannot write to the plugin directory: {s}.", .{@errorName(e)});
+        errdefer cwd.deleteTree(io, tmp_path) catch {};
+        var tmp_dir = cwd.openDir(io, tmp_path, .{}) catch |e|
+            return self.refuse("Cannot write to the plugin directory: {s}.", .{@errorName(e)});
+        defer tmp_dir.close(io);
+
+        var scratch: [max_zip_name]u8 = undefined;
+        me.extract(&fr, .{}, &scratch, tmp_dir) catch |e|
+            return self.refuse("The package would not unpack: {s}.", .{@errorName(e)});
+        we.extract(&fr, .{}, &scratch, tmp_dir) catch |e|
+            return self.refuse("The package would not unpack: {s}.", .{@errorName(e)});
+
+        const text = tmp_dir.readFileAlloc(io, "manifest.json", self.alloc, .limited(max_manifest_bytes)) catch |e|
+            return self.refuse("The manifest would not read back: {s}.", .{@errorName(e)});
+        defer self.alloc.free(text);
+        var manifest = parseManifest(self.alloc, text) catch
+            return self.refuse("The manifest is not one this host can read.", .{});
+        errdefer manifest.deinit(self.alloc);
+        if (manifest.api != api_version)
+            return self.refuse("{s} speaks plugin API {d}; this host speaks {d}.", .{ manifest.id, manifest.api, api_version });
+        if (!idSafe(manifest.id))
+            return self.refuse("The manifest's id is not a name this host can install.", .{});
+        // The manifest is authoritative, so the module must carry its id. A
+        // mismatch is a repack error, not something to guess about.
+        var want_buf: [max_zip_name]u8 = undefined;
+        const want = std.fmt.bufPrint(&want_buf, "{s}.wasm", .{manifest.id}) catch
+            return self.refuse("The manifest's id is too long for a module name.", .{});
+        if (!std.mem.eql(u8, wasm_name, want))
+            return self.refuse("The module is named {s} but the manifest's id wants {s}.", .{ wasm_name, want });
+
+        return .{ .manifest = manifest, .tmp_path = tmp_path };
+    }
+
+    /// What the consent sheet shows, as JSON, without installing anything:
+    /// `{"id":..,"name":..,"version":..,"sentences":[..]}`. When the id is
+    /// already loaded it adds `"installed":{"version":..,"origin":..,
+    /// "adds":[..],"drops":[..],"downgrade":bool}` so the sheet can call out
+    /// the delta, downgrades included. A refused package answers
+    /// `{"error":"…"}` with the sentence the shell shows.
+    pub fn inspectPackage(self: *Host, path: []const u8, out: *std.ArrayList(u8)) error{OutOfMemory}!void {
+        const alloc = self.alloc;
+        var up = self.unpackToTemp(path) catch |e| {
+            try out.appendSlice(alloc, "{\"error\":");
+            try writeJsonString(out, alloc, self.installErrorText(e));
+            try out.append(alloc, '}');
+            return;
+        };
+        defer {
+            std.Io.Dir.cwd().deleteTree(io, up.tmp_path) catch {};
+            alloc.free(up.tmp_path);
+            up.manifest.deinit(alloc);
+        }
+        try out.appendSlice(alloc, "{\"id\":");
+        try writeJsonString(out, alloc, up.manifest.id);
+        try out.appendSlice(alloc, ",\"name\":");
+        try writeJsonString(out, alloc, up.manifest.name);
+        try out.appendSlice(alloc, ",\"version\":");
+        try writeJsonString(out, alloc, up.manifest.version);
+        try out.appendSlice(alloc, ",\"sentences\":[");
+        try writeSentences(out, alloc, &up.manifest, null);
+        try out.append(alloc, ']');
+        if (self.entryFor(up.manifest.id)) |have| {
+            try out.appendSlice(alloc, ",\"installed\":{\"version\":");
+            try writeJsonString(out, alloc, have.manifest.version);
+            try out.print(alloc, ",\"origin\":\"{s}\"", .{@tagName(have.origin)});
+            try out.appendSlice(alloc, ",\"adds\":[");
+            try writeSentences(out, alloc, &up.manifest, &have.manifest);
+            try out.appendSlice(alloc, "],\"drops\":[");
+            try writeSentences(out, alloc, &have.manifest, &up.manifest);
+            try out.print(alloc, "],\"downgrade\":{s}}}", .{
+                if (versionLess(up.manifest.version, have.manifest.version)) "true" else "false",
+            });
+        }
+        try out.append(alloc, '}');
+    }
+
+    /// Unpack, validate, place under the install root and load hot. The
+    /// consent already happened on the sheet; this is the Install button.
+    ///
+    /// An id already running is replaced — its instance unloaded, its
+    /// directory and grants file overwritten — except a developer copy, which
+    /// keeps the id for this run per install.md; the files still land so the
+    /// next launch without the override has them.
+    pub fn installPackage(self: *Host, path: []const u8) !void {
+        var up = try self.unpackToTemp(path);
+        var placed = false;
+        defer {
+            if (!placed) std.Io.Dir.cwd().deleteTree(io, up.tmp_path) catch {};
+            self.alloc.free(up.tmp_path);
+            up.manifest.deinit(self.alloc);
+        }
+        const root = try self.installRoot();
+        const final = try std.fs.path.join(self.alloc, &.{ root, up.manifest.id });
+        defer self.alloc.free(final);
+        const cwd = std.Io.Dir.cwd();
+
+        var developer_stays = false;
+        if (self.entryFor(up.manifest.id)) |have| {
+            if (have.origin == .developer) {
+                developer_stays = true;
+            } else {
+                // Consent was re-asked with the delta on the sheet, so the
+                // old instance, its files and its grants file all go.
+                self.unload(have);
+            }
+        }
+        cwd.deleteTree(io, final) catch {};
+        cwd.rename(up.tmp_path, cwd, final, io) catch |e|
+            return self.refuse("Cannot place {s}: {s}.", .{ up.manifest.id, @errorName(e) });
+        placed = true;
+        if (developer_stays) {
+            self.br.say(broker.level_warn, up.manifest.id, "installed; the developer copy stays in force until the override is dropped", .{});
+            return;
+        }
+
+        self.loadInstalledOne(root, up.manifest.id) catch |e| {
+            // Nothing half-installed: a module that will not start leaves no
+            // directory behind, and the sentence says which plugin failed.
+            cwd.deleteTree(io, final) catch {};
+            return self.refuse("{s} did not start: {s}. Nothing was installed.", .{ up.manifest.id, @errorName(e) });
+        };
+    }
+
+    /// Remove an installed plugin: instance down, broker record gone, overlay
+    /// and store contributions erased (the same dropPlugin path a dead plugin
+    /// takes), directory deleted, persisted storage deleted. Bundled and
+    /// developer copies refuse: only what install wrote can be removed.
+    pub fn uninstall(self: *Host, id: []const u8) !void {
+        const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+        if (e.origin != .installed) return Error.NotInstalled;
+        self.unload(e);
+        if (e.dir.len > 0) std.Io.Dir.cwd().deleteTree(io, e.dir) catch {};
+        self.deleteStorage(e.manifest.id);
+        self.br.say(broker.level_info, id, "uninstalled: its files, storage and overlay are gone", .{});
+    }
+
+    /// Take a loaded plugin out of the registry: SHUTDOWN, thread down,
+    /// instance gone, broker record gone, slot tombstoned. The files are the
+    /// caller's business — installPackage replaces them, uninstall deletes
+    /// them, and a developer or bundled set is never written.
+    fn unload(self: *Host, e: *Entry) void {
+        const index = e.state.index;
+        if (e.thread != null) {
+            if (e.isLive()) self.br.push(index, broker.Kind.shutdown, 0, "");
+            const until = broker.monoMs() + self.opts.shutdown_ms;
+            while (e.isLive() and broker.monoMs() < until) broker.sleepMs(2);
+            e.stopping.store(true, .release);
+            var grace: u32 = 0;
+            while (grace < shutdown_grace_ms and e.entered_ms.load(.acquire) != 0) : (grace += 2) broker.sleepMs(2);
+            if (e.entered_ms.load(.acquire) != 0) {
+                self.br.say(broker.level_warn, e.manifest.id, "still inside the module; terminating", .{});
+                e.inst.terminate();
+            }
+            if (e.thread) |th| {
+                th.join();
+                e.thread = null;
+            }
+        } else if (e.isLive()) {
+            self.deliverTo(index, broker.Kind.shutdown, 0, "");
+        }
+        // SHUTDOWN delivery retired it; this is the path where it could not.
+        self.retire(index, false, "unloaded");
+        self.br.removePlugin(e.state);
+        {
+            // The watchdog walks the registry on the I/O thread; it must see
+            // the tombstone before the instance behind it goes away.
+            self.reg_mu.lock();
+            e.removed = true;
+            self.reg_mu.unlock();
+        }
+        e.inst.deinit();
+        e.module.deinit();
+        self.alloc.free(e.bytes);
+    }
+
+    /// Switch one capability on or off, live. The broker checks per call, so
+    /// the flip is felt on the plugin's next mediated call: a revoked
+    /// capability answers -1 and counts denied exactly as if the manifest had
+    /// never asked. No restart, no event, no redelivery.
+    pub fn grantSet(self: *Host, id: []const u8, cap_name: []const u8, on: bool) !void {
+        const cap = broker.Cap.fromName(cap_name) orelse return Error.UnknownCapability;
+        var grants: broker.Caps = undefined;
+        {
+            self.cfg_mu.lock();
+            defer self.cfg_mu.unlock();
+            const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+            // A grant can never exceed the manifest: switching ON something
+            // it never asked for is refused, not stored.
+            if (!e.manifest.caps.contains(cap)) return Error.NotGranted;
+            if (on) e.grants.insert(cap) else e.grants.remove(cap);
+            // The natives read this set unlocked on the dispatch threads. It
+            // is one machine word; a call racing the flip lands on one side
+            // of it or the other, which is what "live" means.
+            e.state.caps = e.grants;
+            grants = e.grants;
+        }
+        self.persistGrants(id, grants) catch |e| {
+            self.br.say(broker.level_warn, id, "grant change not saved: {s}", .{@errorName(e)});
+        };
+        self.br.say(broker.level_info, id, "grant {s} switched {s}", .{ cap.name(), if (on) "on" else "off" });
+    }
+
+    /// Write the grants file beside the plugin's wasm, atomically. A set that
+    /// cannot be written (the app bundle is read-only) keeps the flip for
+    /// this run and says so.
+    fn persistGrants(self: *Host, id: []const u8, caps: broker.Caps) !void {
+        const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+        if (e.dir.len == 0) return;
+        var json: std.ArrayList(u8) = .empty;
+        defer json.deinit(self.alloc);
+        try writeGrantsJson(&json, self.alloc, caps);
+        const name = if (e.origin == .installed)
+            try self.alloc.dupe(u8, grants_file)
+        else
+            try std.fmt.allocPrint(self.alloc, "{s}.grants.json", .{id});
+        defer self.alloc.free(name);
+        const final = try std.fs.path.join(self.alloc, &.{ e.dir, name });
+        defer self.alloc.free(final);
+        const tmp = try std.fmt.allocPrint(self.alloc, "{s}.tmp", .{final});
+        defer self.alloc.free(tmp);
+        const cwd = std.Io.Dir.cwd();
+        try cwd.writeFile(io, .{ .sub_path = tmp, .data = json.items });
+        try cwd.rename(tmp, cwd, final, io);
+    }
+
+    /// Take the plugin's persisted storage with it. The broker keeps the file
+    /// on a mere disable so a reload finds its settings; an uninstall is the
+    /// mariner saying goodbye, and everything the plugin owns goes.
+    fn deleteStorage(self: *Host, id: []const u8) void {
+        var name_buf: [192]u8 = undefined;
+        const name = storageFileName(id, &name_buf);
+        var dir_owned: ?[]u8 = null;
+        var resolved = false;
+        {
+            self.br.mu.lock();
+            defer self.br.mu.unlock();
+            resolved = self.br.storage_dir_resolved;
+            if (resolved) {
+                if (self.br.storage_dir) |d| dir_owned = self.alloc.dupe(u8, d) catch null;
+            }
+        }
+        // Never resolved this run does not mean no file: an earlier run may
+        // have written one in the default place.
+        if (!resolved) dir_owned = storageDirDefault(self.alloc);
+        const dir = dir_owned orelse return;
+        defer self.alloc.free(dir);
+        const path = std.fs.path.join(self.alloc, &.{ dir, name }) catch return;
+        defer self.alloc.free(path);
+        std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    }
+
     // -- the event loop ------------------------------------------------------
 
     /// Start the broker's I/O thread, arm the watchdog, and give every live
     /// plugin its own dispatch thread. Call after `loadDir`: `lk_start` runs on
     /// the caller's thread, and nothing should be delivering events while it
-    /// does.
+    /// does. Idempotent, and a repeat call picks up plugins loaded since —
+    /// which is what `loadPlugins` leans on when it loads a second directory.
     pub fn start(self: *Host) !void {
-        if (self.started) return;
         // Armed before the I/O thread exists, so the first tick already has it.
         self.br.setWatchdog(self, watchdogTick);
         try self.br.start();
         self.started = true;
-        for (self.entries.items, 0..) |*e, i| {
-            if (!e.isLive()) continue;
-            e.stopping.store(false, .release);
-            e.thread = std.Thread.spawn(
-                .{ .stack_size = dispatch_stack_bytes },
-                dispatchMain,
-                .{ self, @as(u32, @intCast(i)) },
-            ) catch |err| {
-                // No thread means no events, ever. Better a plugin that is
-                // visibly gone than one that is silently deaf.
-                self.br.say(broker.level_err, e.manifest.id, "no dispatch thread: {s}", .{@errorName(err)});
-                self.retire(@intCast(i), true, "no dispatch thread");
-                continue;
-            };
+        for (self.entries.items, 0..) |e, i| {
+            if (e.removed or !e.isLive() or e.thread != null) continue;
+            self.spawnDispatch(@intCast(i));
         }
+    }
+
+    /// One plugin's dispatch thread, spawned at `start` or the moment a hot
+    /// install appends it.
+    fn spawnDispatch(self: *Host, index: u32) void {
+        const e = self.entries.items[index];
+        e.stopping.store(false, .release);
+        e.thread = std.Thread.spawn(
+            .{ .stack_size = dispatch_stack_bytes },
+            dispatchMain,
+            .{ self, index },
+        ) catch |err| {
+            // No thread means no events, ever. Better a plugin that is
+            // visibly gone than one that is silently deaf.
+            self.br.say(broker.level_err, e.manifest.id, "no dispatch thread: {s}", .{@errorName(err)});
+            self.retire(index, true, "no dispatch thread");
+            return;
+        };
     }
 
     /// SHUTDOWN to every live plugin, drained best effort, then every thread
@@ -1406,30 +1999,30 @@ pub const Host = struct {
         if (!self.started) {
             // Never started: deliver SHUTDOWN inline so a plugin that opened a
             // socket in lk_start still gets told.
-            for (self.entries.items, 0..) |*e, i| {
-                if (e.isLive()) self.deliverTo(@intCast(i), broker.Kind.shutdown, 0, "");
+            for (self.entries.items, 0..) |e, i| {
+                if (!e.removed and e.isLive()) self.deliverTo(@intCast(i), broker.Kind.shutdown, 0, "");
             }
             self.br.stop();
             return;
         }
 
-        for (self.entries.items, 0..) |*e, i| {
-            if (e.isLive()) self.br.push(@intCast(i), broker.Kind.shutdown, 0, "");
+        for (self.entries.items, 0..) |e, i| {
+            if (!e.removed and e.isLive()) self.br.push(@intCast(i), broker.Kind.shutdown, 0, "");
         }
         var waited: u32 = 0;
         while (self.br.queued() > 0 and waited < self.opts.shutdown_ms) : (waited += 2) {
             broker.sleepMs(2);
         }
 
-        for (self.entries.items) |*e| e.stopping.store(true, .release);
+        for (self.entries.items) |e| e.stopping.store(true, .release);
         var grace: u32 = 0;
         while (grace < shutdown_grace_ms and self.anyInModule()) : (grace += 2) broker.sleepMs(2);
-        for (self.entries.items) |*e| {
-            if (e.thread == null or e.entered_ms.load(.acquire) == 0) continue;
+        for (self.entries.items) |e| {
+            if (e.removed or e.thread == null or e.entered_ms.load(.acquire) == 0) continue;
             self.br.say(broker.level_warn, e.manifest.id, "still inside the module at shutdown; terminating", .{});
             e.inst.terminate();
         }
-        for (self.entries.items) |*e| {
+        for (self.entries.items) |e| {
             if (e.thread) |th| {
                 th.join();
                 e.thread = null;
@@ -1440,7 +2033,7 @@ pub const Host = struct {
     }
 
     fn anyInModule(self: *Host) bool {
-        for (self.entries.items) |*e| {
+        for (self.entries.items) |e| {
             if (e.thread != null and e.entered_ms.load(.acquire) != 0) return true;
         }
         return false;
@@ -1473,7 +2066,7 @@ pub const Host = struct {
 
     /// One plugin's dispatch thread: its queue, its instance, nobody else's.
     fn dispatchMain(self: *Host, index: u32) void {
-        const e = &self.entries.items[index];
+        const e = self.entries.items[index];
         // WAMR keeps the interpreter's native stack boundary per THREAD, and
         // the load thread got its own from initRuntime. Cheap, and the
         // documented way to enter wasm from a thread the runtime has not seen;
@@ -1513,8 +2106,8 @@ pub const Host = struct {
 
     fn deliverTo(self: *Host, index: u32, kind: u32, handle: u64, payload: []const u8) void {
         if (index >= self.entries.items.len) return;
-        const e = &self.entries.items[index];
-        if (!e.isLive()) return;
+        const e = self.entries.items[index];
+        if (e.removed or !e.isLive()) return;
         // SHUTDOWN is the last thing a plugin ever sees, whatever it returns.
         if (kind == broker.Kind.shutdown) e.live.store(false, .release);
 
@@ -1561,7 +2154,7 @@ pub const Host = struct {
     /// about why, so it is dropped in favour of the budget it blew. Every other
     /// trap keeps its original exception text.
     fn disableStuck(self: *Host, index: u32) void {
-        const e = &self.entries.items[index];
+        const e = self.entries.items[index];
         e.inst.clearException();
         var buf: [max_reason]u8 = undefined;
         const reason = std.fmt.bufPrint(
@@ -1578,7 +2171,7 @@ pub const Host = struct {
     /// logged as an error, status line replaced with the reason — from one that
     /// was shut down, which keeps whatever it last said about itself.
     fn retire(self: *Host, index: u32, fault: bool, reason: []const u8) void {
-        const e = &self.entries.items[index];
+        const e = self.entries.items[index];
         e.live.store(false, .release);
         if (e.retired.swap(true, .acq_rel)) return;
         if (fault) {
@@ -1610,8 +2203,12 @@ pub const Host = struct {
     /// terminated call unwinds.
     fn watchdogTick(ctx: ?*anyopaque, mono_ms: i64) void {
         const self: *Host = @ptrCast(@alignCast(ctx orelse return));
-        for (self.entries.items) |*e| {
-            if (!e.isLive()) continue;
+        // Under the registry lock: an install appends to this list from the
+        // API thread while the tick walks it here on the I/O thread.
+        self.reg_mu.lock();
+        defer self.reg_mu.unlock();
+        for (self.entries.items) |e| {
+            if (e.removed or !e.isLive()) continue;
             const entered = e.entered_ms.load(.acquire);
             if (entered == 0) continue;
             const elapsed = mono_ms - entered;
@@ -1633,6 +2230,245 @@ pub const Host = struct {
 
 fn lessName(_: void, a: []u8, b: []u8) bool {
     return std.mem.lessThan(u8, a, b);
+}
+
+// ---- install: the package, the grants, the consent sentences ----------------
+
+/// Longest refusal sentence kept for the shell to show.
+pub const max_install_msg = 240;
+
+/// Longest member name read out of a package. An id is 128 bytes at most and
+/// the module name adds five; anything longer is not a plugin file.
+pub const max_zip_name = 160;
+
+/// Longest grants.json read back. A full grant list is under 200 bytes.
+pub const max_grants_bytes: usize = 4096;
+
+/// The revocation file beside an installed plugin's wasm. A flat directory
+/// uses `<id>.grants.json` instead, because its plugins share the directory.
+pub const grants_file = "grants.json";
+
+/// The consent table's order (install.md). The sheet and the settings rows
+/// list sentences in this order whatever order the manifest declared.
+pub const sentence_order = [_]broker.Cap{
+    .vessel_read,
+    .ais_read,
+    .vessel_publish,
+    .ais_publish,
+    .overlay_draw,
+    .alerts_raise,
+    .net_tcp_client,
+    .net_udp,
+    .net_http,
+    .net_ws,
+    .storage,
+    .files,
+};
+
+/// One capability's consent sentence, worded exactly as install.md's table.
+/// Host lists print inline; the `local` token prints as the boat's own
+/// network, because "local" is jargon and that is what it grants.
+pub fn writeSentence(out: *std.ArrayList(u8), alloc: std.mem.Allocator, cap: broker.Cap, m: *const Manifest) !void {
+    switch (cap) {
+        .vessel_read => try out.appendSlice(alloc, "Read your instruments: position, heading, depth, wind."),
+        .ais_read => try out.appendSlice(alloc, "Read AIS traffic."),
+        .vessel_publish => try out.appendSlice(alloc, "Provide instrument readings to the chart."),
+        .ais_publish => try out.appendSlice(alloc, "Provide AIS targets to the chart."),
+        .overlay_draw => try out.appendSlice(alloc, "Draw on the chart."),
+        .alerts_raise => try out.appendSlice(alloc, "Raise alarms."),
+        .net_tcp_client => try out.appendSlice(alloc, "Connect to instruments on your network."),
+        .net_udp => try out.appendSlice(alloc, "Listen for broadcasts on your network."),
+        .net_http => {
+            try out.appendSlice(alloc, "Fetch data from: ");
+            try writeHostList(out, alloc, m.http_hosts);
+            try out.append(alloc, '.');
+        },
+        .net_ws => {
+            try out.appendSlice(alloc, "Stream data from: ");
+            try writeHostList(out, alloc, m.ws_hosts);
+            try out.append(alloc, '.');
+        },
+        .storage => try out.appendSlice(alloc, "Keep its own settings and data."),
+        .files => {
+            try out.appendSlice(alloc, "Open ");
+            for (m.file_types, 0..) |ft, i| {
+                if (i > 0) try out.appendSlice(alloc, if (i + 1 == m.file_types.len) " and " else ", ");
+                try out.appendSlice(alloc, ft);
+            }
+            if (m.file_types.len > 0) try out.append(alloc, ' ');
+            try out.appendSlice(alloc, "files you choose.");
+        },
+    }
+}
+
+fn writeHostList(out: *std.ArrayList(u8), alloc: std.mem.Allocator, hosts: []const []u8) !void {
+    for (hosts, 0..) |h, i| {
+        if (i > 0) try out.appendSlice(alloc, ", ");
+        try out.appendSlice(alloc, if (std.mem.eql(u8, h, broker.local_token)) "your own network" else h);
+    }
+}
+
+/// The sentences of `of`'s capabilities as a comma-separated run of JSON
+/// strings, skipping any whose sentence `unless` would print identically.
+/// With `unless` null that is simply all of them; with it, the run is the
+/// consent delta — a changed host list changes the sentence, so it shows.
+fn writeSentences(out: *std.ArrayList(u8), alloc: std.mem.Allocator, of: *const Manifest, unless: ?*const Manifest) error{OutOfMemory}!void {
+    var first = true;
+    for (sentence_order) |cap| {
+        if (!of.caps.contains(cap)) continue;
+        var s: std.ArrayList(u8) = .empty;
+        defer s.deinit(alloc);
+        try writeSentence(&s, alloc, cap, of);
+        if (unless) |other| {
+            if (other.caps.contains(cap)) {
+                var o: std.ArrayList(u8) = .empty;
+                defer o.deinit(alloc);
+                try writeSentence(&o, alloc, cap, other);
+                if (std.mem.eql(u8, s.items, o.items)) continue;
+            }
+        }
+        if (!first) try out.append(alloc, ',');
+        first = false;
+        try writeJsonString(out, alloc, s.items);
+    }
+}
+
+fn pkgBaseName(path: []const u8) []const u8 {
+    const cut = std.mem.lastIndexOfAny(u8, path, "/\\") orelse return path;
+    return path[cut + 1 ..];
+}
+
+/// install.md's per-platform table. Null when the platform names no place —
+/// Android's files directory has no path in the environment, so a shell there
+/// sets `Options.install_root` instead.
+pub fn installRootAlloc(alloc: std.mem.Allocator) ?[]u8 {
+    switch (builtin.os.tag) {
+        .windows => {
+            const appdata = std.c.getenv("APPDATA") orelse return null;
+            const s = std.mem.span(appdata);
+            if (s.len == 0) return null;
+            return std.fmt.allocPrint(alloc, "{s}\\Lookout Marine\\Plugins", .{s}) catch null;
+        },
+        .macos => {
+            const home = std.mem.span(std.c.getenv("HOME") orelse return null);
+            if (home.len == 0) return null;
+            return std.fmt.allocPrint(alloc, "{s}/Library/Application Support/Lookout Marine/Plugins", .{home}) catch null;
+        },
+        .linux => {
+            if (std.c.getenv("XDG_DATA_HOME")) |x| {
+                const s = std.mem.span(x);
+                if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout-marine/plugins", .{s}) catch null;
+            }
+            const home = std.mem.span(std.c.getenv("HOME") orelse return null);
+            if (home.len == 0) return null;
+            return std.fmt.allocPrint(alloc, "{s}/.local/share/lookout-marine/plugins", .{home}) catch null;
+        },
+        else => return null,
+    }
+}
+
+/// True when the id can be a directory name under the install root:
+/// reverse-DNS characters only, no separators, no leading dot. An id that
+/// fails this is refused at install and never touches the disk.
+pub fn idSafe(id: []const u8) bool {
+    if (id.len == 0 or id.len > 128) return false;
+    if (id[0] == '.') return false;
+    for (id) |c| switch (c) {
+        'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
+        else => return false,
+    };
+    return true;
+}
+
+/// `{"v":1,"granted":["ais.read",…]}` — the capabilities the mariner has left
+/// on. The manifest stays the asked-for set; this file is the subset in force.
+pub fn writeGrantsJson(out: *std.ArrayList(u8), alloc: std.mem.Allocator, caps: broker.Caps) !void {
+    try out.appendSlice(alloc, "{\"v\":1,\"granted\":[");
+    var first = true;
+    for (sentence_order) |cap| {
+        if (!caps.contains(cap)) continue;
+        if (!first) try out.append(alloc, ',');
+        first = false;
+        try writeJsonString(out, alloc, cap.name());
+    }
+    try out.appendSlice(alloc, "]}");
+}
+
+/// Null when the text is not a grants file at all. The caller treats that as
+/// nothing granted, never as everything: this is a permissions file. A cap
+/// name a newer host wrote and this one does not know grants nothing and
+/// refuses nothing.
+pub fn parseGrants(alloc: std.mem.Allocator, text: []const u8) ?broker.Caps {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, text, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const list = parsed.value.object.get("granted") orelse return null;
+    if (list != .array) return null;
+    var caps = broker.Caps.initEmpty();
+    for (list.array.items) |item| switch (item) {
+        .string => |s| if (broker.Cap.fromName(s)) |cap| caps.insert(cap),
+        else => return null,
+    };
+    return caps;
+}
+
+/// True when `a` reads as an older version than `b`. Dotted segments compare
+/// numerically when both are numbers, lexically otherwise; a missing segment
+/// is zero. This only ever decides whether the consent sheet says
+/// "downgrade", so a tie or an unparseable pair is simply not one.
+pub fn versionLess(a: []const u8, b: []const u8) bool {
+    var ia = std.mem.splitScalar(u8, a, '.');
+    var ib = std.mem.splitScalar(u8, b, '.');
+    while (true) {
+        const sa = ia.next();
+        const sb = ib.next();
+        if (sa == null and sb == null) return false;
+        const ta = sa orelse "0";
+        const tb = sb orelse "0";
+        const na = std.fmt.parseInt(u64, ta, 10) catch null;
+        const nb = std.fmt.parseInt(u64, tb, 10) catch null;
+        if (na != null and nb != null) {
+            if (na.? != nb.?) return na.? < nb.?;
+        } else switch (std.mem.order(u8, ta, tb)) {
+            .lt => return true,
+            .gt => return false,
+            .eq => {},
+        }
+    }
+}
+
+/// The name broker.zig's KvStore saves a plugin's storage under, replicated
+/// here so `uninstall` can take the file with the plugin. Kept in step with
+/// KvStore.fileName by the comment on both.
+fn storageFileName(id: []const u8, buf: []u8) []const u8 {
+    const n = @min(id.len, buf.len - 5);
+    for (id[0..n], 0..) |c, i| buf[i] = switch (c) {
+        'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => c,
+        else => '_',
+    };
+    @memcpy(buf[n .. n + 5], ".json");
+    return buf[0 .. n + 5];
+}
+
+/// Where broker.zig keeps plugin storage when nobody called setStorageDir,
+/// replicated from its defaultStorageDir for the same reason as the name.
+fn storageDirDefault(alloc: std.mem.Allocator) ?[]u8 {
+    if (builtin.os.tag == .windows) {
+        const appdata = std.c.getenv("APPDATA") orelse return null;
+        const s = std.mem.span(appdata);
+        if (s.len == 0) return null;
+        return std.fmt.allocPrint(alloc, "{s}\\lookout\\plugins", .{s}) catch null;
+    }
+    if (std.c.getenv("XDG_DATA_HOME")) |x| {
+        const s = std.mem.span(x);
+        if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout/plugins", .{s}) catch null;
+    }
+    const home = std.mem.span(std.c.getenv("HOME") orelse return null);
+    if (home.len == 0) return null;
+    return switch (builtin.os.tag) {
+        .macos, .ios => std.fmt.allocPrint(alloc, "{s}/Library/Application Support/lookout/plugins", .{home}) catch null,
+        else => std.fmt.allocPrint(alloc, "{s}/.local/share/lookout/plugins", .{home}) catch null,
+    };
 }
 
 fn boolText(v: f64) []const u8 {
@@ -1815,16 +2651,16 @@ fn writeJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const
 
 const t = std.testing;
 
-test "a manifest parses id, name, abi and the granted capabilities" {
+test "a manifest parses id, name, api and the granted capabilities" {
     const a = t.allocator;
     var m = try parseManifest(a,
-        \\{"id":"org.beetlebug.ais","name":"AIS targets","abi":1,
+        \\{"id":"org.beetlebug.ais","name":"AIS targets","api":1,
         \\ "capabilities":["ais.read","overlay.draw","alerts.raise"]}
     );
     defer m.deinit(a);
     try t.expectEqualStrings("org.beetlebug.ais", m.id);
     try t.expectEqualStrings("AIS targets", m.name);
-    try t.expectEqual(@as(u32, 1), m.abi);
+    try t.expectEqual(@as(u32, 1), m.api);
     try t.expect(m.caps.contains(.ais_read));
     try t.expect(m.caps.contains(.overlay_draw));
     try t.expect(m.caps.contains(.alerts_raise));
@@ -1832,9 +2668,24 @@ test "a manifest parses id, name, abi and the granted capabilities" {
     try t.expect(!m.caps.contains(.net_tcp_client));
 }
 
+test "a manifest's version is a short string, shown and never enforced" {
+    const a = t.allocator;
+    var m = try parseManifest(a, "{\"id\":\"x\",\"api\":1,\"version\":\"1.4.0\"}");
+    defer m.deinit(a);
+    try t.expectEqualStrings("1.4.0", m.version);
+
+    var none = try parseManifest(a, "{\"id\":\"x\",\"api\":1}");
+    defer none.deinit(a);
+    try t.expectEqualStrings("", none.version);
+
+    // A number and a novel are both typos, not versions.
+    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"api\":1,\"version\":2}"));
+    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"api\":1,\"version\":\"a-version-string-far-longer-than-anyone-prints\"}"));
+}
+
 test "a manifest with no capabilities grants nothing, and name defaults to id" {
     const a = t.allocator;
-    var m = try parseManifest(a, "{\"id\":\"org.beetlebug.quiet\",\"abi\":1}");
+    var m = try parseManifest(a, "{\"id\":\"org.beetlebug.quiet\",\"api\":1}");
     defer m.deinit(a);
     try t.expectEqualStrings("org.beetlebug.quiet", m.name);
     try t.expectEqual(@as(usize, 0), m.caps.count());
@@ -1844,17 +2695,17 @@ test "a manifest is refused rather than half-read" {
     const a = t.allocator;
     try t.expectError(Error.BadManifest, parseManifest(a, "not json"));
     try t.expectError(Error.BadManifest, parseManifest(a, "[]"));
-    try t.expectError(Error.BadManifest, parseManifest(a, "{\"abi\":1}"));
+    try t.expectError(Error.BadManifest, parseManifest(a, "{\"api\":1}"));
     try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\"}"));
     // An unknown capability is a typo in a grant, so the plugin does not load.
-    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.mqtt\"]}"));
-    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":\"vessel.read\"}"));
+    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.mqtt\"]}"));
+    try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"api\":1,\"capabilities\":\"vessel.read\"}"));
 }
 
 test "a net.http or net.ws grant carries the hosts it covers, and nothing else" {
     const a = t.allocator;
     var m = try parseManifest(a,
-        \\{"id":"org.beetlebug.grib","abi":1,"capabilities":[
+        \\{"id":"org.beetlebug.grib","api":1,"capabilities":[
         \\  {"net.http":["nomads.ncep.noaa.gov","opendap.nasa.gov"]},
         \\  {"net.ws":["demo.signalk.org"]},
         \\  "storage","files","net.udp"]}
@@ -1874,19 +2725,19 @@ test "a net.http or net.ws grant carries the hosts it covers, and nothing else" 
     const bad = [_][]const u8{
         // A bare net.http is "may reach anything", which no manifest may ask
         // for, and an empty list is the same grant written longer.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.http\"]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"net.ws\"]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.http\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.ws\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[]}]}",
         // A capability that reaches no named server takes no list.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"storage\":[\"a.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"storage\":[\"a.example\"]}]}",
         // A URL, a wildcard and a path are not hostnames.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"https://a.example\"]}]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"*.example\"]}]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"a.example/x\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"https://a.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"*.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"a.example/x\"]}]}",
         // One entry, one capability; and one list per capability.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"a.example\"],\"net.ws\":[\"b.example\"]}]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":[\"a.example\"]},{\"net.http\":[\"b.example\"]}]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[{\"net.http\":\"a.example\"}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"a.example\"],\"net.ws\":[\"b.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"a.example\"]},{\"net.http\":[\"b.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":\"a.example\"}]}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 }
@@ -1894,7 +2745,7 @@ test "a net.http or net.ws grant carries the hosts it covers, and nothing else" 
 test "a manifest claims file types, lowercase and dotted, and only with files" {
     const a = t.allocator;
     var m = try parseManifest(a,
-        \\{"id":"org.beetlebug.grib","abi":1,"capabilities":["files"],
+        \\{"id":"org.beetlebug.grib","api":1,"capabilities":["files"],
         \\ "file_types":[".grib2",".grb"]}
     );
     defer m.deinit(a);
@@ -1907,26 +2758,26 @@ test "a manifest claims file types, lowercase and dotted, and only with files" {
     const bad = [_][]const u8{
         // The claim rests on `files`: without it the plugin could not read a
         // byte of what it asked for.
-        "{\"id\":\"x\",\"abi\":1,\"file_types\":[\".grib2\"]}",
+        "{\"id\":\"x\",\"api\":1,\"file_types\":[\".grib2\"]}",
         // Written any way but the way the routing compares it.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".GRIB2\"]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\"grib2\"]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".tar.gz\"]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".\"]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".grib 2\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[\".GRIB2\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[\"grib2\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[\".tar.gz\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[\".\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[\".grib 2\"]}",
         // Claiming nothing, written like a claim.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[]}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":\".grib2\"}",
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[1]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":\".grib2\"}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[1]}",
         // The same type twice is a typo, not two claims.
-        "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[\".grb\",\".grb\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[\".grb\",\".grb\"]}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 
     // Nine types is past what a grant sentence can say.
     var many: std.ArrayList(u8) = .empty;
     defer many.deinit(a);
-    try many.appendSlice(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"],\"file_types\":[");
+    try many.appendSlice(a, "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"],\"file_types\":[");
     for (0..max_file_types + 1) |i| {
         if (i > 0) try many.append(a, ',');
         try many.print(a, "\".t{d}\"", .{i});
@@ -1935,7 +2786,7 @@ test "a manifest claims file types, lowercase and dotted, and only with files" {
     try t.expectError(Error.BadManifest, parseManifest(a, many.items));
 
     // A manifest that claims nothing keeps an empty list, not a null one.
-    var quiet = try parseManifest(a, "{\"id\":\"x\",\"abi\":1,\"capabilities\":[\"files\"]}");
+    var quiet = try parseManifest(a, "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"files\"]}");
     defer quiet.deinit(a);
     try t.expectEqual(@as(usize, 0), quiet.file_types.len);
 }
@@ -1957,14 +2808,14 @@ test "the extension is read from the name, lowercased, dot kept" {
 }
 
 const ais_settings_manifest =
-    \\{"id":"org.beetlebug.ais","name":"AIS targets","abi":1,
+    \\{"id":"org.beetlebug.ais","name":"AIS targets","api":1,
     \\ "capabilities":["ais.read"],
     \\ "settings":[
     \\  {"key":"cpa_limit","label":"CPA limit","kind":"number","unit":"m","min":93,"max":9260,"default":926},
     \\  {"key":"cpa_alarm","label":"Collision alarm","kind":"toggle","default":true}]}
 ;
 
-test "the start payload carries the ABI, and NMEA config only for nmea0183" {
+test "the start payload carries the api version, and NMEA config only for nmea0183" {
     var vessels = try store.Store.init(t.allocator);
     defer vessels.deinit();
     var ais = aisstore.AisStore.init(t.allocator);
@@ -1974,13 +2825,13 @@ test "the start payload carries the ABI, and NMEA config only for nmea0183" {
     var h = Host.init(t.allocator, &br, .{ .nmea_host = "10.0.0.4", .nmea_port = 2000 });
     defer h.deinit();
 
-    var nm = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.nmea0183\",\"abi\":1}");
+    var nm = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.nmea0183\",\"api\":1}");
     defer nm.deinit(t.allocator);
     const nmea = try h.startJson(&nm, &.{}, &.{});
     defer t.allocator.free(nmea);
     try t.expectEqualStrings("{\"abi\":1,\"config\":{\"host\":\"10.0.0.4\",\"port\":2000}}", nmea);
 
-    var om = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.ownship\",\"abi\":1}");
+    var om = try parseManifest(t.allocator, "{\"id\":\"org.beetlebug.ownship\",\"api\":1}");
     defer om.deinit(t.allocator);
     const other = try h.startJson(&om, &.{}, &.{});
     defer t.allocator.free(other);
@@ -2015,20 +2866,20 @@ test "a settings schema parses, and a malformed field refuses the manifest" {
     // A field with no kind, an unknown kind, a range that is not one, a
     // toggle whose default is a number, and two fields sharing a key.
     const bad = [_][]const u8{
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\"}]}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"slider\",\"default\":1}]}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"number\",\"min\":5,\"max\":5,\"default\":5}]}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"number\",\"min\":0,\"max\":5}]}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"toggle\",\"default\":1}]}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"toggle\",\"default\":true}," ++
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\"}]}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"slider\",\"default\":1}]}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"number\",\"min\":5,\"max\":5,\"default\":5}]}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"number\",\"min\":0,\"max\":5}]}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"toggle\",\"default\":1}]}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"toggle\",\"default\":true}," ++
             "{\"key\":\"a\",\"kind\":\"toggle\",\"default\":false}]}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{}}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":{}}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 
     // A default outside the range it declares is clamped, not refused.
     var clamped = try parseManifest(a,
-        \\{"id":"x","abi":1,"settings":[{"key":"a","kind":"number","min":1,"max":10,"default":99}]}
+        \\{"id":"x","api":1,"settings":[{"key":"a","kind":"number","min":1,"max":10,"default":99}]}
     );
     defer clamped.deinit(a);
     try t.expectEqual(@as(f64, 10), clamped.settings[0].default_value);
@@ -2040,7 +2891,7 @@ test "a settings schema parses, and a malformed field refuses the manifest" {
 }
 
 const v2_manifest =
-    \\{"id":"org.beetlebug.ais","name":"AIS targets","abi":1,
+    \\{"id":"org.beetlebug.ais","name":"AIS targets","api":1,
     \\ "settings":{"groups":[
     \\  {"label":"Collision alarm","tab":"alarms","fields":[
     \\   {"key":"cpa_limit","label":"Closest approach","desc":"Alarm when a vessel will pass closer than this.",
@@ -2076,7 +2927,7 @@ test "a v2 schema carries labels, descriptions, groups and tabs" {
 
     // An unknown tab is a typo, not a new tab.
     var unknown = try parseManifest(a,
-        \\{"id":"x","abi":1,"settings":{"groups":[{"label":"G","tab":"weather",
+        \\{"id":"x","api":1,"settings":{"groups":[{"label":"G","tab":"weather",
         \\ "fields":[{"key":"a","kind":"toggle","default":true}]}]}}
     );
     defer unknown.deinit(a);
@@ -2085,15 +2936,15 @@ test "a v2 schema carries labels, descriptions, groups and tabs" {
     // A v2 block with no groups array, a group that is not an object, and a
     // group with no fields.
     const bad = [_][]const u8{
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"fields\":[]}}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[\"G\"]}}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"label\":\"G\"}]}}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"fields\":[]}}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[\"G\"]}}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"label\":\"G\"}]}}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 }
 
 const list_manifest =
-    \\{"id":"org.beetlebug.nmea0183","name":"NMEA 0183","abi":1,
+    \\{"id":"org.beetlebug.nmea0183","name":"NMEA 0183","api":1,
     \\ "settings":{"groups":[
     \\  {"label":"Connections","tab":"connections","list":{"key":"connections",
     \\   "footer":"Most WiFi gateways serve NMEA 0183 on port 10110.",
@@ -2183,23 +3034,23 @@ test "a list is refused when it fights another key, and text needs a row" {
     const a = t.allocator;
     const bad = [_][]const u8{
         // A scalar text field has nowhere to keep its value.
-        "{\"id\":\"x\",\"abi\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"text\"}]}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":[{\"key\":\"a\",\"kind\":\"text\"}]}",
         // A list with no key, and one with no columns.
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"item_fields\":[]}}]}}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":[]}}]}}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"list\":{\"item_fields\":[]}}]}}",
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":[]}}]}}",
         // A column called id would fight the one the host writes.
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":" ++
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":" ++
             "[{\"key\":\"id\",\"kind\":\"text\"}]}}]}}",
         // A switch naming a column the list does not have, and one naming a
         // column that is not a toggle: either leaves the shell with no switch.
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"switch_key\":\"nope\"," ++
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"switch_key\":\"nope\"," ++
             "\"item_fields\":[{\"key\":\"on\",\"kind\":\"toggle\",\"default\":true}]}}]}}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"switch_key\":\"h\"," ++
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"switch_key\":\"h\"," ++
             "\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",
         // A list key that a field already uses, and two lists with one key.
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"fields\":[{\"key\":\"c\",\"kind\":\"toggle\",\"default\":true}]}," ++
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"fields\":[{\"key\":\"c\",\"kind\":\"toggle\",\"default\":true}]}," ++
             "{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",
-        "{\"id\":\"x\",\"abi\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}," ++
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}," ++
             "{\"list\":{\"key\":\"c\",\"item_fields\":[{\"key\":\"h\",\"kind\":\"text\"}]}}]}}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
@@ -2228,4 +3079,113 @@ test "the registry JSON carries the schema the shell renders" {
     try writeFieldJson(&json, a, v1.settings[0], 926);
     try t.expectEqualStrings("{\"key\":\"cpa_limit\",\"label\":\"CPA limit\",\"kind\":\"number\",\"unit\":\"m\"," ++
         "\"min\":93,\"max\":9260,\"default\":926,\"tab\":\"advanced\",\"value\":926}", json.items);
+}
+
+test "the consent sentences read exactly as install.md words them" {
+    const a = t.allocator;
+    var m = try parseManifest(a,
+        \\{"id":"org.example.everything","api":1,"capabilities":[
+        \\ "vessel.read","ais.read","vessel.publish","ais.publish",
+        \\ "overlay.draw","alerts.raise","net.tcp-client","net.udp",
+        \\ {"net.http":["nomads.ncep.noaa.gov"]},
+        \\ {"net.ws":["demo.signalk.org","local"]},
+        \\ "storage","files"],
+        \\ "file_types":[".grib2",".grb"]}
+    );
+    defer m.deinit(a);
+
+    const expect = [_][]const u8{
+        "Read your instruments: position, heading, depth, wind.",
+        "Read AIS traffic.",
+        "Provide instrument readings to the chart.",
+        "Provide AIS targets to the chart.",
+        "Draw on the chart.",
+        "Raise alarms.",
+        "Connect to instruments on your network.",
+        "Listen for broadcasts on your network.",
+        "Fetch data from: nomads.ncep.noaa.gov.",
+        "Stream data from: demo.signalk.org, your own network.",
+        "Keep its own settings and data.",
+        "Open .grib2 and .grb files you choose.",
+    };
+    for (sentence_order, expect) |cap, want| {
+        var s: std.ArrayList(u8) = .empty;
+        defer s.deinit(a);
+        try writeSentence(&s, a, cap, &m);
+        try t.expectEqualStrings(want, s.items);
+    }
+
+    // The delta writer: everything against nothing is everything, and a
+    // manifest against itself is silence.
+    var all: std.ArrayList(u8) = .empty;
+    defer all.deinit(a);
+    try writeSentences(&all, a, &m, null);
+    try t.expectEqual(@as(usize, expect.len), std.mem.count(u8, all.items, "\"") / 2);
+    var none: std.ArrayList(u8) = .empty;
+    defer none.deinit(a);
+    try writeSentences(&none, a, &m, &m);
+    try t.expectEqualStrings("", none.items);
+
+    // A changed host list changes the sentence, so it shows in the delta.
+    var other = try parseManifest(a,
+        \\{"id":"org.example.everything","api":1,"capabilities":[{"net.http":["tiles.example.org"]}]}
+    );
+    defer other.deinit(a);
+    var delta: std.ArrayList(u8) = .empty;
+    defer delta.deinit(a);
+    try writeSentences(&delta, a, &other, &m);
+    try t.expectEqualStrings("\"Fetch data from: tiles.example.org.\"", delta.items);
+}
+
+test "grants.json round-trips, and a malformed one grants nothing" {
+    const a = t.allocator;
+    var caps = broker.Caps.initEmpty();
+    caps.insert(.ais_read);
+    caps.insert(.overlay_draw);
+    caps.insert(.net_http);
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try writeGrantsJson(&json, a, caps);
+    try t.expectEqualStrings("{\"v\":1,\"granted\":[\"ais.read\",\"overlay.draw\",\"net.http\"]}", json.items);
+
+    const back = parseGrants(a, json.items).?;
+    try t.expect(back.eql(caps));
+
+    // An empty grant list is a valid file that grants nothing.
+    const empty = parseGrants(a, "{\"v\":1,\"granted\":[]}").?;
+    try t.expectEqual(@as(usize, 0), empty.count());
+
+    // A name a newer host knows grants nothing here and refuses nothing.
+    const newer = parseGrants(a, "{\"v\":1,\"granted\":[\"ais.read\",\"net.quic\"]}").?;
+    try t.expectEqual(@as(usize, 1), newer.count());
+
+    // Not a grants file at all: null, which the loader reads as NOTHING
+    // granted, never as everything.
+    try t.expect(parseGrants(a, "not json") == null);
+    try t.expect(parseGrants(a, "[]") == null);
+    try t.expect(parseGrants(a, "{\"v\":1}") == null);
+    try t.expect(parseGrants(a, "{\"v\":1,\"granted\":[1]}") == null);
+}
+
+test "version order decides only the downgrade sentence" {
+    try t.expect(versionLess("1.2", "1.10"));
+    try t.expect(!versionLess("1.10", "1.2"));
+    try t.expect(versionLess("1.2", "1.2.1"));
+    try t.expect(!versionLess("1.2", "1.2"));
+    try t.expect(!versionLess("", ""));
+    try t.expect(versionLess("", "0.1"));
+    // Unparseable segments fall back to text order rather than lying.
+    try t.expect(versionLess("1.0-beta", "1.0-rc"));
+}
+
+test "an id that could leave the install root is refused" {
+    try t.expect(idSafe("org.example.downwind"));
+    try t.expect(idSafe("a-b_c.9"));
+    try t.expect(!idSafe(""));
+    try t.expect(!idSafe(".hidden"));
+    try t.expect(!idSafe("../escape"));
+    try t.expect(!idSafe("a/b"));
+    try t.expect(!idSafe("a\\b"));
+    try t.expect(!idSafe("a b"));
 }

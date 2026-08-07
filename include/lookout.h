@@ -110,8 +110,12 @@ int lookout_plugins_active(lookout *h);
 
 /* Every loaded plugin with its settings schema and the values in force:
  *
- *   {"plugins":[{"id":"org.beetlebug.ais","name":"AIS targets","live":true,
+ *   {"plugins":[{"id":"org.beetlebug.ais","name":"AIS targets",
+ *                "version":"1.2","origin":"installed","live":true,
  *                "status":"{\"state\":\"running\",...}",
+ *                "capabilities":[
+ *                  {"cap":"ais.read","sentence":"Read AIS traffic.",
+ *                   "granted":true}],
  *                "settings":[
  *                  {"key":"cpa_limit","label":"CPA limit","kind":"number",
  *                   "unit":"m","min":93,"max":9260,"default":926,"value":926},
@@ -120,9 +124,65 @@ int lookout_plugins_active(lookout *h);
  *
  * A shell draws a control per field — a number field with its unit and range,
  * a toggle as a switch — and needs to know nothing about what a plugin does.
- * Borrowed until the next plugin query; NULL when no plugin layer is up.
- * *out_len (NULL to ignore) receives the length. */
+ * "origin" is "bundled", "installed" or "developer": only an installed row
+ * offers Uninstall, and a developer row says "developer copy" by its status.
+ * "capabilities" is the manifest's asked-for set in consent-sheet wording,
+ * with "hosts":[...] on the net.http/net.ws entries and "granted" tracking
+ * lookout_plugin_grant_set(). Borrowed until the next plugin query; NULL when
+ * no plugin layer is up. *out_len (NULL to ignore) receives the length. */
 const char *lookout_plugins_json(lookout *h, size_t *out_len);
+
+/* ---- plugin install and consent (see specs/plugins/install.md) ----------- */
+
+/* Load the INSTALLED plugin set — what lookout_plugin_install() put under the
+ * per-user plugin directory (macOS: ~/Library/Application Support/Lookout
+ * Marine/Plugins/<id>/) — creating the plugin layer if nothing has yet. Call
+ * once after open; LOOKOUT_PLUGINS keeps working as the developer override
+ * beside it, and on an id collision the first copy loaded wins, so the
+ * override should load first (it does when it loads at open). Idempotent.
+ * Returns 0 while the layer is up afterwards, -1 otherwise. */
+int lookout_plugins_load_installed(lookout *h);
+
+/* Read a .lkplug without installing it: everything the consent sheet shows.
+ *
+ *   {"id":"org.example.downwind","name":"Downwind line","version":"1.0",
+ *    "sentences":["Read your instruments: position, heading, depth, wind.",
+ *                 "Draw on the chart."]}
+ *
+ * When the id is already loaded, an "installed" object rides beside it so the
+ * sheet can call out the delta: {"version":..,"origin":..,"adds":[..],
+ * "drops":[..],"downgrade":true|false} — adds/drops are consent sentences the
+ * new package gains/loses against the running copy. A refused package answers
+ * {"error":"<one sentence, ready to show>"}. Borrowed until the next plugin
+ * query; NULL only when no plugin layer can come up. */
+const char *lookout_plugin_inspect(lookout *h, const char *path, size_t *out_len);
+
+/* Install a .lkplug the mariner consented to: unpack (the zip must hold
+ * exactly manifest.json and the manifest's <id>.wasm; anything else refuses
+ * by name), place under the per-user plugin directory, and load hot — the
+ * plugin draws without a restart. Reinstalling an id replaces the running
+ * copy and resets its grants to the consented set; while LOOKOUT_PLUGINS
+ * carries the same id, the files land but the developer copy keeps running.
+ *
+ * Returns NULL on success, else one borrowed sentence saying why, ready for
+ * the shell to show. Valid until the next install or inspect. */
+const char *lookout_plugin_install(lookout *h, const char *path);
+
+/* Remove an installed plugin: instance, overlay objects, published values,
+ * saved storage, directory — everything it owns. 0 on success; -1 for an
+ * unknown id or a bundled/developer plugin (install never wrote those, so
+ * uninstall will not touch them). */
+int lookout_plugin_uninstall(lookout *h, const char *id);
+
+/* Switch one granted capability on or off, live. The broker checks every
+ * mediated call, so a revoked capability answers the plugin -1 and counts
+ * denied exactly as if the manifest never asked for it — the plugin keeps
+ * running. The state persists beside the plugin's wasm (grants.json) and is
+ * read back at every load; absent means everything the manifest asked for.
+ * `cap` is the manifest capability name ("ais.read", "net.http", ...).
+ * Returns 0, or -1 for an unknown id/capability or one the manifest never
+ * asked for — a grant can never exceed the manifest. */
+int lookout_plugin_grant_set(lookout *h, const char *id, const char *cap, int on);
 
 /* One plugin's settings, as a JSON object of key to value. Every key its
  * schema declares is present. Borrowed until the next plugin query; NULL when

@@ -199,14 +199,23 @@ final class ChartController: NSObject {
         MarinerSettings.applySavedOverlay(&mm)
         setMariner(mm)
 
-        // The plugins came up inside lookout_open, so their saved settings can
-        // go in now. A plugin with none stays on its manifest defaults.
+        // The INSTALLED plugin set loads beside whatever LOOKOUT_PLUGINS
+        // brought up inside lookout_open. The override loaded first, so a
+        // developer copy keeps its id; this also creates the plugin layer on a
+        // machine with no override at all.
+        loadInstalledPlugins()
+
+        // The plugins are up, so their saved settings can go in now. A plugin
+        // with none stays on its manifest defaults.
         PluginSettings.applySaved(to: self)
 
         startDisplayLink()
         pushReadouts()
         model?.hasChart = true
         model?.chartPath = chartPath
+        // A .lkplug opened before the chart was up waited for the plugin
+        // layer; it can go to its consent sheet now.
+        model?.drainPendingInstall()
         return true
     }
 
@@ -590,6 +599,56 @@ final class ChartController: NSObject {
     func setPluginConfig(_ id: String, _ json: String) -> Bool {
         guard let h = handle else { return false }
         let ok = lookout_plugin_config_set(h, id, json) == 0
+        if ok { kick() }
+        return ok
+    }
+
+    // MARK: - Plugin install and consent
+
+    /// Load the installed plugin set — what Install put under Application
+    /// Support — creating the plugin layer when the environment brought none.
+    @discardableResult
+    func loadInstalledPlugins() -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugins_load_installed(h) == 0
+    }
+
+    /// Everything the consent sheet shows for a .lkplug, as JSON, without
+    /// installing it. Nil only when no plugin layer can come up.
+    func inspectPlugin(_ path: String) -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = lookout_plugin_inspect(h, path, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+
+    /// Install a consented .lkplug. Nil on success — the plugin is already
+    /// drawing — else the one sentence to show the mariner.
+    func installPlugin(_ path: String) -> String? {
+        guard let h = handle else { return "Open a chart before installing a plugin." }
+        guard let err = lookout_plugin_install(h, path) else {
+            kick()
+            return nil
+        }
+        return String(cString: err)
+    }
+
+    /// Remove an installed plugin and everything it owns. False for a bundled
+    /// or developer plugin, which install never wrote.
+    @discardableResult
+    func uninstallPlugin(_ id: String) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_plugin_uninstall(h, id) == 0
+        if ok { kick() }
+        return ok
+    }
+
+    /// Switch one granted capability on or off, live. The plugin keeps
+    /// running; a revoked capability simply answers it -1 from here on.
+    @discardableResult
+    func setPluginGrant(_ id: String, _ cap: String, _ on: Bool) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_plugin_grant_set(h, id, cap, on ? 1 : 0) == 0
         if ok { kick() }
         return ok
     }

@@ -6,6 +6,14 @@ const builtin = @import("builtin");
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
 
+/// The plugin host, for the install surface below. Present only when the
+/// build has one; every entry point checks, so a build without plugins keeps
+/// exporting the symbols and answers "no".
+const plugins_enabled = @import("build_options").plugins;
+const phost = if (plugins_enabled) @import("plugin/host.zig") else struct {};
+
+const capi_io = std.Io.Threaded.global_single_threaded.io();
+
 // On Android, native stderr goes nowhere — a Zig panic (Debug safety check,
 // unreachable, …) would die as a bare SIGABRT with no message in logcat. Route
 // the panic message through the android log first, then abort as usual.
@@ -189,6 +197,94 @@ export fn lookout_plugin_config_set(h: ?*lookout, id: [*:0]const u8, json: [*:0]
     defer l.apiUnlock();
     l.setPluginConfig(std.mem.span(id), std.mem.span(json)) catch return -1;
     return 0;
+}
+
+/// Load the INSTALLED plugin set — what lookout_plugin_install put under the
+/// per-user plugin directory — creating the plugin layer if nothing has yet.
+/// Idempotent: an id already loaded is skipped, so the shell calls it once
+/// after open and again whenever it likes. 0 when the layer is up afterwards.
+export fn lookout_plugins_load_installed(h: ?*lookout) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (ensureInstalledPlugins(l)) 0 else -1;
+}
+
+/// Read a .lkplug without installing it: everything the consent sheet shows,
+/// as JSON. `{"id":..,"name":..,"version":..,"sentences":[..]}`, plus
+/// `"installed":{"version":..,"origin":..,"adds":[..],"drops":[..],
+/// "downgrade":bool}` when the id is already loaded, so the sheet calls out
+/// the grant delta. A refused package answers `{"error":"<sentence>"}`.
+/// Borrowed until the next plugin query; NULL only when no layer can come up.
+export fn lookout_plugin_inspect(h: ?*lookout, path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (!ensureInstalledPlugins(l)) return null;
+    const ps = l.plugins.?;
+    ps.json.clearRetainingCapacity();
+    ps.host.inspectPackage(std.mem.span(path), &ps.json) catch return null;
+    if (out_len) |p| p.* = ps.json.items.len;
+    return ps.json.items.ptr;
+}
+
+/// Install a .lkplug: unpack, validate — the zip must hold exactly
+/// manifest.json and the manifest's <id>.wasm — place it under the per-user
+/// plugin directory and load it hot. Call after the mariner consented on the
+/// sheet lookout_plugin_inspect fed.
+///
+/// NULL on success. Otherwise one borrowed sentence saying why, ready to
+/// show: "The package holds notes.txt; a plugin package holds only
+/// manifest.json and its module." Valid until the next install or inspect.
+export fn lookout_plugin_install(h: ?*lookout, path: [*:0]const u8) ?[*:0]const u8 {
+    if (comptime !plugins_enabled) return "This build has no plugin host.";
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (!ensureInstalledPlugins(l)) return "The plugin layer could not start.";
+    const ps = l.plugins.?;
+    ps.host.installPackage(std.mem.span(path)) catch |e| return ps.host.installErrorText(e).ptr;
+    return null;
+}
+
+/// Remove an installed plugin: its instance, its overlay objects, its store
+/// contributions, its saved storage and its directory. 0 on success; -1 for
+/// an unknown id or a bundled/developer plugin, which install never wrote and
+/// uninstall will not touch.
+export fn lookout_plugin_uninstall(h: ?*lookout, id: [*:0]const u8) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return -1;
+    ps.host.uninstall(std.mem.span(id)) catch return -1;
+    return 0;
+}
+
+/// Switch one of a plugin's granted capabilities on or off, live: the broker
+/// checks per call, so a revoked capability answers -1 to the plugin and
+/// counts denied exactly as if the manifest never asked for it. The change
+/// persists beside the plugin's wasm and is read back at every load. 0 on
+/// success; -1 for an unknown id, an unknown capability name, or a
+/// capability the manifest never asked for (a grant can never exceed the
+/// manifest).
+export fn lookout_plugin_grant_set(h: ?*lookout, id: [*:0]const u8, cap: [*:0]const u8, on: c_int) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return -1;
+    ps.host.grantSet(std.mem.span(id), std.mem.span(cap), on != 0) catch return -1;
+    return 0;
+}
+
+/// The plugin layer with the installed set loaded, created on first need.
+/// True when the layer is up afterwards. The install root is created empty
+/// rather than treated as an error: a first install has nothing yet.
+fn ensureInstalledPlugins(l: *lk.Lookout) bool {
+    if (comptime !plugins_enabled) return false;
+    const root = phost.installRootAlloc(gpa) orelse return l.plugins != null;
+    defer gpa.free(root);
+    std.Io.Dir.cwd().createDirPath(capi_io, root) catch {};
+    l.loadPlugins(root) catch return l.plugins != null;
+    return l.plugins != null;
 }
 
 /// Offer a file the mariner opened to the plugins: 1 when one claimed the file

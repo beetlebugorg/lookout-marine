@@ -12,8 +12,33 @@ import UIKit
 
 #if os(macOS)
 
+/// The app delegate exists for one job: files LaunchServices hands the app —
+/// a double-clicked .lkplug, `open x.lkplug`, a chart dropped on the Dock
+/// icon. A WindowGroup has no other hook for them. Files that arrive before
+/// the content view has published the model wait here.
+@MainActor
+final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    static weak var model: AppModel? {
+        didSet { deliverPending() }
+    }
+    private static var pending: [String] = []
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Self.pending.append(contentsOf: urls.map(\.path))
+        Self.deliverPending()
+    }
+
+    private static func deliverPending() {
+        guard let model else { return }
+        let paths = pending
+        pending = []
+        for p in paths { model.openFileOrChart(p) }
+    }
+}
+
 @main
 struct LookoutMarineApp: App {
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     // Held as @State so the controller (and its lookout* handle / display link)
     // survives view-tree rebuilds.
@@ -35,6 +60,7 @@ struct LookoutMarineApp: App {
         WindowGroup {
             ContentView(model: model, controller: controller)
                 .frame(minWidth: 720, minHeight: 520)
+                .onAppear { MacAppDelegate.model = model }
         }
         // A chart needs room. The default window was 900×520, which is the
         // minimum size, not a working size.
@@ -228,6 +254,33 @@ struct ContentView: View {
             } message: {
                 Text(model.openError ?? "")
             }
+            // The .lkplug consent sheet. Every install entry point sets
+            // pendingInstall; the sheet is the only way from there to disk.
+            .sheet(item: Binding(
+                get: { model.pendingInstall },
+                set: { model.pendingInstall = $0 })) { pkg in
+                PluginConsentSheet(model: model, pkg: pkg)
+            }
+            .alert("Couldn't install plugin", isPresented: Binding(
+                get: { model.installError != nil },
+                set: { if !$0 { model.installError = nil } })) {
+                Button("OK", role: .cancel) { model.installError = nil }
+            } message: {
+                Text(model.installError ?? "")
+            }
+            #if os(macOS)
+            // A file dropped on the chart takes the path the Open panel takes:
+            // the core decides what it is, and a .lkplug goes to consent.
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                for p in providers {
+                    _ = p.loadObject(ofClass: URL.self) { url, _ in
+                        guard let url else { return }
+                        DispatchQueue.main.async { model.openFileOrChart(url.path) }
+                    }
+                }
+                return !providers.isEmpty
+            }
+            #endif
             // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
             // scale, search, pick opens that chrome once the chart is up. On
             // the simulator, pass it as SIMCTL_CHILD_LOOKOUT_SHOW.
@@ -252,6 +305,13 @@ struct ContentView: View {
                             let n = part.count > 1 ? (Int(part[1]) ?? 1) : 1
                             for _ in 0..<n { model.controller?.cycleScheme() }
                         case "search": model.searchOpen = true
+                        // install:<path> — a .lkplug straight to its consent
+                        // sheet, for the screenshot protocol. Parsed from the
+                        // raw variable: a path keeps its case.
+                        case "install":
+                            if let r = show.range(of: "install:", options: .caseInsensitive) {
+                                model.beginPluginInstall(String(show[r.upperBound...]))
+                            }
                         // pick at the centre, or at a fraction of the view:
                         // pick:0.5x0.85 lands low in the chart. ("x", because
                         // the comma splits the LOOKOUT_SHOW list itself.)

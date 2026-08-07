@@ -55,7 +55,7 @@ CAP=${LOOKOUT_CAP:-1600}                      # served width; never UPscaled
 # Retina display the capture is twice this in pixels.
 EXPECT=${LOOKOUT_EXPECT:-720x592}
 
-SECTIONS="display depths text charts vessels alarms connections advanced"
+SECTIONS="display depths text charts vessels alarms connections plugins advanced"
 
 # ---- preflight -------------------------------------------------------------
 bin=$APP/Contents/MacOS/LookoutMarine

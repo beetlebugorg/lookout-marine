@@ -537,7 +537,10 @@ pub fn build(b: *std.Build) void {
     // The signalk module is installed like the others AND handed to the
     // Signal K host test below.
     var signalk_wasm: ?std.Build.LazyPath = null;
-    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline" }) |name| {
+    // The windline module is the install test's payload: the walkthrough's
+    // downwind plugin under the id its package carries.
+    var windline_wasm: ?std.Build.LazyPath = null;
+    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline", "canvasdemo" }) |name| {
         const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
         if (!haveFile(b, main_rel)) continue;
         const mod = b.createModule(.{
@@ -558,8 +561,29 @@ pub fn build(b: *std.Build) void {
         // `windline` is BUILT but not installed, for the same reason as echo:
         // it is the documentation's worked example, and beside the five real
         // ones the harness would load it and draw a second line off own ship.
-        // Building it keeps the recipes compiling.
-        if (std.mem.eql(u8, name, "windline")) continue;
+        // Building it keeps the recipes compiling — and hands the install test
+        // below its module, which it packs as the doc's org.example.downwind.
+        if (std.mem.eql(u8, name, "windline")) {
+            windline_wasm = wasm_exe.getEmittedBin();
+            continue;
+        }
+        // `canvasdemo` installs into its own zig-out/plugins-canvas so the
+        // standard harness bar stays what it was; a canvas run copies the
+        // pair in beside the real plugins deliberately.
+        if (std.mem.eql(u8, name, "canvasdemo")) {
+            const cid = manifestId(b, name);
+            plugins_step.dependOn(&b.addInstallFileWithDir(
+                wasm_exe.getEmittedBin(),
+                .{ .custom = "plugins-canvas" },
+                b.fmt("{s}.wasm", .{cid}),
+            ).step);
+            plugins_step.dependOn(&b.addInstallFileWithDir(
+                b.path("plugins/canvasdemo/manifest.json"),
+                .{ .custom = "plugins-canvas" },
+                b.fmt("{s}.manifest.json", .{cid}),
+            ).step);
+            continue;
+        }
         if (std.mem.eql(u8, name, "nmea0183")) nmea_wasm = wasm_exe.getEmittedBin();
         if (std.mem.eql(u8, name, "signalk")) signalk_wasm = wasm_exe.getEmittedBin();
 
@@ -698,6 +722,25 @@ pub fn build(b: *std.Build) void {
                     b.step("signalk-host", "Run the Signal K stream + arbitration test").dependOn(&sk_run.step);
                     test_step.dependOn(&sk_run.step);
                 }
+            }
+
+            // The install path end to end: a .lkplug packed in-test around the
+            // windline module (the docs' downwind example), refused packages,
+            // hot install, live grant revocation, grants.json persistence and
+            // uninstall taking the directory and the overlay with it.
+            if (windline_wasm) |wbin| {
+                const install_mod = b.createModule(.{
+                    .root_source_file = b.path("test/install_host.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                });
+                install_mod.addImport("host", host_mod);
+                install_mod.addImport("overlay", ov_mod);
+                install_mod.addAnonymousImport("windline_plugin_wasm", .{ .root_source_file = wbin });
+                const install_run = b.addRunArtifact(b.addTest(.{ .root_module = install_mod }));
+                b.step("install-host", "Run the plugin install + consent test").dependOn(&install_run.step);
+                test_step.dependOn(&install_run.step);
             }
 
             // Time isolation: echo beside a plugin that stops answering. Like
