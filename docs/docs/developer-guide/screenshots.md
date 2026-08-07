@@ -88,7 +88,7 @@ desktop takes 1120 x 720.
 open -n --env LOOKOUT_OPEN=<chart|folder> \
         --env LOOKOUT_VIEW=-76.482,38.976,13.7 \
         --env LOOKOUT_WINDOW=1400x900 \
-        build/Debug/LookoutMarine.app
+        macos/build-mac/Build/Products/Debug/LookoutMarine.app
 # one window only, no shadow, written to the specified file name
 screencapture -o -l"$(GetWindowID LookoutMarine)" docs/docs/img/macos-day.webp
 ```

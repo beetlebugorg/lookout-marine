@@ -112,7 +112,8 @@ everything the app links against, so you pre-build nothing. Use the Release
 configuration of Xcode for a non-debug app.
 
 If you have no Xcode, `macos/build-dev.sh --zig` builds the Mac app with the Command
-Line Tools into `macos/build/`.
+Line Tools. It writes the same bundle every other build writes,
+`macos/build-mac/Build/Products/Debug/LookoutMarine.app`.
 
 On Linux — refer to [linux/README.md](linux/README.md):
 

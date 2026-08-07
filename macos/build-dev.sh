@@ -4,15 +4,26 @@
 # libtool (ld64 alignment). Rendering is direct Metal.
 #
 #   macos/build-dev.sh [--zig]     # --zig also rebuilds the Zig cores first
+#   -> macos/build-mac/Build/Products/Debug/LookoutMarine.app
 #
 # tile57 is a zig package dependency (sibling ../tile57 checkout if present,
 # else fetched per ../build.zig.zon) — `zig build` installs both archives and
-# headers into zig-out/. Overridable: OUT (build dir).
+# headers into zig-out/.
+#
+# The bundle lands in the SAME slot build.sh fills,
+# macos/build-mac/Build/Products/Debug/LookoutMarine.app. One app path on disk
+# is the point: a bundle in a second directory goes stale silently and gets
+# launched by mistake months later. Whichever script ran last owns that path,
+# and xcodebuild rebuilds the product when it finds one it did not write.
+# Overridable: OUT (the directory that holds the bundle).
 set -e
 REPO="${0:A:h:h}"
-OUT="${OUT:-$REPO/macos/build}"
+OUT="${OUT:-$REPO/macos/build-mac/Build/Products/Debug}"
+# Intermediates (repacked archives, the bare executable) stay out of the
+# products directory, beside Xcode's own.
+WORK="$REPO/macos/build-mac/Build/Intermediates.noindex/build-dev"
 SDK=$(xcrun --show-sdk-path)
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$WORK"
 cd "$REPO"
 
 if [[ "$1" == "--zig" ]]; then
@@ -25,29 +36,29 @@ echo "==> repack + merge zig archives (ld64 alignment)"
 # aren't 8-byte aligned — feeding the archives to libtool directly can lose
 # symbols depending on member sizes. Extract to loose objects (zig also records
 # mode-0 member permissions, hence the chmod) and repack from those.
-rm -rf "$OUT/repack"; mkdir -p "$OUT/repack/lookout" "$OUT/repack/tile57"
-(cd "$OUT/repack/lookout" && ar x "$REPO/zig-out/lib/liblookout_marine.a")
-(cd "$OUT/repack/tile57"  && ar x "$REPO/zig-out/lib/libtile57.a")
-chmod 644 "$OUT"/repack/lookout/*.o "$OUT"/repack/tile57/*.o
-xcrun libtool -static -o "$OUT/liblookoutall.a" \
-  "$OUT"/repack/lookout/*.o "$OUT"/repack/tile57/*.o 2>/dev/null
+rm -rf "$WORK/repack"; mkdir -p "$WORK/repack/lookout" "$WORK/repack/tile57"
+(cd "$WORK/repack/lookout" && ar x "$REPO/zig-out/lib/liblookout_marine.a")
+(cd "$WORK/repack/tile57"  && ar x "$REPO/zig-out/lib/libtile57.a")
+chmod 644 "$WORK"/repack/lookout/*.o "$WORK"/repack/tile57/*.o
+xcrun libtool -static -o "$WORK/liblookoutall.a" \
+  "$WORK"/repack/lookout/*.o "$WORK"/repack/tile57/*.o 2>/dev/null
 
 echo "==> swiftc app"
 xcrun swiftc -swift-version 5 -sdk "$SDK" -target arm64-apple-macosx26.0 \
   -O \
   -import-objc-header macos/LookoutMarine/Bridging-Header.h \
   -I zig-out/include \
-  -L "$OUT" \
+  -L "$WORK" \
   -llookoutall \
   -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework UniformTypeIdentifiers \
-  -o "$OUT/LookoutMarine" macos/LookoutMarine/*.swift 2>&1 \
+  -o "$WORK/LookoutMarine" macos/LookoutMarine/*.swift 2>&1 \
   | grep -v "was built for newer\|not an allowed client of it" || true
 
 echo "==> bundle"
 APP="$OUT/LookoutMarine.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"
-cp "$OUT/LookoutMarine" "$APP/Contents/MacOS/LookoutMarine"
+cp "$WORK/LookoutMarine" "$APP/Contents/MacOS/LookoutMarine"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

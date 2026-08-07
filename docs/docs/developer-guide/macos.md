@@ -41,7 +41,9 @@ members whose offsets are not aligned. The script extracts the members to loose
 objects and packs those.
 
 Without Xcode, `macos/build-dev.sh` builds the macOS app with the Command Line
-Tools alone: `swiftc` and a hand-made bundle.
+Tools alone: `swiftc` and a hand-made bundle. It writes that bundle to the path
+above — the one app path on disk, whichever script built it, so no stale second
+copy can wait there to be launched.
 
 ## Environment variables
 

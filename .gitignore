@@ -17,8 +17,8 @@ zig-pkg/
 !linux/data/icons/**/*.png
 !android/app/src/main/res/mipmap-*/*.png
 .DS_Store
-# Xcode / xcodegen build products and derived data (build, build-ios,
-# build-iosdev, DerivedData, …) — never tracked.
+# Xcode / xcodegen derived data — never tracked. build-mac holds every product
+# (macOS and the iOS simulator alike); the glob also catches older trees.
 macos/build*/
 macos/DerivedData/
 # Docusaurus build output

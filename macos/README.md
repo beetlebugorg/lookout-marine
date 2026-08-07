@@ -35,7 +35,9 @@ every configuration — build the app itself with Xcode's Release configuration
 for a fully non-debug binary.
 
 **No Xcode?** `macos/build-dev.sh [--zig]` builds the same app with just the
-Command Line Tools (swiftc + a hand-rolled bundle) into `macos/build/`.
+Command Line Tools (swiftc + a hand-rolled bundle). It fills the slot the Xcode
+build fills, `macos/build-mac/Build/Products/Debug/LookoutMarine.app` — one app
+path on disk, so there is never a second bundle to launch by mistake.
 
 You need a baked `.pmtiles` chart to see anything: **File ▸ Open Chart…** picks a
 `.pmtiles` file (or a folder of cells to compose a library). On first launch the
