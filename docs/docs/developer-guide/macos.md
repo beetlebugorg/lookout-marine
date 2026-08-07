@@ -14,14 +14,14 @@ chrome is SwiftUI above it.
 `ChartController` are platform-neutral. Only the backing view class, the display
 link, the backing scale and the raw input are behind `#if os(...)`.
 
-## Prerequisites
+## Before you build
 
 - **Xcode.** The deployment targets are macOS 14 and iOS 15.
 - **Zig 0.16** and **XcodeGen** (`brew install zig xcodegen`).
 
 tile57 is not a prerequisite. It is a Zig package dependency of the core.
 
-## Build and run
+## Building and running
 
 ```sh
 cd macos && xcodegen generate   # writes LookoutMarine.xcodeproj from project.yml
@@ -43,7 +43,7 @@ objects and packs those.
 Without Xcode, `macos/build-dev.sh` builds the macOS app with the Command Line
 Tools alone: `swiftc` and a hand-made bundle.
 
-## Dev hooks
+## Environment variables
 
 | Variable | Effect |
 |---|---|
@@ -55,7 +55,7 @@ Tools alone: `swiftc` and a hand-made bundle.
 `simctl` forwards the first two as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 `SIMCTL_CHILD_LOOKOUT_VIEW`.
 
-## Two windows on iOS
+## Why iOS needs two windows
 
 SwiftUI's hosting view hit-tests as itself across its whole window and never
 forwards touches to UIKit subviews. A gesture surface inside SwiftUI therefore
@@ -71,7 +71,7 @@ cannot come from the view tree. The chrome writes the frames of its controls to
 `ChromeHitMap`, and both platforms hit-test against that. macOS needs it as
 much: without it every chrome click reached the chart.
 
-## Cautions
+## What to watch out for
 
 - **FrontBoard caches scene sessions per install.** After a change to the scene
   configuration, a plain reinstall keeps the stale session and the SceneDelegate
@@ -82,7 +82,7 @@ much: without it every chrome click reached the chart.
 - **The rotation gesture sign** is not confirmed on a real device. That needs a
   signing team.
 
-## Files
+## Where the code lives
 
 | File | Role |
 |---|---|

@@ -54,7 +54,7 @@ time passing rather than an event.*
 
 Record what the event gave you, and draw from a 1 Hz timer.
 
-## Deletes before sets
+## Deletes always happen before sets
 
 The host applies every delete before every set, whatever order they are in inside
 the JSON. `lk.Overlay` makes you write them that way round too: it refuses a `del`
@@ -207,7 +207,69 @@ that ships with Lookout waits 2 s.
 Reassembly is yours too: one `TCP_DATA` event is one socket read of at most 8192
 bytes, which has no relationship to the line boundaries in what the peer sent.
 
-## One subscription per plugin
+The same rule covers WebSockets: `WS_CLOSED` is the end, and dialling again is
+yours. What is **not** yours there is reassembly — the host joins a message's
+fragments and answers the peer's pings before you see anything, so one `WS_DATA`
+is one whole message. UDP is the third case: one `UDP_DATA` is exactly one
+datagram, never two joined and never one split.
+
+## Name every server you reach
+
+`net.http` and `net.ws` are the only capabilities that carry an argument: the
+list of hosts you may reach. A URL outside the list returns -1 before a socket
+opens, and the log line names the host you asked for.
+
+*"This plugin may reach the internet" is not something a mariner can weigh, and a
+plugin that reaches one server for weather and quietly reaches a second one is
+exactly what the grant sentence exists to prevent.*
+
+There are no wildcards, so a plugin that needs two servers names two servers. A
+redirect that would leave the host fails the fetch rather than following, because
+the list was checked once at the URL you asked for.
+
+When the address is a mariner's setting rather than yours — a Signal K server,
+an instrument bridge — write `local`. It grants the boat's own network and
+refuses the internet, which is the honest shape of that grant.
+
+## Ask for a range, not a file
+
+A response body is capped at 4 MiB, and the fetch fails rather than truncating.
+A GRIB, a chart bundle and a tide table are all bigger than that, so ask for a
+range: `{"url":…,"range":"bytes=0-1048575"}`.
+
+*One 4 MiB slice is an event you can decode inside the watchdog's budget. One
+200 MB body would be an allocation the plugin cannot hold and a decode it cannot
+finish in a second.*
+
+Four fetches run at once across every plugin. A fifth returns -1 at once, which
+is a signal to try again from a timer, not an error.
+
+## Storage is small, and it is yours alone
+
+`storage_put` writes the file before it returns, so what you saved survives a
+trap, a disable and a restart. What it is not is a database: 64 KiB a value,
+1 MiB and 256 keys in total, and another plugin's store is another file that you
+cannot read.
+
+*A plugin's saved state is a mariner's settings and a resume point, not a data
+store. A weather plugin caches WHICH run it fetched, not the run.*
+
+`storage_get` uses the two-call pattern: it answers with the size, and writes
+into your buffer only when the value fits. A key that was never written answers
+-1, which is not the same as a key holding nothing.
+
+## You cannot open a file
+
+There is no `file_open`, and there never will be one. A file handle arrives as
+`FILE_OPENED` because a mariner chose that file and the application granted it.
+
+*A plugin that could name a path could read the chart library, the settings and
+the saved credentials of every other plugin on the machine.*
+
+Read with an absolute offset — the handle has no cursor — and expect 0 bytes at
+the end of the file rather than an error.
+
+## A plugin has one subscription
 
 Calling `subscribe` again **replaces** the path list rather than adding to it, so
 a plugin that re-subscribes on reconnect does not leak handles. There are no

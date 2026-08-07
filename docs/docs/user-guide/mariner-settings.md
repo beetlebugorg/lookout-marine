@@ -12,7 +12,7 @@ import settingsDisplay from '../img/settings-display.webp';
 The gear opens the settings. ⌘, (Ctrl+,) does the same. Every change applies to
 the chart at once and is kept for the next time.
 
-## Display
+## Choosing the colour scheme and detail
 
 <AnnotatedShot
   src={settingsDisplay}
@@ -49,7 +49,7 @@ Other.
 
 **Soundings** — spot depths, on or off, whatever the category. ⌘⇧S.
 
-## Depths
+## Setting the safety contour and depth shading
 
 ![The Depths tab](../img/settings-depths.png)
 
@@ -78,7 +78,7 @@ affect the safety contour.
 **Safety depth** — soundings at or shallower than this print bold. It shades no
 water; it only marks the numbers.
 
-## Text
+## Choosing what text and symbols appear
 
 ![The Text tab](../img/settings-text.png)
 
@@ -93,13 +93,41 @@ ECDIS ones.
 **Full light-sector lines** — draw each sector out to its full range, instead of
 a short leader. Useful on approach, noisy in a crowded harbour.
 
-## Charts
+## Managing your chart library
 
 ![The Charts tab](../img/settings-charts.webp)
 
 The open library, the recent ones, and the button to add more.
 
-## Advanced
+## Adding a connection
+
+Where the boat's data comes from. You need none of this to read a chart. It is
+what puts your boat, your depth and the traffic around you on top of one.
+
+There are two kinds of source and a section for each. A boat can have both, and
+more than one of either.
+
+**Connections** — NMEA 0183 over TCP, which is what almost every WiFi
+instrument gateway serves. Give it the gateway's address and port; most of them
+use port 10110.
+
+**Signal K servers** — a Signal K server on the boat. Signal K is an open
+marine data standard: the server reads every instrument it can reach and streams
+the readings in one format. Give it the server's address and port. The stream is
+usually on port 8375. Port 3000 is the server's own web page, which is not the
+stream.
+
+Under each row is what that source is doing right now — connected and how fast
+data is arriving, paused, or unreachable. The switch on the right pauses a
+source without deleting it: the connection closes and stays closed until you
+switch it back on. Open a row with the chevron to change its address.
+
+Everything switched on here feeds the same chart. When two sources carry the
+same reading — a Signal K server and a NMEA gateway both reporting heading —
+the chart uses one of them and falls back to the other if the first goes quiet
+for five seconds. You cannot yet choose which one wins.
+
+## Changing the Advanced settings
 
 ![The Advanced tab](../img/settings-advanced.png)
 

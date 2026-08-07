@@ -79,7 +79,7 @@ points instead of 410, and the collision alarm lands a couple of replay seconds
 later than the geometry says. Use `--rate 1` when the timing is what you are
 testing.
 
-## The replay log
+## Making the replay log
 
 `tools/nmea_gen.zig` writes the log the shipped plugins are verified against. It
 is deterministic — no clock, no randomness — so two runs produce identical bytes.
@@ -101,7 +101,7 @@ The log itself is not in the repository — run the command above to write it.
 Any recording works: `--replay` reads a plain NMEA 0183 log. A capture from your
 own boat is the best test data there is.
 
-## Settings, applied hot
+## Changing settings while it runs
 
 ```sh
 --set-config 200@org.beetlebug.ais '{"cpa_limit":100}'
@@ -194,7 +194,7 @@ chart is open. Module load and `lk_start` go straight to stderr, so if your
 plugin never appears in any stream at all, look further up the terminal — the
 reason it did not load is up there.
 
-## Golden tests
+## Writing a golden test
 
 The generator is deterministic and the harness is a plain program with an exit
 code, so a plugin can be regression-tested without a Mac app in the loop.
@@ -233,7 +233,7 @@ the way `plugins/nmea0183/parser.zig` and `plugins/ais/cpa.zig` do — `zig buil
 test` runs those directly. A native test is faster to run and you can put a
 debugger on it, which you cannot do inside the interpreter.
 
-## The same loop inside the app
+## Running your plugin in the real app
 
 Two environment variables put the same plugins in the real app, with no code
 change:

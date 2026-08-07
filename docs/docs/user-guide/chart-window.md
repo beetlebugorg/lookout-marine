@@ -11,13 +11,13 @@ between them is chart: a drag there pans, even close to a button.
 
 ![The chart window on macOS](../img/macos-day.webp)
 
-## Readout capsule
+## Reading the numbers along the bottom
 
 ![The readout capsule](../img/detail/readout-capsule.webp)
 
 - **Band** — the kind of chart you are on: Berthing, Harbor, Approach, Coastal,
   General or Overview.
-- **Scale**, in blue — click it to [go to a scale](moving-the-chart.md#go-to-a-scale).
+- **Scale**, in blue — click it to [go to a scale](moving-the-chart.md#going-to-a-scale).
 - **Zoom** — how far in you are. It is finer than the scale, and it is the quick
   way to return to the same view twice.
 - **Position** — under the pointer while you hover, otherwise the centre of the
@@ -29,7 +29,7 @@ between them is chart: a drag there pans, even close to a button.
 
 A phone hides the band and sets the type smaller. Position and scale always stay.
 
-## Bubbles
+## Using the corner buttons
 
 ![The zoom and settings bubbles](../img/detail/zoom-settings.webp)
 
@@ -39,18 +39,18 @@ A phone hides the band and sets the type smaller. Position and scale always stay
 - **Plus and minus**, bottom right — one zoom step about the centre.
 - **Gear**, bottom right — [mariner settings](mariner-settings.md).
 
-## Scale bar
+## Judging distance with the scale bar
 
 ![The scale bar](../img/detail/scale-bar.webp)
 
 A round distance at the current scale, in the bottom left corner.
 
-## Pick report
+## Identifying a feature
 
 Click or tap a feature. The report lists each object under the cursor and the
 chart cell it came from.
 
-## Starting up
+## Waiting while the chart loads
 
 The first start prepares the chart symbols and takes a few seconds. Later starts
 skip that work. While a library opens, the app states what it is doing.

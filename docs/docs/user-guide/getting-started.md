@@ -10,7 +10,7 @@ sidebar_position: 1
 This is a prototype. Keep your official charts and your paper backup.
 :::
 
-## Get your charts
+## Getting your charts
 
 The app does not come with charts. NOAA publishes the ENC cells of United States
 waters at no cost: download the whole set, or the cells of your area, from the
@@ -30,7 +30,7 @@ tile57 bake ENC_ROOT -o out/      # every cell you downloaded
 
 You now have a folder of `.pmtiles` charts.
 
-## Open them
+## Opening a chart folder
 
 Open the folder, not the single cells. The app then draws the most detailed
 chart available at each point and stitches the seams, the way a chart table
@@ -48,7 +48,7 @@ With nothing open yet, the same picker sits in the middle of the window:
 
 The app opens where you left it the last time.
 
-## Find your water
+## Finding your water
 
 A whole coast is a lot of chart. Two quick ways in:
 

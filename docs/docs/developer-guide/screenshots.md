@@ -16,7 +16,7 @@ Verification is the difficult part of
 not generation. A shell can look correct alone and still be soft, the wrong size,
 or missing its chrome. The same frame on each host makes those faults obvious.
 
-## Specified frame
+## The frame every host captures
 
 | Item | Value |
 |---|---|
@@ -27,7 +27,7 @@ or missing its chrome. The same frame on each host makes those faults obvious.
 | **Scale** | 2, which gives **2800 x 1800 px** |
 | **Frames** | `day` (the chart and the floating chrome) and `settings` (the mariner panel above the chart) |
 | **File names** | `docs/docs/img/<host>-<shot>.webp`, for example `linux-day.webp` or `macos-day.webp` |
-| **Format** | WebP, quality 88. See [Format](#format). |
+| **Format** | WebP, quality 88. See [saving the frame as WebP](#saving-the-frame-as-webp). |
 
 Two environment variables make the camera the same on each host:
 
@@ -39,7 +39,7 @@ LOOKOUT_VIEW=lon,lat,zoom[,rot]    # the first camera position
 On iOS and iPadOS, `simctl launch` sends them as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 `SIMCTL_CHILD_LOOKOUT_VIEW`.
 
-## Linux
+## Capturing on Linux
 
 ```sh
 cd linux
@@ -72,7 +72,7 @@ gdbus call --session -d org.beetlebug.LookoutMarine \
   -m org.gtk.Actions.Activate settings '@av []' '@a{sv} {}'
 ```
 
-## macOS
+## Capturing on macOS
 
 Use the same four values: the chart, the camera, the day scheme, and 1400 x 900 at
 scale 2. Capture only the window. Do not capture the screen, and do not include the
@@ -107,7 +107,7 @@ frame correctly. Do not make it larger.
 uses `LOOKOUT_OPEN_SETTINGS=1` for the settings frame. A settings frame must agree
 with `linux-settings.webp`.
 
-## iPadOS and iOS
+## Capturing on iPadOS and iOS
 
 The simulator writes the frame itself, so no screen permission is necessary. The
 `SIMCTL_CHILD_` variables must be in the environment of `simctl`. They are not
@@ -143,7 +143,7 @@ swift macos/frame-device.swift docs/docs/img/android-day-raw.webp \
   docs/docs/img/android-day.webp 60 150 90 1     # the tablet frame serves Android too
 ```
 
-## Android
+## Capturing on Android
 
 Android has no simulator here: the emulator needs hardware virtualisation that
 this machine does not give it, so the capture comes from a device over
@@ -157,7 +157,7 @@ Take the capture in ONE session with the taps that frame it. A relaunch
 restores the saved view, so coordinates read off an earlier capture aim at a
 view the app no longer shows.
 
-## Format
+## Saving the frame as WebP
 
 WebP, quality 88. A chart screenshot is a dense picture and PNG stores it
 losslessly: the same frames were 7.8 MB as PNG and 2.0 MB as WebP, and the chart
@@ -175,7 +175,7 @@ taken at the specified size, and the framed image is derived from it. The image 
 reader is served is capped — 1600 px for a window, 1400 for a device — because
 the README shows these 160 to 300 points wide and the docs column is about 750.
 
-## How to examine a frame
+## Examining a frame
 
 Examine these four items in this sequence. Each item is a fault that this project
 made and then found.

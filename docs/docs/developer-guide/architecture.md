@@ -33,7 +33,7 @@ their own idiom.
                                                tessellation, atlases, tiles
 ```
 
-## Parts
+## The core, the shells and the engine
 
 **The core** is in `src/`. It opens a baked chart or a chart library, then asks
 the engine for a GPU scene. The scene contains vertices, quads, the
@@ -82,7 +82,7 @@ keeps many shells maintainable (see
 - **Each behavior has one specification.** One core function anchors the zoom below
   the pointer. Each shell only selects which gesture calls that function.
 
-## GPU backends
+## Choosing a GPU backend
 
 The core has one design and four GPU transports. You select the transport when
 you build the core with `-Dbackend=`.
@@ -102,7 +102,7 @@ A headless program does not need a window. It gets each frame with
 `lookout_snapshot_rgba`. `lookout-marine-demo` uses this function to write parity
 PNG files.
 
-## Build the core
+## Building the core
 
 The core needs **Zig 0.16**. The tile57 engine is a Zig package dependency: the
 build uses a sibling `../tile57` checkout when there is one, and otherwise
@@ -124,7 +124,7 @@ tool, not the app:
 ./zig-out/bin/lookout-marine-demo chart.pmtiles [--png out.png] [--lon L --lat L --zoom Z]
 ```
 
-## Hosts
+## Where each host is documented
 
 | Host | Toolkit | Page |
 |---|---|---|
@@ -136,7 +136,7 @@ tool, not the app:
 Each host captures its screenshots to one specification. You can then compare the
 hosts frame by frame. Refer to [the screenshot protocol](screenshots.md).
 
-## Files
+## Where the code lives
 
 ```
 build.zig, build.zig.zon   the build and the tile57 dependency pin

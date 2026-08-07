@@ -17,7 +17,7 @@ further, there is a finished example of the same shape sitting in the tree.
 
 The walkthrough is in Zig, which is the only language whose plugin-side library
 is settled. Go and Rust modules load and run — see
-[the same plugin in Go, and in Rust](#the-same-plugin-in-go-and-in-rust) for the
+[building the plugin in Go and in Rust](#building-the-plugin-in-go-and-in-rust) for the
 toolchains and the build commands — but their libraries are being rewritten, so
 read the Zig listing first for the shape of the thing.
 
@@ -30,10 +30,10 @@ read the Zig listing first for the shape of the thing.
 - **macOS.** It is the only platform where the whole loop — build, harness,
   app — has been run.
 - **A baked chart**, a `.pmtiles` file. If you do not have one,
-  [Get your charts](../../user-guide/getting-started.md#get-your-charts) takes
+  [Getting your charts](../../user-guide/getting-started.md#getting-your-charts) takes
   about ten minutes.
 
-## The directory
+## Laying out the plugin directory
 
 A plugin is a directory with two files in it.
 
@@ -48,7 +48,7 @@ Those names are fixed by Lookout's build: `zig build plugins` reads
 into `zig-out/plugins` as `<id>.wasm` and `<id>.manifest.json`. That pair, in one
 directory, is what the host loads.
 
-## The manifest
+## Writing the manifest
 
 ```json
 {
@@ -77,7 +77,7 @@ Later you will want the settings block, which puts your own controls in the
 mariner's settings window. That is in
 [the ABI reference](abi.md#the-manifest), along with every other manifest field.
 
-## The module
+## Writing the module
 
 `plugins/common/lk.zig` is the plugin side of the ABI. It writes the five wasm
 exports for you, routes two of them to functions you write, and hands you a
@@ -260,7 +260,7 @@ each one is a rule with a reason behind it.
   you own, remembers an overflow, and refuses the whole batch at `send` rather
   than posting half a line.
 
-## Compile it
+## Compiling the plugin
 
 `zig build plugins` builds plugins **in Lookout's tree**. It walks a fixed list
 of directory names in `build.zig`, so add yours:
@@ -293,7 +293,7 @@ linker keeps the five exports. Rename the result to `<id>.wasm`, put
 `<id>.manifest.json` beside it, and the host will load it. Copying
 `plugins/common/lk.zig` into your own project works too — it imports only `std`.
 
-## The same plugin in Go, and in Rust
+## Building the plugin in Go and in Rust
 
 Zig is not the only way in. The plugin above exists in all three languages, line
 for line, so you can read the one you already know:
@@ -320,7 +320,7 @@ each language when that shape lands.
 
 :::
 
-### Go
+### Building in Go
 
 Go 1.24 or later. `GOOS=wasip1 GOARCH=wasm` with `-buildmode=c-shared` emits a
 reactor module, and `//go:wasmexport` and `//go:wasmimport` bind the ABI.
@@ -348,7 +348,7 @@ them is optional.
   runtime. `tinygo build -target=wasip1` emits tens of kilobytes from the same
   source, with the usual TinyGo standard library caveats.
 
-### Rust
+### Building in Rust
 
 `wasm32-wasip1`, `crate-type = ["cdylib"]`. Add the target once with
 `rustup target add wasm32-wasip1`.
@@ -371,7 +371,7 @@ and the message reaches your log, so do not panic on data off the wire.
 
 The module is about 120 KB, near the Zig one.
 
-## Run it in the harness
+## Running the plugin in the harness
 
 The **dev harness** is Lookout's chart core running offscreen with the real
 plugin host inside it, plus a loopback TCP server that plays a recorded NMEA log
@@ -420,7 +420,7 @@ The exit code is 0 only if a frame rendered and no plugin trapped.
 [The dev harness](dev-harness.md) has every flag, the delta streams, and how to
 turn a run like this into a regression test.
 
-## Run it in the app
+## Running the plugin in the app
 
 Two environment variables are the whole install story for now.
 
@@ -449,7 +449,7 @@ On the iOS simulator, which reads paths on the host machine, the same directory
 works through `SIMCTL_CHILD_LOOKOUT_PLUGINS`. On an iOS device there is no import
 path at all, so only plugins bundled with the app can run.
 
-## Then read the rules
+## What to read next
 
 The plugins that ship with Lookout are the worked examples, in rising order of
 difficulty: `laylines` draws; `ownship` draws and uses the own-ship anchor;

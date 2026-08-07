@@ -21,7 +21,7 @@ built since the last edition. A raster chart can.
 Lookout draws the raster chart below the ENC, and drops the ENC's own shading
 only where the raster chart covers. You keep the chart and you see the water.
 
-## What you see
+## Viewing a raster chart under the ENC
 
 The Golden Gate, from the same position, in each of the three states.
 
@@ -40,7 +40,7 @@ chart covers. Everywhere else the ENC still draws.
 
 ![The raster chart with the ENC hidden](../img/raster-state-raster-only.webp)
 
-## Add a raster chart
+## Adding a raster chart
 
 Open **Chart ▸ Add Raster Charts…** (⇧⌘I), or the **Raster charts** section of
 the Charts tab in Settings. The panel takes several files at once, and whole
@@ -53,7 +53,7 @@ The **Raster charts** section of the Charts tab in Settings switches one off
 without removing it. These are half-gigabyte downloads, and carrying four
 providers for one coast usually means wanting three of them quiet.
 
-## Sets
+## What a set is
 
 Files group into **sets** by their provider. Files named `…ArcGIS…`, `…Bing…`
 and `…Google…` make three sets. Files from one provider covering adjacent
@@ -62,7 +62,7 @@ regions make one set and draw as a single continuous picture.
 Compare the providers. Each shows a different day, a different tide and a
 different amount of cloud, and one of them shows the bottom.
 
-### Sets that cover different water
+### Carrying sets for different coasts
 
 Sets that cover different water are drawn at the same time. Carry a San
 Francisco set and an Atlantic set and each draws over its own coast. You do not
@@ -85,7 +85,7 @@ one under the middle of the screen. If neither is under the middle, it works on
 the one filling most of the screen. The other coast is not changed. Centre the
 coast you want to work on, or zoom in to it.
 
-## The pill
+## Seeing whether a raster chart is drawn
 
 The pill sits at the right of the readouts. It appears whenever **a raster chart
 is in view**, at any zoom, and it goes when you leave the coverage. Where you
@@ -106,7 +106,7 @@ still drawn, and the text says which one is off:
 
 ![The pill with the ENC hidden above the raster chart](../img/raster-pill-chartoff.webp)
 
-## Choosing one
+## Toggling raster charts
 
 The chevron means the pill opens a list. The list holds every set that covers
 this view and marks the one being drawn, followed by **None**, the ENC switch
@@ -125,7 +125,7 @@ Three ways to the same thing:
 Use ⌘I over a reef. It opens nothing, so your eye keeps its fix and anything
 that moves between two providers is a real difference.
 
-## At the edge of the coverage
+## Leaving the raster chart's coverage
 
 A raster chart changes the ENC only where it covers. Outside its bounds the ENC
 is untouched.
@@ -140,7 +140,7 @@ Holes behave the same way. These tile pyramids follow a coastline, so about a
 third of the ground inside their own bounds has no tile. The ENC draws there on
 its own, with no marker and no gap.
 
-## Comparing the two
+## Comparing the raster chart with the ENC
 
 **Chart ▸ Hide ENC Over Raster** (⇧⌘H), or the pill's list, hides the ENC
 wherever the raster chart covers. The ENC stays everywhere else.
