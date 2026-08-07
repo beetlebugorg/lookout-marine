@@ -52,6 +52,13 @@ pub const Track = struct {
         return self.nth(self.len - 1);
     }
 
+    /// A move faster than this is a teleport, not a leg: a replayed log
+    /// looping back to its start, or a GPS reacquiring somewhere else. 60 m/s
+    /// is about 117 kn, above any boat this chart serves. Joining the old
+    /// trail to the new fix would draw a line across water the boat never
+    /// crossed, so the track restarts at the new fix instead.
+    pub const teleport_mps: f64 = 60.0;
+
     /// Keep this position if it is at least `min_interval_ms` newer AND at
     /// least `min_dist_m` away from the last kept fix; the first fix is always
     /// kept. Returns true when the track changed.
@@ -64,8 +71,12 @@ pub const Track = struct {
     pub fn consider(self: *Track, t_ms: i64, at: lk.Point, min_interval_ms: i64, min_dist_m: f64) bool {
         if (!at.valid()) return false;
         if (self.newest()) |last| {
-            if (t_ms - last.t_ms < min_interval_ms) return false;
-            if (last.at.distanceTo(at) < min_dist_m) return false;
+            const dt_ms = t_ms - last.t_ms;
+            if (dt_ms < min_interval_ms) return false;
+            const dist = last.at.distanceTo(at);
+            if (dist < min_dist_m) return false;
+            const dt_s = @as(f64, @floatFromInt(dt_ms)) / 1000.0;
+            if (dist > teleport_mps * dt_s) self.clear();
         }
         self.push(.{ .t_ms = t_ms, .at = at });
         return true;
@@ -156,6 +167,34 @@ test "a clock that jumps backwards drops the fix" {
     try t.expectEqual(@as(usize, 1), tr.count());
 }
 
+test "a teleport restarts the track at the new fix" {
+    var tr = Track{};
+    _ = tr.consider(0, annapolis, 1000, 2.0);
+    _ = tr.consider(1_000, annapolis.destination(0, 10), 1000, 2.0);
+    try t.expectEqual(@as(usize, 2), tr.count());
+
+    // 3 km in one second: the replay looped, or the GPS came back somewhere
+    // else. The old trail goes; the new fix starts a fresh one.
+    const far = annapolis.destination(90, 3_000);
+    try t.expect(tr.consider(2_000, far, 1000, 2.0));
+    try t.expectEqual(@as(usize, 1), tr.count());
+    try t.expectEqual(far.lat, tr.newest().?.at.lat);
+}
+
+test "a fast boat is a leg and a slow reappearance is a leg" {
+    var tr = Track{};
+    _ = tr.consider(0, annapolis, 1000, 2.0);
+
+    // 50 m in one second is 97 kn: implausible on the hook, real on a foiler.
+    try t.expect(tr.consider(1_000, annapolis.destination(0, 50), 1000, 2.0));
+    try t.expectEqual(@as(usize, 2), tr.count());
+
+    // 1 km after a 30 minute silence is 0.5 m/s made good: kept, joined.
+    const on = annapolis.destination(0, 50).destination(0, 1_000);
+    try t.expect(tr.consider(1_801_000, on, 1000, 2.0));
+    try t.expectEqual(@as(usize, 3), tr.count());
+}
+
 test "a position off the earth is refused" {
     var tr = Track{};
     try t.expect(!tr.consider(0, .{ .lat = 91, .lon = -76.4767 }, 1000, 2.0));
@@ -180,10 +219,11 @@ test "the ring wraps and keeps the newest max_points" {
 }
 
 test "copy writes oldest first" {
+    // An hour between fixes: 14 km legs at walking speed, no teleport.
     var tr = Track{};
     _ = tr.consider(0, .{ .lat = 38.0, .lon = -76.0 }, 1000, 2.0);
-    _ = tr.consider(1000, .{ .lat = 38.1, .lon = -76.1 }, 1000, 2.0);
-    _ = tr.consider(2000, .{ .lat = 38.2, .lon = -76.2 }, 1000, 2.0);
+    _ = tr.consider(3_600_000, .{ .lat = 38.1, .lon = -76.1 }, 1000, 2.0);
+    _ = tr.consider(7_200_000, .{ .lat = 38.2, .lon = -76.2 }, 1000, 2.0);
     var out: [max_points]lk.Point = undefined;
     const n = tr.copy(&out);
     try t.expectEqual(@as(usize, 3), n);
@@ -194,10 +234,11 @@ test "copy writes oldest first" {
 }
 
 test "copy into a short buffer keeps the newest points" {
+    // Ten seconds between fixes: 111 m legs at 11 m/s, no teleport.
     var tr = Track{};
     for (0..10) |i| {
         const lat = 38.0 + @as(f64, @floatFromInt(i)) * 0.001;
-        _ = tr.consider(@as(i64, @intCast(i)) * 1000, .{ .lat = lat, .lon = -76.0 }, 1000, 2.0);
+        _ = tr.consider(@as(i64, @intCast(i)) * 10_000, .{ .lat = lat, .lon = -76.0 }, 1000, 2.0);
     }
     var out: [4]lk.Point = undefined;
     const n = tr.copy(&out);
