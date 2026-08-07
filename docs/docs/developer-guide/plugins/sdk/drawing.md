@@ -63,7 +63,9 @@ the ring for you. Each takes a style struct:
 `target_danger`, `track`, `layline_port`, `layline_stbd` and `warning`.
 Lookout resolves each one for the day, dusk and night schemes.
 
-**The symbols are** `ownship`, `target`, `aton` and `aton_virtual`.
+**The symbols are** `ownship`, `target`, `aton` and `aton_virtual`. For a
+shape of your own, a dial or a ring or a rose, draw it with
+[a canvas](canvas.md).
 
 **`.anchor = .ownship`** rides own ship's display position, which Lookout
 carries forward between fixes, so the object stays still on screen instead of

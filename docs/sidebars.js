@@ -41,6 +41,7 @@ const sidebars = {
               items: [
                 'developer-guide/plugins/sdk/subscribing',
                 'developer-guide/plugins/sdk/drawing',
+                'developer-guide/plugins/sdk/canvas',
                 'developer-guide/plugins/sdk/publishing',
                 'developer-guide/plugins/sdk/settings',
                 'developer-guide/plugins/sdk/connections',
