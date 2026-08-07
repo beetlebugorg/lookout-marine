@@ -461,7 +461,11 @@ const Watcher = struct {
                 @memcpy(keys[n][0..k.len], k);
                 lens[n] = k.len;
                 var w = std.Io.Writer.fixed(&desc[n]);
-                w.print("{s} {s}", .{ @tagName(o.kind), @tagName(o.token) }) catch {};
+                if (o.kind == .canvas) {
+                    w.print("canvas {s} {d} cmds", .{ @tagName(o.space), o.cmds.len }) catch {};
+                } else {
+                    w.print("{s} {s}", .{ @tagName(o.kind), @tagName(o.token) }) catch {};
+                }
                 if (o.pts.len > 0) w.print(" {d} pts", .{o.pts.len}) catch {};
                 desc_len[n] = w.buffered().len;
                 n += 1;
@@ -492,6 +496,7 @@ const Watcher = struct {
                 .symbol => emit("  {s}: {s} {s} at {d:.5},{d:.5} rot {d:.0}\n", .{ k, @tagName(o.sym), @tagName(o.token), o.at[0], o.at[1], o.rot_deg }),
                 .polyline => emit("  {s}: polyline {s} {d} pts{s}\n", .{ k, @tagName(o.token), o.pts.len, if (o.dash) " dashed" else "" }),
                 .polygon => emit("  {s}: polygon {s} {d} pts\n", .{ k, @tagName(o.token), o.pts.len }),
+                .canvas => emit("  {s}: canvas {s} {d} cmd(s) at {d:.5},{d:.5}{s}\n", .{ k, @tagName(o.space), o.cmds.len, o.at[0], o.at[1], if (o.ship_anchor) " (ownship)" else "" }),
             }
         }
     }
@@ -873,7 +878,7 @@ pub fn main(init: std.process.Init) !void {
 
     var trapped = state.trapped.load(.monotonic);
     if (ps) |p| {
-        for (p.host.entries.items) |*e| {
+        for (p.host.entries.items) |e| {
             if (!e.isLive()) trapped = true;
             emit("plugin {s}: {s}, {d} denied call(s), status {s}\n", .{
                 e.manifest.id,

@@ -606,6 +606,10 @@ pub const Lookout = struct {
     atlas_scale: f32 = 1.0,
     atlases_ready: bool = false, // see ensureAtlases: loaded at first use, not at open
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
+    /// The bold face's metrics, kept (pixels freed) so plugin canvas text can
+    /// lay out bold runs against the bold texture. The italic face stays
+    /// texture-only: the canvas API has no slant.
+    glyph_bold_atlas: ?atlas.GlyphAtlas = null,
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
     // Deepest zoom a build actually produced geometry for. A chart's declared
@@ -845,11 +849,19 @@ pub const Lookout = struct {
 
     fn uploadGlyphFace(self: *Lookout, png_b: []const u8, json: []const u8, bold: bool) bool {
         var a = atlas.loadGlyph(self.alloc, png_b, json) catch return false;
-        defer a.deinit();
-        if (bold)
-            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch return false
-        else
+        if (bold) {
+            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch {
+                a.deinit();
+                return false;
+            };
+            // Keep the metrics for canvas text; the GPU has the pixels.
+            a.freePixels();
+            if (self.glyph_bold_atlas) |*old| old.deinit();
+            self.glyph_bold_atlas = a;
+        } else {
+            defer a.deinit();
             self.g.uploadGlyphAtlasItalic(a.rgba(), a.width, a.height) catch return false;
+        }
         return true;
     }
 
@@ -1156,6 +1168,24 @@ pub const Lookout = struct {
         } else return error.PluginsUnavailable;
     }
 
+    /// The overlay store's view of a loaded glyph atlas: one metrics lookup,
+    /// no C types across the boundary.
+    fn overlayGlyphLookup(ctx: *const anyopaque, cp: u21) ?ov.Glyph {
+        const a: *const atlas.GlyphAtlas = @ptrCast(@alignCast(ctx));
+        const g = a.lookup(cp) orelse return null;
+        return .{
+            .u0 = g.u0,
+            .v0 = g.v0,
+            .u1 = g.u1,
+            .v1 = g.v1,
+            .off_x = g.off_x,
+            .off_y = g.off_y,
+            .w = g.w,
+            .h = g.h,
+            .advance = g.advance,
+        };
+    }
+
     /// The overlay palette scheme that matches the chart's.
     fn overlayScheme(self: *Lookout) ov.Scheme {
         return switch (self.mariner.scheme) {
@@ -1176,6 +1206,13 @@ pub const Lookout = struct {
         // built after it, so a move shows in this frame.
         self.tickShip();
         self.followTick();
+        // Hand the store whatever glyph faces are loaded, so canvas text lays
+        // out against the same atlases the labels draw with. Idempotent: only
+        // a change marks the store dirty.
+        ps.overlay.setFonts(
+            if (self.glyph_atlas != null) .{ .ctx = @ptrCast(&self.glyph_atlas.?), .lookup = overlayGlyphLookup } else null,
+            if (self.glyph_bold_atlas != null) .{ .ctx = @ptrCast(&self.glyph_bold_atlas.?), .lookup = overlayGlyphLookup } else null,
+        );
         const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.overlayScheme(), self.ship_at) catch |e| {
             std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
             return;
@@ -1465,6 +1502,7 @@ pub const Lookout = struct {
         self.raster.deinit(&self.g);
         if (self.sprite_atlas) |*sa| sa.deinit();
         if (self.glyph_atlas) |*ga| ga.deinit();
+        if (self.glyph_bold_atlas) |*gb| gb.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts

@@ -105,6 +105,11 @@ steady wind, nothing.
 ## The limits
 
 A canvas holds 2048 commands; the SDK drops the rest with one log line. A
-text run is cut at 256 bytes, a gradient at 8 stops. The recording counts
-against your scene's 64 KiB like every other object. A canvas is not
-hit-testable: a pick payload needs a symbol.
+text run is cut at 256 bytes, a gradient at 8 stops.
+
+The recording counts against your scene's 64 KiB like every other object. A
+canvas is not hit-testable: a pick payload needs a symbol.
+
+Text on the chart reads from about 10 pt regular or 9 pt bold at 1x. Below
+that the stems fall under a pixel and the glyphs read as ghosts, worst over
+a busy chart.

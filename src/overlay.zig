@@ -48,6 +48,14 @@ const std = @import("std");
 const camera = @import("camera.zig");
 const lock = @import("lock.zig");
 
+/// The canvas budget refusals' one log line (spec rule 7). Quiet under the
+/// test runner, which reads a step's stderr as a failure report; the tests
+/// assert the refusal itself.
+fn sayRefused(comptime fmt: []const u8, args: anytype) void {
+    if (@import("builtin").is_test) return;
+    std.debug.print(fmt, args);
+}
+
 /// Palette scheme. Mirrors tile57's day/dusk/night; kept as a local enum so
 /// this file (and its tests) need no C import.
 pub const Scheme = enum(u8) { day = 0, dusk = 1, night = 2 };
@@ -64,7 +72,7 @@ pub const Token = enum(u8) {
     warning,
 };
 
-pub const Kind = enum(u8) { symbol, polyline, polygon };
+pub const Kind = enum(u8) { symbol, polyline, polygon, canvas };
 
 /// The symbol shapes the prototype draws. Expanded to vector geometry here —
 /// no sprite atlas, so the overlay pass carries no texture.
@@ -72,6 +80,135 @@ pub const Sym = enum(u8) { ownship, target, aton, aton_virtual };
 
 /// Straight-alpha RGBA, 0..1 (what the shader wants).
 pub const Rgba = [4]f32;
+
+// ---- the canvas object (specs/plugins/canvas.md) ---------------------------
+//
+// A canvas is a RECORDED command list, not pixels: the plugin posts the
+// commands once, and this store replays them into triangles (and SDF glyph
+// quads) at build time, so the drawing survives zoom and scheme changes
+// without the plugin in the frame path. Coordinates are canvas units around
+// the anchor: x right (east), y down (south). `points` units hold their
+// screen size across zoom (converted at build, like symbol radii); `geo`
+// units are METRES on the ground at the anchor, so a 1852-unit arc is a
+// range ring. Stroke widths and text sizes are always screen points, in
+// either space.
+
+/// Which unit a canvas's coordinates carry. See above.
+pub const CanvasSpace = enum(u8) { geo, points };
+
+pub const LineCap = enum(u8) { butt, round, square };
+pub const LineJoin = enum(u8) { miter, round, bevel };
+pub const TextAlign = enum(u8) { left, center, right };
+
+/// A posted colour: free RGBA, or a palette token resolved per scheme.
+const CColor = union(enum) {
+    rgba: Rgba,
+    token: Token,
+
+    fn resolveTo(self: CColor, scheme: Scheme) Rgba {
+        return switch (self) {
+            .rgba => |c| c,
+            .token => |tok| resolve(tok, scheme),
+        };
+    }
+};
+
+const CStop = struct { t: f32, c: CColor };
+
+/// Gradient geometry in canvas units. Linear runs `a`->`b`; radial is centred
+/// on `a` with radius `r`. Stops are owned by the command list.
+const CGrad = struct { a: [2]f32, b: [2]f32 = .{ 0, 0 }, r: f32 = 0, stops: []CStop };
+
+const CPaint = union(enum) {
+    flat: CColor,
+    linear: CGrad,
+    radial: CGrad,
+
+    fn freeStops(self: *CPaint, alloc: std.mem.Allocator) void {
+        switch (self.*) {
+            .linear, .radial => |*g| alloc.free(g.stops),
+            .flat => {},
+        }
+    }
+};
+
+/// One recorded canvas command. Angles are radians here (degrees on the
+/// wire); `rotate` is clockwise on screen, matching y-down coordinates.
+const CanvasCmd = union(enum) {
+    begin_path,
+    move_to: [2]f32,
+    line_to: [2]f32,
+    quad_to: [2][2]f32, // control, end
+    bezier_to: [3][2]f32, // control1, control2, end
+    arc: struct { c: [2]f32, r: f32, a0: f32, a1: f32, ccw: bool },
+    close_path,
+    fill,
+    stroke,
+    clip,
+    fill_style: CPaint,
+    stroke_style: CPaint,
+    line_width: f32,
+    line_cap: LineCap,
+    line_join: LineJoin,
+    font: struct { size: f32, bold: bool },
+    text_align: TextAlign,
+    fill_text: struct { at: [2]f32, text: []u8 }, // text owned
+    translate: [2]f32,
+    rotate: f32,
+    scale: [2]f32,
+    save,
+    restore,
+
+    fn free(self: *CanvasCmd, alloc: std.mem.Allocator) void {
+        switch (self.*) {
+            .fill_text => |ft| alloc.free(ft.text),
+            .fill_style, .stroke_style => |*p| @constCast(p).freeStops(alloc),
+            else => {},
+        }
+    }
+};
+
+/// One SDF glyph-quad vertex the overlay text pass draws. Byte-identical to
+/// tile57_gpu_quad (the backend static-asserts it), so the existing SDF
+/// pipeline draws canvas text with no new shader. `x`,`y` are origin-relative
+/// world like Vertex; `ox`,`oy` stay zero (the glyph box is baked into world
+/// space at build, the same discipline as every other overlay size); `depth`
+/// is 0 so the near-plane contract of the overlay pass holds.
+pub const TextVertex = extern struct {
+    x: f32,
+    y: f32,
+    ox: f32 = 0,
+    oy: f32 = 0,
+    u: f32,
+    v: f32,
+    color: [4]u8,
+    weight: f32 = 0,
+    scamin: f32 = 0, // <= 0: never scale-gated
+    flags: u32 = 0, // disp_cat 0, no map_align, no flip
+    depth: f32 = 0,
+};
+
+/// One glyph's metrics, EM units, y down, relative to the pen on the
+/// baseline. The same numbers atlas.zig decodes from the tile57 bake.
+pub const Glyph = struct {
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    off_x: f32,
+    off_y: f32,
+    w: f32,
+    h: f32,
+    advance: f32,
+};
+
+/// A glyph source the core wires in (root.zig adapts the loaded SDF atlas).
+/// Behind a function pointer so this file stays free of C imports and its
+/// tests can supply a fake face.
+pub const Font = struct {
+    ctx: *const anyopaque,
+    lookup: *const fn (ctx: *const anyopaque, cp: u21) ?Glyph,
+};
 
 fn rgb(hex: u24, a: f32) Rgba {
     return .{
@@ -119,6 +256,11 @@ pub const Frame = struct {
     /// The world point the vertices are measured FROM. Draw them with the MVP
     /// built for it, and wrap about (camera centre - origin). See COORDINATES.
     origin: camera.Vec2,
+    /// Canvas text as SDF glyph quads (6 TextVertex each), one stream per
+    /// atlas face. Same origin and uniform as `verts`; drawn by the backend
+    /// with the glyph atlas texture after the triangle stream.
+    text: []const TextVertex = &.{},
+    text_bold: []const TextVertex = &.{},
 };
 
 /// One retained object, as posted. Geometry is kept in GEO and expanded per
@@ -145,12 +287,21 @@ const Object = struct {
     /// its lines move smoothly. A polyline keeps its shape and travels with
     /// its first point.
     ship_anchor: bool = false,
+    // canvas
+    space: CanvasSpace = .points,
+    cmds: []CanvasCmd = &.{}, // owned
+    /// The tessellation budget refused this object and said so once. Reset by
+    /// a re-post (the object is replaced whole).
+    over_said: bool = false,
 
     fn free(self: *Object, alloc: std.mem.Allocator) void {
         if (self.pts.len > 0) alloc.free(self.pts);
         self.pts = &.{};
         if (self.pick.len > 0) alloc.free(self.pick);
         self.pick = &.{};
+        for (self.cmds) |*c| c.free(alloc);
+        if (self.cmds.len > 0) alloc.free(self.cmds);
+        self.cmds = &.{};
     }
 };
 
@@ -241,6 +392,33 @@ const MAX_OBJECTS = 4096;
 /// track, and an unbounded ring or polyline is an unbounded vertex buffer.
 const MAX_POINTS = 8192;
 
+// ---- canvas budgets (spec rule 7: over budget refuses the whole object) ----
+
+/// Commands one canvas may carry.
+pub const MAX_CANVAS_CMDS = 2048;
+/// Bytes one fillText run may carry.
+pub const MAX_CANVAS_TEXT = 256;
+/// Stops one gradient may carry.
+const MAX_CANVAS_STOPS = 8;
+/// Triangle vertices one canvas may tessellate to.
+const MAX_CANVAS_VERTS = 32768;
+/// Glyphs one canvas may lay out.
+const MAX_CANVAS_GLYPHS = 512;
+/// Points one flattened path may hold.
+const MAX_CANVAS_PATH_PTS = 4096;
+/// save/restore depth (the base state plus this many saves).
+const CANVAS_STATE_DEPTH = 8;
+/// Points a clip polygon may hold after flattening.
+const CLIP_MAX_PTS = 64;
+/// Segments a full circle flattens to. Chord error at a 100 pt radius is
+/// under a quarter point.
+const ARC_SEGS_FULL = 64;
+/// Segments a quadratic / cubic bezier flattens to.
+const QUAD_SEGS = 16;
+const CUBIC_SEGS = 24;
+/// A miter longer than this many half-widths draws as a bevel.
+const MITER_LIMIT = 10.0;
+
 pub const Error = error{ BadBatch, Budget, OutOfMemory };
 
 pub const Store = struct {
@@ -251,6 +429,19 @@ pub const Store = struct {
     /// insertion order within a kind, which is stable frame to frame.
     objs: std.StringArrayHashMapUnmanaged(Object) = .empty,
     verts: std.ArrayList(Vertex) = .empty,
+    /// Canvas text, rebuilt with the vertices: one glyph-quad stream per
+    /// atlas face the backend can bind.
+    tverts: std.ArrayList(TextVertex) = .empty,
+    tverts_bold: std.ArrayList(TextVertex) = .empty,
+    /// The glyph faces the core wired in (setFonts), or null before the atlas
+    /// loads. A canvas fillText with no face is skipped and re-tessellated
+    /// when the face arrives.
+    font_reg: ?Font = null,
+    font_bold: ?Font = null,
+    /// Scratch for the canvas tessellator, reused across objects and builds.
+    cpath: std.ArrayList([2]f64) = .empty,
+    csubs: std.ArrayList(CSub) = .empty,
+    cidx: std.ArrayList(u32) = .empty,
     /// The last pick payload handed out, copied under the mutex. `pickAt`
     /// returns a slice of this, not of the object: batches land on a broker
     /// thread that does not hold the C ABI lock, so a pointer into an object
@@ -283,9 +474,26 @@ pub const Store = struct {
         }
         self.objs.deinit(self.alloc);
         self.verts.deinit(self.alloc);
+        self.tverts.deinit(self.alloc);
+        self.tverts_bold.deinit(self.alloc);
+        self.cpath.deinit(self.alloc);
+        self.csubs.deinit(self.alloc);
+        self.cidx.deinit(self.alloc);
         self.pick_out.deinit(self.alloc);
         self.id_out.deinit(self.alloc);
         self.* = undefined;
+    }
+
+    /// Wire the SDF glyph faces in (or out). Idempotent and cheap: only a
+    /// changed face marks the store dirty, so the render thread may call this
+    /// every frame with whatever the atlas cache currently holds.
+    pub fn setFonts(self: *Store, reg: ?Font, bold: ?Font) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (sameFont(self.font_reg, reg) and sameFont(self.font_bold, bold)) return;
+        self.font_reg = reg;
+        self.font_bold = bold;
+        self.dirty = true;
     }
 
     /// Objects currently retained (all sources).
@@ -400,7 +608,12 @@ pub const Store = struct {
 
     fn parseObject(self: *Store, o: std.json.ObjectMap) (error{ OutOfMemory, Skip })!Object {
         const kind = std.meta.stringToEnum(Kind, jstr(o.get("kind") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
-        const token = std.meta.stringToEnum(Token, jstr(o.get("color") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
+        // A canvas carries colour per command, not per object; every other
+        // kind still requires its token.
+        const token = if (kind == .canvas)
+            Token.ownship
+        else
+            std.meta.stringToEnum(Token, jstr(o.get("color") orelse return error.Skip) orelse return error.Skip) orelse return error.Skip;
         var obj = Object{ .kind = kind, .token = token };
         errdefer obj.free(self.alloc);
         if (o.get("anchor")) |a| {
@@ -435,8 +648,140 @@ pub const Store = struct {
                 obj.alpha = @floatCast(jnum(o.get("alpha")) orelse 1);
                 obj.alpha = std.math.clamp(obj.alpha, 0, 1);
             },
+            .canvas => {
+                if (o.get("space")) |sp| {
+                    obj.space = std.meta.stringToEnum(CanvasSpace, jstr(sp) orelse return error.Skip) orelse return error.Skip;
+                }
+                // The anchor. An own-ship canvas may omit it (the display
+                // position substitutes); a fixed one must say where it sits.
+                if (o.get("at")) |at| {
+                    obj.at = jpoint(at) orelse return error.Skip;
+                } else if (!obj.ship_anchor) return error.Skip;
+                obj.cmds = try self.parseCanvasCmds(o, jstr(o.get("id") orelse .null) orelse "?");
+            },
         }
         return obj;
+    }
+
+    // ---- canvas decode ----------------------------------------------------
+
+    /// The command list, or error.Skip. Budget violations (spec rule 7) refuse
+    /// the whole object with one log line; a malformed command refuses it
+    /// silently like any other malformed object.
+    fn parseCanvasCmds(self: *Store, o: std.json.ObjectMap, id: []const u8) (error{ OutOfMemory, Skip })![]CanvasCmd {
+        const arr = o.get("cmds") orelse return error.Skip;
+        if (arr != .array) return error.Skip;
+        const items = arr.array.items;
+        if (items.len > MAX_CANVAS_CMDS) {
+            sayRefused("overlay: canvas \"{s}\" refused: {d} commands, the budget is {d}\n", .{ id, items.len, MAX_CANVAS_CMDS });
+            return error.Skip;
+        }
+        var cmds = std.ArrayList(CanvasCmd).empty;
+        errdefer {
+            for (cmds.items) |*c| c.free(self.alloc);
+            cmds.deinit(self.alloc);
+        }
+        for (items) |it| {
+            if (it != .array or it.array.items.len == 0) return error.Skip;
+            const a = it.array.items;
+            const op = jstr(a[0]) orelse return error.Skip;
+            const cmd: CanvasCmd = blk: {
+                if (std.mem.eql(u8, op, "P")) break :blk .begin_path;
+                if (std.mem.eql(u8, op, "M")) break :blk .{ .move_to = try argPt(a, 1) };
+                if (std.mem.eql(u8, op, "L")) break :blk .{ .line_to = try argPt(a, 1) };
+                if (std.mem.eql(u8, op, "Q")) break :blk .{ .quad_to = .{ try argPt(a, 1), try argPt(a, 3) } };
+                if (std.mem.eql(u8, op, "B")) break :blk .{ .bezier_to = .{ try argPt(a, 1), try argPt(a, 3), try argPt(a, 5) } };
+                if (std.mem.eql(u8, op, "A")) break :blk .{ .arc = .{
+                    .c = try argPt(a, 1),
+                    .r = try argNum(a, 3),
+                    .a0 = std.math.degreesToRadians(try argNum(a, 4)),
+                    .a1 = std.math.degreesToRadians(try argNum(a, 5)),
+                    .ccw = if (a.len > 6) (jbool(a[6]) orelse ((jnum(a[6]) orelse 0) != 0)) else false,
+                } };
+                if (std.mem.eql(u8, op, "Z")) break :blk .close_path;
+                if (std.mem.eql(u8, op, "F")) break :blk .fill;
+                if (std.mem.eql(u8, op, "S")) break :blk .stroke;
+                if (std.mem.eql(u8, op, "C")) break :blk .clip;
+                if (std.mem.eql(u8, op, "fs")) break :blk .{ .fill_style = try self.parsePaint(a) };
+                if (std.mem.eql(u8, op, "ss")) break :blk .{ .stroke_style = try self.parsePaint(a) };
+                if (std.mem.eql(u8, op, "lw")) {
+                    var w = try argNum(a, 1);
+                    if (!(w > 0.05 and w < 64)) w = 1.5;
+                    break :blk .{ .line_width = w };
+                }
+                if (std.mem.eql(u8, op, "cap")) break :blk .{ .line_cap = argEnum(LineCap, a, 1) orelse return error.Skip };
+                if (std.mem.eql(u8, op, "join")) break :blk .{ .line_join = argEnum(LineJoin, a, 1) orelse return error.Skip };
+                if (std.mem.eql(u8, op, "font")) {
+                    var size = try argNum(a, 1);
+                    if (!(size > 2 and size < 128)) size = 12;
+                    const bold = if (a.len > 2)
+                        std.mem.eql(u8, jstr(a[2]) orelse return error.Skip, "bold")
+                    else
+                        false;
+                    break :blk .{ .font = .{ .size = size, .bold = bold } };
+                }
+                if (std.mem.eql(u8, op, "ta")) break :blk .{ .text_align = argEnum(TextAlign, a, 1) orelse return error.Skip };
+                if (std.mem.eql(u8, op, "T")) {
+                    const at = try argPt(a, 1);
+                    if (a.len < 4) return error.Skip;
+                    const text = jstr(a[3]) orelse return error.Skip;
+                    if (text.len > MAX_CANVAS_TEXT) {
+                        sayRefused("overlay: canvas \"{s}\" refused: a {d}-byte text run, the budget is {d}\n", .{ id, text.len, MAX_CANVAS_TEXT });
+                        return error.Skip;
+                    }
+                    break :blk .{ .fill_text = .{ .at = at, .text = try self.alloc.dupe(u8, text) } };
+                }
+                if (std.mem.eql(u8, op, "tr")) break :blk .{ .translate = try argPt(a, 1) };
+                if (std.mem.eql(u8, op, "rot")) break :blk .{ .rotate = std.math.degreesToRadians(try argNum(a, 1)) };
+                if (std.mem.eql(u8, op, "sc")) break :blk .{ .scale = try argPt(a, 1) };
+                if (std.mem.eql(u8, op, "sv")) break :blk .save;
+                if (std.mem.eql(u8, op, "rs")) break :blk .restore;
+                return error.Skip;
+            };
+            cmds.append(self.alloc, cmd) catch |e| {
+                var c = cmd;
+                c.free(self.alloc);
+                return e;
+            };
+        }
+        return try cmds.toOwnedSlice(self.alloc);
+    }
+
+    /// A paint: `[r,g,b,a]`, `"token"`, or `{"lin":[x0,y0,x1,y1],"stops":[...]}` /
+    /// `{"rad":[cx,cy,r],"stops":[...]}` with stops `[[t, color], ...]`.
+    fn parsePaint(self: *Store, a: []std.json.Value) (error{ OutOfMemory, Skip })!CPaint {
+        if (a.len < 2) return error.Skip;
+        const v = a[1];
+        if (v == .array or v == .string) return .{ .flat = parseColor(v) orelse return error.Skip };
+        if (v != .object) return error.Skip;
+        const stops_v = v.object.get("stops") orelse return error.Skip;
+        if (stops_v != .array) return error.Skip;
+        const raw_stops = stops_v.array.items;
+        if (raw_stops.len < 2 or raw_stops.len > MAX_CANVAS_STOPS) return error.Skip;
+        const stops = try self.alloc.alloc(CStop, raw_stops.len);
+        errdefer self.alloc.free(stops);
+        for (raw_stops, stops) |rv, *s| {
+            if (rv != .array or rv.array.items.len < 2) return error.Skip;
+            const tv = jnum(rv.array.items[0]) orelse return error.Skip;
+            if (!std.math.isFinite(tv)) return error.Skip;
+            s.* = .{
+                .t = @floatCast(std.math.clamp(tv, 0, 1)),
+                .c = parseColor(rv.array.items[1]) orelse return error.Skip,
+            };
+        }
+        if (v.object.get("lin")) |g| {
+            const q = try quadNums(g);
+            return .{ .linear = .{ .a = .{ q[0], q[1] }, .b = .{ q[2], q[3] }, .stops = stops } };
+        }
+        if (v.object.get("rad")) |g| {
+            if (g != .array or g.array.items.len < 3) return error.Skip;
+            const cx = finiteF32(jnum(g.array.items[0])) orelse return error.Skip;
+            const cy = finiteF32(jnum(g.array.items[1])) orelse return error.Skip;
+            const r = finiteF32(jnum(g.array.items[2])) orelse return error.Skip;
+            if (!(r > 0)) return error.Skip;
+            return .{ .radial = .{ .a = .{ cx, cy }, .r = r, .stops = stops } };
+        }
+        return error.Skip;
     }
 
     // ---- pick payloads ----------------------------------------------------
@@ -586,7 +931,13 @@ pub const Store = struct {
         self.mu.lock();
         defer self.mu.unlock();
         if (self.needsRebuildLocked(zoom, scheme, ship)) try self.buildLocked(zoom, scheme, ship);
-        return .{ .verts = self.verts.items, .generation = self.gen, .origin = self.built_origin };
+        return .{
+            .verts = self.verts.items,
+            .generation = self.gen,
+            .origin = self.built_origin,
+            .text = self.tverts.items,
+            .text_bold = self.tverts_bold.items,
+        };
     }
 
     /// The point this build measures its vertices from: the first object's own
@@ -595,7 +946,7 @@ pub const Store = struct {
     /// and would move every vertex in the frame with it.
     fn originLocked(self: *Store) camera.Vec2 {
         for (self.objs.values()) |*o| {
-            if (o.kind == .symbol) return geo(o.at);
+            if (o.kind == .symbol or o.kind == .canvas) return geo(o.at);
             if (o.pts.len > 0) return geo(o.pts[0]);
         }
         return .{ .x = 0, .y = 0 };
@@ -603,12 +954,15 @@ pub const Store = struct {
 
     fn buildLocked(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) Error!void {
         self.verts.clearRetainingCapacity();
+        self.tverts.clearRetainingCapacity();
+        self.tverts_bold.clearRetainingCapacity();
         self.built_origin = self.originLocked();
         const wpp = worldPerPt(zoom);
-        // Paint order: areas, then lines, then symbols. A track must not cover
-        // the boat, and a warning area must not cover either.
-        for ([3]Kind{ .polygon, .polyline, .symbol }) |pass| {
-            for (self.objs.values()) |*o| {
+        // Paint order: areas, then lines, then symbols, then canvases. A track
+        // must not cover the boat, a warning area must not cover either, and
+        // an instrument drawing sits over all three.
+        for ([4]Kind{ .polygon, .polyline, .symbol, .canvas }) |pass| {
+            for (self.objs.keys(), self.objs.values()) |key, *o| {
                 if (o.kind != pass) continue;
                 var c = resolve(o.token, scheme);
                 switch (o.kind) {
@@ -621,6 +975,7 @@ pub const Store = struct {
                     // vector stay attached to the hull between fixes.
                     .polyline => try self.emitPolyline(o.pts, @as(f64, o.width_pt) * wpp, o.dash, wpp, c, lineShift(o, ship)),
                     .symbol => try self.emitSymbol(o, effAt(o, ship), wpp, c),
+                    .canvas => try self.emitCanvas(key, o, effAt(o, ship), wpp, scheme),
                 }
             }
         }
@@ -804,7 +1159,741 @@ pub const Store = struct {
             },
         }
     }
+
+    // ---- the canvas ---------------------------------------------------------
+
+    /// Replay one canvas's command list into triangles and glyph quads. On a
+    /// blown tessellation budget the WHOLE object is rewound and refused with
+    /// one log line (spec rule 7), so a runaway drawing costs nothing but its
+    /// log line.
+    fn emitCanvas(self: *Store, key: []const u8, o: *Object, at_geo: [2]f64, wpp: f64, scheme: Scheme) Error!void {
+        if (o.cmds.len == 0) return;
+        const at = geo(at_geo);
+        var vm = CanvasVM{
+            .s = self,
+            .ax = at.x,
+            .ay = at.y,
+            .unit = switch (o.space) {
+                .points => wpp,
+                .geo => worldPerMetre(at_geo[1]),
+            },
+            .wpp = wpp,
+            .scheme = scheme,
+            .vmark = self.verts.items.len,
+            .tmark = self.tverts.items.len,
+            .tbmark = self.tverts_bold.items.len,
+        };
+        self.cpath.clearRetainingCapacity();
+        self.csubs.clearRetainingCapacity();
+        for (o.cmds) |*cmd| {
+            if (vm.over) break;
+            try vm.exec(cmd);
+        }
+        if (vm.over) {
+            self.verts.shrinkRetainingCapacity(vm.vmark);
+            self.tverts.shrinkRetainingCapacity(vm.tmark);
+            self.tverts_bold.shrinkRetainingCapacity(vm.tbmark);
+            if (!o.over_said) {
+                o.over_said = true;
+                sayRefused("overlay: canvas \"{s}\" refused: over the tessellation budget\n", .{key});
+            }
+        }
+    }
+
+    /// One glyph-quad vertex, measured from the build origin like push().
+    fn pushText(self: *Store, list: *std.ArrayList(TextVertex), w: camera.Vec2, u: f32, v: f32, c: [4]u8) Error!void {
+        try list.append(self.alloc, .{
+            .x = @floatCast(camera.wrapDx(w.x, self.built_origin.x)),
+            .y = @floatCast(w.y - self.built_origin.y),
+            .u = u,
+            .v = v,
+            .color = c,
+        });
+    }
 };
+
+// ---- the canvas tessellator -------------------------------------------------
+//
+// A tiny canvas machine, run at BUILD time only: paths flatten in user space
+// (each appended point carries the transform current at its append, which is
+// how the HTML canvas behaves), fills ear-clip, strokes expand with caps and
+// joins, gradients evaluate per emitted vertex, and text lays out as SDF
+// glyph quads off the wired atlas face. Clipping is Sutherland-Hodgman
+// against the clip path, which therefore must be CONVEX; a concave clip
+// keeps its hull's wedges, the same caveat emitPolygon carries.
+
+/// One graphics state. Paints here hold gradient geometry ALREADY transformed
+/// (resolvePaint), so evaluation runs against the transformed path points.
+const CState = struct {
+    /// Row-major affine: x' = a x + b y + tx ; y' = c x + d y + ty.
+    tf: [6]f64 = .{ 1, 0, 0, 0, 1, 0 },
+    fill: CPaint = .{ .flat = .{ .rgba = .{ 0, 0, 0, 1 } } },
+    stroke: CPaint = .{ .flat = .{ .rgba = .{ 0, 0, 0, 1 } } },
+    width: f64 = 1.5,
+    cap: LineCap = .butt,
+    join: LineJoin = .miter,
+    fsize: f64 = 12,
+    fbold: bool = false,
+    talign: TextAlign = .left,
+    clip_len: usize = 0,
+};
+
+const CanvasVM = struct {
+    s: *Store,
+    /// The anchor in world units, and world units per canvas unit / per point.
+    ax: f64,
+    ay: f64,
+    unit: f64,
+    wpp: f64,
+    scheme: Scheme,
+    st: [CANVAS_STATE_DEPTH + 1]CState = @splat(.{}),
+    clips: [CANVAS_STATE_DEPTH + 1][CLIP_MAX_PTS][2]f64 = undefined,
+    sp: usize = 0,
+    /// Rewind marks for the whole-object refusal.
+    vmark: usize,
+    tmark: usize,
+    tbmark: usize,
+    glyphs: usize = 0,
+    over: bool = false,
+
+    fn state(vm: *CanvasVM) *CState {
+        return &vm.st[vm.sp];
+    }
+
+    fn exec(vm: *CanvasVM, cmd: *const CanvasCmd) Error!void {
+        switch (cmd.*) {
+            .begin_path => {
+                vm.s.cpath.clearRetainingCapacity();
+                vm.s.csubs.clearRetainingCapacity();
+            },
+            .move_to => |p| try vm.newSub(vm.xf(p)),
+            .line_to => |p| try vm.vertex(vm.xf(p)),
+            .quad_to => |q| try vm.flattenQuad(vm.xf(q[0]), vm.xf(q[1])),
+            .bezier_to => |q| try vm.flattenCubic(vm.xf(q[0]), vm.xf(q[1]), vm.xf(q[2])),
+            .arc => |a| try vm.flattenArc(a),
+            .close_path => try vm.closeSub(),
+            .fill => try vm.fillPath(),
+            .stroke => try vm.strokePath(),
+            .clip => vm.clipPath(),
+            .fill_style => |p| vm.state().fill = vm.resolvePaint(p),
+            .stroke_style => |p| vm.state().stroke = vm.resolvePaint(p),
+            .line_width => |w| vm.state().width = w,
+            .line_cap => |c| vm.state().cap = c,
+            .line_join => |j| vm.state().join = j,
+            .font => |f| {
+                vm.state().fsize = f.size;
+                vm.state().fbold = f.bold;
+            },
+            .text_align => |a| vm.state().talign = a,
+            .fill_text => |ft| try vm.text(ft.at, ft.text),
+            .translate => |d| vm.apply(.{ 1, 0, d[0], 0, 1, d[1] }),
+            .rotate => |r| {
+                const cs = @cos(@as(f64, r));
+                const sn = @sin(@as(f64, r));
+                vm.apply(.{ cs, -sn, 0, sn, cs, 0 });
+            },
+            .scale => |k| vm.apply(.{ k[0], 0, 0, 0, k[1], 0 }),
+            .save => vm.saveState(),
+            .restore => {
+                if (vm.sp > 0) vm.sp -= 1;
+            },
+        }
+    }
+
+    // ---- transform ---------------------------------------------------------
+
+    /// tf := tf o m — the command applies in the local coordinates the author
+    /// is drawing in, HTML-canvas style.
+    fn apply(vm: *CanvasVM, m: [6]f64) void {
+        const f = vm.state().tf;
+        vm.state().tf = .{
+            f[0] * m[0] + f[1] * m[3],
+            f[0] * m[1] + f[1] * m[4],
+            f[0] * m[2] + f[1] * m[5] + f[2],
+            f[3] * m[0] + f[4] * m[3],
+            f[3] * m[1] + f[4] * m[4],
+            f[3] * m[2] + f[4] * m[5] + f[5],
+        };
+    }
+
+    fn xf(vm: *CanvasVM, p: [2]f32) [2]f64 {
+        return vm.xfRaw(.{ p[0], p[1] });
+    }
+
+    fn avgScale(vm: *CanvasVM) f64 {
+        const f = vm.state().tf;
+        return @sqrt(@abs(f[0] * f[4] - f[1] * f[3]));
+    }
+
+    fn saveState(vm: *CanvasVM) void {
+        if (vm.sp == CANVAS_STATE_DEPTH) return; // over depth: the save is ignored
+        vm.st[vm.sp + 1] = vm.st[vm.sp];
+        const n = vm.st[vm.sp].clip_len;
+        if (n > 0) @memcpy(vm.clips[vm.sp + 1][0..n], vm.clips[vm.sp][0..n]);
+        vm.sp += 1;
+    }
+
+    // ---- the path -----------------------------------------------------------
+
+    fn newSub(vm: *CanvasVM, p: [2]f64) Error!void {
+        try vm.s.csubs.append(vm.s.alloc, .{ .start = @intCast(vm.s.cpath.items.len), .len = 0, .closed = false });
+        try vm.rawPush(p);
+    }
+
+    fn rawPush(vm: *CanvasVM, p: [2]f64) Error!void {
+        if (vm.s.cpath.items.len >= MAX_CANVAS_PATH_PTS) {
+            vm.over = true;
+            return;
+        }
+        try vm.s.cpath.append(vm.s.alloc, p);
+        vm.s.csubs.items[vm.s.csubs.items.len - 1].len += 1;
+    }
+
+    /// The pen: the last point of the open subpath, or null.
+    fn pen(vm: *CanvasVM) ?[2]f64 {
+        const subs = vm.s.csubs.items;
+        if (subs.len == 0) return null;
+        const last = subs[subs.len - 1];
+        if (last.len == 0) return null;
+        return vm.s.cpath.items[last.start + last.len - 1];
+    }
+
+    /// Add a point, drawing from the pen. With no pen this opens a subpath,
+    /// as the HTML canvas does for a lineTo on an empty path.
+    fn vertex(vm: *CanvasVM, p: [2]f64) Error!void {
+        const q = vm.pen() orelse return vm.newSub(p);
+        if (q[0] == p[0] and q[1] == p[1]) return; // exact repeats draw nothing
+        try vm.rawPush(p);
+    }
+
+    fn closeSub(vm: *CanvasVM) Error!void {
+        const subs = vm.s.csubs.items;
+        if (subs.len == 0) return;
+        const last = &subs[subs.len - 1];
+        if (last.len < 2) return;
+        last.closed = true;
+        // The pen moves to the subpath's start; drawing continues in a fresh
+        // subpath from there.
+        try vm.newSub(vm.s.cpath.items[last.start]);
+    }
+
+    fn flattenQuad(vm: *CanvasVM, c: [2]f64, e: [2]f64) Error!void {
+        const p0 = vm.pen() orelse return vm.newSub(e);
+        var i: usize = 1;
+        while (i <= QUAD_SEGS) : (i += 1) {
+            const k = @as(f64, @floatFromInt(i)) / QUAD_SEGS;
+            const u = 1 - k;
+            try vm.vertex(.{
+                u * u * p0[0] + 2 * u * k * c[0] + k * k * e[0],
+                u * u * p0[1] + 2 * u * k * c[1] + k * k * e[1],
+            });
+        }
+    }
+
+    fn flattenCubic(vm: *CanvasVM, c1: [2]f64, c2: [2]f64, e: [2]f64) Error!void {
+        const p0 = vm.pen() orelse return vm.newSub(e);
+        var i: usize = 1;
+        while (i <= CUBIC_SEGS) : (i += 1) {
+            const k = @as(f64, @floatFromInt(i)) / CUBIC_SEGS;
+            const u = 1 - k;
+            try vm.vertex(.{
+                u * u * u * p0[0] + 3 * u * u * k * c1[0] + 3 * u * k * k * c2[0] + k * k * k * e[0],
+                u * u * u * p0[1] + 3 * u * u * k * c1[1] + 3 * u * k * k * c2[1] + k * k * k * e[1],
+            });
+        }
+    }
+
+    /// Sampled in USER space and transformed per sample, so a non-uniform
+    /// scale draws the ellipse it implies. Angle 0 is +x, positive sweeps
+    /// toward +y (clockwise on screen), the HTML convention.
+    fn flattenArc(vm: *CanvasVM, a: @FieldType(CanvasCmd, "arc")) Error!void {
+        if (!(a.r > 0)) return;
+        var sweep: f64 = @as(f64, a.a1) - @as(f64, a.a0);
+        const tau = 2.0 * std.math.pi;
+        if (!a.ccw) {
+            while (sweep < 0) sweep += tau;
+            if (sweep > tau) sweep = tau;
+        } else {
+            while (sweep > 0) sweep -= tau;
+            if (sweep < -tau) sweep = -tau;
+        }
+        const n: usize = @intFromFloat(@max(2.0, @ceil(@abs(sweep) / tau * ARC_SEGS_FULL)));
+        var i: usize = 0;
+        while (i <= n) : (i += 1) {
+            const ang = @as(f64, a.a0) + sweep * @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(n));
+            const p = vm.xf(.{
+                a.c[0] + a.r * @as(f32, @floatCast(@cos(ang))),
+                a.c[1] + a.r * @as(f32, @floatCast(@sin(ang))),
+            });
+            if (i == 0 and vm.pen() == null) try vm.newSub(p) else try vm.vertex(p);
+        }
+    }
+
+    // ---- paints -------------------------------------------------------------
+
+    /// A style command's paint with its gradient geometry moved into the
+    /// transformed space the path points live in, so evaluation needs no
+    /// inverse transform.
+    fn resolvePaint(vm: *CanvasVM, p: CPaint) CPaint {
+        switch (p) {
+            .flat => return p,
+            .linear => |g| {
+                const a = vm.xf(g.a);
+                const b = vm.xf(g.b);
+                return .{ .linear = .{
+                    .a = .{ @floatCast(a[0]), @floatCast(a[1]) },
+                    .b = .{ @floatCast(b[0]), @floatCast(b[1]) },
+                    .stops = g.stops,
+                } };
+            },
+            .radial => |g| {
+                const a = vm.xf(g.a);
+                return .{ .radial = .{
+                    .a = .{ @floatCast(a[0]), @floatCast(a[1]) },
+                    .r = @floatCast(@as(f64, g.r) * vm.avgScale()),
+                    .stops = g.stops,
+                } };
+            },
+        }
+    }
+
+    fn evalPaint(vm: *CanvasVM, paint: *const CPaint, p: [2]f64) Rgba {
+        switch (paint.*) {
+            .flat => |c| return c.resolveTo(vm.scheme),
+            .linear => |g| {
+                const dx = @as(f64, g.b[0]) - g.a[0];
+                const dy = @as(f64, g.b[1]) - g.a[1];
+                const d2 = dx * dx + dy * dy;
+                const tv: f64 = if (d2 > 0)
+                    std.math.clamp(((p[0] - g.a[0]) * dx + (p[1] - g.a[1]) * dy) / d2, 0, 1)
+                else
+                    0;
+                return vm.stopColor(g.stops, @floatCast(tv));
+            },
+            .radial => |g| {
+                const tv = std.math.clamp(std.math.hypot(p[0] - g.a[0], p[1] - g.a[1]) / @as(f64, g.r), 0, 1);
+                return vm.stopColor(g.stops, @floatCast(tv));
+            },
+        }
+    }
+
+    fn stopColor(vm: *CanvasVM, stops: []const CStop, tv: f32) Rgba {
+        if (tv <= stops[0].t) return stops[0].c.resolveTo(vm.scheme);
+        var i: usize = 1;
+        while (i < stops.len) : (i += 1) {
+            if (tv <= stops[i].t) {
+                const a = stops[i - 1].c.resolveTo(vm.scheme);
+                const b = stops[i].c.resolveTo(vm.scheme);
+                const span = stops[i].t - stops[i - 1].t;
+                const k: f32 = if (span > 0) (tv - stops[i - 1].t) / span else 1;
+                var out: Rgba = undefined;
+                for (a, b, &out) |x, y, *o| o.* = x + (y - x) * k;
+                return out;
+            }
+        }
+        return stops[stops.len - 1].c.resolveTo(vm.scheme);
+    }
+
+    // ---- emitting -----------------------------------------------------------
+
+    fn worldOf(vm: *CanvasVM, p: [2]f64) camera.Vec2 {
+        return .{ .x = vm.ax + p[0] * vm.unit, .y = vm.ay + p[1] * vm.unit };
+    }
+
+    fn emitTriRaw(vm: *CanvasVM, a: [2]f64, b: [2]f64, c: [2]f64, paint: *const CPaint) Error!void {
+        if (vm.over) return;
+        if (vm.s.verts.items.len - vm.vmark + 3 > MAX_CANVAS_VERTS) {
+            vm.over = true;
+            return;
+        }
+        try vm.s.push(vm.worldOf(a), vm.evalPaint(paint, a));
+        try vm.s.push(vm.worldOf(b), vm.evalPaint(paint, b));
+        try vm.s.push(vm.worldOf(c), vm.evalPaint(paint, c));
+    }
+
+    /// One triangle through the clip (when set), then out.
+    fn paintTri(vm: *CanvasVM, a: [2]f64, b: [2]f64, c: [2]f64, paint: *const CPaint) Error!void {
+        const n_clip = vm.state().clip_len;
+        if (n_clip < 3) return vm.emitTriRaw(a, b, c, paint);
+        const clip_pts = vm.clips[vm.sp][0..n_clip];
+        var buf_a: [CLIP_MAX_PTS + 8][2]f64 = undefined;
+        var buf_b: [CLIP_MAX_PTS + 8][2]f64 = undefined;
+        buf_a[0] = a;
+        buf_a[1] = b;
+        buf_a[2] = c;
+        var cur: *[CLIP_MAX_PTS + 8][2]f64 = &buf_a;
+        var nxt: *[CLIP_MAX_PTS + 8][2]f64 = &buf_b;
+        var n: usize = 3;
+        // Which side of a clip edge is inside follows the polygon's winding.
+        var area: f64 = 0;
+        for (clip_pts, 0..) |p, i| {
+            const q = clip_pts[(i + 1) % n_clip];
+            area += p[0] * q[1] - q[0] * p[1];
+        }
+        const inner: f64 = if (area >= 0) 1 else -1;
+        for (clip_pts, 0..) |e0, i| {
+            const e1 = clip_pts[(i + 1) % n_clip];
+            const ex = e1[0] - e0[0];
+            const ey = e1[1] - e0[1];
+            var m: usize = 0;
+            var j: usize = 0;
+            while (j < n) : (j += 1) {
+                const p = cur[j];
+                const q = cur[(j + 1) % n];
+                const dp = (ex * (p[1] - e0[1]) - ey * (p[0] - e0[0])) * inner;
+                const dq = (ex * (q[1] - e0[1]) - ey * (q[0] - e0[0])) * inner;
+                if (dp >= 0) {
+                    if (m < nxt.len) {
+                        nxt[m] = p;
+                        m += 1;
+                    }
+                }
+                if ((dp >= 0) != (dq >= 0)) {
+                    const k = dp / (dp - dq);
+                    if (m < nxt.len) {
+                        nxt[m] = .{ p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k };
+                        m += 1;
+                    }
+                }
+            }
+            const swap = cur;
+            cur = nxt;
+            nxt = swap;
+            n = m;
+            if (n < 3) return;
+        }
+        var k: usize = 1;
+        while (k + 1 < n) : (k += 1) {
+            try vm.emitTriRaw(cur[0], cur[k], cur[k + 1], paint);
+        }
+    }
+
+    // ---- fill ---------------------------------------------------------------
+
+    fn fillPath(vm: *CanvasVM) Error!void {
+        // Copied out of the state so the pointer handed down cannot alias a
+        // state slot a later command mutates.
+        const paint = vm.state().fill;
+        for (vm.s.csubs.items) |sub| {
+            if (sub.len < 3) continue;
+            try vm.earClip(vm.s.cpath.items[sub.start..][0..sub.len], &paint);
+        }
+    }
+
+    /// Ear-clip one ring (implicitly closed). Degenerate or oversized rings
+    /// fall back to a fan, which is exact for convex input.
+    fn earClip(vm: *CanvasVM, pts: []const [2]f64, paint: *const CPaint) Error!void {
+        const idx = &vm.s.cidx;
+        idx.clearRetainingCapacity();
+        for (pts, 0..) |p, i| {
+            // Skip exact repeats, including a closing point equal to the first.
+            const prev = if (idx.items.len > 0) pts[idx.items[idx.items.len - 1]] else pts[pts.len - 1];
+            if (p[0] == prev[0] and p[1] == prev[1] and idx.items.len > 0) continue;
+            try idx.append(vm.s.alloc, @intCast(i));
+        }
+        if (idx.items.len >= 2) {
+            const f = pts[idx.items[0]];
+            const l = pts[idx.items[idx.items.len - 1]];
+            if (f[0] == l[0] and f[1] == l[1]) _ = idx.pop();
+        }
+        var m = idx.items.len;
+        if (m < 3) return;
+        if (m > 512) return vm.fanRing(pts, idx.items, paint);
+        var area: f64 = 0;
+        for (idx.items, 0..) |ia, i| {
+            const ib = idx.items[(i + 1) % m];
+            area += pts[ia][0] * pts[ib][1] - pts[ib][0] * pts[ia][1];
+        }
+        if (area == 0) return;
+        const orient: f64 = if (area > 0) 1 else -1;
+
+        while (m > 3) {
+            var clipped = false;
+            var k: usize = 0;
+            ear: while (k < m) : (k += 1) {
+                const a = pts[idx.items[(k + m - 1) % m]];
+                const b = pts[idx.items[k]];
+                const c = pts[idx.items[(k + 1) % m]];
+                const cr = cross2(a, b, c) * orient;
+                if (cr <= 0) continue; // reflex or flat corner
+                var j: usize = 0;
+                while (j < m) : (j += 1) {
+                    if (j == k or j == (k + m - 1) % m or j == (k + 1) % m) continue;
+                    if (pointInTri(pts[idx.items[j]], a, b, c, orient)) continue :ear;
+                }
+                try vm.paintTri(a, b, c, paint);
+                _ = idx.orderedRemove(k);
+                m -= 1;
+                clipped = true;
+                break;
+            }
+            // No ear found: numerically degenerate ring. Fan what is left —
+            // wrong only for what was already unfillable.
+            if (!clipped) return vm.fanRing(pts, idx.items, paint);
+        }
+        try vm.paintTri(pts[idx.items[0]], pts[idx.items[1]], pts[idx.items[2]], paint);
+    }
+
+    fn fanRing(vm: *CanvasVM, pts: []const [2]f64, idx: []const u32, paint: *const CPaint) Error!void {
+        var i: usize = 1;
+        while (i + 1 < idx.len) : (i += 1) {
+            try vm.paintTri(pts[idx[0]], pts[idx[i]], pts[idx[i + 1]], paint);
+        }
+    }
+
+    // ---- stroke -------------------------------------------------------------
+
+    fn strokePath(vm: *CanvasVM) Error!void {
+        const st = vm.state();
+        // Width is SCREEN POINTS in either space (spec rule 2); the transform's
+        // scale applies like it does to everything else drawn under it.
+        const hw = 0.5 * st.width * (vm.wpp / vm.unit) * vm.avgScale();
+        if (!(hw > 0)) return;
+        const paint = st.stroke;
+        for (vm.s.csubs.items) |sub| {
+            if (sub.len < 2) continue;
+            try vm.strokeSub(vm.s.cpath.items[sub.start..][0..sub.len], sub.closed, hw, st.cap, st.join, &paint);
+        }
+    }
+
+    fn strokeSub(vm: *CanvasVM, pts_in: []const [2]f64, closed: bool, hw: f64, cap: LineCap, join: LineJoin, paint: *const CPaint) Error!void {
+        var pts = pts_in;
+        // A closed ring whose last point is the first again within rounding
+        // (a full-circle arc lands ~1e-14 off) would otherwise contribute a
+        // noise-length wrap segment whose direction is pure rounding error,
+        // and the join built on that direction is a wedge pointing anywhere.
+        while (closed and pts.len > 1 and nearPt(pts[0], pts[pts.len - 1])) pts = pts[0 .. pts.len - 1];
+        const n = pts.len;
+        if (n < 2) return;
+        // The closing segment, unless the author already drew back to the start.
+        const wrap = closed and (pts[0][0] != pts[n - 1][0] or pts[0][1] != pts[n - 1][1]);
+        const segs = if (wrap) n else n - 1;
+        var prev_dir: ?[2]f64 = null;
+        var first_dir: ?[2]f64 = null;
+        var i: usize = 0;
+        while (i < segs) : (i += 1) {
+            const a = pts[i];
+            const b = pts[(i + 1) % n];
+            const dx = b[0] - a[0];
+            const dy = b[1] - a[1];
+            const len = std.math.hypot(dx, dy);
+            // A segment shorter than any drawable length is a repeat point;
+            // its quad is invisible and its direction is noise, so neither
+            // may reach the join machinery.
+            if (!(len > SEG_EPS)) continue;
+            const d = [2]f64{ dx / len, dy / len };
+            const nx = -d[1] * hw;
+            const ny = d[0] * hw;
+            try vm.paintTri(.{ a[0] + nx, a[1] + ny }, .{ b[0] + nx, b[1] + ny }, .{ b[0] - nx, b[1] - ny }, paint);
+            try vm.paintTri(.{ a[0] + nx, a[1] + ny }, .{ b[0] - nx, b[1] - ny }, .{ a[0] - nx, a[1] - ny }, paint);
+            if (prev_dir) |pd| try vm.joinAt(a, pd, d, hw, join, paint);
+            if (first_dir == null) first_dir = d;
+            prev_dir = d;
+        }
+        if (closed) {
+            // Close the ring's last corner too.
+            if (prev_dir != null and first_dir != null)
+                try vm.joinAt(pts[0], prev_dir.?, first_dir.?, hw, join, paint);
+            return;
+        }
+        if (cap == .butt) return;
+        if (first_dir) |fd| try vm.capAt(pts[0], .{ -fd[0], -fd[1] }, hw, cap, paint);
+        if (prev_dir) |ld| try vm.capAt(pts[n - 1], ld, hw, cap, paint);
+    }
+
+    /// Fill the wedge a turn opens on the outside of the joint at `p`.
+    fn joinAt(vm: *CanvasVM, p: [2]f64, d1: [2]f64, d2: [2]f64, hw: f64, join: LineJoin, paint: *const CPaint) Error!void {
+        const cr = d1[0] * d2[1] - d1[1] * d2[0];
+        const dot = d1[0] * d2[0] + d1[1] * d2[1];
+        if (@abs(cr) < 1e-12 and dot > 0) return; // straight through
+        const s: f64 = if (cr > 0) -1 else 1; // the outer side of the turn
+        const o1 = [2]f64{ -d1[1] * s, d1[0] * s };
+        const o2 = [2]f64{ -d2[1] * s, d2[0] * s };
+        const a = [2]f64{ p[0] + o1[0] * hw, p[1] + o1[1] * hw };
+        const b = [2]f64{ p[0] + o2[0] * hw, p[1] + o2[1] * hw };
+        switch (join) {
+            .bevel => try vm.paintTri(p, a, b, paint),
+            .round => try vm.fanBetween(p, o1, o2, hw, paint),
+            .miter => {
+                // cos of the half angle between the outer normals.
+                const ch = @sqrt(@max(0.0, (1.0 + (o1[0] * o2[0] + o1[1] * o2[1])) * 0.5));
+                if (!(ch > 1.0 / MITER_LIMIT)) return vm.paintTri(p, a, b, paint);
+                var mx = o1[0] + o2[0];
+                var my = o1[1] + o2[1];
+                const ml = std.math.hypot(mx, my);
+                if (!(ml > 0)) return vm.paintTri(p, a, b, paint);
+                mx = p[0] + mx / ml * (hw / ch);
+                my = p[1] + my / ml * (hw / ch);
+                try vm.paintTri(p, a, .{ mx, my }, paint);
+                try vm.paintTri(p, .{ mx, my }, b, paint);
+            },
+        }
+    }
+
+    /// A cap at `p` for a segment leaving along `d` (pointing OUT of the line).
+    fn capAt(vm: *CanvasVM, p: [2]f64, d: [2]f64, hw: f64, cap: LineCap, paint: *const CPaint) Error!void {
+        const nx = -d[1] * hw;
+        const ny = d[0] * hw;
+        switch (cap) {
+            .butt => {},
+            .square => {
+                const q = [2]f64{ p[0] + d[0] * hw, p[1] + d[1] * hw };
+                try vm.paintTri(.{ p[0] + nx, p[1] + ny }, .{ q[0] + nx, q[1] + ny }, .{ q[0] - nx, q[1] - ny }, paint);
+                try vm.paintTri(.{ p[0] + nx, p[1] + ny }, .{ q[0] - nx, q[1] - ny }, .{ p[0] - nx, p[1] - ny }, paint);
+            },
+            .round => try vm.fanBetween(p, .{ -d[1], d[0] }, .{ d[1], -d[0] }, hw, paint),
+        }
+    }
+
+    /// Fan from unit direction `o1` to `o2` about `p`, the short way round.
+    /// A join's wedge is always under pi, so the short way IS the wedge; a
+    /// round cap's is exactly pi and either way round draws the same half
+    /// circle.
+    fn fanBetween(vm: *CanvasVM, p: [2]f64, o1: [2]f64, o2: [2]f64, hw: f64, paint: *const CPaint) Error!void {
+        const a0 = std.math.atan2(o1[1], o1[0]);
+        var da = std.math.atan2(o2[1], o2[0]) - a0;
+        while (da > std.math.pi) da -= 2 * std.math.pi;
+        while (da < -std.math.pi) da += 2 * std.math.pi;
+        if (da == 0) da = std.math.pi; // a full half circle (round cap)
+        const steps: usize = @intFromFloat(@max(1.0, @ceil(@abs(da) / 0.4)));
+        var i: usize = 0;
+        while (i < steps) : (i += 1) {
+            const b0 = a0 + da * @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(steps));
+            const b1 = a0 + da * @as(f64, @floatFromInt(i + 1)) / @as(f64, @floatFromInt(steps));
+            try vm.paintTri(
+                p,
+                .{ p[0] + @cos(b0) * hw, p[1] + @sin(b0) * hw },
+                .{ p[0] + @cos(b1) * hw, p[1] + @sin(b1) * hw },
+                paint,
+            );
+        }
+    }
+
+    // ---- clip ---------------------------------------------------------------
+
+    /// Adopt the current path's first usable subpath as the clip region.
+    /// Convex regions clip exactly; see the file comment for concave ones.
+    fn clipPath(vm: *CanvasVM) void {
+        for (vm.s.csubs.items) |sub| {
+            if (sub.len < 3) continue;
+            if (sub.len > CLIP_MAX_PTS) {
+                vm.over = true; // over the clip budget refuses the object
+                return;
+            }
+            const pts = vm.s.cpath.items[sub.start..][0..sub.len];
+            @memcpy(vm.clips[vm.sp][0..pts.len], pts);
+            vm.state().clip_len = pts.len;
+            return;
+        }
+    }
+
+    // ---- text ---------------------------------------------------------------
+
+    fn text(vm: *CanvasVM, at: [2]f32, run: []const u8) Error!void {
+        const st = vm.state();
+        // Which face draws this run. Asking for bold without a wired bold
+        // face falls back to the regular one, metrics and texture together.
+        const use_bold = st.fbold and vm.s.font_bold != null;
+        const font = (if (use_bold) vm.s.font_bold else vm.s.font_reg) orelse return;
+        const list = if (use_bold) &vm.s.tverts_bold else &vm.s.tverts;
+        // Point size -> canvas units, so geo-space text holds its screen size
+        // like a stroke width does. The transform then applies to the glyph
+        // boxes like it does to everything else drawn under it.
+        const size = st.fsize * (vm.wpp / vm.unit);
+        // Advance-based width for the alignment shift; no shaping, which the
+        // instrument strings this serves do not need.
+        var width: f64 = 0;
+        var it = std.unicode.Utf8Iterator{ .bytes = run, .i = 0 };
+        while (nextCp(&it)) |cp| {
+            width += glyphAdvance(font, cp) * size;
+        }
+        var px: f64 = @as(f64, at[0]) - switch (st.talign) {
+            .left => 0,
+            .center => width / 2,
+            .right => width,
+        };
+        const py: f64 = at[1];
+        it = .{ .bytes = run, .i = 0 };
+        while (nextCp(&it)) |cp| {
+            const g = font.lookup(font.ctx, cp) orelse {
+                px += 0.5 * size;
+                continue;
+            };
+            const adv = @as(f64, g.advance) * size;
+            if (g.w > 0 and g.h > 0) {
+                if (vm.glyphs >= MAX_CANVAS_GLYPHS) {
+                    vm.over = true;
+                    return;
+                }
+                vm.glyphs += 1;
+                const gx = px + @as(f64, g.off_x) * size;
+                const gy = py + @as(f64, g.off_y) * size;
+                const gw = @as(f64, g.w) * size;
+                const gh = @as(f64, g.h) * size;
+                const color = rgbaBytes(vm.evalPaint(&st.fill, vm.xfRaw(.{ px, py })));
+                const c00 = vm.worldOf(vm.xfRaw(.{ gx, gy }));
+                const c10 = vm.worldOf(vm.xfRaw(.{ gx + gw, gy }));
+                const c11 = vm.worldOf(vm.xfRaw(.{ gx + gw, gy + gh }));
+                const c01 = vm.worldOf(vm.xfRaw(.{ gx, gy + gh }));
+                try vm.s.pushText(list, c00, g.u0, g.v0, color);
+                try vm.s.pushText(list, c10, g.u1, g.v0, color);
+                try vm.s.pushText(list, c11, g.u1, g.v1, color);
+                try vm.s.pushText(list, c00, g.u0, g.v0, color);
+                try vm.s.pushText(list, c11, g.u1, g.v1, color);
+                try vm.s.pushText(list, c01, g.u0, g.v1, color);
+            }
+            px += adv;
+        }
+    }
+
+    /// xf for a point already in f64 canvas units.
+    fn xfRaw(vm: *CanvasVM, p: [2]f64) [2]f64 {
+        const f = vm.state().tf;
+        return .{ f[0] * p[0] + f[1] * p[1] + f[2], f[3] * p[0] + f[4] * p[1] + f[5] };
+    }
+};
+
+/// Shader colour (0..1) -> the u8 straight-alpha quad vertices carry.
+fn rgbaBytes(c: Rgba) [4]u8 {
+    var out: [4]u8 = undefined;
+    for (c, &out) |ch, *o| o.* = @intFromFloat(std.math.clamp(ch, 0, 1) * 255.0 + 0.5);
+    return out;
+}
+
+fn nextCp(it: *std.unicode.Utf8Iterator) ?u21 {
+    if (it.i >= it.bytes.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(it.bytes[it.i]) catch {
+        it.i += 1; // an invalid byte is skipped, not fatal
+        return nextCp(it);
+    };
+    if (it.i + len > it.bytes.len) {
+        it.i = it.bytes.len;
+        return null;
+    }
+    const cp = std.unicode.utf8Decode(it.bytes[it.i..][0..len]) catch {
+        it.i += 1;
+        return nextCp(it);
+    };
+    it.i += len;
+    return cp;
+}
+
+fn glyphAdvance(font: Font, cp: u21) f64 {
+    const g = font.lookup(font.ctx, cp) orelse return 0.5;
+    return g.advance;
+}
+
+fn cross2(a: [2]f64, b: [2]f64, c: [2]f64) f64 {
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+/// Strictly inside, matching `orient`'s winding. Boundary points count as
+/// outside, so shared edges do not block an ear.
+fn pointInTri(p: [2]f64, a: [2]f64, b: [2]f64, c: [2]f64, orient: f64) bool {
+    return cross2(a, b, p) * orient > 0 and
+        cross2(b, c, p) * orient > 0 and
+        cross2(c, a, p) * orient > 0;
+}
 
 /// Clip a payload string to `MAX_PICK_TEXT`, on a UTF-8 boundary.
 fn clip(s: []const u8) []const u8 {
@@ -853,6 +1942,74 @@ pub fn ownshipLenWorld(lat_deg: f64, wpp: f64, scale: f64) f64 {
 pub fn worldPerMetre(lat_deg: f64) f64 {
     const c = @abs(std.math.cos(lat_deg * std.math.pi / 180.0));
     return 1.0 / (EARTH_CIRCUMFERENCE_M * @max(c, 1.0e-6));
+}
+
+// ---- canvas helpers --------------------------------------------------------
+
+/// One flattened subpath: `start`..`start+len` into the shared point list.
+const CSub = struct { start: u32, len: u32, closed: bool };
+
+/// Shortest stroke segment worth drawing, canvas units. Anything under it is
+/// a repeated point within rounding, in either space.
+const SEG_EPS = 1e-9;
+
+fn nearPt(a: [2]f64, b: [2]f64) bool {
+    return @abs(a[0] - b[0]) <= SEG_EPS and @abs(a[1] - b[1]) <= SEG_EPS;
+}
+
+fn sameFont(a: ?Font, b: ?Font) bool {
+    const x = a orelse return b == null;
+    const y = b orelse return false;
+    return x.ctx == y.ctx and x.lookup == y.lookup;
+}
+
+fn finiteF32(v: ?f64) ?f32 {
+    const n = v orelse return null;
+    if (!std.math.isFinite(n)) return null;
+    return @floatCast(n);
+}
+
+/// Command argument `i`, a finite number. error.Skip refuses the object.
+fn argNum(a: []std.json.Value, i: usize) error{Skip}!f32 {
+    if (i >= a.len) return error.Skip;
+    return finiteF32(jnum(a[i])) orelse error.Skip;
+}
+
+/// Command arguments `i`, `i+1` as a point.
+fn argPt(a: []std.json.Value, i: usize) error{Skip}![2]f32 {
+    return .{ try argNum(a, i), try argNum(a, i + 1) };
+}
+
+fn argEnum(comptime E: type, a: []std.json.Value, i: usize) ?E {
+    if (i >= a.len) return null;
+    return std.meta.stringToEnum(E, jstr(a[i]) orelse return null);
+}
+
+/// `[r,g,b,a]` (0..1, clamped) or a token name.
+fn parseColor(v: std.json.Value) ?CColor {
+    switch (v) {
+        .string => |s| return .{ .token = std.meta.stringToEnum(Token, s) orelse return null },
+        .array => |arr| {
+            if (arr.items.len < 4) return null;
+            var c: Rgba = undefined;
+            for (arr.items[0..4], &c) |it, *ch| {
+                const n = finiteF32(jnum(it)) orelse return null;
+                ch.* = std.math.clamp(n, 0, 1);
+            }
+            return .{ .rgba = c };
+        },
+        else => return null,
+    }
+}
+
+/// Four finite numbers out of a JSON array.
+fn quadNums(v: std.json.Value) error{Skip}![4]f32 {
+    if (v != .array or v.array.items.len < 4) return error.Skip;
+    var out: [4]f32 = undefined;
+    for (v.array.items[0..4], &out) |it, *o| {
+        o.* = finiteF32(jnum(it)) orelse return error.Skip;
+    }
+    return out;
 }
 
 // ---- JSON helpers ----------------------------------------------------------
@@ -1507,4 +2664,300 @@ test "object budget is enforced" {
         };
     }
     try t.expect(false); // the cap must have fired
+}
+
+// ---- canvas tests -----------------------------------------------------------
+
+/// A one-glyph face for the tests: every codepoint but the space is a 0.6 x
+/// 0.72 em box hung 0.7 em above the baseline, advancing 0.65 em.
+const test_font_ctx: u8 = 0;
+fn testGlyph(_: *const anyopaque, cp: u21) ?Glyph {
+    if (cp == ' ') return .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0, .off_x = 0, .off_y = 0, .w = 0, .h = 0, .advance = 0.3 };
+    return .{ .u0 = 0.1, .v0 = 0.1, .u1 = 0.2, .v1 = 0.2, .off_x = 0.05, .off_y = -0.7, .w = 0.6, .h = 0.72, .advance = 0.65 };
+}
+fn testFont() Font {
+    return .{ .ctx = &test_font_ctx, .lookup = testGlyph };
+}
+
+test "a canvas records, fills, strokes and draws text" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    s.setFonts(testFont(), null);
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","space":"points","at":[-76.4767,38.9763],"cmds":[
+        \\ ["fs",[1,0,0,1]],["P"],["M",-10,-10],["L",10,-10],["L",10,10],["L",-10,10],["Z"],["F"],
+        \\ ["ss","warning"],["lw",2],["P"],["M",-20,0],["L",20,0],["S"],
+        \\ ["font",12,"regular"],["ta","left"],["T",0,30,"AB"]]}]}
+    );
+    try t.expectEqual(@as(usize, 1), s.count());
+    const fr = try s.buildIfNeeded(15.0, .day, null);
+
+    // The square ear-clips to two triangles, the one-segment stroke to two
+    // more: 12 triangle vertices, fill first.
+    try t.expectEqual(@as(usize, 12), fr.verts.len);
+    try t.expectApproxEqAbs(@as(f32, 1), fr.verts[0].r, 1e-6);
+    try t.expectApproxEqAbs(@as(f32, 0), fr.verts[0].g, 1e-6);
+    const wc = resolve(.warning, .day);
+    try t.expectEqual(wc[0], fr.verts[6].r);
+    try t.expectEqual(wc[1], fr.verts[6].g);
+
+    // The fill spans 20 points either way, centred on the anchor.
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    var min_x: f64 = 1e9;
+    var max_x: f64 = -1e9;
+    for (fr.verts[0..6]) |v| {
+        const x = @as(f64, v.x) + fr.origin.x;
+        min_x = @min(min_x, x);
+        max_x = @max(max_x, x);
+    }
+    try t.expectApproxEqRel(20.0 * wpp, max_x - min_x, 1e-4);
+    try t.expectApproxEqAbs(at.x, (min_x + max_x) / 2, 1e-9);
+
+    // Two glyphs, six quad vertices each, in the regular stream, red.
+    try t.expectEqual(@as(usize, 12), fr.text.len);
+    try t.expectEqual(@as(usize, 0), fr.text_bold.len);
+    try t.expectEqual(@as(u8, 255), fr.text[0].color[0]);
+    try t.expectEqual(@as(u8, 0), fr.text[0].color[1]);
+    // The glyph boxes sit below the anchor (y = +30 pt) and above their own
+    // baseline, 12 pt tall at 0.72 em.
+    var min_y: f64 = 1e9;
+    var max_y: f64 = -1e9;
+    for (fr.text) |v| {
+        const y = @as(f64, v.y) + fr.origin.y;
+        min_y = @min(min_y, y);
+        max_y = @max(max_y, y);
+    }
+    try t.expectApproxEqRel(0.72 * 12.0 * wpp, max_y - min_y, 1e-3);
+    try t.expect(min_y > at.y); // below the anchor in world space (south)
+
+    // No face wired: the text is skipped, the geometry stays, and wiring the
+    // face back marks the store dirty so the text returns.
+    s.setFonts(null, null);
+    const bare = try s.buildIfNeeded(15.0, .day, null);
+    try t.expectEqual(@as(usize, 0), bare.text.len);
+    try t.expectEqual(@as(usize, 12), bare.verts.len);
+    s.setFonts(testFont(), null);
+    try t.expect(s.needsRebuild(15.0, .day, null));
+    try t.expectEqual(@as(usize, 12), (try s.buildIfNeeded(15.0, .day, null)).text.len);
+}
+
+test "canvas budgets refuse the whole object and spare its siblings" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+
+    // 2049 commands: refused. The good sibling in the same batch survives.
+    var json = std.ArrayList(u8).empty;
+    defer json.deinit(t.allocator);
+    try json.appendSlice(t.allocator, "{\"set\":[{\"id\":\"big\",\"kind\":\"canvas\",\"at\":[-76.4,38.9],\"cmds\":[[\"P\"]");
+    for (0..MAX_CANVAS_CMDS) |_| try json.appendSlice(t.allocator, ",[\"L\",1,2]");
+    try json.appendSlice(t.allocator, "]},{\"id\":\"ok\",\"kind\":\"symbol\",\"sym\":\"target\",\"at\":[-76.4,38.9],\"color\":\"target\"}]}");
+    try s.applyBatch("p", json.items);
+    try t.expectEqual(@as(usize, 1), s.count());
+    try t.expect(s.objs.contains("p/ok"));
+
+    // Exactly 2048 is inside the budget.
+    json.clearRetainingCapacity();
+    try json.appendSlice(t.allocator, "{\"set\":[{\"id\":\"fits\",\"kind\":\"canvas\",\"at\":[-76.4,38.9],\"cmds\":[[\"P\"]");
+    for (0..MAX_CANVAS_CMDS - 1) |_| try json.appendSlice(t.allocator, ",[\"L\",1,2]");
+    try json.appendSlice(t.allocator, "]}]}");
+    try s.applyBatch("p", json.items);
+    try t.expect(s.objs.contains("p/fits"));
+    try t.expectEqual(@as(usize, MAX_CANVAS_CMDS), s.objs.get("p/fits").?.cmds.len);
+
+    // A text run over 256 bytes refuses its object.
+    json.clearRetainingCapacity();
+    try json.appendSlice(t.allocator, "{\"set\":[{\"id\":\"txt\",\"kind\":\"canvas\",\"at\":[-76.4,38.9],\"cmds\":[[\"T\",0,0,\"");
+    for (0..MAX_CANVAS_TEXT + 1) |_| try json.append(t.allocator, 'a');
+    try json.appendSlice(t.allocator, "\"]]}]}");
+    try s.applyBatch("p", json.items);
+    try t.expect(!s.objs.contains("p/txt"));
+
+    // An unknown command refuses its object like any malformed row.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"odd","kind":"canvas","at":[-76.4,38.9],"cmds":[["hologram",1]]}]}
+    );
+    try t.expect(!s.objs.contains("p/odd"));
+}
+
+test "canvas spaces: points hold their screen size, geo scales with the chart" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    const lat = 38.9763;
+    try s.applyBatch("p",
+        \\{"set":[{"id":"pt","kind":"canvas","space":"points","at":[-76.4767,38.9763],"cmds":[
+        \\ ["P"],["M",-10,0],["L",10,0],["L",0,5],["Z"],["F"]]},
+        \\ {"id":"m","kind":"canvas","space":"geo","at":[-76.4767,38.9763],"cmds":[
+        \\ ["P"],["M",-50,0],["L",50,0],["L",0,25],["Z"],["F"]]}]}
+    );
+    for ([_]f64{ 12.0, 15.0 }) |zoom| {
+        const fr = try s.buildIfNeeded(zoom, .day, null);
+        try t.expectEqual(@as(usize, 6), fr.verts.len);
+        var pt_span: f64 = 0;
+        var m_span: f64 = 0;
+        var min_x = [2]f64{ 1e9, 1e9 };
+        var max_x = [2]f64{ -1e9, -1e9 };
+        for (fr.verts, 0..) |v, i| {
+            const which = i / 3;
+            const x = @as(f64, v.x) + fr.origin.x;
+            min_x[which] = @min(min_x[which], x);
+            max_x[which] = @max(max_x[which], x);
+        }
+        pt_span = max_x[0] - min_x[0];
+        m_span = max_x[1] - min_x[1];
+        // 20 points at this zoom; 100 metres at this latitude, any zoom.
+        try t.expectApproxEqRel(20.0 * worldPerPt(zoom), pt_span, 1e-4);
+        try t.expectApproxEqRel(100.0 * worldPerMetre(lat), m_span, 1e-4);
+    }
+}
+
+test "canvas gradients colour per vertex and tokens resolve per scheme" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["fs",{"lin":[-10,0,10,0],"stops":[[0,[0,0,0,1]],[1,[1,1,1,1]]]}],
+        \\ ["P"],["M",-10,-10],["L",10,-10],["L",10,10],["L",-10,10],["Z"],["F"]]}]}
+    );
+    var fr = try s.buildIfNeeded(15.0, .day, null);
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    try t.expectEqual(@as(usize, 6), fr.verts.len);
+    for (fr.verts) |v| {
+        const cx = ((@as(f64, v.x) + fr.origin.x) - at.x) / wpp; // canvas x, points
+        const want = std.math.clamp((cx + 10.0) / 20.0, 0, 1);
+        try t.expectApproxEqAbs(want, @as(f64, v.r), 1e-3);
+        try t.expectApproxEqAbs(want, @as(f64, v.g), 1e-3);
+        try t.expectApproxEqAbs(@as(f64, 1), @as(f64, v.a), 1e-6);
+    }
+
+    // A token in a canvas resolves per scheme, so the seven names still read
+    // as part of the chart.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["fs","ownship"],["P"],["M",0,0],["L",10,0],["L",0,10],["Z"],["F"]]}]}
+    );
+    fr = try s.buildIfNeeded(15.0, .day, null);
+    const day = resolve(.ownship, .day);
+    try t.expectEqual(day[0], fr.verts[0].r);
+    fr = try s.buildIfNeeded(15.0, .night, null);
+    const night = resolve(.ownship, .night);
+    try t.expectEqual(night[0], fr.verts[0].r);
+}
+
+test "canvas transforms, save/restore and the ship anchor" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    // rotate(90) carries a point drawn at north round to east; the saved
+    // state must come back untouched.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"anchor":"ownship","cmds":[
+        \\ ["sv"],["rot",90],["P"],["M",0,-10],["L",1,-10],["L",0,-9],["Z"],["F"],["rs"],
+        \\ ["tr",5,0],["P"],["M",0,0],["L",1,0],["L",0,1],["Z"],["F"]]}]}
+    );
+    const fr = try s.buildIfNeeded(15.0, .day, null);
+    // Two three-point fills: one triangle each.
+    try t.expectEqual(@as(usize, 6), fr.verts.len);
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    // First triangle: (0,-10) rotated 90 clockwise lands 10 pt EAST.
+    try t.expectApproxEqAbs(at.x + 10.0 * wpp, @as(f64, fr.verts[0].x) + fr.origin.x, wpp * 0.01);
+    try t.expectApproxEqAbs(at.y, @as(f64, fr.verts[0].y) + fr.origin.y, wpp * 0.01);
+    // Second triangle: the restore dropped the rotation, so the translate
+    // moves it 5 pt east and nothing else.
+    try t.expectApproxEqAbs(at.x + 5.0 * wpp, @as(f64, fr.verts[3].x) + fr.origin.x, wpp * 0.01);
+    try t.expectApproxEqAbs(at.y, @as(f64, fr.verts[3].y) + fr.origin.y, wpp * 0.01);
+
+    // The whole canvas rides own ship's display position.
+    const ship = [2]f64{ -76.4767, 38.9773 };
+    try t.expect(s.needsRebuild(15.0, .day, ship));
+    const moved = try s.buildIfNeeded(15.0, .day, ship);
+    const dy = geo(ship).y - at.y;
+    try t.expectApproxEqAbs(at.y + dy, @as(f64, moved.verts[0].y) + moved.origin.y, wpp * 0.01);
+}
+
+test "canvas clip confines a fill to the clip path" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["P"],["M",-5,-5],["L",5,-5],["L",5,5],["L",-5,5],["Z"],["C"],
+        \\ ["P"],["M",-20,-20],["L",20,-20],["L",20,20],["L",-20,20],["Z"],["F"]]}]}
+    );
+    const fr = try s.buildIfNeeded(15.0, .day, null);
+    try t.expect(fr.verts.len >= 6);
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    for (fr.verts) |v| {
+        const cx = ((@as(f64, v.x) + fr.origin.x) - at.x) / wpp;
+        const cy = ((@as(f64, v.y) + fr.origin.y) - at.y) / wpp;
+        try t.expect(@abs(cx) <= 5.001 and @abs(cy) <= 5.001);
+    }
+}
+
+test "a canvas arc closes into a ring the fill can take" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    // A full circle, filled: ARC_SEGS_FULL segments fan into a disc that
+    // stays inside its radius and covers most of its area.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["P"],["A",0,0,10,0,360,false],["Z"],["F"]]}]}
+    );
+    const fr = try s.buildIfNeeded(15.0, .day, null);
+    try t.expect(fr.verts.len >= 3 * (ARC_SEGS_FULL - 2));
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    for (fr.verts) |v| {
+        const cx = ((@as(f64, v.x) + fr.origin.x) - at.x) / wpp;
+        const cy = ((@as(f64, v.y) + fr.origin.y) - at.y) / wpp;
+        try t.expect(std.math.hypot(cx, cy) <= 10.001);
+    }
+}
+
+test "a thick stroked circle is an annulus: nothing reaches the middle" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    // The demo's bezel: radius 55, width 26. Everything the stroke emits
+    // must stay inside the band; the window in the middle stays open. Both
+    // the open full circle and the closePath'd one, whose closing point
+    // lands a rounding error away from the start and once fed the joins a
+    // noise-direction segment, and with every join and cap in play.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["lw",26],["P"],["A",0,0,55,0,360,false],["S"]]},
+        \\ {"id":"gz","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["lw",26],["join","round"],["cap","round"],["P"],["A",0,0,55,0,360,false],["Z"],["S"]]},
+        \\ {"id":"gm","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["lw",26],["join","bevel"],["P"],["A",0,0,55,0,360,false],["Z"],["S"]]}]}
+    );
+    const fr = try s.buildIfNeeded(15.0, .day, null);
+    try t.expect(fr.verts.len >= 3 * 6 * 60);
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    var i: usize = 0;
+    while (i + 2 < fr.verts.len) : (i += 3) {
+        var tri: [3][2]f64 = undefined;
+        for (0..3) |k| {
+            const v = fr.verts[i + k];
+            tri[k] = .{
+                ((@as(f64, v.x) + fr.origin.x) - at.x) / wpp,
+                ((@as(f64, v.y) + fr.origin.y) - at.y) / wpp,
+            };
+            const rr = std.math.hypot(tri[k][0], tri[k][1]);
+            // Inside the band: never nearer the centre than the inner edge,
+            // never further out than the outer edge plus the miter's reach.
+            t.expect(rr > 55.0 - 13.0 - 0.01 and rr < 55.0 + 13.0 + 0.5) catch |e| {
+                std.debug.print("stroke vertex at radius {d:.2} (tri {d})\n", .{ rr, i / 3 });
+                return e;
+            };
+        }
+        // And no triangle may cover the centre point.
+        const o = [2]f64{ 0, 0 };
+        const inside = pointInTri(o, tri[0], tri[1], tri[2], 1) or pointInTri(o, tri[0], tri[1], tri[2], -1);
+        t.expect(!inside) catch |e| {
+            std.debug.print("triangle {d} covers the centre\n", .{i / 3});
+            return e;
+        };
+    }
 }

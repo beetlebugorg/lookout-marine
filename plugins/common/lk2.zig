@@ -5,8 +5,8 @@
 //!   comptime { lk.plugin(@This()); }
 //!
 //!   pub const inputs = struct {
-//!       pub const boat = lk.position("navigation.position", .{});
-//!       pub const twd = lk.number("environment.wind.directionTrue", .{ .label = "wind" });
+//!       pub const boat = lk.subscribePosition("navigation.position", .{});
+//!       pub const twd = lk.subscribeNumber("environment.wind.directionTrue", .{ .label = "wind" });
 //!   };
 //!
 //!   pub fn draw(c: *lk.Chart) void {
@@ -40,20 +40,21 @@
 //! WHAT A PLUGIN MAY DECLARE at its root. All of it is optional; `plugin`
 //! reads what is there and wires only that.
 //!
-//!   inputs           a struct of `lk.number` / `lk.position` / `lk.ais`
-//!   draw(c)          the scene, on the library's timer
-//!   draw_rate_ms     how often, default 1000
-//!   Settings         one settings group, or a tuple of them
-//!   onSettings()     after a settings change, before the redraw
-//!   Connections      a tier-2 connection list
-//!   onData(row, b)   the bytes off one row's socket        (tier 2)
-//!   onOpen(row)      a stream came up; send a subscription (tier 2)
-//!   onClose(row)     a stream ended                        (tier 2)
-//!   rowNote(row)     a phrase after a connected row's rate (tier 2)
-//!   endpoint(row)    where to dial, when it is not host:port (tier 2)
-//!   onStart(s)       anything else at startup
-//!   onEvent(e)       every event the library did not consume (tier 3)
-//!   onShutdown()     the last word
+//!   inputs                a struct of `lk.subscribeNumber` /
+//!                         `lk.subscribePosition` / `lk.subscribeAis`
+//!   draw(c)               the scene, on the library's timer
+//!   draw_rate_ms          how often, default 1000
+//!   Settings              one settings group, or a tuple of them
+//!   onSettings()          after a settings change, before the redraw
+//!   Connections           a connection list
+//!   onData(conn, b)       bytes from one connection's socket
+//!   onOpen(conn)          a stream came up; send a subscription
+//!   onClose(conn)         a stream ended
+//!   connectionNote(conn)  a phrase after the connection's rate
+//!   endpoint(conn)        where to dial, when it is not host:port
+//!   onStart(s)            anything else at startup
+//!   onEvent(e)            every event the library did not consume
+//!   onShutdown()          the last word
 //!
 //! TARGET. wasm32-freestanding: no threads, no filesystem, no clock but the
 //! two the host lends. Everything is single-threaded by contract, so plugin
@@ -61,18 +62,19 @@
 //! returns; anything that must outlive an event is a global or lives in the
 //! library.
 //!
-//! The raw ABI is unchanged and is re-exported below as `lk.raw` for tier 3.
+//! The raw wire calls are unchanged and re-exported below as `lk.raw`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const raw_lk = @import("lk.zig");
 const schema = @import("schema.zig");
 const conn = @import("conn.zig");
 
 /// The raw host-call shim: the imports, the event union, the JSON builders.
-/// Tier 3 uses it directly; tiers 1 and 2 never need it.
+/// `onEvent` uses it directly; the declared surface never needs it.
 pub const raw = raw_lk;
 
-pub const abi_version = raw_lk.abi_version;
+pub const api_version = raw_lk.api_version;
 
 // ---------------------------------------------------------------------------
 // The numbers the library fixes
@@ -105,7 +107,7 @@ pub fn nm(n: f64) f64 {
     return n * nm_m;
 }
 
-/// Knots from metres per second. Everything crossing the ABI is SI; this is
+/// Knots from metres per second. Everything crossing the API is SI; this is
 /// for text a mariner reads.
 pub fn knots(mps: f64) f64 {
     return mps * 1.9438444924406046;
@@ -214,8 +216,15 @@ pub fn monoMs() i64 {
     return raw_lk.monoMs();
 }
 
-/// Log one formatted line. Truncated at 512 bytes.
+/// Log one formatted line. Truncated at 512 bytes. On a native build the
+/// line goes to stderr (and nowhere under the test runner, which reads a
+/// step's stderr as a failure report), so a test may reach any library path
+/// without linking the wasm host imports.
 pub fn log(level: Level, comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (!builtin.is_test) std.debug.print("[{s}] " ++ fmt ++ "\n", .{@tagName(level)} ++ args);
+        return;
+    }
     raw_lk.logf(level, fmt, args);
 }
 
@@ -340,12 +349,12 @@ fn Input(comptime T: type, comptime path_: []const u8, comptime opts: InputOpts)
 }
 
 /// A number off the vessel store: a speed, a depth, a wind direction.
-pub fn number(comptime path: []const u8, comptime opts: InputOpts) type {
+pub fn subscribeNumber(comptime path: []const u8, comptime opts: InputOpts) type {
     return Input(f64, path, opts);
 }
 
 /// A position off the vessel store, as a `Point`.
-pub fn position(comptime path: []const u8, comptime opts: InputOpts) type {
+pub fn subscribePosition(comptime path: []const u8, comptime opts: InputOpts) type {
     return Input(Point, path, opts);
 }
 
@@ -384,7 +393,7 @@ pub const AisOpts = struct {
 /// The AIS target set, recorded and aged by the library. Declare it beside the
 /// vessel inputs; it never holds the draw back, because an empty sea is not a
 /// missing instrument.
-pub fn ais(comptime opts: AisOpts) type {
+pub fn subscribeAis(comptime opts: AisOpts) type {
     return struct {
         pub const lk_ais = true;
 
@@ -702,6 +711,47 @@ pub const Chart = struct {
         b.done(id);
     }
 
+    /// Open a canvas object: a recorded drawing anchored like any other
+    /// object and diffed like one (specs/plugins/canvas.md). Record onto the
+    /// returned Canvas, then call `done()` — always, even after an error.
+    ///
+    ///   var cv = c.canvas("dial", .{ .at = boat, .anchor = .ownship });
+    ///   cv.beginPath();
+    ///   cv.arc(0, 0, 60, 0, 360, false);
+    ///   cv.fillStyle(.{ .rgba = .{ 0.1, 0.1, 0.1, 0.6 } });
+    ///   cv.fill();
+    ///   cv.done();
+    ///
+    /// Coordinates are canvas units around the anchor, x right and y DOWN:
+    /// `points` hold their screen size across zoom, `geo` units are metres on
+    /// the ground. Stroke widths and text sizes are screen points in both.
+    /// Night is yours: free RGBA is not dimmed by the core, so read the
+    /// scheme or use the tokens.
+    pub fn canvas(self: *Chart, id: []const u8, opts: Canvas.Opts) Canvas {
+        _ = self;
+        var cv = Canvas{ .w = Writer.init() };
+        cv.id.set(id);
+        const at_ok = if (opts.at) |p| p.valid() else false;
+        if (opts.anchor == .fixed and !at_ok) {
+            // Nowhere to sit: record nothing, and done() leaves no trace.
+            cv.aborted = true;
+            return cv;
+        }
+        cv.w.raw("{\"id\":");
+        cv.w.str(id);
+        cv.w.print(",\"kind\":\"canvas\",\"space\":\"{s}\"", .{@tagName(opts.space)});
+        if (at_ok) {
+            cv.w.raw(",\"at\":[");
+            cv.w.num(opts.at.?.lon);
+            cv.w.raw(",");
+            cv.w.num(opts.at.?.lat);
+            cv.w.raw("]");
+        }
+        cv.w.anchor(opts.anchor);
+        cv.w.raw(",\"cmds\":[");
+        return cv;
+    }
+
     /// Say the plugin is working, and what it is doing. Posted once; the
     /// library sends nothing while the text is unchanged.
     pub fn status(self: *Chart, comptime fmt: []const u8, args: anytype) void {
@@ -721,6 +771,312 @@ pub const Chart = struct {
         self.state = s;
         self.detail.set(w.buffered());
         self.said = true;
+    }
+};
+
+/// Most commands one canvas may record; the core refuses more (spec rule 7).
+/// The encoder drops the 2049th onward with one log line, so the object that
+/// does go out is still drawable.
+pub const max_canvas_cmds = 2048;
+
+/// Longest fillText run, bytes. The encoder truncates on a UTF-8 boundary.
+pub const max_canvas_text = 256;
+
+/// Most stops one gradient may carry; extra stops are dropped.
+pub const max_canvas_stops = 8;
+
+/// A recording surface for one canvas object, opened by `Chart.canvas`. The
+/// command stream serializes straight into the scene buffer; the diff then
+/// treats the whole canvas like any object, so re-recording an identical
+/// drawing sends nothing.
+pub const Canvas = struct {
+    w: Writer,
+    id: Str(max_object_id) = .{},
+    /// Commands recorded so far.
+    n: u32 = 0,
+    /// Commands dropped over the budget.
+    dropped: u32 = 0,
+    aborted: bool = false,
+    said_text_cut: bool = false,
+
+    pub const Space = enum { geo, points };
+    pub const Weight = enum { regular, bold };
+    pub const Cap = enum { butt, round, square };
+    pub const Join = enum { miter, round, bevel };
+    pub const Align = enum { left, center, right };
+
+    pub const Opts = struct {
+        /// Where the canvas sits. Required for a fixed anchor; an own-ship
+        /// canvas may omit it and ride the display position alone.
+        at: ?Point = null,
+        anchor: Anchor = .fixed,
+        space: Space = .points,
+    };
+
+    /// A colour: free RGBA (0..1, straight alpha) or a palette token that
+    /// resolves per scheme.
+    pub const ColorSpec = union(enum) {
+        rgba: [4]f64,
+        token: Color,
+    };
+
+    pub const Stop = struct { t: f64, color: ColorSpec };
+
+    /// What a fill or stroke paints with.
+    pub const Style = union(enum) {
+        rgba: [4]f64,
+        token: Color,
+        linear: struct { from: [2]f64, to: [2]f64, stops: []const Stop },
+        radial: struct { center: [2]f64, radius: f64, stops: []const Stop },
+    };
+
+    // ---- the path ----
+
+    pub fn beginPath(self: *Canvas) void {
+        self.op0("P");
+    }
+
+    pub fn moveTo(self: *Canvas, x: f64, y: f64) void {
+        self.opN("M", &.{ x, y });
+    }
+
+    pub fn lineTo(self: *Canvas, x: f64, y: f64) void {
+        self.opN("L", &.{ x, y });
+    }
+
+    pub fn quadTo(self: *Canvas, cx: f64, cy: f64, x: f64, y: f64) void {
+        self.opN("Q", &.{ cx, cy, x, y });
+    }
+
+    pub fn bezierTo(self: *Canvas, c1x: f64, c1y: f64, c2x: f64, c2y: f64, x: f64, y: f64) void {
+        self.opN("B", &.{ c1x, c1y, c2x, c2y, x, y });
+    }
+
+    /// Angles in degrees: 0 along +x, growing toward +y (clockwise on
+    /// screen). `ccw` sweeps the other way, as on the HTML canvas.
+    pub fn arc(self: *Canvas, cx: f64, cy: f64, r: f64, a0_deg: f64, a1_deg: f64, ccw: bool) void {
+        const b = self.begin() orelse return;
+        b.raw("[\"A\",");
+        b.num(cx);
+        b.raw(",");
+        b.num(cy);
+        b.raw(",");
+        b.num(r);
+        b.raw(",");
+        b.num(a0_deg);
+        b.raw(",");
+        b.num(a1_deg);
+        b.raw(if (ccw) ",true]" else ",false]");
+    }
+
+    pub fn closePath(self: *Canvas) void {
+        self.op0("Z");
+    }
+
+    // ---- painting ----
+
+    pub fn fill(self: *Canvas) void {
+        self.op0("F");
+    }
+
+    pub fn stroke(self: *Canvas) void {
+        self.op0("S");
+    }
+
+    /// Clip everything painted after this to the current path. Convex paths
+    /// clip exactly.
+    pub fn clip(self: *Canvas) void {
+        self.op0("C");
+    }
+
+    pub fn fillStyle(self: *Canvas, s: Style) void {
+        const b = self.begin() orelse return;
+        b.raw("[\"fs\",");
+        writeStyle(b, s);
+        b.raw("]");
+    }
+
+    pub fn strokeStyle(self: *Canvas, s: Style) void {
+        const b = self.begin() orelse return;
+        b.raw("[\"ss\",");
+        writeStyle(b, s);
+        b.raw("]");
+    }
+
+    /// Screen points, in either space.
+    pub fn lineWidth(self: *Canvas, w: f64) void {
+        self.opN("lw", &.{w});
+    }
+
+    pub fn lineCap(self: *Canvas, cap: Cap) void {
+        self.opTag("cap", @tagName(cap));
+    }
+
+    pub fn lineJoin(self: *Canvas, join: Join) void {
+        self.opTag("join", @tagName(join));
+    }
+
+    // ---- text ----
+
+    /// The UI face at `size_pt` screen points.
+    pub fn font(self: *Canvas, size_pt: f64, weight: Weight) void {
+        const b = self.begin() orelse return;
+        b.raw("[\"font\",");
+        b.num(size_pt);
+        b.print(",\"{s}\"]", .{@tagName(weight)});
+    }
+
+    pub fn textAlign(self: *Canvas, a: Align) void {
+        self.opTag("ta", @tagName(a));
+    }
+
+    /// `x`,`y` is the baseline point (or its centre / right end under
+    /// textAlign). Runs over 256 bytes are truncated with one log line.
+    pub fn fillText(self: *Canvas, text: []const u8, x: f64, y: f64) void {
+        const b = self.begin() orelse return;
+        var run = text;
+        if (run.len > max_canvas_text) {
+            var n: usize = max_canvas_text;
+            while (n > 0 and (run[n] & 0xc0) == 0x80) n -= 1;
+            run = run[0..n];
+            if (!self.said_text_cut) {
+                self.said_text_cut = true;
+                log(.warn, "canvas {s}: a text run over {d} bytes was truncated", .{ self.id.text(), max_canvas_text });
+            }
+        }
+        b.raw("[\"T\",");
+        b.num(x);
+        b.raw(",");
+        b.num(y);
+        b.raw(",");
+        b.str(run);
+        b.raw("]");
+    }
+
+    // ---- transforms ----
+
+    pub fn translate(self: *Canvas, dx: f64, dy: f64) void {
+        self.opN("tr", &.{ dx, dy });
+    }
+
+    /// Degrees, clockwise on screen: rotate(90) carries north to east.
+    pub fn rotate(self: *Canvas, deg: f64) void {
+        self.opN("rot", &.{deg});
+    }
+
+    pub fn scale(self: *Canvas, sx: f64, sy: f64) void {
+        self.opN("sc", &.{ sx, sy });
+    }
+
+    pub fn save(self: *Canvas) void {
+        self.op0("sv");
+    }
+
+    pub fn restore(self: *Canvas) void {
+        self.op0("rs");
+    }
+
+    /// Close the canvas and hand it to the scene diff. Call exactly once.
+    pub fn done(self: *Canvas) void {
+        if (self.aborted) {
+            scene.len = self.w.start; // no separator, no fragment
+            return;
+        }
+        self.w.raw("]}");
+        self.w.done(self.id.text());
+    }
+
+    // ---- the encoder ----
+
+    /// Room for one more command, or null once the budget is spent. The
+    /// first drop logs; the rest only count.
+    fn begin(self: *Canvas) ?*Writer {
+        if (self.aborted) return null;
+        if (self.n >= max_canvas_cmds) {
+            if (self.dropped == 0) {
+                log(.warn, "canvas {s}: over {d} commands; the rest were dropped", .{ self.id.text(), max_canvas_cmds });
+            }
+            self.dropped += 1;
+            return null;
+        }
+        if (self.n > 0) self.w.raw(",");
+        self.n += 1;
+        return &self.w;
+    }
+
+    fn op0(self: *Canvas, comptime op: []const u8) void {
+        const b = self.begin() orelse return;
+        b.raw("[\"" ++ op ++ "\"]");
+    }
+
+    fn opN(self: *Canvas, comptime op: []const u8, args: []const f64) void {
+        const b = self.begin() orelse return;
+        b.raw("[\"" ++ op ++ "\"");
+        for (args) |v| {
+            b.raw(",");
+            b.num(v);
+        }
+        b.raw("]");
+    }
+
+    fn opTag(self: *Canvas, comptime op: []const u8, tag: []const u8) void {
+        const b = self.begin() orelse return;
+        b.print("[\"" ++ op ++ "\",\"{s}\"]", .{tag});
+    }
+
+    fn writeStyle(b: *Writer, s: Style) void {
+        switch (s) {
+            .rgba => |c| writeRgba(b, c),
+            .token => |tok| b.print("\"{s}\"", .{@tagName(tok)}),
+            .linear => |g| {
+                b.raw("{\"lin\":[");
+                b.num(g.from[0]);
+                b.raw(",");
+                b.num(g.from[1]);
+                b.raw(",");
+                b.num(g.to[0]);
+                b.raw(",");
+                b.num(g.to[1]);
+                b.raw("],\"stops\":[");
+                writeStops(b, g.stops);
+                b.raw("]}");
+            },
+            .radial => |g| {
+                b.raw("{\"rad\":[");
+                b.num(g.center[0]);
+                b.raw(",");
+                b.num(g.center[1]);
+                b.raw(",");
+                b.num(g.radius);
+                b.raw("],\"stops\":[");
+                writeStops(b, g.stops);
+                b.raw("]}");
+            },
+        }
+    }
+
+    fn writeStops(b: *Writer, stops: []const Stop) void {
+        const n = @min(stops.len, max_canvas_stops);
+        for (stops[0..n], 0..) |s, i| {
+            if (i > 0) b.raw(",");
+            b.raw("[");
+            b.num(s.t);
+            b.raw(",");
+            switch (s.color) {
+                .rgba => |c| writeRgba(b, c),
+                .token => |tok| b.print("\"{s}\"", .{@tagName(tok)}),
+            }
+            b.raw("]");
+        }
+    }
+
+    fn writeRgba(b: *Writer, c: [4]f64) void {
+        b.raw("[");
+        for (c, 0..) |ch, i| {
+            if (i > 0) b.raw(",");
+            b.num(ch);
+        }
+        b.raw("]");
     }
 };
 
@@ -888,7 +1244,7 @@ pub const Publish = struct {
 var upsert_buf: [8192]u8 = undefined;
 
 /// A batch of AIS targets. `sog_mps` is metres per second: everything crossing
-/// the ABI is SI, whatever the wire format reported.
+/// the API is SI, whatever the wire format reported.
 pub const Upsert = struct {
     b: raw_lk.AisUpsert,
     ts: i64,
@@ -956,7 +1312,7 @@ pub const Endpoint = conn.Endpoint;
 
 /// A list of connections the mariner keeps, owned by the library: the settings
 /// rows, the sockets, the reconnect clock, the per-row status and the pause
-/// switch. See `conn.zig` for what a row carries.
+/// switch. See `conn.zig` for what a connection carries.
 pub fn connections(comptime opts: conn.Opts) type {
     return conn.Connections(opts);
 }
@@ -965,13 +1321,13 @@ pub fn connections(comptime opts: conn.Opts) type {
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Emit the ABI exports and wire them to what the plugin declares. Call once,
+/// Emit the API exports and wire them to what the plugin declares. Call once,
 /// at container scope:
 ///
 ///   comptime { lk.plugin(@This()); }
 ///
 /// Everything is optional. A plugin that declares only `draw` gets a timer and
-/// a scene; one that declares only `onEvent` is a raw tier-3 plugin.
+/// a scene; one that declares only `onEvent` is a raw plugin.
 pub fn plugin(comptime P: type) void {
     const D = Declared(P);
     const Impl = struct {
@@ -1253,4 +1609,93 @@ test "a label defaults to the last segment of the path" {
 test "labels join in the order they were declared" {
     try expect.expectEqualStrings("wind, position", comptime joinLabels(&.{ "wind", "position" }, ", "));
     try expect.expectEqualStrings("wind", comptime joinLabels(&.{"wind"}, ", "));
+}
+
+test "canvas encoder: a valid object lands in the scene, the 2049th command is dropped" {
+    scene.begin();
+    defer scene.forget();
+    var c = Chart{};
+    var cv = c.canvas("dial", .{ .at = annapolis, .space = .points });
+    cv.beginPath();
+    cv.moveTo(0, 0);
+    var i: usize = 0;
+    while (i < 2600) : (i += 1) cv.lineTo(1, 2);
+    // The budget: 2048 commands recorded, the rest counted and dropped.
+    try expect.expectEqual(@as(u32, max_canvas_cmds), cv.n);
+    try expect.expectEqual(@as(u32, 2600 + 2 - max_canvas_cmds), cv.dropped);
+    cv.done();
+
+    const body = scene.buf[0..scene.len];
+    try expect.expect(std.mem.indexOf(u8, body, "\"kind\":\"canvas\"") != null);
+    try expect.expect(std.mem.indexOf(u8, body, "\"space\":\"points\"") != null);
+    var lines: usize = 0;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, body, at, "[\"L\"")) |p| {
+        lines += 1;
+        at = p + 1;
+    }
+    try expect.expectEqual(@as(usize, max_canvas_cmds - 2), lines);
+
+    // What went out parses as the JSON the host's parser will see.
+    var buf: [2 * scene_bytes]u8 = undefined;
+    const full = try std.fmt.bufPrint(&buf, "{s}]{c}", .{ body, '}' });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), full, .{});
+    const objs = parsed.object.get("set").?.array.items;
+    try expect.expectEqual(@as(usize, 1), objs.len);
+    try expect.expectEqual(@as(usize, max_canvas_cmds), objs[0].object.get("cmds").?.array.items.len);
+}
+
+test "canvas encoder: styles, gradients, anchors and the text budget" {
+    scene.begin();
+    defer scene.forget();
+    var c = Chart{};
+    var cv = c.canvas("g", .{ .anchor = .ownship, .space = .geo });
+    cv.fillStyle(.{ .linear = .{
+        .from = .{ 0, 0 },
+        .to = .{ 10, 0 },
+        .stops = &.{
+            .{ .t = 0, .color = .{ .rgba = .{ 0, 0, 0, 1 } } },
+            .{ .t = 1, .color = .{ .token = .warning } },
+        },
+    } });
+    cv.beginPath();
+    cv.arc(0, 0, 5, 0, 360, false);
+    cv.fill();
+    cv.strokeStyle(.{ .token = .ownship });
+    cv.lineWidth(2);
+    cv.lineCap(.round);
+    cv.stroke();
+    cv.font(12, .bold);
+    cv.textAlign(.center);
+    const big: [300]u8 = @splat('x');
+    cv.fillText(&big, 0, 0);
+    cv.done();
+
+    const body = scene.buf[0..scene.len];
+    try expect.expect(std.mem.indexOf(u8, body, "\"anchor\":\"ownship\"") != null);
+    try expect.expect(std.mem.indexOf(u8, body, "\"space\":\"geo\"") != null);
+    try expect.expect(std.mem.indexOf(u8, body,
+        \\{"lin":[0,0,10,0],"stops":[[0,[0,0,0,1]],[1,"warning"]]}
+    ) != null);
+    try expect.expect(std.mem.indexOf(u8, body, "[\"font\",12,\"bold\"]") != null);
+    try expect.expect(std.mem.indexOf(u8, body, "[\"cap\",\"round\"]") != null);
+    // The 300-byte run went out truncated to the budget.
+    try expect.expectEqual(@as(usize, max_canvas_text), std.mem.count(u8, body, "x"));
+}
+
+test "canvas encoder: a fixed canvas with no position leaves no trace" {
+    scene.begin();
+    defer scene.forget();
+    var c = Chart{};
+    const before = scene.len;
+    var cv = c.canvas("ghost", .{});
+    cv.beginPath();
+    cv.moveTo(0, 0);
+    cv.lineTo(1, 1);
+    cv.fill();
+    cv.done();
+    try expect.expectEqual(before, scene.len);
+    try expect.expectEqual(@as(usize, 0), scene.sets);
 }

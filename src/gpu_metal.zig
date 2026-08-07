@@ -113,6 +113,13 @@ pub const Gpu = struct {
     /// store's generation moves — a plugin batch or a zoom step, not a frame.
     overlay_buf: ?*mc.lkm_buf = null,
     overlay_count: u32 = 0,
+    /// Canvas text: SDF glyph quads in the overlay's own frame, one buffer
+    /// per atlas face, drawn with the chart's SDF pipeline and the glyph
+    /// texture(s) already uploaded for labels.
+    overlay_text_buf: ?*mc.lkm_buf = null,
+    overlay_text_count: u32 = 0,
+    overlay_text_bold_buf: ?*mc.lkm_buf = null,
+    overlay_text_bold_count: u32 = 0,
     overlay_gen: u64 = 0, // 0 = nothing uploaded yet (a built store is >= 1)
     /// The overlay pass's own frame uniform — the chart's, with the MVP and
     /// wrap rebuilt for the overlay's origin. setOverlay writes it, and it is
@@ -342,14 +349,28 @@ pub const Gpu = struct {
     /// the MVP and wrap built for that origin, and the camera moves every frame
     /// while the geometry does not.
     pub fn setOverlay(self: *Gpu, fr: ov.Frame, u: Uniforms) !void {
+        // The overlay's TextVertex rides the SDF pipeline, whose shader
+        // fetches tile57_gpu_quad — the layouts must agree byte for byte.
+        comptime std.debug.assert(@sizeOf(ov.TextVertex) == @sizeOf(cc.tile57_gpu_quad));
         self.overlay_u = u;
         if (fr.generation == self.overlay_gen) return;
         self.overlay_gen = fr.generation;
         self.freeOverlayBuf();
-        if (fr.verts.len == 0) return;
-        const bytes = std.mem.sliceAsBytes(fr.verts);
-        self.overlay_buf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
-        self.overlay_count = @intCast(fr.verts.len);
+        if (fr.verts.len > 0) {
+            const bytes = std.mem.sliceAsBytes(fr.verts);
+            self.overlay_buf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+            self.overlay_count = @intCast(fr.verts.len);
+        }
+        if (fr.text.len > 0) {
+            const bytes = std.mem.sliceAsBytes(fr.text);
+            self.overlay_text_buf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+            self.overlay_text_count = @intCast(fr.text.len);
+        }
+        if (fr.text_bold.len > 0) {
+            const bytes = std.mem.sliceAsBytes(fr.text_bold);
+            self.overlay_text_bold_buf = mc.lkm_new_buffer(self.ctx, bytes.ptr, bytes.len) orelse return error.MetalFailure;
+            self.overlay_text_bold_count = @intCast(fr.text_bold.len);
+        }
     }
 
     /// Drop the overlay geometry (every plugin stopped, or teardown). The next
@@ -363,6 +384,12 @@ pub const Gpu = struct {
         if (self.overlay_buf) |b| mc.lkm_free_buffer(b);
         self.overlay_buf = null;
         self.overlay_count = 0;
+        if (self.overlay_text_buf) |b| mc.lkm_free_buffer(b);
+        self.overlay_text_buf = null;
+        self.overlay_text_count = 0;
+        if (self.overlay_text_bold_buf) |b| mc.lkm_free_buffer(b);
+        self.overlay_text_bold_buf = null;
+        self.overlay_text_bold_count = 0;
     }
 
     /// Draw the overlay LAST — after the raster underlay and the whole chart,
@@ -373,13 +400,45 @@ pub const Gpu = struct {
     /// shader reads mvp and wrap_x, and both are built for the overlay's
     /// origin, not the chart's.
     fn recordOverlay(self: *Gpu, f: *mc.lkm_frame) void {
-        const buf = self.overlay_buf orelse return;
-        if (self.overlay_count == 0) return;
+        if (self.overlay_buf) |buf| {
+            if (self.overlay_count > 0) {
+                mc.lkm_set_depth_mode(f, 0);
+                mc.lkm_set_pipeline(f, mc.LKM_PIPE_OVERLAY);
+                mc.lkm_bind_vbuf(f, buf);
+                mc.lkm_set_uniforms(f, &self.overlay_u, @sizeOf(Uniforms));
+                mc.lkm_draw(f, 0, self.overlay_count);
+            }
+        }
+        // Canvas text, over the triangles: the chart's SDF pipeline with the
+        // overlay's uniform. The quads carry depth 0 and the pass writes no
+        // depth, so the near-plane contract holds for text too. Category and
+        // scale gates are the chart's business, not a plugin drawing's.
+        if (self.overlay_text_count == 0 and self.overlay_text_bold_count == 0) return;
+        var uu = self.overlay_u;
+        uu.cat_mask = 0xFFFFFFFF;
         mc.lkm_set_depth_mode(f, 0);
-        mc.lkm_set_pipeline(f, mc.LKM_PIPE_OVERLAY);
-        mc.lkm_bind_vbuf(f, buf);
-        mc.lkm_set_uniforms(f, &self.overlay_u, @sizeOf(Uniforms));
-        mc.lkm_draw(f, 0, self.overlay_count);
+        if (self.overlay_text_buf) |buf| {
+            if (self.overlay_text_count > 0) {
+                if (self.glyph_tex) |tex| {
+                    mc.lkm_set_pipeline(f, mc.LKM_PIPE_SDF);
+                    mc.lkm_bind_vbuf(f, buf);
+                    mc.lkm_bind_texture(f, tex);
+                    mc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+                    mc.lkm_draw(f, 0, self.overlay_text_count);
+                }
+            }
+        }
+        if (self.overlay_text_bold_buf) |buf| {
+            if (self.overlay_text_bold_count > 0) {
+                if (self.glyph_bold_tex orelse self.glyph_tex) |tex| {
+                    mc.lkm_set_pipeline(f, mc.LKM_PIPE_SDF);
+                    mc.lkm_bind_vbuf(f, buf);
+                    mc.lkm_bind_texture(f, tex);
+                    mc.lkm_set_uniforms(f, &uu, @sizeOf(Uniforms));
+                    mc.lkm_draw(f, 0, self.overlay_text_bold_count);
+                }
+            }
+        }
     }
 
     // ---- the draw-ready scene from tile57 ----------------------------------
