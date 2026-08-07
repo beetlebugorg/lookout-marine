@@ -7,8 +7,7 @@ sidebar_position: 4
 # The ABI
 
 This is the reference: every event your module can be handed, every call it can
-make, the shape of every payload in between, and — at the end — the raw module
-contract a toolchain other than Zig implements by hand.
+make, and the shape of every payload in between.
 
 The boundary is deliberately narrow. Everything crossing it is either an integer
 or a `(pointer, length)` byte range in your module's own linear memory, and it is
@@ -20,13 +19,14 @@ loads. The WASI a wasip1 module gets is a floor for its language runtime and
 nothing more: [the WASI floor](#the-wasi-floor) below says exactly what works and
 what does not.
 
-Three files in Lookout are the real contract, and they win any argument with this
-page: `plugins/common/lk.zig` is the plugin side, `src/plugin/broker.zig`
+Three files in Lookout are the real contract. Where this page disagrees with
+them, they are right: `plugins/common/lk.zig` is the plugin side, `src/plugin/broker.zig`
 implements every import, and `src/plugin/host.zig` parses every manifest. The Go
 and Rust libraries in `sdk/` mirror `lk.zig`; `src/plugin/wasm.zig` bounds WASI.
 
 The ABI version is **1**, and it is unstable —
-[what that means for you](index.md#the-abi-is-version-0-and-unstable).
+[what that means for you](index.md#the-abi-is-version-0-and-unstable). The last
+section is the raw module contract, for writing a library in another language.
 
 ## Event kinds
 
@@ -53,8 +53,8 @@ host add an event without breaking a module built today.
 | 14 | `WS_CLOSED` | The connection id | `{"code":1000,"reason":"…"}`. The last event on that connection, whoever ended it. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
 
-Kind 2 is unassigned. `SHUTDOWN` ignores the queue cap: a plugin in trouble is
-exactly the one that must hear it.
+Kind 2 is unassigned. `SHUTDOWN` ignores the queue cap, so a plugin whose queue
+is already full still receives it.
 
 **One datagram is one event.** The host never joins two `UDP_DATA` payloads and
 never splits one, so a plugin parsing NMEA over UDP does not reassemble anything
@@ -98,9 +98,8 @@ not trap.
 | `file_write` | `(handle: i64, ptr, len) -> i32` | `files` | Bytes appended, or -1 for a read handle, or one that is not yours. |
 | `file_close` | `(handle: i64)` | `files` | Nothing. The host also closes every handle you hold when you stop. |
 
-Timers, status lines, the log and the clocks need no capability. They are
-baseline plumbing: a plugin that cannot say what it is doing is worse than one
-that can.
+Timers, status lines, the log and the clocks need no capability. Every plugin
+can report what it is doing and measure time without asking for one.
 
 **There is no `file_open`.** You cannot name a path. Every file handle you ever
 see arrived as a `FILE_OPENED` event because the host granted it, and the host
@@ -125,9 +124,9 @@ file.
 | `storage` | `storage_get`, `storage_put` — a key-value store of your own |
 | `files` | `file_read`, `file_write`, `file_close`, on handles the host granted |
 
-An unknown capability name refuses the whole plugin. A typo in a grant would
-otherwise be a permission silently lost at sea, so it is a load error instead —
-check your spelling against the table above.
+An unknown capability name refuses the whole plugin, so a typo in a grant is a
+load error rather than a permission that turns out to be missing at run time.
+Check your spelling against the table above.
 
 Most capabilities are all-or-nothing. There is no subtree restriction:
 `vessel.publish` grants every path, not `navigation.*`.
@@ -141,10 +140,9 @@ servers on that list and nothing else:
                             {"net.ws": ["demo.signalk.org"]}]
 ```
 
-The reason is what a mariner is being asked to agree to. "This plugin may reach
-the internet" is not a sentence anybody can weigh; "this plugin may reach
-nomads.ncep.noaa.gov" is. So the bare names `"net.http"` and `"net.ws"` refuse
-the manifest, and so does an empty list.
+The list exists so that a mariner can be told which servers a plugin reaches,
+rather than only that it reaches the internet. The bare names `"net.http"` and
+`"net.ws"` refuse the manifest, and so does an empty list.
 
 | Rule | Detail |
 |---|---|
@@ -164,10 +162,9 @@ name resolves.
 ```
 
 Write it when the server is a **mariner's setting** rather than something you
-chose — a Signal K server lives at whatever the boat's network calls it, and no
-manifest can know that address in advance. The sentence a mariner weighs is
-still a real one: this plugin may reach servers on the boat's network, and not
-the internet.
+chose: a Signal K server is at whatever address the boat's network gives it, and
+no manifest can know that in advance. The grant still has a definite meaning —
+this plugin may reach servers on the boat's network, and not the internet.
 
 The check runs on the text of the URL, before any name lookup, so a public name
 that happens to resolve to a private address is still refused.
@@ -180,14 +177,13 @@ missing capability does.
 
 Go and Rust do not compile a module that runs without WASI. Their runtimes import
 `wasi_snapshot_preview1` before a line of your code executes, and a module with an
-unresolved import does not instantiate. So the host answers WASI — and this
-section is the whole answer.
+unresolved import does not instantiate. The host therefore provides WASI, and
+this section lists all of it.
 
-**WASI is a floor for language runtimes. It is not a capability surface.** Every
-real thing a plugin does still goes through a `lookout` import and is still
-checked against your manifest. Read the two lists below before you debug
-anything: an afternoon spent looking for a missing preopen is an afternoon spent
-looking for something that was never there.
+**WASI is a floor for language runtimes, not a capability surface.** Every
+real thing a plugin does goes through a `lookout` import and is checked against
+your manifest. The two lists below say which calls work and which do not; read
+them before debugging a call that failed.
 
 **What works**
 
@@ -207,17 +203,15 @@ looking for something that was never there.
 | `File::open`, `os.Open`, any path at all | `ENOENT` | **Zero preopened directories.** There is no root, so no path resolves — absolute or relative, read or write. `fd_prestat_get(3)` is `EBADF`, which is how the standard library discovers there is no filesystem. |
 | `read_dir`, `os.ReadDir` | `ENOENT` | Same. |
 | `TcpStream::connect`, `net.Dial` | `Unsupported` | No sockets. `sock_open` is refused before a descriptor exists. Use `tcp_connect` with the `net.tcp-client` capability. |
-| `env::var`, `os.Getenv` | not present | The environment is empty on purpose: the app's configuration is not the plugin's. Your settings arrive in `lk_start` and in `CONFIG_CHANGED`. |
-| `thread::spawn`, `go func()` | `ENOTSUP`, or a goroutine that never runs | One thread, and it runs only inside your exports. |
+| `env::var`, `os.Getenv` | not present | The environment is empty on purpose: the app's configuration is not the plugin's. Your settings arrive when the plugin starts and in `CONFIG_CHANGED`. |
+| `thread::spawn`, `go func()` | `ENOTSUP`, or a goroutine that never runs | One thread, and it runs only while the host is calling your plugin. |
 | `thread::sleep`, `time.Sleep` | returns at once | `poll_oneoff` never waits. A thread parked in a sleep cannot see the watchdog, so a plugin that could sleep could hold its dispatch thread for as long as it liked. Sleeping is what `timer_set` is for. |
 | `fd_read` on stdin | end of file | Backed by the null device. |
 
 Two consequences worth knowing.
 
-- **A sleep becomes a spin, and the watchdog kills a spin.** Turning
-  `time.Sleep(2 * time.Second)` into a busy loop is not an accident; it is how
-  the single-thread rule is enforced rather than merely documented. Write a
-  timer.
+- **A sleep becomes a busy loop.** `time.Sleep(2 * time.Second)` spins instead
+  of waiting, and the watchdog terminates the instance. Write a timer.
 - **A Rust `cdylib` makes WAMR print `warning: a module with WASI apis should be
   either a command or a reactor` once at load.** It exports neither `_start` nor
   `_initialize` because `wasm-ld` calls its constructors from the top of each
@@ -294,8 +288,8 @@ later.
 **A `null` value is a removal, not a null reading.** The path has no value from
 any source any more, because a source was cleared or the plugin that owned it was
 disabled. Stop drawing whatever it fed. There is no separate delete list, and a
-removal carries no `ts` and no `age_ms`, because a timestamp on a value that does
-not exist would be a lie.
+removal carries no `ts` and no `age_ms`, because there is no value for them to
+describe.
 
 ### AIS_CHANGED
 
@@ -307,7 +301,7 @@ not exist would be a lie.
 ```
 
 The **whole** target set, at most twice a second and only when something moved.
-An unknown field is left out rather than sent as null: at sea "never heard" and
+An unknown field is left out rather than sent as null, because "never heard" and
 "heard as zero" are different facts. Targets are evicted from the store after
 600 s, and an aid to navigation after 1800 s, because an aid transmits about
 every three minutes.
@@ -370,8 +364,8 @@ under a luminance ceiling, and a test enforces it.
 | `warning` | Anything that wants attention: an off-position aid, a hazard area |
 
 **`"anchor":"ownship"`.** Fixes arrive about once a second, and a symbol drawn at
-the last fix steps across the screen. An object with this anchor rides own ship's
-**display** position, which the core carries forward between fixes and
+the last fix steps across the screen. An object with this anchor follows own
+ship's **display** position, which the core carries forward between fixes and
 substitutes every frame; a polyline keeps its shape and travels with its first
 point. The lon/lat you post is still the fix, and it is what draws if the core
 has no carried position. Dead reckoning stops at the 5 s staleness window.
@@ -387,8 +381,8 @@ validates, escapes and caps the text at 16 rows of 96 bytes; a row that is not
 two strings is dropped and the symbol still draws. **Values are strings you have
 already formatted for display** — the core cannot know that a row called SOG
 holds metres per second, so you write the number and the unit yourself. This is
-the one place the SI rule is broken, deliberately, and it is the only one. Lines
-and areas carry no payload: there is no single point to measure a hit to. The app
+the only place the SI rule is broken, and it is deliberate. Lines and areas carry
+no payload: there is no single point to measure a hit to. The app
 reads the payload back with `lookout_overlay_at`, which answers with the nearest
 symbol whose **anchor** is within about 14 pt of the point the mariner touched.
 
@@ -406,9 +400,9 @@ writes `{"state":"disabled","detail":"<reason>"}` itself when it takes a plugin
 out of service.
 
 Your status is nearly the only thing you can put in front of a person away from
-the chart itself, so spend it well: say what you are doing, or say what you are
-missing. It reaches the app through `lookout_plugins_json`. If your settings
-include a list, a status can also carry one line per row — see
+the chart itself. Use it to say what you are doing, or what you are missing. It
+reaches the app through `lookout_plugins_json`. If your settings include a list,
+a status can also carry one line per row — see
 [status items](#status-items-one-line-per-row). There are no jobs, no progress
 and no alarm surface yet.
 
@@ -420,8 +414,7 @@ and no alarm surface yet.
 
 There is no alarm surface yet, so **your alert is a log line and nothing more** —
 nobody at the helm will see it. Raise them anyway, and set the severity honestly:
-it picks the log level, so the line still carries the difference between "you may
-want to know" and "act now".
+it picks the log level, so the log still shows how urgent the alert was.
 
 | Severity | Log level |
 |---|---|
@@ -430,8 +423,8 @@ want to know" and "act now".
 | `caution`, `notice` | info |
 | anything else, or no severity at all | error |
 
-An unreadable severity is not a reason to be quiet. The host also keeps the last
-alert per plugin, up to 400 bytes.
+An unrecognised severity is logged at error rather than dropped. The host also
+keeps the last alert per plugin, up to 400 bytes.
 
 ### http_fetch
 
@@ -441,10 +434,9 @@ alert per plugin, up to 400 bytes.
 ```
 
 Only `url` is required. `method` is `GET` or `HEAD` — the host refuses anything
-else, because a plugin that can POST can send your data somewhere and no marine
-use here needs one. `headers` is optional and each name and value must be
-printable ASCII. `range` is an HTTP range expression and is the way past the
-body cap.
+else, because a plugin that can POST can send data off the boat and nothing here
+needs to. `headers` is optional and each name and value must be printable ASCII.
+`range` is an HTTP range expression and is the way past the body cap.
 
 The host resolves, connects, negotiates TLS and reads the body on a thread of
 its own, so neither your dispatch thread nor the host's I/O thread waits for a
@@ -534,12 +526,12 @@ const value = lk.storageGet("last_run", buf[0..size]) orelse return;
 
 The return is the value's size in bytes, or -1 when there is no such key. The
 host writes into your buffer only when the value fits it, so a short buffer
-costs you a size and nothing else.
+returns the size and writes nothing.
 
 A value is **bytes**, not text: store a packed struct if you like. An empty
-value deletes the key — that is the delete, and there is no separate import for
-it. A key must be printable ASCII with no quote and no backslash, because it
-goes into that JSON file as itself.
+value deletes the key; there is no separate delete import. A key must be
+printable ASCII with no quote and no backslash, because it goes into that JSON
+file as itself.
 
 | Limit | Value |
 |---|---|
@@ -561,8 +553,8 @@ mariner chose that file and the application asked the host to grant it:
 {"name":"gfs.t00z.pgrb2.0p25.f000","size":12582912,"mode":"read"}
 ```
 
-`name` is the file's name with no directory: you are told what you were given,
-not where it lives. `mode` is `read` or `write`.
+`name` is the file's name with no directory: you are told what the file is
+called, not where it is. `mode` is `read` or `write`.
 
 `file_read` takes an **absolute offset** — the handle has no cursor, so two
 reads never interfere and a plugin decoding a GRIB can seek freely. It returns
@@ -666,10 +658,11 @@ A field:
 Schema v1 — `"settings"` as a bare array of fields — still parses. Those fields
 carry no group and land on `advanced`.
 
-**The plugin always receives the whole settings object**, in `lk_start`'s config
-and again on every `CONFIG_CHANGED`, so a handler never merges. A value outside
-its range is clamped on the way in, so a plugin never defends against a setting
-it did not publish. A key the schema does not declare is ignored.
+**The plugin always receives the whole settings object**, in the config it is
+started with and again on every `CONFIG_CHANGED`, so a handler never merges. A
+value outside its range is clamped on the way in, so a plugin never receives a
+setting outside the range it declared. A key the schema does not declare is
+ignored.
 
 There is no choice field and no colour. Nothing validates one field against
 another.
@@ -704,9 +697,8 @@ every edit and delivered like any other setting.
 
 The last four are optional; the three strings are at most 240 bytes each, and a
 longer one is cut. **Write them.** A tab can hold two lists — Connections holds
-NMEA gateways and Signal K servers — and without your own wording both wear
-whatever the application picked, which means one of them tells the mariner the
-wrong port.
+NMEA gateways and Signal K servers — and without your own wording both show the
+application's default text, which is wrong for at least one of them.
 
 What you receive:
 
@@ -716,13 +708,13 @@ What you receive:
 
 - **Every row carries an `id`** the app assigned when the row was added, and it
   does not change when the row is edited. Echo it back in your status items (see
-  below) so each row's line finds its row.
+  below) so the app can put each line beside the right row.
 - Every column the schema declares is present in every row, in schema order.
   Numbers are clamped, text is capped at 128 bytes, a missing column takes its
   default, and a column nobody declared is dropped.
 - At most 8 rows. Rows past that are dropped rather than wrapped.
-- **The array is the whole truth.** A row the mariner deleted is simply absent
-  from the next array you receive.
+- **The array is complete.** A row the mariner deleted is absent from the next
+  array you receive.
 - A list starts **empty**. `lookout_plugin_config_get` and the registry both show it
   as `[]` until an app writes rows. (The one exception is `nmea0183`: the host
   seeds row one from the address the app was started with, so a mariner sees the
@@ -792,15 +784,14 @@ themselves:
 returns 1, that app must poll `lookout_needs_redraw` a few times a second instead
 of sleeping until the mariner touches something. If an app skips that, your
 plugin keeps running but nothing it draws reaches the screen until someone pans
-the chart. That is worth knowing before you spend an afternoon debugging a
-plugin that turns out to be working.
+the chart.
 
 ## The raw module contract
 
 This section is for building a plugin WITHOUT the Zig library — from Go, Rust,
 or any toolchain that emits wasm. With `lk.zig` you never touch any of this:
-`lk.registerPlugin(@This())` generates all five exports and connects `lk_start`
-and `lk_event` to the `start` and `onEvent` functions you write.
+`lk.registerPlugin(@This())` registers your plugin and routes the host's calls
+to the `start` and `onEvent` functions you write.
 
 Your compiled module must export these five functions. They are the only part
 the host ever calls.

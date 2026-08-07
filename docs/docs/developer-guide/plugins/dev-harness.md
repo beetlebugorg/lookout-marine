@@ -13,9 +13,9 @@ directory and a recorded log, and it prints what your plugin published, what it
 drew and what it was denied, then writes the chart with your overlay on it to a
 PNG.
 
-Nothing about the plugin layer is simulated: the same broker, the same stores,
-the same overlay engine, the same watchdog. What is missing is the window and the
-water.
+Nothing about the plugin layer is simulated: it uses the same broker, stores,
+overlay engine and watchdog as the app. What is missing is the app window and a
+real boat.
 
 ```sh
 zig build plugin-dev            # zig-out/bin/lookout-plugin-dev
@@ -47,11 +47,10 @@ today, and `-Dplugins=true` with a WAMR archive elsewhere.
 | `--set-config [SECONDS@]ID JSON` | Change a plugin's settings, optionally at a replay second. Repeatable, applied in order. |
 | `-h`, `--help` | The usage text. |
 
-`--print deltas` and `--print overlay` also print every error line, because a
-harness that hid a trap while it was asked for overlay objects would be a harness
-that lies. `--print status` and `--print alert` do not: they show their own stream
-only, so read the end-of-run summary and the exit code rather than the absence of
-red.
+`--print deltas` and `--print overlay` also print every error line, so a filter
+never hides a trap. `--print status` and `--print alert` do not: they show their
+own stream only, so read the end-of-run summary and the exit code rather than
+taking a clean stream for a clean run.
 
 Exit code 0 only when at least one frame rendered and no plugin trapped; 1 for a
 trap or no frame; 2 for a bad invocation or a chart that will not open.
@@ -99,7 +98,7 @@ navigation report type 21.
 The log itself is not in the repository — run the command above to write it.
 
 Any recording works: `--replay` reads a plain NMEA 0183 log. A capture from your
-own boat is the best test data there is.
+own boat is better test data than the generated log.
 
 ## Changing settings while it runs
 
@@ -108,9 +107,9 @@ own boat is the best test data there is.
 ```
 
 The `SECONDS@` prefix is the replay second to make the change at; without one it
-happens before the replay starts. Proving that a setting applies **hot** means
-changing it while the log is playing and watching the behaviour move — a change
-made before the run starts proves nothing. Each change prints when it lands:
+happens before the replay starts. To check that a setting applies **hot**, change
+it while the log is playing and watch the behaviour change; a change made before
+the run starts does not test that. Each change prints when it lands:
 
 ```
 t=  200.0s set-config org.beetlebug.ais {"cpa_limit":100}
@@ -122,12 +121,12 @@ refused config does not fail the run today.
 
 ## Reading what it prints
 
-Every line carries the replay clock, so a line can be lined up with the second of
-the log that caused it.
+Every line carries the replay clock, so any output can be matched to the second
+of the log that caused it.
 
 **`--print status`** — every status line a plugin posts, and only those. The host
-logs a status only when the text changes, so this stream is the plugins' state
-machine written out:
+logs a status only when the text changes, so this stream shows each plugin's
+changes of state and nothing else:
 
 ```
 t=    0.0s [info] org.beetlebug.nmea0183: status {"state":"degraded","detail":"connecting to 127.0.0.1:65129"}
@@ -157,8 +156,8 @@ fresh, and `gone` means the path or the target has no value at all any more. Age
 is printed but not compared, so a value that never changes prints once.
 
 **`--print overlay`** — objects appearing and disappearing, by their
-host-namespaced id. Geometry moves every second and printing that would drown the
-stream:
+host-namespaced id. Geometry moves every second, so movement itself is not
+printed:
 
 ```
 t=    2.0s overlay + org.beetlebug.ownship/ownship (symbol ownship)
@@ -185,14 +184,14 @@ call(s)`** — any number but zero is a capability your manifest forgot.
 **`alert(s) raised`** — how many alerts came out of the whole run, which is the
 number to pin if you are testing an alarm.
 
-The PNG is the other half. A plugin can publish and draw perfectly and still put
-its line in the wrong place, or in a colour that vanishes at night, and only the
-render says so. Run `--scheme night` as well as day.
+The PNG is the other half. A plugin can publish and draw correctly and still put
+its line in the wrong place, or in a colour that disappears at night; only the
+render shows that. Run `--scheme night` as well as day.
 
 One thing the print streams miss: everything the plugin layer says **before** the
-chart is open. Module load and `lk_start` go straight to stderr, so if your
-plugin never appears in any stream at all, look further up the terminal — the
-reason it did not load is up there.
+chart is open. Module load and the plugin's start go straight to stderr, so if
+your plugin never appears in any stream at all, look further up the terminal —
+the reason it did not load is up there.
 
 ## Writing a golden test
 
@@ -211,9 +210,8 @@ diff expected.txt actual.txt
 ```
 
 The tail — the object inventory, the per-plugin line and the alert count — is
-byte-identical across repeated runs, which is what makes it the part worth
-pinning.
-What is **not** stable: the `t=` stamps, the `age` columns, the frame count, and
+byte-identical across repeated runs, so it is the part worth pinning. What is
+**not** stable: the `t=` stamps, the `age` columns, the frame count, and
 anything whose size depends on wall-clock time (the own-ship track keeps one point
 per real second, so `--rate 20` gives a shorter track than `--rate 1`). Either
 filter those or pin `--rate 1` and accept the wait.
@@ -235,7 +233,7 @@ debugger on it, which you cannot do inside the interpreter.
 
 ## Running your plugin in the real app
 
-Two environment variables put the same plugins in the real app, with no code
+These environment variables put the same plugins in the real app, with no code
 change:
 
 | Variable | Effect |
@@ -245,9 +243,10 @@ change:
 | `LOOKOUT_OPEN=<chart\|dir>` | Open a chart at startup, so you do not have to pick one by hand on every launch. |
 | `LOOKOUT_VIEW=lon,lat,zoom[,rot]` | The first camera position. |
 
-On the iOS simulator they are `SIMCTL_CHILD_LOOKOUT_PLUGINS` and friends, and the
-simulator reaches a replay server on the host over loopback. A python or netcat
-server serving the same log at a fixed port is enough:
+On the iOS simulator each name takes the `SIMCTL_CHILD_` prefix, as in
+`SIMCTL_CHILD_LOOKOUT_PLUGINS`, and the simulator reaches a replay server on the
+host over loopback. A python or netcat server serving the same log at a fixed
+port is enough:
 
 ```sh
 LOOKOUT_PLUGINS=$PWD/zig-out/plugins LOOKOUT_NMEA=127.0.0.1:10110 \
@@ -259,9 +258,9 @@ console, or the terminal you launched the app from. The Windows app is a
 Windows-subsystem binary with no console attached, so redirect stderr to a file
 there or you will see nothing at all.
 
-One last thing, before you sit and watch a live feed. An app that renders only
-when something changes can freeze your plugin's traffic on screen while nobody
-touches the machine — your plugin is still running, but the picture stops
+One more thing to expect from a live feed. An app that renders only when
+something changes can freeze your plugin's traffic on screen while nobody
+touches the machine: your plugin is still running, but the picture stops
 updating. The Mac app polls for redraws while any plugin is active and does not
 have this problem; the GTK and Windows apps still do. Pan the chart to force a
 frame, or test on macOS.

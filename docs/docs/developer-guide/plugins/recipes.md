@@ -7,8 +7,8 @@ sidebar_position: 2
 # Recipes
 
 Each recipe is one thing you might want a plugin to do, the permissions it
-needs, and a complete short example. If a recipe runs longer than a screen, the
-API is at fault and not the recipe — say so.
+needs, and a complete short example. If a recipe runs longer than a screen, that
+is a problem with the API rather than the recipe — report it.
 
 Every listing below is the whole plugin except the manifest. There is no setup
 step, no event loop and no teardown, because the library owns all three.
@@ -22,14 +22,13 @@ comptime {
 }
 ```
 
-That `comptime` block writes the five wasm exports, routes them to whatever you
-declare, and is the only ceremony there is.
+That `comptime` block registers your plugin. Nothing else has to be wired up.
 
 :::note Zig first, then Go and Rust
 
-The Zig library is the one that is settled. The **ABI** underneath it — the
-exports, the imports, the WASI floor — is settled too, and a Go or Rust module
-that speaks it loads and runs today. The libraries in `sdk/go` and `sdk/rust`
+Only the Zig library is settled. The **ABI** underneath it — the imports, the
+events, the WASI floor — is also settled, and a Go or Rust module that speaks it
+loads and runs today. The libraries in `sdk/go` and `sdk/rust`
 are being rewritten onto the same three tiers as the Zig one, and each recipe
 gains its Go and Rust listing as that lands. Read
 [the ABI](abi.md) for what those libraries are written against.
@@ -81,8 +80,8 @@ and 10.
 
 **Where it appears.** `tab` picks one of the mariner's settings tabs — display,
 depths, text, charts, vessels, alarms, connections, advanced — and `group` is
-the heading inside it. The mariner never learns a plugin put it there, which is
-the point: a collision alarm belongs under Alarms beside every other alarm.
+the heading inside it. The app shows a collision alarm limit under Alarms like
+any other alarm setting. It does not say which plugin added it.
 
 **Reacting to a change.** You do not have to. The library re-reads the values
 and calls `draw` again the moment the mariner changes one. Declare
@@ -129,17 +128,17 @@ pub fn draw(c: *lk.Chart) void {
 ```
 
 **`get` versus `fresh`.** A required input is fresh whenever `draw` runs, so
-`get()` needs no null check. An optional one has no `get` at all — the compiler
-says so — and `fresh()` hands you a `?f64` to decide about.
+`get()` needs no null check. An optional one has no `get` at all, so calling it
+is a compile error; `fresh()` returns a `?f64` for you to check.
 
 **What happens when a reading goes stale.** The library takes everything this
 plugin drew off the chart and posts `degraded`, naming every missing input at
 once: `no wind, no position`. A line that says only "no wind" while the GPS is
-also out sends the mariner to the wrong instrument. Name an input with `.label`
-and that is the word the mariner reads.
+also out sends the mariner to the wrong instrument. The `.label` you give an
+input is the word that appears in that list.
 
 **The window is 5 seconds**, the same one the vessel store uses. Raise it per
-input with `.max_age_ms` where the reading arrives on a slower clock.
+input with `.max_age_ms` for a reading that arrives less often.
 
 Reference: [STORE_CHANGED](abi.md#store_changed) and
 [vessel data goes stale after 5 seconds](rules.md#vessel-data-goes-stale-after-5-seconds).
@@ -170,7 +169,7 @@ pub fn draw(c: *lk.Chart) void {
 ```
 
 **Places are `lk.Point`, latitude first.** The wire format puts longitude
-first, and this type is what keeps that off your desk. `destination`,
+first, and this type does that conversion for you. `destination`,
 `bearingTo` and `distanceTo` are on it; distances are metres, and `lk.nm(1)`
 converts.
 
@@ -181,10 +180,10 @@ a 1.5 pt line is 1.5 pt at every scale.
 `track`, `layline_port`, `layline_stbd`, `warning`. The core resolves each one
 for the day, dusk and night schemes.
 
-**Anchoring to the boat.** `.anchor = .ownship` rides own ship's display
-position, which the core carries forward between fixes, so the object sits
-still on screen instead of stepping once a second. Own ship's heading line uses
-it.
+**Anchoring to the boat.** An object with `.anchor = .ownship` follows own
+ship's display position, which the core carries forward between fixes, so the
+object stays still on screen instead of stepping once a second. Own ship's
+heading line uses it.
 
 ### A guard ring with a sweep
 
@@ -235,13 +234,13 @@ pub fn draw(c: *lk.Chart) void {
 }
 ```
 
-Both objects are described in full on every one of the four calls a second. The
-library sends the sweep, because it moved, and while the boat holds station it
-does not send the ring again. Take the ring out of `draw` — return early, or
-drop the setting to nothing — and it leaves the chart on the next call without
-anything being deleted by hand.
+Both objects are described in full on all four calls each second. The library
+sends the sweep because it moved; while the boat holds station it does not send
+the ring again. Take the ring out of `draw` — return early, or drop the setting
+to nothing — and it leaves the chart on the next call, with no delete call from
+you.
 
-An area's ring is closed for you and wants three points at least; a line wants
+An area's ring is closed for you and needs at least three points; a line needs
 two.
 
 Reference: [the overlay payload](abi.md#overlay).
@@ -282,7 +281,7 @@ units do not cross the ABI in SI: the core cannot know that a row called SOG
 holds metres per second, so the plugin does the conversion and writes the unit
 into the text. Up to 16 rows, 96 bytes each.
 
-**Only symbols answer a tap.** A line and an area have no single point to
+**Only symbols respond to a tap.** A line and an area have no single point to
 measure a touch against, so they carry no payload. The hit test measures to a
 symbol's anchor, within about 14 points.
 
@@ -292,8 +291,8 @@ Reference: [the overlay payload](abi.md#overlay).
 
 **Capabilities:** `ais.read`.
 
-Declare the target set like any other input. It never holds `draw` back: an
-empty sea is not a missing instrument.
+Declare the target set like any other input. It never holds `draw` back,
+because no targets in range is a normal condition rather than a missing reading.
 
 ```zig
 pub const inputs = struct {
@@ -327,16 +326,16 @@ pub fn draw(c: *lk.Chart) void {
 }
 ```
 
-A target that stops being heard drops out of the snapshot, so it stops being
-drawn, so the library takes its symbol off the chart. Nothing tracks that for
-you.
+A target that stops being heard drops out of the snapshot. It is then not
+drawn, and the library takes its symbol off the chart. You do not have to track
+expiry yourself.
 
 **`sog_mps` is metres per second**, whatever the wire format reported.
-`lk.knots` converts for text a mariner reads.
+`lk.knots` converts it for display.
 
-Real closest-approach maths — the passing distance and the time to it — is more
-than a recipe. `plugins/ais/cpa.zig` is the worked solver, and it is a plain
-file with its own tests.
+Closest-approach maths — the passing distance and the time to it — is too long
+for a recipe. `plugins/ais/cpa.zig` is the worked solver, a plain file with its
+own tests.
 
 Reference: [AIS_CHANGED](abi.md#ais_changed).
 
@@ -412,18 +411,19 @@ pub fn endpoint(row: *Connections.Row) lk.Endpoint {
 }
 ```
 
-Return `.refused` with a sentence and the row stops retrying and says why.
+Return `.refused` with a sentence: the row stops retrying and shows that
+sentence as its status.
 
 **Extra columns** go in `.Extra`, a struct shaped like a settings group; their
 values arrive as `row.cols.<name>`. Rows are matched to sockets by the id the
-shell minted, so editing one row never disturbs another's connection.
+shell assigned, so editing one row never disturbs another's connection.
 
-`plugins/signalk` is the shipped example, over both TCP and a websocket;
-`plugins/nmea0183` is the other.
+`plugins/signalk` is the worked example, over both TCP and a websocket, and
+`plugins/nmea0183` is a second one.
 
 Reference: [lists](abi.md#lists-a-group-the-mariner-adds-rows-to) and
-[reconnecting is yours](rules.md#reconnecting-is-yours) — which it no longer
-is, once the library owns the row.
+[reconnecting is yours](rules.md#reconnecting-is-yours), which the library does
+for you once it owns the row.
 
 ## Raising an alarm, and when not to
 
@@ -440,8 +440,8 @@ Severity is `alarm`, `warning`, `notice` or `caution`. The host maps them to log
 levels: alarm at error, warning at warn, the other two at info.
 
 **Raise one only when the mariner must act now and would not otherwise know.**
-Everything else is a status line. An alarm that cries wolf gets switched off,
-and then the real one is not heard.
+Everything else is a status line. An alarm that fires when nothing is wrong gets
+switched off, and then the real one is not heard.
 
 **Latch it.** Raise on the edge, not every tick, and re-arm only when the
 condition has genuinely cleared. Give the gate a dead band if the quantity can
@@ -449,8 +449,8 @@ sit on the limit: a target parked at exactly the alarm distance must not alarm
 once a second.
 
 **There is no alarm surface yet.** An alert is a log line and nothing more
-today — no sound, no banner. Build the behaviour now; it will be heard when the
-chrome for it lands.
+today — no sound, no banner. Build the behaviour now; it will work when the
+chrome for it is built.
 
 Reference: [alert](abi.md#alert).
 
@@ -467,20 +467,20 @@ pub fn draw(c: *lk.Chart) void {
 ```
 
 **The library posts it once.** The host logs every status text it has not seen
-before, so a repeat at 1 Hz would be a log line a second — and the library
-sends nothing while the text is unchanged. Say nothing at all and the plugin
-reads `running`.
+before, so a repeat at 1 Hz would be a log line a second. The library sends
+nothing while the text is unchanged. Say nothing at all and the plugin reads
+`running`.
 
 **You rarely need `degraded`.** A missing declared input already produces it,
 naming the instrument. Use it for what the library cannot see.
 
 **Round anything live.** A detail carrying a raw float changes every tick and is
-a new line every tick. `{d:.0}` on a wind direction, or a five-degree bucket, is
-the difference between a log you can read and one you cannot.
+a new line every tick. Round it — `{d:.0}` on a wind direction, or a five-degree
+bucket — and the log stays readable.
 
 **A connection list writes its own.** The library posts one item per row —
 `connected`, `paused`, `reconnecting`, `unreachable`, `no_address` — under the
-row id the shell minted, and the plugin line above them counts what is up:
+row id the shell assigned, and the plugin line above them counts what is up:
 `2 of 3 connected, 44 msg/s`.
 
 Reference: [chrome_status](abi.md#chrome_status),
@@ -567,22 +567,23 @@ Reference: [file_read and file_write](abi.md#file_read-and-file_write) and
 
 ## Building an instrument display
 
-**Status: not buildable today, and worth saying plainly.**
+**Status: not buildable today.**
 
 There is no way to put a number on the screen from a plugin. The overlay draws
 three things — symbols, lines and areas — and none of them carries text. A
-plugin has two places words reach the mariner, and neither is an instrument:
+plugin has two places where words reach the mariner, and neither works as an
+instrument:
 
 - **a pick payload**, which shows rows of text when a symbol is hovered or
   tapped;
-- **the status line**, which today goes to the log and has no home on screen.
+- **the status line**, which today goes to the log and is not shown on screen.
 
 What is coming is chrome readout blocks: a plugin declaring a readout, and the
 app drawing it in its own idiom beside the other instruments, the way a settings
 group is drawn today. That is not built, and no part of the ABI reserves it yet.
 
-Until then, an instrument-shaped plugin says what it knows through
-[the status line](#showing-live-status-per-connection-when-there-are-rows), and
+Until then, an instrument-shaped plugin reports through
+[the status line](#showing-live-status-per-connection-when-there-are-rows) and
 draws the thing itself — the guard ring, the layline, the vector — rather than a
 number about it.
 
@@ -590,8 +591,8 @@ number about it.
 
 - [Build your first plugin](build-your-first.md) walks one plugin start to
   finish, including the manifest, the build command and the harness.
-- [The rules](rules.md) is every mistake that costs a mariner something at sea.
-  Read it before you copy any of the code above.
+- [The rules](rules.md) collects the mistakes that cost a mariner something at
+  sea. Read it before you copy any of the code above.
 - [The ABI](abi.md) is what the library is written against, and what a tier-3
   plugin talks to directly.
 - [The dev harness](dev-harness.md) runs your plugin against a recorded log and

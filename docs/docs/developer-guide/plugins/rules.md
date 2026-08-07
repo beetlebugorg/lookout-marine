@@ -7,12 +7,13 @@ sidebar_position: 5
 # The rules
 
 Some of these the host enforces on you. The rest are mistakes it cannot catch,
-and those are the expensive ones — a plugin that breaks one of them usually still
-runs, still draws, and is quietly wrong.
+and those are the expensive ones: a plugin that breaks one of them usually keeps
+running and drawing, and is quietly wrong.
 
-Skim the headings now and come back when one bites. Under each rule, the line in
-*italics* is the reason it exists, and the reason is always the same shape: a
-chartplotter that draws something wrong is worse than one that draws nothing.
+Skim the headings now and come back to a rule when you hit it. Under each rule,
+the line in *italics* is the reason it exists, and the reason is always the same
+shape: a chartplotter that draws something wrong is worse than one that draws
+nothing.
 
 ## State lives in globals
 
@@ -36,12 +37,10 @@ moves, without asking you for anything. Own ship's symbol and its two lines
 travel between fixes because they declared `"anchor":"ownship"`, not because a
 plugin is called sixty times a second.
 
-*The frame loop must never wait on a plugin, so there is no per-frame callback to
-be late for.*
+*The frame loop must never wait on a plugin, so no per-frame callback exists.*
 
-Publish state, not pictures. If you find yourself wanting to draw on a timer
-faster than about 1 Hz, the thing you want is probably an anchor or a retained
-object that already moves.
+If you find yourself wanting to draw on a timer faster than about 1 Hz, the
+thing you want is probably an anchor or a retained object that already moves.
 
 ## Redraw on a timer, not on every reading
 
@@ -65,7 +64,7 @@ you read matches what happens.
 mean "replace", never "delete what I just drew".*
 
 Delete what you stop drawing, in the same batch. A plugin that goes degraded and
-leaves its lines up is telling the mariner a lie about data it no longer has.
+leaves its lines up is showing the mariner data it no longer has.
 
 ## Colours are tokens, never RGB
 
@@ -76,8 +75,8 @@ night palette.
 *A mariner on a night passage has dark-adapted eyes, and one plugin with a
 hard-coded `#FF0000` costs twenty minutes of night vision.*
 
-The night column is held under a luminance ceiling and a test enforces it. Your
-RGB would not be.
+The night column is held under a luminance ceiling and a test enforces it; an
+RGB you picked yourself would not be checked.
 
 ## Everything is SI at the boundary
 
@@ -90,18 +89,18 @@ will get wrong.*
 
 The single exception is a pick payload, whose rows are display strings you format
 yourself, because the core cannot know that a row called SOG holds metres per
-second. It is the one place the rule is broken. Do not take it as a pattern.
+second. It is the only exception.
 
 ## One event at a time, and return promptly
 
 A plugin is entered by exactly one thread, ever, with one event in flight. There
 are no threads inside the module and no way to make one.
 
-*Straight-line code with no locks is the whole reason the ABI looks like this.*
+*One thread and one event in flight means straight-line code with no locks.*
 
 Do your work in the handler and return. When you need to wake later, ask for
 `timer_set` and handle the `TIMER` event. There is no sleep to call, and blocking
-would only block you.
+stops only your own plugin.
 
 ## The watchdog kills a 1000 ms overrun
 
@@ -116,14 +115,15 @@ One second is enormous for an event handler — the four plugins that ship with
 Lookout take microseconds. The kill lands between 1000 ms and 1100 ms, because
 the precision is one tick. The budget covers **one call**: a plugin that takes
 900 ms on every event is never stopped and is 900 ms late forever. The watchdog
-does not cover `lk_start`, which runs on the loading thread before the I/O thread
-exists.
+does not cover the plugin's start, which runs on the loading thread before the
+I/O thread exists.
 
 ## A plugin that traps is disabled, not retried
 
-A trap, a watchdog kill, or `lk_alloc` answering 0 takes the plugin out of
-service. Everything it contributed is erased: overlay objects, published values,
-AIS targets, sockets, timers, queued events. The status line says why.
+A trap, a watchdog kill, or the module failing to allocate memory for a payload
+takes the plugin out of service. Everything it contributed is erased: overlay
+objects, published values, AIS targets, sockets, timers, queued events. The
+status line says why.
 
 *A chartplotter that keeps drawing the last position a crashed plugin published
 is worse than one that draws nothing.*
@@ -136,8 +136,7 @@ Linear memory is capped at 256 wasm pages at instantiation, and the interpreter
 stack is 64 KiB. A module whose declared **minimum** memory is over the cap fails
 at load rather than at sea.
 
-*A plugin that leaks is a plugin the mariner has to notice; a cap makes the host
-notice first.*
+*Without a cap, a leak becomes the mariner's problem instead of the host's.*
 
 Nothing an ordinary plugin does approaches it. The largest inbound payload is an
 AIS snapshot, and `lk.zig`'s arena settles at the high-water mark of the largest
@@ -158,21 +157,21 @@ that plugin, and logged — the first one and then every thousandth.
 
 ## Unknown event kinds return 0
 
-`lk.registerPlugin` does this for you. If you write the exports yourself, do it
-too.
+`lk.registerPlugin` does this for you. If you are writing a plugin without the
+Zig library, do it yourself.
 
 *A host must be able to add an event kind without breaking a module built against
 an older one.*
 
 ## Vessel data goes stale after 5 seconds
 
-One window rules every vessel path. The store elects the first-registered source
-whose value is inside it; if no source is fresh, the newest stale value is
-elected and flagged. `STORE_CHANGED` carries `age_ms`, and that number is already
+The same window applies to every vessel path. The store elects the
+first-registered source whose value is inside it; if no source is fresh, the
+newest stale value is elected and flagged. `STORE_CHANGED` carries `age_ms`, and that number is already
 stale when you read it.
 
-*Five seconds without an instrument is the fact a mariner needs on screen, and
-one number for every path means nobody has to remember which.*
+*A mariner needs to see that an instrument has been silent for five seconds, and
+one window for every path means nobody has to remember which path uses which.*
 
 Age it on with `mono_ms`, never with the wall clock: a GPS that sets the boat's
 clock mid-passage must not make a good fix look ten minutes old. AIS is a
@@ -190,8 +189,8 @@ it, and writes `denied <call>: manifest does not request capability <name>`.
 and a stack trace would hide the misconfiguration.*
 
 Check the returns. `subscribe` coming back -1 means you will receive nothing at
-all, ever, and the right response is to fail `start`: a plugin that starts
-cleanly and then sits deaf is the worst of the three outcomes.
+all, so the right response is to fail `start`: a plugin that starts cleanly and
+then receives nothing is harder to diagnose than one that refuses to start.
 
 [The dev harness](dev-harness.md) prints `N denied call(s)` per plugin at the end
 of every run. It should be zero. If it is not, the fix is almost always one more
@@ -219,17 +218,16 @@ datagram, never two joined and never one split.
 list of hosts you may reach. A URL outside the list returns -1 before a socket
 opens, and the log line names the host you asked for.
 
-*"This plugin may reach the internet" is not something a mariner can weigh, and a
-plugin that reaches one server for weather and quietly reaches a second one is
-exactly what the grant sentence exists to prevent.*
+*A mariner cannot judge "this plugin may reach the internet", and naming the
+hosts is what stops a weather plugin from quietly reaching a second server.*
 
-There are no wildcards, so a plugin that needs two servers names two servers. A
+There are no wildcards: a plugin that needs two servers must name both. A
 redirect that would leave the host fails the fetch rather than following, because
 the list was checked once at the URL you asked for.
 
 When the address is a mariner's setting rather than yours — a Signal K server,
 an instrument bridge — write `local`. It grants the boat's own network and
-refuses the internet, which is the honest shape of that grant.
+refuses the internet.
 
 ## Ask for a range, not a file
 
@@ -237,9 +235,8 @@ A response body is capped at 4 MiB, and the fetch fails rather than truncating.
 A GRIB, a chart bundle and a tide table are all bigger than that, so ask for a
 range: `{"url":…,"range":"bytes=0-1048575"}`.
 
-*One 4 MiB slice is an event you can decode inside the watchdog's budget. One
-200 MB body would be an allocation the plugin cannot hold and a decode it cannot
-finish in a second.*
+*A 4 MiB slice can be decoded inside the watchdog's budget; a 200 MB body is more
+than the plugin can hold and more than it can decode in a second.*
 
 Four fetches run at once across every plugin. A fifth returns -1 at once, which
 is a signal to try again from a timer, not an error.
@@ -247,9 +244,9 @@ is a signal to try again from a timer, not an error.
 ## Storage is small, and it is yours alone
 
 `storage_put` writes the file before it returns, so what you saved survives a
-trap, a disable and a restart. What it is not is a database: 64 KiB a value,
-1 MiB and 256 keys in total, and another plugin's store is another file that you
-cannot read.
+trap, a disable and a restart. It is not a database: 64 KiB a value, 1 MiB and
+256 keys in total, and another plugin's store is another file that you cannot
+read.
 
 *A plugin's saved state is a mariner's settings and a resume point, not a data
 store. A weather plugin caches WHICH run it fetched, not the run.*
@@ -277,17 +274,16 @@ wildcards: name the exact paths.
 
 ## Never be silent
 
-The through-line of every rule above. When your plugin cannot do its job, say so,
-in the place a person will look:
+This is what every rule above comes back to. When your plugin cannot do its job,
+say so, in the place a person will look:
 
 - Post a `degraded` status line and name **every** missing input. "no wind" while
   the GPS is also out sends the mariner after the wrong instrument.
-- Take the drawing off the chart. Stale geometry drawn confidently is the failure
-  mode that puts a boat on a rock.
+- Take the drawing off the chart. Stale geometry that still looks current is the
+  failure mode that puts a boat on a rock.
 - Say when a choice was made, not just when something broke. With its alarm
   switched off, the `ais` plugin posts "alarms off" rather than a count of zero,
   because a mariner has to be able to see that the silence was chosen and not
   broken.
 - Post a status only on a transition. The host logs every line it has not seen,
-  so a 1 Hz repeat is a 1 Hz log line, and a log nobody can read is another way
-  of being silent.
+  so a 1 Hz repeat is a 1 Hz log line, and the log becomes unreadable.
