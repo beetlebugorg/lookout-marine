@@ -118,31 +118,6 @@ Built and usable today:
 - `lookout-plugin-dev`, a harness that runs your plugin against a recorded log
   and renders the result to a PNG.
 
-## What is coming
-
-None of this exists yet. Do not write against it.
-
-- UDP, HTTP, storage, file access and weather grids. Today the only network call
-  is a TCP client, though a plugin may hold several at once.
-- WASI, so the Go and Rust standard libraries boot, and an SDK for each. Today
-  the practical language is Zig, or any toolchain that emits freestanding wasm.
-- A `.lkplug` package, an installer, and a consent screen that shows a mariner
-  what a plugin is asking for before it is granted.
-- More chrome than a status string and its per-row items: jobs, progress, an
-  alarm surface.
-- Restarting a plugin that trapped. Today it stays down until the app restarts.
-- Per-plugin memory, time and queue budgets in the manifest. Today every plugin
-  gets the same limits and cannot ask for more.
-- Ahead-of-time compilation for plugins bundled on iOS.
-- Imports filtered when the module is instantiated, so a call your manifest did
-  not ask for cannot be made at all. Today it can be made, and the host answers
-  it with `-1` and a log line.
-
-That last one changes what a mistake costs you. Today, calling something your
-manifest did not ask for gets you a `-1` you might forget to check; one day it
-will stop the module loading at all. Write your plugin so that both worlds are
-the same thing: ask for what you use, and use only what you ask for.
-
 ## The ABI is version 0 and unstable
 
 Your module exports `lk_abi`, it returns 1, and the host refuses any module that
