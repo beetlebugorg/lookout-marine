@@ -158,9 +158,16 @@ final class ChartController: NSObject {
                 ok += 1
                 if model?.rasterOff.contains(p) == true { setRasterEnabled(p, false) }
             }
-            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed")
+            // After every source is in, because switching one chart off can move
+            // which set is drawn, and the saved answer is the one that wins.
+            restoreRasterShown()
+            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed, \(model?.rasterHidden.count ?? 0) set(s) off")
             model?.rasterName = rasterName()
         }
+        // The ENC-over-picture state belongs to the mariner too, and it only
+        // does anything where a picture covers, so it is safe to put back before
+        // knowing whether one does.
+        if model?.chartHiddenSaved == true { setChartHidden(true) }
 
         // Reopen where we left off. With nothing saved the opening view is the
         // engine's own (lookout_default_view) — the same policy every host gets,
@@ -714,11 +721,15 @@ final class ChartController: NSObject {
     }
     /// Hide or show the vector chart. The picture beneath it stays.
     func toggleChart()        { guard let h = handle else { return }; lookout_toggle_chart(h); kick(); pushReadouts() }
+    func setChartHidden(_ hidden: Bool) { guard let h = handle else { return }; lookout_set_chart_hidden(h, hidden ? 1 : 0) }
     func chartHidden() -> Bool { guard let h = handle else { return false }; return lookout_chart_hidden(h) != 0 }
-    /// Every set, with whether it is in view and which one is drawn. This is
+    /// Every set, with whether it is in view and whether it is drawn. This is
     /// what the pill's menu is built from — a mariner has to see what they
     /// carry, not guess at it through a cycle.
-    struct RasterSet: Identifiable { let id: Int; let name: String; let inView: Bool }
+    ///
+    /// `shown` is the set's own state, not "drawn over this view": that is what
+    /// gets saved, and a coast off screen still has an answer.
+    struct RasterSet: Identifiable { let id: Int; let name: String; let inView: Bool; let shown: Bool }
     func rasterSets() -> [RasterSet] {
         guard let h = handle else { return [] }
         let n = Int(lookout_raster_set_count(h))
@@ -728,11 +739,38 @@ final class ChartController: NSObject {
             let name = (p != nil && len > 0)
                 ? String(decoding: UnsafeRawBufferPointer(start: p!, count: len), as: UTF8.self) : ""
             return RasterSet(id: i, name: name,
-                             inView: lookout_raster_set_in_view(h, UInt32(i)) != 0)
+                             inView: lookout_raster_set_in_view(h, UInt32(i)) != 0,
+                             shown: lookout_raster_shown(h, UInt32(i)) != 0)
         }
     }
     func rasterActiveIndex() -> Int { guard let h = handle else { return -1 }; return Int(lookout_raster_active_index(h)) }
     func rasterSelect(_ i: Int) { guard let h = handle else { return }; lookout_raster_select(h, Int32(i)); kick(); pushReadouts() }
+
+    /// Draw a set, or stop drawing it, by index and without reference to the
+    /// camera. `rasterSelect` cannot do this: it answers for the view on screen,
+    /// and the view a launch opens into is often nowhere near the set being
+    /// restored. Showing still turns off the sets covering the same water.
+    func rasterSetShown(_ i: Int, _ on: Bool) {
+        guard let h = handle else { return }
+        lookout_raster_set_shown(h, UInt32(i), on ? 1 : 0)
+    }
+
+    /// Put back which raster sets the mariner had drawn. Adding a source draws
+    /// its set, which is right for a chart just picked and wrong for one being
+    /// re-installed at launch, so every open has to correct it — and before the
+    /// first frame, or a set the mariner switched off flashes on screen.
+    ///
+    /// Two passes. Hiding first and showing second is what keeps the election:
+    /// where two providers cover one coast, the sources were added in an order
+    /// that drew the first of them, so showing the mariner's pick before hiding
+    /// its rival would leave the rival to turn the pick straight back off.
+    private func restoreRasterShown() {
+        guard let hidden = model?.rasterHidden else { return }
+        let sets = rasterSets()
+        guard !sets.isEmpty else { return }
+        for s in sets where hidden.contains(s.name) { rasterSetShown(s.id, false) }
+        for s in sets where !hidden.contains(s.name) { rasterSetShown(s.id, true) }
+    }
 
     /// Turn one raster chart on or off without removing it.
     @discardableResult
@@ -834,7 +872,8 @@ final class ChartController: NSObject {
         if model.rasterAvailable != avail { model.rasterAvailable = avail }
         let sets = rasterSets()
         if model.rasterSets.map(\.id) != sets.map(\.id)
-            || model.rasterSets.map(\.inView) != sets.map(\.inView) { model.rasterSets = sets }
+            || model.rasterSets.map(\.inView) != sets.map(\.inView)
+            || model.rasterSets.map(\.shown) != sets.map(\.shown) { model.rasterSets = sets }
         let ai = rasterActiveIndex()
         if model.rasterActive != ai { model.rasterActive = ai }
         let active = rasterName()

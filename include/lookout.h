@@ -351,6 +351,26 @@ int lookout_raster_set_in_view(lookout *h, uint32_t i);
 int32_t lookout_raster_active_index(lookout *h);
 void lookout_raster_select(lookout *h, int32_t i);
 
+/* Read and write one set's DRAWN state by index, with no camera in it.
+ *
+ * A host has to save which sets the mariner chose and put them back at the next
+ * launch, because lookout_raster_add draws a set it has just opened — right for
+ * a chart the mariner is adding now, wrong for one being re-installed after
+ * they switched it off. The pair above cannot do it: lookout_raster_active_index
+ * describes one view, and lookout_raster_select(-1) turns off whatever is drawn
+ * over that view rather than a set you name. Both fail on the ordinary case of a
+ * set covering water the opening view is nowhere near.
+ *
+ * The election still holds. Showing a set turns off the sets covering the same
+ * water, so a restore can never put two competing pictures on at once, and a set
+ * whose every chart is switched off (lookout_raster_set_enabled) stays off.
+ *
+ * Restore in two passes: turn off everything the mariner had off, then turn on
+ * everything they had on. One pass in either direction loses a set whose rival
+ * was drawn first when the sources were added. */
+int  lookout_raster_shown(lookout *h, uint32_t i);
+void lookout_raster_set_shown(lookout *h, uint32_t i, int shown);
+
 /* Turn one raster chart on or off WITHOUT removing it, by the path it was added
  * with. A mariner who carries four providers for one coast wants three of them
  * quiet, not deleted — they are half-gigabyte downloads. Takes effect at once;

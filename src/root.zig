@@ -2490,6 +2490,19 @@ pub const Lookout = struct {
         self.rasterChanged();
     }
 
+    /// Read and write one set's drawn state by index, with no camera in it. A
+    /// host that saves the mariner's selection needs both: `rasterActiveIndex`
+    /// only describes the view on screen, and `rasterSelect` can only turn off
+    /// what is drawn over it.
+    pub fn rasterShown(self: *Lookout, i: usize) bool {
+        return self.raster.isShown(i);
+    }
+
+    pub fn rasterSetShown(self: *Lookout, i: usize, on: bool) void {
+        self.raster.setShown(i, on);
+        self.rasterChanged();
+    }
+
     pub fn rasterSetCount(self: *Lookout) usize {
         return self.raster.setCount();
     }
@@ -2576,6 +2589,9 @@ test {
     // Collect the pick rules' own tests. Only pickRanked reaches pick.zig, and a
     // test build never analyzes it, so without this the file's tests never run.
     _ = pick_rules;
+    // Same for the raster underlay: a test build reaches the Layer type but not
+    // its body, so the set-name and election tests were never running.
+    _ = rasterlayer;
 }
 
 test "camera roundtrip" {

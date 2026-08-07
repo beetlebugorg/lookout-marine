@@ -602,6 +602,19 @@ export fn lookout_raster_select(h: ?*lookout, i: i32) void {
     l.rasterSelect(if (i < 0) null else @intCast(i));
 }
 
+/// Read and write one set's drawn state by index, no camera. See lookout.h.
+export fn lookout_raster_shown(h: ?*lookout, i: u32) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.rasterShown(i)) 1 else 0;
+}
+
+export fn lookout_raster_set_shown(h: ?*lookout, i: u32, shown: c_int) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.rasterSetShown(i, shown != 0);
+}
+
 /// Turn one raster chart on or off without removing it. See lookout.h.
 export fn lookout_raster_set_enabled(h: ?*lookout, path: ?[*:0]const u8, enabled: c_int) c_int {
     const l = locked(h);

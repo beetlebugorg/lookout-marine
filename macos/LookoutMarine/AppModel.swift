@@ -42,6 +42,14 @@ final class AppModel: ObservableObject {
     /// these are half-gigabyte downloads, and carrying four providers for one
     /// coast means wanting three of them quiet, not deleted.
     @Published var rasterOff: Set<String> = []
+    /// The sets the mariner has turned off at the pill, by set name. Read at
+    /// launch and applied before the first frame; written whenever the drawn set
+    /// changes. Without it the engine's own rule wins every launch — adding a
+    /// source draws it — and a chart switched off comes back.
+    private(set) var rasterHidden: Set<String> = []
+    /// Was the ENC hidden over the picture when the app last quit? Applied at
+    /// open; `chartHidden` is the live state.
+    private(set) var chartHiddenSaved = false
     /// Every set, with whether it is in view. The pill's menu is built from it.
     @Published var rasterSets: [ChartController.RasterSet] = []
     /// The drawn set's index, or -1.
@@ -241,6 +249,16 @@ final class AppModel: ObservableObject {
     /// launch would be its own bug.
     private let rasterKey = "lookout.rastercharts"
     private let rasterOffKey = "lookout.rastercharts.off"
+    /// Which SETS are not drawn, by set name. Beside the installed list and the
+    /// switched-off list, because all three describe the same charts and any one
+    /// of them living somewhere else is a way for them to drift apart.
+    ///
+    /// Not the same thing as rasterOff. Off means "installed and quiet" and
+    /// takes a set out of the pill's list entirely; this is the pill's own
+    /// choice of which picture covers this water, and a set that is not drawn is
+    /// still offered.
+    private let rasterHiddenKey = "lookout.rastercharts.hidden"
+    private let chartHiddenKey = "lookout.chart.hidden"
 
     init() {
         recents = UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
@@ -250,6 +268,8 @@ final class AppModel: ObservableObject {
         rasterPaths = (UserDefaults.standard.stringArray(forKey: rasterKey) ?? [])
             .filter { FileManager.default.fileExists(atPath: $0) }
         rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
+        rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
+        chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
     }
 
     // MARK: - Opening charts
@@ -434,6 +454,8 @@ final class AppModel: ObservableObject {
         guard let c = controller else { return }
         c.toggleChart()
         chartHidden = c.chartHidden()
+        chartHiddenSaved = chartHidden
+        UserDefaults.standard.set(chartHidden, forKey: chartHiddenKey)
     }
 
     /// Install the raster charts the mariner chose. Files that will not open are reported
@@ -485,6 +507,29 @@ final class AppModel: ObservableObject {
         rasterSets = c.rasterSets()
         rasterAvailable = c.rasterAvailableName()
         chartHidden = c.chartHidden()
+        saveRasterShown()
+    }
+
+    /// Write down which sets are drawn. Everything that can move the selection
+    /// comes through refreshRasterState, so this is the one place it is saved:
+    /// the pill's menu, the Chart menu, the cycle key, and switching a chart off
+    /// in Settings, which can move the selection on its own.
+    ///
+    /// Read back from the engine rather than tracked here. The engine owns the
+    /// election — showing one set turns off the sets covering the same water —
+    /// so what it says after the change is the only account that can be right.
+    ///
+    /// Sets that are not installed this launch keep their entry: a mariner who
+    /// unplugs the drive holding one has not changed their mind about it.
+    private func saveRasterShown() {
+        guard let sets = controller?.rasterSets(), !sets.isEmpty else { return }
+        var hidden = rasterHidden
+        for s in sets {
+            if s.shown { hidden.remove(s.name) } else { hidden.insert(s.name) }
+        }
+        guard hidden != rasterHidden else { return }
+        rasterHidden = hidden
+        UserDefaults.standard.set(Array(hidden), forKey: rasterHiddenKey)
     }
 
     /// Draw one set, or none for -1.
@@ -565,9 +610,17 @@ final class AppModel: ObservableObject {
 
     /// Forget every installed source. The engine has no remove yet, so this
     /// takes effect on the next chart open — say so where it is offered.
+    ///
+    /// The switched-off and not-drawn lists go with it. They are keyed by path
+    /// and set name, so leaving them behind means the same file added again
+    /// months later comes back switched off with nothing on screen to say why.
     func clearRasterCharts() {
         rasterPaths.removeAll()
+        rasterOff.removeAll()
+        rasterHidden.removeAll()
         UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
+        UserDefaults.standard.set(Array(rasterHidden), forKey: rasterHiddenKey)
     }
 
     /// Step to the next raster chart set, with "no picture" as one position — so the
@@ -583,7 +636,10 @@ final class AppModel: ObservableObject {
             return
         }
         c.cycleRaster()
-        rasterName = c.rasterName()
+        // The whole state, not just the name: the cycle moves which set is drawn,
+        // and that has to reach the pill's mark and the saved selection at once
+        // rather than waiting on the next frame's readouts.
+        refreshRasterState()
     }
     /// Set the color scheme directly (0 day / 1 dusk / 2 night).
     func setScheme(_ s: Int) {
