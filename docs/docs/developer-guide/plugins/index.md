@@ -37,8 +37,10 @@ One rule is the same in all three languages and it is not a style preference:
 your exports.** No background goroutines, no threads, no sleeping. Do the work in
 the handler and return; to wake up later, ask for a timer.
 
-The shortest path in is [Build your first plugin](build-your-first.md): a
-manifest, one file, and a dashed line drawn on a real chart.
+The shortest path in is [Recipes](recipes.md): one page, a dozen things a plugin
+might do, and a complete short listing for each.
+[Build your first plugin](build-your-first.md) is the long way round the same
+ground — a manifest, one file, and a dashed line drawn on a real chart.
 
 ## What you can build
 
@@ -174,6 +176,7 @@ handed. What that means for you:
 
 | Page | What it is |
 |---|---|
+| [Recipes](recipes.md) | One recipe per thing you might want to do, with the permissions it needs |
 | [Build your first plugin](build-your-first.md) | The walkthrough in Zig: a directory, a manifest, a module, the harness, the app |
 | [The ABI](abi.md) | The reference: exports, imports, event kinds, JSON shapes, the manifest |
 | [The rules](rules.md) | The contract that bites, and the reason behind each rule |
@@ -185,8 +188,10 @@ The plugins that ship with Lookout are worked examples of everything on these
 pages. Read them in this order; each one adds something.
 
 ```
-plugins/common/lk.zig      the plugin-side library: the externs, a scratch arena, JSON helpers
+plugins/common/lk2.zig     the plugin library: inputs, draw, settings, connections
+plugins/common/lk.zig      the raw shim under it: the externs, a scratch arena, JSON helpers
 plugins/laylines/          two close-hauled lines from the true wind — the simplest one
+plugins/windline/          one line downwind, and the shortest plugin there is
 plugins/ownship/           the boat: symbol, heading line, course vector, track
 plugins/nmea0183/          TCP clients, NMEA 0183 and AIVDM parsing, publishing, a settings list
 plugins/signalk/           a second publisher: a JSON line protocol, a unit conversion, one seam per transport

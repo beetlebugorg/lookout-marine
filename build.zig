@@ -477,6 +477,11 @@ pub fn build(b: *std.Build) void {
         "plugins/ais/config.zig",
         "plugins/ais/aton.zig",
         "plugins/laylines/geo.zig",
+        // lk v2. The surface has no wasm builtin on any path a test reaches,
+        // so the geodesy, the settings schema and the manifest checks run
+        // natively beside everything else.
+        "plugins/common/schema.zig",
+        "plugins/common/lk2.zig",
         // The generator's round trip re-parses the log it writes and runs the
         // ais plugin's own solver over it, so the scenario the harness replays
         // is checked by the gate here rather than only by eye in the harness.
@@ -490,6 +495,14 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true, // the stores' and overlay's lock is os_unfair_lock
         });
+        // A plugin file that declares its settings imports lk2 for the types
+        // and the schema generator. Nothing a test reaches calls a host
+        // import, so the same file compiles for the host and for wasm.
+        mod.addImport("lk2", b.createModule(.{
+            .root_source_file = b.path("plugins/common/lk2.zig"),
+            .target = target,
+            .optimize = optimize,
+        }));
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
 
@@ -501,6 +514,13 @@ pub fn build(b: *std.Build) void {
     const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
     const lk_mod = b.createModule(.{
         .root_source_file = b.path("plugins/common/lk.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+    });
+    // lk v2: the simple surface. It roots its own copy of lk.zig as the raw
+    // shim below it, so a plugin imports one or the other and never both.
+    const lk2_mod = b.createModule(.{
+        .root_source_file = b.path("plugins/common/lk2.zig"),
         .target = wasm_target,
         .optimize = .ReleaseSmall,
     });
@@ -517,7 +537,7 @@ pub fn build(b: *std.Build) void {
     // The signalk module is installed like the others AND handed to the
     // Signal K host test below.
     var signalk_wasm: ?std.Build.LazyPath = null;
-    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines" }) |name| {
+    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline" }) |name| {
         const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
         if (!haveFile(b, main_rel)) continue;
         const mod = b.createModule(.{
@@ -526,6 +546,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
         });
         mod.addImport("lk", lk_mod);
+        mod.addImport("lk2", lk2_mod);
         const wasm_exe = b.addExecutable(.{ .name = name, .root_module = mod });
         wasm_exe.entry = .disabled;
         wasm_exe.rdynamic = true;
@@ -534,6 +555,11 @@ pub fn build(b: *std.Build) void {
             echo_wasm = wasm_exe.getEmittedBin();
             continue;
         }
+        // `windline` is BUILT but not installed, for the same reason as echo:
+        // it is the documentation's worked example, and beside the five real
+        // ones the harness would load it and draw a second line off own ship.
+        // Building it keeps the recipes compiling.
+        if (std.mem.eql(u8, name, "windline")) continue;
         if (std.mem.eql(u8, name, "nmea0183")) nmea_wasm = wasm_exe.getEmittedBin();
         if (std.mem.eql(u8, name, "signalk")) signalk_wasm = wasm_exe.getEmittedBin();
 

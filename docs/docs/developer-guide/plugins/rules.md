@@ -1,7 +1,7 @@
 ---
 id: rules
 title: The rules
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # The rules

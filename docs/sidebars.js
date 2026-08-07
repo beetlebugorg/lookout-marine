@@ -32,6 +32,7 @@ const sidebars = {
           label: 'Plugins',
           link: {type: 'doc', id: 'developer-guide/plugins/index'},
           items: [
+            'developer-guide/plugins/recipes',
             'developer-guide/plugins/build-your-first',
             'developer-guide/plugins/abi',
             'developer-guide/plugins/rules',

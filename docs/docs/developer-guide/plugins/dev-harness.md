@@ -1,7 +1,7 @@
 ---
 id: dev-harness
 title: The dev harness
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # The dev harness

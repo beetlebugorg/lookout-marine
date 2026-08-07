@@ -1,7 +1,7 @@
 ---
 id: build-your-first
 title: Build your first plugin
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Build your first plugin
