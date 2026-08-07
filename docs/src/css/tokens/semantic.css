@@ -1,0 +1,54 @@
+/* Semantic aliases. Reach for these first; drop to the base tokens only when
+   naming a chart feature the app has no UI name for. */
+/* ADAPTED FOR DOCUSAURUS: the dark selector below is the design system's
+   [data-appearance="dark"] widened to also match [data-theme="dark"], which is
+   what Docusaurus stamps on <html>. Every value is verbatim from the system.
+   Both are qualified with `html` so they outrank the merged :root the minifier
+   emits after them. */
+
+
+:root {
+  --text-primary: var(--chrome-ink);
+  --text-secondary: var(--chrome-muted);
+  --text-link: var(--chrome-accent);
+  --text-warning: var(--chrome-overscale);
+  --text-on-accent: #ffffff;
+
+  --surface-chrome: var(--chrome-surface);   /* bubbles, capsule, pick card */
+  --surface-panel: var(--chrome-panel);      /* settings pane, empty state */
+  --surface-sunken: rgba(26, 26, 26, 0.06);  /* text field well */
+  --surface-nodata: var(--chart-nodta);      /* what the window clears to */
+
+  --border-panel: var(--chrome-edge);
+  --border-rule: var(--chrome-rule);
+
+  --state-hover: var(--chrome-hover-fill);
+  --state-press: var(--chrome-press-fill);
+  --state-flat-hover: rgba(26, 26, 26, 0.1);
+  --state-flat-press: rgba(26, 26, 26, 0.16);
+  --state-selected: rgba(27, 73, 196, 0.14);
+
+  /* status — each colour means one thing and only that thing */
+  --status-live: var(--chrome-amber);        /* the capsule's dot; raster off */
+  --status-overscale: var(--chrome-overscale);
+  --status-pick: var(--chrome-magenta);      /* S-52 highlights in magenta */
+  --status-drawn: var(--chrome-accent);      /* raster chart drawn */
+
+  /* the depth ladder, deep to dry */
+  --depth-deep: var(--chart-depdw);
+  --depth-medium-deep: var(--chart-depmd);
+  --depth-medium-shallow: var(--chart-depms);
+  --depth-shallow: var(--chart-depvs);
+  --depth-intertidal: var(--chart-depit);
+  --depth-land: var(--chart-landa);
+  --depth-contour: var(--chart-depcn);
+}
+
+html[data-appearance="dark"],
+html[data-theme="dark"] {
+  --surface-sunken: rgba(214, 210, 200, 0.08);
+  --state-flat-hover: rgba(214, 210, 200, 0.1);
+  --state-flat-press: rgba(214, 210, 200, 0.16);
+  --state-selected: rgba(126, 161, 245, 0.18);
+  --text-on-accent: #00344c;
+}

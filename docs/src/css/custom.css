@@ -1,34 +1,837 @@
+/* The design system, in its own load order (its styles.css). Imported here
+   rather than listed in the config's customCss because Docusaurus reloads this
+   file on save and does NOT reload the config — pulling them in here is what
+   lets a token edit reach the running dev server. */
+@import url("./tokens/colors-chart.css");
+@import url("./tokens/colors-chrome.css");
+@import url("./tokens/fonts.css");
+@import url("./tokens/typography.css");
+@import url("./tokens/space.css");
+@import url("./tokens/semantic.css");
+
 /**
- * Lookout Marine docs theme. The same deep-water blue palette as the
- * tile57 docs, so the engine and the app read as one project.
+ * Lookout Marine docs theme.
+ *
+ * The token files in ./tokens/ are the design system, carried over as-is. This
+ * file is the only mapping layer: it points Docusaurus's infima variables at
+ * those tokens and adds the few pieces of chrome the docs have that the app
+ * does not — the guide capsule and the landing page.
+ *
+ * The organising rule is the app's own: the chart is the ground, and every
+ * piece of chrome is a small opaque object floating on it. So the page clears
+ * to NODTA, and the article, the rail and the capsule are opaque panels.
+ *
+ * Dark mode is the design system's [data-appearance="dark"] arm, which the
+ * token files also key to [data-theme="dark"] for Docusaurus.
  */
 
+/* ── infima ← tokens, light ─────────────────────────────────────────────── */
+
 :root {
-  --ifm-color-primary: #0b6ea8;
-  --ifm-color-primary-dark: #0a6397;
-  --ifm-color-primary-darker: #095e8e;
-  --ifm-color-primary-darkest: #074d75;
-  --ifm-color-primary-light: #0c79b9;
-  --ifm-color-primary-lighter: #0d7ec2;
-  --ifm-color-primary-lightest: #1090d8;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  /* Deep-water blue, shared with the tile57 docs so the engine and the app
+     read as one project. These are the design system's --docs-* tokens. */
+  --ifm-color-primary: var(--docs-primary);
+  --ifm-color-primary-dark: var(--docs-primary-dark);
+  --ifm-color-primary-darker: var(--docs-primary-darker);
+  --ifm-color-primary-darkest: var(--docs-primary-darkest);
+  --ifm-color-primary-light: var(--docs-primary-light);
+  --ifm-color-primary-lighter: var(--docs-primary-lighter);
+  --ifm-color-primary-lightest: var(--docs-primary-lightest);
+
+  --ifm-font-family-base: var(--font-ui);
+  --ifm-font-family-monospace: var(--font-mono);
+  --ifm-line-height-base: var(--leading-body);
+  --ifm-heading-font-weight: var(--weight-semibold);
+  --ifm-font-weight-semibold: var(--weight-semibold);
+
+  --ifm-font-color-base: var(--text-primary);
+  --ifm-heading-color: var(--text-primary);
+  --ifm-link-color: var(--text-link);
+  --ifm-link-hover-color: var(--text-link);
+
+  /* The page clears to NODTA; panels sit on it. */
+  --ifm-background-color: var(--surface-nodata);
+  --ifm-background-surface-color: var(--surface-chrome);
+
+  --ifm-hr-border-color: var(--border-rule);
+  --ifm-toc-border-color: var(--border-rule);
+  --ifm-table-border-color: var(--border-rule);
+  --ifm-table-stripe-background: var(--surface-sunken);
+  --ifm-blockquote-color: var(--text-secondary);
+  --ifm-blockquote-border-color: var(--border-rule);
+
+  --ifm-code-background: var(--surface-sunken);
+  --ifm-code-font-size: 92%;
+  --ifm-code-padding-horizontal: var(--space-3);
+  --ifm-code-padding-vertical: var(--space-1);
+  --ifm-pre-background: var(--surface-sunken);
+  --ifm-pre-color: var(--text-primary);
+
+  --ifm-menu-color: var(--text-primary);
+  --ifm-menu-color-active: var(--text-link);
+  --ifm-menu-color-background-active: var(--state-selected);
+  --ifm-menu-color-background-hover: var(--state-flat-hover);
+
+  --ifm-global-radius: var(--radius-8);
+  --ifm-global-shadow-lw: var(--shadow-bubble);
+  --ifm-global-shadow-md: var(--shadow-capsule);
+  --ifm-global-shadow-tl: var(--shadow-panel);
+
+  /* The capsule is 44px tall and clears the window edge by the chrome margin,
+     top and bottom — that sum is the height the layout must reserve for it. */
+  --ifm-navbar-height: calc(var(--chrome-capsule-h) + var(--chrome-margin) * 2);
+  --ifm-navbar-background-color: transparent;
+  --ifm-navbar-shadow: none;
+  --ifm-navbar-link-color: var(--text-primary);
+  --ifm-navbar-link-hover-color: var(--text-primary);
+
+  --ifm-footer-background-color: var(--chrome-panel);
+  --ifm-footer-color: var(--text-primary);
+  --ifm-footer-link-color: var(--text-secondary);
+  --ifm-footer-title-color: var(--text-primary);
+
+  --docusaurus-highlighted-code-line-bg: var(--state-flat-hover);
 }
+
+/* ── infima ← tokens, dark ──────────────────────────────────────────────── */
 
 [data-theme='dark'] {
-  --ifm-color-primary: #4fb3e6;
-  --ifm-color-primary-dark: #2ea4e1;
+  /* The design system carries a separate ramp for primary on a dark ground. */
+  --ifm-color-primary: var(--docs-primary-on-dark);
+  --ifm-color-primary-dark: var(--docs-primary-on-dark-dark);
+  --ifm-color-primary-darkest: var(--docs-primary-on-dark-darkest);
+  --ifm-color-primary-light: var(--docs-primary-on-dark-light);
+  --ifm-color-primary-lightest: var(--docs-primary-on-dark-lightest);
+  /* UNDEFINED IN THE TOKENS: the system has no --docs-primary-on-dark-darker
+     or -lighter rung. Held at the values this file carried before the token
+     import so the ramp stays monotonic; replace if the system grows them. */
   --ifm-color-primary-darker: #1d9cdd;
-  --ifm-color-primary-darkest: #1781b8;
-  --ifm-color-primary-light: #70c2eb;
   --ifm-color-primary-lighter: #81caee;
-  --ifm-color-primary-lightest: #b3e0f5;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  --ifm-background-color: var(--surface-nodata);
+  --ifm-background-surface-color: var(--surface-chrome);
+  --ifm-footer-background-color: var(--chrome-panel);
 }
 
-/* Screenshots are 2800x1800. Keep them inside the content column. */
+/* ── the ground ─────────────────────────────────────────────────────────── */
+
+/* Panels are opaque and carry the product's one hairline and one panel shadow.
+   Nothing here is a system material: a material takes its colour from what is
+   behind it, which is exactly what the app refuses to do. */
+.main-wrapper {
+  background: var(--surface-nodata);
+}
+
+/* The article: an opaque panel floating on the chart ground. */
+.theme-doc-markdown {
+  padding: var(--space-11) clamp(var(--space-9), 4vw, 56px) 46px;
+  background: var(--surface-chrome);
+  border: var(--hairline) solid var(--border-panel);
+  border-radius: var(--radius-12);
+  box-shadow: var(--shadow-panel);
+}
+
+.markdown h1:first-child {
+  font-size: 2.6rem;
+  letter-spacing: -0.025em;
+}
+
+.markdown > h2 {
+  padding-bottom: var(--space-3);
+  border-bottom: var(--hairline) solid var(--border-rule);
+}
+
+/* Screenshots are wide. Keep them inside the content column. */
 .markdown img {
   max-width: 100%;
   height: auto;
-  border-radius: 6px;
+  border-radius: var(--radius-6);
+}
+
+/* Every numeric readout in the product is monospacedDigit(). Same here. */
+.lm-num {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: var(--num-tabular);
+}
+
+/* ── the guide capsule (nav) ────────────────────────────────────────────── */
+
+/* The navbar is not a bar. It is the app's readout capsule: one opaque object,
+   floating clear of the top edge, holding the switch between the two guides.
+   The strip it floats in clears to NODTA, like the app's window, so an article
+   scrolling under the capsule is masked by chart ground rather than sliding
+   visibly behind it. The landing turns that transparent — see the landing
+   section, where the ramp is the ground the capsule floats on. */
+.navbar {
+  padding: var(--chrome-margin) var(--chrome-margin) 0;
+  background: var(--surface-nodata);
+  box-shadow: none;
+  height: var(--ifm-navbar-height);
+}
+
+.navbar__inner {
+  width: fit-content;
+  max-width: 100%;
+  height: var(--chrome-capsule-h);
+  margin: 0 auto;
+  padding: 0 var(--space-3) 0 var(--space-8);
+  gap: var(--space-1);
+  background: var(--surface-chrome);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-capsule);
+}
+
+.navbar__items {
+  gap: var(--space-1);
+}
+
+.navbar__brand {
+  margin-right: var(--space-4);
+  padding-right: var(--space-7);
+  border-right: var(--hairline) solid var(--border-rule);
+}
+
+.navbar__title {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-14);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* The lockup. No drawn wordmark exists, so the name is the UI face at semibold
+   and the mark is held to the cap height of that text — 0.72em in the system
+   faces — with one space of clearance beside it. */
+.navbar__logo {
+  height: 0.72em;
+  width: auto;
+  margin-right: 0.25em;
+  font-size: var(--text-14);
+  /* flex, so the img is a flex item and cannot pick up the inline baseline gap
+     that was pushing the mark a third of its height below the cap line. */
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+
+.navbar__logo img {
+  display: block;
+  height: 100%;
+  width: auto;
+}
+
+.navbar__link {
+  padding: var(--space-4) var(--space-6);
+  border-radius: 16px;
+  font-size: var(--text-14);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.navbar__link:hover {
+  background: var(--state-flat-hover);
+  text-decoration: none;
+}
+
+/* The guide you are reading is the selected segment, exactly as a selected
+   control reads in the app's chrome. */
+.navbar__link--active {
+  background: var(--state-selected);
+  color: var(--text-link);
+  font-weight: var(--weight-semibold);
+}
+
+.navbar__toggle {
+  color: var(--text-primary);
+}
+
+.navbar-sidebar {
+  background: var(--surface-chrome);
+}
+
+/* ── the rail ───────────────────────────────────────────────────────────── */
+
+/* Kept, against option 1d's no-rail mockup: thirteen pages need a standing
+   index. Styled as one more opaque panel so it belongs to the same family. */
+.theme-doc-sidebar-container {
+  background: var(--surface-chrome);
+  border-right: var(--hairline) solid var(--border-rule) !important;
+}
+
+.menu {
+  padding: var(--space-6) var(--space-5) var(--space-10) !important;
+}
+
+.menu__link {
+  border-radius: var(--radius-6);
+  font-size: var(--text-14);
+  line-height: var(--leading-snug);
+}
+
+.menu__list-item-collapsible > .menu__link--sublist {
+  font-size: var(--text-11);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  font-weight: var(--weight-semibold);
+}
+
+/* ── the page rail (table of contents) ──────────────────────────────────── */
+
+.table-of-contents {
+  font-size: var(--text-13);
+  border-left: var(--hairline) solid var(--border-rule);
+}
+
+.table-of-contents__link--active {
+  font-weight: var(--weight-semibold);
+}
+
+/* ── admonitions ────────────────────────────────────────────────────────── */
+
+/* "Not for navigation" is the only caution the product raises, and it raises it
+   quietly — one dot, one line — rather than in a coloured slab. */
+.theme-admonition {
+  border-radius: var(--radius-8);
+  border: var(--hairline) solid var(--border-panel);
+  box-shadow: none;
+}
+
+.theme-admonition-warning,
+.theme-admonition-caution {
+  --ifm-alert-background-color: var(--surface-sunken);
+  --ifm-alert-border-color: var(--status-overscale);
+  --ifm-alert-foreground-color: var(--text-primary);
+}
+
+/* ── annotated screenshots ──────────────────────────────────────────────── */
+
+.lm-shot-annotated {
+  margin: 0 0 var(--space-10);
+}
+
+.lm-shot-annotated__frame {
+  position: relative;
+  border: var(--hairline) solid var(--border-panel);
+  border-radius: var(--radius-8);
+  overflow: hidden;
+  /* The redesigned settings window is light, so the frame backs it in the
+     panel colour rather than the near-black the tabbed window needed. */
+  background: var(--chrome-panel);
+}
+
+.lm-shot-annotated__frame img {
+  width: 100%;
+  display: block;
+  border-radius: 0;
+}
+
+.lm-mark {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: var(--chrome-marker);
+  height: var(--chrome-marker);
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  background: var(--status-pick);
+  box-shadow: var(--shadow-bubble);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-mark__lead {
+  position: absolute;
+  height: 1px;
+  background: var(--status-pick);
+}
+
+.lm-shot-annotated__caption {
+  margin-top: var(--space-4);
+  font-size: var(--text-13);
+  line-height: var(--leading-body);
+  color: var(--text-secondary);
+}
+
+.lm-legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-7) var(--space-9);
+  margin-top: var(--space-10);
+}
+
+.lm-legend__row {
+  display: flex;
+  gap: var(--space-6);
+  font-size: 15px;
+  line-height: var(--leading-body);
+}
+
+.lm-legend__n {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: var(--status-pick);
+  color: #ffffff;
+  font-size: var(--text-12);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 996px) {
+  .lm-legend {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── landing ────────────────────────────────────────────────────────────── */
+
+/* The landing is a document route (routeBasePath is '/'), so it arrives inside
+   the doc layout. Every width cap in that chain has to go or the "chart as
+   ground" premise fails: the ground must reach both edges of the viewport.
+   The [class*=] selectors catch Docusaurus's hashed CSS-module wrappers. */
+body:has(.lm-landing) [class*="docMainContainer"],
+body:has(.lm-landing) [class*="docItemContainer"],
+body:has(.lm-landing) [class*="docRoot"],
+body:has(.lm-landing) .container,
+body:has(.lm-landing) .row,
+body:has(.lm-landing) .col {
+  max-width: none;
+  width: 100%;
+  flex: 1 1 100%;
+  padding: 0;
+  margin: 0;
+}
+
+.main-wrapper:has(.lm-landing) .theme-doc-sidebar-container {
+  display: none;
+}
+
+/* A landing page has nothing to be a breadcrumb to. */
+.main-wrapper:has(.lm-landing) .theme-doc-breadcrumbs {
+  display: none;
+}
+
+.main-wrapper:has(.lm-landing) .theme-doc-markdown {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: 0 none;
+}
+
+/* On the landing the ground is the ramp itself, so the capsule floats on the
+   hero — option 1a — instead of on a NODTA strip. It is absolute rather than
+   sticky so it belongs to the hero and scrolls away with it, which is also
+   what stops hero copy sliding visibly behind a transparent bar. */
+body:has(.lm-landing) .navbar {
+  position: absolute;
+  width: 100%;
+  background: transparent;
+  /* The hero is positioned and comes later in the DOM, so without this the
+     ramp paints over the capsule. */
+  z-index: 200;
+}
+
+.lm-landing {
+  --lm-landing-pad: clamp(var(--space-10), 5vw, 64px);
+}
+
+/* The hero: the S-52 depth ramp, deep at the top to dry at the bottom, running
+   the full width of the viewport. The height is FIXED, not fluid — the band
+   proportions are a composition at this size, and letting it grow with the
+   viewport turns the ladder into page-scale slabs. */
+/* No negative margin: the landing's navbar is absolute, so it already takes no
+   space in the flow and the ramp starts at the top of the page on its own. */
+.lm-hero {
+  position: relative;
+  height: 560px;
+  overflow: hidden;
+}
+
+.lm-hero__bands {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lm-hero__band {
+  width: 100%;
+}
+
+/* The two contours the ramp implies. They cross the whole chart, as a contour
+   does; the info panel is opaque and masks the stretch behind it. */
+.lm-hero__contour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid var(--chart-depcn);
+}
+
+/* Colour is set per figure from --chart-sndg1/2, the S-52 rule. */
+.lm-hero__sounding {
+  position: absolute;
+  font-size: var(--text-11);
+  line-height: 1;
+}
+
+/* Each label is pinned to what it names — its band, or the contour line it sits
+   on — and centred on that position. */
+.lm-hero__legendItem {
+  position: absolute;
+  right: var(--space-11);
+  transform: translateY(-50%);
+  font-size: var(--text-9);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  text-align: right;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+/* The chart's unit statement, bottom-right with the band legend. */
+.lm-hero__unit {
+  position: absolute;
+  right: var(--space-11);
+  bottom: var(--space-7);
+  font-size: var(--text-9);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+/* Option 1a's info box: one opaque panel with the product's single hairline and
+   single panel shadow, floated low-left on the ground. */
+.lm-hero__panel {
+  position: absolute;
+  left: var(--lm-landing-pad);
+  /* 76px down, as the canvas sets its copy — the panel reads as sitting high on
+     the ramp, with the capsule just clear above it. */
+  top: 76px;
+  width: min(600px, calc(100% - var(--lm-landing-pad) * 2));
+  padding: var(--space-11) 30px var(--space-10);
+  background: var(--surface-chrome);
+  border: var(--hairline) solid var(--border-panel);
+  border-radius: var(--radius-12);
+  box-shadow: var(--shadow-panel);
+}
+
+.lm-hero__title {
+  margin: 0 0 var(--space-8);
+  font-size: 38px;
+  font-weight: var(--weight-semibold);
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+}
+
+.lm-hero__lede {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-17);
+  line-height: var(--leading-body);
+  color: var(--text-primary);
+  text-wrap: pretty;
+}
+
+/* The caution is a standing fact carried at chrome weight — one dot, one line —
+   not a coloured slab. */
+.lm-caution {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-7);
+  margin-bottom: var(--space-9);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-8);
+}
+
+.lm-caution__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--status-overscale);
+}
+
+.lm-caution__term {
+  flex: none;
+  font-size: var(--text-11);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--status-overscale);
+}
+
+.lm-caution__body {
+  font-size: var(--text-13);
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.lm-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+}
+
+.lm-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: var(--radius-8);
+  border: var(--hairline) solid var(--border-panel);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  font-weight: var(--weight-medium);
+}
+
+.lm-btn:hover {
+  color: var(--text-primary);
+  text-decoration: none;
+  background: var(--state-flat-hover);
+}
+
+.lm-btn--primary {
+  border-color: var(--chrome-ink);
+  background: var(--chrome-ink);
+  color: var(--chrome-surface);
+  font-weight: var(--weight-semibold);
+}
+
+.lm-btn--primary:hover {
+  background: var(--chrome-ink);
+  color: var(--chrome-surface);
+  opacity: 0.9;
+}
+
+/* The proof strip and the two guide cards sit on the chrome panel below the
+   hero, the way option 1a lays the page out. */
+.lm-strip,
+.lm-cards {
+  padding: 44px var(--lm-landing-pad) 0;
+  background: var(--chrome-panel);
+}
+
+.lm-cards {
+  padding-bottom: 52px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-7);
+}
+
+.lm-strip__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-bottom: var(--space-9);
+}
+
+.lm-strip__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: var(--weight-semibold);
+  line-height: 1.2;
+}
+
+.lm-strip__note {
+  font-size: var(--text-13);
+  color: var(--text-secondary);
+}
+
+.lm-strip__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-7);
+  margin-bottom: 34px;
+}
+
+/* The framed handhelds keep their own proportions and sit centred under the
+   desktop row rather than in it. */
+.lm-strip__devices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 34px;
+  margin-bottom: 34px;
+}
+
+.lm-device {
+  margin: 0;
+  text-align: center;
+}
+
+.lm-device img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.lm-device figcaption,
+.lm-shot figcaption {
+  margin-top: var(--space-4);
+  font-size: var(--text-13);
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+
+.lm-device figcaption b,
+.lm-shot figcaption b {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.lm-shot {
+  margin: 0;
+}
+
+.lm-shot img {
+  width: 100%;
+  aspect-ratio: 1600 / 1021;
+  object-fit: cover;
+  display: block;
+  border: var(--hairline) solid var(--border-panel);
+  border-radius: var(--radius-6);
+}
+
+.lm-card {
+  display: block;
+  padding: var(--space-9) var(--space-10);
+  background: var(--surface-chrome);
+  border: var(--hairline) solid var(--border-panel);
+  border-radius: var(--radius-12);
+  box-shadow: var(--shadow-panel);
+}
+
+.lm-card:hover {
+  background: var(--chrome-hover-fill);
+  text-decoration: none;
+}
+
+.lm-card__bars {
+  display: flex;
+  gap: 3px;
+  margin-bottom: var(--space-7);
+}
+
+.lm-card__bars > span {
+  width: 26px;
+  height: 6px;
+  border-radius: 3px;
+}
+
+.lm-card__title {
+  display: block;
+  margin-bottom: var(--space-3);
+  font-size: 18px;
+  font-weight: var(--weight-semibold);
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.lm-card__body {
+  display: block;
+  font-size: var(--text-14);
+  line-height: var(--leading-body);
+  color: var(--text-secondary);
+}
+
+/* The tail prose carries the landing's remaining links. It continues the same
+   panel the cards sit on, so the page ends on one surface. */
+.lm-tail {
+  padding: 0 clamp(var(--space-10), 5vw, 64px) 52px;
+  background: var(--chrome-panel);
+}
+
+.lm-tail > :last-child {
+  margin-bottom: 0;
+}
+
+/* ── narrow ─────────────────────────────────────────────────────────────── */
+
+/* At 390px the rail is already a bubble (Docusaurus's own toggle) and the
+   capsule survives: it loses the guide links to the drawer but keeps the mark
+   and the wordmark. The ladder takes the narrow column better than a
+   screenshot hero would. */
+@media (max-width: 996px) {
+  /* The guide links move into the drawer at this width, so the rule that
+     separated them from the wordmark would divide the capsule from nothing. */
+  .navbar__brand {
+    margin-right: 0;
+    padding-right: 0;
+    border-right: none;
+  }
+
+  /* The panel cannot float inside a fixed hero on a narrow screen — it is
+     taller than the hero. The hero grows to the panel instead, and the bands
+     (absolute, inset 0) fill whatever height that comes to. */
+  .lm-hero {
+    height: auto;
+    padding: calc(var(--ifm-navbar-height) + var(--space-6)) var(--space-8) var(--space-10);
+  }
+
+  /* relative, not static: the bands are absolute and would otherwise paint
+     over a static panel and hide the whole hero. */
+  .lm-hero__panel {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: auto;
+  }
+
+  .lm-hero__legendItem,
+  .lm-hero__sounding {
+    display: none;
+  }
+
+  .lm-cards,
+  .lm-strip__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-doc-markdown {
+    padding: var(--space-9) var(--space-9) 34px;
+    border-radius: var(--radius-8);
+  }
+}
+
+@media (max-width: 560px) {
+  .lm-hero__title {
+    font-size: 30px;
+  }
+
+  .lm-hero__lede {
+    font-size: var(--text-16);
+  }
+
+  .lm-hero__actions .lm-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
 }
