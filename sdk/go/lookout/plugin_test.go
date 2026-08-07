@@ -29,8 +29,8 @@ func startWindline(t *testing.T) *windlineTest {
 	t.Helper()
 	resetHost()
 	p := &windlineTest{
-		boat: Position("navigation.position"),
-		twd:  Number("environment.wind.directionTrue", InputOpts{Label: "wind"}),
+		boat: SubscribePosition("navigation.position"),
+		twd:  SubscribeNumber("environment.wind.directionTrue", InputOpts{Label: "wind"}),
 	}
 	Register(p)
 	if rc := dispatchStart([]byte(`{"abi":1,"config":{}}`)); rc != 0 {
@@ -141,7 +141,7 @@ func TestAClearedPathIsRemovalAndNotZero(t *testing.T) {
 
 func TestAnOptionalInputNeverHoldsTheDrawBack(t *testing.T) {
 	resetHost()
-	depth := Number("environment.depth.belowKeel", InputOpts{Optional: true})
+	depth := SubscribeNumber("environment.depth.belowKeel", InputOpts{Optional: true})
 	var seen bool
 	p := &funcPlugin{draw: func(c *Chart) {
 		_, seen = depth.Fresh()
@@ -241,11 +241,11 @@ func TestADrawMethodOfTheWrongShapeIsReported(t *testing.T) {
 	}
 }
 
-func TestAHostSpeakingAnotherABIIsRefused(t *testing.T) {
+func TestAHostSpeakingAnotherAPIIsRefused(t *testing.T) {
 	resetHost()
 	Register(&funcPlugin{draw: func(c *Chart) {}})
 	if rc := dispatchStart([]byte(`{"abi":2,"config":{}}`)); rc == 0 {
-		t.Fatal("an ABI mismatch must refuse the start")
+		t.Fatal("an API mismatch must refuse the start")
 	}
 }
 

@@ -1,4 +1,4 @@
-//! The raw ABI: the host imports, the event union and the JSON builders.
+//! The raw API: the host imports, the event union and the JSON builders.
 //!
 //! Tier 3. A plugin that fits tiers 1 and 2 never touches this module — the
 //! library above it owns the subscription, the timer, the scene and the
@@ -57,11 +57,11 @@ use crate::chart::{Color, Sym};
 use crate::json::{self, Json};
 use std::borrow::Cow;
 
-/// The ABI version this library speaks. `lk_abi` returns it.
-pub const ABI_VERSION: u32 = 1;
+/// The API version this library speaks. `lk_abi` returns it.
+pub const API_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
-// The host imports, exactly as the ABI freezes them
+// The host imports, exactly as the API freezes them
 // ---------------------------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
@@ -258,7 +258,7 @@ pub fn publish_json(s: &str) -> i32 {
 }
 
 /// Send a `{"targets":[...]}` batch. Speed over ground is METRES PER SECOND,
-/// not knots: everything crossing this ABI is SI.
+/// not knots: everything crossing this API is SI.
 pub fn ais_upsert_json(s: &str) -> i32 {
     unsafe { host_ais_upsert(s.as_ptr(), s.len() as u32) }
 }
@@ -664,7 +664,7 @@ pub enum Event<'a> {
 
 /// What `start` receives: the host's `{"abi":1,"config":{...}}`, parsed.
 pub struct Start<'a> {
-    pub abi: u32,
+    pub api: u32,
     /// The `config` object.
     pub config: Json<'a>,
 }
@@ -1227,7 +1227,7 @@ pub(crate) const KIND_WS_CLOSED: u32 = 14;
 pub(crate) const KIND_SHUTDOWN: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
-/// event carries both because a plugin needs both and the ABI carries one
+/// event carries both because a plugin needs both and the API carries one
 /// payload per event.
 pub(crate) fn http_response(request: i64, payload: &[u8]) -> HttpResponse<'_> {
     let bad = HttpResponse {

@@ -24,7 +24,7 @@ const earthRadiusM = 6371008.8
 // NM is a distance in metres from a distance in nautical miles.
 func NM(n float64) float64 { return n * NauticalMile }
 
-// Knots is knots from metres per second. Everything crossing the ABI is SI;
+// Knots is knots from metres per second. Everything crossing the API is SI;
 // this is for text a mariner reads.
 func Knots(mps float64) float64 { return mps * 1.9438444924406046 }
 

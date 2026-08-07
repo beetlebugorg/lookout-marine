@@ -1,4 +1,4 @@
-//! The host side of the plugin ABI: the twenty-seven native functions a plugin
+//! The host side of the plugin API: the twenty-seven native functions a plugin
 //! imports from module `lookout`, the grants that gate them, and the one I/O
 //! thread that owns sockets, timers and the subscriber fanout.
 //!
@@ -1598,7 +1598,7 @@ pub const Broker = struct {
     /// import, so a path a mariner did not choose cannot be opened.
     ///
     /// The picker that would call this is chrome nobody has built. The API is
-    /// here so that when it is built, nothing about the ABI has to change — and
+    /// here so that when it is built, nothing about the API has to change — and
     /// so a plugin like the GRIB reader can be driven from the harness today.
     pub fn grantFile(self: *Broker, plugin: u32, path: []const u8, write: bool) !i64 {
         const cwd = std.Io.Dir.cwd();
@@ -1865,7 +1865,7 @@ fn fetchCancelled(f: *Fetch) bool {
 }
 
 /// `u32 json_len | status+headers JSON | raw body`. One buffer, because a
-/// plugin needs both halves and the ABI carries one payload per event.
+/// plugin needs both halves and the API carries one payload per event.
 fn deliverFetch(f: *Fetch, resp: *webio.Response) void {
     if (fetchCancelled(f)) return;
     const alloc = f.br.alloc;
@@ -2119,7 +2119,7 @@ fn wsDrainOut(w: *Ws, stream: *webio.Stream) bool {
     }
 }
 
-/// One reassembled message. A binary message is dropped with a line: the ABI
+/// One reassembled message. A binary message is dropped with a line: the API
 /// carries WS_DATA as text, and a plugin handed bytes it cannot tell from text
 /// would parse them as JSON.
 fn wsMessage(w: *Ws, opcode: webio.Opcode, payload: []const u8) void {

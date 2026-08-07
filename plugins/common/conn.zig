@@ -11,23 +11,24 @@
 //!       .State = struct { framer: Framer = .{} },
 //!   });
 //!
-//!   pub fn onData(row: *Connections.Row, bytes: []const u8) void { … }
+//!   pub fn onData(conn: *Connections.Connection, bytes: []const u8) void { … }
 //!
 //! and the library owns everything else: the settings list schema, one socket
-//! per row, the reconnect clock, the failure count behind "unreachable", the
-//! pause switch, the per-row status item and the plugin's own status line.
+//! per connection, the reconnect clock, the failure count behind
+//! "unreachable", the pause switch, the per-row status item and the plugin's
+//! own status line.
 //!
-//! ROWS ARE MATCHED BY ID. Editing one row never disturbs another's
-//! connection: only an address change, a pause or a delete closes a socket.
+//! CONNECTIONS ARE MATCHED BY ID. Editing one connection never disturbs
+//! another: only an address change, a pause or a delete closes a socket.
 //!
 //! The plugin may declare, on its root:
 //!
-//!   onData(row, bytes)      required — the bytes off the wire
-//!   onOpen(row)             a stream opened; send a subscription here
-//!   onClose(row)            a stream ended
-//!   rowNote(row)            a phrase to add after a connected row's rate
-//!   endpoint(row)           where to dial, when it is not the row's host and
-//!                           port — a websocket URL, say
+//!   onData(conn, bytes)     required: the bytes off the wire
+//!   onOpen(conn)            a stream opened; send a subscription here
+//!   onClose(conn)           a stream ended
+//!   connectionNote(conn)    a phrase to add after the connection's rate
+//!   endpoint(conn)          where to dial, when it is not the connection's
+//!                           host and port: a websocket URL, say
 //!
 //! This file imports the raw shim and the schema, and nothing above them.
 
@@ -35,19 +36,19 @@ const std = @import("std");
 const raw = @import("lk.zig");
 const schema = @import("schema.zig");
 
-/// Where one row is dialled.
+/// Where one connection is dialled.
 pub const Endpoint = union(enum) {
     tcp: struct { host: []const u8, port: u16 },
     /// A websocket URL. The manifest must grant `net.ws` for its host.
     ws: []const u8,
-    /// This row cannot be dialled, and the text says why. The library stops
-    /// retrying and shows the reason on the row.
+    /// This connection cannot be dialled, and the text says why. The library
+    /// stops retrying and shows the reason on the connection's line.
     refused: []const u8,
 };
 
 /// How one connection list behaves.
 pub const Opts = struct {
-    /// The config key the row array arrives under.
+    /// The config key the connection array arrives under.
     key: []const u8,
     /// The section heading in the settings window.
     group: []const u8,
@@ -59,24 +60,25 @@ pub const Opts = struct {
     columns: schema.RowColumns = .{},
     /// Columns beyond the four, as a struct shaped like a settings group.
     Extra: type = struct {},
-    /// Per-row state the plugin keeps: a framer, a parser, an identity.
+    /// Per-connection state the plugin keeps: a framer, a parser, an
+    /// identity.
     State: type = struct {},
 
     /// Delay before a dropped connection is retried.
     reconnect_ms: i64 = 2_000,
-    /// Failed connects in a row before a row reads as unreachable rather than
-    /// reconnecting. Three tries is six seconds of silence.
+    /// Failed connects in a row before a connection reads as unreachable
+    /// rather than reconnecting. Three tries is six seconds of silence.
     unreachable_after: u32 = 3,
     /// How often the status is rebuilt, and the window a rate is averaged
     /// over.
     status_ms: i64 = 2_000,
-    /// What `row.count` counts, for the status: "42 msg/s".
+    /// What `conn.count` counts, for the status: "42 msg/s".
     rate_noun: []const u8 = "msg",
-    /// The plugin's status detail when the mariner has added no rows.
+    /// The plugin's status detail when the mariner has added no connections.
     status_empty: []const u8 = "nothing configured",
-    /// What a row says once it has read as unreachable.
+    /// What a connection says once it has read as unreachable.
     no_answer_detail: []const u8 = "check the address",
-    /// What a row says when the host would not dial it at all. That only
+    /// What a connection says when the host would not dial it at all. That only
     /// happens when the manifest's grant does not cover the address, and only
     /// the plugin knows which grant it asked for.
     refused_detail: []const u8 = "the host refused this address",
@@ -89,9 +91,10 @@ pub const RowState = enum {
     /// Dialled and dialled and nothing answered.
     no_answer,
     paused,
-    /// The row has no address, or a port nothing can dial.
+    /// The connection has no address, or a port nothing can dial.
     no_address,
-    /// The endpoint refused the row outright: a grant that does not cover it.
+    /// The endpoint refused the connection outright: a grant that does not
+    /// cover it.
     refused,
 
     fn text(self: RowState) []const u8 {
@@ -159,7 +162,7 @@ pub fn Connections(comptime opts: Opts) type {
 
         /// One connection: the row the mariner filled in, the plugin's own
         /// state for it, and the socket the library holds.
-        pub const Row = struct {
+        pub const Connection = struct {
             /// The shell's id for this row. It survives an edit, and it is
             /// what a status item points at.
             id: schema.Str(32) = .{},
@@ -171,7 +174,7 @@ pub fn Connections(comptime opts: Opts) type {
             enabled: bool = true,
             /// The plugin's own columns.
             cols: ColumnValues(opts.Extra) = .{},
-            /// The plugin's own state for this row.
+            /// The plugin's own state for this connection.
             state: opts.State = .{},
 
             used: bool = false,
@@ -193,43 +196,46 @@ pub fn Connections(comptime opts: Opts) type {
             rate: u64 = 0,
             detail: schema.Str(64) = .{},
 
-            /// What to call this row: the mariner's name, or the address.
-            pub fn label(self: *const Row) []const u8 {
+            /// What to call this connection: the mariner's name, or the
+            /// address.
+            pub fn label(self: *const Connection) []const u8 {
                 return if (self.name.len > 0) self.name.text() else self.host.text();
             }
 
             /// True while the stream is up.
-            pub fn connected(self: *const Row) bool {
+            pub fn connected(self: *const Connection) bool {
                 return self.conn == .connected;
             }
 
-            /// Write to this row's stream. Returns the bytes queued, or -1.
-            pub fn send(self: *Row, bytes: []const u8) i32 {
+            /// Write to this connection's stream. Returns the bytes queued,
+            /// or -1.
+            pub fn send(self: *Connection, bytes: []const u8) i32 {
                 if (self.sock < 0) return -1;
                 return if (self.ws) raw.wsSend(self.sock, bytes) else raw.tcpSend(self.sock, bytes);
             }
 
-            /// Count `n` of whatever this row carries. The library turns it
-            /// into the rate on the row's status line and in the plugin's.
-            pub fn count(self: *Row, n: u64) void {
+            /// Count `n` of whatever this connection carries. The library
+            /// turns it into the rate on the connection's status line and in
+            /// the plugin's.
+            pub fn count(self: *Connection, n: u64) void {
                 self.counted += n;
             }
 
-            /// Add a phrase to this row's status line, after the state. Say
-            /// nothing that only repeats the state.
-            pub fn setDetail(self: *Row, comptime fmt: []const u8, args: anytype) void {
+            /// Add a phrase to this connection's status line, after the
+            /// state. Say nothing that only repeats the state.
+            pub fn setDetail(self: *Connection, comptime fmt: []const u8, args: anytype) void {
                 var buf: [64]u8 = undefined;
                 var w = std.Io.Writer.fixed(&buf);
                 w.print(fmt, args) catch {};
                 self.detail.set(w.buffered());
             }
 
-            /// A row with no address cannot be dialled.
-            fn usable(self: *const Row) bool {
+            /// A connection with no address cannot be dialled.
+            fn usable(self: *const Connection) bool {
                 return self.host.len > 0 and self.port > 0;
             }
 
-            fn closeSocket(self: *Row) void {
+            fn closeSocket(self: *Connection) void {
                 if (self.sock >= 0) {
                     if (self.ws) raw.wsClose(self.sock) else raw.tcpClose(self.sock);
                 }
@@ -239,14 +245,14 @@ pub fn Connections(comptime opts: Opts) type {
                 self.rate = 0;
             }
 
-            fn scheduleRetry(self: *Row) void {
+            fn scheduleRetry(self: *Connection) void {
                 if (self.retry_timer >= 0) return;
                 if (!self.enabled or !self.usable()) return;
                 const id = raw.timerSet(opts.reconnect_ms, false);
                 if (id >= 0) self.retry_timer = id;
             }
 
-            fn noteFailure(self: *Row) void {
+            fn noteFailure(self: *Connection) void {
                 if (self.failures < opts.unreachable_after) self.failures += 1;
                 if (self.failures >= opts.unreachable_after) {
                     self.conn = .no_answer;
@@ -258,18 +264,44 @@ pub fn Connections(comptime opts: Opts) type {
             }
         };
 
-        var rows: [schema.max_rows]Row = @splat(.{});
+        var conns: [schema.max_rows]Connection = @splat(.{});
         var status_timer: i64 = -1;
         var last_status: schema.Str(768) = .{};
 
-        /// Every row the mariner has, in slot order.
-        pub fn all() []Row {
-            return &rows;
+        /// The used connections, in the order the settings window shows.
+        fn ordered(buf: *[schema.max_rows]*Connection) []*Connection {
+            var n: usize = 0;
+            for (&conns) |*r| {
+                if (!r.used) continue;
+                buf[n] = r;
+                n += 1;
+            }
+            // A `for (1..n)` would be a REVERSED range when n is 0, which is
+            // undefined with safety off, so this is a while.
+            var i: usize = 1;
+            while (i < n) : (i += 1) {
+                var j = i;
+                while (j > 0 and buf[j - 1].order > buf[j].order) : (j -= 1) {
+                    const tmp = buf[j - 1];
+                    buf[j - 1] = buf[j];
+                    buf[j] = tmp;
+                }
+            }
+            return buf[0..n];
         }
 
-        /// The row with this id, or null.
-        pub fn byId(id: []const u8) ?*Row {
-            for (&rows) |*r| {
+        /// Every connection the mariner has, in the order the settings window
+        /// shows. The slice is rebuilt on each call.
+        pub fn all() []*Connection {
+            const S = struct {
+                var buf: [schema.max_rows]*Connection = undefined;
+            };
+            return ordered(&S.buf);
+        }
+
+        /// The connection with this id, or null.
+        pub fn byId(id: []const u8) ?*Connection {
+            for (&conns) |*r| {
                 if (r.used and r.id.eql(id)) return r;
             }
             return null;
@@ -294,7 +326,7 @@ pub fn Connections(comptime opts: Opts) type {
                 postStatus(P);
                 return true;
             }
-            for (&rows) |*r| {
+            for (&conns) |*r| {
                 if (!r.used or r.retry_timer != id) continue;
                 r.retry_timer = -1;
                 open(P, r);
@@ -336,7 +368,7 @@ pub fn Connections(comptime opts: Opts) type {
         }
 
         pub fn lkShutdown() void {
-            for (&rows) |*r| {
+            for (&conns) |*r| {
                 if (!r.used) continue;
                 r.closeSocket();
                 r.used = false;
@@ -347,21 +379,21 @@ pub fn Connections(comptime opts: Opts) type {
 
         // ---- the connection itself ------------------------------------------
 
-        fn bySocket(id: i64, ws: bool) ?*Row {
-            for (&rows) |*r| {
+        fn bySocket(id: i64, ws: bool) ?*Connection {
+            for (&conns) |*r| {
                 if (r.used and r.sock == id and r.ws == ws) return r;
             }
             return null;
         }
 
-        fn where(comptime P: type, r: *Row) Endpoint {
+        fn where(comptime P: type, r: *Connection) Endpoint {
             if (@hasDecl(P, "endpoint")) return P.endpoint(r);
             return .{ .tcp = .{ .host = r.host.text(), .port = r.port } };
         }
 
         /// Ask for a connection. The result arrives later as an open or a
         /// close event, so only an outright refusal is visible here.
-        fn open(comptime P: type, r: *Row) void {
+        fn open(comptime P: type, r: *Connection) void {
             if (!r.enabled) {
                 r.conn = .paused;
                 return;
@@ -389,7 +421,8 @@ pub fn Connections(comptime opts: Opts) type {
                 r.sock = -1;
                 // The host would not make the call at all, and the only reason
                 // it does that is the grant. Retrying is a refusal every two
-                // seconds for ever, so the row stops and says what is wrong.
+                // seconds for ever, so the connection stops and says what is
+                // wrong.
                 if (r.ws) {
                     r.conn = .refused;
                     r.detail.set(opts.refused_detail);
@@ -400,7 +433,7 @@ pub fn Connections(comptime opts: Opts) type {
             }
         }
 
-        fn opened(comptime P: type, r: *Row) void {
+        fn opened(comptime P: type, r: *Connection) void {
             r.conn = .connected;
             r.failures = 0;
             r.last_counted = r.counted;
@@ -410,11 +443,11 @@ pub fn Connections(comptime opts: Opts) type {
             postStatus(P);
         }
 
-        fn ended(comptime P: type, r: *Row) void {
+        fn ended(comptime P: type, r: *Connection) void {
             r.sock = -1;
             if (@hasDecl(P, "onClose")) P.onClose(r);
-            // The close of a row the mariner just switched off is not a
-            // failure, and must not read as one.
+            // The close of a connection the mariner just switched off is not
+            // a failure, and must not read as one.
             if (r.enabled and r.usable()) {
                 r.noteFailure();
                 r.scheduleRetry();
@@ -424,7 +457,7 @@ pub fn Connections(comptime opts: Opts) type {
 
         /// Take the mariner's list and make the streams match it.
         fn reconcile(comptime P: type, config: std.json.Value) void {
-            for (&rows) |*r| r.seen = false;
+            for (&conns) |*r| r.seen = false;
 
             const list = listOf(config);
             for (list, 0..) |item, order| {
@@ -467,8 +500,8 @@ pub fn Connections(comptime opts: Opts) type {
                     r.closeSocket();
                     r.conn = .no_address;
                 } else if (moved or !was_enabled) {
-                    // A new address, or a row just switched back on: start
-                    // over, including the count behind "unreachable".
+                    // A new address, or a connection just switched back on:
+                    // start over, including the count behind "unreachable".
                     r.closeSocket();
                     r.failures = 0;
                     r.conn = .reconnecting;
@@ -479,8 +512,8 @@ pub fn Connections(comptime opts: Opts) type {
                 }
             }
 
-            // A row the mariner deleted takes its stream with it.
-            for (&rows) |*r| {
+            // A connection the mariner deleted takes its stream with it.
+            for (&conns) |*r| {
                 if (!r.used or r.seen) continue;
                 r.closeSocket();
                 r.* = .{};
@@ -496,8 +529,8 @@ pub fn Connections(comptime opts: Opts) type {
             };
         }
 
-        fn freeSlot() ?*Row {
-            for (&rows) |*r| {
+        fn freeSlot() ?*Connection {
+            for (&conns) |*r| {
                 if (!r.used) return r;
             }
             return null;
@@ -527,29 +560,12 @@ pub fn Connections(comptime opts: Opts) type {
         /// The item ids are the row ids the shell assigned, which is how each
         /// row's line finds its way back to the right row.
         fn postStatus(comptime P: type) void {
-            var order: [schema.max_rows]*Row = undefined;
-            var n: usize = 0;
-            for (&rows) |*r| {
-                if (!r.used) continue;
-                order[n] = r;
-                n += 1;
-            }
-            // In the mariner's order, not the slot order. A `for (1..n)` would
-            // be a REVERSED range when n is 0, which is undefined with safety
-            // off, so this is a while.
-            var i: usize = 1;
-            while (i < n) : (i += 1) {
-                var j = i;
-                while (j > 0 and order[j - 1].order > order[j].order) : (j -= 1) {
-                    const tmp = order[j - 1];
-                    order[j - 1] = order[j];
-                    order[j] = tmp;
-                }
-            }
+            var order_buf: [schema.max_rows]*Connection = undefined;
+            const order = ordered(&order_buf);
 
             var live: usize = 0;
             var total: u64 = 0;
-            for (order[0..n]) |r| {
+            for (order) |r| {
                 sampleRate(r);
                 if (r.connected()) {
                     live += 1;
@@ -564,17 +580,17 @@ pub fn Connections(comptime opts: Opts) type {
             b.raw(",\"detail\":");
             var detail: [120]u8 = undefined;
             var d = raw.Buf.init(&detail);
-            if (n == 0) {
+            if (order.len == 0) {
                 d.raw(opts.status_empty);
             } else if (live > 0) {
-                d.print("{d} of {d} connected, {d} {s}/s", .{ live, n, total, opts.rate_noun });
+                d.print("{d} of {d} connected, {d} {s}/s", .{ live, order.len, total, opts.rate_noun });
             } else {
-                d.print("0 of {d} connected", .{n});
+                d.print("0 of {d} connected", .{order.len});
             }
             b.str(d.bytes());
 
             b.raw(",\"items\":[");
-            for (order[0..n], 0..) |r, k| {
+            for (order, 0..) |r, k| {
                 if (k > 0) b.raw(",");
                 b.raw("{\"id\":");
                 b.str(r.id.text());
@@ -585,8 +601,8 @@ pub fn Connections(comptime opts: Opts) type {
                 var lw = raw.Buf.init(&line);
                 if (r.connected()) {
                     lw.print("{d} {s}/s", .{ r.rate, opts.rate_noun });
-                    if (@hasDecl(P, "rowNote")) {
-                        const note = P.rowNote(r);
+                    if (@hasDecl(P, "connectionNote")) {
+                        const note = P.connectionNote(r);
                         if (note.len > 0) lw.print(", {s}", .{note});
                     }
                 } else lw.raw(r.detail.text());
@@ -595,9 +611,9 @@ pub fn Connections(comptime opts: Opts) type {
             }
             b.raw("]}");
             if (b.overflowed) {
-                // Too many rows to describe at once: the line still goes out,
-                // so the chrome never falls silent.
-                raw.status(if (live > 0) "running" else "degraded", "{d} of {d} connected", .{ live, n });
+                // Too many connections to describe at once: the line still
+                // goes out, so the chrome never falls silent.
+                raw.status(if (live > 0) "running" else "degraded", "{d} of {d} connected", .{ live, order.len });
                 return;
             }
             // The host logs a status text it has not seen, so a 2 s repeat of
@@ -607,7 +623,7 @@ pub fn Connections(comptime opts: Opts) type {
             raw.statusJson(b.bytes());
         }
 
-        fn sampleRate(r: *Row) void {
+        fn sampleRate(r: *Connection) void {
             const diff = r.counted - r.last_counted;
             r.last_counted = r.counted;
             if (!r.connected()) {

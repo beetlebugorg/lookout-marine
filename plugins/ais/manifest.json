@@ -1,7 +1,7 @@
 {
   "id": "org.beetlebug.ais",
   "name": "AIS targets",
-  "abi": 1,
+  "api": 1,
   "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"],
   "settings": {
     "groups": [

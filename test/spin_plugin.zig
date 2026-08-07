@@ -37,7 +37,7 @@ var events: u32 = 0;
 var spins: u32 = 0;
 
 pub fn start(s: lk.Start) !void {
-    lk.logf(.info, "spin start, abi {d}", .{s.abi});
+    lk.logf(.info, "spin start, api {d}", .{s.api});
     draw();
     lk.status("running", "not spinning yet", .{});
 }

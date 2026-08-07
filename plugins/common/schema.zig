@@ -40,7 +40,7 @@ pub const Tab = enum {
 };
 
 /// A number the mariner sets. `unit` is shown beside the control; the value
-/// crosses the ABI in that unit and is clamped into the range before it
+/// crosses the API in that unit and is clamped into the range before it
 /// arrives.
 pub const Num = struct {
     label: []const u8,
@@ -59,7 +59,7 @@ pub const Flag = struct {
 };
 
 /// A line of text. Legal only as a column of a connection row: a scalar
-/// setting crosses the ABI as a number and the host keeps no scalar string.
+/// setting crosses the API as a number and the host keeps no scalar string.
 pub const Text = struct {
     label: []const u8,
     desc: []const u8 = "",

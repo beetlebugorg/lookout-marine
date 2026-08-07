@@ -7,8 +7,8 @@ package lookout
 // holds Draw back while a required input is missing or stale.
 //
 //	var (
-//		boat = lk.Position("navigation.position")
-//		twd  = lk.Number("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
+//		boat = lk.SubscribePosition("navigation.position")
+//		twd  = lk.SubscribeNumber("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
 //	)
 
 import (
@@ -140,9 +140,9 @@ func lastSegment(path string) string {
 // direction.
 type NumberInput struct{ input }
 
-// Number declares a numeric input. Call it from a package-level variable, so it
+// SubscribeNumber declares a numeric input. Call it from a package-level variable, so it
 // is registered before the host starts the plugin. Pass at most one InputOpts.
-func Number(path string, opts ...InputOpts) *NumberInput {
+func SubscribeNumber(path string, opts ...InputOpts) *NumberInput {
 	n := &NumberInput{input: newInput(path, false, opts)}
 	register(&n.input)
 	return n
@@ -164,8 +164,8 @@ func (n *NumberInput) Fresh() (float64, bool) {
 // PositionInput is a position off the vessel store.
 type PositionInput struct{ input }
 
-// Position declares a position input. Pass at most one InputOpts.
-func Position(path string, opts ...InputOpts) *PositionInput {
+// SubscribePosition declares a position input. Pass at most one InputOpts.
+func SubscribePosition(path string, opts ...InputOpts) *PositionInput {
 	p := &PositionInput{input: newInput(path, true, opts)}
 	register(&p.input)
 	return p
@@ -204,8 +204,8 @@ type AISInput struct {
 	atMono int64
 }
 
-// AIS declares the AIS target set. The library subscribes at start.
-func AIS(opts ...AISOpts) *AISInput {
+// SubscribeAIS declares the AIS target set. The library subscribes at start.
+func SubscribeAIS(opts ...AISOpts) *AISInput {
 	max := 128
 	if len(opts) > 0 && opts[0].Max > 0 {
 		max = opts[0].Max

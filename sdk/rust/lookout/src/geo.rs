@@ -8,7 +8,7 @@ pub fn nm(n: f64) -> f64 {
     n * NM_M
 }
 
-/// Knots from metres per second. Everything crossing the ABI is SI; this is
+/// Knots from metres per second. Everything crossing the API is SI; this is
 /// for text a mariner reads.
 pub fn knots(mps: f64) -> f64 {
     mps * 1.943_844_492_440_604_6

@@ -6,6 +6,6 @@ description = "The Lookout plugin API: inputs, draw, settings and connections"
 publish = false
 
 # No dependencies, on purpose. A plugin SDK that pulls a crate tree makes the
-# module bigger, the build slower and the supply chain longer, and the ABI is
+# module bigger, the build slower and the supply chain longer, and the API is
 # small enough not to need one. Add serde to YOUR plugin if you want it.
 [dependencies]

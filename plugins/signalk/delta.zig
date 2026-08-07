@@ -20,7 +20,7 @@
 
 const std = @import("std");
 
-/// The vessel paths the host reads. Same names as the ABI's table.
+/// The vessel paths the host reads. Same names as the API's table.
 pub const Path = enum {
     position,
     heading_true,

@@ -15,8 +15,8 @@ package main
 import lk "github.com/beetlebugorg/lookout-marine/sdk/go/lookout"
 
 var (
-	boat = lk.Position("navigation.position")
-	twd  = lk.Number("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
+	boat = lk.SubscribePosition("navigation.position")
+	twd  = lk.SubscribeNumber("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
 )
 
 type windline struct{}

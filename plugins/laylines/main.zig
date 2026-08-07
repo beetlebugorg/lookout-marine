@@ -15,8 +15,8 @@ comptime {
 }
 
 pub const inputs = struct {
-    pub const boat = lk.position("navigation.position", .{});
-    pub const twd = lk.number("environment.wind.directionTrue", .{ .label = "wind" });
+    pub const boat = lk.subscribePosition("navigation.position", .{});
+    pub const twd = lk.subscribeNumber("environment.wind.directionTrue", .{ .label = "wind" });
 };
 
 /// Dashed, and light: a layline is where the boat could go, not anything

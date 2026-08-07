@@ -9,7 +9,7 @@
 //! Units are SI on both sides but not in between: the parser already returns
 //! sentence speeds in m/s, while an AIS position report carries speed over
 //! ground in knots. The conversion happens here, once, so `fromAis` hands back
-//! metres per second like everything else crossing the ABI.
+//! metres per second like everything else crossing the API.
 
 const std = @import("std");
 const parser = @import("parser.zig");

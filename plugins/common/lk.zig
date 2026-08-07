@@ -1,4 +1,4 @@
-//! The plugin side of the lookout ABI. Import this, declare two functions, and
+//! The plugin side of the lookout API. Import this, declare two functions, and
 //! you have a plugin.
 //!
 //!   const lk = @import("lk");
@@ -19,7 +19,7 @@
 //! `registerPlugin` emits the five exports PROTOTYPE.md requires — lk_abi,
 //! lk_alloc, lk_free, lk_start, lk_event — and routes lk_start / lk_event to
 //! your two functions. Unknown event kinds are answered 0 without reaching you,
-//! which is what the ABI says must happen.
+//! which is what the API says must happen.
 //!
 //! TARGET. wasm32-freestanding: no WASI, no filesystem, no clock but the two
 //! the host lends you, and no threads. Everything is single-threaded by
@@ -44,8 +44,8 @@
 
 const std = @import("std");
 
-/// The ABI version this library speaks. `lk_abi` returns it.
-pub const abi_version: u32 = 1;
+/// The API version this library speaks. `lk_abi` returns it.
+pub const api_version: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // The host imports, exactly as PROTOTYPE.md freezes them
@@ -116,7 +116,7 @@ pub fn publishJson(json: []const u8) i32 {
 }
 
 /// Upsert a `{"targets":[...]}` batch. `sog` is METRES PER SECOND, not knots:
-/// everything crossing this ABI is SI.
+/// everything crossing this API is SI.
 pub fn aisUpsertJson(json: []const u8) i32 {
     return host.ais_upsert(json.ptr, @intCast(json.len));
 }
@@ -611,7 +611,7 @@ pub const Event = union(enum) {
 
 /// What `start` receives: the host's `{"abi":1,"config":{...}}`, parsed.
 pub const Start = struct {
-    abi: u32,
+    api: u32,
     /// The `config` object. Use `cfgStr` / `cfgInt` to read it.
     config: std.json.Value,
 };
@@ -632,7 +632,7 @@ const kind_ws_closed: u32 = 14;
 const kind_shutdown: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
-/// event carries both because a plugin needs both and the ABI carries one
+/// event carries both because a plugin needs both and the API carries one
 /// payload per event.
 fn parseHttpResponse(request: i64, payload: []const u8) HttpResponse {
     if (payload.len < 4) return .{ .request = request, .status = 0, .head = "", .body = "" };
@@ -670,14 +670,14 @@ fn envelope(payload: []const u8) ?std.json.Value {
     return root;
 }
 
-/// Emit the five ABI exports and wire them to `P.start` and `P.onEvent`.
+/// Emit the five exports and wire them to `P.start` and `P.onEvent`.
 /// Call once, at container scope, from the plugin's root file:
 ///
 ///   comptime { lk.registerPlugin(@This()); }
 pub fn registerPlugin(comptime P: type) void {
     const Impl = struct {
-        fn abi() callconv(.c) u32 {
-            return abi_version;
+        fn api() callconv(.c) u32 {
+            return api_version;
         }
 
         fn alloc(len: u32) callconv(.c) ?[*]u8 {
@@ -698,16 +698,16 @@ pub fn registerPlugin(comptime P: type) void {
                 return -1;
             };
             if (root != .object) return -1;
-            const abi_field: u32 = switch (root.object.get("abi") orelse std.json.Value{ .integer = 0 }) {
+            const api_field: u32 = switch (root.object.get("abi") orelse std.json.Value{ .integer = 0 }) {
                 .integer => |i| if (i > 0 and i <= 0xffff_ffff) @intCast(i) else 0,
                 else => 0,
             };
-            if (abi_field != abi_version) {
-                logf(.err, "lk_start: host speaks ABI {d}, this plugin speaks {d}", .{ abi_field, abi_version });
+            if (api_field != api_version) {
+                logf(.err, "lk_start: host speaks API {d}, this plugin speaks {d}", .{ api_field, api_version });
                 return -1;
             }
             const cfg = root.object.get("config") orelse std.json.Value{ .null = {} };
-            P.start(.{ .abi = abi_field, .config = cfg }) catch |e| {
+            P.start(.{ .api = api_field, .config = cfg }) catch |e| {
                 logf(.err, "start failed: {s}", .{@errorName(e)});
                 return -1;
             };
@@ -756,7 +756,7 @@ pub fn registerPlugin(comptime P: type) void {
                     } };
                 },
                 kind_shutdown => .shutdown,
-                // The ABI says an unknown kind is ignored and answered 0. A
+                // The API says an unknown kind is ignored and answered 0. A
                 // future host must be able to add events without breaking a
                 // plugin built today.
                 else => return 0,
@@ -768,7 +768,7 @@ pub fn registerPlugin(comptime P: type) void {
             return 0;
         }
     };
-    @export(&Impl.abi, .{ .name = "lk_abi", .linkage = .strong });
+    @export(&Impl.api, .{ .name = "lk_abi", .linkage = .strong });
     @export(&Impl.alloc, .{ .name = "lk_alloc", .linkage = .strong });
     @export(&Impl.free, .{ .name = "lk_free", .linkage = .strong });
     @export(&Impl.start, .{ .name = "lk_start", .linkage = .strong });

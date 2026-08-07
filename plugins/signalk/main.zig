@@ -6,15 +6,15 @@
 //! maps the paths it knows onto the host's own, and publishes them.
 //!
 //! Every server the mariner keeps is a row of the `servers` setting. The
-//! library owns the rows end to end — the socket, the reconnect clock, the
-//! pause switch and each row's line in the settings window — so this file is
+//! library owns the connections end to end: the socket, the reconnect clock,
+//! the pause switch and each row's line in the settings window. This file is
 //! the protocol and nothing else: what to send when a stream opens, and what
 //! each document means.
 //!
 //! Everything published lands in ONE source: the store sees the plugin, not
-//! the row. This plugin is a source of its own beside `nmea0183`, so a Signal K
-//! server and a NMEA gateway carrying the same path are arbitrated by the
-//! store's election rather than by whichever arrived last.
+//! the connection. This plugin is a source of its own beside `nmea0183`, so a
+//! Signal K server and a NMEA gateway carrying the same path are arbitrated by
+//! the store's election rather than by whichever arrived last.
 //!
 //! A document that is not JSON, a path outside the vocabulary and a vessel
 //! with no MMSI are counted and dropped without a log line, because a real
@@ -35,20 +35,21 @@ comptime {
 }
 
 pub const Connections = cfg.Connections;
-const Row = Connections.Row;
+const Connection = Connections.Connection;
 
-/// Longest websocket URL built for a row: the scheme, an address of up to 253
-/// bytes, a port and the spec's path.
+/// Longest websocket URL built for a connection: the scheme, an address of up
+/// to 253 bytes, a port and the spec's path.
 var url_buf: [320]u8 = undefined;
 
 /// What the mapping threw away, counted for the whole plugin: the store has
-/// one source whatever the row.
+/// one source whatever the connection.
 var counts: delta.Counts = .{};
 
-/// Where a row is dialled. The two transports differ here and nowhere else.
-pub fn endpoint(row: *Row) lk.Endpoint {
-    if (!row.cols.websocket) return .{ .tcp = .{ .host = row.host.text(), .port = row.port } };
-    const url = transport.wsUrl(&url_buf, row.host.text(), row.port) orelse
+/// Where a connection is dialled. The two transports differ here and nowhere
+/// else.
+pub fn endpoint(conn: *Connection) lk.Endpoint {
+    if (!conn.cols.websocket) return .{ .tcp = .{ .host = conn.host.text(), .port = conn.port } };
+    const url = transport.wsUrl(&url_buf, conn.host.text(), conn.port) orelse
         return .{ .refused = "the address is too long for a websocket URL" };
     return .{ .ws = url };
 }
@@ -56,27 +57,27 @@ pub fn endpoint(row: *Row) lk.Endpoint {
 /// A TCP stream starts with NO subscription — Signal K 1.8.2 fixes the initial
 /// policy at `none` — so a client that sends nothing receives nothing after
 /// the hello. The stream really starts here.
-pub fn onOpen(row: *Row) void {
-    const s = &row.state;
+pub fn onOpen(conn: *Connection) void {
+    const s = &conn.state;
     // A partial document and an identity from the last connection have nothing
     // to do with this one.
-    s.framer = transport.Framer.init(kind(row), &s.doc);
+    s.framer = transport.Framer.init(kind(conn), &s.doc);
     s.self_id.set("");
     // A websocket message is already one document, so the CR LF the TCP
     // framing needs would be two bytes of noise inside it.
-    _ = row.send(if (row.cols.websocket) transport.subscribe_body else transport.subscribe_all);
+    _ = conn.send(if (conn.cols.websocket) transport.subscribe_body else transport.subscribe_all);
 }
 
-pub fn onData(row: *Row, bytes: []const u8) void {
-    const s = &row.state;
-    if (s.framer.buf.len == 0) s.framer = transport.Framer.init(kind(row), &s.doc);
+pub fn onData(conn: *Connection, bytes: []const u8) void {
+    const s = &conn.state;
+    if (s.framer.buf.len == 0) s.framer = transport.Framer.init(kind(conn), &s.doc);
     var it = s.framer.feed(bytes);
     while (it.next()) |doc| {
-        row.count(1);
+        conn.count(1);
         switch (delta.parse(lk.scratch(), doc, s.self_id.text(), &counts)) {
             // A hello with no `self`, or one too long to keep, leaves the
             // identity empty. An empty identity matches no context, so own
-            // ship stays unpublished and the row's line says so.
+            // ship stays unpublished and the connection's line says so.
             .hello => |id| if (id.len > 0 and id.len <= cfg.max_identity) s.self_id.set(id),
             .own => |ups| publishOwn(ups),
             .target => |target| upsert(target),
@@ -87,12 +88,12 @@ pub fn onData(row: *Row, bytes: []const u8) void {
 
 /// A hello may leave `self` out. Deltas then carry a concrete vessel URN that
 /// nothing can match against own ship, and only the AIS targets get through.
-pub fn rowNote(row: *Row) []const u8 {
-    return if (row.rate > 0 and row.state.self_id.len == 0) "own ship not named" else "";
+pub fn connectionNote(conn: *Connection) []const u8 {
+    return if (conn.rate > 0 and conn.state.self_id.len == 0) "own ship not named" else "";
 }
 
-fn kind(row: *Row) transport.Kind {
-    return if (row.cols.websocket) .ws else .tcp;
+fn kind(conn: *Connection) transport.Kind {
+    return if (conn.cols.websocket) .ws else .tcp;
 }
 
 fn publishOwn(ups: delta.Updates) void {

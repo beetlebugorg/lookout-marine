@@ -2,8 +2,8 @@
 //!
 //! One boat can have several NMEA sources: a masthead AIS transponder on one
 //! address, a plotter bridging the instruments on another. Each is a row here,
-//! and the library gives each row its own socket, its own reconnect clock and
-//! its own line in the settings window.
+//! and the library gives each connection its own socket, its own reconnect
+//! clock and its own line in the settings window.
 //!
 //! The declaration is the whole schema. `lk.settingsJson` renders the
 //! manifest's `settings` block from it, and the test at the bottom checks that
@@ -81,12 +81,12 @@ test "the manifest ships the schema this file declares" {
     try lk.expectManifest(@embedFile("manifest.json"), .{Connections.lk_list});
 }
 
-test "a row starts at the column defaults the schema names" {
-    const row = Connections.Row{};
-    try t.expectEqual(@as(u16, 0), row.port);
-    try t.expect(row.enabled);
+test "a connection starts at the column defaults the schema names" {
+    const conn = Connections.Connection{};
+    try t.expectEqual(@as(u16, 0), conn.port);
+    try t.expect(conn.enabled);
     // The feeder is bound when the connection opens, and the assembler holds
     // no fragment until one arrives.
-    try t.expectEqual(@as(usize, 0), row.state.feeder.buf.len);
-    try t.expectEqual(@as(u64, 0), row.state.feeder.stats.lines);
+    try t.expectEqual(@as(usize, 0), conn.state.feeder.buf.len);
+    try t.expectEqual(@as(u64, 0), conn.state.feeder.stats.lines);
 }

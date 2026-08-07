@@ -433,7 +433,7 @@ fn stageAs(tmp: *std.testing.TmpDir, id: []const u8, manifest: []const u8) !void
 /// all; `files` is what the claim rests on.
 const grib_id = "org.beetlebug.grib";
 const grib_manifest =
-    \\{"id":"org.beetlebug.grib","name":"Weather files","abi":1,
+    \\{"id":"org.beetlebug.grib","name":"Weather files","api":1,
     \\ "capabilities":["vessel.read","overlay.draw","files"],
     \\ "file_types":[".grib2",".grb",".pmtiles"]}
 ;
@@ -552,14 +552,14 @@ test "two plugins claiming one file type both lose it, and the log names them" {
     defer alloc.free(dir_path);
     try stageAs(&tmp, grib_id, grib_manifest);
     try stageAs(&tmp, "org.beetlebug.weather",
-        \\{"id":"org.beetlebug.weather","name":"Weather too","abi":1,
+        \\{"id":"org.beetlebug.weather","name":"Weather too","api":1,
         \\ "capabilities":["vessel.read","overlay.draw","files"],
         \\ "file_types":[".grib2"]}
     );
     // A claim with no `files` behind it: the manifest is refused, so the plugin
     // never loads and never competes for the type either.
     try stageAs(&tmp, "org.beetlebug.ungranted",
-        \\{"id":"org.beetlebug.ungranted","name":"No grant","abi":1,
+        \\{"id":"org.beetlebug.ungranted","name":"No grant","api":1,
         \\ "capabilities":["vessel.read","overlay.draw"],
         \\ "file_types":[".grib2"]}
     );

@@ -21,10 +21,10 @@ comptime {
 }
 
 pub const inputs = struct {
-    pub const fix = lk.position("navigation.position", .{});
-    pub const heading = lk.number("navigation.headingTrue", .{ .optional = true });
-    pub const course = lk.number("navigation.courseOverGroundTrue", .{ .optional = true });
-    pub const speed = lk.number("navigation.speedOverGround", .{ .optional = true });
+    pub const fix = lk.subscribePosition("navigation.position", .{});
+    pub const heading = lk.subscribeNumber("navigation.headingTrue", .{ .optional = true });
+    pub const course = lk.subscribeNumber("navigation.courseOverGroundTrue", .{ .optional = true });
+    pub const speed = lk.subscribeNumber("navigation.speedOverGround", .{ .optional = true });
 };
 
 /// Heading line length: 0.1 nm, the same as an AIS target's heading line, so

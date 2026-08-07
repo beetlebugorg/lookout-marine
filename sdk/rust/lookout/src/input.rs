@@ -50,8 +50,8 @@ pub struct Optional;
 ///
 /// ```ignore
 /// struct Windline { boat: lk::Position, twd: lk::Number }
-/// // boat: lk::Position::new("navigation.position"),
-/// // twd:  lk::Number::new("environment.wind.directionTrue").label("wind"),
+/// // boat: lk::subscribe_position("navigation.position"),
+/// // twd:  lk::subscribe_number("environment.wind.directionTrue").label("wind"),
 /// ```
 pub struct Input<T: Value, R = Required> {
     path: &'static str,
@@ -71,6 +71,23 @@ pub type Number<R = Required> = Input<f64, R>;
 
 /// A position off the vessel store.
 pub type Position<R = Required> = Input<Point, R>;
+
+/// Subscribe to one numeric path off the vessel store. The builder methods
+/// refine it: `.label(...)`, `.max_age(...)`, `.optional()`.
+pub const fn subscribe_number(path: &'static str) -> Number {
+    Number::new(path)
+}
+
+/// Subscribe to one position path off the vessel store.
+pub const fn subscribe_position(path: &'static str) -> Position {
+    Position::new(path)
+}
+
+/// Subscribe to the AIS target set. `max` is the most targets kept; a longer
+/// snapshot is truncated and logged.
+pub const fn subscribe_ais(max: usize) -> Ais {
+    Ais::new(max)
+}
 
 impl<T: Value> Input<T, Required> {
     pub const fn new(path: &'static str) -> Input<T, Required> {

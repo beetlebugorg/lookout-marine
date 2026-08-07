@@ -2,8 +2,8 @@
 //!
 //! One boat can reach more than one server: the boat's own server on the
 //! network, and a second one on a laptop that holds the instruments it
-//! bridges. Each is a row here, and the library gives each row its own socket,
-//! its own reconnect clock and its own line in the settings window.
+//! bridges. Each is a row here, and the library gives each connection its own
+//! socket, its own reconnect clock and its own line in the settings window.
 //!
 //! The declaration is the whole schema. `lk.settingsJson` renders the
 //! manifest's `settings` block from it, and the test at the bottom checks that
@@ -87,12 +87,12 @@ test "the manifest ships the schema this file declares" {
     try lk.expectManifest(@embedFile("manifest.json"), .{Connections.lk_list});
 }
 
-test "a row starts at the column defaults the schema names" {
-    const row = Connections.Row{};
-    try t.expectEqual(@as(u16, 0), row.port);
-    try t.expect(row.enabled);
+test "a connection starts at the column defaults the schema names" {
+    const conn = Connections.Connection{};
+    try t.expectEqual(@as(u16, 0), conn.port);
+    try t.expect(conn.enabled);
     // The transport column defaults off: a row a shell wrote badly must not
     // silently change transport.
-    try t.expect(!row.cols.websocket);
-    try t.expectEqual(@as(usize, 0), row.state.self_id.len);
+    try t.expect(!conn.cols.websocket);
+    try t.expectEqual(@as(usize, 0), conn.state.self_id.len);
 }

@@ -1,6 +1,6 @@
 {
   "id": "org.beetlebug.laylines",
   "name": "Laylines",
-  "abi": 1,
+  "api": 1,
   "capabilities": ["vessel.read", "overlay.draw"]
 }

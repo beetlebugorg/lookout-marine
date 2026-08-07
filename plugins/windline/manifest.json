@@ -1,6 +1,6 @@
 {
   "id": "org.example.windline",
   "name": "Downwind line",
-  "abi": 1,
+  "api": 1,
   "capabilities": ["vessel.read", "overlay.draw"]
 }

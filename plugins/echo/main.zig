@@ -31,7 +31,7 @@ var draw_on: bool = true;
 var scale: f64 = 1.0;
 
 pub fn start(s: lk.Start) !void {
-    lk.logf(.info, "echo start, abi {d}", .{s.abi});
+    lk.logf(.info, "echo start, api {d}", .{s.api});
     applyConfig(s.config);
 
     const n = lk.subscribePaths(&.{"navigation.position"});
@@ -88,7 +88,7 @@ pub fn onEvent(e: lk.Event) !void {
             lk.logf(.info, "shutdown after {d} ticks", .{ticks});
             lk.status("stopped", "shut down", .{});
         },
-        // An event kind this fixture asks for nothing about. The ABI says an
+        // An event kind this fixture asks for nothing about. The API says an
         // unknown kind is ignored, and a switch with no else arm is a plugin
         // that stops compiling every time the host grows one.
         else => {},

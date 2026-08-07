@@ -1,7 +1,7 @@
 {
   "id": "org.beetlebug.echo",
   "name": "Echo (test plugin)",
-  "abi": 1,
+  "api": 1,
   "capabilities": ["vessel.read", "overlay.draw", "net.tcp-client"],
   "settings": [
     {"key": "draw", "label": "Draw the symbol", "kind": "toggle", "default": true},

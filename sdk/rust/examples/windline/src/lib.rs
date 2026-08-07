@@ -27,8 +27,8 @@ struct Windline {
 impl Default for Windline {
     fn default() -> Self {
         Windline {
-            boat: lk::Position::new("navigation.position"),
-            twd: lk::Number::new("environment.wind.directionTrue").label("wind"),
+            boat: lk::subscribe_position("navigation.position"),
+            twd: lk::subscribe_number("environment.wind.directionTrue").label("wind"),
         }
     }
 }

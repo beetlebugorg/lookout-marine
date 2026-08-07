@@ -1,6 +1,6 @@
 //! WAMR embedding smoke test: the wasm32 module built from
 //! test/smoke_plugin.zig is loaded, instantiated under a memory cap, and
-//! driven through the ABI exports. Item 4 of the prototype verification bar.
+//! driven through the API exports. Item 4 of the prototype verification bar.
 //!
 //! Kept out of src/plugin/wasm.zig so that importing the wrapper never drags
 //! in the embedded module bytes: the .wasm arrives as an anonymous import
@@ -25,7 +25,7 @@ var natives = wasm.nativeSymbols(&.{
     .{ .name = "log", .func = @ptrCast(&hostLog), .signature = "(i*~)" },
 });
 
-test "wamr loads a plugin-shaped module and runs the ABI exports" {
+test "wamr loads a plugin-shaped module and runs the API exports" {
     const allocator = std.testing.allocator;
 
     try wasm.initRuntime();
@@ -55,7 +55,7 @@ test "wamr loads a plugin-shaped module and runs the ABI exports" {
     };
     defer inst.deinit();
 
-    try std.testing.expectEqual(@as(u32, 1), try inst.abiVersion());
+    try std.testing.expectEqual(@as(u32, 1), try inst.apiVersion());
     try std.testing.expectEqual(@as(i32, 0), try inst.start("{\"abi\":1,\"config\":{}}"));
 
     // Write a payload through the module's own lk_alloc, deliver it as an
@@ -79,5 +79,5 @@ test "wamr loads a plugin-shaped module and runs the ABI exports" {
     // on the instance that has to be cleared before it is used again.
     try std.testing.expectError(error.BadAppAddr, inst.slice(0xffff_fff0, 16));
     inst.clearException();
-    try std.testing.expectEqual(@as(u32, 1), try inst.abiVersion());
+    try std.testing.expectEqual(@as(u32, 1), try inst.apiVersion());
 }

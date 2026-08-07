@@ -42,8 +42,8 @@ package main
 import lk "github.com/beetlebugorg/lookout-marine/sdk/go/lookout"
 
 var (
-	boat = lk.Position("navigation.position")
-	twd  = lk.Number("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
+	boat = lk.SubscribePosition("navigation.position")
+	twd  = lk.SubscribeNumber("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
 )
 
 type windline struct{}
@@ -68,9 +68,9 @@ Declared as package-level variables, so they are registered before the host
 starts the plugin.
 
 ```go
-func lk.Number(path string, opts ...lk.InputOpts) *lk.NumberInput
-func lk.Position(path string, opts ...lk.InputOpts) *lk.PositionInput
-func lk.AIS(opts ...lk.AISOpts) *lk.AISInput
+func lk.SubscribeNumber(path string, opts ...lk.InputOpts) *lk.NumberInput
+func lk.SubscribePosition(path string, opts ...lk.InputOpts) *lk.PositionInput
+func lk.SubscribeAIS(opts ...lk.AISOpts) *lk.AISInput
 
 type lk.InputOpts struct {
 	Label    string        // what the status line calls it; default: the last path segment
@@ -152,7 +152,7 @@ type guard struct {
 	} `label:"Guard ring" tab:"alarms"`
 }
 
-var boat = lk.Position("navigation.position")
+var boat = lk.SubscribePosition("navigation.position")
 
 func (p *guard) Draw(c *lk.Chart) {
 	ring := make([]lk.Point, 0, 60)
@@ -175,7 +175,7 @@ The tags:
 | `lk:"key"` | every field | the config key. A field without it is a mistake and the start says so. |
 | `label:"…"` | every field | what the mariner reads. Required. |
 | `desc:"…"` | every field | the line under the control. |
-| `unit:"…"` | a number | shown beside the control. The value crosses the ABI in that unit. |
+| `unit:"…"` | a number | shown beside the control. The value crosses the API in that unit. |
 | `min:"…"` `max:"…"` `default:"…"` | a number | required. A value outside the range is clamped before the plugin sees it. |
 | `default:"true"` | a bool | required. |
 | `label:"…"` `tab:"…"` | the `Settings` field | the group heading, and where it appears. Tabs: `display`, `depths`, `text`, `charts`, `vessels`, `alarms`, `connections`, `advanced`. |
@@ -207,9 +207,9 @@ The library owns the sockets, the reconnect clock, the pause switch, the per-row
 status items and the list's settings schema. The plugin writes `OnData`.
 
 ```go
-// One row: the columns the mariner fills in, and the state the parser keeps
-// between reads. An exported field with an lk tag is a column; everything else
-// is yours.
+// One connection: the columns the mariner fills in, and the state the parser
+// keeps between reads. An exported field with an lk tag is a column;
+// everything else is yours.
 type feed struct {
 	WebSocket bool `lk:"websocket" label:"WebSocket" desc:"Read the WebSocket stream instead of the plain one." default:"false"`
 
@@ -224,7 +224,7 @@ var servers = lk.Connections(lk.ConnOpts{
 	Columns: lk.RowColumns{
 		Port: lk.NumSpec{Label: "Port", Desc: "Most servers stream on 8375.", Min: 1, Max: 65535, Default: 8375},
 	},
-	Row:         func() any { return &feed{} },
+	State:       func() any { return &feed{} },
 	StatusEmpty: "no servers",
 })
 
@@ -233,9 +233,10 @@ type source struct{}
 func init() { lk.Register(&source{}) }
 func main() {}
 
-// OnData is the bytes off one row's socket, in whatever sizes they arrived.
-func (p *source) OnData(row *lk.Row, data []byte) {
-	s := row.State.(*feed)
+// OnData is bytes from one connection's socket, in whatever sizes they
+// arrived.
+func (p *source) OnData(conn *lk.Conn, data []byte) {
+	s := conn.State.(*feed)
 	s.partial += string(data)
 	pub := lk.NewPublish()
 	for {
@@ -245,7 +246,7 @@ func (p *source) OnData(row *lk.Row, data []byte) {
 		}
 		line := s.partial[:i]
 		s.partial = s.partial[i+1:]
-		row.Count(1)
+		conn.Count(1)
 		if sog, ok := parseSOG(line); ok {
 			pub.Number("navigation.speedOverGround", sog)
 		}
@@ -254,45 +255,45 @@ func (p *source) OnData(row *lk.Row, data []byte) {
 }
 
 // OnOpen: a stream came up. Send the subscription here.
-func (p *source) OnOpen(row *lk.Row) { row.Send([]byte("subscribe\n")) }
+func (p *source) OnOpen(conn *lk.Conn) { conn.Send([]byte("subscribe\n")) }
 
-// Endpoint: where to dial, when it is not the row's host and port.
-func (p *source) Endpoint(row *lk.Row) lk.Endpoint {
-	if row.State.(*feed).WebSocket {
-		return lk.WSEndpoint("ws://" + row.Host + "/signalk/v1/stream")
+// Endpoint: where to dial, when it is not the connection's host and port.
+func (p *source) Endpoint(conn *lk.Conn) lk.Endpoint {
+	if conn.State.(*feed).WebSocket {
+		return lk.WSEndpoint("ws://" + conn.Host + "/signalk/v1/stream")
 	}
-	return lk.TCPEndpoint(row.Host, row.Port)
+	return lk.TCPEndpoint(conn.Host, conn.Port)
 }
 ```
 
-What a row carries and what it answers:
+What a connection carries and what it answers:
 
 ```go
-type lk.Row struct {
+type lk.Conn struct {
 	ID      string // the shell's id. It survives an edit.
 	Name    string // what the mariner calls it; may be empty
 	Host    string
 	Port    uint16
 	Enabled bool // false means PAUSED
-	State   any  // what ConnOpts.Row returned
+	State   any  // what ConnOpts.State returned
 }
 
-func (r *lk.Row) Label() string     // the name, or the address
-func (r *lk.Row) Connected() bool
-func (r *lk.Row) Rate() uint64      // what Count counted, per second
-func (r *lk.Row) Send(data []byte) int32
-func (r *lk.Row) Count(n uint64)
-func (r *lk.Row) SetDetail(format string, a ...any)
+func (conn *lk.Conn) Label() string     // the name, or the address
+func (conn *lk.Conn) Connected() bool
+func (conn *lk.Conn) Rate() uint64      // what Count counted, per second
+func (conn *lk.Conn) Send(data []byte) int32
+func (conn *lk.Conn) Count(n uint64)
+func (conn *lk.Conn) SetDetail(format string, a ...any)
 
-func (c *lk.Conns) All() []*lk.Row
-func (c *lk.Conns) ByID(id string) *lk.Row
+func (c *lk.Conns) All() []*lk.Conn
+func (c *lk.Conns) ByID(id string) *lk.Conn
 
 func lk.TCPEndpoint(host string, port uint16) lk.Endpoint
 func lk.WSEndpoint(url string) lk.Endpoint
 func lk.RefusedEndpoint(why string) lk.Endpoint
 ```
 
-Rows are matched by id: editing one never disturbs another's connection. Only an
+Connections are matched by id: editing one never disturbs another. Only an
 address change, a column change, a pause or a delete closes a socket.
 
 Publishing, from `OnData`:
@@ -319,13 +320,13 @@ and one that is absent is not wired.
 | `Draw(*lk.Chart)` | the scene, on the library's timer |
 | `DrawRate() time.Duration` | how often, default 1 s |
 | `OnSettings()` | after a settings change, before the redraw |
-| `OnData(*lk.Row, []byte)` | the bytes off one row's socket (tier 2) |
-| `OnOpen(*lk.Row)` | a stream came up; send a subscription (tier 2) |
-| `OnClose(*lk.Row)` | a stream ended (tier 2) |
-| `RowNote(*lk.Row) string` | a phrase after a connected row's rate (tier 2) |
-| `Endpoint(*lk.Row) lk.Endpoint` | where to dial, when it is not host:port (tier 2) |
+| `OnData(*lk.Conn, []byte)` | bytes from one connection's socket |
+| `OnOpen(*lk.Conn)` | a stream came up; send a subscription |
+| `OnClose(*lk.Conn)` | a stream ended |
+| `ConnNote(*lk.Conn) string` | a phrase after the connection's rate |
+| `Endpoint(*lk.Conn) lk.Endpoint` | where to dial, when it is not host:port |
 | `OnStart(lk.Start) error` | anything else at startup |
-| `OnEvent(lk.Event) error` | every event the library did not consume (tier 3) |
+| `OnEvent(lk.Event) error` | every event the library did not consume |
 | `OnShutdown()` | the last word |
 
 A method with the wrong signature does not satisfy the interface, so the library
@@ -343,7 +344,7 @@ host until the call returns. The parsers hang off the event —`e.Readings()`,
 functions: `lk.TCPConnect`, `lk.TimerSet`, `lk.HTTPFetch`, `lk.StorageGet`,
 `lk.SubscribePaths`, `lk.Alert`.
 
-A tier-3 plugin that draws calls `lk.Scene(func(c *lk.Chart) { … })`, which
+A raw plugin that draws calls `lk.Scene(func(c *lk.Chart) { … })`, which
 gives it the same retained scene and the same deletes as `Draw`.
 
 ## What Go does not do that Zig does

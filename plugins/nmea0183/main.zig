@@ -6,14 +6,15 @@
 //! it knows, and publishes them.
 //!
 //! Every gateway the mariner keeps is a row of the `connections` setting. The
-//! library owns the rows end to end — the socket, the reconnect clock, the
-//! pause switch and each row's line in the settings window — so this file is
+//! library owns the connections end to end: the socket, the reconnect clock,
+//! the pause switch and each row's line in the settings window. This file is
 //! the protocol and nothing else: reassembly, the parse, and what each sentence
 //! means.
 //!
 //! Everything published lands in ONE source: the store sees the plugin, not the
-//! row. Two rows carrying the same sentence therefore overwrite each other in
-//! publish order, which is a real thing to fix later and not this pass.
+//! connection. Two connections carrying the same sentence therefore overwrite
+//! each other in publish order, which is a real thing to fix later and not this
+//! pass.
 //!
 //! A line that fails its checksum, a sentence type the parser does not decode
 //! and an AIS payload that will not decode are dropped without a log line,
@@ -37,24 +38,24 @@ comptime {
 }
 
 pub const Connections = cfg.Connections;
-const Row = Connections.Row;
+const Connection = Connections.Connection;
 
 /// A partial sentence and a half-assembled AIS message from the last connection
 /// have nothing to do with this one, so the stream starts over here.
-pub fn onOpen(row: *Row) void {
-    const s = &row.state;
+pub fn onOpen(conn: *Connection) void {
+    const s = &conn.state;
     s.feeder = parser.Feeder.init(&s.line);
     s.assembler = .{};
 }
 
-pub fn onData(row: *Row, bytes: []const u8) void {
-    const s = &row.state;
+pub fn onData(conn: *Connection, bytes: []const u8) void {
+    const s = &conn.state;
     if (s.feeder.buf.len == 0) s.feeder = parser.Feeder.init(&s.line);
     var it = s.feeder.feed(bytes);
     while (it.next()) |line| {
         // The feeder returns complete, checksum-verified lines only, so this
-        // is the row's message rate.
-        row.count(1);
+        // is the connection's message rate.
+        conn.count(1);
         // A sentence type this parser does not decode — GSV, GSA, a
         // proprietary line — or one whose fields are unreadable.
         const sentence = parser.parse(line) catch continue;

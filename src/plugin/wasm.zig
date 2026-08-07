@@ -1,5 +1,5 @@
 //! WAMR embedding: load a plugin module, instantiate it under a memory cap,
-//! call the five ABI exports, and move bytes across the boundary.
+//! call the five exports, and move bytes across the boundary.
 //!
 //! This file knows nothing about what a plugin does. It is the mechanical
 //! layer: the broker supplies the native functions, the host supplies the
@@ -15,7 +15,7 @@
 //! time per plugin, so an Instance belongs to whichever thread is currently
 //! inside it.
 //!
-//! Two rules the ABI depends on:
+//! Two rules the API depends on:
 //!   * Nothing crosses as a host pointer. A plugin sees only app addresses —
 //!     offsets into its own linear memory — and the host copies bytes in and
 //!     out through them.
@@ -455,7 +455,7 @@ pub const Limits = struct {
     /// Interpreter stack for this instance's execution environment.
     stack_bytes: u32 = 64 * 1024,
     /// Heap WAMR manages inside linear memory for wasm_runtime_module_malloc.
-    /// Zero: the ABI routes host-to-plugin buffers through the module's own
+    /// Zero: the API routes host-to-plugin buffers through the module's own
     /// lk_alloc, so nothing needs it.
     heap_bytes: u32 = 0,
     /// Hard cap on linear memory, in 64 KiB wasm pages. 256 pages = 16 MiB,
@@ -464,9 +464,9 @@ pub const Limits = struct {
     max_memory_pages: u32 = 256,
 };
 
-/// The five exports every plugin provides (PROTOTYPE.md, ABI v0).
-const abi_exports = struct {
-    const abi = "lk_abi";
+/// The five exports every plugin provides (PROTOTYPE.md, API v0).
+const api_exports = struct {
+    const api = "lk_abi";
     const alloc = "lk_alloc";
     const free = "lk_free";
     const start = "lk_start";
@@ -491,13 +491,13 @@ pub const Buf = struct {
 pub const Instance = struct {
     inst: c.wasm_module_inst_t,
     env: c.wasm_exec_env_t,
-    fn_abi: c.wasm_function_inst_t,
+    fn_api: c.wasm_function_inst_t,
     fn_alloc: c.wasm_function_inst_t,
     fn_free: c.wasm_function_inst_t,
     fn_start: c.wasm_function_inst_t,
     fn_event: c.wasm_function_inst_t,
 
-    /// Instantiate under `limits` and resolve the ABI exports. A module
+    /// Instantiate under `limits` and resolve the API exports. A module
     /// missing any of the five is not a plugin, so this fails rather than
     /// deferring the error to the first call.
     pub fn init(module: Module, limits: Limits, err: *ErrBuf) Error!Instance {
@@ -517,11 +517,11 @@ pub const Instance = struct {
         return .{
             .inst = inst,
             .env = env,
-            .fn_abi = c.wasm_runtime_lookup_function(inst, abi_exports.abi) orelse return error.MissingExport,
-            .fn_alloc = c.wasm_runtime_lookup_function(inst, abi_exports.alloc) orelse return error.MissingExport,
-            .fn_free = c.wasm_runtime_lookup_function(inst, abi_exports.free) orelse return error.MissingExport,
-            .fn_start = c.wasm_runtime_lookup_function(inst, abi_exports.start) orelse return error.MissingExport,
-            .fn_event = c.wasm_runtime_lookup_function(inst, abi_exports.event) orelse return error.MissingExport,
+            .fn_api = c.wasm_runtime_lookup_function(inst, api_exports.api) orelse return error.MissingExport,
+            .fn_alloc = c.wasm_runtime_lookup_function(inst, api_exports.alloc) orelse return error.MissingExport,
+            .fn_free = c.wasm_runtime_lookup_function(inst, api_exports.free) orelse return error.MissingExport,
+            .fn_start = c.wasm_runtime_lookup_function(inst, api_exports.start) orelse return error.MissingExport,
+            .fn_event = c.wasm_runtime_lookup_function(inst, api_exports.event) orelse return error.MissingExport,
         };
     }
 
@@ -568,7 +568,7 @@ pub const Instance = struct {
     }
 
     /// Any export beyond the five, by name. The host uses this for nothing;
-    /// tests and future ABI versions do.
+    /// tests and future API versions do.
     pub fn lookup(self: *Instance, name: [:0]const u8) ?c.wasm_function_inst_t {
         return c.wasm_runtime_lookup_function(self.inst, name.ptr);
     }
@@ -592,13 +592,13 @@ pub const Instance = struct {
         if (!ok) return error.Trap;
     }
 
-    // ---- the five ABI exports ----
+    // ---- the five exports ----
 
-    /// lk_abi() — the ABI version the module speaks. 1 is the only one this
+    /// lk_abi() — the API version the module speaks. 1 is the only one this
     /// host accepts; the caller decides what to do with anything else.
-    pub fn abiVersion(self: *Instance) Error!u32 {
+    pub fn apiVersion(self: *Instance) Error!u32 {
         var results: [1]c.wasm_val_t = undefined;
-        try self.call(self.fn_abi, &results, &.{});
+        try self.call(self.fn_api, &results, &.{});
         return @bitCast(results[0].of.i32);
     }
 

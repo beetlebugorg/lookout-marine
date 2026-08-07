@@ -73,19 +73,19 @@ const max_name = 34;
 pub const inputs = struct {
     /// The traffic. The library records each snapshot and ages it; an empty
     /// sea is not a missing instrument, so this never holds the draw back.
-    pub const traffic = lk.ais(.{ .max = max_targets });
+    pub const traffic = lk.subscribeAis(.{ .max = max_targets });
 
     /// Own ship. All three are optional: the CPA needs them and the drawing
     /// does not, so a boat with no GPS still sees the traffic.
-    pub const boat = lk.position("navigation.position", .{
+    pub const boat = lk.subscribePosition("navigation.position", .{
         .optional = true,
         .max_age_ms = max_own_age_ms,
     });
-    pub const sog = lk.number("navigation.speedOverGround", .{
+    pub const sog = lk.subscribeNumber("navigation.speedOverGround", .{
         .optional = true,
         .max_age_ms = max_own_age_ms,
     });
-    pub const cog = lk.number("navigation.courseOverGroundTrue", .{
+    pub const cog = lk.subscribeNumber("navigation.courseOverGroundTrue", .{
         .optional = true,
         .max_age_ms = max_own_age_ms,
     });

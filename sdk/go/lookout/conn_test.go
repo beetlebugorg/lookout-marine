@@ -12,7 +12,7 @@ import (
 )
 
 // A tier-2 plugin, shaped like signalk: two transports, one column that picks
-// between them, and per-row state the parser keeps.
+// between them, and per-connection state the parser keeps.
 
 type server struct {
 	// A column: an exported field with an lk tag. The library fills it in.
@@ -27,28 +27,28 @@ type skPlugin struct {
 	data   []string
 }
 
-func (p *skPlugin) Endpoint(row *Row) Endpoint {
-	if row.State.(*server).WebSocket {
-		return WSEndpoint("ws://" + row.Host + "/signalk/v1/stream")
+func (p *skPlugin) Endpoint(conn *Conn) Endpoint {
+	if conn.State.(*server).WebSocket {
+		return WSEndpoint("ws://" + conn.Host + "/signalk/v1/stream")
 	}
-	return TCPEndpoint(row.Host, row.Port)
+	return TCPEndpoint(conn.Host, conn.Port)
 }
 
-func (p *skPlugin) OnOpen(row *Row) {
-	p.opened = append(p.opened, row.ID)
-	row.Send([]byte("subscribe"))
+func (p *skPlugin) OnOpen(conn *Conn) {
+	p.opened = append(p.opened, conn.ID)
+	conn.Send([]byte("subscribe"))
 }
 
-func (p *skPlugin) OnClose(row *Row) { p.closed = append(p.closed, row.ID) }
+func (p *skPlugin) OnClose(conn *Conn) { p.closed = append(p.closed, conn.ID) }
 
-func (p *skPlugin) OnData(row *Row, data []byte) {
-	row.State.(*server).docs++
-	row.Count(1)
-	p.data = append(p.data, row.ID+":"+string(data))
+func (p *skPlugin) OnData(conn *Conn, data []byte) {
+	conn.State.(*server).docs++
+	conn.Count(1)
+	p.data = append(p.data, conn.ID+":"+string(data))
 }
 
-func (p *skPlugin) RowNote(row *Row) string {
-	if row.State.(*server).docs == 0 {
+func (p *skPlugin) ConnNote(conn *Conn) string {
+	if conn.State.(*server).docs == 0 {
 		return "nothing parsed yet"
 	}
 	return ""
@@ -63,7 +63,7 @@ func newServers() *Conns {
 		Columns: RowColumns{
 			Port: NumSpec{Label: "Port", Desc: "Most Signal K servers stream on port 8375.", Min: 1, Max: 65535, Default: 8375},
 		},
-		Row:            func() any { return &server{} },
+		State:          func() any { return &server{} },
 		StatusEmpty:    "no servers",
 		RefusedDetail:  "websocket refused; the server is not on this boat's network",
 		NoAnswerDetail: "check the address",
@@ -105,11 +105,11 @@ func status(t *testing.T) statusLine {
 	return s
 }
 
-func TestEachRowIsDialledWhereItsColumnsSay(t *testing.T) {
+func TestEachConnectionIsDialledWhereItsColumnsSay(t *testing.T) {
 	_, c := startServers(t, twoServers)
 
 	if len(c.All()) != 2 {
-		t.Fatalf("want two rows, got %d", len(c.All()))
+		t.Fatalf("want two connections, got %d", len(c.All()))
 	}
 	want := []string{
 		"10.0.0.2:8375",
@@ -119,11 +119,11 @@ func TestEachRowIsDialledWhereItsColumnsSay(t *testing.T) {
 		t.Fatalf("dialled %v, want %v", testHost.Dialled, want)
 	}
 	if c.ByID("a").Label() != "Boat" || c.ByID("b").Label() != "laptop.local" {
-		t.Fatal("a row with no name is called by its address")
+		t.Fatal("a connection with no name is called by its address")
 	}
 }
 
-func TestAStreamThatOpensCarriesDataToTheRightRow(t *testing.T) {
+func TestAStreamThatOpensCarriesDataToTheRightConnection(t *testing.T) {
 	p, c := startServers(t, twoServers)
 	a, b := c.ByID("a"), c.ByID("b")
 
@@ -133,7 +133,7 @@ func TestAStreamThatOpensCarriesDataToTheRightRow(t *testing.T) {
 		t.Fatalf("both streams opened: %v", p.opened)
 	}
 	if got := testHost.Sent[a.sock]; len(got) != 1 || got[0] != "subscribe" {
-		t.Fatalf("OnOpen must be able to write to the row: %v", got)
+		t.Fatalf("OnOpen must be able to write to the connection: %v", got)
 	}
 
 	dispatchEvent(TCPData, a.sock, []byte("delta-a"))
@@ -142,7 +142,7 @@ func TestAStreamThatOpensCarriesDataToTheRightRow(t *testing.T) {
 		t.Fatalf("the bytes reached %v", p.data)
 	}
 	if a.State.(*server).docs != 1 || b.State.(*server).docs != 1 {
-		t.Fatal("each row keeps its own state")
+		t.Fatal("each connection keeps its own state")
 	}
 
 	// The rate is counted over the status window: two deltas in a 2 s window is
@@ -158,7 +158,7 @@ func TestAStreamThatOpensCarriesDataToTheRightRow(t *testing.T) {
 	}
 }
 
-func TestPausingARowClosesItAndLeavesTheOtherAlone(t *testing.T) {
+func TestPausingAConnectionClosesItAndLeavesTheOtherAlone(t *testing.T) {
 	p, c := startServers(t, twoServers)
 	a := c.ByID("a")
 	dispatchEvent(TCPConnected, a.sock, nil)
@@ -169,13 +169,13 @@ func TestPausingARowClosesItAndLeavesTheOtherAlone(t *testing.T) {
 	dispatchEvent(ConfigChanged, 0, []byte(paused))
 
 	if len(testHost.Closed) != 1 || testHost.Closed[0] != sockA {
-		t.Fatalf("only the paused row's socket closes: %v", testHost.Closed)
+		t.Fatalf("only the paused connection's socket closes: %v", testHost.Closed)
 	}
 	if c.ByID("a").conn != RowPaused {
-		t.Fatalf("row a reads %q", c.ByID("a").conn)
+		t.Fatalf("connection a reads %q", c.ByID("a").conn)
 	}
 	if len(testHost.Dialled) != 2 {
-		t.Fatalf("editing one row redialled another: %v", testHost.Dialled)
+		t.Fatalf("editing one connection redialled another: %v", testHost.Dialled)
 	}
 	if len(p.closed) != 0 {
 		t.Fatal("a socket the library closed is not a stream that ended")
@@ -186,13 +186,13 @@ func TestPausingARowClosesItAndLeavesTheOtherAlone(t *testing.T) {
 	}
 }
 
-func TestANewAddressRedialsAndResetsTheRowState(t *testing.T) {
+func TestANewAddressRedialsAndResetsTheState(t *testing.T) {
 	_, c := startServers(t, twoServers)
 	a := c.ByID("a")
 	dispatchEvent(TCPConnected, a.sock, nil)
 	dispatchEvent(TCPData, a.sock, []byte("delta"))
 	if a.State.(*server).docs != 1 {
-		t.Fatal("the row parsed one document")
+		t.Fatal("the connection parsed one document")
 	}
 
 	moved := strings.Replace(twoServers, `"host":"10.0.0.2"`, `"host":"10.0.0.9"`, 1)
@@ -202,7 +202,7 @@ func TestANewAddressRedialsAndResetsTheRowState(t *testing.T) {
 		t.Fatalf("the new address was not dialled: %v", testHost.Dialled)
 	}
 	if c.ByID("a").State.(*server).docs != 0 {
-		t.Fatal("a row that moved starts its state over")
+		t.Fatal("a connection that moved starts its state over")
 	}
 }
 
@@ -218,27 +218,27 @@ func TestAColumnThatPicksTheTransportIsAChangeOfAddress(t *testing.T) {
 		t.Fatalf("a changed column must redial: %v", testHost.Dialled)
 	}
 	if got := testHost.Dialled[len(testHost.Dialled)-1]; !strings.HasPrefix(got, "ws ") {
-		t.Fatalf("the row moved to the websocket: %s", got)
+		t.Fatalf("the connection moved to the websocket: %s", got)
 	}
 	if !c.ByID("a").State.(*server).WebSocket {
-		t.Fatal("the column value did not reach the row")
+		t.Fatal("the column value did not reach the connection")
 	}
 }
 
-func TestADeletedRowTakesItsStreamWithIt(t *testing.T) {
+func TestADeletedConnectionTakesItsStreamWithIt(t *testing.T) {
 	_, c := startServers(t, twoServers)
 	sockB := c.ByID("b").sock
 
 	dispatchEvent(ConfigChanged, 0, []byte(`{"servers":[{"id":"a","name":"Boat","host":"10.0.0.2","port":8375,"enabled":true}]}`))
 	if len(c.All()) != 1 || c.ByID("b") != nil {
-		t.Fatalf("row b is gone: %d rows", len(c.All()))
+		t.Fatalf("connection b is gone: %d connections", len(c.All()))
 	}
 	if len(testHost.Closed) != 1 || testHost.Closed[0] != sockB {
-		t.Fatalf("row b's socket closes: %v", testHost.Closed)
+		t.Fatalf("connection b's socket closes: %v", testHost.Closed)
 	}
 }
 
-func TestARowThatNeverAnswersReadsAsUnreachable(t *testing.T) {
+func TestAConnectionThatNeverAnswersReadsAsUnreachable(t *testing.T) {
 	p, c := startServers(t, `{"servers":[{"id":"a","host":"10.0.0.2","port":8375,"enabled":true}]}`)
 	a := c.ByID("a")
 
@@ -251,7 +251,7 @@ func TestARowThatNeverAnswersReadsAsUnreachable(t *testing.T) {
 		dispatchEvent(Timer, a.retryTimer, nil)
 	}
 	if a.conn != RowNoAnswer {
-		t.Fatalf("after three failures the row reads %q", a.conn)
+		t.Fatalf("after three failures the connection reads %q", a.conn)
 	}
 	if len(p.closed) != 3 {
 		t.Fatalf("the plugin heard %d closes", len(p.closed))
@@ -281,13 +281,13 @@ func TestAnAddressTheHostWillNotDialStopsRetrying(t *testing.T) {
 	}
 }
 
-func TestARowWithNoAddressIsNotDialled(t *testing.T) {
+func TestAConnectionWithNoAddressIsNotDialled(t *testing.T) {
 	_, c := startServers(t, `{"servers":[{"id":"a","host":"","port":8375,"enabled":true}]}`)
 	if len(testHost.Dialled) != 0 {
 		t.Fatalf("nothing to dial: %v", testHost.Dialled)
 	}
 	if c.ByID("a").conn != RowNoAddress {
-		t.Fatalf("the row reads %q", c.ByID("a").conn)
+		t.Fatalf("the connection reads %q", c.ByID("a").conn)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestAnEmptyListSaysSoRatherThanSayingNothing(t *testing.T) {
 	}
 }
 
-func TestTheRowNoteFollowsTheRate(t *testing.T) {
+func TestTheConnNoteFollowsTheRate(t *testing.T) {
 	_, c := startServers(t, `{"servers":[{"id":"a","host":"10.0.0.2","port":8375,"enabled":true}]}`)
 	a := c.ByID("a")
 	dispatchEvent(TCPConnected, a.sock, nil)

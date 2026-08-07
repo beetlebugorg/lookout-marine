@@ -200,7 +200,7 @@ func TestMoreFieldsThanTheHostAllowsIsRefused(t *testing.T) {
 }
 
 func TestCheckManifestFailsOnADriftedRange(t *testing.T) {
-	manifest := []byte(`{"id":"x","abi":1,"settings":{"groups":[{"label":"Collision alarm","tab":"alarms","fields":[
+	manifest := []byte(`{"id":"x","api":1,"settings":{"groups":[{"label":"Collision alarm","tab":"alarms","fields":[
 		{"key":"cpa_limit","label":"Closest approach (CPA)","desc":"Alarm when a vessel will pass closer than this.","kind":"number","unit":"m","min":93,"max":9260,"default":926},
 		{"key":"cpa_alarm","label":"Collision alarm","desc":"Sound the alarm and colour the vessel red. Off silences both.","kind":"toggle","default":true}]}]}}`)
 	if err := CheckManifest(manifest, &alarmPlugin{}); err != nil {

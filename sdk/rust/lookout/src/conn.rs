@@ -7,7 +7,7 @@
 //!
 //! impl lk::ConnSpec for Servers {
 //!     type Columns = SkColumns;      // beyond the four every list carries
-//!     type State = Framer;           // per-row parse state
+//!     type State = Framer;           // per-connection parse state
 //!     const OPTS: lk::ConnOpts = lk::ConnOpts {
 //!         key: "servers",
 //!         group: "Signal K servers",
@@ -18,16 +18,16 @@
 //! }
 //!
 //! impl lk::Source<Servers> for SignalK {
-//!     fn on_data(&mut self, row: &mut lk::Row<Servers>, bytes: &[u8]) { … }
+//!     fn on_data(&mut self, conn: &mut lk::Connection<Servers>, bytes: &[u8]) { … }
 //! }
 //! ```
 //!
 //! The library owns everything else: the settings list schema, one socket per
-//! row, the reconnect clock, the failure count behind "unreachable", the pause
-//! switch, the per-row status item and the plugin's own status line.
+//! connection, the reconnect clock, the failure count behind "unreachable",
+//! the pause switch, the per-row status item and the plugin's own status line.
 //!
-//! ROWS ARE MATCHED BY ID. Editing one row never disturbs another's
-//! connection: only an address change, a pause or a delete closes a socket.
+//! CONNECTIONS ARE MATCHED BY ID. Editing one connection never disturbs
+//! another: only an address change, a pause or a delete closes a socket.
 
 use crate::json::{self, Json};
 use crate::raw;
@@ -77,8 +77,8 @@ impl RowColumns {
 /// How one connection list behaves.
 #[derive(Debug, Clone, Copy)]
 pub struct ConnOpts {
-    /// The config key the row array arrives under. Empty means the plugin has
-    /// no connection list.
+    /// The config key the connection array arrives under. Empty means the
+    /// plugin has no connection list.
     pub key: &'static str,
     /// The section heading in the settings window.
     pub group: &'static str,
@@ -90,19 +90,19 @@ pub struct ConnOpts {
     pub columns: RowColumns,
     /// Delay before a dropped connection is retried.
     pub reconnect_ms: i64,
-    /// Failed connects in a row before a row reads as unreachable rather than
-    /// reconnecting. Three tries is six seconds of silence.
+    /// Failed connects in a row before a connection reads as unreachable
+    /// rather than reconnecting. Three tries is six seconds of silence.
     pub unreachable_after: u32,
     /// How often the status is rebuilt, and the window a rate is averaged
     /// over.
     pub status_ms: i64,
-    /// What `row.count` counts, for the status: "42 msg/s".
+    /// What `conn.count` counts, for the status: "42 msg/s".
     pub rate_noun: &'static str,
-    /// The plugin's status detail when the mariner has added no rows.
+    /// The plugin's status detail when the mariner has added no connections.
     pub status_empty: &'static str,
-    /// What a row says once it has read as unreachable.
+    /// What a connection says once it has read as unreachable.
     pub no_answer_detail: &'static str,
-    /// What a row says when the host would not dial it at all. That only
+    /// What a connection says when the host would not dial it at all. That only
     /// happens when the manifest's grant does not cover the address, and only
     /// the plugin knows which grant it asked for.
     pub refused_detail: &'static str,
@@ -127,11 +127,11 @@ impl ConnOpts {
     };
 }
 
-/// One connection list: its columns, its per-row state and its wording.
+/// One connection list: its columns, its per-connection state and its wording.
 pub trait ConnSpec: 'static {
     /// Columns beyond the four every list carries. `()` for none.
     type Columns: Fields;
-    /// Per-row state the plugin keeps: a framer, a parser, an identity.
+    /// Per-connection state the plugin keeps: a framer, a parser, an identity.
     type State: Default;
     const OPTS: ConnOpts;
 
@@ -183,7 +183,7 @@ impl ConnSpec for NoConns {
     const OPTS: ConnOpts = ConnOpts::DEFAULT;
 }
 
-/// Where one row is dialled.
+/// Where one connection is dialled.
 #[derive(Debug, Clone)]
 pub enum Endpoint {
     Tcp {
@@ -192,8 +192,8 @@ pub enum Endpoint {
     },
     /// A websocket URL. The manifest must grant `net.ws` for its host.
     Ws(String),
-    /// This row cannot be dialled, and the text says why. The library stops
-    /// retrying and shows the reason on the row.
+    /// This connection cannot be dialled, and the text says why. The library
+    /// stops retrying and shows the reason on the connection's line.
     Refused(String),
 }
 
@@ -205,9 +205,10 @@ pub enum RowState {
     /// Dialled and dialled and nothing answered.
     NoAnswer,
     Paused,
-    /// The row has no address, or a port nothing can dial.
+    /// The connection has no address, or a port nothing can dial.
     NoAddress,
-    /// The endpoint refused the row outright: a grant that does not cover it.
+    /// The endpoint refused the connection outright: a grant that does not
+    /// cover it.
     Refused,
 }
 
@@ -226,7 +227,7 @@ impl RowState {
 
 /// One connection: the row the mariner filled in, the plugin's own state for
 /// it, and the socket the library holds.
-pub struct Row<L: ConnSpec> {
+pub struct Connection<L: ConnSpec> {
     /// The shell's id for this row. It survives an edit, and it is what a
     /// status item points at.
     pub id: String,
@@ -238,7 +239,7 @@ pub struct Row<L: ConnSpec> {
     pub enabled: bool,
     /// The plugin's own columns.
     pub cols: L::Columns,
-    /// The plugin's own state for this row.
+    /// The plugin's own state for this connection.
     pub state: L::State,
 
     seen: bool,
@@ -258,9 +259,9 @@ pub struct Row<L: ConnSpec> {
     detail: String,
 }
 
-impl<L: ConnSpec> Row<L> {
-    fn new(id: &str) -> Row<L> {
-        Row {
+impl<L: ConnSpec> Connection<L> {
+    fn new(id: &str) -> Connection<L> {
+        Connection {
             id: id.to_owned(),
             name: String::new(),
             host: String::new(),
@@ -282,7 +283,7 @@ impl<L: ConnSpec> Row<L> {
         }
     }
 
-    /// What to call this row: the mariner's name, or the address.
+    /// What to call this connection: the mariner's name, or the address.
     pub fn label(&self) -> &str {
         if self.name.is_empty() {
             &self.host
@@ -296,12 +297,13 @@ impl<L: ConnSpec> Row<L> {
         self.conn == RowState::Connected
     }
 
-    /// What this row has carried in the last status window, per second.
+    /// What this connection has carried in the last status window, per
+    /// second.
     pub fn rate(&self) -> u64 {
         self.rate
     }
 
-    /// Write to this row's stream. Returns the bytes queued, or -1.
+    /// Write to this connection's stream. Returns the bytes queued, or -1.
     pub fn send(&mut self, bytes: &[u8]) -> i32 {
         if self.sock < 0 {
             return -1;
@@ -318,20 +320,20 @@ impl<L: ConnSpec> Row<L> {
         }
     }
 
-    /// Count `n` of whatever this row carries. The library turns it into the
-    /// rate on the row's status line and in the plugin's.
+    /// Count `n` of whatever this connection carries. The library turns it
+    /// into the rate on the connection's status line and in the plugin's.
     pub fn count(&mut self, n: u64) {
         self.counted += n;
     }
 
-    /// Add a phrase to this row's status line, after the state. Say nothing
-    /// that only repeats the state.
+    /// Add a phrase to this connection's status line, after the state. Say
+    /// nothing that only repeats the state.
     pub fn set_detail(&mut self, text: &str) {
         self.detail.clear();
         self.detail.push_str(text);
     }
 
-    /// A row with no address cannot be dialled.
+    /// A connection with no address cannot be dialled.
     fn usable(&self) -> bool {
         !self.host.is_empty() && self.port > 0
     }
@@ -378,31 +380,31 @@ impl<L: ConnSpec> Row<L> {
 
 /// What a source plugin writes. Everything but `on_data` has a default.
 pub trait Source<L: ConnSpec>: crate::Plugin {
-    /// The bytes off one row's socket.
-    fn on_data(&mut self, row: &mut Row<L>, bytes: &[u8]);
+    /// Bytes from one connection's socket.
+    fn on_data(&mut self, conn: &mut Connection<L>, bytes: &[u8]);
 
     /// A stream came up. Send a subscription here.
-    fn on_open(&mut self, row: &mut Row<L>) {
-        let _ = row;
+    fn on_open(&mut self, conn: &mut Connection<L>) {
+        let _ = conn;
     }
 
     /// A stream ended.
-    fn on_close(&mut self, row: &mut Row<L>) {
-        let _ = row;
+    fn on_close(&mut self, conn: &mut Connection<L>) {
+        let _ = conn;
     }
 
-    /// A phrase to add after a connected row's rate.
-    fn row_note(&mut self, row: &Row<L>) -> String {
-        let _ = row;
+    /// A phrase to add after the connection's rate while the stream is up.
+    fn connection_note(&mut self, conn: &Connection<L>) -> String {
+        let _ = conn;
         String::new()
     }
 
-    /// Where to dial, when it is not the row's host and port — a websocket
-    /// URL, say.
-    fn endpoint(&mut self, row: &Row<L>) -> Endpoint {
+    /// Where to dial, when it is not the connection's host and port: a
+    /// websocket URL, say.
+    fn endpoint(&mut self, conn: &Connection<L>) -> Endpoint {
         Endpoint::Tcp {
-            host: row.host.clone(),
-            port: row.port,
+            host: conn.host.clone(),
+            port: conn.port,
         }
     }
 }
@@ -410,15 +412,15 @@ pub trait Source<L: ConnSpec>: crate::Plugin {
 /// A plugin with no list still satisfies the trait, so tier 1 declares
 /// nothing.
 impl<P: crate::Plugin> Source<NoConns> for P {
-    fn on_data(&mut self, row: &mut Row<NoConns>, bytes: &[u8]) {
-        let _ = (row, bytes);
+    fn on_data(&mut self, conn: &mut Connection<NoConns>, bytes: &[u8]) {
+        let _ = (conn, bytes);
     }
 }
 
-/// The rows, the sockets and the status line. The library owns one of these
-/// per plugin; a plugin reaches its rows through the hooks.
+/// The connections, the sockets and the status line. The library owns one of
+/// these per plugin; a plugin reaches its connections through the hooks.
 pub struct Conns<L: ConnSpec> {
-    rows: Vec<Row<L>>,
+    conns: Vec<Connection<L>>,
     status_timer: i64,
     last_status: String,
 }
@@ -432,7 +434,7 @@ impl<L: ConnSpec> Default for Conns<L> {
 impl<L: ConnSpec> Conns<L> {
     pub fn new() -> Conns<L> {
         Conns {
-            rows: Vec::new(),
+            conns: Vec::new(),
             status_timer: -1,
             last_status: String::new(),
         }
@@ -443,14 +445,14 @@ impl<L: ConnSpec> Conns<L> {
         !L::OPTS.key.is_empty()
     }
 
-    /// Every row the mariner has, in slot order.
-    pub fn all(&self) -> &[Row<L>] {
-        &self.rows
+    /// Every connection the mariner has, in slot order.
+    pub fn all(&self) -> &[Connection<L>] {
+        &self.conns
     }
 
-    /// The row with this id, or nothing.
-    pub fn by_id(&mut self, id: &str) -> Option<&mut Row<L>> {
-        self.rows.iter_mut().find(|r| r.id == id)
+    /// The connection with this id, or nothing.
+    pub fn by_id(&mut self, id: &str) -> Option<&mut Connection<L>> {
+        self.conns.iter_mut().find(|r| r.id == id)
     }
 
     // ---- what the driver calls --------------------------------------------
@@ -472,11 +474,11 @@ impl<L: ConnSpec> Conns<L> {
             self.post_status(p);
             return true;
         }
-        let at = match self.rows.iter().position(|r| r.retry_timer == id) {
+        let at = match self.conns.iter().position(|r| r.retry_timer == id) {
             Some(i) => i,
             None => return false,
         };
-        self.rows[at].retry_timer = -1;
+        self.conns[at].retry_timer = -1;
         self.open(p, at);
         true
     }
@@ -493,11 +495,11 @@ impl<L: ConnSpec> Conns<L> {
                 None => return false,
             },
             raw::Event::TcpData { conn, bytes } => match self.by_socket(*conn, false) {
-                Some(at) => p.on_data(&mut self.rows[at], bytes),
+                Some(at) => p.on_data(&mut self.conns[at], bytes),
                 None => return false,
             },
             raw::Event::WsData(w) => match self.by_socket(w.conn, true) {
-                Some(at) => p.on_data(&mut self.rows[at], w.text.as_bytes()),
+                Some(at) => p.on_data(&mut self.conns[at], w.text.as_bytes()),
                 None => return false,
             },
             raw::Event::TcpClosed(id) => match self.by_socket(*id, false) {
@@ -514,10 +516,10 @@ impl<L: ConnSpec> Conns<L> {
     }
 
     pub(crate) fn shutdown(&mut self) {
-        for r in &mut self.rows {
+        for r in &mut self.conns {
             r.close_socket();
         }
-        self.rows.clear();
+        self.conns.clear();
         if self.status_timer >= 0 {
             raw::timer_cancel(self.status_timer);
         }
@@ -530,70 +532,70 @@ impl<L: ConnSpec> Conns<L> {
         if id < 0 {
             return None;
         }
-        self.rows.iter().position(|r| r.sock == id && r.ws == ws)
+        self.conns.iter().position(|r| r.sock == id && r.ws == ws)
     }
 
     /// Ask for a connection. The result arrives later as an open or a close
     /// event, so only an outright refusal is visible here.
     fn open<P: Source<L>>(&mut self, p: &mut P, at: usize) {
-        if !self.rows[at].enabled {
-            self.rows[at].conn = RowState::Paused;
+        if !self.conns[at].enabled {
+            self.conns[at].conn = RowState::Paused;
             return;
         }
-        if !self.rows[at].usable() {
-            self.rows[at].conn = RowState::NoAddress;
+        if !self.conns[at].usable() {
+            self.conns[at].conn = RowState::NoAddress;
             return;
         }
-        match p.endpoint(&self.rows[at]) {
+        match p.endpoint(&self.conns[at]) {
             Endpoint::Tcp { host, port } => {
-                self.rows[at].ws = false;
-                self.rows[at].sock = raw::tcp_connect(&host, port);
+                self.conns[at].ws = false;
+                self.conns[at].sock = raw::tcp_connect(&host, port);
             }
             Endpoint::Ws(url) => {
-                self.rows[at].ws = true;
-                self.rows[at].sock = raw::ws_connect(&url, &[]);
+                self.conns[at].ws = true;
+                self.conns[at].sock = raw::ws_connect(&url, &[]);
             }
             Endpoint::Refused(why) => {
-                self.rows[at].conn = RowState::Refused;
+                self.conns[at].conn = RowState::Refused;
                 let why = why.clone();
-                self.rows[at].set_detail(&why);
+                self.conns[at].set_detail(&why);
                 return;
             }
         }
-        if self.rows[at].sock < 0 {
-            self.rows[at].sock = -1;
+        if self.conns[at].sock < 0 {
+            self.conns[at].sock = -1;
             // The host would not make the call at all, and the only reason it
             // does that is the grant. Retrying is a refusal every two seconds
-            // for ever, so the row stops and says what is wrong.
-            if self.rows[at].ws {
-                self.rows[at].conn = RowState::Refused;
-                self.rows[at].set_detail(L::OPTS.refused_detail);
+            // for ever, so the connection stops and says what is wrong.
+            if self.conns[at].ws {
+                self.conns[at].conn = RowState::Refused;
+                self.conns[at].set_detail(L::OPTS.refused_detail);
                 return;
             }
-            self.rows[at].note_failure();
-            self.rows[at].schedule_retry();
+            self.conns[at].note_failure();
+            self.conns[at].schedule_retry();
         }
     }
 
     fn opened<P: Source<L>>(&mut self, p: &mut P, at: usize) {
         {
-            let r = &mut self.rows[at];
+            let r = &mut self.conns[at];
             r.conn = RowState::Connected;
             r.failures = 0;
             r.last_counted = r.counted;
             r.rate = 0;
             r.set_detail("");
         }
-        p.on_open(&mut self.rows[at]);
+        p.on_open(&mut self.conns[at]);
         self.post_status(p);
     }
 
     fn ended<P: Source<L>>(&mut self, p: &mut P, at: usize) {
-        self.rows[at].sock = -1;
-        p.on_close(&mut self.rows[at]);
-        // The close of a row the mariner just switched off is not a failure,
-        // and must not read as one.
-        let r = &mut self.rows[at];
+        self.conns[at].sock = -1;
+        p.on_close(&mut self.conns[at]);
+        // The close of a connection the mariner just switched off is not a
+        // failure, and must not read as one.
+        let r = &mut self.conns[at];
         if r.enabled && r.usable() {
             r.note_failure();
             r.schedule_retry();
@@ -603,7 +605,7 @@ impl<L: ConnSpec> Conns<L> {
 
     /// Take the mariner's list and make the streams match it.
     fn reconcile<P: Source<L>>(&mut self, p: &mut P, cfg: &Json<'_>) {
-        for r in &mut self.rows {
+        for r in &mut self.conns {
             r.seen = false;
         }
 
@@ -618,18 +620,18 @@ impl<L: ConnSpec> Conns<L> {
                 Some(id) if !id.is_empty() => id.to_owned(),
                 _ => continue,
             };
-            let (at, fresh) = match self.rows.iter().position(|r| r.id == id) {
+            let (at, fresh) = match self.conns.iter().position(|r| r.id == id) {
                 Some(at) => (at, false),
                 None => {
-                    if self.rows.len() == MAX_ROWS {
+                    if self.conns.len() == MAX_ROWS {
                         continue;
                     }
-                    self.rows.push(Row::new(&id));
-                    (self.rows.len() - 1, true)
+                    self.conns.push(Connection::new(&id));
+                    (self.conns.len() - 1, true)
                 }
             };
 
-            let r = &mut self.rows[at];
+            let r = &mut self.conns[at];
             let was_enabled = !fresh && r.enabled;
             let old_host = std::mem::take(&mut r.host);
             let old_port = r.port;
@@ -660,8 +662,8 @@ impl<L: ConnSpec> Conns<L> {
                 r.close_socket();
                 r.conn = RowState::NoAddress;
             } else if moved || !was_enabled {
-                // A new address, or a row just switched back on: start over,
-                // including the count behind "unreachable".
+                // A new address, or a connection just switched back on: start
+                // over, including the count behind "unreachable".
                 r.close_socket();
                 r.failures = 0;
                 r.conn = RowState::Reconnecting;
@@ -672,13 +674,13 @@ impl<L: ConnSpec> Conns<L> {
             }
         }
 
-        // A row the mariner deleted takes its stream with it.
-        for r in &mut self.rows {
+        // A connection the mariner deleted takes its stream with it.
+        for r in &mut self.conns {
             if !r.seen {
                 r.close_socket();
             }
         }
-        self.rows.retain(|r| r.seen);
+        self.conns.retain(|r| r.seen);
     }
 
     // ---- the status line ---------------------------------------------------
@@ -687,16 +689,16 @@ impl<L: ConnSpec> Conns<L> {
     /// item ids are the row ids the shell assigned, which is how each row's
     /// line finds its way back to the right row.
     fn post_status<P: Source<L>>(&mut self, p: &mut P) {
-        let mut order: Vec<usize> = (0..self.rows.len()).collect();
-        order.sort_by_key(|&i| self.rows[i].order);
+        let mut order: Vec<usize> = (0..self.conns.len()).collect();
+        order.sort_by_key(|&i| self.conns[i].order);
 
         let mut live = 0usize;
         let mut total = 0u64;
         for &i in &order {
             self.sample_rate(i);
-            if self.rows[i].connected() {
+            if self.conns[i].connected() {
                 live += 1;
-                total += self.rows[i].rate;
+                total += self.conns[i].rate;
             }
         }
 
@@ -726,21 +728,21 @@ impl<L: ConnSpec> Conns<L> {
             if k > 0 {
                 out.push(',');
             }
-            let line = if self.rows[i].connected() {
-                let mut line = format!("{} {}/s", self.rows[i].rate, L::OPTS.rate_noun);
-                let note = p.row_note(&self.rows[i]);
+            let line = if self.conns[i].connected() {
+                let mut line = format!("{} {}/s", self.conns[i].rate, L::OPTS.rate_noun);
+                let note = p.connection_note(&self.conns[i]);
                 if !note.is_empty() {
                     line.push_str(", ");
                     line.push_str(&note);
                 }
                 line
             } else {
-                self.rows[i].detail.clone()
+                self.conns[i].detail.clone()
             };
             out.push_str("{\"id\":");
-            json::push_str(&mut out, &self.rows[i].id);
+            json::push_str(&mut out, &self.conns[i].id);
             out.push_str(",\"state\":");
-            json::push_str(&mut out, self.rows[i].conn.text());
+            json::push_str(&mut out, self.conns[i].conn.text());
             out.push_str(",\"detail\":");
             json::push_str(&mut out, &line);
             out.push('}');
@@ -758,7 +760,7 @@ impl<L: ConnSpec> Conns<L> {
     }
 
     fn sample_rate(&mut self, at: usize) {
-        let r = &mut self.rows[at];
+        let r = &mut self.conns[at];
         let diff = r.counted - r.last_counted;
         r.last_counted = r.counted;
         if !r.connected() {
@@ -818,22 +820,22 @@ mod tests {
     }
 
     impl Source<Servers> for Fake {
-        fn on_data(&mut self, row: &mut Row<Servers>, bytes: &[u8]) {
-            row.count(1);
+        fn on_data(&mut self, conn: &mut Connection<Servers>, bytes: &[u8]) {
+            conn.count(1);
             self.seen
-                .push((row.id.clone(), String::from_utf8_lossy(bytes).into_owned()));
+                .push((conn.id.clone(), String::from_utf8_lossy(bytes).into_owned()));
         }
-        fn on_open(&mut self, row: &mut Row<Servers>) {
-            self.opened.push(row.id.clone());
+        fn on_open(&mut self, conn: &mut Connection<Servers>) {
+            self.opened.push(conn.id.clone());
         }
     }
 
-    // Off wasm every host call answers "refused", so a row never opens and
-    // nothing is dialled. What is testable here is the bookkeeping: which rows
-    // exist, what they carry, and what the schema says.
+    // Off wasm every host call answers "refused", so a connection never opens
+    // and nothing is dialled. What is testable here is the bookkeeping: which
+    // connections exist, what they carry, and what the schema says.
 
     #[test]
-    fn a_row_list_is_matched_by_id_and_a_deleted_row_goes() {
+    fn a_connection_list_is_matched_by_id_and_a_deleted_connection_goes() {
         let mut p = Fake::default();
         let mut c: Conns<Servers> = Conns::new();
         let cfg = Json::parse(
@@ -857,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn a_paused_row_is_paused_and_a_row_with_no_address_says_so() {
+    fn a_paused_connection_is_paused_and_one_with_no_address_says_so() {
         let mut p = Fake::default();
         let mut c: Conns<Servers> = Conns::new();
         let cfg = Json::parse(
@@ -871,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn data_reaches_on_data_with_the_row_that_carried_it() {
+    fn data_reaches_on_data_with_the_connection_that_carried_it() {
         let mut p = Fake::default();
         let mut c: Conns<Servers> = Conns::new();
         c.reconcile(
@@ -880,8 +882,8 @@ mod tests {
         );
         // Off wasm nothing dials, so the socket is planted by hand to drive the
         // routing the host would drive.
-        c.rows[0].sock = 42;
-        c.rows[0].conn = RowState::Connected;
+        c.conns[0].sock = 42;
+        c.conns[0].conn = RowState::Connected;
         assert!(c.event(
             &mut p,
             &raw::Event::TcpData {
@@ -910,8 +912,8 @@ mod tests {
             &mut p,
             &Json::parse(r#"{"servers":[{"id":"a","host":"10.0.0.2","port":3000}]}"#).unwrap(),
         );
-        c.rows[0].conn = RowState::Connected;
-        c.rows[0].count(84);
+        c.conns[0].conn = RowState::Connected;
+        c.conns[0].count(84);
         c.sample_rate(0);
         // 84 in a 2 s window is 42 a second.
         assert_eq!(c.all()[0].rate(), 42);

@@ -1,6 +1,6 @@
 package lookout
 
-// The raw layer: the ABI as it is, with no library on top. Tier 3 is written
+// The raw layer: the API as it is, with no library on top. Tier 3 is written
 // against this file — an event switch, a socket, a timer — and tiers 1 and 2
 // are written against everything else in the package and never need it.
 //
@@ -14,8 +14,8 @@ import (
 	"strconv"
 )
 
-// ABIVersion is the ABI this library speaks. lk_abi returns it.
-const ABIVersion uint32 = 1
+// APIVersion is the API this library speaks. lk_abi returns it.
+const APIVersion uint32 = 1
 
 // ---------------------------------------------------------------------------
 // Logging and clocks — no capability needed for either
@@ -58,7 +58,7 @@ func MonoMs() int64 { return hostMono() }
 func PublishJSON(b []byte) int32 { return hostPublish(b) }
 
 // AISUpsertJSON sends a {"targets":[...]} batch. Speed over ground is METRES
-// PER SECOND: everything crossing this ABI is SI.
+// PER SECOND: everything crossing this API is SI.
 func AISUpsertJSON(b []byte) int32 { return hostAISUpsert(b) }
 
 // OverlayJSON posts an overlay batch, {"set":[...],"del":[...]}. A tier-1
@@ -279,7 +279,7 @@ const (
 	Shutdown      Kind = 99
 )
 
-// known is the set the ABI defines. An unknown kind is answered 0 without
+// known is the set the API defines. An unknown kind is answered 0 without
 // reaching a plugin, so a future host can add events without breaking a plugin
 // built today.
 func (k Kind) known() bool {
@@ -377,7 +377,7 @@ func (r Response) Header(name string) string {
 }
 
 // Response splits an HTTPResponded payload: u32 head length, the head JSON, the
-// raw body. One event carries both because a plugin needs both and the ABI
+// raw body. One event carries both because a plugin needs both and the API
 // carries one payload per event.
 func (e Event) Response() Response {
 	r := Response{Request: e.Handle}
@@ -400,7 +400,7 @@ func (e Event) Response() Response {
 
 // Start is what OnStart receives.
 type Start struct {
-	ABI uint32 `json:"abi"`
+	API uint32 `json:"abi"`
 	// Config is the settings object as the host sent it. A plugin with a
 	// Settings struct never reads this: the library has already filled the
 	// struct in by the time OnStart runs.
@@ -541,7 +541,7 @@ func (p *Publish) close() {
 	p.b = append(p.b, '}')
 }
 
-// Number adds one numeric value. Everything crossing the ABI is SI.
+// Number adds one numeric value. Everything crossing the API is SI.
 func (p *Publish) Number(path string, v float64) {
 	p.open(path)
 	p.b = appendNum(p.b, v)

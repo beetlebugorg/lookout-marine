@@ -10,16 +10,16 @@ package lookout
 //		AddLabel: "Add Server",
 //		RateNoun: "deltas",
 //		Columns:  lk.RowColumns{Port: lk.NumSpec{Label: "Port", Min: 1, Max: 65535, Default: 8375}},
-//		Row:      func() any { return &server{} },
+//		State:    func() any { return &server{} },
 //	})
 //
-//	func (p *plugin) OnData(row *lk.Row, data []byte) { … }
+//	func (p *plugin) OnData(conn *lk.Conn, data []byte) { … }
 //
 // and the library owns everything else: the settings list schema, one socket per
-// row, the reconnect clock, the failure count behind "unreachable", the pause
-// switch, the per-row status item and the plugin's own status line.
+// connection, the reconnect clock, the failure count behind "unreachable", the
+// pause switch, the per-row status item and the plugin's own status line.
 //
-// ROWS ARE MATCHED BY ID. Editing one row never disturbs another's connection:
+// CONNECTIONS ARE MATCHED BY ID. Editing one connection never disturbs another:
 // only an address change, a pause or a delete closes a socket.
 
 import (
@@ -32,7 +32,7 @@ import (
 
 // ConnOpts is how one connection list behaves. Only Key and Group are required.
 type ConnOpts struct {
-	// Key is the config key the row array arrives under.
+	// Key is the config key the connection array arrives under.
 	Key string
 	// Group is the section heading in the settings window.
 	Group string
@@ -45,29 +45,29 @@ type ConnOpts struct {
 	// Columns words the four standard columns and sets the port's range. A zero
 	// column keeps the library's wording.
 	Columns RowColumns
-	// Row makes one row's struct: the plugin's extra columns, which are its
-	// exported fields with an lk tag, and its own per-row state, which is
-	// everything else. The library fills the columns in and leaves the state
-	// alone.
-	Row func() any
+	// State makes one connection's struct: the plugin's extra columns, which
+	// are its exported fields with an lk tag, and its own per-connection
+	// state, which is everything else. The library fills the columns in and
+	// leaves the state alone.
+	State func() any
 
 	// Reconnect is the delay before a dropped connection is retried. Default 2 s.
 	Reconnect time.Duration
-	// UnreachableAfter is failed connects in a row before a row reads as
-	// unreachable rather than reconnecting. Default 3, which is six seconds of
-	// silence.
+	// UnreachableAfter is failed connects in a row before a connection reads
+	// as unreachable rather than reconnecting. Default 3, which is six seconds
+	// of silence.
 	UnreachableAfter uint32
 	// StatusEvery is how often the status is rebuilt, and the window a rate is
 	// averaged over. Default 2 s.
 	StatusEvery time.Duration
-	// RateNoun is what Row.Count counts, for the status: "42 msg/s".
+	// RateNoun is what Conn.Count counts, for the status: "42 msg/s".
 	RateNoun string
 	// StatusEmpty is the plugin's status detail when the mariner has added no
-	// rows.
+	// connections.
 	StatusEmpty string
-	// NoAnswerDetail is what a row says once it has read as unreachable.
+	// NoAnswerDetail is what a connection says once it has read as unreachable.
 	NoAnswerDetail string
-	// RefusedDetail is what a row says when the host would not dial it at all.
+	// RefusedDetail is what a connection says when the host would not dial it at all.
 	// That only happens when the manifest's grant does not cover the address,
 	// and only the plugin knows which grant it asked for.
 	RefusedDetail string
@@ -124,14 +124,14 @@ const (
 	// RowNoAnswer is dialled and dialled and nothing answered.
 	RowNoAnswer RowState = "unreachable"
 	RowPaused   RowState = "paused"
-	// RowNoAddress is a row with no address, or a port nothing can dial.
+	// RowNoAddress is a connection with no address, or a port nothing can dial.
 	RowNoAddress RowState = "no_address"
 	// RowRefused is an endpoint the host would not dial: a grant that does not
 	// cover it.
 	RowRefused RowState = "refused"
 )
 
-// Endpoint is where one row is dialled. Build one with [TCPEndpoint],
+// Endpoint is where one connection is dialled. Build one with [TCPEndpoint],
 // [WSEndpoint] or [RefusedEndpoint].
 type Endpoint struct {
 	kind string
@@ -148,13 +148,13 @@ func TCPEndpoint(host string, port uint16) Endpoint {
 // WSEndpoint dials a WebSocket URL. The manifest must grant net.ws for its host.
 func WSEndpoint(url string) Endpoint { return Endpoint{kind: "ws", text: url} }
 
-// RefusedEndpoint says this row cannot be dialled, and why. The library stops
-// retrying and shows the reason on the row.
+// RefusedEndpoint says this connection cannot be dialled, and why. The library
+// stops retrying and shows the reason on the connection's line.
 func RefusedEndpoint(why string) Endpoint { return Endpoint{kind: "refused", text: why} }
 
-// Row is one connection: the row the mariner filled in, the plugin's own state
-// for it, and the socket the library holds.
-type Row struct {
+// Conn is one connection: the row the mariner filled in, the plugin's own
+// state for it, and the socket the library holds.
+type Conn struct {
 	// ID is the shell's id for this row. It survives an edit, and it is what a
 	// status item points at.
 	ID string
@@ -164,8 +164,8 @@ type Row struct {
 	Port uint16
 	// Enabled false means PAUSED: the stream closes and nothing reconnects.
 	Enabled bool
-	// State is what ConnOpts.Row returned: the plugin's columns and its own
-	// per-row state. Assert it to your own type.
+	// State is what ConnOpts.State returned: the plugin's columns and its own
+	// per-connection state. Assert it to your own type.
 	State any
 
 	used  bool
@@ -184,83 +184,83 @@ type Row struct {
 	detail      string
 }
 
-// Label is what to call this row: the mariner's name, or the address.
-func (r *Row) Label() string {
-	if r.Name != "" {
-		return r.Name
+// Label is what to call this connection: the mariner's name, or the address.
+func (conn *Conn) Label() string {
+	if conn.Name != "" {
+		return conn.Name
 	}
-	return r.Host
+	return conn.Host
 }
 
 // Connected is true while the stream is up.
-func (r *Row) Connected() bool { return r.conn == RowConnected }
+func (conn *Conn) Connected() bool { return conn.conn == RowConnected }
 
 // Rate is what Count counted over the last status window, per second.
-func (r *Row) Rate() uint64 { return r.rate }
+func (conn *Conn) Rate() uint64 { return conn.rate }
 
-// Send writes to this row's stream and returns the bytes queued, or -1.
-func (r *Row) Send(data []byte) int32 {
-	if r.sock < 0 {
+// Send writes to this connection's stream and returns the bytes queued, or -1.
+func (conn *Conn) Send(data []byte) int32 {
+	if conn.sock < 0 {
 		return -1
 	}
-	if r.ws {
-		return hostWSSend(r.sock, data)
+	if conn.ws {
+		return hostWSSend(conn.sock, data)
 	}
-	return hostTCPSend(r.sock, data)
+	return hostTCPSend(conn.sock, data)
 }
 
-// Count counts n of whatever this row carries. The library turns it into the
-// rate on the row's status line and in the plugin's.
-func (r *Row) Count(n uint64) { r.counted += n }
+// Count counts n of whatever this connection carries. The library turns it
+// into the rate on the connection's status line and in the plugin's.
+func (conn *Conn) Count(n uint64) { conn.counted += n }
 
-// SetDetail adds a phrase to this row's status line, after the state. Say
+// SetDetail adds a phrase to this connection's status line, after the state. Say
 // nothing that only repeats the state.
-func (r *Row) SetDetail(format string, a ...any) {
+func (conn *Conn) SetDetail(format string, a ...any) {
 	if len(a) == 0 {
-		r.detail = format
+		conn.detail = format
 		return
 	}
-	r.detail = fmt.Sprintf(format, a...)
+	conn.detail = fmt.Sprintf(format, a...)
 }
 
-// A row with no address cannot be dialled.
-func (r *Row) usable() bool { return r.Host != "" && r.Port > 0 }
+// A connection with no address cannot be dialled.
+func (conn *Conn) usable() bool { return conn.Host != "" && conn.Port > 0 }
 
-func (r *Row) closeSocket() {
-	if r.sock >= 0 {
-		if r.ws {
-			hostWSClose(r.sock)
+func (conn *Conn) closeSocket() {
+	if conn.sock >= 0 {
+		if conn.ws {
+			hostWSClose(conn.sock)
 		} else {
-			hostTCPClose(r.sock)
+			hostTCPClose(conn.sock)
 		}
 	}
-	r.sock = -1
-	if r.retryTimer >= 0 {
-		hostTimerCancel(r.retryTimer)
+	conn.sock = -1
+	if conn.retryTimer >= 0 {
+		hostTimerCancel(conn.retryTimer)
 	}
-	r.retryTimer = -1
-	r.rate = 0
+	conn.retryTimer = -1
+	conn.rate = 0
 }
 
-func (r *Row) scheduleRetry(delayMs int64) {
-	if r.retryTimer >= 0 || !r.Enabled || !r.usable() {
+func (conn *Conn) scheduleRetry(delayMs int64) {
+	if conn.retryTimer >= 0 || !conn.Enabled || !conn.usable() {
 		return
 	}
 	if id := hostTimerSet(delayMs, false); id >= 0 {
-		r.retryTimer = id
+		conn.retryTimer = id
 	}
 }
 
-func (r *Row) noteFailure(limit uint32, detail string) {
-	if r.failures < limit {
-		r.failures++
+func (conn *Conn) noteFailure(limit uint32, detail string) {
+	if conn.failures < limit {
+		conn.failures++
 	}
-	if r.failures >= limit {
-		r.conn = RowNoAnswer
-		r.detail = detail
+	if conn.failures >= limit {
+		conn.conn = RowNoAnswer
+		conn.detail = detail
 	} else {
-		r.conn = RowReconnecting
-		r.detail = ""
+		conn.conn = RowReconnecting
+		conn.detail = ""
 	}
 }
 
@@ -269,7 +269,7 @@ func (r *Row) noteFailure(limit uint32, detail string) {
 type Conns struct {
 	opts    ConnOpts
 	columns RowColumns
-	rows    []*Row
+	conns   []*Conn
 
 	statusTimer int64
 	lastStatus  string
@@ -306,14 +306,15 @@ func Connections(opts ConnOpts) *Conns {
 	return c
 }
 
-// All is every row the mariner has, in the order the settings window shows.
-func (c *Conns) All() []*Row { return c.rows }
+// All is every connection the mariner has, in the order the settings window
+// shows.
+func (c *Conns) All() []*Conn { return c.conns }
 
-// ByID is the row with this id, or nil.
-func (c *Conns) ByID(id string) *Row {
-	for _, r := range c.rows {
-		if r.ID == id {
-			return r
+// ByID is the connection with this id, or nil.
+func (c *Conns) ByID(id string) *Conn {
+	for _, conn := range c.conns {
+		if conn.ID == id {
+			return conn
 		}
 	}
 	return nil
@@ -343,21 +344,22 @@ func (c *Conns) group() (specGroup, error) {
 	return specGroup{label: c.opts.Group, tab: c.opts.Tab, list: l}, nil
 }
 
-// extraColumns reads the plugin's own columns off the row struct: its exported
-// fields with an lk tag. Everything else on that struct is the plugin's state.
+// extraColumns reads the plugin's own columns off the state struct: its
+// exported fields with an lk tag. Everything else on that struct is the
+// plugin's state.
 func (c *Conns) extraColumns() ([]specField, error) {
-	if c.opts.Row == nil {
+	if c.opts.State == nil {
 		return nil, nil
 	}
-	v := reflect.ValueOf(c.opts.Row())
+	v := reflect.ValueOf(c.opts.State())
 	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
-			return nil, fmt.Errorf("connections %q: Row returned a nil pointer", c.opts.Key)
+			return nil, fmt.Errorf("connections %q: State returned a nil pointer", c.opts.Key)
 		}
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("connections %q: Row must return a pointer to a struct", c.opts.Key)
+		return nil, fmt.Errorf("connections %q: State must return a pointer to a struct", c.opts.Key)
 	}
 	var out []specField
 	t := v.Type()
@@ -396,12 +398,12 @@ func (c *Conns) timer(id int64) bool {
 		c.postStatus()
 		return true
 	}
-	for _, r := range c.rows {
-		if r.retryTimer != id {
+	for _, conn := range c.conns {
+		if conn.retryTimer != id {
 			continue
 		}
-		r.retryTimer = -1
-		c.open(r)
+		conn.retryTimer = -1
+		c.open(conn)
 		return true
 	}
 	return false
@@ -411,45 +413,45 @@ func (c *Conns) timer(id int64) bool {
 func (c *Conns) event(e Event) bool {
 	switch e.Kind {
 	case TCPConnected:
-		r := c.bySocket(e.Handle, false)
-		if r == nil {
+		conn := c.bySocket(e.Handle, false)
+		if conn == nil {
 			return false
 		}
-		c.opened(r)
+		c.opened(conn)
 	case WSOpen:
-		r := c.bySocket(e.Handle, true)
-		if r == nil {
+		conn := c.bySocket(e.Handle, true)
+		if conn == nil {
 			return false
 		}
-		c.opened(r)
+		c.opened(conn)
 	case TCPData:
-		r := c.bySocket(e.Handle, false)
-		if r == nil {
+		conn := c.bySocket(e.Handle, false)
+		if conn == nil {
 			return false
 		}
 		if h, ok := reg.plugin.(DataHandler); ok {
-			h.OnData(r, e.Payload)
+			h.OnData(conn, e.Payload)
 		}
 	case WSData:
-		r := c.bySocket(e.Handle, true)
-		if r == nil {
+		conn := c.bySocket(e.Handle, true)
+		if conn == nil {
 			return false
 		}
 		if h, ok := reg.plugin.(DataHandler); ok {
-			h.OnData(r, e.Payload)
+			h.OnData(conn, e.Payload)
 		}
 	case TCPClosed:
-		r := c.bySocket(e.Handle, false)
-		if r == nil {
+		conn := c.bySocket(e.Handle, false)
+		if conn == nil {
 			return false
 		}
-		c.ended(r)
+		c.ended(conn)
 	case WSClosed:
-		r := c.bySocket(e.Handle, true)
-		if r == nil {
+		conn := c.bySocket(e.Handle, true)
+		if conn == nil {
 			return false
 		}
-		c.ended(r)
+		c.ended(conn)
 	default:
 		return false
 	}
@@ -457,11 +459,11 @@ func (c *Conns) event(e Event) bool {
 }
 
 func (c *Conns) shutdown() {
-	for _, r := range c.rows {
-		r.closeSocket()
-		r.used = false
+	for _, conn := range c.conns {
+		conn.closeSocket()
+		conn.used = false
 	}
-	c.rows = nil
+	c.conns = nil
 	if c.statusTimer >= 0 {
 		hostTimerCancel(c.statusTimer)
 	}
@@ -470,88 +472,88 @@ func (c *Conns) shutdown() {
 
 // ---- the connection itself ------------------------------------------------
 
-func (c *Conns) bySocket(id int64, ws bool) *Row {
-	for _, r := range c.rows {
-		if r.sock == id && r.ws == ws {
-			return r
+func (c *Conns) bySocket(id int64, ws bool) *Conn {
+	for _, conn := range c.conns {
+		if conn.sock == id && conn.ws == ws {
+			return conn
 		}
 	}
 	return nil
 }
 
-func (c *Conns) where(r *Row) Endpoint {
+func (c *Conns) where(conn *Conn) Endpoint {
 	if e, ok := reg.plugin.(Endpointer); ok {
-		return e.Endpoint(r)
+		return e.Endpoint(conn)
 	}
-	return TCPEndpoint(r.Host, r.Port)
+	return TCPEndpoint(conn.Host, conn.Port)
 }
 
 // open asks for a connection. The result arrives later as an open or a close
 // event, so only an outright refusal is visible here.
-func (c *Conns) open(r *Row) {
-	if !r.Enabled {
-		r.conn = RowPaused
+func (c *Conns) open(conn *Conn) {
+	if !conn.Enabled {
+		conn.conn = RowPaused
 		return
 	}
-	if !r.usable() {
-		r.conn = RowNoAddress
+	if !conn.usable() {
+		conn.conn = RowNoAddress
 		return
 	}
-	switch e := c.where(r); e.kind {
+	switch e := c.where(conn); e.kind {
 	case "ws":
-		r.ws = true
-		r.sock = WSConnect(e.text)
+		conn.ws = true
+		conn.sock = WSConnect(e.text)
 	case "refused":
-		r.conn = RowRefused
-		r.detail = e.text
+		conn.conn = RowRefused
+		conn.detail = e.text
 		return
 	default:
-		r.ws = false
-		r.sock = hostTCPConnect(e.host, e.port)
+		conn.ws = false
+		conn.sock = hostTCPConnect(e.host, e.port)
 	}
-	if r.sock < 0 {
-		r.sock = -1
+	if conn.sock < 0 {
+		conn.sock = -1
 		// The host would not make the call at all, and the only reason it does
 		// that is the grant. Retrying is a refusal every two seconds for ever,
-		// so the row stops and says what is wrong.
-		if r.ws {
-			r.conn = RowRefused
-			r.detail = c.opts.RefusedDetail
+		// so the connection stops and says what is wrong.
+		if conn.ws {
+			conn.conn = RowRefused
+			conn.detail = c.opts.RefusedDetail
 			return
 		}
-		r.noteFailure(c.opts.UnreachableAfter, c.opts.NoAnswerDetail)
-		r.scheduleRetry(c.opts.Reconnect.Milliseconds())
+		conn.noteFailure(c.opts.UnreachableAfter, c.opts.NoAnswerDetail)
+		conn.scheduleRetry(c.opts.Reconnect.Milliseconds())
 	}
 }
 
-func (c *Conns) opened(r *Row) {
-	r.conn = RowConnected
-	r.failures = 0
-	r.lastCounted = r.counted
-	r.rate = 0
-	r.detail = ""
+func (c *Conns) opened(conn *Conn) {
+	conn.conn = RowConnected
+	conn.failures = 0
+	conn.lastCounted = conn.counted
+	conn.rate = 0
+	conn.detail = ""
 	if h, ok := reg.plugin.(Opener); ok {
-		h.OnOpen(r)
+		h.OnOpen(conn)
 	}
 	c.postStatus()
 }
 
-func (c *Conns) ended(r *Row) {
-	r.sock = -1
+func (c *Conns) ended(conn *Conn) {
+	conn.sock = -1
 	if h, ok := reg.plugin.(Closer); ok {
-		h.OnClose(r)
+		h.OnClose(conn)
 	}
-	// The close of a row the mariner just switched off is not a failure, and
-	// must not read as one.
-	if r.Enabled && r.usable() {
-		r.noteFailure(c.opts.UnreachableAfter, c.opts.NoAnswerDetail)
-		r.scheduleRetry(c.opts.Reconnect.Milliseconds())
+	// The close of a connection the mariner just switched off is not a
+	// failure, and must not read as one.
+	if conn.Enabled && conn.usable() {
+		conn.noteFailure(c.opts.UnreachableAfter, c.opts.NoAnswerDetail)
+		conn.scheduleRetry(c.opts.Reconnect.Milliseconds())
 	}
 	c.postStatus()
 }
 
-// rowConfig is the four standard columns as the shell writes them.
-type rowConfig struct {
+// connConfig is the four standard columns as the shell writes them.
+type connConfig struct {
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	Host    string   `json:"host"`
@@ -561,8 +563,8 @@ type rowConfig struct {
 
 // reconcile takes the mariner's list and makes the streams match it.
 func (c *Conns) reconcile(cfg map[string]json.RawMessage) {
-	for _, r := range c.rows {
-		r.seen = false
+	for _, conn := range c.conns {
+		conn.seen = false
 	}
 
 	var items []json.RawMessage
@@ -571,85 +573,87 @@ func (c *Conns) reconcile(cfg map[string]json.RawMessage) {
 	}
 
 	for order, item := range items {
-		var in rowConfig
+		var in connConfig
 		if json.Unmarshal(item, &in) != nil || in.ID == "" {
 			continue
 		}
-		r := c.ByID(in.ID)
-		fresh := r == nil
+		conn := c.ByID(in.ID)
+		fresh := conn == nil
 		if fresh {
-			r = &Row{ID: in.ID, sock: -1, retryTimer: -1, conn: RowReconnecting}
-			c.rows = append(c.rows, r)
+			conn = &Conn{ID: in.ID, sock: -1, retryTimer: -1, conn: RowReconnecting}
+			c.conns = append(c.conns, conn)
 		}
-		wasEnabled := !fresh && r.Enabled
-		oldHost, oldPort := r.Host, r.Port
+		wasEnabled := !fresh && conn.Enabled
+		oldHost, oldPort := conn.Host, conn.Port
 
-		r.used = true
-		r.seen = true
-		r.order = order
-		r.Name = in.Name
-		r.Host = in.Host
+		conn.used = true
+		conn.seen = true
+		conn.order = order
+		conn.Name = in.Name
+		conn.Host = in.Host
 		port := c.columns.Port.Default
 		if in.Port != nil {
 			port = *in.Port
 		}
 		if port >= 1 && port <= 65535 {
-			r.Port = uint16(port)
+			conn.Port = uint16(port)
 		} else {
-			r.Port = 0
+			conn.Port = 0
 		}
-		r.Enabled = in.Enabled == nil || *in.Enabled
+		conn.Enabled = in.Enabled == nil || *in.Enabled
 
-		// The columns land in a fresh row struct, which is also where the
-		// plugin's per-row state lives. A column that changed adopts the new
-		// struct and so resets the state; an unchanged one keeps the old.
-		state, cols := c.readRow(item)
-		moved := fresh || oldHost != r.Host || oldPort != r.Port || !sameColumns(r, cols)
+		// The columns land in a fresh state struct, which is also where the
+		// plugin's per-connection state lives. A column that changed adopts
+		// the new struct and so resets the state; an unchanged one keeps the
+		// old.
+		state, cols := c.readConn(item)
+		moved := fresh || oldHost != conn.Host || oldPort != conn.Port || !sameColumns(conn, cols)
 		if moved || !wasEnabled {
-			r.State = state
+			conn.State = state
 		}
 
 		switch {
-		case !r.Enabled:
-			r.closeSocket()
-			r.conn = RowPaused
-			r.failures = 0
-		case !r.usable():
-			r.closeSocket()
-			r.conn = RowNoAddress
+		case !conn.Enabled:
+			conn.closeSocket()
+			conn.conn = RowPaused
+			conn.failures = 0
+		case !conn.usable():
+			conn.closeSocket()
+			conn.conn = RowNoAddress
 		case moved || !wasEnabled:
-			// A new address, or a row just switched back on: start over,
-			// including the count behind "unreachable".
-			r.closeSocket()
-			r.failures = 0
-			r.conn = RowReconnecting
-			c.open(r)
-		case r.sock < 0 && r.retryTimer < 0:
-			c.open(r)
+			// A new address, or a connection just switched back on: start
+			// over, including the count behind "unreachable".
+			conn.closeSocket()
+			conn.failures = 0
+			conn.conn = RowReconnecting
+			c.open(conn)
+		case conn.sock < 0 && conn.retryTimer < 0:
+			c.open(conn)
 		}
 	}
 
-	// A row the mariner deleted takes its stream with it.
-	kept := c.rows[:0]
-	for _, r := range c.rows {
-		if r.seen {
-			kept = append(kept, r)
+	// A connection the mariner deleted takes its stream with it.
+	kept := c.conns[:0]
+	for _, conn := range c.conns {
+		if conn.seen {
+			kept = append(kept, conn)
 			continue
 		}
-		r.closeSocket()
+		conn.closeSocket()
 	}
-	c.rows = kept
-	// In the mariner's order, not the order the rows were added, so the status
-	// items come back in the order the settings window shows.
-	slices.SortStableFunc(c.rows, func(a, b *Row) int { return a.order - b.order })
+	c.conns = kept
+	// In the mariner's order, not the order the connections were added, so the
+	// status items come back in the order the settings window shows.
+	slices.SortStableFunc(c.conns, func(a, b *Conn) int { return a.order - b.order })
 }
 
-// readRow makes one row's struct and fills its columns in from the config.
-func (c *Conns) readRow(item json.RawMessage) (any, []any) {
-	if c.opts.Row == nil {
+// readConn makes one connection's state struct and fills its columns in from
+// the config.
+func (c *Conns) readConn(item json.RawMessage) (any, []any) {
+	if c.opts.State == nil {
 		return nil, nil
 	}
-	state := c.opts.Row()
+	state := c.opts.State()
 	v := reflect.ValueOf(state)
 	for v.Kind() == reflect.Pointer && !v.IsNil() {
 		v = v.Elem()
@@ -676,14 +680,14 @@ func (c *Conns) readRow(item json.RawMessage) (any, []any) {
 	return state, values
 }
 
-// sameColumns is true when the row's live columns are the ones just read. A
+// sameColumns is true when the connection's live columns are the ones just read. A
 // column of the plugin's own may pick the transport, so a change to one is a
 // change of address.
-func sameColumns(r *Row, cols []any) bool {
-	if r.State == nil {
+func sameColumns(conn *Conn, cols []any) bool {
+	if conn.State == nil {
 		return len(cols) == 0
 	}
-	v := reflect.ValueOf(r.State)
+	v := reflect.ValueOf(conn.State)
 	for v.Kind() == reflect.Pointer && !v.IsNil() {
 		v = v.Elem()
 	}
@@ -712,11 +716,11 @@ func sameColumns(r *Row, cols []any) bool {
 // row's line finds its way back to the right row.
 func (c *Conns) postStatus() {
 	live, total := 0, uint64(0)
-	for _, r := range c.rows {
-		c.sampleRate(r)
-		if r.Connected() {
+	for _, conn := range c.conns {
+		c.sampleRate(conn)
+		if conn.Connected() {
 			live++
-			total += r.rate
+			total += conn.rate
 		}
 	}
 	state := "degraded"
@@ -726,12 +730,12 @@ func (c *Conns) postStatus() {
 
 	var detail string
 	switch {
-	case len(c.rows) == 0:
+	case len(c.conns) == 0:
 		detail = c.opts.StatusEmpty
 	case live > 0:
-		detail = fmt.Sprintf("%d of %d connected, %d %s/s", live, len(c.rows), total, c.opts.RateNoun)
+		detail = fmt.Sprintf("%d of %d connected, %d %s/s", live, len(c.conns), total, c.opts.RateNoun)
 	default:
-		detail = fmt.Sprintf("0 of %d connected", len(c.rows))
+		detail = fmt.Sprintf("0 of %d connected", len(c.conns))
 	}
 
 	b := append(make([]byte, 0, 512), `{"state":`...)
@@ -739,20 +743,20 @@ func (c *Conns) postStatus() {
 	b = append(b, `,"detail":`...)
 	b = appendString(b, detail)
 	b = append(b, `,"items":[`...)
-	for i, r := range c.rows {
+	for i, conn := range c.conns {
 		if i > 0 {
 			b = append(b, ',')
 		}
 		b = append(b, `{"id":`...)
-		b = appendString(b, r.ID)
+		b = appendString(b, conn.ID)
 		b = append(b, `,"state":`...)
-		b = appendString(b, string(r.conn))
+		b = appendString(b, string(conn.conn))
 		b = append(b, `,"detail":`...)
-		line := r.detail
-		if r.Connected() {
-			line = fmt.Sprintf("%d %s/s", r.rate, c.opts.RateNoun)
+		line := conn.detail
+		if conn.Connected() {
+			line = fmt.Sprintf("%d %s/s", conn.rate, c.opts.RateNoun)
 			if n, ok := reg.plugin.(Noter); ok {
-				if note := n.RowNote(r); note != "" {
+				if note := n.ConnNote(conn); note != "" {
 					line += ", " + note
 				}
 			}
@@ -771,13 +775,13 @@ func (c *Conns) postStatus() {
 	StatusJSON(b)
 }
 
-func (c *Conns) sampleRate(r *Row) {
-	diff := r.counted - r.lastCounted
-	r.lastCounted = r.counted
-	if !r.Connected() {
-		r.rate = 0
+func (c *Conns) sampleRate(conn *Conn) {
+	diff := conn.counted - conn.lastCounted
+	conn.lastCounted = conn.counted
+	if !conn.Connected() {
+		conn.rate = 0
 		return
 	}
 	ms := uint64(c.opts.StatusEvery.Milliseconds())
-	r.rate = (diff*1000 + ms/2) / ms
+	conn.rate = (diff*1000 + ms/2) / ms
 }

@@ -1,4 +1,4 @@
-//! Just enough JSON for the ABI: a borrowing reader and the escaping a writer
+//! Just enough JSON for the API: a borrowing reader and the escaping a writer
 //! needs. The SDK has no dependencies, so this is here instead of serde.
 //!
 //! The reader borrows from the input wherever it can. A string with no escape

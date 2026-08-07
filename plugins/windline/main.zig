@@ -11,8 +11,8 @@ comptime {
 }
 
 pub const inputs = struct {
-    pub const boat = lk.position("navigation.position", .{});
-    pub const twd = lk.number("environment.wind.directionTrue", .{ .label = "wind" });
+    pub const boat = lk.subscribePosition("navigation.position", .{});
+    pub const twd = lk.subscribeNumber("environment.wind.directionTrue", .{ .label = "wind" });
 };
 
 pub fn draw(c: *lk.Chart) void {

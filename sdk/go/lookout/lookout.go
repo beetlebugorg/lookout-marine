@@ -6,8 +6,8 @@
 //	import lk "github.com/beetlebugorg/lookout-marine/sdk/go/lookout"
 //
 //	var (
-//		boat = lk.Position("navigation.position")
-//		twd  = lk.Number("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
+//		boat = lk.SubscribePosition("navigation.position")
+//		twd  = lk.SubscribeNumber("environment.wind.directionTrue", lk.InputOpts{Label: "wind"})
 //	)
 //
 //	type windline struct{}
@@ -53,11 +53,11 @@
 //	Draw(*Chart)                the scene, on the library's timer
 //	DrawRate() time.Duration    how often, default 1 s
 //	OnSettings()                after a settings change, before the redraw
-//	OnData(*Row, []byte)        the bytes off one row's socket        (tier 2)
-//	OnOpen(*Row)                a stream came up; send a subscription (tier 2)
-//	OnClose(*Row)               a stream ended                        (tier 2)
-//	RowNote(*Row) string        a phrase after a connected row's rate (tier 2)
-//	Endpoint(*Row) Endpoint     where to dial, when it is not host:port (tier 2)
+//	OnData(*Conn, []byte)       bytes from one connection's socket    (tier 2)
+//	OnOpen(*Conn)               a stream came up; send a subscription (tier 2)
+//	OnClose(*Conn)              a stream ended                        (tier 2)
+//	ConnNote(*Conn) string      a phrase after the connection's rate  (tier 2)
+//	Endpoint(*Conn) Endpoint    where to dial, when it is not host:port (tier 2)
 //	OnStart(Start) error        anything else at startup
 //	OnEvent(Event) error        every event the library did not consume (tier 3)
 //	OnShutdown()                the last word
@@ -128,21 +128,22 @@ type DrawRater interface{ DrawRate() time.Duration }
 // the Settings struct in and before it redraws.
 type SettingsWatcher interface{ OnSettings() }
 
-// DataHandler is the tier-2 entry point: the bytes off one row's socket.
-type DataHandler interface{ OnData(row *Row, data []byte) }
+// DataHandler is the tier-2 entry point: bytes from one connection's socket.
+type DataHandler interface{ OnData(conn *Conn, data []byte) }
 
-// Opener hears that a row's stream came up. Send a subscription here.
-type Opener interface{ OnOpen(row *Row) }
+// Opener hears that a connection's stream came up. Send a subscription here.
+type Opener interface{ OnOpen(conn *Conn) }
 
-// Closer hears that a row's stream ended.
-type Closer interface{ OnClose(row *Row) }
+// Closer hears that a connection's stream ended.
+type Closer interface{ OnClose(conn *Conn) }
 
-// Noter adds a phrase after a connected row's rate on its status line.
-type Noter interface{ RowNote(row *Row) string }
+// Noter adds a phrase after the rate on a connection's status line while the
+// stream is up.
+type Noter interface{ ConnNote(conn *Conn) string }
 
-// Endpointer says where a row is dialled, when it is not the row's host and
-// port — a websocket URL, say.
-type Endpointer interface{ Endpoint(row *Row) Endpoint }
+// Endpointer says where a connection is dialled, when it is not the
+// connection's host and port: a websocket URL, say.
+type Endpointer interface{ Endpoint(conn *Conn) Endpoint }
 
 // Starter does anything else at startup, after the library has subscribed and
 // armed its timers.
@@ -198,7 +199,7 @@ func Register(p any) {
 	}
 	reg.plugin = p
 	checkMethod(p, "Draw", "Draw(*lookout.Chart)")
-	checkMethod(p, "OnData", "OnData(*lookout.Row, []byte)")
+	checkMethod(p, "OnData", "OnData(*lookout.Conn, []byte)")
 
 	groups, err := settingsOf(p)
 	if err != nil {
@@ -320,8 +321,8 @@ func dispatchStart(raw []byte) int32 {
 		Log(Error, "lk_start: config is not JSON")
 		return -1
 	}
-	if s.ABI != ABIVersion {
-		Log(Error, "lk_start: host speaks ABI %d, this plugin speaks %d", s.ABI, ABIVersion)
+	if s.API != APIVersion {
+		Log(Error, "lk_start: host speaks API %d, this plugin speaks %d", s.API, APIVersion)
 		return -1
 	}
 	if err := wiringComplaint(); err != nil {
@@ -400,7 +401,7 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 		return -1
 	}
 	if !kind.known() {
-		// The ABI says an unknown kind is ignored and answered 0. A future host
+		// The API says an unknown kind is ignored and answered 0. A future host
 		// must be able to add events without breaking a plugin built today.
 		return 0
 	}

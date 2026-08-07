@@ -16,7 +16,7 @@
 
 const std = @import("std");
 
-/// Which stream a row uses.
+/// Which stream a connection uses.
 pub const Kind = enum {
     tcp,
     ws,
@@ -62,7 +62,8 @@ pub const max_doc = 8192;
 /// `instant` with a `minPeriod` sends each change as it happens and no faster
 /// than 200 ms. The default policy is `ideal`, which repeats a value that did
 /// not change; a repeat is a store write that elects the same number again,
-/// and at one server per row it is what fills the host's event queue first.
+/// and at one server per connection it is what fills the host's event queue
+/// first.
 pub const subscribe_all =
     subscribe_body ++ "\r\n";
 

@@ -5,7 +5,7 @@ listing each. The docs may take these verbatim. Each listing compiles as
 written for `wasm32-wasip1`, apart from the parser bodies marked `…`.
 
 The names are the Zig library's names in Rust idiom: `Plugin`, `Chart`,
-`Number`, `Position`, `Ais`, `Publish`, `Upsert`, `ConnSpec`, `Source`, `Row`,
+`Number`, `Position`, `Ais`, `Publish`, `Upsert`, `ConnSpec`, `Source`, `Connection`,
 `Endpoint`, `SettingsHook`. A plugin author reads the same API in either
 language.
 
@@ -66,8 +66,8 @@ struct Windline {
 impl Default for Windline {
     fn default() -> Self {
         Windline {
-            boat: lk::Position::new("navigation.position"),
-            twd: lk::Number::new("environment.wind.directionTrue").label("wind"),
+            boat: lk::subscribe_position("navigation.position"),
+            twd: lk::subscribe_number("environment.wind.directionTrue").label("wind"),
         }
     }
 }
@@ -93,7 +93,7 @@ impl lk::Plugin for Windline {
 }
 ```
 
-`plugin!` writes the five ABI exports and builds the plugin with `Default` on
+`plugin!` writes the five exports and builds the plugin with `Default` on
 the first call. The library subscribes to both paths, records and ages what
 arrives, runs `draw` once a second, and sends the difference between this
 scene and the last. A reading older than 5 s takes the line off the chart and
@@ -114,12 +114,12 @@ struct Instruments {
 impl Default for Instruments {
     fn default() -> Self {
         Instruments {
-            boat: lk::Position::new("navigation.position"),
-            twd: lk::Number::new("environment.wind.directionTrue").label("wind"),
-            depth: lk::Number::new("environment.depth.belowKeel")
+            boat: lk::subscribe_position("navigation.position"),
+            twd: lk::subscribe_number("environment.wind.directionTrue").label("wind"),
+            depth: lk::subscribe_number("environment.depth.belowKeel")
                 .max_age(10_000)
                 .optional(),
-            traffic: lk::Ais::new(256),
+            traffic: lk::subscribe_ais(256),
         }
     }
 }
@@ -228,9 +228,9 @@ returns the same text on its own.
 
 ## Tier 2 — a source plugin
 
-The library owns the connection rows end to end: the settings list schema, one
-socket per row, the reconnect clock, the pause switch, the per-row status item
-and the plugin's status line. The plugin writes the protocol.
+The library owns the connections end to end: the settings list schema, one
+socket per connection, the reconnect clock, the pause switch, the per-row
+status item and the plugin's status line. The plugin writes the protocol.
 
 ```rust
 use lookout as lk;
@@ -249,7 +249,7 @@ struct Servers;
 
 impl lk::ConnSpec for Servers {
     type Columns = SkColumns;       // beyond the four every list carries
-    type State = Vec<u8>;           // per-row parse state: the partial line
+    type State = Vec<u8>;           // per-connection parse state: the partial line
     const OPTS: lk::ConnOpts = lk::ConnOpts {
         key: "servers",
         group: "Signal K servers",
@@ -283,16 +283,16 @@ impl lk::Plugin for SignalK {
 
 impl lk::Source<Servers> for SignalK {
     /// A stream came up. Send the subscription here.
-    fn on_open(&mut self, row: &mut lk::Row<Servers>) {
-        row.send(br#"{"context":"vessels.self","subscribe":[{"path":"*"}]}"#);
+    fn on_open(&mut self, conn: &mut lk::Connection<Servers>) {
+        conn.send(br#"{"context":"vessels.self","subscribe":[{"path":"*"}]}"#);
     }
 
-    /// The bytes off one row's socket.
-    fn on_data(&mut self, row: &mut lk::Row<Servers>, bytes: &[u8]) {
-        row.state.extend_from_slice(bytes);
-        while let Some(at) = row.state.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = row.state.drain(..=at).collect();
-            row.count(1);
+    /// Bytes from one connection's socket.
+    fn on_data(&mut self, conn: &mut lk::Connection<Servers>, bytes: &[u8]) {
+        conn.state.extend_from_slice(bytes);
+        while let Some(at) = conn.state.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = conn.state.drain(..=at).collect();
+            conn.count(1);
             let (path, value) = …;
             let mut p = lk::Publish::begin();
             p.number(path, value);
@@ -300,14 +300,14 @@ impl lk::Source<Servers> for SignalK {
         }
     }
 
-    /// Where to dial, when it is not the row's host and port.
-    fn endpoint(&mut self, row: &lk::Row<Servers>) -> lk::Endpoint {
-        if row.cols.websocket {
-            lk::Endpoint::Ws(format!("ws://{}:{}/signalk/v1/stream", row.host, row.port))
+    /// Where to dial, when it is not the connection's host and port.
+    fn endpoint(&mut self, conn: &lk::Connection<Servers>) -> lk::Endpoint {
+        if conn.cols.websocket {
+            lk::Endpoint::Ws(format!("ws://{}:{}/signalk/v1/stream", conn.host, conn.port))
         } else {
             lk::Endpoint::Tcp {
-                host: row.host.clone(),
-                port: row.port,
+                host: conn.host.clone(),
+                port: conn.port,
             }
         }
     }
@@ -319,8 +319,8 @@ impl lk::Source<Servers> for SignalK {
 needs `use lookout::ConnSpec;` in scope; `Display::get()` and
 `Display::schema()` are inherent and need no import.
 
-The other two hooks are `on_close(row)` and `row_note(row) -> String`, which
-adds a phrase after a connected row's rate.
+The other two hooks are `on_close(conn)` and `connection_note(conn) -> String`, which
+adds a phrase after the connection's rate.
 
 ## Publishing
 
@@ -345,7 +345,7 @@ u.send();
 ```
 
 Both stamp the host's wall clock, which is what the store ages against. `sog`
-is metres per second: everything crossing the ABI is SI.
+is metres per second: everything crossing the API is SI.
 
 ## Alarms
 
@@ -358,7 +358,7 @@ otherwise know. Everything else is a status line.
 
 ## Tier 3 — the raw events
 
-For whatever the first two tiers do not cover. `register!` hands over every
+For whatever the declared surface does not cover. `register!` hands over every
 event with nothing consumed.
 
 ```rust
@@ -391,7 +391,7 @@ impl raw::RawPlugin for Probe {
 }
 ```
 
-A tier-1 or tier-2 plugin reaches the same calls through `lk::raw` without
+Any plugin reaches the same calls through `lk::raw` without
 giving up the library: storage, HTTP, UDP, files and the WebSocket calls all
 live there.
 
@@ -401,14 +401,14 @@ lk::raw::http_fetch(&lk::raw::HttpRequest::get("https://tiles.example.org/x"));
 ```
 
 `Plugin::on_event` receives every event the library did not consume, so a
-tier-1 plugin can answer an HTTP response without leaving tier 1.
+drawing plugin can answer an HTTP response without giving anything up.
 
 ## What it costs
 
 | | Zig | Rust |
 |---|---|---|
 | windline, less its header and blank lines | 15 lines | 30 lines |
-| the library, tests and raw tier included | 3846 lines in `plugins/common` | 5548 lines in `sdk/rust/lookout/src` |
+| the library, tests and raw calls included | 3846 lines in `plugins/common` | 5548 lines in `sdk/rust/lookout/src` |
 | the built module | 82 KiB (laylines) | 110 KiB |
 
 The Rust plugin is longer by its `Default` impl and its `inputs()` list, which

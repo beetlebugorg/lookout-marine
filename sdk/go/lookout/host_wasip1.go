@@ -1,6 +1,6 @@
 //go:build wasip1
 
-// The host boundary: the ABI's imports on one side, the five exports on the
+// The host boundary: the API's imports on one side, the five exports on the
 // other, and nothing above them. Every other file in this package is portable
 // Go that calls the host* wrappers at the bottom of this file, which is what
 // lets the package build and its tests run on a development machine.
@@ -10,7 +10,7 @@ package lookout
 import "unsafe"
 
 // ---------------------------------------------------------------------------
-// The host imports, exactly as the ABI freezes them
+// The host imports, exactly as the API freezes them
 // ---------------------------------------------------------------------------
 
 //go:wasmimport lookout log
@@ -202,7 +202,7 @@ func hostFileClose(handle int64) { wasmFileClose(handle) }
 var allocs = map[uint32][]byte{}
 
 //go:wasmexport lk_abi
-func lkABI() uint32 { return ABIVersion }
+func lkAPI() uint32 { return APIVersion }
 
 //go:wasmexport lk_alloc
 func lkAlloc(n uint32) uint32 {

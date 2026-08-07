@@ -55,7 +55,7 @@ impl Publish {
 }
 
 /// A batch of AIS targets. `sog_mps` is metres per second: everything crossing
-/// the ABI is SI, whatever the wire format reported.
+/// the API is SI, whatever the wire format reported.
 pub struct Upsert {
     b: raw::AisUpsert,
     ts: i64,

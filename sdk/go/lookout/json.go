@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-// The JSON the library writes by hand. Every payload crossing the ABI is small
+// The JSON the library writes by hand. Every payload crossing the API is small
 // and fixed in shape, so it is appended into a byte slice rather than built as
 // a map and marshalled.
 

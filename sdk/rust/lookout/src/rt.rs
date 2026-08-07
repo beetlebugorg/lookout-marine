@@ -24,8 +24,8 @@ fn layout(len: u32) -> Option<Layout> {
     Layout::from_size_align(std::cmp::max(len as usize, 1), ALIGN).ok()
 }
 
-pub fn abi() -> u32 {
-    raw::ABI_VERSION
+pub fn api() -> u32 {
+    raw::API_VERSION
 }
 
 /// lk_alloc. Returns 0 when it cannot allocate, which the host reads as "the
@@ -72,13 +72,13 @@ fn parse_start(ptr: u32, len: u32) -> Option<Json<'static>> {
             return None;
         }
     };
-    let abi = root.i64_or("abi", 0);
-    if abi != raw::ABI_VERSION as i64 {
+    let api = root.i64_or("abi", 0);
+    if api != raw::API_VERSION as i64 {
         crate::log!(
             raw::Level::Error,
-            "lk_start: host speaks ABI {}, this plugin speaks {}",
-            abi,
-            raw::ABI_VERSION
+            "lk_start: host speaks API {}, this plugin speaks {}",
+            api,
+            raw::API_VERSION
         );
         return None;
     }
@@ -222,7 +222,7 @@ pub fn start<P: Source<L>, L: ConnSpec>(ptr: u32, len: u32) -> i32 {
     }
 
     let s = raw::Start {
-        abi: raw::ABI_VERSION,
+        api: raw::API_VERSION,
         config,
     };
     match d.plugin.on_start(&s) {
@@ -326,7 +326,7 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
 
     let e = match decode(kind, handle, bytes, text) {
         Some(e) => e,
-        // The ABI says an unknown kind is ignored and answered 0. A future
+        // The API says an unknown kind is ignored and answered 0. A future
         // host must be able to add events without breaking a plugin built
         // today.
         None => return 0,
@@ -413,7 +413,7 @@ pub fn raw_start<P: raw::RawPlugin + Default + 'static>(ptr: u32, len: u32) -> i
         None => return -1,
     };
     let s = raw::Start {
-        abi: raw::ABI_VERSION,
+        api: raw::API_VERSION,
         config,
     };
     match p.start(s) {

@@ -68,7 +68,7 @@ impl Tab {
 }
 
 /// A number the mariner sets. `unit` is shown beside the control; the value
-/// crosses the ABI in that unit and is clamped into the range before it
+/// crosses the API in that unit and is clamped into the range before it
 /// arrives.
 #[derive(Debug, Clone, Copy)]
 pub struct Num {
@@ -109,7 +109,7 @@ impl Flag {
 }
 
 /// A line of text. Legal only as a column of a connection row: a scalar
-/// setting crosses the ABI as a number and the host keeps no scalar string.
+/// setting crosses the API as a number and the host keeps no scalar string.
 #[derive(Debug, Clone, Copy)]
 pub struct Text {
     pub label: &'static str,
@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn the_manifest_is_checked_against_the_declaration() {
         let manifest = format!(
-            r#"{{"id":"org.example.x","abi":1,"settings":{}}}"#,
+            r#"{{"id":"org.example.x","api":1,"settings":{}}}"#,
             settings_json(&[Bare::schema()])
         );
         assert!(expect_manifest(&manifest, &[Bare::schema()]).is_ok());

@@ -67,7 +67,7 @@ const MaxFields = 16
 const MaxTextBytes = 128
 
 // NumSpec is a number the mariner sets. Unit is shown beside the control; the
-// value crosses the ABI in that unit and is clamped into the range before a
+// value crosses the API in that unit and is clamped into the range before a
 // plugin reads it. Use it to word a connection list's Port column; a settings
 // field says the same thing in its tags.
 type NumSpec struct {
@@ -87,7 +87,7 @@ type FlagSpec struct {
 }
 
 // TextSpec is a line of text. It is legal only as a column of a connection row:
-// a scalar setting crosses the ABI as a number and the host keeps no scalar
+// a scalar setting crosses the API as a number and the host keeps no scalar
 // string.
 type TextSpec struct {
 	Label string

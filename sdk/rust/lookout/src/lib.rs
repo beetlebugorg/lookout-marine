@@ -59,8 +59,8 @@
 //! | `on_event(e)` | every event the library did not consume (tier 3) |
 //! | `on_shutdown()` | the last word |
 //!
-//! and for tier 2, on [`Source`]: `on_data(row, bytes)`, `on_open`, `on_close`,
-//! `row_note` and `endpoint`.
+//! and for tier 2, on [`Source`]: `on_data(conn, bytes)`, `on_open`,
+//! `on_close`, `connection_note` and `endpoint`.
 //!
 //! TARGET. `wasm32-wasip1`, `crate-type = ["cdylib"]`. One thread, no
 //! filesystem, no sockets but the host's. See [`raw`] for the floor.
@@ -78,14 +78,17 @@ mod settings;
 pub use chart::{
     Anchor, Area, Chart, Color, Line, Pick, State, Sym, Symbol, MAX_OBJECTS, SCENE_BYTES,
 };
-pub use conn::{ConnOpts, ConnSpec, Conns, Endpoint, NoConns, Row, RowColumns, RowState, Source};
+pub use conn::{
+    ConnOpts, ConnSpec, Connection, Conns, Endpoint, NoConns, RowColumns, RowState, Source,
+};
 pub use geo::{knots, nm, normalize_deg, wrap_lon, Point, NM_M};
 pub use input::{
-    Ais, AnyInput, Input, Number, Optional, Position, Required, Target, Value, DEFAULT_MAX_AGE_MS,
+    subscribe_ais, subscribe_number, subscribe_position, Ais, AnyInput, Input, Number, Optional,
+    Position, Required, Target, Value, DEFAULT_MAX_AGE_MS,
 };
 pub use json::Json;
 pub use post::{alert, say, Publish, Upsert};
-pub use raw::{log, mono_ms, now_ms, Level, Severity, ABI_VERSION};
+pub use raw::{log, mono_ms, now_ms, Level, Severity, API_VERSION};
 pub use settings::{
     expect_manifest, settings_json, Field, FieldSpec, Fields, Flag, Group, ListInfo, Num,
     SettingsGroup, SettingsHook, Spec, Store, Tab, Text, MAX_FIELDS, MAX_ROWS, MAX_TEXT_BYTES,
@@ -201,7 +204,7 @@ impl<T> Single<T> {
 #[doc(hidden)]
 pub mod rt;
 
-/// Write the five ABI exports and wire them to your plugin. Call it once, at
+/// Write the five exports and wire them to your plugin. Call it once, at
 /// the top level of your crate, with the plugin's type:
 ///
 /// ```ignore
@@ -219,7 +222,7 @@ macro_rules! plugin {
     ($plugin:ty, connections: $conns:ty) => {
         #[no_mangle]
         pub extern "C" fn lk_abi() -> u32 {
-            $crate::rt::abi()
+            $crate::rt::api()
         }
 
         #[no_mangle]
@@ -244,7 +247,7 @@ macro_rules! plugin {
     };
 }
 
-/// Write the five ABI exports for a TIER 3 plugin: one that handles the raw
+/// Write the five exports for a TIER 3 plugin: one that handles the raw
 /// events itself. [`plugin!`] is what a tier 1 or tier 2 plugin uses.
 ///
 /// ```ignore
@@ -255,7 +258,7 @@ macro_rules! register {
     ($plugin:ty) => {
         #[no_mangle]
         pub extern "C" fn lk_abi() -> u32 {
-            $crate::rt::abi()
+            $crate::rt::api()
         }
 
         #[no_mangle]

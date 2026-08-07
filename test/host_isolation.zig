@@ -28,7 +28,7 @@ const spin_id = "org.beetlebug.spin";
 /// The spinner asks for nothing but the overlay: `log`, `chrome_status` and
 /// timers are ungated, so this is every grant it needs to draw one symbol.
 const spin_manifest =
-    \\{"id":"org.beetlebug.spin","name":"Spinner","abi":1,"capabilities":["overlay.draw"]}
+    \\{"id":"org.beetlebug.spin","name":"Spinner","api":1,"capabilities":["overlay.draw"]}
 ;
 
 /// The timer ids test/spin_plugin.zig treats as "stop returning" and "trap
