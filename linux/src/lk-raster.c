@@ -5,8 +5,9 @@
 #include <string.h>
 
 struct _LkRasterCharts {
-  GPtrArray  *paths; /* char*, in the order added; NULL-terminated for callers */
-  GHashTable *off;   /* the paths switched off, as a set */
+  GPtrArray  *paths;  /* char*, in the order added; NULL-terminated for callers */
+  GHashTable *off;    /* the paths switched off, as a set */
+  GHashTable *hidden; /* the SET NAMES not drawn, as a set */
 };
 
 /* ---- set names ---------------------------------------------------------- */
@@ -85,20 +86,32 @@ lk_raster_set_name_for (const char *path)
 
 /* ---- the installed list ------------------------------------------------- */
 
-static void
-lk_raster_charts_save (LkRasterCharts *self)
+/* The keys of a set table as a strv the store can write. Borrowed: the strings
+ * belong to the table. */
+static GPtrArray *
+lk_raster_keys (GHashTable *table)
 {
-  g_autoptr (GPtrArray) off = g_ptr_array_new ();
+  GPtrArray *keys = g_ptr_array_new ();
   GHashTableIter iter;
   gpointer key;
 
-  g_hash_table_iter_init (&iter, self->off);
+  g_hash_table_iter_init (&iter, table);
   while (g_hash_table_iter_next (&iter, &key, NULL))
-    g_ptr_array_add (off, key);
-  g_ptr_array_add (off, NULL);
+    g_ptr_array_add (keys, key);
+  g_ptr_array_add (keys, NULL);
+
+  return keys;
+}
+
+static void
+lk_raster_charts_save (LkRasterCharts *self)
+{
+  g_autoptr (GPtrArray) off = lk_raster_keys (self->off);
+  g_autoptr (GPtrArray) hidden = lk_raster_keys (self->hidden);
 
   lk_store_save_raster_paths (lk_raster_charts_paths (self));
   lk_store_save_raster_off ((const char *const *) off->pdata);
+  lk_store_save_raster_hidden ((const char *const *) hidden->pdata);
 }
 
 LkRasterCharts *
@@ -108,6 +121,7 @@ lk_raster_charts_new (void)
 
   self->paths = g_ptr_array_new_with_free_func (g_free);
   self->off = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  self->hidden = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
   g_auto (GStrv) saved = lk_store_load_raster_paths ();
   for (guint i = 0; saved[i] != NULL; i++)
@@ -117,6 +131,10 @@ lk_raster_charts_new (void)
   g_auto (GStrv) off = lk_store_load_raster_off ();
   for (guint i = 0; off[i] != NULL; i++)
     g_hash_table_add (self->off, g_strdup (off[i]));
+
+  g_auto (GStrv) hidden = lk_store_load_raster_hidden ();
+  for (guint i = 0; hidden[i] != NULL; i++)
+    g_hash_table_add (self->hidden, g_strdup (hidden[i]));
 
   return self;
 }
@@ -129,6 +147,7 @@ lk_raster_charts_free (LkRasterCharts *self)
 
   g_ptr_array_unref (self->paths);
   g_hash_table_unref (self->off);
+  g_hash_table_unref (self->hidden);
   g_free (self);
 }
 
@@ -171,10 +190,25 @@ lk_raster_charts_add (LkRasterCharts *self, const char *path)
   return TRUE;
 }
 
+/* Is any installed file still part of the set called `name`? */
+static gboolean
+lk_raster_charts_holds_set (LkRasterCharts *self, const char *name)
+{
+  for (guint i = 0; i + 1 < self->paths->len; i++)
+    {
+      g_autofree char *other = lk_raster_set_name_for (g_ptr_array_index (self->paths, i));
+      if (g_strcmp0 (other, name) == 0)
+        return TRUE;
+    }
+  return FALSE;
+}
+
 void
 lk_raster_charts_remove (LkRasterCharts *self, const char *path)
 {
   g_return_if_fail (self != NULL && path != NULL);
+
+  g_autofree char *name = lk_raster_set_name_for (path);
 
   for (guint i = 0; i + 1 < self->paths->len; i++)
     {
@@ -185,7 +219,15 @@ lk_raster_charts_remove (LkRasterCharts *self, const char *path)
         }
     }
 
+  /* Forgotten means forgotten. The two lists are keyed by path and by set name,
+   * so leaving an entry behind means the same file installed again months later
+   * comes back switched off, or its set not drawn, with nothing on screen to
+   * say why. The name goes with the LAST file of its set: while the mariner
+   * still carries the others, it is still the set they switched off. */
   g_hash_table_remove (self->off, path);
+  if (!lk_raster_charts_holds_set (self, name))
+    g_hash_table_remove (self->hidden, name);
+
   lk_raster_charts_save (self);
 }
 
@@ -207,6 +249,44 @@ lk_raster_charts_enabled (LkRasterCharts *self, const char *path)
 {
   g_return_val_if_fail (self != NULL && path != NULL, TRUE);
   return !g_hash_table_contains (self->off, path);
+}
+
+gboolean
+lk_raster_charts_shown (LkRasterCharts *self, const char *name)
+{
+  g_return_val_if_fail (self != NULL && name != NULL, TRUE);
+  return !g_hash_table_contains (self->hidden, name);
+}
+
+gboolean
+lk_raster_charts_note_shown (LkRasterCharts    *self,
+                             const char *const *shown,
+                             const char *const *hidden)
+{
+  gboolean changed = FALSE;
+
+  g_return_val_if_fail (self != NULL, FALSE);
+
+  for (guint i = 0; shown != NULL && shown[i] != NULL; i++)
+    {
+      if (g_hash_table_remove (self->hidden, shown[i]))
+        changed = TRUE;
+    }
+
+  for (guint i = 0; hidden != NULL && hidden[i] != NULL; i++)
+    {
+      if (g_hash_table_contains (self->hidden, hidden[i]))
+        continue;
+      g_hash_table_add (self->hidden, g_strdup (hidden[i]));
+      changed = TRUE;
+    }
+
+  /* Only on a real change: this is read back after every frame that moves the
+   * raster state, and rewriting settings.ini as the mariner sails in and out of
+   * coverage would be a file write for nothing. */
+  if (changed)
+    lk_raster_charts_save (self);
+  return changed;
 }
 
 static void

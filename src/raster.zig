@@ -1393,6 +1393,60 @@ test "a set with every chart switched off cannot be shown" {
     try testing.expect(!l.isShown(9));
 }
 
+fn named(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+/// The restore a host actually performs: it saved set NAMES, and it hides the
+/// ones the mariner had off before it shows the rest.
+fn restoreHidden(l: *Layer, hidden: []const []const u8) void {
+    for (l.sets.items, 0..) |*s, i| {
+        if (named(hidden, s.name)) l.setShown(i, false);
+    }
+    for (l.sets.items, 0..) |*s, i| {
+        if (!named(hidden, s.name)) l.setShown(i, true);
+    }
+}
+
+test "the restore follows the names, which a chart that will not open reorders" {
+    const a = testing.allocator;
+
+    // The mariner carries two providers for the Chesapeake and one for the
+    // Adriatic, and prefers Bing over this coast with the Adriatic quiet.
+    var l = try testLayer(a, &.{
+        .{ .name = "ArcGIS", .west = -77, .east = -76 },
+        .{ .name = "Bing", .west = -76.5, .east = -75.5 },
+        .{ .name = "Google", .west = 12, .east = 13 },
+    });
+    defer freeTestLayer(&l);
+    asJustAdded(&l);
+    l.setShown(1, true);
+    l.setShown(2, false);
+    const hidden = [_][]const u8{ "ArcGIS", "Google" };
+
+    // Next launch the ArcGIS drive is unplugged, so its chart never opens and
+    // every set after it moves down one. The set at the index Bing had is
+    // Google now, so an index-keyed restore would put the picture on the wrong
+    // coast; the names still say what the mariner chose.
+    var l2 = try testLayer(a, &.{
+        .{ .name = "Bing", .west = -76.5, .east = -75.5 },
+        .{ .name = "Google", .west = 12, .east = 13 },
+    });
+    defer freeTestLayer(&l2);
+    asJustAdded(&l2);
+    try testing.expect(!std.mem.eql(u8, "Bing", l2.sets.items[1].name));
+
+    restoreHidden(&l2, &hidden);
+    try testing.expect(l2.isShown(0));
+    try testing.expect(!l2.isShown(1));
+
+    // And the unplugged set is not forgotten: it is simply not here to restore.
+    try testing.expectEqual(@as(usize, 2), l2.setCount());
+}
+
 test "the key packs a whole tile address" {
     const k: Key = .{ .x = 70458, .y = 84151, .z = 17, .set = 3 };
     const round: Key = @bitCast(k.pack());

@@ -54,7 +54,10 @@ void lk_app_model_toggle_other_category (LkAppModel *self);
  * asking twenty times would be unusable. */
 void lk_app_model_add_raster_charts (LkAppModel *self, const char *const *paths);
 
-/* Replay the installed list into a chart the engine has just opened. */
+/* Replay the installed list into a chart the engine has just opened, and put
+ * back the choices the mariner made about it: the charts switched off, the sets
+ * they stopped drawing, and whether the ENC is hidden where a picture covers.
+ * Called before the first frame, so nothing they switched off flashes up. */
 void lk_app_model_reinstall_raster_charts (LkAppModel *self);
 
 /* Forget one file. The engine cannot drop a chart from a live handle, so the

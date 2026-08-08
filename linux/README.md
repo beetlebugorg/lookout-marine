@@ -54,7 +54,10 @@ ENC. The pill at the end of the readouts names the set drawn over the view: blue
 when it draws, amber when one covers the view and is off. **Ctrl+I** steps to the
 next set covering this water, and **Ctrl+Shift+H** hides the ENC where a picture
 covers it. The installed list lives in `settings.ini` and is replayed into every
-chart the engine opens.
+chart the engine opens, along with the rest of what the mariner chose: the
+charts switched off (`off`), the sets they stopped drawing (`hidden`, by set
+name) and the ENC-over-picture state (`chart_hidden`). They are put back before
+the first frame, because the engine draws a set as it opens it.
 
 ## Testing
 

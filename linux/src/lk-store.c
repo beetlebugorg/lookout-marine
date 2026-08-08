@@ -155,6 +155,37 @@ lk_store_save_raster_off (const char *const *paths)
   lk_store_save_list ("off", paths);
 }
 
+char **
+lk_store_load_raster_hidden (void)
+{
+  return lk_store_load_list ("hidden");
+}
+
+void
+lk_store_save_raster_hidden (const char *const *names)
+{
+  lk_store_save_list ("hidden", names);
+}
+
+gboolean
+lk_store_load_chart_hidden (void)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  g_autoptr (GError) error = NULL;
+  gboolean hidden = g_key_file_get_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", &error);
+
+  return error == NULL && hidden;
+}
+
+void
+lk_store_save_chart_hidden (gboolean hidden)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  g_key_file_set_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", hidden);
+  lk_store_flush (keyfile);
+}
+
 /* ---- mariner ------------------------------------------------------------ */
 
 void

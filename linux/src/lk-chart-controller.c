@@ -644,6 +644,17 @@ lk_chart_controller_raster_select (LkChartController *self, int index)
   lk_chart_controller_kick (self);
 }
 
+void
+lk_chart_controller_raster_set_shown (LkChartController *self, int index, gboolean shown)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || index < 0)
+    return;
+  lookout_raster_set_shown (self->handle, (uint32_t) index, shown ? 1 : 0);
+  lk_chart_controller_kick (self);
+}
+
 gboolean
 lk_chart_controller_raster_set_enabled (LkChartController *self,
                                         const char        *path,
@@ -679,6 +690,7 @@ lk_chart_controller_raster_sets (LkChartController *self)
       set->id = (int) i;
       set->name = lk_raster_dup (name, length);
       set->in_view = lookout_raster_set_in_view (self->handle, i) != 0;
+      set->shown = lookout_raster_shown (self->handle, i) != 0;
       g_ptr_array_add (sets, set);
     }
 
@@ -729,6 +741,17 @@ lk_chart_controller_raster_over_chart (LkChartController *self)
   if (self->handle == NULL)
     return FALSE;
   return lookout_raster_over_chart (self->handle) != 0;
+}
+
+void
+lk_chart_controller_set_chart_hidden (LkChartController *self, gboolean hidden)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_set_chart_hidden (self->handle, hidden ? 1 : 0);
+  lk_chart_controller_kick (self);
 }
 
 gboolean

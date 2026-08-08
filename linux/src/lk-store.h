@@ -25,6 +25,20 @@ void   lk_store_save_raster_paths (const char *const *paths);
 char **lk_store_load_raster_off (void);
 void   lk_store_save_raster_off (const char *const *paths);
 
+/* The SETS the mariner has stopped drawing, by set name, and whether the ENC
+ * was hidden where a picture covers it. Both are choices the mariner made at
+ * the pill, and neither survives on the installed list alone: the engine draws
+ * a set as it opens it, so a launch that only replays the list turns a set they
+ * switched off back on.
+ *
+ * Not the same thing as the off list. Off means "installed and quiet" and takes
+ * a set out of the pill's list; this is the pill's own choice of which picture
+ * covers this water, and a set that is not drawn is still offered. */
+char   **lk_store_load_raster_hidden (void);
+void     lk_store_save_raster_hidden (const char *const *names);
+gboolean lk_store_load_chart_hidden (void);
+void     lk_store_save_chart_hidden (gboolean hidden);
+
 /* Mariner settings. Load overlays onto a struct already holding engine
  * defaults, so unknown/engine-only fields are left untouched. */
 void lk_store_save_mariner (const tile57_mariner *mariner);

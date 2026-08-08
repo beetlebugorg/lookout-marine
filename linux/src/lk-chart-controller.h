@@ -90,11 +90,14 @@ void lk_chart_controller_toggle_other_category (LkChartController *self);
 
 /* One set the engine reports: the charts of one provider, drawn as one
  * picture. `in_view` says whether it has enabled charts under this view, which
- * is what the pill and its list are built from. */
+ * is what the pill and its list are built from. `shown` is the set's own state
+ * rather than "drawn over this view": that is what gets saved, and a coast off
+ * screen still has an answer. */
 typedef struct {
   int      id;
   char    *name;
   gboolean in_view;
+  gboolean shown;
 } LkRasterSet;
 
 void lk_raster_set_free (LkRasterSet *set);
@@ -111,6 +114,12 @@ void lk_chart_controller_raster_cycle (LkChartController *self);
 /* Draw set `index`, or none for -1. Off is off for the water in view only: the
  * sets covering other coasts stay as the mariner left them. */
 void lk_chart_controller_raster_select (LkChartController *self, int index);
+
+/* Draw set `index`, or stop drawing it, WITHOUT reference to the camera. Select
+ * cannot do this: it answers for the view on screen, and the view a launch
+ * opens into is often nowhere near the set being put back. Showing still turns
+ * off the sets covering the same water, so the election holds. */
+void lk_chart_controller_raster_set_shown (LkChartController *self, int index, gboolean shown);
 
 /* Turn one installed chart on or off. It stays installed either way. */
 gboolean lk_chart_controller_raster_set_enabled (LkChartController *self,
@@ -134,6 +143,7 @@ gboolean lk_chart_controller_raster_over_chart (LkChartController *self);
 
 /* Hide the vector chart where a picture covers it, and show it again. */
 void     lk_chart_controller_toggle_chart (LkChartController *self);
+void     lk_chart_controller_set_chart_hidden (LkChartController *self, gboolean hidden);
 gboolean lk_chart_controller_chart_hidden (LkChartController *self);
 
 /* ---- pick --------------------------------------------------------------- */
