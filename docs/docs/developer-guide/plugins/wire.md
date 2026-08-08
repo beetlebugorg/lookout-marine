@@ -86,7 +86,7 @@ not trap.
 | `timer_cancel` | `(id: i64)` | none | Nothing. Cancelling another plugin's timer does nothing. |
 | `subscribe` | `(ptr, len) -> i32` | `vessel.read` | The number of paths, or -1. The payload is `["navigation.position",…]`. **One subscription per plugin**: calling again replaces the list. |
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
-| `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. Port 0 takes an ephemeral one. |
+| `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. The port must be one your manifest's `net.udp` grant names, so port 0 is refused: an ephemeral port is not a port the mariner consented to. |
 | `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** (the host resolves no name here), so `255.255.255.255` works and `gateway.local` does not. |
 | `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
 | `http_fetch` | `(ptr, len) -> i64` | `net.http` + its host list | A request id at once, or -1. The host fetches on a thread of its own and delivers exactly one `HTTP_RESPONSE` carrying that id. |
