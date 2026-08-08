@@ -1294,6 +1294,31 @@ pub const Broker = struct {
         _ = self.ais.clearSource(source) catch {};
     }
 
+    /// Take back what a capability produced, for a plugin that still runs.
+    /// A revoked grant stops future calls, and what earlier calls drew or
+    /// published must go with it: a frozen overlay object or a held reading
+    /// reads as live data and is not.
+    pub fn withdraw(self: *Broker, index: u32, cap: Cap, now_ms: i64) void {
+        var id: []const u8 = "";
+        var source: SourceId = 0;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            for (self.plugins.items) |p| {
+                if (p.index != index) continue;
+                id = p.id;
+                source = p.source;
+                break;
+            }
+        }
+        switch (cap) {
+            .overlay_draw => if (id.len > 0) self.overlay.remove(id),
+            .vessel_publish => self.vessels.clearSource(source, now_ms),
+            .ais_publish => _ = self.ais.clearSource(source) catch {},
+            else => {},
+        }
+    }
+
     // -- tables ---------------------------------------------------------------
 
     /// Take one table declaration from a plugin. A declaration under a key the

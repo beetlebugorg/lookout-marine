@@ -2291,10 +2291,12 @@ pub const Host = struct {
     pub fn grantSet(self: *Host, id: []const u8, cap_name: []const u8, on: bool) !void {
         const cap = broker.Cap.fromName(cap_name) orelse return Error.UnknownCapability;
         var grants: broker.Caps = undefined;
+        var index: u32 = 0;
         {
             self.cfg_mu.lock();
             defer self.cfg_mu.unlock();
             const e = self.entryFor(id) orelse return Error.UnknownPlugin;
+            index = e.state.index;
             // A grant can never exceed the manifest: switching ON something
             // it never asked for is refused, not stored.
             if (!e.manifest.caps.contains(cap)) return Error.NotGranted;
@@ -2305,6 +2307,11 @@ pub const Host = struct {
             e.state.caps = e.grants;
             grants = e.grants;
         }
+        // A grant that goes off takes back what it produced. The plugin keeps
+        // running, so nothing else clears the overlay objects it drew or the
+        // readings it published, and both would sit there unchanging while
+        // looking current.
+        if (!on) self.br.withdraw(index, cap, broker.wallMs());
         self.persistGrants(id, grants) catch |e| {
             self.br.say(broker.level_warn, id, "grant change not saved: {s}", .{@errorName(e)});
         };

@@ -468,6 +468,9 @@ test "the downwind example installs hot, draws, loses a grant live, and uninstal
         // plugin keeps running. Exactly a capability never asked for.
         try h.grantSet(downwind_id, "overlay.draw", false);
         try must(exists(grants_path), "grants.json written beside the wasm");
+        // What the capability drew goes with the capability. An object left
+        // behind stops updating and still reads as live.
+        try must(!rig.ov.objs.contains(downwind_id ++ "/windline"), "the revoke took the drawing off the chart");
         const denied_before = p.denied;
         pushFix(&rig, p.index, 38.9800);
         _ = h.pump();
