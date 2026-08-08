@@ -39,8 +39,8 @@ pub const Connections = lk.connections(.{
     .group = "Connections",
     .footer = "Give the address of your instrument network's gateway. Most WiFi gateways serve " ++
         "NMEA 0183 on port 10110. Everything switched on here feeds the same chart.",
-    .empty = "No gateways yet.",
-    .add_label = "Add Gateway",
+    .empty = "No connections yet.",
+    .add_label = "Add Connection",
     .columns = .{
         .name = .{
             .label = "Name",

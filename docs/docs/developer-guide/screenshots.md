@@ -21,7 +21,7 @@ or missing its chrome. The same frame on each host makes those faults obvious.
 | Item | Value |
 |---|---|
 | **Chart** | The NOAA ENC library (a folder of baked cells). The labels and the anchorage areas are dense. |
-| **Camera** | `-76.482,38.976,13.7` — Annapolis Harbor and the Naval Academy |
+| **Camera** | `-76.482,38.976,13.7`: Annapolis Harbor and the Naval Academy |
 | **Scheme** | Day |
 | **Logical size** | 1400 x 900 points |
 | **Scale** | 2, which gives **2800 x 1800 px** |
@@ -172,8 +172,9 @@ im.save(sys.argv[2], 'WEBP', quality=88, method=6)" in.png out.webp
 
 The `-raw` capture keeps its NATIVE size: it is the evidence that the frame was
 taken at the specified size, and the framed image is derived from it. The image a
-reader is served is capped — 1600 px for a window, 1400 for a device — because
-the README shows these 160 to 300 points wide and the docs column is about 750.
+reader is served is capped at 1600 px for a window and 1400 for a device,
+because the README shows these 160 to 300 points wide and the docs column is
+about 750.
 
 ## Examining a frame
 

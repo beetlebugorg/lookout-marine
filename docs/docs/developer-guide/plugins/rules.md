@@ -18,8 +18,8 @@ nothing.
 ## State lives in globals
 
 `lk.scratch()` is a bump arena that is **reset the moment your handler returns**.
-Anything you allocate from it — a parsed JSON tree, a slice of readings, a
-formatted string — is gone when the next event arrives. State that must survive
+Anything you allocate from it (a parsed JSON tree, a slice of readings, a
+formatted string) is gone when the next event arrives. State that must survive
 goes in a container-level `var`: a counter, a fixed array, a struct.
 
 *There is no heap and no free list, so an allocation that outlives its event is a
@@ -111,7 +111,7 @@ call comes back as a trap, and the plugin goes down the ordinary fault path.
 *Time isolation is what keeps a slow weather plugin from delaying a collision
 alarm.*
 
-One second is enormous for an event handler — the four plugins that ship with
+One second is enormous for an event handler. The five plugins that ship with
 Lookout take microseconds. The kill lands between 1000 ms and 1100 ms, because
 the precision is one tick. The budget covers **one call**: a plugin that takes
 900 ms on every event is never stopped and is 900 ms late forever. The watchdog
@@ -145,7 +145,7 @@ single event.
 ## The queue holds 1024 events, and then drops
 
 Each plugin has its own FIFO. Over the cap, an event is dropped, counted against
-that plugin, and logged — the first one and then every thousandth.
+that plugin, and logged: the first one and then every thousandth.
 
 | Pressure | What happens |
 |---|---|
@@ -207,7 +207,7 @@ Reassembly is yours too: one `TCP_DATA` event is one socket read of at most 8192
 bytes, which has no relationship to the line boundaries in what the peer sent.
 
 The same rule covers WebSockets: `WS_CLOSED` is the end, and dialling again is
-yours. What is **not** yours there is reassembly — the host joins a message's
+yours. What is **not** yours there is reassembly: the host joins a message's
 fragments and answers the peer's pings before you see anything, so one `WS_DATA`
 is one whole message. UDP is the third case: one `UDP_DATA` is exactly one
 datagram, never two joined and never one split.
@@ -225,9 +225,9 @@ There are no wildcards: a plugin that needs two servers must name both. A
 redirect that would leave the host fails the fetch rather than following, because
 the list was checked once at the URL you asked for.
 
-When the address is a mariner's setting rather than yours — a Signal K server,
-an instrument bridge — write `local`. It grants the boat's own network and
-refuses the internet.
+When the address is a mariner's setting rather than yours (a Signal K server, an
+instrument bridge), write `local`. It grants the boat's own network and refuses
+the internet.
 
 ## Ask for a range, not a file
 
@@ -258,12 +258,12 @@ into your buffer only when the value fits. A key that was never written answers
 ## You cannot open a file
 
 There is no `file_open`, and there never will be one. A file handle arrives as
-`FILE_OPENED` because a mariner chose that file and Lookoutlication granted it.
+`FILE_OPENED` because a mariner chose that file and Lookout granted it.
 
 *A plugin that could name a path could read the chart library, the settings and
 the saved credentials of every other plugin on the machine.*
 
-Read with an absolute offset — the handle has no cursor — and expect 0 bytes at
+Read with an absolute offset (the handle has no cursor) and expect 0 bytes at
 the end of the file rather than an error.
 
 ## A plugin has one subscription

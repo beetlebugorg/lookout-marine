@@ -14,7 +14,7 @@ drew and what it was denied, then writes the chart with your overlay on it to a
 PNG.
 
 Nothing about the plugin layer is simulated: it uses the same broker, stores,
-overlay engine and watchdog as Lookout. What is missing is Lookout window and a
+overlay engine and watchdog as Lookout. What is missing is Lookout's window and a
 real boat.
 
 ```sh
@@ -40,7 +40,7 @@ today, and `-Dplugins=true` with a WAMR archive elsewhere.
 | `--rate X` | Replay speed, times real time. Default 1. `0` serves as fast as the socket takes it. |
 | `--until S` | Stop after S replay **seconds**. Default: the whole log. |
 | `--png PATH` | The snapshot written at `--until`. Default `plugin-dev.png`. |
-| `--view lon,lat,zoom[,rot]` | The camera. Default: fit the chart. Use the rotation at least once — geometry that looks right north-up can still be wrong under a turned camera, and rendering one is the only way to find out. |
+| `--view lon,lat,zoom[,rot]` | The camera. Default: fit the chart. Use the rotation at least once. Geometry that looks right north-up can still be wrong under a turned camera, and rendering one is the only way to find out. |
 | `--width W --height H` | Render size in pixels. Default 1600x1200. |
 | `--scheme day\|dusk\|night` | The palette. Default day. Run night to see what your colour tokens actually look like. |
 | `--print WHAT` | One of `all`, `deltas`, `overlay`, `alert`, `status`. Default `all`. |
@@ -79,7 +79,8 @@ testing.
 ## Making the replay log
 
 `tools/nmea_gen.zig` writes the log the shipped plugins are verified against. It
-is deterministic — no clock, no randomness — so two runs produce identical bytes.
+is deterministic, with no clock and no randomness, so two runs produce identical
+bytes.
 
 ```sh
 zig run tools/nmea_gen.zig -- test/annapolis.nmea
@@ -88,12 +89,12 @@ zig run tools/nmea_gen.zig -- test/annapolis.nmea
 600 seconds at 1 Hz out of Annapolis harbour: own ship sails a gentle S curve at
 5 kn reporting RMC, HDT, MWD and DPT, and holds ten degrees between heading and
 course so the heading line and the course vector are two visibly different lines.
-Three AIS targets exercise all three sides of the `ais` plugin's alarm gate — one
+Three AIS targets exercise all three sides of the `ais` plugin's alarm gate: one
 crosses into it at about t = 50 s and stays, one lies anchored 1.4 km abeam and
 never gates, one is a class B already departing with a negative TCPA. Two aids to
 navigation report type 21.
 
-The log itself is not in the repository — run the command above to write it.
+The log itself is not in the repository. Run the command above to write it.
 
 Any recording works: `--replay` reads a plain NMEA 0183 log. A capture from your
 own boat is better test data than the generated log.
@@ -122,7 +123,7 @@ refused config does not fail the run today.
 Every line carries the replay clock, so any output can be matched to the second
 of the log that caused it.
 
-**`--print status`** — every status line a plugin posts, and only those. The host
+**`--print status`.** Every status line a plugin posts, and only those. The host
 logs a status only when the text changes, so this stream shows each plugin's
 changes of state and nothing else:
 
@@ -132,13 +133,13 @@ t=    1.0s [info] org.beetlebug.nmea0183: status {"state":"running","detail":"co
 t=   20.0s [info] org.beetlebug.ais: status {"state":"running","detail":"5 targets, 1 in CPA alarm"}
 ```
 
-**`--print alert`** — alerts, at the level their severity picked:
+**`--print alert`.** Alerts, at the level their severity picked:
 
 ```
 t=   20.0s [error] org.beetlebug.ais: ALERT {"severity":"alarm","title":"AIS CPA alarm","body":"367123450: CPA 149 m in 591 s"}
 ```
 
-**`--print deltas`** — the vessel store and the AIS store as they change. This
+**`--print deltas`.** The vessel store and the AIS store as they change. This
 reads the stores rather than the log, because the broker logs failures, not
 successful publishes:
 
@@ -153,7 +154,7 @@ t=  180.0s ais 366987650 gone
 fresh, and `gone` means the path or the target has no value at all any more. Age
 is printed but not compared, so a value that never changes prints once.
 
-**`--print overlay`** — objects appearing and disappearing, by their
+**`--print overlay`.** Objects appearing and disappearing, by their
 host-namespaced id. Geometry moves every second, so movement itself is not
 printed:
 
@@ -176,10 +177,10 @@ replay: 61 group(s), 275 line(s), 60.0 s at 20x, 1 connection(s)
 frames: 14 rendered, 1 alert(s) raised
 ```
 
-Three things to read every time. **`live`** — anything else means the plugin
+Three things to read every time. **`live`.** Anything else means the plugin
 trapped or was killed, and the status line beside it says why. **`denied
-call(s)`** — any number but zero is a capability your manifest forgot.
-**`alert(s) raised`** — how many alerts came out of the whole run, which is the
+call(s)`.** Any number but zero is a capability your manifest forgot.
+**`alert(s) raised`.** How many alerts came out of the whole run, which is the
 number to pin if you are testing an alarm.
 
 The PNG is the other half. A plugin can publish and draw correctly and still put
@@ -188,8 +189,8 @@ render shows that. Run `--scheme night` as well as day.
 
 One thing the print streams miss: everything the plugin layer says **before** the
 chart is open. Module load and the plugin's start go straight to stderr, so if
-your plugin never appears in any stream at all, look further up the terminal —
-the reason it did not load is up there.
+your plugin never appears in any stream at all, look further up the terminal.
+The reason it did not load is up there.
 
 ## Writing a golden test
 
@@ -207,7 +208,7 @@ zig run tools/nmea_gen.zig -- test/annapolis.nmea
 diff expected.txt actual.txt
 ```
 
-The tail — the object inventory, the per-plugin line and the alert count — is
+The tail (the object inventory, the per-plugin line and the alert count) is
 byte-identical across repeated runs, so it is the part worth pinning. What is
 **not** stable: the `t=` stamps, the `age` columns, the frame count, and
 anything whose size depends on wall-clock time (the own-ship track keeps one point
@@ -223,9 +224,9 @@ sed -E 's/^t= *[0-9.]+s //' run.txt | grep '^overlay [+-]' | sort
 
 That comparison is stable across runs too.
 
-For pure logic — a parser, a CPA solver, geodesy — do not use the harness at all.
+For pure logic (a parser, a CPA solver, geodesy), do not use the harness at all.
 Keep that code in a file that does not `@import("lk")` and unit-test it natively,
-the way `plugins/nmea0183/parser.zig` and `plugins/ais/cpa.zig` do — `zig build
+the way `plugins/nmea0183/parser.zig` and `plugins/ais/cpa.zig` do. `zig build
 test` runs those directly. A native test is faster to run and you can put a
 debugger on it, which you cannot do inside the interpreter.
 

@@ -85,8 +85,8 @@ for a `lk.Flag`. A number outside its range is clamped before it reaches you,
 by Lookout and again by the SDK, so `s.length_nm` is always between 0.1
 and 10.
 
-**Where it appears.** `tab` picks one of the mariner's settings tabs — display,
-depths, text, charts, vessels, alarms, connections, advanced — and `group` is
+**Where it appears.** `tab` picks one of the mariner's settings tabs (display,
+depths, text, charts, vessels, alarms, connections, advanced), and `group` is
 the heading inside it. Lookout shows a collision alarm limit under Alarms like
 any other alarm setting. It does not say which plugin added it.
 
@@ -244,8 +244,8 @@ pub fn draw(c: *lk.Chart) void {
 
 Both objects are described in full on all four calls each second. The SDK
 sends the sweep because it moved; while the boat holds station it does not send
-the ring again. Take the ring out of `draw` — return early, or drop the setting
-to nothing — and it leaves the chart on the next call, with no delete call from
+the ring again. Take the ring out of `draw` (return early, or drop the setting
+to nothing) and it leaves the chart on the next call, with no delete call from
 you.
 
 An area's ring is closed for you and needs at least three points; a line needs
@@ -341,7 +341,7 @@ expiry yourself.
 **`sog_mps` is metres per second**, whatever the wire format reported.
 `lk.knots` converts it for display.
 
-Closest-approach maths — the passing distance and the time to it — is too long
+Closest-approach maths (the passing distance and the time to it) is too long
 for a recipe. `plugins/ais/cpa.zig` is the worked solver, a plain file with its
 own tests.
 
@@ -403,7 +403,7 @@ fn publish(sentence: []const u8) void {
 ```
 
 **What each hook is for.** `onData` is required. `onOpen(conn)` runs when a
-stream comes up — send a subscription there, if the protocol needs one.
+stream comes up: send a subscription there, if the protocol needs one.
 `onClose(conn)` runs when one ends. `connectionNote(conn)` adds a phrase after the rate
 on that row's line.
 
@@ -457,8 +457,8 @@ sit on the limit: a target parked at exactly the alarm distance must not alarm
 once a second.
 
 **There is no alarm surface yet.** An alert is a log line and nothing more
-today — no sound, no banner. Build the behaviour now; it will work when the
-chrome for it is built.
+today, with no sound and no banner. Build the behaviour now; it will work when
+the chrome for it is built.
 
 Reference: [alert](wire.md#alert).
 
@@ -483,12 +483,12 @@ nothing while the text is unchanged. Say nothing at all and the plugin reads
 naming the instrument. Use it for what the SDK cannot see.
 
 **Round anything live.** A detail carrying a raw float changes every tick and is
-a new line every tick. Round it — `{d:.0}` on a wind direction, or a five-degree
-bucket — and the log stays readable.
+a new line every tick. Round it, with `{d:.0}` on a wind direction or a
+five-degree bucket, and the log stays readable.
 
-**A connection list writes its own.** The SDK posts one item per row —
-`connected`, `paused`, `reconnecting`, `unreachable`, `no_address` — under the
-row id the shell assigned, and the plugin line above them counts what is up:
+**A connection list writes its own.** The SDK posts one item per row, under the
+row id the shell assigned: `connected`, `paused`, `reconnecting`, `unreachable`
+or `no_address`. The plugin line above them counts what is up:
 `2 of 3 connected, 44 msg/s`.
 
 Reference: [chrome_status](wire.md#chrome_status),
@@ -519,8 +519,8 @@ and [storage is small, and it is yours alone](rules.md#storage-is-small-and-it-i
 
 ## Fetching from the internet
 
-**Capabilities:** `{"net.http": ["nomads.ncep.noaa.gov"]}` — the hosts by name,
-never a bare `net.http`.
+**Capabilities:** `{"net.http": ["nomads.ncep.noaa.gov"]}`. Name each host, and
+never write a bare `net.http`.
 
 **Status: raw calls only.** The SDK has no fetch helper yet. Use
 `lk.raw.httpGet` or `lk.raw.httpFetch`, and take the answer in `onEvent`
@@ -535,7 +535,7 @@ pub fn onEvent(e: lk.raw.Event) !void {
 }
 ```
 
-GET and HEAD only. A body is capped at 4 MiB — ask for a range rather than a
+GET and HEAD only. A body is capped at 4 MiB, so ask for a range rather than a
 file, and cache what you fetched in storage, because a boat's connection is
 metered and often absent. There are no wildcards in the host list, and a
 redirect off the host is refused.
@@ -549,8 +549,8 @@ Reference: [http_fetch](wire.md#http_fetch),
 **Capabilities:** `files`.
 
 **Status: raw calls only, and nothing can grant a file yet.** There is no
-`file_open` import and there never will be — a plugin cannot name a path. A
-handle arrives as `.file_opened` because the mariner chose that file. The
+`file_open` import and there never will be, because a plugin cannot name a path.
+A handle arrives as `.file_opened` because the mariner chose that file. The
 picker that would ask is not built, so today only the harness and the in-tree
 tests produce one.
 
@@ -578,9 +578,8 @@ Reference: [file_read and file_write](wire.md#file_read-and-file_write) and
 **Status: not buildable today.**
 
 There is no way to put a number on the screen from a plugin. The overlay draws
-three things — symbols, lines and areas — and none of them carries text. A
-plugin has two places where words reach the mariner, and neither works as an
-instrument:
+three things: symbols, lines and areas. None of them carries text. A plugin has
+two places where words reach the mariner, and neither works as an instrument:
 
 - **a pick payload**, which shows rows of text when a symbol is hovered or
   tapped;
@@ -592,7 +591,7 @@ group is drawn today. That is not built, and no part of the ABI reserves it yet.
 
 Until then, an instrument-shaped plugin reports through
 [the status line](#showing-live-status-per-connection-when-there-are-rows) and
-draws the thing itself — the guard ring, the layline, the vector — rather than a
+draws the thing itself (the guard ring, the layline, the vector) rather than a
 number about it.
 
 ## What to read next

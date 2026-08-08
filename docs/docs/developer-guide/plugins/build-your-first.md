@@ -34,8 +34,8 @@ has those toolchains.
   plugin still needs it, to build the harness you will run the plugin in.
 - **A checkout of Lookout.** Note the commit you are on: the ABI is unstable,
   and this is what you will pin to.
-- **macOS.** It is the only platform where the whole loop — build, harness,
-  app — has been run.
+- **macOS.** It is the only platform where the whole loop (build, harness, app)
+  has been run.
 - **A baked chart**, a `.pmtiles` file. If you do not have one,
   [Getting your charts](../../user-guide/getting-started.md#getting-your-charts) takes
   about ten minutes.
@@ -71,7 +71,7 @@ host refuses anything else. Leave `capabilities` out and your plugin is granted
 nothing, which for this one means it cannot draw.
 
 A **capability** is a permission. Most of what your module can ask the host to do
-sits behind one — logging, the clocks and timers do not — and the host checks
+sits behind one. Logging, the clocks and the timers do not. The host checks
 every call against this list. Here you are asking for the two you need: read boat
 data, and draw. You are not asking for `net.tcp-client` or `alerts.raise`, so if
 you called either it would be refused.
@@ -82,7 +82,7 @@ why you want to find them in the harness rather than at sea.
 
 Later you will want the settings block, which puts your own controls in the
 mariner's settings window. Declare it as a Zig struct and check it against the
-manifest in a test — see
+manifest in a test. See
 [adding settings](sdk/settings.md).
 [The wire protocol](wire.md#the-manifest) has every other manifest field.
 
@@ -227,7 +227,7 @@ Three things a Go author has to know.
   function or in a package-level variable.
 - **Goroutines make no progress after you return.** There is one thread and it is
   only inside your module while the host is calling it. No background workers, no
-  `time.Sleep` — it fails rather than sleeping, so a sleep loop is a spin loop
+  `time.Sleep`: it fails rather than sleeping, so a sleep loop is a spin loop
   and the watchdog will kill it. Ask the host for a timer.
 - **The module is about 4.6 MB**, whatever the plugin does; that is the Go
   runtime. `tinygo build -target=wasip1` emits tens of kilobytes from the same
@@ -253,7 +253,7 @@ cp examples/windline/manifest.json \
 list are all testable there without a boat or an emulator.
 
 `std` works: `String`, `Vec`, `format!`, `SystemTime` and `println!` all do what
-you expect. `File::open`, `TcpStream::connect` and `thread::spawn` do not — see
+you expect. `File::open`, `TcpStream::connect` and `thread::spawn` do not. See
 [the WASI floor](wire.md#the-wasi-floor) for the exact list. A panic traps the
 instance and the message reaches your log, so do not panic on data off the wire.
 

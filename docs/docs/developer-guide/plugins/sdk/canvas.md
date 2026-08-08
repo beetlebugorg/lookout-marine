@@ -51,6 +51,11 @@ mariner zooms out. A range ring or a sector is `.geo`: `arc(0, 0, 1852, …)`
 is one nautical mile on the water at any zoom. Stroke widths and text sizes
 are screen points in both spaces.
 
+Both spaces are aligned to the chart, not to the display: x is east and y is
+south on the ground. When the mariner turns the view to course-up, your
+drawing turns with it. To hold part of it upright, see [Keeping a readout
+level when the chart turns](#keeping-a-readout-level-when-the-chart-turns).
+
 ## The commands
 
 The recorder is the canvas model you already know:
@@ -61,7 +66,7 @@ The recorder is the canvas model you already know:
 | Painting | `fill()`, `stroke()`, `clip()` |
 | Style | `fillStyle`, `strokeStyle`, `lineWidth`, `lineCap`, `lineJoin` |
 | Text | `font(size_pt, .regular/.bold)`, `textAlign`, `fillText(text, x, y)` |
-| Transform | `translate`, `rotate(deg)`, `scale`, `save`, `restore` |
+| Transform | `translate`, `rotate(deg)`, `scale`, `save`, `restore`, `screenAligned(on)` |
 
 A style is a token, a free color, or a gradient:
 
@@ -81,26 +86,68 @@ wheelhouse.
 
 ## A worked instrument
 
-The shipped `plugins/canvasdemo/` draws a wind dial at own ship: a
-radial-gradient face, ticks every 10 and 30 degrees, bold cardinal letters,
-and a needle on the recorded rotation. The needle is the part worth copying:
+The shipped `plugins/canvasdemo/` draws a wind dial at own ship: an open band
+with the chart showing through the middle, ticks every 10 and 30 degrees,
+bold cardinal letters, a pointer where the true wind blows from, and a
+readout on a plate below. The pointer is the part worth copying:
 
 ```zig
 cv.save();
 cv.rotate(twd);
 cv.beginPath();
-cv.moveTo(0, -(R - 8));
-cv.lineTo(5.5, 16);
-cv.lineTo(-5.5, 16);
+cv.moveTo(0, -(r0 + 2));
+cv.lineTo(6, -(R - 4));
+cv.lineTo(-6, -(R - 4));
 cv.closePath();
 cv.fill();
 cv.restore();
 ```
 
 Draw the shape pointing north in its own frame, `rotate` to the live
-bearing, and `restore` so the rotation ends with the needle. The whole dial
+bearing, and `restore` so the rotation ends with the pointer. The whole dial
 re-records every `draw` call, and Lookout sends only what changed: with a
 steady wind, nothing.
+
+## Keeping a readout level when the chart turns
+
+Your coordinates are chart coordinates, so under course-up the whole canvas
+turns with the chart. That is what you want for a compass card: north stays
+north, the way a real rose behaves. It is not what you want for a number. A
+readout that turns with the chart ends up running up the side of the dial,
+and a number on its side is not a number.
+
+Wrap the part that must stay upright in `screenAligned`:
+
+```zig
+cv.save();
+cv.screenAligned(true);
+cv.fillStyle(.{ .rgba = .{ 0.94, 0.96, 0.98, 0.88 } });
+plate(&cv);                       // a rounded rectangle under the dial
+cv.fill();
+cv.fillStyle(.{ .rgba = .{ 0.12, 0.16, 0.22, 1 } });
+cv.font(12, .regular);
+cv.fillText(label, 0, R + 19);
+cv.restore();
+```
+
+It is graphics state, like a fill style, so `save` and `restore` scope it and
+one canvas holds both kinds of content. It covers everything you record while
+it is on, not only text: the plate above stays a level rectangle, so the
+number sits on it at any view rotation. Anything you draw outside the scope
+keeps turning with the chart.
+
+Two things to know:
+
+- It cancels your own `rotate` as well as the view's, for as long as it is on.
+  The promise is level on the display, so a label at the tip of a rotated
+  needle comes out upright without you undoing the needle's rotation.
+- The turn is applied about the point you are drawing from, which is the
+  anchor until you `translate` away from it. Place the plate where you want
+  it, then turn the alignment on.
+
+Lookout re-tessellates a canvas that uses this when the view rotation changes,
+and only such a canvas. Your plugin is not called: this happens in the core,
+on the recording you already posted.
 
 ## The limits
 

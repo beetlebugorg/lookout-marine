@@ -46,7 +46,7 @@ executable.
 | Variable | Effect |
 |---|---|
 | `LOOKOUT_OPEN` | Open this chart or folder at start |
-| `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` — the opening camera |
+| `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` sets the opening camera |
 | `LOOKOUT_WARP` | `1` forces the software rasterizer |
 | `LOOKOUT_OPEN_SETTINGS` | `1` opens the mariner pane at start, for a screenshot |
 

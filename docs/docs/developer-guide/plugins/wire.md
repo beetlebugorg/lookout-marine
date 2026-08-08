@@ -11,7 +11,7 @@ can make, and the format of every payload in between.
 
 The boundary is deliberately narrow. Everything crossing it is either an integer
 or a `(pointer, length)` byte range in your module's own linear memory, and it is
-always copied — you are never handed a pointer into the host's memory. Text is
+always copied. You are never handed a pointer into the host's memory. Text is
 UTF-8, and anything structured is JSON.
 
 Your module is `wasm32-freestanding` (Zig) or `wasm32-wasip1` (Go, Rust). Either
@@ -20,21 +20,22 @@ nothing more: [the WASI floor](#the-wasi-floor) below says exactly what works an
 what does not.
 
 Three files in Lookout are the real contract. Where this page disagrees with
-them, they are right: `plugins/common/lk.zig` is the plugin side, `src/plugin/broker.zig`
+them, they are right: `plugins/common/lk.zig` is the raw plugin side under
+the SDK, `src/plugin/broker.zig`
 implements every import, and `src/plugin/host.zig` parses every manifest. The Go
 and Rust libraries in `sdk/` mirror `lk.zig`; `src/plugin/wasm.zig` bounds WASI.
 
-The ABI version is **1**, and it is unstable —
+The wire protocol version is **1**, and it is unstable:
 [what that means for you](index.md#the-abi-is-version-0-and-unstable). The last
 section is the raw module contract, for writing a library in another language.
 
 ## Event kinds
 
 Everything that happens to your plugin arrives here. The host delivers one event
-at a time, from that plugin's own FIFO, into the one handler you write — in Zig
-that is `onEvent`, and each kind below is one branch of it. **Your handler must
-ignore a kind it does not know and answer 0**; that tolerance is what lets the
-host add an event without breaking a module built today.
+at a time, from that plugin's own FIFO, into the one handler you write. In Zig
+that handler is `onEvent`, and each kind below is one branch of it. **Your
+handler must ignore a kind it does not know and answer 0**; that tolerance is
+what lets the host add an event without breaking a module built today.
 
 | # | Kind | `handle` | Payload |
 |---|---|---|---|
@@ -42,13 +43,13 @@ host add an event without breaking a module built today.
 | 3 | `TIMER` | The timer id `timer_set` returned | empty |
 | 4 | `TCP_CONNECTED` | The connection id | empty |
 | 5 | `TCP_DATA` | The connection id | Raw bytes, one event per socket read, at most 8192 bytes. Reassembling lines is yours. |
-| 6 | `TCP_CLOSED` | The connection id | empty. Sent when the peer or an error ended it — not when you called `tcp_close`. |
+| 6 | `TCP_CLOSED` | The connection id | empty. Sent when the peer or an error ended it, not when you called `tcp_close`. |
 | 7 | `UDP_DATA` | The socket id `udp_open` returned | One datagram, raw. |
 | 8 | `HTTP_RESPONSE` | The request id `http_fetch` returned | An envelope: `u32 json_len`, the head JSON, then the raw body. See [http_fetch](#http_fetch). |
 | 9 | `FILE_OPENED` | The file handle | `{"name":"gfs.grib2","size":12582912,"mode":"read"}`. The mariner chose a file and the host granted it to you. |
 | 10 | `STORE_CHANGED` | 0 | `{"values":[…]}`, subscribed paths only, coalesced to at most 10 Hz |
 | 11 | `AIS_CHANGED` | 0 | `{"targets":[…]}`, the whole target set, at most 2 Hz and only when something moved |
-| 12 | `WS_OPEN` | The connection id | `{"protocol":"v1.signalk"}` — the subprotocol the server chose, empty when it chose none. |
+| 12 | `WS_OPEN` | The connection id | `{"protocol":"v1.signalk"}`. The subprotocol the server chose, empty when it chose none. |
 | 13 | `WS_DATA` | The connection id | One whole text message. The host joins the fragments, so this is never half of one. |
 | 14 | `WS_CLOSED` | The connection id | `{"code":1000,"reason":"…"}`. The last event on that connection, whoever ended it. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
@@ -57,10 +58,10 @@ Kind 2 is unassigned. `SHUTDOWN` ignores the queue cap, so a plugin whose queue
 is already full still receives it.
 
 **One datagram is one event.** The host never joins two `UDP_DATA` payloads and
-never splits one, so a plugin parsing NMEA over UDP does not reassemble anything
-— which is the opposite of `TCP_DATA`, where you must. A datagram over 8192 bytes
-is dropped whole and logged, because half a sentence looks to a parser exactly
-like a short one.
+never splits one, so a plugin parsing NMEA over UDP does not reassemble anything.
+`TCP_DATA` is the opposite: with TCP you must reassemble. A datagram over 8192
+bytes is dropped whole and logged, because half a sentence looks to a parser
+exactly like a short one.
 
 ## The imports
 
@@ -70,29 +71,29 @@ not trap.
 
 | Import | Signature | Capability | Returns |
 |---|---|---|---|
-| `log` | `(level: u32, ptr, len)` | — | The host stamps the plugin id and the level: 0 debug, 1 info, 2 warn, 3 error. |
-| `now_ms` | `() -> i64` | — | Wall clock, ms since the epoch. Stamp published values with this. |
-| `mono_ms` | `() -> i64` | — | Monotonic ms. Measure intervals with this; it does not jump when a GPS fix sets the boat's clock. |
+| `log` | `(level: u32, ptr, len)` | none | The host stamps the plugin id and the level: 0 debug, 1 info, 2 warn, 3 error. |
+| `now_ms` | `() -> i64` | none | Wall clock, ms since the epoch. Stamp published values with this. |
+| `mono_ms` | `() -> i64` | none | Monotonic ms. Measure intervals with this; it does not jump when a GPS fix sets the boat's clock. |
 | `publish` | `(ptr, len) -> i32` | `vessel.publish` | Updates applied, or -1. A bad update inside a good batch is skipped and not counted. |
 | `ais_upsert` | `(ptr, len) -> i32` | `ais.publish` | Targets applied, or -1. |
 | `overlay` | `(ptr, len) -> i32` | `overlay.draw` | 0, or -1 when the batch was refused whole. |
-| `chrome_status` | `(ptr, len)` | — | Nothing. The host keeps the latest line per plugin. |
+| `chrome_status` | `(ptr, len)` | none | Nothing. The host keeps the latest line per plugin. |
 | `alert` | `(ptr, len) -> i32` | `alerts.raise` | 0, or -1. |
 | `tcp_connect` | `(host_ptr, host_len, port: u32) -> i64` | `net.tcp-client` | A connection id at once, or -1. The resolve and the connect happen on the host's I/O thread; the outcome arrives as `TCP_CONNECTED` or `TCP_CLOSED`. |
 | `tcp_send` | `(id: i64, ptr, len) -> i32` | `net.tcp-client` | Bytes queued for writing, or -1 for an unknown connection or one belonging to another plugin. |
-| `tcp_close` | `(id: i64)` | — | Nothing, and no `TCP_CLOSED`: you asked, so you know. It can only close your own connection. |
-| `timer_set` | `(delay_ms: i64, periodic: u32) -> i64` | — | A timer id, or -1. A delay under 1 ms is raised to 1 ms. A periodic timer that fires late does not then fire a burst of catch-up ticks. |
-| `timer_cancel` | `(id: i64)` | — | Nothing. Cancelling another plugin's timer does nothing. |
+| `tcp_close` | `(id: i64)` | none | Nothing, and no `TCP_CLOSED`: you asked, so you know. It can only close your own connection. |
+| `timer_set` | `(delay_ms: i64, periodic: u32) -> i64` | none | A timer id, or -1. A delay under 1 ms is raised to 1 ms. A periodic timer that fires late does not then fire a burst of catch-up ticks. |
+| `timer_cancel` | `(id: i64)` | none | Nothing. Cancelling another plugin's timer does nothing. |
 | `subscribe` | `(ptr, len) -> i32` | `vessel.read` | The number of paths, or -1. The payload is `["navigation.position",…]`. **One subscription per plugin**: calling again replaces the list. |
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
 | `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. Port 0 takes an ephemeral one. |
-| `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** — the host resolves no name here — so `255.255.255.255` works and `gateway.local` does not. |
+| `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** (the host resolves no name here), so `255.255.255.255` works and `gateway.local` does not. |
 | `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
 | `http_fetch` | `(ptr, len) -> i64` | `net.http` + its host list | A request id at once, or -1. The host fetches on a thread of its own and delivers exactly one `HTTP_RESPONSE` carrying that id. |
 | `ws_connect` | `(ptr, len) -> i64` | `net.ws` + its host list | A connection id at once, or -1. The host performs the handshake and delivers `WS_OPEN`, then `WS_DATA` per message, then `WS_CLOSED`. |
 | `ws_send` | `(id: i64, ptr, len) -> i32` | `net.ws` | Bytes queued, or -1. Text messages only. The host writes the frame on the connection's own thread, so this returns at once however slow the peer is. |
 | `ws_close` | `(id: i64)` | `net.ws` | Nothing. The host sends the close frame and still delivers `WS_CLOSED`. |
-| `storage_get` | `(kptr, klen, vptr, vcap) -> i32` | `storage` | The value's size in bytes, or -1 when there is no such key. The host writes into your buffer only when the value fits it — see [storage_get and storage_put](#storage_get-and-storage_put). |
+| `storage_get` | `(kptr, klen, vptr, vcap) -> i32` | `storage` | The value's size in bytes, or -1 when there is no such key. The host writes into your buffer only when the value fits it. See [storage_get and storage_put](#storage_get-and-storage_put). |
 | `storage_put` | `(kptr, klen, vptr, vlen) -> i32` | `storage` | 0, or -1 when a cap is in the way. An empty value deletes the key. The host has written the file before this returns. |
 | `file_read` | `(handle: i64, offset: i64, ptr, cap) -> i32` | `files` | Bytes read, 0 at the end of the file, or -1. `offset` is absolute: a handle has no cursor to move. |
 | `file_write` | `(handle: i64, ptr, len) -> i32` | `files` | Bytes appended, or -1 for a read handle, or one that is not yours. |
@@ -103,24 +104,25 @@ can report what it is doing and measure time without asking for one.
 
 **There is no `file_open`.** You cannot name a path. Every file handle you ever
 see arrived as a `FILE_OPENED` event because the host granted it, and the host
-grants one only when Lookoutlication asks it to on a mariner's behalf. Lookoutlication asks on the mariner's behalf when they open a file your
+grants one only when Lookout asks it to on a mariner's behalf, which happens
+when they open a file your
 manifest claims. See **File types** below.
 
 ### The capabilities
 
 | Capability | What it grants |
 |---|---|
-| `vessel.publish` | `publish` — write vessel paths as a source in the store |
-| `vessel.read` | `subscribe` — receive `STORE_CHANGED` for named paths |
-| `ais.publish` | `ais_upsert` — write AIS targets |
-| `ais.read` | `ais_subscribe` — receive `AIS_CHANGED` snapshots |
-| `overlay.draw` | `overlay` — retained objects on the chart |
+| `vessel.publish` | `publish`: write vessel paths as a source in the store |
+| `vessel.read` | `subscribe`: receive `STORE_CHANGED` for named paths |
+| `ais.publish` | `ais_upsert`: write AIS targets |
+| `ais.read` | `ais_subscribe`: receive `AIS_CHANGED` snapshots |
+| `overlay.draw` | `overlay`: retained objects on the chart |
 | `alerts.raise` | `alert` |
 | `net.tcp-client` | `tcp_connect`, `tcp_send`, `tcp_close` |
 | `net.udp` | `udp_open`, `udp_send`, `udp_close` |
-| `net.http` | `http_fetch` — **to the hosts the grant names, and no others** |
-| `net.ws` | `ws_connect`, `ws_send`, `ws_close` — **to the hosts the grant names, and no others** |
-| `storage` | `storage_get`, `storage_put` — a key-value store of your own |
+| `net.http` | `http_fetch`: **to the hosts the grant names, and no others** |
+| `net.ws` | `ws_connect`, `ws_send`, `ws_close`: **to the hosts the grant names, and no others** |
+| `storage` | `storage_get`, `storage_put`: a key-value store of your own |
 | `files` | `file_read`, `file_write`, `file_close`, on handles the host granted |
 
 An unknown capability name refuses the whole plugin, so a typo in a grant is a
@@ -162,7 +164,7 @@ name resolves.
 
 Write it when the server is a **mariner's setting** rather than something you
 chose: a Signal K server is at whatever address the boat's network gives it, and
-no manifest can know that in advance. The grant still has a definite meaning —
+no manifest can know that in advance. The grant still has a definite meaning:
 this plugin may reach servers on the boat's network, and not the internet.
 
 The check runs on the text of the URL, before any name lookup, so a public name
@@ -190,7 +192,7 @@ them before debugging a call that failed.
 |---|---|
 | `clock_time_get`, `clock_res_get` | Real. `SystemTime::now()` and `time.Now()` agree with the host's `now_ms` to the millisecond. `Instant` and monotonic timing work. |
 | `random_get` | Real. Seeds Go's map hashing and Rust's `HashMap`, which is why both need it to boot. |
-| `fd_write` on 1 and 2 | Becomes log lines, one per line written. `println!`, `fmt.Println`, `eprintln!` and a Rust `fatal error` all arrive in the plugin layer's log — never on the terminal Lookout was launched from, and never in a file. A line over 512 bytes is cut. Any other descriptor is `EBADF`. |
+| `fd_write` on 1 and 2 | Becomes log lines, one per line written. `println!`, `fmt.Println`, `eprintln!` and a Rust `fatal error` all arrive in the plugin layer's log, never on the terminal Lookout was launched from and never in a file. A line over 512 bytes is cut. Any other descriptor is `EBADF`. |
 | `args_*`, `environ_*` | Succeed and report nothing. Zero arguments, zero variables. |
 | `sched_yield` | Real, and pointless: there is nothing else to schedule. |
 | `proc_exit` | Real. It traps the instance, so a Rust panic or a Go `fatal error` fails the plugin loudly instead of half-running. |
@@ -199,7 +201,7 @@ them before debugging a call that failed.
 
 | You wrote | You get | Why |
 |---|---|---|
-| `File::open`, `os.Open`, any path at all | `ENOENT` | **Zero preopened directories.** There is no root, so no path resolves — absolute or relative, read or write. `fd_prestat_get(3)` is `EBADF`, which is how the standard library discovers there is no filesystem. |
+| `File::open`, `os.Open`, any path at all | `ENOENT` | **Zero preopened directories.** There is no root, so no path resolves, absolute or relative, read or write. `fd_prestat_get(3)` is `EBADF`, which is how the standard library discovers there is no filesystem. |
 | `read_dir`, `os.ReadDir` | `ENOENT` | Same. |
 | `TcpStream::connect`, `net.Dial` | `Unsupported` | No sockets. `sock_open` is refused before a descriptor exists. Use `tcp_connect` with the `net.tcp-client` capability. |
 | `env::var`, `os.Getenv` | not present | The environment is empty on purpose: Lookout's configuration is not the plugin's. Your settings arrive when the plugin starts and in `CONFIG_CHANGED`. |
@@ -251,9 +253,9 @@ degrees, and nothing downstream ever has to ask what unit it is holding.
 | `environment.wind.directionTrue` | number | degrees true, the direction the wind blows **from** |
 
 The store takes any path string you like; that table is the vocabulary in use
-today. Four of those paths are read by the core itself — position, heading,
-course and speed drive own ship's display position, follow mode and course-up —
-so if you publish them under names of your own, no boat appears.
+today. Four of those paths are read by the core itself: position, heading,
+course and speed drive own ship's display position, follow mode and course-up.
+If you publish them under names of your own, no boat appears.
 
 Several plugins may publish the same path. The store elects one: the
 first-registered source wins while its value is inside the staleness window, and
@@ -268,8 +270,8 @@ value is elected and flagged stale.
 ```
 
 Only `mmsi` is required; the upsert merges each field it carries into the target
-it names. `sog` is **metres per second**, not knots — the AIS wire format reports
-knots and converting is the parsing plugin's job. An aid to navigation adds
+it names. `sog` is **metres per second**, not knots. The AIS wire format reports
+knots, and converting is the parsing plugin's job. An aid to navigation adds
 `"aton":true` and may add `"aton_type"` (0..31), `"virtual":true` and
 `"off_position"`. A target that has once reported as an aid stays one.
 
@@ -338,13 +340,13 @@ batch can delete a stale object and set a new one with the same id.
 | `scale` | symbol | Default 1. Outside 0.05..20 it is reset to 1. |
 | `pts` | polyline | 2 to 8192 points of `[lon, lat]` |
 | `ring` | polygon | 3 to 8192 points. Closed for you. |
-| `width_pt` | polyline | Screen **points**, not metres — the core converts at the live zoom. Default 1.5; outside 0.1..64 it is reset. |
+| `width_pt` | polyline | Screen **points**, not metres. The core converts at the live zoom. Default 1.5; outside 0.1..64 it is reset. |
 | `dash` | polyline | Default false |
 | `alpha` | polygon | Multiplies the token's own alpha. Clamped to 0..1, default 1. |
 | `anchor` | symbol, polyline | `"ownship"` and nothing else. See below. |
 | `pick` | symbol | See below. |
 
-A malformed object is skipped and the rest of the batch still applies — one bad
+A malformed object is skipped and the rest of the batch still applies: one bad
 row must not drop the good ones. Malformed JSON, a top-level value that is not an
 object, or going over the 4096-object budget fails the whole batch with -1.
 
@@ -380,7 +382,7 @@ has no carried position. Dead reckoning stops at the 5 s staleness window.
 Both parts are optional and a payload with neither is dropped. The core
 validates, escapes and caps the text at 16 rows of 96 bytes; a row that is not
 two strings is dropped and the symbol still draws. **Values are strings you have
-already formatted for display** — the core cannot know that a row called SOG
+already formatted for display.** The core cannot know that a row called SOG
 holds metres per second, so you write the number and the unit yourself. This is
 the only place the SI rule is broken, and it is deliberate. Lines and areas carry
 no payload: there is no single point to measure a hit to. Lookout
@@ -403,7 +405,7 @@ out of service.
 Your status is nearly the only thing you can put in front of a person away from
 the chart itself. Use it to say what you are doing, or what you are missing. It
 reaches Lookout through `lookout_plugins_json`. If your settings include a list,
-a status can also carry one line per row — see
+a status can also carry one line per row. See
 [status items](#status-items-one-line-per-row). There are no jobs, no progress
 and no alarm surface yet.
 
@@ -413,9 +415,10 @@ and no alarm surface yet.
 {"severity":"alarm","title":"AIS CPA alarm","body":"367123450: CPA 149 m in 591 s"}
 ```
 
-There is no alarm surface yet, so **your alert is a log line and nothing more** —
-nobody at the helm will see it. Raise them anyway, and set the severity honestly:
-it picks the log level, so the log still shows how urgent the alert was.
+There is no alarm surface yet, so **your alert is a log line and nothing more**.
+Nobody at the helm will see it. Raise your alerts anyway, and set the severity
+honestly: it picks the log level, so the log still shows how urgent the alert
+was.
 
 | Severity | Log level |
 |---|---|
@@ -434,7 +437,7 @@ keeps the last alert per plugin, up to 400 bytes.
  "headers":{"accept":"application/octet-stream"},"range":"bytes=0-1048575"}
 ```
 
-Only `url` is required. `method` is `GET` or `HEAD` — the host refuses anything
+Only `url` is required. `method` is `GET` or `HEAD`. The host refuses anything
 else, because a plugin that can POST can send data off the boat and nothing here
 needs to. `headers` is optional and each name and value must be printable ASCII.
 `range` is an HTTP range expression and is the way past the body cap.
@@ -466,7 +469,7 @@ redirect. A fetch that never reached a server answers `"status":0` with an
 
 | Limit | Value |
 |---|---|
-| Body | 4 MiB. Over it the fetch fails with `BodyTooLarge` rather than truncating. **Use `range` for anything bigger** — a 200 MB GRIB is 200 requests, and each one is an event you can act on. |
+| Body | 4 MiB. Over it the fetch fails with `BodyTooLarge` rather than truncating. **Use `range` for anything bigger.** A 200 MB GRIB is 200 requests, and each one is an event you can act on. |
 | Redirects | 5, and each must stay on the same host. One that leaves fails with `RedirectOffHost`. |
 | In flight | 4 across every plugin. A fifth returns -1 at once; try again from a timer. |
 | Read and connect | 20 s each. |
@@ -483,8 +486,8 @@ cookie jar, no authentication and no compressed transfer encoding.
 ```
 
 Only `url` is required; `protocols` is the subprotocol list the host offers in
-the handshake. The host dials, performs the RFC 6455 handshake — accept hash
-checked — and then owns the connection on a thread of its own.
+the handshake. The host dials, performs the RFC 6455 handshake (checking the
+accept hash), and then owns the connection on a thread of its own.
 
 What you get:
 
@@ -495,7 +498,7 @@ What you get:
   busy.
 - **`WS_CLOSED`** once, at the end, whoever ended it. `code` is the RFC 6455
   close code; `code` 0 means the connection never opened and `reason` names what
-  stopped it — `HandshakeRefused`, `ConnectFailed`, `TlsFailed`.
+  stopped it: `HandshakeRefused`, `ConnectFailed`, `TlsFailed`.
 
 `ws_send` takes one **text** message and queues it; the connection's own thread
 writes the masked frame. An incoming **binary** message is dropped with a log
@@ -511,8 +514,8 @@ tell from text would parse them as JSON.
 ### storage_get and storage_put
 
 A key-value store of your own, one per plugin, that survives a restart. The host
-keeps it as a JSON file under Lookoutlication's data directory — data, not
-cache, so nothing purges it when the disk runs low.
+keeps it as a JSON file under Lookout's data directory. That is data and
+not cache, so nothing purges it when the disk runs low.
 
 `storage_get` uses a **two-call pattern**, because the host cannot allocate in
 your memory. Call it with a zero-length buffer to learn the size, then call it
@@ -548,7 +551,7 @@ being loaded again.
 ### file_read and file_write
 
 There is no way to open a file. A handle arrives as `FILE_OPENED` because the
-mariner chose that file and Lookoutlication asked the host to grant it:
+mariner chose that file and Lookout asked the host to grant it:
 
 ```json
 {"name":"gfs.t00z.pgrb2.0p25.f000","size":12582912,"mode":"read"}
@@ -557,7 +560,7 @@ mariner chose that file and Lookoutlication asked the host to grant it:
 `name` is the file's name with no directory: you are told what the file is
 called, not where it is. `mode` is `read` or `write`.
 
-`file_read` takes an **absolute offset** — the handle has no cursor, so two
+`file_read` takes an **absolute offset**. The handle has no cursor, so two
 reads never interfere and a plugin decoding a GRIB can seek freely. It returns
 the bytes read, 0 at the end of the file, and -1 for a handle that is not yours.
 `file_write` appends to a write handle and returns the bytes written.
@@ -584,7 +587,7 @@ list of plugins and never learn one was involved; you never learn there was a
 file picker. The host matches the extension, grants you read access, and sends
 `FILE_OPENED`.
 
-Write each type lowercase, with the leading dot and nothing else — `.grib2`, not
+Write each type lowercase, with the leading dot and nothing else: `.grib2`, not
 `.GRIB2` and not `grib2`. A name in any other form refuses the manifest, because
 it would read as a claim and never match a file. The same applies to a compound
 extension such as `.tar.gz`: only the last dot is matched. Eight types is the
@@ -596,7 +599,7 @@ the claim rests on the grant.
 Two rules decide what you do NOT get:
 
 - **A chart is always a chart.** `.pmtiles` and `.mbtiles` belong to the chart
-  side of Lookoutlication and are never offered to a plugin, whatever a manifest
+  side of Lookout and are never offered to a plugin, whatever a manifest
   claims.
 - **Two plugins claiming one type both lose it.** Neither is given the file and
   the log names both. Load order must not decide who reads the mariner's
@@ -688,7 +691,7 @@ A field:
 | `default` | text | Optional, a string, at most 128 bytes. Absent means empty. |
 | `optional` | text | `true` says the mariner may leave it empty. Display only: what an empty value means is yours to decide. |
 
-Schema v1 — `"settings"` as a bare array of fields — still parses. Those fields
+Schema v1 (`"settings"` as a bare array of fields) still parses. Those fields
 carry no group and land on `advanced`.
 
 **The plugin always receives the whole settings object**, in the config it is
@@ -703,7 +706,7 @@ another.
 ### Lists: a group the mariner adds rows to
 
 A group may hold a **list** instead of fields. A list is a table the mariner adds
-rows to and removes rows from — the NMEA connections are the first one. The value
+rows to and removes rows from. The NMEA connections are the first one. The value
 of the list's key in your config is a JSON **array** of row objects, replaced whole on
 every edit and delivered like any other setting.
 
@@ -724,13 +727,13 @@ every edit and delivered like any other setting.
 | `key` | Required, 1 to 32 bytes. The key the array arrives under, and it may not collide with a field or another list. |
 | `item_fields` | Required, 1 to 16 columns, the same field kinds as above. A column called `id` refuses the manifest: the id is the host's. |
 | `footer` | The sentence under the section: what these rows are, and the one thing a mariner needs to know to fill one in. |
-| `add_label` | The wording on the button that adds a row — "Add Server", not "Add". |
+| `add_label` | The wording on the button that adds a row: "Add Server", not "Add". |
 | `empty` | What the section says while it holds no rows. |
 | `switch_key` | Which toggle column is the row's own on/off switch, drawn on the row's line rather than inside it. Absent means the first toggle column. Naming a column the list does not declare, or one that is not a toggle, refuses the manifest. |
 
 The last four are optional; the three strings are at most 240 bytes each, and a
-longer one is cut. **Write them.** A tab can hold two lists — Connections holds
-NMEA gateways and Signal K servers — and without your own wording both show the
+longer one is cut. **Write them.** A tab can hold two lists: Connections holds
+NMEA gateways and Signal K servers. Without your own wording both lists show the
 application's default text, which is wrong for at least one of them.
 
 What you receive:
@@ -774,8 +777,8 @@ ships knows `connected`, `paused`, `reconnecting`, `unreachable`,
 
 You never call these. They are in `include/lookout.h`, the C header an app uses
 to drive the chart core, and they are how a control in a settings window becomes
-your `CONFIG_CHANGED` — worth knowing when a setting you declared is not reaching
-you.
+your `CONFIG_CHANGED`. That is worth knowing when a setting you declared is not
+reaching you.
 
 ```c
 int  lookout_plugins_load(lookout *h, const char *dir);
@@ -821,9 +824,9 @@ the chart.
 
 ## The raw module contract
 
-This section is for building a plugin WITHOUT the Zig SDK — from Go, Rust,
+This section is for building a plugin WITHOUT the Zig SDK: from Go, Rust,
 or any toolchain that emits wasm. With `lk.zig` you never touch any of this:
-`lk.registerPlugin(@This())` registers your plugin and routes the host's calls
+`lk.plugin(@This())` registers your plugin and routes the host's calls
 to the `start` and `onEvent` functions you write.
 
 Your compiled module must export these five functions. They are the only part

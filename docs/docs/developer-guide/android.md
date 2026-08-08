@@ -6,8 +6,8 @@ sidebar_position: 5
 
 # Android
 
-A **Java shell** — a plain Activity, a `SurfaceView` and the platform gesture
-detectors — around the Zig core. The core cross-compiles to
+A **Java shell** sits around the Zig core: a plain Activity, a `SurfaceView` and
+the platform gesture detectors. The core cross-compiles to
 `aarch64-linux-android` and renders **raw Vulkan** (`src/gpu_vk.zig`) onto the
 view's `ANativeWindow`. The chrome above it is Compose.
 

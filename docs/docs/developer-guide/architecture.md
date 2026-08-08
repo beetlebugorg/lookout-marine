@@ -128,7 +128,7 @@ tool, not the app:
 
 | Host | Toolkit | Page |
 |---|---|---|
-| macOS, iPadOS, iOS | SwiftUI | [macOS, iPadOS and iOS](macos.md) — the reference for behaviour |
+| macOS, iPadOS, iOS | SwiftUI | [macOS, iPadOS and iOS](macos.md), the reference for behaviour |
 | Linux | GTK4, C | [Linux](linux.md) |
 | Windows | WinUI 3, C++/WinRT | [Windows](windows.md) |
 | Android | Java and Compose | [Android](android.md) |
@@ -140,7 +140,7 @@ hosts frame by frame. Refer to [the screenshot protocol](screenshots.md).
 
 ```
 build.zig, build.zig.zon   the build and the tile57 dependency pin
-include/lookout.h          the C ABI — the full shell-to-core contract
+include/lookout.h          the C ABI, the full shell-to-core contract
 src/root.zig               Lookout: the scene lifecycle and worker-thread rebuilds
 src/camera.zig             web-mercator camera math (MVP, screen<->geo, SCAMIN)
 src/gpu.zig                the backend switch

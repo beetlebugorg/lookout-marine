@@ -49,17 +49,17 @@ opens with the entry points in Zig, Go and Rust.
 There are two jobs. Most plugins do one of them; some do both.
 
 **Publish.** Turn a data source into values the whole app can use. Your plugin
-opens a TCP connection to something on the boat's network — a NMEA 0183
-multiplexer, a Signal K server — parses what comes back, and writes readings
-into the **vessel store** — Lookout's single table of current boat data, keyed
-by path: `navigation.position`,
+opens a TCP connection to something on the boat's network, such as a NMEA 0183
+multiplexer or a Signal K server, parses what comes back, and writes readings
+into the **vessel store**. That store is Lookout's single table of current boat
+data, keyed by path: `navigation.position`,
 `environment.depth.belowTransducer`, and so on. It can write AIS contacts into
 the **AIS store** the same way, keyed by MMSI. Position, heading, course and
 speed in the vessel store are what put the boat on the chart and drive follow
 mode and course-up. Without a publishing plugin, Lookout has no position.
 
-**Draw.** Put your own geometry on the chart. Your plugin posts objects —
-symbols, lines and filled areas, in longitude and latitude — to the **overlay**,
+**Draw.** Put your own geometry on the chart. Your plugin posts objects
+(symbols, lines and filled areas, in longitude and latitude) to the **overlay**,
 a retained layer the core draws along with the chart. Retained means you post an
 object once and it stays until you replace it or delete it. Laylines, a guard
 ring, a route, an anchor-watch circle, a tide arrow, the track you have sailed.
@@ -91,7 +91,7 @@ runtime. If your manifest asked for the permission, the host does it.
 
 ## Where your plugin shows up
 
-Your manifest can declare settings — numbers and toggles. They appear in the
+Your manifest can declare settings: numbers and toggles. They appear in the
 app's settings window as ordinary chart settings, filed under the topic they
 belong to: a collision-alarm limit sits under Alarms beside every other alarm.
 No pane names your plugin, and the word "plugin" does not appear anywhere in the
@@ -128,7 +128,7 @@ present; elsewhere it needs `-Dplugins=true`.
 Built and usable today:
 
 - The twenty-seven `lookout` imports and the twelve capabilities.
-- WASI preview1, bounded to a language floor — no filesystem, no sockets, no
+- WASI preview1, bounded to a language floor: no filesystem, no sockets, no
   environment, no sleeping. It is what lets a Go or Rust module boot at all. The
   `windline` plugin has been run in the harness in Zig, in Go and in Rust
   against one replay log.
@@ -193,7 +193,7 @@ pages. Read them in this order; each one adds something.
 ```
 plugins/common/lk2.zig     the plugin library: inputs, draw, settings, connections
 plugins/common/lk.zig      the raw shim under it: the externs, a scratch arena, JSON helpers
-plugins/laylines/          two close-hauled lines from the true wind — the simplest one
+plugins/laylines/          two close-hauled lines from the true wind, the simplest one
 plugins/windline/          one line downwind, and the shortest plugin there is
 plugins/ownship/           the boat: symbol, heading line, course vector, track
 plugins/nmea0183/          TCP clients, NMEA 0183 and AIVDM parsing, publishing, a settings list

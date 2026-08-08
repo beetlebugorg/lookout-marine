@@ -98,7 +98,7 @@ form prints is the name the pill cycles.
 
 Which sets cover the view changes as the mariner sails, so the state is read off
 the engine with the other readouts, at 10 Hz. Anything that changes the selection
-outside a frame — a switch in the settings panel, a chart added — reads it back at
+outside a frame (a switch in the settings panel, a chart added) reads it back at
 once, because the readouts only run while the chart renders and the panel can be
 open over a chart that is standing still.
 

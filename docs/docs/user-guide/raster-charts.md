@@ -9,9 +9,9 @@ sidebar_position: 5
 A **raster chart** is a chart made of pictures rather than features. Lookout
 reads two kinds:
 
-- **MBTiles** — satellite imagery, or another vendor's chart rendered to tiles.
+- **MBTiles.** Satellite imagery, or another vendor's chart rendered to tiles.
   Cruisers publish these for coasts the ENC covers poorly.
-- **BSB/KAP** — raster nautical charts, such as the discontinued NOAA RNC
+- **BSB/KAP.** Raster nautical charts, such as the discontinued NOAA RNC
   sheets, baked with tile57.
 
 The ENC gives you the depths, the aids and the hazards. It cannot show you what
@@ -19,7 +19,8 @@ is there now: the coral heads, the sand bar across the entrance, the breakwater
 built since the last edition. A raster chart can.
 
 Lookout draws the raster chart below the ENC, and drops the ENC's own shading
-only where the raster chart covers. You keep the chart and you see the water.
+only where the raster chart covers. The ENC's features stay on the chart, and
+the picture underneath them is visible.
 
 ## Viewing a raster chart under the ENC
 
@@ -30,7 +31,7 @@ The Golden Gate, from the same position, in each of the three states.
 ![The ENC alone at the Golden Gate](../img/raster-state-enc-only.webp)
 
 **A raster chart below the ENC.** Where the raster chart covers, the ENC drops
-its depth and land fills and keeps everything else — the contours, the buoys,
+its depth and land fills and keeps everything else: the contours, the buoys,
 the lights, the traffic separation, the soundings and the labels.
 
 ![A Google raster chart below the ENC](../img/raster-state-both.webp)

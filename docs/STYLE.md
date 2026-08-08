@@ -29,9 +29,9 @@ Correct:
 
 Wrong:
 
-- `Sets` — a bare noun. It does not say what the reader does.
-- `Build and run` — an imperative. Use the gerund.
-- `Choosing one` — one what? It is not clear on its own.
+- `Sets` is a bare noun. It does not say what the reader does.
+- `Build and run` is an imperative. Use the gerund.
+- `Choosing one` raises the question: one what? It is not clear on its own.
 
 A question or a statement is also correct when it is clear on its own, for
 example `Why one ABI` or `How the chart gets onto the screen`.
@@ -115,7 +115,7 @@ Do this every time you change a heading.
    cd docs && bun run build
    ```
 
-If you cannot correct a link — the page that holds it is not yours to edit —
+If you cannot correct a link, because the page that holds it is not yours to edit,
 keep the old anchor on the new heading instead:
 
 ```md

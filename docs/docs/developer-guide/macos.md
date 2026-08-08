@@ -42,17 +42,17 @@ objects and packs those.
 
 Without Xcode, `macos/build-dev.sh` builds the macOS app with the Command Line
 Tools alone: `swiftc` and a hand-made bundle. It writes that bundle to the path
-above — the one app path on disk, whichever script built it, so no stale second
-copy can wait there to be launched.
+above. That is the one app path on disk, whichever script built it, so there is
+never a stale second copy to launch by mistake.
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
 | `LOOKOUT_OPEN` | Open this chart or folder at start |
-| `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` — the opening camera |
-| `LOOKOUT_WINDOW` | `WIDTHxHEIGHT` — the window content size (macOS) |
-| `LOOKOUT_SHOW` | `settings[:tab]`, `scale`, `search`, `pick` — open that chrome |
+| `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` sets the opening camera |
+| `LOOKOUT_WINDOW` | `WIDTHxHEIGHT` sets the window content size (macOS) |
+| `LOOKOUT_SHOW` | `settings[:tab]`, `scale`, `search` or `pick` opens that chrome |
 
 `simctl` forwards the first two as `SIMCTL_CHILD_LOOKOUT_OPEN` and
 `SIMCTL_CHILD_LOOKOUT_VIEW`.
@@ -63,9 +63,9 @@ SwiftUI's hosting view hit-tests as itself across its whole window and never
 forwards touches to UIKit subviews. A gesture surface inside SwiftUI therefore
 renders but hears nothing. iOS uses the UIKit lifecycle and a two-window stack:
 
-1. **The input window** — `ChartUIView` in plain UIKit. Its backing layer is the
+1. **The input window.** `ChartUIView` in plain UIKit. Its backing layer is the
    chart's `CAMetalLayer`, and it owns every gesture.
-2. **The chrome window** — the SwiftUI overlay in a `PassThroughWindow`. Controls
+2. **The chrome window.** The SwiftUI overlay in a `PassThroughWindow`. Controls
    keep their touches; everything else falls through to the chart.
 
 A SwiftUI control has no backing view of its own, so the pass-through decision
