@@ -26,9 +26,14 @@ to find out where something lives.
 
 Do not read these end to end. Grep for the section you need.
 
-- `src/plugin/broker.zig` (6k lines): every host call a plugin can make, the
-  capability checks, the overlay/store/table/chrome sinks, budgets. Tests at
-  the bottom.
+- `src/plugin/broker.zig` (2.3k) plus `src/plugin/broker/` (eleven parts):
+  every host call a plugin can make, the capability checks, the
+  overlay/store/table/chrome sinks, budgets. `broker.zig` holds the Broker
+  struct and dispatch; the parts hold caps, budgets, tables, the queue,
+  sockets, http, ws, storage, the registry JSON and the natives table. Each
+  part carries its own tests. `broker.zig` has a comptime block referencing
+  every part: without it a part's tests go dead, because a re-export alone
+  does not pull them into a test build.
 - `src/plugin/host.zig` (4k): the manifest parser, plugin load and unload,
   install and uninstall, grants, the registry JSON the shells read, restart
   with backoff.
