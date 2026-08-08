@@ -104,7 +104,11 @@ The open library, the recent ones, and the button to add more.
 ![The Connections section of mariner settings on macOS](../img/settings-connections.webp)
 
 Where the boat's data comes from. You need none of this to read a chart. A
-connection is what puts your boat, your depth and the traffic around you on it.
+connection is what puts your boat and the traffic around you on it.
+
+Two pages carry this in full: [instrument
+connections](instrument-connections.md) and [Signal K
+servers](signal-k-servers.md).
 
 There are two kinds of source and a section for each. A boat can have both, and
 more than one of either.

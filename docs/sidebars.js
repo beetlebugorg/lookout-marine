@@ -14,6 +14,10 @@ const sidebars = {
         'user-guide/moving-the-chart',
         'user-guide/mariner-settings',
         'user-guide/raster-charts',
+        'user-guide/instrument-connections',
+        'user-guide/signal-k-servers',
+        'user-guide/your-boat',
+        'user-guide/ais-traffic',
       ],
     },
     {

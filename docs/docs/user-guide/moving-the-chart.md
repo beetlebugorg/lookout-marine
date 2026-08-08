@@ -13,8 +13,12 @@ turns about the centre of the view.
 
 ![The chart turned 45 degrees](../img/macos-rotated.webp)
 
-The north bubble in the top right corner points north the whole time. Click or
-tap it, or press ⌘↑ (Ctrl+↑), and the chart returns to north-up.
+The north bubble in the top right corner points north the whole time. Press ⌘↑
+(Ctrl+↑) and the chart returns to north-up.
+
+Clicking or tapping the bubble does something else: it locks the chart to your
+boat. See [holding the boat on the
+screen](your-boat.md#holding-the-boat-on-the-screen).
 
 ![The north bubble on a turned chart](../img/detail/north-bubble.webp)
 
