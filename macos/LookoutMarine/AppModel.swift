@@ -573,11 +573,21 @@ final class AppModel: ObservableObject {
     }
 
     #if os(macOS)
-    /// The tables the loaded plugins declare, and the menu items that open
-    /// them. Called once the plugin sets are up.
+    /// Every table the loaded plugins declare, in declaration order. The
+    /// Vessels menu is built from this, so the items follow the plugins that
+    /// are up: a plugin that unloads takes its item with it.
+    @Published var pluginTables: [PluginTableSpec] = []
+
+    /// The tables the loaded plugins declare. The menu is built from this, so
+    /// setting it is all it takes to make the items appear.
     func refreshPluginTables() {
         guard let c = controller else { return }
-        PluginTableMenu.install(c.tableSpecs(), model: self)
+        pluginTables = c.tableSpecs()
+    }
+
+    /// Open one declared table's window, or bring it forward.
+    func showPluginTable(_ spec: PluginTableSpec) {
+        _ = PluginTableWindowController.show(spec, model: self)
     }
 
     /// Show a place a plugin table row named: centre the chart on it and pin

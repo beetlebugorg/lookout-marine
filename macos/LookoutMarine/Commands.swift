@@ -35,6 +35,21 @@ struct AppCommands: Commands {
             .disabled(model.recents.isEmpty)
         }
 
+        // Vessels: the shell's menu, holding the tables the plugins declare.
+        // The menu is the shell's because the menu bar is: a plugin describes
+        // a table and where it belongs, and the shell decides what the bar
+        // looks like. Every declaration lands here, whatever its `menu` names,
+        // until there is a second place to put one.
+        CommandMenu("Vessels") {
+            if model.pluginTables.isEmpty {
+                Text("No Vessel Tables").foregroundStyle(.secondary)
+            } else {
+                ForEach(model.pluginTables) { spec in
+                    Button("\(spec.title)…") { model.showPluginTable(spec) }
+                }
+            }
+        }
+
         // Chart menu (a separate top-level menu; SwiftUI already provides "View").
         CommandMenu("Chart") {
             Menu("Color Scheme") {

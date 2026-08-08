@@ -44,7 +44,7 @@ struct PluginTableColumn {
 }
 
 /// One table a plugin declares. `id` is what a menu item carries.
-struct PluginTableSpec {
+struct PluginTableSpec: Identifiable {
     let plugin: String
     let key: String
     let title: String
@@ -493,83 +493,4 @@ final class PluginTableRowView: NSTableRowView {
     }
 }
 
-// MARK: - The menu
-
-/// The menu items the declarations ask for. A plugin names the menu ("Vessels")
-/// and the shell puts the item in it, making the menu when it is the first to
-/// ask. Nothing here is written for any particular plugin.
-@MainActor
-enum PluginTableMenu {
-    /// Menus this has made, so a rebuild replaces its own items and leaves the
-    /// app's menus alone.
-    private static var made: [String: NSMenu] = [:]
-
-    /// The menu bar belongs to SwiftUI and may not be up at the moment the
-    /// chart opens the plugins, so an absent one is waited for rather than
-    /// treated as an answer.
-    static func install(_ specs: [PluginTableSpec], model: AppModel, retries: Int = 6) {
-        guard let main = NSApp.mainMenu else {
-            guard retries > 0 else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                install(specs, model: model, retries: retries - 1)
-            }
-            return
-        }
-        for menu in made.values { menu.removeAllItems() }
-
-        for spec in specs {
-            let menu = menuNamed(spec.menu, in: main)
-            let item = NSMenuItem(title: "\(spec.title)…",
-                                  action: #selector(PluginTableAction.open(_:)),
-                                  keyEquivalent: "")
-            item.target = PluginTableAction.shared
-            item.representedObject = PluginTableRequest(spec: spec, model: model)
-            menu.addItem(item)
-            lkLog("plugin table: \(spec.menu) > \(item.title) from \(spec.plugin)")
-        }
-        // A menu whose only plugin has gone leaves no empty title behind.
-        for (name, menu) in made where menu.numberOfItems == 0 {
-            if let item = main.items.first(where: { $0.submenu === menu }) {
-                main.removeItem(item)
-            }
-            made.removeValue(forKey: name)
-        }
-    }
-
-    private static func menuNamed(_ name: String, in main: NSMenu) -> NSMenu {
-        if let menu = made[name] { return menu }
-        let menu = NSMenu(title: name)
-        let item = NSMenuItem(title: name, action: nil, keyEquivalent: "")
-        item.submenu = menu
-        // Before Window, which is where a mariner looks for the app's own
-        // menus to end.
-        let before = main.items.firstIndex { $0.title == "Window" } ?? main.items.count
-        main.insertItem(item, at: before)
-        made[name] = menu
-        return menu
-    }
-}
-
-private final class PluginTableRequest: NSObject {
-    let spec: PluginTableSpec
-    weak var model: AppModel?
-
-    init(spec: PluginTableSpec, model: AppModel) {
-        self.spec = spec
-        self.model = model
-    }
-}
-
-/// The one target the menu items send to. A menu item needs an object to talk
-/// to, and the windows come and go.
-@MainActor
-private final class PluginTableAction: NSObject {
-    static let shared = PluginTableAction()
-
-    @objc func open(_ sender: NSMenuItem) {
-        guard let req = sender.representedObject as? PluginTableRequest,
-              let model = req.model else { return }
-        PluginTableWindowController.show(req.spec, model: model)
-    }
-}
 #endif
