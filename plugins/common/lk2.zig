@@ -726,7 +726,8 @@ pub const Chart = struct {
     /// `points` hold their screen size across zoom, `geo` units are metres on
     /// the ground. Stroke widths and text sizes are screen points in both.
     /// Night is yours: free RGBA is not dimmed by the core, so read the
-    /// scheme or use the tokens.
+    /// scheme or use the tokens. The drawing turns with the chart under
+    /// course-up; `screenAligned` holds a run of it level on screen.
     pub fn canvas(self: *Chart, id: []const u8, opts: Canvas.Opts) Canvas {
         _ = self;
         var cv = Canvas{ .w = Writer.init() };
@@ -966,6 +967,25 @@ pub const Canvas = struct {
 
     pub fn scale(self: *Canvas, sx: f64, sy: f64) void {
         self.opN("sc", &.{ sx, sy });
+    }
+
+    /// Hold what follows LEVEL ON SCREEN, however the mariner has turned the
+    /// chart. Canvas units are chart-aligned, so under course-up a drawing
+    /// turns with the chart: right for a compass card, wrong for a readout,
+    /// which ends up on its side. Turn this on and the rest of the recording
+    /// — text, the plate behind it, any shape — draws upright, about the point
+    /// you are drawing from. It is state like a fill style, so scope it with
+    /// save/restore and one canvas mixes both:
+    ///
+    ///   cv.save();
+    ///   cv.screenAligned(true);
+    ///   cv.fillText("TWD 224", 0, 84);
+    ///   cv.restore();
+    ///
+    /// Any rotation you applied goes too, for as long as it is on: the promise
+    /// is level on the display, not level relative to your own transform.
+    pub fn screenAligned(self: *Canvas, on: bool) void {
+        self.opN("sa", &.{if (on) 1 else 0});
     }
 
     pub fn save(self: *Canvas) void {

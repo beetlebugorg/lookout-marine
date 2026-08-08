@@ -167,7 +167,7 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
     // The host namespaces overlay ids by plugin, so two plugins may both call
     // an object "echo".
     try std.testing.expect(ov.objs.contains(echo_id ++ "/echo"));
-    const fr = try ov.buildIfNeeded(15.0, .day, null);
+    const fr = try ov.buildIfNeeded(15.0, 0, .day, null);
     try std.testing.expectEqual(@as(usize, overlay.TARGET_VERTS), fr.verts.len);
     // Drawn where the payload said, not at the plugin's fallback position.
     // Vertices are measured from the frame's origin, so put them back first.
@@ -248,7 +248,7 @@ test "a settings change reaches the plugin and changes what it draws" {
     );
     try std.testing.expectEqual(@as(usize, 1), h.pump());
     try std.testing.expect(ov.objs.contains(echo_id ++ "/echo"));
-    const fr = try ov.buildIfNeeded(15.0, .day, null);
+    const fr = try ov.buildIfNeeded(15.0, 0, .day, null);
     const one_x = fr.verts[0].x;
 
     // A key the schema does not declare is ignored, and a number outside its
@@ -259,7 +259,7 @@ test "a settings change reaches the plugin and changes what it draws" {
     try h.configJson(echo_id, &json);
     try std.testing.expectEqualStrings("{\"draw\":true,\"scale\":3}", json.items);
     // The plugin redrew at the new scale: the same symbol, wider.
-    const bigger = try ov.buildIfNeeded(15.0, .day, null);
+    const bigger = try ov.buildIfNeeded(15.0, 0, .day, null);
     try std.testing.expect(@abs(bigger.verts[0].x - one_x) > 0);
 
     // The toggle off: the plugin deletes its own object.

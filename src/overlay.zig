@@ -13,7 +13,7 @@
 //!   defer ov.deinit();
 //!   try ov.applyBatch("org.beetlebug.ais", json);   // broker thread, any time
 //!   ov.removeSource("org.beetlebug.ais");           // plugin stopped/failed
-//!   const fr = try ov.buildIfNeeded(cam.zoom, .day, null); // render thread, per frame
+//!   const fr = try ov.buildIfNeeded(cam.zoom, cam.rotation, .day, null); // render thread
 //!   try gpu.setOverlay(fr, u);   // re-uploads iff fr.generation moved; `u` is
 //!                                // the frame uniform with the MVP and wrap
 //!                                // rebuilt for fr.origin
@@ -92,6 +92,19 @@ pub const Rgba = [4]f32;
 // units are METRES on the ground at the anchor, so a 1852-unit arc is a
 // range ring. Stroke widths and text sizes are always screen points, in
 // either space.
+//
+// SCREEN-ALIGNED CONTENT. Canvas units are chart-aligned: x is east and y is
+// south on the ground, so under a turned view (course-up) a canvas turns with
+// the chart. That is right for a compass card and wrong for a text readout,
+// which turns onto its side and stops reading. The `screen_aligned` command
+// turns the frame back: while it is on, the build puts the view's rotation
+// into the transform in reverse, about the point the pen is at, so the camera
+// undoes it and everything recorded under it — paths, text, gradients, clips
+// — lands level on the display. It is graphics state like a fill style, so
+// save/restore scopes it and one canvas mixes both kinds of content. The
+// build therefore depends on the view rotation, but only for a canvas that
+// asks: `has_screen_aligned` gates the rebuild so a plain scene costs nothing
+// as the mariner turns the chart.
 
 /// Which unit a canvas's coordinates carry. See above.
 pub const CanvasSpace = enum(u8) { geo, points };
@@ -156,6 +169,10 @@ const CanvasCmd = union(enum) {
     translate: [2]f32,
     rotate: f32,
     scale: [2]f32,
+    /// On: hold what follows level on the display, whatever the view rotation
+    /// and whatever rotation the transform already carries. Off: give the
+    /// transform its own rotation back. Scoped by save/restore.
+    screen_aligned: bool,
     save,
     restore,
 
@@ -290,6 +307,10 @@ const Object = struct {
     // canvas
     space: CanvasSpace = .points,
     cmds: []CanvasCmd = &.{}, // owned
+    /// The command list turns the screen-aligned frame on somewhere, so this
+    /// object's geometry depends on the view rotation and must be rebuilt when
+    /// the mariner turns the chart.
+    screen_aligned: bool = false,
     /// The tessellation budget refused this object and said so once. Reset by
     /// a re-post (the object is replaced whole).
     over_said: bool = false,
@@ -385,6 +406,12 @@ const EARTH_CIRCUMFERENCE_M: f64 = 40075016.685578488;
 /// Rebuild when the scale has moved more than 5% — log2(1.05) of zoom.
 const ZOOM_REBUILD_DZ = 0.070389327891398;
 
+/// Rebuild when the view has turned more than this, radians (0.1 degrees).
+/// Only a scene holding screen-aligned content is gated on it at all; the
+/// tolerance is there so float noise in the camera does not rebuild, and it
+/// leaves a 100 pt run under a fifth of a point off level.
+const ROT_REBUILD_DRAD = 0.0017453292519943296;
+
 /// Per-store object ceiling. A plugin that leaks objects costs frame time and
 /// memory; over the cap the batch is rejected rather than silently truncated.
 const MAX_OBJECTS = 4096;
@@ -461,6 +488,11 @@ pub const Store = struct {
     /// rides it. Without a rider the position is ignored and nothing rebuilds.
     built_ship: ?[2]f64 = null,
     has_ship_anchor: bool = false,
+    /// The view rotation this build compensated for, radians, and whether any
+    /// canvas asked for that. Without one the rotation is ignored and turning
+    /// the chart never rebuilds the overlay.
+    built_rot: f64 = 0,
+    has_screen_aligned: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) Store {
         return .{ .alloc = alloc };
@@ -518,6 +550,10 @@ pub const Store = struct {
 
         self.mu.lock();
         defer self.mu.unlock();
+        // Under the lock (defers run last in, first out), and on every exit
+        // path: a batch that fails halfway must not leave the build's
+        // dependencies describing objects it no longer holds.
+        defer self.noteRiders();
 
         if (root.get("del")) |d| {
             if (d == .array) for (d.array.items) |it| {
@@ -555,7 +591,6 @@ pub const Store = struct {
                 }
                 gop.value_ptr.* = obj;
                 self.dirty = true;
-                if (obj.ship_anchor) self.has_ship_anchor = true;
             }
         }
     }
@@ -577,7 +612,7 @@ pub const Store = struct {
                 self.dirty = true;
             } else i += 1;
         }
-        self.noteShipAnchors();
+        self.noteRiders();
     }
 
     fn removeLocked(self: *Store, k: []const u8) void {
@@ -586,19 +621,21 @@ pub const Store = struct {
             var v = kv.value;
             v.free(self.alloc);
             self.dirty = true;
-            self.noteShipAnchors();
+            self.noteRiders();
         }
     }
 
-    /// Does anything ride own ship's display position? Recomputed on every
-    /// change, so a frame with no rider never rebuilds for a moving boat.
-    fn noteShipAnchors(self: *Store) void {
+    /// What the retained scene makes the build depend on: anything riding own
+    /// ship's display position, and any canvas holding content level on
+    /// screen. Recomputed on every change, so a scene with neither never
+    /// rebuilds for a moving boat or a turning view.
+    fn noteRiders(self: *Store) void {
         self.has_ship_anchor = false;
+        self.has_screen_aligned = false;
         for (self.objs.values()) |*o| {
-            if (o.ship_anchor) {
-                self.has_ship_anchor = true;
-                return;
-            }
+            if (o.ship_anchor) self.has_ship_anchor = true;
+            if (o.screen_aligned) self.has_screen_aligned = true;
+            if (self.has_ship_anchor and self.has_screen_aligned) return;
         }
     }
 
@@ -658,6 +695,12 @@ pub const Store = struct {
                     obj.at = jpoint(at) orelse return error.Skip;
                 } else if (!obj.ship_anchor) return error.Skip;
                 obj.cmds = try self.parseCanvasCmds(o, jstr(o.get("id") orelse .null) orelse "?");
+                for (obj.cmds) |c| {
+                    if (c == .screen_aligned and c.screen_aligned) {
+                        obj.screen_aligned = true;
+                        break;
+                    }
+                }
             },
         }
         return obj;
@@ -734,6 +777,11 @@ pub const Store = struct {
                 if (std.mem.eql(u8, op, "tr")) break :blk .{ .translate = try argPt(a, 1) };
                 if (std.mem.eql(u8, op, "rot")) break :blk .{ .rotate = std.math.degreesToRadians(try argNum(a, 1)) };
                 if (std.mem.eql(u8, op, "sc")) break :blk .{ .scale = try argPt(a, 1) };
+                if (std.mem.eql(u8, op, "sa")) break :blk .{
+                    // Bare `["sa"]` turns it on; the flag may arrive as a bool
+                    // or a number, like `ccw` on an arc.
+                    .screen_aligned = if (a.len > 1) (jbool(a[1]) orelse ((jnum(a[1]) orelse 0) != 0)) else true,
+                };
                 if (std.mem.eql(u8, op, "sv")) break :blk .save;
                 if (std.mem.eql(u8, op, "rs")) break :blk .restore;
                 return error.Skip;
@@ -910,27 +958,30 @@ pub const Store = struct {
         return o.at;
     }
 
-    /// True when the vertex array no longer matches (zoom, scheme, own ship's
-    /// display position) or an apply has landed since the last build.
-    pub fn needsRebuild(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) bool {
+    /// True when the vertex array no longer matches (zoom, view rotation,
+    /// scheme, own ship's display position) or an apply has landed since the
+    /// last build. `rot` is the camera's view rotation in radians; it only
+    /// counts while a canvas holds content level on screen.
+    pub fn needsRebuild(self: *Store, zoom: f64, rot: f64, scheme: Scheme, ship: ?[2]f64) bool {
         self.mu.lock();
         defer self.mu.unlock();
-        return self.needsRebuildLocked(zoom, scheme, ship);
+        return self.needsRebuildLocked(zoom, rot, scheme, ship);
     }
 
-    fn needsRebuildLocked(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) bool {
+    fn needsRebuildLocked(self: *Store, zoom: f64, rot: f64, scheme: Scheme, ship: ?[2]f64) bool {
         if (!self.has_build or self.dirty) return true;
         if (scheme != self.built_scheme) return true;
         if (self.has_ship_anchor and !samePoint(ship, self.built_ship)) return true;
+        if (self.has_screen_aligned and @abs(rot - self.built_rot) > ROT_REBUILD_DRAD) return true;
         return @abs(zoom - self.built_zoom) > ZOOM_REBUILD_DZ;
     }
 
     /// Render-thread entry: rebuild if needed and return the current frame.
     /// The returned slice is valid until the next call.
-    pub fn buildIfNeeded(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) Error!Frame {
+    pub fn buildIfNeeded(self: *Store, zoom: f64, rot: f64, scheme: Scheme, ship: ?[2]f64) Error!Frame {
         self.mu.lock();
         defer self.mu.unlock();
-        if (self.needsRebuildLocked(zoom, scheme, ship)) try self.buildLocked(zoom, scheme, ship);
+        if (self.needsRebuildLocked(zoom, rot, scheme, ship)) try self.buildLocked(zoom, rot, scheme, ship);
         return .{
             .verts = self.verts.items,
             .generation = self.gen,
@@ -952,7 +1003,7 @@ pub const Store = struct {
         return .{ .x = 0, .y = 0 };
     }
 
-    fn buildLocked(self: *Store, zoom: f64, scheme: Scheme, ship: ?[2]f64) Error!void {
+    fn buildLocked(self: *Store, zoom: f64, rot: f64, scheme: Scheme, ship: ?[2]f64) Error!void {
         self.verts.clearRetainingCapacity();
         self.tverts.clearRetainingCapacity();
         self.tverts_bold.clearRetainingCapacity();
@@ -975,7 +1026,7 @@ pub const Store = struct {
                     // vector stay attached to the hull between fixes.
                     .polyline => try self.emitPolyline(o.pts, @as(f64, o.width_pt) * wpp, o.dash, wpp, c, lineShift(o, ship)),
                     .symbol => try self.emitSymbol(o, effAt(o, ship), wpp, c),
-                    .canvas => try self.emitCanvas(key, o, effAt(o, ship), wpp, scheme),
+                    .canvas => try self.emitCanvas(key, o, effAt(o, ship), wpp, rot, scheme),
                 }
             }
         }
@@ -983,6 +1034,7 @@ pub const Store = struct {
         self.dirty = false;
         self.has_build = true;
         self.built_zoom = zoom;
+        self.built_rot = rot;
         self.built_scheme = scheme;
         self.built_ship = ship;
     }
@@ -1166,7 +1218,7 @@ pub const Store = struct {
     /// blown tessellation budget the WHOLE object is rewound and refused with
     /// one log line (spec rule 7), so a runaway drawing costs nothing but its
     /// log line.
-    fn emitCanvas(self: *Store, key: []const u8, o: *Object, at_geo: [2]f64, wpp: f64, scheme: Scheme) Error!void {
+    fn emitCanvas(self: *Store, key: []const u8, o: *Object, at_geo: [2]f64, wpp: f64, rot: f64, scheme: Scheme) Error!void {
         if (o.cmds.len == 0) return;
         const at = geo(at_geo);
         var vm = CanvasVM{
@@ -1178,6 +1230,7 @@ pub const Store = struct {
                 .geo => worldPerMetre(at_geo[1]),
             },
             .wpp = wpp,
+            .view_rot = rot,
             .scheme = scheme,
             .vmark = self.verts.items.len,
             .tmark = self.tverts.items.len,
@@ -1236,6 +1289,11 @@ const CState = struct {
     fbold: bool = false,
     talign: TextAlign = .left,
     clip_len: usize = 0,
+    /// The screen-aligned frame is on, and the angle `screenAligned` turned
+    /// the transform by to get there — turning it off turns that back, so the
+    /// author's own frame returns exactly.
+    screen: bool = false,
+    screen_turn: f64 = 0,
 };
 
 const CanvasVM = struct {
@@ -1245,6 +1303,9 @@ const CanvasVM = struct {
     ay: f64,
     unit: f64,
     wpp: f64,
+    /// The camera's view rotation, radians clockwise on screen. Canvas units
+    /// are chart-aligned, so this is what `screenAligned` cancels.
+    view_rot: f64,
     scheme: Scheme,
     st: [CANVAS_STATE_DEPTH + 1]CState = @splat(.{}),
     clips: [CANVAS_STATE_DEPTH + 1][CLIP_MAX_PTS][2]f64 = undefined,
@@ -1287,12 +1348,9 @@ const CanvasVM = struct {
             .text_align => |a| vm.state().talign = a,
             .fill_text => |ft| try vm.text(ft.at, ft.text),
             .translate => |d| vm.apply(.{ 1, 0, d[0], 0, 1, d[1] }),
-            .rotate => |r| {
-                const cs = @cos(@as(f64, r));
-                const sn = @sin(@as(f64, r));
-                vm.apply(.{ cs, -sn, 0, sn, cs, 0 });
-            },
+            .rotate => |r| vm.turn(r),
             .scale => |k| vm.apply(.{ k[0], 0, 0, 0, k[1], 0 }),
+            .screen_aligned => |on| vm.screenAligned(on),
             .save => vm.saveState(),
             .restore => {
                 if (vm.sp > 0) vm.sp -= 1;
@@ -1314,6 +1372,40 @@ const CanvasVM = struct {
             f[3] * m[1] + f[4] * m[4],
             f[3] * m[2] + f[4] * m[5] + f[5],
         };
+    }
+
+    /// Turn the local frame by `r` radians, clockwise on screen.
+    fn turn(vm: *CanvasVM, r: f64) void {
+        const cs = @cos(r);
+        const sn = @sin(r);
+        vm.apply(.{ cs, -sn, 0, sn, cs, 0 });
+    }
+
+    /// Hold what follows level on the display, or stop holding it.
+    ///
+    /// Canvas units are chart-aligned, so a turned view turns the drawing with
+    /// the chart. Turning this ON turns the local frame until its rotation is
+    /// exactly minus the view's, so the camera's own rotation cancels it and
+    /// the content lands upright. The turn is about the point the pen is at,
+    /// which is the anchor until the author translates away from it. Any
+    /// rotation the author already applied goes with it: the promise is level
+    /// on screen, not level relative to whatever the transform was doing.
+    /// Turning it OFF turns the frame back by the same angle. A non-uniform
+    /// scale or a mirror carries no single rotation; the angle of the
+    /// transformed x axis is what gets cancelled.
+    fn screenAligned(vm: *CanvasVM, on: bool) void {
+        const st = vm.state();
+        if (on == st.screen) return;
+        if (on) {
+            const f = st.tf;
+            st.screen_turn = -vm.view_rot - std.math.atan2(f[3], f[0]);
+            st.screen = true;
+            vm.turn(st.screen_turn);
+        } else {
+            st.screen = false;
+            vm.turn(-st.screen_turn);
+            st.screen_turn = 0;
+        }
     }
 
     fn xf(vm: *CanvasVM, p: [2]f32) [2]f64 {
@@ -2143,14 +2235,14 @@ test "a ship anchor moves the symbol and its line, not the rest" {
     );
     try t.expect(s.has_ship_anchor);
 
-    const base = try s.buildIfNeeded(15.0, .day, null);
+    const base = try s.buildIfNeeded(15.0, 0, .day, null);
     const fixed = try t.allocator.dupe(Vertex, base.verts);
     defer t.allocator.free(fixed);
 
     // The same frame with the boat carried 0.001 degrees north.
     const ship = [2]f64{ -76.4767, 38.9773 };
-    try t.expect(s.needsRebuild(15.0, .day, ship));
-    const moved = try s.buildIfNeeded(15.0, .day, ship);
+    try t.expect(s.needsRebuild(15.0, 0, .day, ship));
+    const moved = try s.buildIfNeeded(15.0, 0, .day, ship);
     try t.expectEqual(fixed.len, moved.verts.len);
     const dy = geo(ship).y - geo(.{ -76.4767, 38.9763 }).y;
 
@@ -2167,7 +2259,7 @@ test "a ship anchor moves the symbol and its line, not the rest" {
     try t.expectEqual(fixed.len - TARGET_VERTS, shifted);
 
     // The same position twice is not a rebuild.
-    try t.expect(!s.needsRebuild(15.0, .day, ship));
+    try t.expect(!s.needsRebuild(15.0, 0, .day, ship));
 }
 
 // Line expansion is pure world space and the camera only rotates the MVP, so
@@ -2210,7 +2302,7 @@ test "a dashed line keeps its width and dashes at every angle, zoom and density"
             const batch = try std.fmt.bufPrint(&buf, "{{\"set\":[{{\"id\":\"v\",\"kind\":\"polyline\",\"pts\":[[{d},{d}],[{d},{d}]]," ++
                 "\"width_pt\":3.0,\"dash\":true,\"color\":\"ownship\"}}]}}", .{ lon0, lat0, lon1, lat1 });
             try s.applyBatch("p", batch);
-            const fr = try s.buildIfNeeded(zoom, .day, null);
+            const fr = try s.buildIfNeeded(zoom, 0, .day, null);
             const quads = fr.verts.len / 6;
             try t.expect(quads >= 8);
             // The vertices are SMALL: a harbour-sized overlay measured from its
@@ -2269,7 +2361,7 @@ test "an aid to navigation is a diamond, and a virtual one is broken open" {
     try s.applyBatch("p",
         \\{"set":[{"id":"a","kind":"symbol","sym":"aton","at":[-76.4767,38.9763],"color":"target"}]}
     );
-    var fr = try s.buildIfNeeded(zoom, .day, null);
+    var fr = try s.buildIfNeeded(zoom, 0, .day, null);
     try t.expectEqual(@as(usize, ATON_VERTS), fr.verts.len);
     // Four corners on the axes, ATON_HALF points from the anchor.
     for (0..fr.verts.len) |i| {
@@ -2286,7 +2378,7 @@ test "an aid to navigation is a diamond, and a virtual one is broken open" {
     try s.applyBatch("p",
         \\{"set":[{"id":"v","kind":"symbol","sym":"aton_virtual","at":[-76.4767,38.9763],"color":"target"}]}
     );
-    fr = try s.buildIfNeeded(zoom, .day, null);
+    fr = try s.buildIfNeeded(zoom, 0, .day, null);
     try t.expectEqual(@as(usize, ATON_VERTS + ATON_VIRTUAL_VERTS), fr.verts.len);
     var far: f64 = 0;
     for (ATON_VERTS..fr.verts.len) |i| {
@@ -2308,7 +2400,7 @@ test "symbol expansion vertex counts and orientation" {
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":0,"color":"ownship"}]}
     );
-    var fr = try s.buildIfNeeded(15.0, .day, null);
+    var fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expectEqual(@as(usize, OWNSHIP_VERTS), fr.verts.len);
     try t.expectEqual(@as(usize, 15), fr.verts.len); // 7 hull points, fanned
 
@@ -2327,7 +2419,7 @@ test "symbol expansion vertex counts and orientation" {
     try s.applyBatch("p",
         \\{"set":[{"id":"o","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],"rot_deg":90,"color":"ownship"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day, null);
+    fr = try s.buildIfNeeded(15.0, 0, .day, null);
     const stem_e = absAt(fr, 8);
     try t.expect(stem_e.x > at.x);
     try t.expectApproxEqAbs(at.y, stem_e.y, 1e-9);
@@ -2336,7 +2428,7 @@ test "symbol expansion vertex counts and orientation" {
     try s.applyBatch("p",
         \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.47,38.97],"rot_deg":210,"color":"target"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day, null);
+    fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expectEqual(@as(usize, OWNSHIP_VERTS + TARGET_VERTS), fr.verts.len);
 }
 
@@ -2381,7 +2473,7 @@ test "the own-ship hull is a ship, at true scale once that is legible" {
     // itself, so a step here is a step of the OFFSET (~1e-6 world) and not of
     // an absolute coordinate — five orders finer than it used to be.
     const grid = 4.0 * 2.98e-8 * 1e-3;
-    const low = measure(try s.buildIfNeeded(15.0, .day, null));
+    const low = measure(try s.buildIfNeeded(15.0, 0, .day, null));
     try t.expectApproxEqAbs(floor15, low.len, grid);
     // Beam holds its fraction of length, and the stem is narrower than the
     // shoulders: a ship, not a box.
@@ -2527,14 +2619,14 @@ test "a dashed line cannot run away" {
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-77.0,38.9],[-76.0,38.9]],"dash":true,"color":"track"}]}
     );
-    try t.expectEqual(@as(usize, 6), (try s.buildIfNeeded(22.0, .day, null)).verts.len);
+    try t.expectEqual(@as(usize, 6), (try s.buildIfNeeded(22.0, 0, .day, null)).verts.len);
 
     // Repeated and reversed points: zero-length segments, and a walk that has
     // to survive its own boundary arithmetic.
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.48,38.98],[-76.48,38.98],[-76.4799,38.98],[-76.48,38.98]],"dash":true,"color":"track"}]}
     );
-    const fr = try s.buildIfNeeded(17.0, .day, null);
+    const fr = try s.buildIfNeeded(17.0, 0, .day, null);
     try t.expect(fr.verts.len > 0);
     try t.expectEqual(@as(usize, 0), fr.verts.len % 6);
 }
@@ -2546,7 +2638,7 @@ test "polyline, dash and polygon expansion" {
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.50,38.90],[-76.48,38.92],[-76.46,38.90]],"width_pt":2,"color":"track"}]}
     );
-    var fr = try s.buildIfNeeded(15.0, .day, null);
+    var fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expectEqual(@as(usize, 12), fr.verts.len);
     const solid = fr.verts.len;
 
@@ -2554,7 +2646,7 @@ test "polyline, dash and polygon expansion" {
     try s.applyBatch("p",
         \\{"set":[{"id":"l","kind":"polyline","pts":[[-76.50,38.90],[-76.48,38.92],[-76.46,38.90]],"width_pt":2,"dash":true,"color":"track"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day, null);
+    fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expect(fr.verts.len > solid);
     try t.expectEqual(@as(usize, 0), fr.verts.len % 6);
 
@@ -2563,7 +2655,7 @@ test "polyline, dash and polygon expansion" {
     try s.applyBatch("p",
         \\{"set":[{"id":"z","kind":"polygon","ring":[[-76.5,38.9],[-76.4,38.9],[-76.4,39.0],[-76.45,39.05],[-76.5,39.0]],"alpha":0.25,"color":"warning"}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day, null);
+    fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expectEqual(@as(usize, 9), fr.verts.len);
     // The polygon's alpha multiplies the token's.
     try t.expectApproxEqAbs(@as(f32, 0.25), fr.verts[0].a, 1e-6);
@@ -2597,10 +2689,10 @@ test "token resolution per scheme" {
     try s.applyBatch("p",
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","at":[-76.4,38.9],"color":"target_danger"}]}
     );
-    const day = (try s.buildIfNeeded(15.0, .day, null)).verts[0];
+    const day = (try s.buildIfNeeded(15.0, 0, .day, null)).verts[0];
     const want_day = resolve(.target_danger, .day);
     try t.expectEqual(want_day[0], day.r);
-    const night = (try s.buildIfNeeded(15.0, .night, null)).verts[0];
+    const night = (try s.buildIfNeeded(15.0, 0, .night, null)).verts[0];
     const want_night = resolve(.target_danger, .night);
     try t.expectEqual(want_night[0], night.r);
 }
@@ -2611,23 +2703,23 @@ test "rebuild gating on zoom, scheme and apply" {
     try s.applyBatch("p",
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","at":[-76.4,38.9],"color":"target"}]}
     );
-    const g0 = (try s.buildIfNeeded(15.0, .day, null)).generation;
+    const g0 = (try s.buildIfNeeded(15.0, 0, .day, null)).generation;
     // Same inputs: no rebuild, same generation, so the GPU never re-uploads.
-    try t.expect(!s.needsRebuild(15.0, .day, null));
-    try t.expectEqual(g0, (try s.buildIfNeeded(15.0, .day, null)).generation);
+    try t.expect(!s.needsRebuild(15.0, 0, .day, null));
+    try t.expectEqual(g0, (try s.buildIfNeeded(15.0, 0, .day, null)).generation);
     // Under 5% of scale: still no rebuild.
-    try t.expect(!s.needsRebuild(15.05, .day, null));
+    try t.expect(!s.needsRebuild(15.05, 0, .day, null));
     // Over it: rebuild.
-    try t.expect(s.needsRebuild(15.1, .day, null));
-    const g1 = (try s.buildIfNeeded(15.1, .day, null)).generation;
+    try t.expect(s.needsRebuild(15.1, 0, .day, null));
+    const g1 = (try s.buildIfNeeded(15.1, 0, .day, null)).generation;
     try t.expect(g1 > g0);
     // A scheme change rebuilds; so does an apply.
-    try t.expect(s.needsRebuild(15.1, .night, null));
-    _ = try s.buildIfNeeded(15.1, .night, null);
-    try t.expect(!s.needsRebuild(15.1, .night, null));
+    try t.expect(s.needsRebuild(15.1, 0, .night, null));
+    _ = try s.buildIfNeeded(15.1, 0, .night, null);
+    try t.expect(!s.needsRebuild(15.1, 0, .night, null));
     try s.applyBatch("p", "{\"del\":[\"t\"]}");
-    try t.expect(s.needsRebuild(15.1, .night, null));
-    try t.expectEqual(@as(usize, 0), (try s.buildIfNeeded(15.1, .night, null)).verts.len);
+    try t.expect(s.needsRebuild(15.1, 0, .night, null));
+    try t.expectEqual(@as(usize, 0), (try s.buildIfNeeded(15.1, 0, .night, null)).verts.len);
 }
 
 test "symbol size tracks the zoom" {
@@ -2637,9 +2729,9 @@ test "symbol size tracks the zoom" {
         \\{"set":[{"id":"t","kind":"symbol","sym":"target","rot_deg":0,"at":[-76.4,38.9],"color":"target"}]}
     );
     const at = geo(.{ -76.4, 38.9 });
-    const fa = try s.buildIfNeeded(10.0, .day, null);
+    const fa = try s.buildIfNeeded(10.0, 0, .day, null);
     const da = at.y - absAt(fa, 1).y; // the apex
-    const fb = try s.buildIfNeeded(11.0, .day, null);
+    const fb = try s.buildIfNeeded(11.0, 0, .day, null);
     const db = at.y - absAt(fb, 1).y;
     // One zoom level in = half the world size, so the symbol keeps its point
     // size. The f32 vertex grid is no longer in the way — the offsets are
@@ -2690,7 +2782,7 @@ test "a canvas records, fills, strokes and draws text" {
         \\ ["font",12,"regular"],["ta","left"],["T",0,30,"AB"]]}]}
     );
     try t.expectEqual(@as(usize, 1), s.count());
-    const fr = try s.buildIfNeeded(15.0, .day, null);
+    const fr = try s.buildIfNeeded(15.0, 0, .day, null);
 
     // The square ear-clips to two triangles, the one-segment stroke to two
     // more: 12 triangle vertices, fill first.
@@ -2734,12 +2826,12 @@ test "a canvas records, fills, strokes and draws text" {
     // No face wired: the text is skipped, the geometry stays, and wiring the
     // face back marks the store dirty so the text returns.
     s.setFonts(null, null);
-    const bare = try s.buildIfNeeded(15.0, .day, null);
+    const bare = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expectEqual(@as(usize, 0), bare.text.len);
     try t.expectEqual(@as(usize, 12), bare.verts.len);
     s.setFonts(testFont(), null);
-    try t.expect(s.needsRebuild(15.0, .day, null));
-    try t.expectEqual(@as(usize, 12), (try s.buildIfNeeded(15.0, .day, null)).text.len);
+    try t.expect(s.needsRebuild(15.0, 0, .day, null));
+    try t.expectEqual(@as(usize, 12), (try s.buildIfNeeded(15.0, 0, .day, null)).text.len);
 }
 
 test "canvas budgets refuse the whole object and spare its siblings" {
@@ -2791,7 +2883,7 @@ test "canvas spaces: points hold their screen size, geo scales with the chart" {
         \\ ["P"],["M",-50,0],["L",50,0],["L",0,25],["Z"],["F"]]}]}
     );
     for ([_]f64{ 12.0, 15.0 }) |zoom| {
-        const fr = try s.buildIfNeeded(zoom, .day, null);
+        const fr = try s.buildIfNeeded(zoom, 0, .day, null);
         try t.expectEqual(@as(usize, 6), fr.verts.len);
         var pt_span: f64 = 0;
         var m_span: f64 = 0;
@@ -2819,7 +2911,7 @@ test "canvas gradients colour per vertex and tokens resolve per scheme" {
         \\ ["fs",{"lin":[-10,0,10,0],"stops":[[0,[0,0,0,1]],[1,[1,1,1,1]]]}],
         \\ ["P"],["M",-10,-10],["L",10,-10],["L",10,10],["L",-10,10],["Z"],["F"]]}]}
     );
-    var fr = try s.buildIfNeeded(15.0, .day, null);
+    var fr = try s.buildIfNeeded(15.0, 0, .day, null);
     const at = geo(.{ -76.4767, 38.9763 });
     const wpp = worldPerPt(15.0);
     try t.expectEqual(@as(usize, 6), fr.verts.len);
@@ -2837,10 +2929,10 @@ test "canvas gradients colour per vertex and tokens resolve per scheme" {
         \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
         \\ ["fs","ownship"],["P"],["M",0,0],["L",10,0],["L",0,10],["Z"],["F"]]}]}
     );
-    fr = try s.buildIfNeeded(15.0, .day, null);
+    fr = try s.buildIfNeeded(15.0, 0, .day, null);
     const day = resolve(.ownship, .day);
     try t.expectEqual(day[0], fr.verts[0].r);
-    fr = try s.buildIfNeeded(15.0, .night, null);
+    fr = try s.buildIfNeeded(15.0, 0, .night, null);
     const night = resolve(.ownship, .night);
     try t.expectEqual(night[0], fr.verts[0].r);
 }
@@ -2855,7 +2947,7 @@ test "canvas transforms, save/restore and the ship anchor" {
         \\ ["sv"],["rot",90],["P"],["M",0,-10],["L",1,-10],["L",0,-9],["Z"],["F"],["rs"],
         \\ ["tr",5,0],["P"],["M",0,0],["L",1,0],["L",0,1],["Z"],["F"]]}]}
     );
-    const fr = try s.buildIfNeeded(15.0, .day, null);
+    const fr = try s.buildIfNeeded(15.0, 0, .day, null);
     // Two three-point fills: one triangle each.
     try t.expectEqual(@as(usize, 6), fr.verts.len);
     const at = geo(.{ -76.4767, 38.9763 });
@@ -2870,10 +2962,115 @@ test "canvas transforms, save/restore and the ship anchor" {
 
     // The whole canvas rides own ship's display position.
     const ship = [2]f64{ -76.4767, 38.9773 };
-    try t.expect(s.needsRebuild(15.0, .day, ship));
-    const moved = try s.buildIfNeeded(15.0, .day, ship);
+    try t.expect(s.needsRebuild(15.0, 0, .day, ship));
+    const moved = try s.buildIfNeeded(15.0, 0, .day, ship);
     const dy = geo(ship).y - at.y;
     try t.expectApproxEqAbs(at.y + dy, @as(f64, moved.verts[0].y) + moved.origin.y, wpp * 0.01);
+}
+
+// The screen-aligned frame: one recording mixes content that turns with the
+// chart (a compass card) and content that stays upright (a readout and the
+// plate behind it). The proof is on SCREEN, so these measure through the
+// camera the renderer uses.
+test "a screen-aligned run keeps its screen geometry as the view turns" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    s.setFonts(testFont(), null);
+    // A chart-aligned triangle at north, then a screen-aligned triangle at the
+    // same place with a text run under it.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","space":"points","at":[-76.4767,38.9763],"cmds":[
+        \\ ["P"],["M",0,-20],["L",4,-20],["L",0,-16],["Z"],["F"],
+        \\ ["sv"],["sa",1],
+        \\ ["P"],["M",0,-20],["L",4,-20],["L",0,-16],["Z"],["F"],
+        \\ ["font",12,"regular"],["ta","left"],["T",0,30,"A"],["rs"]]}]}
+    );
+    try t.expect(s.objs.get("p/g").?.screen_aligned);
+    try t.expect(s.has_screen_aligned);
+
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    // Screen offsets from the anchor, in points, through the renderer's camera.
+    const S = struct {
+        fn off(rot: f64, at_w: camera.Vec2, w: camera.Vec2) [2]f64 {
+            const cam = camera.Camera{ .origin = at_w, .center = at_w, .zoom = 15.0, .rotation = rot, .vw = 800, .vh = 600 };
+            const a = cam.worldToScreen(at_w);
+            const b = cam.worldToScreen(w);
+            return .{ b.x - a.x, b.y - a.y };
+        }
+    };
+
+    for ([_]f64{ 0, 30, 90, -135, 180 }) |deg| {
+        const rot = std.math.degreesToRadians(deg);
+        const fr = try s.buildIfNeeded(15.0, rot, .day, null);
+        try t.expectEqual(@as(usize, 6), fr.verts.len);
+        try t.expectEqual(@as(usize, 6), fr.text.len);
+
+        // The chart-aligned corner turns with the chart: (0,-20) points at
+        // true north, which the turned camera carries round to (20 sin, -20 cos).
+        const chart = S.off(rot, at, absAt(fr, 0));
+        try t.expectApproxEqAbs(20.0 * @sin(rot), chart[0], 0.01);
+        try t.expectApproxEqAbs(-20.0 * @cos(rot), chart[1], 0.01);
+
+        // The screen-aligned corner does not: it lands 20 points above the
+        // anchor on the display at every rotation.
+        const level = S.off(rot, at, absAt(fr, 3));
+        try t.expectApproxEqAbs(@as(f64, 0), level[0], 0.01);
+        try t.expectApproxEqAbs(@as(f64, -20), level[1], 0.01);
+        // Its WORLD geometry did turn, by minus the view, which is what the
+        // camera then undoes.
+        try t.expectApproxEqAbs(at.x - 20.0 * @sin(rot) * wpp, absAt(fr, 3).x, wpp * 0.01);
+
+        // The text with it: the glyph box sits 30 points below the anchor and
+        // its top edge is horizontal on the display, so the run reads level.
+        const g0 = S.off(rot, at, .{ .x = @as(f64, fr.text[0].x) + fr.origin.x, .y = @as(f64, fr.text[0].y) + fr.origin.y });
+        const g1 = S.off(rot, at, .{ .x = @as(f64, fr.text[1].x) + fr.origin.x, .y = @as(f64, fr.text[1].y) + fr.origin.y });
+        try t.expectApproxEqAbs(g0[1], g1[1], 0.01); // level
+        try t.expect(g1[0] > g0[0]); // and running left to right
+        try t.expectApproxEqAbs(30.0 - 0.7 * 12.0, g0[1], 0.05); // 0.7 em above its baseline
+    }
+
+    // Turning the view rebuilds the scene only because something in it is
+    // screen-aligned, and only past the tolerance.
+    _ = try s.buildIfNeeded(15.0, 0, .day, null);
+    try t.expect(!s.needsRebuild(15.0, 0, .day, null));
+    try t.expect(!s.needsRebuild(15.0, ROT_REBUILD_DRAD * 0.5, .day, null));
+    try t.expect(s.needsRebuild(15.0, 0.2, .day, null));
+
+    // A canvas that never asks is not rebuilt for a turning view at all.
+    var plain = Store.init(t.allocator);
+    defer plain.deinit();
+    try plain.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["P"],["M",0,-20],["L",4,-20],["L",0,-16],["Z"],["F"]]}]}
+    );
+    _ = try plain.buildIfNeeded(15.0, 0, .day, null);
+    try t.expect(!plain.has_screen_aligned);
+    try t.expect(!plain.needsRebuild(15.0, 1.5, .day, null));
+}
+
+test "screenAligned is scoped and reversible, and cancels a local rotation" {
+    var s = Store.init(t.allocator);
+    defer s.deinit();
+    const rot = std.math.degreesToRadians(90.0);
+    // Inside a rotate(90) of the author's own: the flag holds the corner level
+    // on screen anyway, and turning it off hands the author's frame back.
+    try s.applyBatch("p",
+        \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
+        \\ ["rot",90],
+        \\ ["sa",1],["P"],["M",0,-20],["L",4,-20],["L",0,-16],["Z"],["F"],
+        \\ ["sa",0],["P"],["M",0,-20],["L",4,-20],["L",0,-16],["Z"],["F"]]}]}
+    );
+    const fr = try s.buildIfNeeded(15.0, rot, .day, null);
+    const at = geo(.{ -76.4767, 38.9763 });
+    const wpp = worldPerPt(15.0);
+    // Screen-aligned under the view's 90 and the author's 90: the world point
+    // is 20 points WEST, which the camera carries back to straight up.
+    try t.expectApproxEqAbs(at.x - 20.0 * wpp, absAt(fr, 0).x, wpp * 0.01);
+    try t.expectApproxEqAbs(at.y, absAt(fr, 0).y, wpp * 0.01);
+    // Turned off, the author's rotate(90) is back: north goes to chart east.
+    try t.expectApproxEqAbs(at.x + 20.0 * wpp, absAt(fr, 3).x, wpp * 0.01);
+    try t.expectApproxEqAbs(at.y, absAt(fr, 3).y, wpp * 0.01);
 }
 
 test "canvas clip confines a fill to the clip path" {
@@ -2884,7 +3081,7 @@ test "canvas clip confines a fill to the clip path" {
         \\ ["P"],["M",-5,-5],["L",5,-5],["L",5,5],["L",-5,5],["Z"],["C"],
         \\ ["P"],["M",-20,-20],["L",20,-20],["L",20,20],["L",-20,20],["Z"],["F"]]}]}
     );
-    const fr = try s.buildIfNeeded(15.0, .day, null);
+    const fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expect(fr.verts.len >= 6);
     const at = geo(.{ -76.4767, 38.9763 });
     const wpp = worldPerPt(15.0);
@@ -2904,7 +3101,7 @@ test "a canvas arc closes into a ring the fill can take" {
         \\{"set":[{"id":"g","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
         \\ ["P"],["A",0,0,10,0,360,false],["Z"],["F"]]}]}
     );
-    const fr = try s.buildIfNeeded(15.0, .day, null);
+    const fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expect(fr.verts.len >= 3 * (ARC_SEGS_FULL - 2));
     const at = geo(.{ -76.4767, 38.9763 });
     const wpp = worldPerPt(15.0);
@@ -2931,7 +3128,7 @@ test "a thick stroked circle is an annulus: nothing reaches the middle" {
         \\ {"id":"gm","kind":"canvas","at":[-76.4767,38.9763],"cmds":[
         \\ ["lw",26],["join","bevel"],["P"],["A",0,0,55,0,360,false],["Z"],["S"]]}]}
     );
-    const fr = try s.buildIfNeeded(15.0, .day, null);
+    const fr = try s.buildIfNeeded(15.0, 0, .day, null);
     try t.expect(fr.verts.len >= 3 * 6 * 60);
     const at = geo(.{ -76.4767, 38.9763 });
     const wpp = worldPerPt(15.0);

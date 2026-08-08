@@ -3,10 +3,15 @@
 //! The canvas feature's worked example: a ring with an open window in the
 //! middle so the boat and the chart under it stay visible, tick marks and
 //! bold cardinal letters on the band, a pointer riding the band where the
-//! true wind blows from, and a text readout under the ring. The band is a
-//! thick stroked circle because canvas fills carry no holes; the library
-//! gates the draw on fresh wind and position, and the whole ring rides own
-//! ship's display position between fixes.
+//! true wind blows from, and a text readout on a plate under the ring. The
+//! band is a thick stroked circle because canvas fills carry no holes; the
+//! library gates the draw on fresh wind and position, and the whole ring
+//! rides own ship's display position between fixes.
+//!
+//! It is also the worked example for the two alignments. The card turns with
+//! the chart, so its N points at true north like a real rose; the readout is
+//! screenAligned, so the plate and the number stay level and readable however
+//! far the mariner has turned the view.
 
 const std = @import("std");
 const lk = @import("lk2");
@@ -102,14 +107,50 @@ pub fn draw(c: *lk.Chart) void {
     cv.fill();
     cv.restore();
 
-    // The readout, under the ring.
+    // The readout, under the ring: a plate and the number on it, both held
+    // LEVEL ON SCREEN. Everything above turns with the chart because that is
+    // what a rose does — north stays north. A number that turns with it goes
+    // on its side and stops being a number, so screenAligned turns the frame
+    // back for the plate and the text together, and save/restore keeps that
+    // to this run.
     var buf: [16]u8 = undefined;
     const label = std.fmt.bufPrint(&buf, "TWD {d:0>3.0}", .{twd}) catch "TWD ---";
+    cv.save();
+    cv.screenAligned(true);
+    cv.fillStyle(.{ .rgba = .{ 0.94, 0.96, 0.98, 0.88 } });
+    cv.strokeStyle(.{ .rgba = .{ 0.35, 0.41, 0.49, 0.9 } });
+    cv.lineWidth(1);
+    plate(&cv);
+    cv.fill();
+    cv.stroke();
+    cv.fillStyle(.{ .rgba = .{ 0.12, 0.16, 0.22, 1 } });
     cv.font(12, .regular);
-    cv.fillText(label, 0, R + 16);
+    cv.fillText(label, 0, R + 19);
+    cv.restore();
 
     cv.done();
     c.status("wind dial: TWD {d:.0}", .{twd});
+}
+
+/// The readout plate: a rounded rectangle under the ring, left as the current
+/// path so the caller fills it and strokes its edge from the one recording.
+fn plate(cv: *lk.Canvas) void {
+    const x0 = -36.0;
+    const y0 = R + 4;
+    const x1 = 36.0;
+    const y1 = R + 26;
+    const r = 4.0;
+    cv.beginPath();
+    cv.moveTo(x0 + r, y0);
+    cv.lineTo(x1 - r, y0);
+    cv.quadTo(x1, y0, x1, y0 + r);
+    cv.lineTo(x1, y1 - r);
+    cv.quadTo(x1, y1, x1 - r, y1);
+    cv.lineTo(x0 + r, y1);
+    cv.quadTo(x0, y1, x0, y1 - r);
+    cv.lineTo(x0, y0 + r);
+    cv.quadTo(x0, y0, x0 + r, y0);
+    cv.closePath();
 }
 
 /// One tick line per `step_deg`, from radius R in to `inner`, as subpaths of
