@@ -62,10 +62,18 @@ instruments are connected.
 | `environment.depth.belowTransducer` | DPT, DBT |
 | `environment.wind.speedApparent`, `environment.wind.angleApparent` | MWV (apparent) |
 | `environment.wind.directionTrue` | MWD |
+| `navigation.attitude.roll`, `navigation.attitude.pitch` | XDR, the `HEEL` and `TRIM` transducers |
+| `steering.rudderAngle` | XDR, the `RUDDER` transducer |
+| `environment.water.temperature` | MTW |
+| `navigation.log`, `navigation.trip.log` | VLW |
 
-**From `signalk`**, the same eight paths, read from a Signal K server's
-deltas and converted to the store's units (Signal K carries radians; the
-store carries degrees).
+An XDR carries a list of transducers a boat's own instruments name, so a
+reading is found by its name and never by its place in the list. A boat
+whose instruments call heel something else publishes nothing for it.
+
+**From `signalk`**, the first eight of those paths, read from a Signal K
+server's deltas and converted to the store's units (Signal K carries radians;
+the store carries degrees).
 
 **The AIS target set**, from both: `nmea0183` assembles AIVDM broadcasts and
 `signalk` reads vessel contexts. Position reports, static names, and type 21
@@ -77,6 +85,6 @@ ages out instead of arriving as a guess. Two plugins publishing the same path
 coexist; the store elects one source and falls back to the other when it goes
 quiet.
 
-Anything beyond these eight paths is yours to define: publish
-`environment.water.temperature` from your plugin and any other plugin can
+Anything beyond these paths is yours to define: publish
+`environment.inside.temperature` from your plugin and any other plugin can
 subscribe to it by that name.

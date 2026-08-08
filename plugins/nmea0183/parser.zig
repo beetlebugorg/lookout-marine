@@ -7,10 +7,11 @@
 //! multipart AIS buffers inside `Assembler`, and the scratch space AIS
 //! strings decode into.
 //!
-//! Units leave this file in SI: speeds in m/s, depths in metres, angles in
-//! degrees. Wind angle is signed with starboard positive. A field the
-//! sentence left empty, or a value the standard reserves for "not
-//! available", arrives as `null` rather than a sentinel number.
+//! Units leave this file in SI: speeds in m/s, depths and log distances in
+//! metres, angles in degrees, temperature in kelvin. Wind angle is signed with
+//! starboard positive. A field the sentence left empty, or a value the
+//! standard reserves for "not available", arrives as `null` rather than a
+//! sentinel number.
 
 const std = @import("std");
 
@@ -34,6 +35,10 @@ const kmh_mps = 1000.0 / 3600.0;
 const mph_mps = 1609.344 / 3600.0;
 const foot_m = 0.3048;
 const fathom_m = 1.8288;
+const nautical_mile_m = 1852.0;
+const kilometre_m = 1000.0;
+/// Celsius zero in kelvin.
+const celsius_k = 273.15;
 
 // ---------------------------------------------------------------------------
 // Checksums and line framing
@@ -227,6 +232,28 @@ fn signed(v: []const u8, dir: []const u8) ?f64 {
     };
 }
 
+/// A distance field and its unit letter, in metres. Only the units a log
+/// sentence uses are read; anything else is not guessed at.
+fn distanceIn(v: []const u8, unit: []const u8) ?f64 {
+    const d = num(v) orelse return null;
+    if (unit.len != 1) return null;
+    return switch (unit[0]) {
+        'N' => d * nautical_mile_m,
+        'K' => d * kilometre_m,
+        else => null,
+    };
+}
+
+fn celsius(v: ?f64) ?f64 {
+    const c = v orelse return null;
+    return c + celsius_k;
+}
+
+/// A one-character field as its letter, or 0 when the field is empty or longer.
+fn letter(s: []const u8) u8 {
+    return if (s.len == 1) s[0] else 0;
+}
+
 fn speedIn(v: []const u8, unit: []const u8) ?f64 {
     const s = num(v) orelse return null;
     if (unit.len != 1) return null;
@@ -387,6 +414,86 @@ pub const Vhw = struct {
     stw_mps: ?f64,
 };
 
+pub const Mtw = struct {
+    /// Water temperature in KELVIN. The sentence carries celsius.
+    temp_k: ?f64,
+};
+
+pub const Vlw = struct {
+    /// Distance through the water since the log was installed, metres.
+    total_m: ?f64,
+    /// Distance through the water since the trip was reset, metres.
+    trip_m: ?f64,
+};
+
+/// One transducer reading out of an `XDR` list.
+pub const Transducer = struct {
+    /// The transducer type letter: `A` angular, `C` temperature, `P` pressure,
+    /// `D` linear displacement. 0 when the field was empty.
+    kind: u8,
+    /// Null when the sentence listed the transducer with no reading, which is
+    /// what a boat wired for a sensor it does not have sends.
+    value: ?f64,
+    /// The unit letter: `D` degrees, `C` celsius, `B` bars. 0 when empty.
+    unit: u8,
+    /// The transducer's name, which is what identifies the reading. Points
+    /// into the caller's line.
+    name: []const u8,
+};
+
+/// A transducer list: any number of `type,value,unit,name` quadruples.
+///
+/// A reading is found by NAME and never by position. The list is the device's
+/// own: one boat sends heel, trim and rudder, another sends engine pressures,
+/// and the same name may sit in a different quadruple on the next boat.
+pub const Xdr = struct {
+    /// Everything after the address, still comma-separated. Points into the
+    /// caller's line.
+    rest: []const u8,
+
+    pub const Iterator = struct {
+        fields: std.mem.SplitIterator(u8, .scalar),
+
+        /// The next whole quadruple. A trailing part-quadruple ends the walk:
+        /// half a reading is not a reading.
+        pub fn next(it: *Iterator) ?Transducer {
+            const kind = it.fields.next() orelse return null;
+            const value = it.fields.next() orelse return null;
+            const unit = it.fields.next() orelse return null;
+            const name = it.fields.next() orelse return null;
+            return .{
+                .kind = letter(kind),
+                .value = num(value),
+                .unit = letter(unit),
+                .name = name,
+            };
+        }
+    };
+
+    pub fn iterator(self: Xdr) Iterator {
+        return .{ .fields = std.mem.splitScalar(u8, self.rest, ',') };
+    }
+
+    /// The named transducer's value, when it carries the type and unit letters
+    /// asked for. A reading in another unit is skipped rather than converted:
+    /// the name belongs to the device, so a unit that does not match means the
+    /// name means something else on this boat.
+    pub fn reading(self: Xdr, name: []const u8, kind: u8, unit: u8) ?f64 {
+        var it = self.iterator();
+        while (it.next()) |t| {
+            if (!eq(t.name, name)) continue;
+            if (t.kind != kind or t.unit != unit) continue;
+            return t.value;
+        }
+        return null;
+    }
+
+    /// An angular transducer, in degrees.
+    pub fn degrees(self: Xdr, name: []const u8) ?f64 {
+        return self.reading(name, 'A', 'D');
+    }
+};
+
 /// One AIVDM/AIVDO sentence: still armored, possibly one fragment of many.
 pub const Vdm = struct {
     fragments: u8,
@@ -415,6 +522,9 @@ pub const Sentence = union(enum) {
     mwv: Mwv,
     mwd: Mwd,
     vhw: Vhw,
+    mtw: Mtw,
+    vlw: Vlw,
+    xdr: Xdr,
     vdm: Vdm,
 };
 
@@ -516,6 +626,22 @@ pub fn parse(line: []const u8) Error!Sentence {
         .heading_mag = if (eq(f.get(4), "M")) num(f.get(3)) else null,
         .stw_mps = speedIn(f.get(5), f.get(6)) orelse speedIn(f.get(7), f.get(8)),
     } };
+
+    if (eq(kind, "MTW")) return .{ .mtw = .{
+        .temp_k = if (eq(f.get(2), "C")) celsius(num(f.get(1))) else null,
+    } };
+
+    if (eq(kind, "VLW")) return .{ .vlw = .{
+        .total_m = distanceIn(f.get(1), f.get(2)),
+        .trip_m = distanceIn(f.get(3), f.get(4)),
+    } };
+
+    // XDR is read straight off the body rather than out of `f`: the list is
+    // any number of quadruples and `Split` stops at `max_fields`.
+    if (eq(kind, "XDR")) {
+        const comma = std.mem.indexOfScalar(u8, body, ',') orelse return error.Malformed;
+        return .{ .xdr = .{ .rest = body[comma + 1 ..] } };
+    }
 
     if (eq(kind, "VDM") or eq(kind, "VDO")) {
         if (f.n < 7) return error.Malformed;
@@ -629,12 +755,19 @@ const Bits = struct {
 
     /// `chars` six-bit characters as text, trimmed at the `@` padding and of
     /// trailing spaces. The result lives in `tb`.
+    ///
+    /// A payload that ends inside the field yields the characters that did
+    /// arrive rather than an error. Text is self-terminating, and a report cut
+    /// a character short is otherwise thrown away whole, taking with it the
+    /// vessel name it was sent to deliver.
     fn text(b: Bits, start: usize, chars: usize, tb: *TextBuf) Error![]const u8 {
         const out = try tb.take(chars);
         var n: usize = 0;
         var k: usize = 0;
         while (k < chars) : (k += 1) {
-            const code = try b.u(start + k * 6, 6);
+            const at = start + k * 6;
+            if (at + 6 > b.total) break;
+            const code = try b.u(at, 6);
             const ch = text_alphabet[@intCast(code)];
             if (ch == '@') break;
             out[n] = ch;
@@ -684,14 +817,25 @@ pub const Assembly = struct {
 /// Joins multi-fragment AIVDM/AIVDO messages.
 ///
 /// Fragments interleave across channels, so a slot is keyed by channel and
-/// sequential message id. Anything unexpected — a fragment out of order, a
-/// second message id on the same channel, an over-long assembly — drops the
-/// partial message and returns null. The stream is untrusted input; losing a
-/// target report is correct, failing is not.
+/// sequential message id. Anything unexpected, a fragment out of order or an
+/// over-long assembly, drops the partial message and returns null. The stream
+/// is untrusted input; losing a target report is correct, failing is not.
+///
+/// MISMATCHED MESSAGE IDS. The standard makes the sequential message id
+/// identical across the fragments of one message. Some gateways bump it per
+/// SENTENCE instead, so a two-part type 5 arrives as ids 4 and 5 and the
+/// continuation matches no slot. A continuation that fits an open slot on
+/// channel, fragment count and expected index is therefore accepted with a
+/// different id, but ONLY when exactly one open slot fits: with two candidates
+/// the id is the only thing telling them apart, and joining the wrong halves
+/// would invent a vessel. See `mismatched_ids`.
 pub const Assembler = struct {
     slots: [4]Slot = @splat(.{}),
     /// Partial messages abandoned because a fragment did not fit the slot.
     dropped: u64 = 0,
+    /// Continuations joined to a slot carrying a different sequential message
+    /// id, which is a non-conforming source rather than a fault here.
+    mismatched_ids: u64 = 0,
     /// Counts pushes so the least recently touched slot is the one reused.
     tick: u64 = 0,
 
@@ -764,15 +908,23 @@ pub const Assembler = struct {
         return null;
     }
 
+    /// The slot this continuation belongs to. An id that matches wins outright;
+    /// a single slot that fits everything but the id is taken as the same
+    /// message, and two such slots are ambiguous and take nothing.
     fn find(a: *Assembler, v: Vdm) ?*Slot {
+        var other: ?*Slot = null;
+        var others: usize = 0;
         for (&a.slots) |*s| {
             if (!s.active) continue;
             if (s.channel != v.channel) continue;
-            if (!idEq(s.msg_id, v.msg_id)) continue;
             if (s.fragments != v.fragments or s.expect != v.index) continue;
-            return s;
+            if (idEq(s.msg_id, v.msg_id)) return s;
+            other = s;
+            others += 1;
         }
-        return null;
+        if (others != 1) return null;
+        a.mismatched_ids += 1;
+        return other;
     }
 
     /// A free slot, or the least recently touched one.
@@ -1125,6 +1277,65 @@ test "VHW is heading and speed through the water" {
     try expectNear(5.5 * knot_mps, v.stw_mps, 1e-9);
 }
 
+test "XDR finds a transducer by name, whatever order the list is in" {
+    const x = (try parse(fx.xdr)).xdr;
+    try expectNear(fx.xdr_expect.heel_deg, x.degrees("HEEL"), tol);
+    try expectNear(fx.xdr_expect.trim_deg, x.degrees("TRIM"), tol);
+    try expectNear(fx.xdr_expect.rudder_deg, x.degrees("RUDDER"), tol);
+    // Listed with no reading: present in the walk, absent as a value.
+    try testing.expect(x.reading("AIRTEMP", 'C', 'C') == null);
+    try testing.expect(x.reading("BARO", 'P', 'B') == null);
+    // A name this boat does not carry.
+    try testing.expect(x.degrees("PITCH") == null);
+
+    // The same three names in another order, with a transducer between them
+    // that nothing reads. Matching on position would swap heel and rudder.
+    const r = (try parse(fx.xdr_reordered)).xdr;
+    try expectNear(-4.2, r.degrees("RUDDER"), tol);
+    try expectNear(12.0, r.degrees("HEEL"), tol);
+    try testing.expect(r.degrees("TRIM") == null);
+    try expectNear(21.5, r.reading("ENGINETEMP", 'C', 'C'), tol);
+}
+
+test "an XDR reading in another unit is not read as degrees" {
+    const x = (try parse(fx.xdr_wrong_unit)).xdr;
+    try testing.expect(x.degrees("HEEL") == null);
+    try expectNear(0.30, x.reading("HEEL", 'A', 'R'), tol);
+}
+
+test "an XDR list walks whole quadruples and stops at a partial one" {
+    var whole = (try parse(fx.xdr)).xdr.iterator();
+    var n: usize = 0;
+    while (whole.next()) |_| n += 1;
+    try testing.expectEqual(@as(usize, 5), n);
+
+    // Three fields left over at the end are not a reading.
+    var short = (try parse("$IIXDR,A,1.0,D,HEEL,A,2.0,D*65")).xdr.iterator();
+    const first = short.next().?;
+    try testing.expectEqualStrings("HEEL", first.name);
+    try testing.expect(short.next() == null);
+
+    // An XDR with no list at all yields nothing and does not error.
+    var empty = (try parse("$IIXDR,*62")).xdr.iterator();
+    try testing.expect(empty.next() == null);
+}
+
+test "MTW is water temperature in kelvin" {
+    try expectNear(fx.mtw_expect_k, (try parse(fx.mtw)).mtw.temp_k, 1e-9);
+    // Another unit letter is not celsius and is not converted as if it were.
+    try testing.expect((try parse("$IIMTW,64.2,F*16")).mtw.temp_k == null);
+}
+
+test "VLW is log and trip distance in metres" {
+    const v = (try parse(fx.vlw)).vlw;
+    try expectNear(fx.vlw_expect.total_m, v.total_m, 1e-6);
+    try expectNear(fx.vlw_expect.trip_m, v.trip_m, 1e-6);
+    // A log that has never been reset still reports its total.
+    const partial = (try parse("$VWVLW,1234.5,N,,*1D")).vlw;
+    try expectNear(fx.vlw_expect.total_m, partial.total_m, 1e-6);
+    try testing.expect(partial.trip_m == null);
+}
+
 test "a bad checksum is rejected, never parsed" {
     try testing.expectError(error.BadChecksum, parse(fx.bad_checksum));
     try testing.expectError(error.BadChecksum, parse(fx.no_checksum));
@@ -1408,16 +1619,13 @@ test "out-of-order and orphaned AIS fragments drop without crashing" {
     try testing.expect(ordered.push(tail) != null);
     try testing.expect(ordered.push(tail) == null);
 
-    // A tail carrying another message id belongs to a different message.
+    // A tail on another channel belongs to another receiver's message.
     var mixed = Assembler{};
     try testing.expect(mixed.push(head) == null);
-    var wrong_id = tail;
-    wrong_id.msg_id = 7;
-    try testing.expect(mixed.push(wrong_id) == null);
     var wrong_channel = tail;
     wrong_channel.channel = 'B';
     try testing.expect(mixed.push(wrong_channel) == null);
-    // The open slot survives both and still completes with its own tail.
+    // The open slot survives it and still completes with its own tail.
     try testing.expect(mixed.push(tail) != null);
 
     // Fragment 3 of 3 arriving before fragment 2 is discarded; the slot
@@ -1434,6 +1642,99 @@ test "out-of-order and orphaned AIS fragments drop without crashing" {
     try testing.expect(jumbled.push(f1) == null);
     try testing.expect(jumbled.push(f3) == null);
     try testing.expect(jumbled.push(f2) == null);
+}
+
+test "a type 5 whose fragments disagree about the message id still reassembles" {
+    var a = Assembler{};
+    const first = (try parse(fx.zeus_type5_a)).vdm;
+    const second = (try parse(fx.zeus_type5_b)).vdm;
+    // The device's two departures from the standard, both harmless here: the
+    // sequential id changes between the fragments, and the channel is empty.
+    try testing.expectEqual(@as(u8, 4), first.msg_id.?);
+    try testing.expectEqual(@as(u8, 5), second.msg_id.?);
+    try testing.expectEqual(@as(u8, 0), first.channel);
+    try testing.expectEqual(@as(u8, 0), second.channel);
+
+    try testing.expect(a.push(first) == null);
+    const done = a.push(second) orelse return error.Incomplete;
+    var text: [text_scratch_bytes]u8 = undefined;
+    const s = (try decode(done.payload, done.fill, &text)).static;
+    try testing.expectEqual(fx.zeus_type5_expect.mmsi, s.mmsi);
+    try testing.expectEqualStrings(fx.zeus_type5_expect.name, s.name);
+    try testing.expectEqualStrings(fx.zeus_type5_expect.callsign, s.callsign);
+    // The fields either side of the join, so the two fragments are proved to
+    // be in the right order and not merely both present.
+    try testing.expectEqualStrings(fx.zeus_type5_expect.destination, s.destination);
+    try testing.expectEqual(@as(u64, 1), a.mismatched_ids);
+}
+
+test "a conforming pair still joins on its message id, and counts as conforming" {
+    var a = Assembler{};
+    try testing.expect(a.push((try parse(fx.aivdm_type5_a)).vdm) == null);
+    const done = a.push((try parse(fx.aivdm_type5_b)).vdm) orelse return error.Incomplete;
+    var text: [text_scratch_bytes]u8 = undefined;
+    const s = (try decode(done.payload, done.fill, &text)).static;
+    try testing.expectEqualStrings(fx.aivdm_type5_expect.name, s.name);
+    try testing.expectEqual(@as(u64, 0), a.mismatched_ids);
+}
+
+test "two interleaved messages never pair with each other's fragments" {
+    const head = (try parse(fx.aivdm_type5_a)).vdm;
+    const tail = (try parse(fx.aivdm_type5_b)).vdm;
+    const other = (try parse(fx.aivdm_type21_a)).vdm;
+    const other_tail = (try parse(fx.aivdm_type21_b)).vdm;
+
+    // Both heads open a slot on the same channel, both waiting for fragment 2.
+    // Each tail carries its own id, so each finds its own head and the two
+    // messages decode to what they were sent as.
+    var a = Assembler{};
+    var head_a = head;
+    head_a.channel = 'B';
+    var tail_a = tail;
+    tail_a.channel = 'B';
+    try testing.expect(a.push(head_a) == null);
+    try testing.expect(a.push(other) == null);
+    const first = a.push(tail_a) orelse return error.Incomplete;
+    var text: [text_scratch_bytes]u8 = undefined;
+    try testing.expectEqualStrings(
+        fx.aivdm_type5_expect.name,
+        (try decode(first.payload, first.fill, &text)).static.name,
+    );
+    const second = a.push(other_tail) orelse return error.Incomplete;
+    var aton_text: [text_scratch_bytes]u8 = undefined;
+    try testing.expectEqualStrings(
+        fx.aivdm_type21_expect.name,
+        (try decode(second.payload, second.fill, &aton_text)).aton.name,
+    );
+    try testing.expectEqual(@as(u64, 0), a.mismatched_ids);
+
+    // With both slots open, a tail whose id matches neither is ambiguous: the
+    // id is the only thing that could tell the two apart, so it is dropped
+    // rather than joined to whichever slot came first.
+    var ambiguous = Assembler{};
+    try testing.expect(ambiguous.push(head_a) == null);
+    try testing.expect(ambiguous.push(other) == null);
+    var stray = tail_a;
+    stray.msg_id = 9;
+    try testing.expect(ambiguous.push(stray) == null);
+    try testing.expectEqual(@as(u64, 0), ambiguous.mismatched_ids);
+    // Both messages are still open and still complete with their own tails.
+    try testing.expect(ambiguous.push(tail_a) != null);
+    try testing.expect(ambiguous.push(other_tail) != null);
+}
+
+test "a static report cut short still yields the name it carried" {
+    var text: [text_scratch_bytes]u8 = undefined;
+    var a = Assembler{};
+    try testing.expect(a.push((try parse(fx.aivdm_type5_a)).vdm) == null);
+    const done = a.push((try parse(fx.aivdm_type5_b)).vdm) orelse return error.Incomplete;
+    // The last four armored characters lost: the destination field now runs off
+    // the end of the payload, and the name in front of it is still readable.
+    const cut = done.payload[0 .. done.payload.len - 4];
+    const s = (try decode(cut, 0, &text)).static;
+    try testing.expectEqual(fx.aivdm_type5_expect.mmsi, s.mmsi);
+    try testing.expectEqualStrings(fx.aivdm_type5_expect.name, s.name);
+    try testing.expectEqualStrings(fx.aivdm_type5_expect.callsign, s.callsign);
 }
 
 test "a fragment whose index or count is impossible is rejected" {

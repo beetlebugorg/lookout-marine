@@ -7,7 +7,17 @@
 //!   - the status carries one item per row, keyed by the row id the shell
 //!     assigned, so the settings window can put each line beside its row.
 //!
-//! The plugin arrives as an anonymous import, like plugins/echo does for
+//! The name test carries an AIS VESSEL NAME the whole way: armored sentences
+//! on a socket, the nmea0183 module's reassembly and decode, the AIS store's
+//! merge onto a target that was created by an earlier position report, the
+//! snapshot the broker fans out, and the ais module's own choice between the
+//! name and the MMSI. What it reads at the end is the row the targets dialog
+//! puts on screen, so nothing about the name path is taken on trust.
+//!
+//! The instrument test does the same for the sentences whose fields are a list
+//! rather than a fixed layout, and checks the units they land in.
+//!
+//! The plugins arrive as anonymous imports, like plugins/echo does for
 //! host_smoke: importing host.zig must never drag a plugin binary into the
 //! core.
 
@@ -21,6 +31,9 @@ const aisstore = host.aisstore;
 const nmea_wasm = @embedFile("nmea_plugin_wasm");
 const nmea_manifest = @embedFile("nmea_manifest");
 const nmea_id = "org.beetlebug.nmea0183";
+const ais_wasm = @embedFile("ais_plugin_wasm");
+const ais_manifest = @embedFile("ais_manifest");
+const ais_id = "org.beetlebug.ais";
 const io = std.Io.Threaded.global_single_threaded.io();
 
 /// How long a wait-for gives up after. Generous: a loaded machine still has to
@@ -37,8 +50,13 @@ const deadline_ms: i64 = 8_000;
 const Feed = struct {
     fd: std.c.fd_t = -1,
     port: u16 = 0,
-    /// "$SDDBT,,f,{d}.0,M,,F" and the like, formatted with the tick.
-    fmt: []const u8,
+    /// "$SDDBT,,f,{d}.0,M,,F" and the like, formatted with the tick. Ignored
+    /// when `lines` is set.
+    fmt: []const u8 = "",
+    /// Whole sentences, checksums and all, written in order once per pass. A
+    /// sentence whose checksum is part of what is under test cannot be
+    /// rebuilt by `sentence` below.
+    lines: ?[]const []const u8 = null,
     thread: ?std.Thread = null,
     stop: std.atomic.Value(bool) = .init(false),
     /// Clients accepted so far. A reconnect shows up here.
@@ -81,6 +99,11 @@ const Feed = struct {
             }
             _ = self.accepted.fetchAdd(1, .monotonic);
             while (!self.stop.load(.acquire)) {
+                if (self.lines) |set| {
+                    if (!self.writeLines(peer, set)) break;
+                    broker.sleepMs(100);
+                    continue;
+                }
                 tick = (tick % 90) + 1;
                 var line: [96]u8 = undefined;
                 const text = sentence(&line, self.fmt, tick) catch return;
@@ -88,6 +111,16 @@ const Feed = struct {
                 broker.sleepMs(20);
             }
         }
+    }
+
+    fn writeLines(self: *Feed, peer: std.c.fd_t, set: []const []const u8) bool {
+        var buf: [128]u8 = undefined;
+        for (set) |line| {
+            if (self.stop.load(.acquire)) return false;
+            const text = std.fmt.bufPrint(&buf, "{s}\r\n", .{line}) catch return false;
+            if (!writeAll(peer, text)) return false;
+        }
+        return true;
     }
 
     fn acceptOne(self: *Feed) ?std.c.fd_t {
@@ -337,4 +370,208 @@ test "two connections feed one chart, and pausing one leaves the other running" 
     try must(!log.has("trapped"), "nothing trapped");
     try must(!log.has("denied"), "no grant was refused");
     try std.testing.expectEqual(@as(u32, 0), plugin.denied);
+}
+
+// ---------------------------------------------------------------------------
+// the name path
+// ---------------------------------------------------------------------------
+
+/// The AIS a gateway repeats, in the order a receiver hears it: the position
+/// reports first and the static reports minutes later, which is the order that
+/// makes the store merge a name onto a target it already has.
+///
+///   * a class A position report and the two-fragment type 5 that names her.
+///     The pair is the one in the parser's fixtures, framed the way a B&G Zeus
+///     frames one: its two fragments carry DIFFERENT sequential message ids and
+///     an empty channel, which is what the assembler has to tolerate for a
+///     class A ship to be anything but a number on the chart.
+///   * a class B position report and the single-sentence type 24 part A that
+///     names her, from the generated Annapolis log.
+///
+/// Both vessels are invented, like everything else the tests here send.
+const ais_lines = [_][]const u8{
+    "!AIVDM,1,1,,,15NtpTh00lJQtlpFCD83IRht0000,0*47",
+    "!AIVDM,1,1,,B,B52LbuP0?6`O6V5TjPmDI3P4h000,0*29",
+    "!AIVDM,2,1,4,,55NtpTh00001LASO3C8M85V0PE8tp000000000163064440008hCSPD3k2Dh,0*55",
+    "!AIVDM,2,2,5,,00000000000,2*60",
+    "!AIVDM,1,1,,B,H52LbuQ<D61=18U@D00000000000,0*4A",
+};
+
+const class_a_mmsi: u32 = 367999123;
+const class_a_name = "GRAY HERON";
+const class_b_mmsi: u32 = 338111222;
+const class_b_name = "SEA SPRITE";
+
+fn named(store: *aisstore.AisStore, mmsi: u32, want: []const u8) bool {
+    const t = store.get(mmsi) orelse return false;
+    const n = t.name() orelse return false;
+    return std.mem.eql(u8, n, want) and t.hasPosition();
+}
+
+fn bothNamed(store: *aisstore.AisStore) bool {
+    return named(store, class_a_mmsi, class_a_name) and named(store, class_b_mmsi, class_b_name);
+}
+
+test "an AIS name reaches the row the targets dialog draws, not the MMSI" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = nmea_id ++ ".wasm", .data = nmea_wasm });
+    try tmp.dir.writeFile(io, .{ .sub_path = nmea_id ++ ".manifest.json", .data = nmea_manifest });
+    try tmp.dir.writeFile(io, .{ .sub_path = ais_id ++ ".wasm", .data = ais_wasm });
+    try tmp.dir.writeFile(io, .{ .sub_path = ais_id ++ ".manifest.json", .data = ais_manifest });
+    const dir_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer alloc.free(dir_path);
+
+    var gateway = Feed{ .lines = &ais_lines };
+    try gateway.open();
+    defer gateway.close();
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{});
+    defer br.deinit();
+    var log = LogSink{ .alloc = alloc };
+    defer log.text.deinit(alloc);
+    br.setLog(&log, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{ .nmea_host = "" });
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    try std.testing.expectEqual(@as(usize, 2), h.count());
+    try h.start();
+    defer h.stop();
+
+    var cfg: std.ArrayList(u8) = .empty;
+    defer cfg.deinit(alloc);
+    try cfg.print(
+        alloc,
+        "{{\"connections\":[{{\"id\":\"c-ais\",\"name\":\"AIS\",\"host\":\"127.0.0.1\",\"port\":{d},\"enabled\":true}}]}}",
+        .{gateway.port},
+    );
+    try h.configSet(nmea_id, cfg.items);
+
+    // Both targets reach the host's store with a position AND the name their
+    // static report carried. The class A name only gets here if the
+    // mismatched message ids were tolerated.
+    try waitFor(&ais, bothNamed);
+
+    // The mariner opens the targets dialog. Rows exist only while it is open,
+    // and what it holds is what the shell puts on screen.
+    try must(br.setTableOpen(ais_id, "targets", true), "the ais plugin declares a targets table");
+
+    var rows: std.ArrayList(u8) = .empty;
+    defer rows.deinit(alloc);
+    const Rows = struct {
+        br: *broker.Broker,
+        out: *std.ArrayList(u8),
+
+        fn ready(self: @This()) bool {
+            self.out.clearRetainingCapacity();
+            _ = self.br.tableRowsJson(ais_id, "targets", "name", true, self.out) catch return false;
+            return std.mem.indexOf(u8, self.out.items, class_a_name) != null and
+                std.mem.indexOf(u8, self.out.items, class_b_name) != null;
+        }
+    };
+    try waitFor(Rows{ .br = &br, .out = &rows }, Rows.ready);
+
+    // The name column is the first cell, the MMSI the second. A target that
+    // reported a name shows it there; the number beside it is the identifier,
+    // not the label, and the two are never the same string.
+    try must(
+        std.mem.indexOf(u8, rows.items, "\"cells\":[\"" ++ class_a_name ++ "\",\"367999123\"") != null,
+        "the class A row leads with her name",
+    );
+    try must(
+        std.mem.indexOf(u8, rows.items, "\"cells\":[\"" ++ class_b_name ++ "\",\"338111222\"") != null,
+        "the class B row leads with her name",
+    );
+
+    try must(!log.has("trapped"), "nothing trapped");
+    try must(!log.has("denied"), "no grant was refused");
+}
+
+// ---------------------------------------------------------------------------
+// the transducer, temperature and log sentences
+// ---------------------------------------------------------------------------
+
+/// A boat's own instruments: a transducer list with two of its five readings
+/// empty, the water temperature, and the log. The XDR is the shape that matters
+/// here, because it is the only sentence the plugin reads whose fields are a
+/// list rather than a fixed layout.
+const instrument_lines = [_][]const u8{
+    "$IIXDR,C,,C,AIRTEMP,A,3.4,D,HEEL,A,1.9,D,TRIM,P,,B,BARO,A,-2.2,D,RUDDER*0B",
+    "$IIMTW,17.9,C*1C",
+    "$VWVLW,1234.5,N,12.3,N*4D",
+};
+
+const roll_path = "navigation.attitude.roll";
+const pitch_path = "navigation.attitude.pitch";
+const rudder_path = "steering.rudderAngle";
+const water_temp_path = "environment.water.temperature";
+const log_path = "navigation.log";
+const trip_path = "navigation.trip.log";
+
+fn haveInstruments(v: *vstore.Store) bool {
+    for ([_][]const u8{ roll_path, pitch_path, rudder_path, water_temp_path, log_path, trip_path }) |p| {
+        if (number(v, p) == null) return false;
+    }
+    return true;
+}
+
+test "XDR, MTW and VLW reach the store in SI" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = nmea_id ++ ".wasm", .data = nmea_wasm });
+    try tmp.dir.writeFile(io, .{ .sub_path = nmea_id ++ ".manifest.json", .data = nmea_manifest });
+    const dir_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer alloc.free(dir_path);
+
+    var instruments = Feed{ .lines = &instrument_lines };
+    try instruments.open();
+    defer instruments.close();
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{});
+    defer br.deinit();
+    var log = LogSink{ .alloc = alloc };
+    defer log.text.deinit(alloc);
+    br.setLog(&log, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{ .nmea_host = "" });
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    try h.start();
+    defer h.stop();
+
+    var cfg: std.ArrayList(u8) = .empty;
+    defer cfg.deinit(alloc);
+    try cfg.print(
+        alloc,
+        "{{\"connections\":[{{\"id\":\"c-inst\",\"name\":\"Instruments\",\"host\":\"127.0.0.1\",\"port\":{d},\"enabled\":true}}]}}",
+        .{instruments.port},
+    );
+    try h.configSet(nmea_id, cfg.items);
+
+    try waitFor(&vessels, haveInstruments);
+
+    // Degrees for the angles, kelvin for the temperature, metres for the log:
+    // the units the store's table names, not the sentence's.
+    try must(@abs(number(&vessels, roll_path).? - 3.4) < 1e-9, "heel is degrees");
+    try must(@abs(number(&vessels, pitch_path).? - 1.9) < 1e-9, "trim is degrees");
+    try must(@abs(number(&vessels, rudder_path).? + 2.2) < 1e-9, "rudder is degrees, signed");
+    try must(@abs(number(&vessels, water_temp_path).? - (17.9 + 273.15)) < 1e-9, "water temperature is kelvin");
+    try must(@abs(number(&vessels, log_path).? - 1234.5 * 1852.0) < 1e-6, "the log is metres");
+    try must(@abs(number(&vessels, trip_path).? - 12.3 * 1852.0) < 1e-6, "the trip is metres");
+
+    try must(!log.has("trapped"), "nothing trapped");
+    try must(!log.has("denied"), "no grant was refused");
 }

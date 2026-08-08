@@ -251,11 +251,21 @@ degrees, and nothing downstream ever has to ask what unit it is holding.
 | `environment.wind.speedApparent` | number | metres per second |
 | `environment.wind.angleApparent` | number | degrees, positive to starboard |
 | `environment.wind.directionTrue` | number | degrees true, the direction the wind blows **from** |
+| `steering.rudderAngle` | number | degrees, positive to starboard |
+| `navigation.attitude.roll` | number | degrees, positive with the mast to starboard |
+| `navigation.attitude.pitch` | number | degrees, positive bow up |
+| `environment.water.temperature` | number | kelvin |
+| `navigation.log` | number | metres through the water since the log was installed |
+| `navigation.trip.log` | number | metres through the water since the trip was reset |
 
 The store takes any path string you like; that table is the vocabulary in use
 today. Four of those paths are read by the core itself: position, heading,
 course and speed drive own ship's display position, follow mode and course-up.
 If you publish them under names of your own, no boat appears.
+
+Angles are the one place the store leaves Signal K's units behind: Signal K
+carries radians and the store carries degrees. Everything else is the SI unit
+Signal K uses, which is why water temperature is kelvin.
 
 Several plugins may publish the same path. The store elects one: the
 first-registered source wins while its value is inside the staleness window, and

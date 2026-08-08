@@ -11,6 +11,11 @@
 //!     to the MMSIs, positions, ship names and aid names that guide states,
 //!     which is what checks the bit layouts in `parser.zig` against something
 //!     outside this repository.
+//!   - The XDR is CAPTURED off a B&G Zeus, because no published example shows
+//!     a real boat's transducer list. The Zeus type 5 pair copies that same
+//!     device's FRAMING, which no published example shows either, around a
+//!     vessel out of the encoder: a fixture never carries another boat's
+//!     identity, and the framing is what it is there to prove.
 //!   - The virtual and off-position type 21 lines have no published example.
 //!     They come from the encoder in `tools/nmea_gen.zig`, and each says so.
 //!   - The rest follow the same field layouts by hand: a receiver with no
@@ -31,7 +36,9 @@ pub const all = [_][]const u8{
     mwd,                  vhw,                 gsv,            aivdm_type1,
     aivdm_type18,         aivdm_type5_a,       aivdm_type5_b,  aivdm_type24a,
     aivdm_type24b,        aivdm_sentinels,     aivdm_type21_a, aivdm_type21_b,
-    aivdm_type21_virtual, aivdm_type21_offpos,
+    aivdm_type21_virtual, aivdm_type21_offpos, xdr,            xdr_reordered,
+    xdr_wrong_unit,       mtw,                 vlw,            zeus_type5_a,
+    zeus_type5_b,
 };
 
 // --- talker sentences ------------------------------------------------------
@@ -80,6 +87,36 @@ pub const mwv_true = "$WIMWV,045.0,T,10.5,N,A*10";
 pub const mwd = "$WIMWD,220.0,T,209.0,M,12.0,N,6.2,M*66";
 pub const vhw = "$VWVHW,274.0,T,262.0,M,5.5,N,10.2,K*60";
 
+/// CAPTURED, off a B&G Zeus. Five transducers: air temperature and barometer
+/// listed with no reading, then heel, trim and rudder angle. The value of the
+/// fixture is the shape: a variable-length list whose names sit in an order no
+/// other boat has to repeat.
+pub const xdr = "$IIXDR,C,,C,AIRTEMP,A,3.4,D,HEEL,A,1.9,D,TRIM,P,,B,BARO,A,-2.2,D,RUDDER*0B";
+pub const xdr_expect = .{
+    .heel_deg = 3.4,
+    .trim_deg = 1.9,
+    .rudder_deg = -2.2,
+};
+
+/// The same three readings a different instrument's way: rudder first, heel
+/// last, and an engine temperature in between that nothing here reads. A parser
+/// that matched on position would report the rudder angle as heel.
+pub const xdr_reordered = "$YXXDR,A,-4.2,D,RUDDER,C,21.5,C,ENGINETEMP,A,12.0,D,HEEL*59";
+
+/// A heel transducer reporting radians. The unit letter is not `D`, so the
+/// number is not degrees and is not published as degrees.
+pub const xdr_wrong_unit = "$IIXDR,A,0.30,R,HEEL*44";
+
+pub const mtw = "$IIMTW,17.9,C*1C";
+/// 17.9 °C in kelvin.
+pub const mtw_expect_k = 17.9 + 273.15;
+
+pub const vlw = "$VWVLW,1234.5,N,12.3,N*4D";
+pub const vlw_expect = .{
+    .total_m = 1234.5 * 1852.0,
+    .trip_m = 12.3 * 1852.0,
+};
+
 /// A well-formed sentence the parser does not decode.
 pub const gsv = "$GPGSV,3,1,11,03,03,111,00,04,15,270,00,06,01,010,00,13,06,292,00*74";
 
@@ -126,6 +163,30 @@ pub const aivdm_type5_expect = .{
 
 /// A fragment index outside its own fragment count.
 pub const aivdm_bad_index = "!AIVDM,2,3,1,A,88888888880,2*24";
+
+/// SELF-CONSISTENT, in the FRAMING a B&G Zeus was seen to use. This pair is the
+/// whole reason `Assembler` tolerates a mismatched sequential message id.
+///
+/// Two things about the framing are wrong against IEC 61162-1 and neither stops
+/// the message decoding: field 4, the sequential message id, is 4 on one
+/// fragment and 5 on the other where the standard makes it identical, and field
+/// 5, the channel, is empty where the standard puts `A` or `B`. The device
+/// increments the id per SENTENCE, so every multi-fragment message it sends
+/// arrives with fragments that disagree about which message they belong to.
+///
+/// The vessel is invented and so is everything identifying her: the ship the
+/// framing was observed on is somebody's boat, and her MMSI and name are hers.
+/// The payload comes from the encoder in `tools/nmea_gen.zig` and is a whole
+/// 424-bit type 5, split 60 and 11 characters with two fill bits, which is the
+/// split the observed message used.
+pub const zeus_type5_a = "!AIVDM,2,1,4,,55NtpTh00001LASO3C8M85V0PE8tp000000000163064440008hCSPD3k2Dh,0*55";
+pub const zeus_type5_b = "!AIVDM,2,2,5,,00000000000,2*60";
+pub const zeus_type5_expect = .{
+    .mmsi = @as(u32, 367999123),
+    .callsign = "WDX7042",
+    .name = "GRAY HERON",
+    .destination = "ANNAPOLIS",
+};
 
 /// Type 24 A and B for target C of the synthetic log.
 pub const aivdm_type24a = "!AIVDM,1,1,,B,H52LbuQ<D61=18U@D00000000000,0*4A";

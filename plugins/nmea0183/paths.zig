@@ -16,7 +16,12 @@ const parser = @import("parser.zig");
 
 const knot_mps = 1852.0 / 3600.0;
 
-/// The vessel paths PROTOTYPE.md freezes for the prototype.
+/// The vessel paths PROTOTYPE.md freezes for the prototype, and the ones the
+/// XDR, MTW and VLW sentences add under the same Signal K naming.
+///
+/// UNITS. Angles are DEGREES, which is the store's rule and a deliberate
+/// departure from Signal K's radians. Everything else is the SI unit Signal K
+/// uses, so temperature is KELVIN and distance is METRES.
 pub const Path = enum {
     position,
     heading_true,
@@ -26,6 +31,12 @@ pub const Path = enum {
     wind_speed_apparent,
     wind_angle_apparent,
     wind_direction_true,
+    rudder_angle,
+    attitude_roll,
+    attitude_pitch,
+    water_temperature,
+    log_total,
+    log_trip,
 
     pub fn text(self: Path) []const u8 {
         return switch (self) {
@@ -37,6 +48,12 @@ pub const Path = enum {
             .wind_speed_apparent => "environment.wind.speedApparent",
             .wind_angle_apparent => "environment.wind.angleApparent",
             .wind_direction_true => "environment.wind.directionTrue",
+            .rudder_angle => "steering.rudderAngle",
+            .attitude_roll => "navigation.attitude.roll",
+            .attitude_pitch => "navigation.attitude.pitch",
+            .water_temperature => "environment.water.temperature",
+            .log_total => "navigation.log",
+            .log_trip => "navigation.trip.log",
         };
     }
 };
@@ -51,7 +68,8 @@ pub const Update = struct {
     value: Value,
 };
 
-/// The most any one sentence yields: RMC gives position, speed and course.
+/// The most any one sentence yields: RMC gives position, speed and course, and
+/// an XDR gives heel, trim and rudder angle.
 pub const max_updates = 3;
 
 pub const Updates = struct {
@@ -97,6 +115,9 @@ pub const Updates = struct {
 ///     is the apparent one.
 ///   * an AIVDM sentence yields nothing here; it goes through the assembler
 ///     and `fromAis`.
+///   * `XDR` is a list of transducers a boat's own instruments name. The three
+///     read here are the ones a sailing plotter has a path for; the rest of the
+///     list is left alone. The names are in `xdr_heel` and the two beside it.
 pub fn fromSentence(s: parser.Sentence) Updates {
     var out = Updates{};
     switch (s) {
@@ -125,10 +146,28 @@ pub fn fromSentence(s: parser.Sentence) Updates {
         },
         .mwd => |w| out.number(.wind_direction_true, w.direction_true),
         .vhw => |v| out.number(.heading_true, v.heading_true),
+        .mtw => |m| out.number(.water_temperature, m.temp_k),
+        .vlw => |v| {
+            out.number(.log_total, v.total_m);
+            out.number(.log_trip, v.trip_m);
+        },
+        .xdr => |x| {
+            out.number(.attitude_roll, x.degrees(xdr_heel));
+            out.number(.attitude_pitch, x.degrees(xdr_trim));
+            out.number(.rudder_angle, x.degrees(xdr_rudder));
+        },
         .vdm => {},
     }
     return out;
 }
+
+/// The XDR transducer names read here. The standard fixes the type and unit
+/// letters and leaves the name to the device, so these are the spellings the
+/// instruments seen so far use, matched exactly and never by position in the
+/// list.
+const xdr_heel = "HEEL";
+const xdr_trim = "TRIM";
+const xdr_rudder = "RUDDER";
 
 /// One AIS target, in the units `ais_upsert` takes. A null field is one the
 /// message did not carry; the host merges, so it is not overwritten.
@@ -222,6 +261,12 @@ test "path text matches the frozen names" {
     try testing.expectEqualStrings("environment.wind.speedApparent", Path.wind_speed_apparent.text());
     try testing.expectEqualStrings("environment.wind.angleApparent", Path.wind_angle_apparent.text());
     try testing.expectEqualStrings("environment.wind.directionTrue", Path.wind_direction_true.text());
+    try testing.expectEqualStrings("steering.rudderAngle", Path.rudder_angle.text());
+    try testing.expectEqualStrings("navigation.attitude.roll", Path.attitude_roll.text());
+    try testing.expectEqualStrings("navigation.attitude.pitch", Path.attitude_pitch.text());
+    try testing.expectEqualStrings("environment.water.temperature", Path.water_temperature.text());
+    try testing.expectEqualStrings("navigation.log", Path.log_total.text());
+    try testing.expectEqualStrings("navigation.trip.log", Path.log_trip.text());
 }
 
 test "RMC yields position, speed over ground and course" {
@@ -287,6 +332,37 @@ test "VHW yields a true heading" {
     try expectNumber(only(try parser.parse(fx.vhw)), .heading_true, 274.0, 1e-9);
 }
 
+test "XDR yields heel and trim as attitude, and the rudder angle, in degrees" {
+    const u = only(try parser.parse(fx.xdr));
+    try testing.expectEqual(@as(usize, 3), u.slice().len);
+    try expectNumber(u, .attitude_roll, fx.xdr_expect.heel_deg, 1e-9);
+    try expectNumber(u, .attitude_pitch, fx.xdr_expect.trim_deg, 1e-9);
+    try expectNumber(u, .rudder_angle, fx.xdr_expect.rudder_deg, 1e-9);
+
+    // The same names in another order publish the same paths, and a
+    // transducer with no path of its own publishes nothing.
+    const r = only(try parser.parse(fx.xdr_reordered));
+    try testing.expectEqual(@as(usize, 2), r.slice().len);
+    try expectNumber(r, .attitude_roll, 12.0, 1e-9);
+    try expectNumber(r, .rudder_angle, -4.2, 1e-9);
+
+    // A reading in radians is not published as degrees.
+    try testing.expectEqual(@as(usize, 0), only(try parser.parse(fx.xdr_wrong_unit)).slice().len);
+}
+
+test "MTW yields water temperature in kelvin" {
+    const u = only(try parser.parse(fx.mtw));
+    try testing.expectEqual(@as(usize, 1), u.slice().len);
+    try expectNumber(u, .water_temperature, fx.mtw_expect_k, 1e-9);
+}
+
+test "VLW yields the log and the trip in metres" {
+    const u = only(try parser.parse(fx.vlw));
+    try testing.expectEqual(@as(usize, 2), u.slice().len);
+    try expectNumber(u, .log_total, fx.vlw_expect.total_m, 1e-6);
+    try expectNumber(u, .log_trip, fx.vlw_expect.trip_m, 1e-6);
+}
+
 test "an AIVDM sentence yields no vessel paths" {
     try testing.expectEqual(@as(usize, 0), only(try parser.parse(fx.aivdm_type1)).slice().len);
 }
@@ -334,6 +410,16 @@ test "a two-fragment type 5 becomes a name" {
     try testing.expectEqual(fx.aivdm_type5_expect.mmsi, t.mmsi);
     try testing.expectEqualStrings(fx.aivdm_type5_expect.name, t.name.?);
     try testing.expect(t.lat == null);
+}
+
+test "a type 5 whose fragments disagree about the message id becomes a name" {
+    var a = parser.Assembler{};
+    try testing.expect(a.push((try parser.parse(fx.zeus_type5_a)).vdm) == null);
+    const done = a.push((try parser.parse(fx.zeus_type5_b)).vdm) orelse return error.Incomplete;
+    var text: [parser.text_scratch_bytes]u8 = undefined;
+    const t = fromAis(try parser.decode(done.payload, done.fill, &text)) orelse return error.NoTarget;
+    try testing.expectEqual(fx.zeus_type5_expect.mmsi, t.mmsi);
+    try testing.expectEqualStrings(fx.zeus_type5_expect.name, t.name.?);
 }
 
 test "a type 21 becomes an AtoN target with its flags" {

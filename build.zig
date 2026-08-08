@@ -542,6 +542,10 @@ pub fn build(b: *std.Build) void {
     // The signalk module is installed like the others AND handed to the
     // Signal K host test below.
     var signalk_wasm: ?std.Build.LazyPath = null;
+    // The ais module is installed like the others AND handed to the
+    // multi-connection test below, which drives an AIS name from the wire to
+    // the row the targets dialog shows.
+    var ais_wasm: ?std.Build.LazyPath = null;
     // The windline module is the install test's payload: the walkthrough's
     // downwind plugin under the id its package carries.
     var windline_wasm: ?std.Build.LazyPath = null;
@@ -591,6 +595,7 @@ pub fn build(b: *std.Build) void {
         }
         if (std.mem.eql(u8, name, "nmea0183")) nmea_wasm = wasm_exe.getEmittedBin();
         if (std.mem.eql(u8, name, "signalk")) signalk_wasm = wasm_exe.getEmittedBin();
+        if (std.mem.eql(u8, name, "ais")) ais_wasm = wasm_exe.getEmittedBin();
 
         const id = manifestId(b, name);
         const manifest_rel = b.fmt("plugins/{s}/manifest.json", .{name});
@@ -708,19 +713,26 @@ pub fn build(b: *std.Build) void {
             // Several connections at once: the real nmea0183 module against two
             // loopback gateways. It needs the plugin's own .wasm, which is
             // built above for installation; the LazyPath is captured there.
+            // The ais module comes too: the second test in that file carries an
+            // AIS name off the wire all the way to the row the targets dialog
+            // shows, which takes both plugins running together.
             if (nmea_wasm) |nbin| {
-                const nmea_mod = b.createModule(.{
-                    .root_source_file = b.path("test/nmea_multi.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = true,
-                });
-                nmea_mod.addImport("host", host_mod);
-                nmea_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
-                nmea_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
-                const nmea_run = b.addRunArtifact(b.addTest(.{ .root_module = nmea_mod }));
-                b.step("nmea-multi", "Run the multi-connection nmea0183 test").dependOn(&nmea_run.step);
-                test_step.dependOn(&nmea_run.step);
+                if (ais_wasm) |abin| {
+                    const nmea_mod = b.createModule(.{
+                        .root_source_file = b.path("test/nmea_multi.zig"),
+                        .target = target,
+                        .optimize = optimize,
+                        .link_libc = true,
+                    });
+                    nmea_mod.addImport("host", host_mod);
+                    nmea_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
+                    nmea_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
+                    nmea_mod.addAnonymousImport("ais_plugin_wasm", .{ .root_source_file = abin });
+                    nmea_mod.addAnonymousImport("ais_manifest", .{ .root_source_file = b.path("plugins/ais/manifest.json") });
+                    const nmea_run = b.addRunArtifact(b.addTest(.{ .root_module = nmea_mod }));
+                    b.step("nmea-multi", "Run the multi-connection nmea0183 test").dependOn(&nmea_run.step);
+                    test_step.dependOn(&nmea_run.step);
+                }
 
                 // The Signal K plugin against a loopback delta stream, and
                 // beside the nmea0183 plugin so the store's election between
