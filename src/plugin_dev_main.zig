@@ -506,9 +506,10 @@ const Watcher = struct {
     }
 };
 
-/// The plugin layer's four pieces, borrowed out of the core. root.zig keeps
-/// them in one heap allocation whose type it does not export; these are the
-/// pointers the harness needs from it.
+/// The plugin layer's pieces, borrowed out of the core. root.zig keeps them in
+/// one heap allocation whose type it does not export; these are the pointers
+/// the harness needs from it. The overlay store is the HANDLE's, because the
+/// core draws the mariner's markers into it too, so it comes from there.
 const PluginsRef = struct {
     vessels: *phost.store.Store,
     ais: *phost.aisstore.AisStore,
@@ -522,7 +523,7 @@ fn pluginsRef(l: *lk.Lookout) ?PluginsRef {
     return .{
         .vessels = &ps.vessels,
         .ais = &ps.ais,
-        .overlay = &ps.overlay,
+        .overlay = &l.overlay,
         .br = &ps.br,
         .host = &ps.host,
     };

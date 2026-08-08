@@ -527,7 +527,7 @@ fn refill(tokens: *i64, since: *i64, now: i64, per_s: i64, burst: i64) void {
     since.* += @divTrunc(gained * 1000, per_s);
 }
 
-// ---- tables (specs/plugins/table.md) ---------------------------------------
+// ---- tables ----------------------------------------------------------------
 
 /// The budgets one table lives inside, the house pattern: a batch that would
 /// take a table past any of them is refused whole and logged, never trimmed.

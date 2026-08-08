@@ -859,6 +859,104 @@ export fn lookout_scale_denominator(h: ?*lookout) f64 {
     return l.scaleDenominator();
 }
 
+// ---- own ship's position ----------------------------------------------------
+/// Own ship's REPORTED position and how much to believe it: 0 no source of
+/// position at all, 1 a source exists but its fix aged out or was lost, 2 a
+/// fix inside its freshness window. `lon`/`lat` are written only for 2, so a
+/// readout that shows numbers on any other answer is showing numbers with no
+/// boat behind them. See lookout.h.
+export fn lookout_own_ship(h: ?*lookout, lon: ?*f64, lat: ?*f64) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    var p: [2]f64 = .{ 0, 0 };
+    const state = l.ownShip(&p);
+    if (state == .live) {
+        if (lon) |o| o.* = p[0];
+        if (lat) |o| o.* = p[1];
+    }
+    return @intFromEnum(state);
+}
+
+// ---- markers ----------------------------------------------------------------
+/// One marker as the core holds it. `name` is NUL-terminated and borrowed
+/// until the next call that changes the markers.
+pub const lookout_marker = extern struct {
+    id: u64,
+    lon: f64,
+    lat: f64,
+    name: ?[*:0]const u8,
+    name_len: usize,
+    dropped_ms: i64,
+};
+
+fn fillMarker(out: *lookout_marker, m: *const @import("markers.zig").Marker) void {
+    out.* = .{
+        .id = m.id,
+        .lon = m.lon,
+        .lat = m.lat,
+        .name = m.name.ptr,
+        .name_len = m.name.len,
+        .dropped_ms = m.dropped_ms,
+    };
+}
+
+/// Drop a marker at a geographic point, named at once. Returns its id, or 0
+/// when nothing could be stored. See lookout.h.
+export fn lookout_marker_add(h: ?*lookout, lon: f64, lat: f64) u64 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return l.markerAdd(lon, lat);
+}
+
+export fn lookout_marker_count(h: ?*lookout) u32 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return @intCast(l.markerCount());
+}
+
+/// Marker `i`, in drop order: 1 when it exists, 0 past the end.
+export fn lookout_marker_get(h: ?*lookout, i: u32, out: *lookout_marker) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const m = l.markerAtIndex(i) orelse return 0;
+    fillMarker(out, m);
+    return 1;
+}
+
+/// The marker with this id: 1 when it exists, 0 once it is gone.
+export fn lookout_marker_by_id(h: ?*lookout, id: u64, out: *lookout_marker) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const m = l.markerById(id) orelse return 0;
+    fillMarker(out, m);
+    return 1;
+}
+
+/// The marker nearest a LOGICAL point: 1 when one is within about 14 pt of it,
+/// 0 when none is.
+export fn lookout_marker_at(h: ?*lookout, x_pt: f32, y_pt: f32, out: *lookout_marker) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const m = l.markerAt(x_pt, y_pt) orelse return 0;
+    fillMarker(out, m);
+    return 1;
+}
+
+/// Rename one marker. An empty name keeps the old one. 0 on success, -1 for an
+/// unknown id.
+export fn lookout_marker_rename(h: ?*lookout, id: u64, name: [*:0]const u8) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.markerRename(id, std.mem.span(name))) 0 else -1;
+}
+
+/// Remove one marker. 0 on success, -1 for an unknown id.
+export fn lookout_marker_remove(h: ?*lookout, id: u64) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.markerRemove(id)) 0 else -1;
+}
+
 comptime {
     _ = lookout_open;
     // The Android Java shell's JNI natives ride in the same archive on vk

@@ -2,7 +2,7 @@
 //! election between sources, staleness by path family, and a coalescing dirty
 //! set that drives the host's subscriber fanout.
 //!
-//! The rules in specs/plugins/data-model.md this file carries:
+//! The rules this file carries:
 //!
 //!   1. Provenance is mandatory — a value is always stored under the source
 //!      that published it, never merged into one anonymous cell.

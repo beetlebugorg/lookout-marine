@@ -2,7 +2,7 @@
 //! the real broker and the real registry, one of which breaks on cue.
 //!
 //! What is proved here, each of it a promise the core keeps whatever a plugin
-//! does (specs/plugins/hardening.md):
+//! does:
 //!
 //!   1. A plugin that traps inside `lk_start` is absent from the registry and
 //!      takes nothing with it. Every OTHER plugin keeps its settings schema, so

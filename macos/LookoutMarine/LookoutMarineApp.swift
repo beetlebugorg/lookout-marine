@@ -282,8 +282,9 @@ struct ContentView: View {
             }
             #endif
             // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
-            // scale, search, pick opens that chrome once the chart is up. On
-            // the simulator, pass it as SIMCTL_CHILD_LOOKOUT_SHOW.
+            // scale, search, pick, menu, marker, rename opens that chrome once
+            // the chart is up. On the simulator, pass it as
+            // SIMCTL_CHILD_LOOKOUT_SHOW.
             .onAppear {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
@@ -331,6 +332,22 @@ struct ContentView: View {
                                 ? part[1].split(separator: "x").compactMap { Double($0) } : []
                             if f.count == 2 { model.pickAt(fx: f[0], fy: f[1]) }
                             else { model.pickAtCentre() }
+                        // The chart menu, a dropped mark, and the rename field
+                        // on the newest mark. Same fraction as pick, because
+                        // the hook has no pointer to press with:
+                        // menu:0.5x0.5, marker:0.45x0.5, rename.
+                        case "menu":
+                            let f = part.count > 1
+                                ? part[1].split(separator: "x").compactMap { Double($0) } : []
+                            model.showChartMenu(fx: f.count == 2 ? f[0] : 0.5,
+                                                fy: f.count == 2 ? f[1] : 0.5)
+                        case "marker":
+                            let f = part.count > 1
+                                ? part[1].split(separator: "x").compactMap { Double($0) } : []
+                            model.showDropMarker(fx: f.count == 2 ? f[0] : 0.5,
+                                                 fy: f.count == 2 ? f[1] : 0.5)
+                        case "rename":
+                            model.showRenameNewestMarker()
                         // pick, then the next object's report 5s later: the
                         // screenshot protocol's way of watching the selection.
                         case "page":

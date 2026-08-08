@@ -139,7 +139,7 @@ int lookout_plugins_active(lookout *h);
  * no plugin layer is up. *out_len (NULL to ignore) receives the length. */
 const char *lookout_plugins_json(lookout *h, size_t *out_len);
 
-/* ---- plugin install and consent (see specs/plugins/install.md) ----------- */
+/* ---- plugin install and consent ------------------------------------------ */
 
 /* Load the INSTALLED plugin set — what lookout_plugin_install() put under the
  * per-user plugin directory (macOS: ~/Library/Application Support/Lookout
@@ -209,7 +209,7 @@ const char *lookout_plugin_config_get(lookout *h, const char *id, size_t *out_le
  * the JSON is not an object. Persisting the values is the shell's job. */
 int lookout_plugin_config_set(lookout *h, const char *id, const char *json);
 
-/* ---- plugin tables (see specs/plugins/table.md) -------------------------- */
+/* ---- plugin tables -------------------------------------------------------- */
 
 /* Every table the loaded plugins declare:
  *
@@ -519,6 +519,96 @@ int lookout_course_up_active(lookout *h);
  * camera and the own-ship overlay ride that display position, so the boat sits
  * still on screen and the chart slides. While it moves, lookout_needs_redraw
  * answers 1 every frame. */
+
+/* ---- own ship's position ------------------------------------------------ */
+/* What a position readout may say. A stale fix is never presented as a live
+ * one, which is why the middle state exists: "the fix dropped" and "you never
+ * set one up" are different problems and want different answers from the
+ * mariner. */
+typedef enum {
+    LOOKOUT_FIX_NONE = 0, /* no source of position at all */
+    LOOKOUT_FIX_LOST = 1, /* a source exists, its fix aged out or was lost */
+    LOOKOUT_FIX_LIVE = 2  /* a fix inside its freshness window */
+} lookout_fix_state;
+
+/* Own ship's REPORTED position, and how much to believe it. Returns a
+ * lookout_fix_state; *lon and *lat (either may be NULL) are written ONLY for
+ * LOOKOUT_FIX_LIVE.
+ *
+ * A READOUT SHOWS THESE NUMBERS OR IT SHOWS NONE. It never falls back to the
+ * map centre or the cursor: a coordinate with no boat behind it is exactly the
+ * ambiguity this removes, and panning away from own ship is when a mistaken
+ * reading is dangerous. The coordinates of a PLACE come from the chart menu,
+ * on demand, at the point the mariner asked about.
+ *
+ * The reported fix, not the display position own ship draws at: that one is
+ * carried forward along COG between fixes, and a dead-reckoned number must
+ * never be shown as a reading. Staleness is the vessel store's own account,
+ * so there is no second clock to disagree with it.
+ *
+ * LOOKOUT_FIX_NONE is the state that carries a fix-it: no plugin has ever
+ * published a position, so the mariner has no source configured (desktop:
+ * offer Settings > Connections) or the device's own receiver has not been
+ * asked for permission (phones and tablets). */
+int lookout_own_ship(lookout *h, double *lon, double *lat);
+
+/* ---- markers ------------------------------------------------------------- */
+/*
+ * The mariner's own mark on the water: a rock they were told about, a crab
+ * pot, an anchorage to come back to. Not a route and not a waypoint in a
+ * navigation sense.
+ *
+ * The core owns them, because every shell shows the same ones and they must
+ * survive a restart, and they are CHART-INDEPENDENT: a marker belongs to the
+ * boat, not to the cell that happened to be open, so it survives changing
+ * chart libraries. The core writes them under the per-user directory beside
+ * the installed plugins (macOS: ~/Library/Application Support/Lookout Marine/
+ * markers.json) and reads them back at every open. A shell stores nothing.
+ *
+ * They draw themselves, in the S-52 mariner magenta reserved for the mariner's
+ * own additions, with their names beside them. A shell adds no drawing code.
+ */
+
+/* One marker. `name` is NUL-terminated and BORROWED: valid until the next call
+ * that changes the markers (add, rename, remove). Copy it if you keep it. */
+typedef struct {
+    uint64_t    id;
+    double      lon, lat;
+    const char *name;
+    size_t      name_len;
+    int64_t     dropped_ms; /* when it was dropped, Unix epoch milliseconds */
+} lookout_marker;
+
+/* Drop a marker at a geographic point. Returns its id, or 0 when nothing could
+ * be stored.
+ *
+ * THE DROP NEVER WAITS FOR TYPING. A mariner drops a mark one-handed on a
+ * moving boat, so this places it AND names it in one call: "Mark 1", "Mark 2",
+ * counting up from the highest number in use, so two marks are never called
+ * the same thing and a mariner who never renames one still has something to
+ * say on the radio. Renaming is a separate, unhurried action. */
+uint64_t lookout_marker_add(lookout *h, double lon, double lat);
+
+/* Walk the markers in drop order. lookout_marker_get answers 1 while `i` is in
+ * range, 0 past the end; lookout_marker_by_id answers 0 once a marker is
+ * gone. */
+uint32_t lookout_marker_count(lookout *h);
+int lookout_marker_get(lookout *h, uint32_t i, lookout_marker *out);
+int lookout_marker_by_id(lookout *h, uint64_t id, lookout_marker *out);
+
+/* The marker nearest a LOGICAL point: 1 when one is within about 14 pt of it,
+ * 0 when none is. This is what decides a chart menu's items: over a marker it
+ * offers Rename and Remove in place of Drop. */
+int lookout_marker_at(lookout *h, float x_pt, float y_pt, lookout_marker *out);
+
+/* Rename one marker, up to 32 characters; longer is cut on a character
+ * boundary. An EMPTY name keeps the old one, because a field the mariner
+ * cleared and left is not a request for a nameless mark. Returns 0, or -1 for
+ * an unknown id. */
+int lookout_marker_rename(lookout *h, uint64_t id, const char *name);
+
+/* Remove one marker. Returns 0, or -1 for an unknown id. */
+int lookout_marker_remove(lookout *h, uint64_t id);
 
 /* ---- mariner (ALL S-52 display settings) ------------------------------- */
 /* Fill *m with tile57's canonical defaults, then edit and set. */

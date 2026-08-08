@@ -771,7 +771,7 @@ pub const Chart = struct {
     }
 
     /// Open a canvas object: a recorded drawing anchored like any other
-    /// object and diffed like one (specs/plugins/canvas.md). Record onto the
+    /// object and diffed like one. Record onto the
     /// returned Canvas, then call `done()` — always, even after an error.
     ///
     ///   var cv = c.canvas("dial", .{ .at = boat, .anchor = .ownship });

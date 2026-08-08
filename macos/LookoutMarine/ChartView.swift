@@ -121,6 +121,23 @@ struct OverlayLayer: View {
             bottom: flipY ? max(0, view.height - point.y + gap) : 0)
     }
 
+    /// Where the chart menu stands: down and right of the press, flipped at
+    /// whichever edge it would cross. Like the hover tip, the panel is never
+    /// measured: it holds two edges and SwiftUI sizes it.
+    static func menuLayout(point: CGPoint, in view: CGSize, hasMarker: Bool) -> HoverPlace {
+        let gap: CGFloat = 2
+        let flipX = point.x + gap + ChartMenuPanel.width > view.width - Chrome.margin
+        let flipY = point.y + gap + ChartMenuPanel.assumedHeight(hasMarker: hasMarker)
+            > view.height - Chrome.margin
+        return HoverPlace(
+            alignment: Alignment(horizontal: flipX ? .trailing : .leading,
+                                 vertical: flipY ? .bottom : .top),
+            leading: flipX ? 0 : point.x + gap,
+            trailing: flipX ? max(0, view.width - point.x + gap) : 0,
+            top: flipY ? 0 : point.y + gap,
+            bottom: flipY ? max(0, view.height - point.y + gap) : 0)
+    }
+
     static func bottomSheetSize(in view: CGSize) -> CGSize {
         // The chart keeps the larger part of the view.
         CGSize(width: view.width, height: min(340, (view.height * 0.48).rounded(.down)))
@@ -328,6 +345,34 @@ struct OverlayLayer: View {
                             .padding(.top, place.top)
                             .padding(.bottom, place.bottom)
                             .allowsHitTesting(false)
+                    }
+                }
+                // The rename field, over its marker. Padding, not an offset:
+                // an offset moves the drawing and leaves the frame, and the
+                // chrome hit region with it, behind. It sits above and right
+                // of the mark, clear of the mark's own name.
+                .overlay(alignment: .topLeading) {
+                    if model.renaming != nil, let p = model.renamingPoint {
+                        MarkerRenameField(model: model)
+                            .chromeHitRegion("marker-rename")
+                            .padding(.leading, min(max(0, p.x + 10),
+                                                   max(0, geo.size.width - MarkerRenameField.width)))
+                            .padding(.top, max(0, p.y - 40))
+                    }
+                }
+                // The chart menu, at the point it was raised at.
+                .overlay(alignment: .topLeading) {
+                    if let menu = model.chartMenu {
+                        let place = Self.menuLayout(point: menu.at, in: geo.size,
+                                                    hasMarker: menu.marker != nil)
+                        ChartMenuPanel(model: model, menu: menu)
+                            .chromeHitRegion("chart-menu")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: place.alignment)
+                            .padding(.leading, place.leading)
+                            .padding(.trailing, place.trailing)
+                            .padding(.top, place.top)
+                            .padding(.bottom, place.bottom)
                     }
                 }
                 // The pinned bubble. Same card as the tooltip, with a close
@@ -641,6 +686,14 @@ final class ChartNSView: NSView {
     /// own exit and move commands never fire.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {   // 53 = Escape
+            if model?.chartMenu != nil {
+                model?.closeChartMenu()
+                return
+            }
+            if model?.renaming != nil {
+                model?.cancelRename()
+                return
+            }
             if model?.picture != nil {
                 model?.picture = nil
                 return
@@ -676,21 +729,14 @@ final class ChartNSView: NSView {
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         // The window forwards mouseMoved to the first responder (us) even when
-        // the pointer is outside — only track it while it is over the chart.
+        // the pointer is outside: only track it while it is over the chart.
         guard bounds.contains(p) else {
-            model?.cursorLon = nil
-            model?.cursorLat = nil
             clearHover()
             return
-        }
-        if let g = controller?.geo(atPoint: p) {
-            model?.cursorLon = g.lon
-            model?.cursorLat = g.lat
         }
         scheduleHover(at: p)
     }
     override func mouseExited(with event: NSEvent) {
-        model?.cursorLon = nil; model?.cursorLat = nil
         clearHover()
     }
 
@@ -737,6 +783,10 @@ final class ChartNSView: NSView {
         // series; scrollWheel and magnify refuse the same way.
         chromeClick = overChrome(p)
         if chromeClick { return }
+        // A press on the chart puts an open menu away, and then behaves as an
+        // ordinary press: a click that only dismissed would cost the mariner
+        // a second one to start the pan they were already making.
+        model?.closeChartMenu()
         downPoint = p; lastDrag = p
         vx = 0; vy = 0; lastSampleTime = 0
         controller?.flingStart(vx: 0, vy: 0) // grabbing stops any coast
@@ -770,7 +820,7 @@ final class ChartNSView: NSView {
         if rotating { return }
         let moved = hypot(p.x - downPoint.x, p.y - downPoint.y)
         if moved <= 4 {
-            tapPick(at: p)          // a tap: cursor pick
+            tapChart(at: p)
         } else {
             controller?.flingStart(vx: vx, vy: vy) // a throw: momentum
         }
@@ -787,27 +837,46 @@ final class ChartNSView: NSView {
         lastSampleTime = ts
     }
 
-    private func tapPick(at p: CGPoint) {
+    /// A plain click on the chart. It pins an overlay symbol's card and does
+    /// nothing else.
+    ///
+    /// IT DOES NOT PICK. A stray click while panning used to throw a pick
+    /// report the mariner never asked for, and the plain click belongs to the
+    /// chart. What is at a point is asked for by name now, from the menu a
+    /// right-click raises there.
+    private func tapChart(at p: CGPoint) {
         // The last line of defense for §6.2. The pass-through host should
         // have swallowed a click on the chrome, but every routing path that
-        // assumption depends on has failed at least once. The pick itself
-        // now refuses a point inside a chrome frame: a click that slips
-        // through does nothing instead of picking under the report.
+        // assumption depends on has failed at least once. A click that slips
+        // through does nothing instead of acting on what is under the panel.
         if ChromeHitMap.shared.contains(p) {
             if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-                NSLog("[hitmap] tapPick refused (%.0f, %.0f): inside chrome", p.x, p.y)
+                NSLog("[hitmap] tapChart refused (%.0f, %.0f): inside chrome", p.x, p.y)
             }
             return
         }
         // An overlay symbol answers first and takes the click: a tap on a
-        // target pins its bubble and does not also open the chart's report.
+        // target pins its bubble, because a mariner tapping a vessel is asking
+        // about the vessel rather than the water under it.
         if let hit = controller?.overlayHit(atPoint: p) {
             model?.pin(hit)
             return
         }
         model?.closePin() // a click elsewhere on the chart closes the bubble
-        guard let g = controller?.geo(atPoint: p) else { return }
-        model?.showPick(controller?.pick(lon: g.lon, lat: g.lat) ?? [], at: p)
+    }
+
+    // MARK: The chart menu
+
+    /// A right-click raises the menu at that point. AppKit routes control-click
+    /// and a two-finger tap here too, so every way a Mac asks for a context
+    /// menu lands in one place.
+    override func rightMouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if overChrome(p) {
+            super.rightMouseDown(with: event)
+            return
+        }
+        model?.openChartMenu(at: p)
     }
 
     // MARK: Wheel / pinch zoom (cursor-anchored)
@@ -904,9 +973,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     private var rotationEngaged = false // rotate stays inert until past a dead-zone
     private var rotationBaseDeg = 0.0   // chart rotation when the dead-zone was crossed
     private var rotationOffset = 0.0    // gesture rotation (rad) at that moment
-    /// Last pointer position from hover (nil on touch-only devices) — anchors
-    /// trackpad scroll-zoom at the pointer when known.
-    private var lastHoverPoint: CGPoint?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1022,16 +1088,18 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         twoFingerTap.numberOfTouchesRequired = 2
         let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
         tap.require(toFail: doubleTap)
-        // Hover feeds the cursor read-out on pointer devices; touches don't hover.
-        // (No scroll-to-zoom recognizer: `allowedScrollTypesMask` also fires on a
-        // pointer *drag*, which then zoomed instead of panned. Pinch is the zoom
-        // gesture; +/- and double-tap cover pointer users.)
-        let hover = UIHoverGestureRecognizer(target: self, action: #selector(onHover(_:)))
+        // No hover recognizer: it fed the cursor lat/lon readout, and the
+        // readout carries own ship now. It comes back with this shell's own
+        // press menu, which is what will need a pointer position again.
+        // (No scroll-to-zoom recognizer either: `allowedScrollTypesMask` also
+        // fires on a pointer *drag*, which then zoomed instead of panned.
+        // Pinch is the zoom gesture; +/- and double-tap cover pointer users.)
+        //
         // The pan needs a delegate too. UIKit asks both recognizers of a
         // pair whether they may run together, and a recognizer with no
         // delegate answers no.
         [pan, pinch, rotate].forEach { $0.delegate = self } // these compose (see below)
-        [pan, pinch, rotate, doubleTap, twoFingerTap, tap, hover].forEach(addGestureRecognizer)
+        [pan, pinch, rotate, doubleTap, twoFingerTap, tap].forEach(addGestureRecognizer)
         panRecognizer = pan
     }
 
@@ -1127,12 +1195,13 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    /// A plain tap on the chart. It does NOT pick: a stray tap while panning
+    /// used to throw a pick report nobody asked for. What is at a point is
+    /// asked for by name, from the menu a press raises there, which this shell
+    /// does not carry yet.
     @objc private func onTap(_ g: UITapGestureRecognizer) {
         notePointerInput("tap")
-        let p = g.location(in: self)
-        guard let geo = controller?.geo(atPoint: p) else { return }
-        model?.showPick(controller?.pick(lon: geo.lon, lat: geo.lat) ?? [],
-                        at: inChromeSpace(p))
+        model?.closePin()
     }
 
     /// A point in this view, moved into the chrome's coordinate space. The
@@ -1160,25 +1229,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     private func notePointerInput(_ kind: String) {
         if Self.loggedInputKinds.insert(kind).inserted {
             lkLog("input active: \(kind)")
-        }
-    }
-
-    /// Pointer hover → live cursor lat/lon in the HUD (parity with macOS
-    /// mouseMoved; touches don't hover, so this only fires for pointers).
-    @objc private func onHover(_ g: UIHoverGestureRecognizer) {
-        switch g.state {
-        case .began, .changed:
-            notePointerInput("hover")
-            let p = g.location(in: self)
-            lastHoverPoint = p
-            if let geo = controller?.geo(atPoint: p) {
-                model?.cursorLon = geo.lon
-                model?.cursorLat = geo.lat
-            }
-        default:
-            lastHoverPoint = nil
-            model?.cursorLon = nil
-            model?.cursorLat = nil
         }
     }
 }

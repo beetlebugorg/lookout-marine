@@ -3,9 +3,9 @@
 //! A target arrives in pieces — a position report every few seconds, a static
 //! report with the name every few minutes — so an update merges: fields the
 //! caller leaves null keep the value they had. Each target carries the time it
-//! was last updated, because specs/plugins/data-model.md is explicit that a
-//! triangle which stopped updating is the dangerous case: consumers get the age
-//! and present staleness before the target is dropped.
+//! was last updated: a triangle which stopped updating is the dangerous case,
+//! so consumers get the age and present staleness before the target is
+//! dropped.
 //!
 //! Provenance is per target, not per field: a target belongs to the source that
 //! last updated it, and `clearSource` drops the targets that source owns. That

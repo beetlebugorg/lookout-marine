@@ -287,10 +287,16 @@ final class ChartController: NSObject {
         stopIdlePoll()
     }
 
-    /// A pick report belongs to the view it was taken in. Any camera move
-    /// retires it, so the report never floats over water it does not describe.
-    private func retirePickReport() {
+    /// A pick report and the chart menu both belong to the view they were
+    /// raised in: both describe one point on the water. Any camera move
+    /// retires them, so neither floats over water it does not describe.
+    ///
+    /// The rename field is not in here. It is anchored to its marker and
+    /// re-projected every frame, and a mariner typing a name while the boat
+    /// drifts under follow must not lose what they typed.
+    private func retireChartChrome() {
         if model?.pickPoint != nil { model?.closePick() }
+        if model?.chartMenu != nil { model?.closeChartMenu() }
     }
 
     /// Resume ticking after any state change (mutating calls funnel through here).
@@ -388,6 +394,11 @@ final class ChartController: NSObject {
             let p = screenPoint(forGeoLon: g.lon, lat: g.lat)
             if moved(model.pickPoint, p) { model.pickPoint = p }
         }
+        // The rename field rides its marker, for the same reason.
+        if let r = model.renaming {
+            let p = screenPoint(forGeoLon: r.lon, lat: r.lat)
+            if moved(model.renamingPoint, p) { model.renamingPoint = p }
+        }
         // A pinned bubble is re-read, not remembered: the target moves, its
         // values change, and it goes away when the plugin drops it.
         if let pinned = model.pinned {
@@ -464,7 +475,7 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         var vv = v
         lookout_set_view(h, &vv)
-        retirePickReport()
+        retireChartChrome()
         kick(); pushReadouts()
     }
 
@@ -493,7 +504,7 @@ final class ChartController: NSObject {
     func pan(dxPt: CGFloat, dyPt: CGFloat) {
         guard let h = handle else { return }
         lookout_pan_logical(h, Float(dxPt), Float(dyPt))
-        retirePickReport()
+        retireChartChrome()
         kick()
     }
 
@@ -511,7 +522,7 @@ final class ChartController: NSObject {
     func zoom(_ dz: Double, atPt pt: CGPoint) {
         guard let h = handle else { return }
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))
-        retirePickReport()
+        retireChartChrome()
         kick()
     }
 
@@ -525,7 +536,7 @@ final class ChartController: NSObject {
     func rotateDrag(from a: CGPoint, to b: CGPoint) {
         guard let h = handle else { return }
         lookout_rotate_drag_logical(h, Float(a.x), Float(a.y), Float(b.x), Float(b.y))
-        retirePickReport()
+        retireChartChrome()
         kick(); pushReadouts()
     }
 
@@ -553,7 +564,7 @@ final class ChartController: NSObject {
     func setFollow(_ on: Bool) {
         guard let h = handle else { return }
         lookout_follow_set(h, on ? 1 : 0)
-        retirePickReport()
+        retireChartChrome()
         kick(); pushReadouts()
     }
 
@@ -574,6 +585,100 @@ final class ChartController: NSObject {
     var pluginsActive: Bool {
         guard let h = handle else { return false }
         return lookout_plugins_active(h) != 0
+    }
+
+    // MARK: - Own ship's position
+
+    /// What the position readout may say. The core decides: `live` carries a
+    /// fix inside its freshness window, `lost` means a source published once
+    /// and has stopped, `none` means nothing ever has.
+    enum FixState: Int { case none = 0, lost = 1, live = 2 }
+
+    /// Own ship's reported position, or nil for either of the other two
+    /// states. Never the map centre and never the cursor: a coordinate with no
+    /// boat behind it is the ambiguity this removes.
+    func ownShip() -> (state: FixState, lat: Double, lon: Double)? {
+        guard let h = handle else { return nil }
+        var lon = 0.0, lat = 0.0
+        let s = FixState(rawValue: Int(lookout_own_ship(h, &lon, &lat))) ?? .none
+        return (s, lat, lon)
+    }
+
+    // MARK: - Markers
+
+    /// One of the mariner's own marks, copied out of the core. The core owns
+    /// the list and the file it lives in; this is a snapshot for the UI.
+    struct Marker: Identifiable, Equatable {
+        let id: UInt64
+        let lon: Double
+        let lat: Double
+        let name: String
+        let droppedAt: Date
+    }
+
+    private func marker(from m: lookout_marker) -> Marker {
+        Marker(id: m.id,
+               lon: m.lon,
+               lat: m.lat,
+               name: m.name.map(String.init(cString:)) ?? "",
+               droppedAt: Date(timeIntervalSince1970: Double(m.dropped_ms) / 1000))
+    }
+
+    /// Drop a marker at a geographic point. It is named in the same call, so
+    /// nothing waits for typing. Nil when the core would not take it.
+    @discardableResult
+    func dropMarker(lon: Double, lat: Double) -> Marker? {
+        guard let h = handle else { return nil }
+        let id = lookout_marker_add(h, lon, lat)
+        guard id != 0 else { return nil }
+        kick()
+        var m = lookout_marker()
+        guard lookout_marker_by_id(h, id, &m) != 0 else { return nil }
+        return marker(from: m)
+    }
+
+    /// Every marker, in drop order.
+    func markers() -> [Marker] {
+        guard let h = handle else { return [] }
+        let n = Int(lookout_marker_count(h))
+        return (0..<n).compactMap { i in
+            var m = lookout_marker()
+            guard lookout_marker_get(h, UInt32(i), &m) != 0 else { return nil }
+            return marker(from: m)
+        }
+    }
+
+    /// The marker under a point, in logical points, or nil when none is near.
+    func marker(atPoint p: CGPoint) -> Marker? {
+        guard let h = handle else { return nil }
+        var m = lookout_marker()
+        guard lookout_marker_at(h, Float(p.x), Float(p.y), &m) != 0 else { return nil }
+        return marker(from: m)
+    }
+
+    func marker(id: UInt64) -> Marker? {
+        guard let h = handle else { return nil }
+        var m = lookout_marker()
+        guard lookout_marker_by_id(h, id, &m) != 0 else { return nil }
+        return marker(from: m)
+    }
+
+    /// Rename a marker. An empty name keeps the old one, which the core
+    /// decides so every shell agrees.
+    @discardableResult
+    func renameMarker(_ id: UInt64, to name: String) -> Bool {
+        guard let h = handle else { return false }
+        let ok = name.withCString { lookout_marker_rename(h, id, $0) } == 0
+        if ok { kick() }
+        return ok
+    }
+
+    @discardableResult
+    func removeMarker(_ id: UInt64) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_marker_remove(h, id) == 0
+        if ok { kick() }
+        return ok
     }
 
     // MARK: - Plugin settings
@@ -982,6 +1087,16 @@ final class ChartController: NSObject {
         if model.courseUpState != cup { model.courseUpState = cup }
         let plugged = pluginsActive
         if model.pluginsActive != plugged { model.pluginsActive = plugged }
+        // Own ship, for the position readout. The state and the numbers move
+        // together: a readout that kept the last position through a lost fix
+        // would be presenting a stale one as live.
+        if let ship = ownShip() {
+            if model.fixState != ship.state { model.fixState = ship.state }
+            let lat: Double? = ship.state == .live ? ship.lat : nil
+            let lon: Double? = ship.state == .live ? ship.lon : nil
+            if model.shipLat != lat { model.shipLat = lat }
+            if model.shipLon != lon { model.shipLon = lon }
+        }
         if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
         if model.centerLat != v.lat { model.centerLat = v.lat }

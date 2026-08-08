@@ -17,6 +17,7 @@ const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in wh
 const atlas = @import("atlas.zig");
 const png = @import("png.zig");
 const ov = @import("overlay.zig");
+const marks = @import("markers.zig"); // the mariner's own marks on the water
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
@@ -162,8 +163,12 @@ pub const NativeKind = gpu.NativeKind;
 const Lock = @import("lock.zig").Lock;
 
 /// Everything the plugin layer needs from the core, in one heap allocation:
-/// the vessel store, the AIS store, the overlay store, the broker that
-/// implements the ABI over them, and the registry that runs the modules.
+/// the vessel store, the AIS store, the broker that implements the ABI over
+/// them, and the registry that runs the modules.
+///
+/// The OVERLAY store is not in here. The core draws into it too: the
+/// mariner's markers are core-owned and outlive any plugin, so it belongs to
+/// the handle and this layer only borrows it.
 ///
 /// Heap-allocated and built in place because the broker holds pointers to the
 /// stores beside it — moving this struct would dangle them.
@@ -171,26 +176,24 @@ const PluginSystem = if (plugins_on) struct {
     alloc: std.mem.Allocator,
     vessels: phost.store.Store,
     ais: phost.aisstore.AisStore,
-    overlay: ov.Store,
     br: phost.broker.Broker,
     host: phost.Host,
     /// Scratch for the registry and config JSON the C ABI hands out. Borrowed
     /// by the caller until the next such call, like every other query here.
     json: std.ArrayList(u8) = .empty,
 
-    fn create(alloc: std.mem.Allocator) !*@This() {
+    fn create(alloc: std.mem.Allocator, overlay: *ov.Store) !*@This() {
         const self = try alloc.create(@This());
         errdefer alloc.destroy(self);
         self.* = .{
             .alloc = alloc,
             .vessels = try phost.store.Store.init(alloc),
             .ais = phost.aisstore.AisStore.init(alloc),
-            .overlay = ov.Store.init(alloc),
             .br = undefined,
             .host = undefined,
         };
         self.br = phost.broker.Broker.init(alloc, &self.vessels, &self.ais, .{
-            .ctx = &self.overlay,
+            .ctx = overlay,
             .applyFn = applyOverlay,
             .removeFn = removeOverlay,
         });
@@ -200,12 +203,12 @@ const PluginSystem = if (plugins_on) struct {
 
     /// Order matters: the registry stops the dispatch thread (delivering
     /// SHUTDOWN, which can still draw and publish) before the broker stops the
-    /// I/O thread, and both are down before the stores they write to go.
+    /// I/O thread, and both are down before the stores they write to go. The
+    /// overlay store is the handle's and outlives this.
     fn destroy(self: *@This()) void {
         const gpa = self.alloc;
         self.host.deinit();
         self.br.deinit();
-        self.overlay.deinit();
         self.ais.deinit();
         self.vessels.deinit();
         self.json.deinit(gpa);
@@ -373,6 +376,42 @@ const ShipDisplay = struct {
         return self.course_deg;
     }
 };
+
+/// One overlay batch describing every mark. A free function so the tests can
+/// feed the same text to a bare overlay store: a canvas the store refuses
+/// draws nothing and says so only in a log line.
+fn markerBatch(a: std.mem.Allocator, json: *std.ArrayList(u8), list: []const marks.Marker, c: [4]f64) !void {
+    try json.appendSlice(a, "{\"set\":[");
+    for (list, 0..) |m, i| {
+        if (i > 0) try json.append(a, ',');
+        // `sa` first: the mark and its name hold their screen orientation
+        // while the chart turns under course up. A ring with a white halo
+        // under it, so the mark reads on a dark chart as well as a light
+        // one, and a dot at the position itself: the ring says "about
+        // here", the dot says where.
+        try json.print(a, "{{\"id\":\"{d}\",\"kind\":\"canvas\",\"space\":\"points\"," ++
+            "\"at\":[{d},{d}],\"cmds\":[[\"sa\"]," ++
+            "[\"ss\",[1,1,1,0.85]],[\"lw\",3.5],[\"P\"],[\"A\",0,0,6.5,0,360],[\"S\"]," ++
+            "[\"ss\",[{d},{d},{d},{d}]],[\"lw\",2],[\"P\"],[\"A\",0,0,6.5,0,360],[\"S\"]," ++
+            "[\"fs\",[{d},{d},{d},{d}]],[\"P\"],[\"A\",0,0,2.2,0,360],[\"F\"]," ++
+            "[\"font\",12,\"bold\"],[\"ta\",\"left\"],", .{
+            m.id, m.lon, m.lat, c[0], c[1], c[2], c[3], c[0], c[1], c[2], c[3],
+        });
+        // The name, in white four ways round and then in magenta over it.
+        // Canvas text has no outline of its own, and a chart is as likely
+        // to be dark under the label as light.
+        try json.appendSlice(a, "[\"fs\",[1,1,1,0.9]],");
+        for ([4][2]f64{ .{ 11, 3 }, .{ 13, 3 }, .{ 11, 5 }, .{ 13, 5 } }) |o| {
+            try json.print(a, "[\"T\",{d},{d},", .{ o[0], o[1] });
+            try marks.jsonString(a, json, m.name);
+            try json.appendSlice(a, "],");
+        }
+        try json.print(a, "[\"fs\",[{d},{d},{d},{d}]],[\"T\",12,4,", .{ c[0], c[1], c[2], c[3] });
+        try marks.jsonString(a, json, m.name);
+        try json.appendSlice(a, "]]}");
+    }
+    try json.appendSlice(a, "]}");
+}
 
 /// A bearing folded into [0, 360).
 fn wrap360(deg: f64) f64 {
@@ -631,6 +670,17 @@ pub const Lookout = struct {
     /// stores, no runtime.
     plugins: ?*PluginSystem = null,
 
+    /// The retained chart overlay: what plugins post and what the core draws
+    /// over the chart. The handle owns it, because the marks below go into it
+    /// and they exist with no plugin layer at all.
+    overlay: ov.Store = undefined,
+    /// The mariner's markers, read at open and written on every change.
+    markers: marks.Store = undefined,
+    /// The palette the marker geometry was posted for. The marks carry their
+    /// colour as RGBA rather than a plugin palette token, so a scheme change
+    /// has to re-post them; comparing here is what notices.
+    markers_scheme: ov.Scheme = .day,
+
     /// Follow mode and course-up, off until a shell turns them on.
     follow: Follow = .{},
     /// Own ship between fixes, and where this frame draws it (lon, lat).
@@ -708,6 +758,11 @@ pub const Lookout = struct {
             }),
             .cam = undefined,
             .raster = rasterlayer.Layer.init(alloc),
+            .overlay = ov.Store.init(alloc),
+            .markers = if (marks.defaultPathAlloc(alloc)) |p| blk: {
+                defer alloc.free(p);
+                break :blk marks.Store.open(alloc, p);
+            } else marks.Store.init(alloc),
         };
         if (dbg) {
             std.debug.print("  gpu.init (Metal device+shaders+pipelines) {d} ms\n", .{gpu.ticksMs() - t});
@@ -730,6 +785,11 @@ pub const Lookout = struct {
         // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
         // derives the live gates (cat_mask/sound_on/clear) from this before the
         // first render.
+        // The marks the mariner already had, on the chart before the first
+        // frame: they belong to the boat, not to the cell being opened. AFTER
+        // the mariner state above, because the marks are posted in the colours
+        // of the palette it names.
+        self.postMarkers();
         self.assets_root = atlasCacheDir(self.alloc);
         self.loadNodataColors();
         // NOT the atlases: they bake at the display density, and nothing has
@@ -1158,7 +1218,7 @@ pub const Lookout = struct {
     pub fn loadPlugins(self: *Lookout, dir: []const u8) !void {
         if (plugins_on) {
             const ps = self.plugins orelse blk: {
-                const created = try PluginSystem.create(self.alloc);
+                const created = try PluginSystem.create(self.alloc, &self.overlay);
                 self.plugins = created;
                 break :blk created;
             };
@@ -1195,27 +1255,30 @@ pub const Lookout = struct {
         };
     }
 
-    /// Rebuild the plugin overlay for this frame's zoom and scheme and hand it
+    /// Rebuild the chart overlay for this frame's zoom and scheme and hand it
     /// to the GPU layer. Cheap when nothing changed: the store returns the same
     /// generation and the backend skips the upload.
     fn updateOverlay(self: *Lookout) void {
-        if (!plugins_on) return;
-        const ps = self.plugins orelse return;
         // Own ship's display position, the camera lock and the overlay all
         // ride this tick: the stores are current here and the frame's MVP is
         // built after it, so a move shows in this frame.
         self.tickShip();
         self.followTick();
+        // The marks carry RGBA, so a scheme change re-posts them. Comparing
+        // here rather than hooking every route into setMariner: there are
+        // several, and one that forgot would leave a day-bright magenta on a
+        // night chart.
+        if (self.markers_scheme != self.overlayScheme()) self.postMarkers();
         // Hand the store whatever glyph faces are loaded, so canvas text lays
         // out against the same atlases the labels draw with. Idempotent: only
         // a change marks the store dirty.
-        ps.overlay.setFonts(
+        self.overlay.setFonts(
             if (self.glyph_atlas != null) .{ .ctx = @ptrCast(&self.glyph_atlas.?), .lookup = overlayGlyphLookup } else null,
             if (self.glyph_bold_atlas != null) .{ .ctx = @ptrCast(&self.glyph_bold_atlas.?), .lookup = overlayGlyphLookup } else null,
         );
         // The view rotation goes in because a canvas may hold a readout level
         // on screen; the store ignores it unless one does.
-        const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at) catch |e| {
+        const frame = self.overlay.buildIfNeeded(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at) catch |e| {
             std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
             return;
         };
@@ -1230,14 +1293,13 @@ pub const Lookout = struct {
         };
     }
 
-    /// True when a plugin has posted geometry the current frame does not show.
-    /// The app renders ON DEMAND, so without this a symbol drawn while the
-    /// chart sat idle would not appear until the mariner touched the screen —
-    /// the same reason raster.wantsFrame exists.
+    /// True when something has posted geometry the current frame does not
+    /// show. The app renders ON DEMAND, so without this a symbol drawn while
+    /// the chart sat idle would not appear until the mariner touched the
+    /// screen. The same reason raster.wantsFrame exists.
     fn overlayWantsFrame(self: *Lookout) bool {
-        if (!plugins_on) return false;
-        const ps = self.plugins orelse return false;
-        return ps.overlay.needsRebuild(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at);
+        if (self.markers_scheme != self.overlayScheme()) return true;
+        return self.overlay.needsRebuild(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at);
     }
 
     /// True once a plugin layer is up. A shell asks so it can keep polling
@@ -1253,25 +1315,19 @@ pub const Lookout = struct {
     /// null. Logical points, the same unit as every other pointer entry point.
     /// Borrowed: valid until the next call.
     pub fn overlayAt(self: *Lookout, x_pt: f32, y_pt: f32) ?[]const u8 {
-        if (!plugins_on) return null;
-        const ps = self.plugins orelse return null;
-        return ps.overlay.pickAt(self.cam, x_pt, y_pt, self.ship_at);
+        return self.overlay.pickAt(self.cam, x_pt, y_pt, self.ship_at);
     }
 
     /// The overlay symbol nearest a logical point, with its id and the anchor
     /// it draws at. A shell pins a bubble to the id and asks `overlayInfo` for
     /// it every frame. Borrowed until the next overlay query.
     pub fn overlayHit(self: *Lookout, x_pt: f32, y_pt: f32) ?ov.Store.Hit {
-        if (!plugins_on) return null;
-        const ps = self.plugins orelse return null;
-        return ps.overlay.hitAt(self.cam, x_pt, y_pt, self.ship_at);
+        return self.overlay.hitAt(self.cam, x_pt, y_pt, self.ship_at);
     }
 
     /// What that object says now, or null once it is gone.
     pub fn overlayInfo(self: *Lookout, id: []const u8) ?ov.Store.Hit {
-        if (!plugins_on) return null;
-        const ps = self.plugins orelse return null;
-        return ps.overlay.infoFor(id, self.ship_at);
+        return self.overlay.infoFor(id, self.ship_at);
     }
 
     /// Every loaded plugin with its settings schema and current values, as
@@ -1312,6 +1368,140 @@ pub const Lookout = struct {
         if (!plugins_on) return false;
         const ps = self.plugins orelse return false;
         return ps.host.openFile(path);
+    }
+
+    // ---- markers ------------------------------------------------------------
+    //
+    // The core owns them so every shell shows the same marks and they survive
+    // a restart. They draw through the overlay store, as canvases: the store
+    // already carries geometry over the chart, keeps it across zoom and scheme
+    // changes, and holds a canvas level on the display when the mariner turns
+    // the chart. Nothing new reaches the GPU layer for this.
+    //
+    // The colour is S-52's mariner magenta, the colour reserved for the
+    // mariner's own additions and the one the pick mark already uses. Posted
+    // as RGBA rather than a palette token because the token list is the
+    // PLUGIN vocabulary; a core drawing has no business growing it.
+
+    /// The overlay source the marks are posted under. Namespaced like a plugin
+    /// id, in a namespace no plugin can claim.
+    const marker_source = "lookout.markers";
+
+    /// How near a logical point must be to a mark for `markerAt` to answer it.
+    /// The same reach the overlay gives a plugin symbol.
+    const marker_pick_radius_pt: f64 = 14.0;
+
+    /// Mariner magenta per palette. Day is the pick mark's own #DB198C; night
+    /// is held dim, like every other night colour, so a mark does not undo a
+    /// night-adapted eye.
+    fn markerRgba(scheme: ov.Scheme) [4]f64 {
+        return switch (scheme) {
+            .day => .{ 0.858, 0.098, 0.549, 1.0 },
+            .dusk => .{ 0.910, 0.435, 0.706, 1.0 },
+            .night => .{ 0.557, 0.102, 0.314, 1.0 },
+        };
+    }
+
+    /// Re-post every mark as an overlay canvas. Called on any change and on a
+    /// scheme change; a handful of objects, so the whole set goes at once
+    /// rather than tracking deltas.
+    fn postMarkers(self: *Lookout) void {
+        const scheme = self.overlayScheme();
+        self.markers_scheme = scheme;
+        self.overlay.removeSource(marker_source);
+        const list = self.markers.items();
+        if (list.len == 0) return;
+
+        const c = markerRgba(scheme);
+        var json = std.ArrayList(u8).empty;
+        defer json.deinit(self.alloc);
+        markerBatch(self.alloc, &json, list, c) catch |e| {
+            std.debug.print("markers: batch not built: {s}\n", .{@errorName(e)});
+            return;
+        };
+        self.overlay.applyBatch(marker_source, json.items) catch |e| {
+            std.debug.print("markers: batch refused: {s}\n", .{@errorName(e)});
+        };
+    }
+
+    /// Drop a marker at a geographic point and name it at once. Returns its
+    /// id, or 0 when nothing could be stored.
+    pub fn markerAdd(self: *Lookout, lon: f64, lat: f64) u64 {
+        const now: i64 = if (plugins_on) phost.broker.wallMs() else std.time.milliTimestamp();
+        const id = self.markers.add(lon, lat, now);
+        if (id != 0) self.postMarkers();
+        return id;
+    }
+
+    /// Rename one marker. An empty name keeps the old one.
+    pub fn markerRename(self: *Lookout, id: u64, name: []const u8) bool {
+        if (!self.markers.rename(id, name)) return false;
+        self.postMarkers();
+        return true;
+    }
+
+    pub fn markerRemove(self: *Lookout, id: u64) bool {
+        if (!self.markers.remove(id)) return false;
+        self.postMarkers();
+        return true;
+    }
+
+    pub fn markerCount(self: *const Lookout) usize {
+        return self.markers.items().len;
+    }
+
+    pub fn markerAtIndex(self: *const Lookout, i: usize) ?*const marks.Marker {
+        const list = self.markers.items();
+        if (i >= list.len) return null;
+        return &list[i];
+    }
+
+    pub fn markerById(self: *const Lookout, id: u64) ?*const marks.Marker {
+        return self.markers.find(id);
+    }
+
+    /// The marker nearest a LOGICAL point, or null when none is within reach.
+    /// Projected with the renderer's own camera, so rotation and the
+    /// antimeridian hold. The nearest wins, and a tie keeps the older mark.
+    pub fn markerAt(self: *Lookout, x_pt: f32, y_pt: f32) ?*const marks.Marker {
+        var best: ?*const marks.Marker = null;
+        var best_d2: f64 = marker_pick_radius_pt * marker_pick_radius_pt;
+        for (self.markers.items()) |*m| {
+            const s = self.cam.worldToScreen(camera.lonLatToWorld(m.lon, m.lat));
+            const dx = s.x - @as(f64, x_pt);
+            const dy = s.y - @as(f64, y_pt);
+            const d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best = m;
+            }
+        }
+        return best;
+    }
+
+    // ---- own ship's position ------------------------------------------------
+
+    /// What the position readout may say. A stale fix is never presented as a
+    /// live one, which is why `lost` exists: "the fix dropped" and "you never
+    /// set one up" are different problems and want different answers from the
+    /// mariner.
+    pub const FixState = enum(c_int) { none = 0, lost = 1, live = 2 };
+
+    /// Own ship's REPORTED position, and how much to believe it. `out` is
+    /// written only for `live`.
+    ///
+    /// The reported fix, not the display position: the display position is
+    /// carried forward along COG between fixes so the boat symbol moves
+    /// smoothly, and a dead-reckoned number must never be shown as a reading.
+    /// The vessel store's own staleness is what decides; nothing here keeps a
+    /// second clock.
+    pub fn ownShip(self: *Lookout, out: *[2]f64) FixState {
+        if (!plugins_on) return .none;
+        const ps = self.plugins orelse return .none;
+        const r = ps.vessels.readElected("navigation.position", phost.broker.wallMs()) orelse return .none;
+        if (r.stale or r.value != .position) return .lost;
+        out.* = .{ r.value.position.lon, r.value.position.lat };
+        return .live;
     }
 
     // ---- follow mode --------------------------------------------------------
@@ -1498,6 +1688,9 @@ pub const Lookout = struct {
                 self.plugins = null;
             }
         }
+        // Now that nothing else can post into them.
+        self.overlay.deinit();
+        self.markers.deinit();
         self.pollCompose(true); // finish any in-flight partition build first
         self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
         // Before g.deinit(): the layer hands its textures back to the GPU.
@@ -2793,4 +2986,54 @@ test "course up turns the chart to own ship's heading" {
     // Off: nothing turns at all.
     const off = Follow{};
     try t.expect(!off.rotate(&cam, 10.0));
+}
+
+// Rule: a marker draws itself. The batch the core posts is the only thing
+// between a dropped mark and pixels, and a canvas the store refuses draws
+// nothing while saying so only in a log line, so assert the store takes it.
+test "a marker posts a canvas the overlay store draws" {
+    const t = std.testing;
+    const a = t.allocator;
+    var one = "Mark 1".*;
+    var two = "the \"rock\"".*;
+    const list = [_]marks.Marker{
+        .{ .id = 1, .lon = -76.4767, .lat = 38.9763, .name = &one, .dropped_ms = 1 },
+        .{ .id = 2, .lon = -76.4700, .lat = 38.9800, .name = &two, .dropped_ms = 2 },
+    };
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try markerBatch(a, &json, &list, Lookout.markerRgba(.day));
+
+    var store = ov.Store.init(a);
+    defer store.deinit();
+    try store.applyBatch("lookout.markers", json.items);
+    try t.expectEqual(@as(usize, 2), store.count());
+
+    // Geometry, in the magenta asked for, near where the mark was dropped.
+    const fr = try store.buildIfNeeded(15.0, 0, .day, null);
+    try t.expect(fr.verts.len > 0);
+    const c = Lookout.markerRgba(.day);
+    var magenta = false;
+    for (fr.verts) |v| {
+        if (@abs(v.r - @as(f32, @floatCast(c[0]))) < 1e-6 and
+            @abs(v.b - @as(f32, @floatCast(c[2]))) < 1e-6) magenta = true;
+    }
+    try t.expect(magenta);
+
+    // A name with a quote in it is escaped, not a broken batch.
+    try t.expect(std.mem.indexOf(u8, json.items, "\\\"rock\\\"") != null);
+}
+
+// The night palette rule the overlay's own tokens keep: a mark must not undo a
+// night-adapted eye.
+test "the marker magenta is dim at night and differs by scheme" {
+    const t = std.testing;
+    const day = Lookout.markerRgba(.day);
+    const night = Lookout.markerRgba(.night);
+    try t.expect(!std.mem.eql(u8, std.mem.asBytes(&day), std.mem.asBytes(&night)));
+    const lum = 0.2126 * night[0] + 0.7152 * night[1] + 0.0722 * night[2];
+    try t.expect(lum < 0.35);
+    for (day) |ch| try t.expect(ch >= 0 and ch <= 1);
+    for (night) |ch| try t.expect(ch >= 0 and ch <= 1);
 }

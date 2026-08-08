@@ -81,7 +81,7 @@ pub const Sym = enum(u8) { ownship, target, aton, aton_virtual };
 /// Straight-alpha RGBA, 0..1 (what the shader wants).
 pub const Rgba = [4]f32;
 
-// ---- the canvas object (specs/plugins/canvas.md) ---------------------------
+// ---- the canvas object -----------------------------------------------------
 //
 // A canvas is a RECORDED command list, not pixels: the plugin posts the
 // commands once, and this store replays them into triangles (and SDF glyph
