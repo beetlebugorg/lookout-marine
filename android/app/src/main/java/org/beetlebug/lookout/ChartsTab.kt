@@ -50,7 +50,7 @@ fun ChartsSection(
     controller: ChartController,
     onRequestAccess: () -> Unit,
 ) {
-    SectionHeader("Open charts")
+    SectionHeader("Open charts", first = true)
     Footer(charts.activeLabel)
 
     if (!charts.storageAccess) {

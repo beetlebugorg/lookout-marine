@@ -18,14 +18,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DirectionsBoat
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Map
@@ -35,13 +40,17 @@ import androidx.compose.material.icons.outlined.SettingsInputAntenna
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Waves
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -51,6 +60,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,8 +75,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -136,7 +149,21 @@ fun SettingsSheet(
         // back closed the whole sheet from a pushed section instead of
         // returning to the list.
         BackHandler(enabled = current != null && !twoPane) { open = null }
-        Box(Modifier.fillMaxHeight(0.92f)) {
+        // What the plugins report has to move on its own while this is open: a
+        // connection that says "Reconnecting" and never says "Connected" is how
+        // the mariner learns the address is wrong. Stopped on close, because
+        // nothing off screen needs a 1 Hz sample.
+        DisposableEffect(controller) {
+            controller.startPluginPolling()
+            onDispose { controller.stopPluginPolling() }
+        }
+        // The connection editor puts a keyboard on screen; without this it
+        // covers the field being typed into.
+        Box(
+            Modifier
+                .fillMaxHeight(0.92f)
+                .imePadding(),
+        ) {
             if (twoPane) {
                 Row(Modifier.fillMaxWidth()) {
                     SectionList(
@@ -226,6 +253,12 @@ private fun SectionList(
  * antenna.radiowaves glyph means, rather than a Wi-Fi symbol — the boat's
  * gateway is often not Wi-Fi.
  */
+/**
+ * The sections the app draws its OWN settings into, before any plugin adds to
+ * them. The rest are a plugin's alone, and stand empty until one loads.
+ */
+private val CORE_CONTENT = setOf("display", "depths", "text", "charts", "plugins", "advanced")
+
 private fun sectionIcon(id: String): ImageVector = when (id) {
     "display" -> Icons.Outlined.Palette
     "depths" -> Icons.Outlined.Waves
@@ -279,6 +312,11 @@ private fun SectionPane(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 32.dp),
         ) {
+            // Whether the app's own settings filled the top of the pane. When
+            // they did not — Vessels, Alarms and Connections are entirely a
+            // plugin's — the first plugin heading is the one that must not draw
+            // a rule under the title bar.
+            val core = id in CORE_CONTENT
             when (id) {
                 "display" -> DisplaySection(m)
                 "depths" -> DepthsSection(m)
@@ -287,8 +325,9 @@ private fun SectionPane(
                 "plugins" -> PluginsManageSection(registry)
                 "advanced" -> AdvancedSection(m)
             }
-            PluginGroups(registry, id, controller)
-            PluginLists(registry, id)
+            val groups = registry.groups(id)
+            PluginGroups(groups, controller, first = !core)
+            PluginLists(registry, id, controller, first = !core && groups.isEmpty())
         }
     }
 }
@@ -297,7 +336,7 @@ private fun SectionPane(
 
 @Composable
 private fun DisplaySection(m: MarinerState) {
-    SectionHeader("Colour scheme")
+    SectionHeader("Colour scheme", first = true)
     SchemeSwatches(m)
     Footer("The palettes switch instantly. Night keeps your eyes dark-adapted.")
 
@@ -452,7 +491,7 @@ private fun DepthsSection(m: MarinerState) {
     val feet = m.depthUnit == DepthUnit.FEET
     val unit = if (feet) "ft" else "m"
 
-    SectionHeader("Depth unit")
+    SectionHeader("Depth unit", first = true)
     SegmentedRow(
         options = DepthUnit.entries.map { it.label },
         selectedIndex = m.depthUnit.ordinal,
@@ -599,7 +638,7 @@ private fun DepthRow(
 
 @Composable
 private fun SymbolsSection(m: MarinerState) {
-    SectionHeader("Text")
+    SectionHeader("Text", first = true)
     SwitchRow("Feature names", m, MI.TEXT_NAMES)
     SwitchRow("Light descriptions", m, MI.SHOW_LIGHT_DESCRIPTIONS)
     SwitchRow("Other text", m, MI.TEXT_OTHER)
@@ -619,7 +658,7 @@ private fun SymbolsSection(m: MarinerState) {
 
 @Composable
 private fun AdvancedSection(m: MarinerState) {
-    SectionHeader("Safety & quality")
+    SectionHeader("Safety & quality", first = true)
     SwitchRow("Data quality overlay", m, MI.DATA_QUALITY)
     SwitchRow("Isolated dangers in shallow water", m, MI.SHOW_ISOLATED_DANGERS_SHALLOW)
     SwitchRow("Information callouts", m, MI.SHOW_INFORM_CALLOUTS)
@@ -652,9 +691,9 @@ private fun AdvancedSection(m: MarinerState) {
  * comes back is the value in force, which is not always the one asked for.
  */
 @Composable
-private fun PluginGroups(registry: PluginRegistry, tab: String, controller: ChartController) {
-    for (group in registry.groups(tab)) {
-        SectionHeader(group.title)
+private fun PluginGroups(groups: List<PluginGroup>, controller: ChartController, first: Boolean) {
+    for ((i, group) in groups.withIndex()) {
+        SectionHeader(group.title, first = first && i == 0)
         for (field in group.fields) {
             when (field.kind) {
                 PluginField.Kind.TOGGLE -> PluginToggleRow(field) { on ->
@@ -672,62 +711,345 @@ private fun PluginGroups(registry: PluginRegistry, tab: String, controller: Char
     }
 }
 
+// ---- the connection editor ---------------------------------------------------
+//
+// The repeating groups on a section — the NMEA gateways, the Signal K servers.
+// This is where the mariner names their own boat's gateway, so it has to work
+// with a thumb, at a slant, in the wet.
+//
+// Every WORD here comes from the manifest: the heading, the sentence under the
+// rows, what an empty list says and what the add button is called ("Add
+// Connection" for NMEA, "Add Server" for Signal K). Nothing is an Android
+// string resource, because nothing here is Android's to name — a plugin that
+// collects something other than gateways says so in its own words and this pane
+// reads correctly with no change.
+//
+// So are the COLUMNS. Four are standard (a name, an address, a port and an
+// on/off switch) but a plugin may declare more — Signal K adds a WebSocket flag
+// — so the editor renders whatever the schema lists, by kind.
+//
+// A row EXPANDS IN PLACE rather than opening a second sheet. The settings are
+// already a bottom sheet, and stacking another over it puts the mariner two
+// dismissals deep in a modal on a moving boat; expanding also keeps the live
+// status line visible while the address is being typed, which is the whole
+// feedback loop — type it, watch it go green.
+
 /**
- * The repeating groups on this section — the NMEA gateways, the Signal K
- * servers — as they stand.
- *
- * READ-ONLY for now: this shows what is configured and what each row is doing,
- * so the section is never an empty pane, but adding, removing and editing a row
- * is the connection editor still to come. Until then the launch intent is the
- * only way to name a gateway.
+ * Every repeating list on this section, as rows that can be added to, edited
+ * and removed.
  */
 @Composable
-private fun PluginLists(registry: PluginRegistry, tab: String) {
-    for (schema in registry.lists(tab)) {
-        SectionHeader(schema.group.ifEmpty { "Connections" })
-        val rows = registry.plugins
-            .firstOrNull { it.id == schema.pluginId }
-            ?.rows?.get(schema.key)
-            .orEmpty()
+private fun PluginLists(
+    registry: PluginRegistry,
+    tab: String,
+    controller: ChartController,
+    first: Boolean,
+) {
+    // Which row is open for editing, across every list on the pane: opening one
+    // closes the last, so the pane never has two keyboards' worth of form on it.
+    var editing by remember { mutableStateOf<String?>(null) }
+
+    for ((i, schema) in registry.lists(tab).withIndex()) {
+        SectionHeader(schema.group.ifEmpty { "Connections" }, first = first && i == 0)
+        val rows = registry.rows(schema)
         if (rows.isEmpty()) {
             Footer(schema.empty.ifEmpty { "Nothing yet." })
-        } else {
-            for (row in rows) {
-                val host = row.cells["host"].orEmpty()
-                val port = row.cells["port"].orEmpty()
-                val name = row.cells["name"].orEmpty()
-                val on = row.cells[schema.switchKey].orEmpty()
-                Row(
+        }
+        for (row in rows) {
+            ConnectionRow(
+                schema = schema,
+                row = row,
+                status = registry.status(schema, row.id),
+                expanded = editing == row.id,
+                onToggleExpanded = { editing = if (editing == row.id) null else row.id },
+                onSetSwitch = { on ->
+                    val key = schema.switchField?.key ?: return@ConnectionRow
+                    controller.setPluginList(schema, rows.replacing(row.id, key, on.toString()))
+                },
+            )
+            if (editing == row.id) {
+                ConnectionEditor(
+                    schema = schema,
+                    row = row,
+                    onCommit = { cells ->
+                        controller.setPluginList(schema, rows.map {
+                            if (it.id == row.id) it.copy(cells = cells) else it
+                        })
+                        editing = null
+                    },
+                    onRemove = {
+                        controller.setPluginList(schema, rows.filterNot { it.id == row.id })
+                        editing = null
+                    },
+                )
+            }
+        }
+        AddRowButton(schema, rows.size) {
+            val fresh = schema.newRow()
+            controller.setPluginList(schema, rows + fresh)
+            // Straight into the editor: a row added on the schema's defaults has
+            // no address yet, so the next thing the mariner needs is the field.
+            editing = fresh.id
+        }
+        if (schema.footer.isNotEmpty()) Footer(schema.footer)
+    }
+}
+
+/** One cell replaced in one row, the rest untouched. */
+private fun List<PluginRow>.replacing(id: String, key: String, value: String): List<PluginRow> =
+    map { if (it.id == id) it.copy(cells = it.cells + (key to value)) else it }
+
+/**
+ * One connection at rest: what it is, what it is doing now, and its own switch.
+ *
+ * The whole line opens the editor, so the target is the row and not a pencil;
+ * the switch keeps its own hit area, because pausing a source is a thing done
+ * without wanting to edit it.
+ */
+@Composable
+private fun ConnectionRow(
+    schema: PluginListSchema,
+    row: PluginRow,
+    status: PluginStatusItem?,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onSetSwitch: (Boolean) -> Unit,
+) {
+    val address = schema.addressField?.let { row.text(it.key) }.orEmpty()
+    val port = schema.portField?.let { row.text(it.key) }.orEmpty()
+    val name = schema.nameField?.let { row.text(it.key) }.orEmpty()
+    val where = when {
+        address.isEmpty() -> ""
+        port.isEmpty() -> address
+        else -> "$address:$port"
+    }
+    // The name is optional and the address stands in for it, which is what the
+    // schema's own footer promises. A row with neither is one just added.
+    val title = name.ifEmpty { where.ifEmpty { "New" } }
+    val switch = schema.switchField
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggleExpanded)
+            .padding(start = 20.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StatusDot(status)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.bodyMedium)
+                // Any extra column the plugin declared and the mariner switched
+                // on, named by the schema — Signal K's WebSocket is the first.
+                for (f in schema.extraFields) {
+                    if (f.kind != PluginField.Kind.TOGGLE || !row.on(f.key)) continue
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        f.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            // Under the name, the address it stands for; then the plugin's own
+            // line for this row. A row that has not been reported on yet says
+            // so rather than showing nothing, so a silent plugin is visible.
+            if (name.isNotEmpty() && where.isNotEmpty()) {
+                Text(
+                    where,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                status?.line ?: "Not started",
+                style = MaterialTheme.typography.bodySmall,
+                color = statusColour(status),
+            )
+        }
+        if (switch != null) {
+            Switch(checked = row.on(switch.key), onCheckedChange = onSetSwitch)
+        }
+        Icon(
+            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = if (expanded) "Close editor" else "Edit ${title}",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Green while it works, amber while it tries, red when it has given up. */
+@Composable
+private fun statusColour(status: PluginStatusItem?): Color = when (status?.tone) {
+    PluginStatusItem.Tone.GOOD -> CONNECTED_GREEN
+    PluginStatusItem.Tone.TRYING -> CONNECTING_AMBER
+    PluginStatusItem.Tone.BAD -> MaterialTheme.colorScheme.error
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/**
+ * The state at a glance, before any word is read. Deliberately not Material's
+ * primary: these are the connection colours the other shells use, and a mariner
+ * who learned green-is-feeding on the Mac reads the same dot here.
+ */
+private val CONNECTED_GREEN = Color(0xFF2E9E4F)
+private val CONNECTING_AMBER = Color(0xFFC77A11)
+
+@Composable
+private fun StatusDot(status: PluginStatusItem?) {
+    Box(
+        Modifier
+            .size(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(statusColour(status)),
+    )
+}
+
+/**
+ * One connection, open for editing: every column the schema declares, in the
+ * order it declared them, rendered from its kind.
+ *
+ * The draft is local and committed on Done, not on every keystroke. Writing
+ * through per character would tear the socket down and build it again for each
+ * letter of a hostname, and the mariner would watch their own typing report
+ * itself unreachable.
+ *
+ * It is re-seeded whenever the row is opened, so what the editor shows is what
+ * the CORE holds after its own clamping — a port typed past 65535 comes back
+ * clamped, and re-opening the row shows the clamped number.
+ */
+@Composable
+private fun ConnectionEditor(
+    schema: PluginListSchema,
+    row: PluginRow,
+    onCommit: (Map<String, String>) -> Unit,
+    onRemove: () -> Unit,
+) {
+    var draft by remember(row.id) { mutableStateOf(row.cells) }
+    val focus = LocalFocusManager.current
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 12.dp),
+    ) {
+        for (f in schema.itemFields) {
+            // The on/off switch lives on the row itself, where it can be reached
+            // without opening anything.
+            if (f.key == schema.switchField?.key) continue
+            when (f.kind) {
+                PluginField.Kind.TOGGLE -> Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp),
+                        .toggleable(
+                            value = draft[f.key] == "true",
+                            role = Role.Switch,
+                            onValueChange = { draft = draft + (f.key to it.toString()) },
+                        )
+                        .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        // The name is optional; the address stands in for it,
-                        // which is what the schema's own footer promises.
-                        Text(
-                            name.ifEmpty { "$host:$port" },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (name.isNotEmpty()) {
+                        Text(f.label, style = MaterialTheme.typography.bodyMedium)
+                        if (f.desc.isNotEmpty()) {
                             Text(
-                                "$host:$port",
+                                f.desc,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                    Text(
-                        if (on == "true" || on == "1") "on" else "off",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Switch(checked = draft[f.key] == "true", onCheckedChange = null)
                 }
+                else -> OutlinedTextField(
+                    value = draft[f.key].orEmpty(),
+                    onValueChange = { draft = draft + (f.key to it) },
+                    label = { Text(f.label) },
+                    supportingText = describing(f.desc),
+                    singleLine = true,
+                    keyboardOptions = keyboardFor(f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                )
             }
         }
-        if (schema.footer.isNotEmpty()) Footer(schema.footer)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = { focus.clearFocus(); onRemove() },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+            ) {
+                Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Remove")
+            }
+            Spacer(Modifier.weight(1f))
+            Button(onClick = { focus.clearFocus(); onCommit(draft) }) { Text("Done") }
+        }
     }
+}
+
+/**
+ * A field's sentence, as a text control's supporting line — or nothing at all
+ * when the manifest declared none, so an undescribed column takes no space it
+ * has no use for.
+ */
+private fun describing(desc: String): (@Composable () -> Unit)? {
+    if (desc.isEmpty()) return null
+    return { Text(desc, style = MaterialTheme.typography.bodySmall) }
+}
+
+/**
+ * The keyboard a column wants.
+ *
+ * A number column is a number, which is the easy half. For TEXT the schema
+ * carries no keyboard hint, so the one hint it does carry is used: the column's
+ * key. An address field gets the URI keyboard — a dot and a slash on the front
+ * row, no autocorrect and no capital first letter, all three of which a
+ * hostname needs and a name field does not. Anything unrecognised falls back to
+ * the ordinary text keyboard, so a plugin naming its columns something else
+ * still gets a usable editor.
+ */
+private fun keyboardFor(f: PluginField): KeyboardOptions = when {
+    f.kind == PluginField.Kind.NUMBER -> KeyboardOptions(keyboardType = KeyboardType.Number)
+    f.key in ADDRESS_KEYS -> KeyboardOptions(
+        keyboardType = KeyboardType.Uri,
+        autoCorrectEnabled = false,
+        capitalization = KeyboardCapitalization.None,
+    )
+    else -> KeyboardOptions(capitalization = KeyboardCapitalization.Words)
+}
+
+private val ADDRESS_KEYS = setOf("host", "address", "url", "server", "hostname")
+
+/**
+ * Add a row, in the plugin's own words. It goes quiet at the host's row cap
+ * rather than letting the mariner type a gateway the core will drop on the way
+ * in — a connection that silently never connects is worse than a button that
+ * says why it cannot.
+ */
+@Composable
+private fun AddRowButton(schema: PluginListSchema, count: Int, onAdd: () -> Unit) {
+    val full = count >= schema.maxRows
+    TextButton(
+        onClick = onAdd,
+        enabled = !full,
+        modifier = Modifier.padding(start = 12.dp, top = 4.dp),
+    ) {
+        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(schema.addLabel.ifEmpty { "Add" })
+    }
+    if (full) Footer("${schema.maxRows} is all this plugin holds.")
 }
 
 /** One key set on one plugin, as the object lookout_plugin_config_set takes. */
@@ -818,7 +1140,7 @@ private fun PluginNumberRow(field: PluginField, onCommit: (Double) -> Unit) {
  */
 @Composable
 private fun PluginsManageSection(registry: PluginRegistry) {
-    SectionHeader("Installed plugins")
+    SectionHeader("Installed plugins", first = true)
     val managed = registry.managed
     if (managed.isEmpty()) {
         Footer(
@@ -855,9 +1177,17 @@ private fun PluginsManageSection(registry: PluginRegistry) {
 
 // ---- rows -------------------------------------------------------------------
 
+/**
+ * A group heading inside a section, with the rule that separates it from the
+ * group before it.
+ *
+ * `first` is the heading at the TOP of a pane, which draws no rule: the pane's
+ * title bar already has one, and the two together read as a double line with a
+ * sliver of background trapped between them.
+ */
 @Composable
-internal fun SectionHeader(text: String) {
-    HorizontalDivider(Modifier.padding(top = 12.dp))
+internal fun SectionHeader(text: String, first: Boolean = false) {
+    if (!first) HorizontalDivider(Modifier.padding(top = 12.dp))
     Text(
         text = text.uppercase(Locale.US),
         style = MaterialTheme.typography.labelSmall,

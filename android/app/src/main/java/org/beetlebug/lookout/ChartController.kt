@@ -96,10 +96,7 @@ class ChartController(private val appContext: Context) {
         private set
 
     /** Re-read the registry from the core. Safe to call on any thread. */
-    fun refreshPlugins() = onEngine { l ->
-        val reg = PluginRegistry.parse(l.pluginsJson())
-        main.post { pluginRegistry = reg }
-    }
+    fun refreshPlugins() = onEngine { l -> republish(l) }
 
     /**
      * Apply one plugin's settings and re-read the registry, because the core
@@ -108,8 +105,67 @@ class ChartController(private val appContext: Context) {
      */
     fun setPluginConfig(id: String, json: String) = onEngine { l ->
         if (!l.pluginConfigSet(id, json)) Log.w(TAG, "plugin config refused: $id $json")
-        val reg = PluginRegistry.parse(l.pluginsJson())
+        republish(l)
+    }
+
+    /**
+     * Replace one repeating list whole and persist it — the shape the core takes
+     * (see `normalizeRows` in src/plugin/host.zig): every edit sends the entire
+     * array, and what comes back is what is in force after the host clamped it.
+     *
+     * Saved as well as sent, because a gateway typed at the helm has to survive
+     * the next launch.
+     */
+    fun setPluginList(list: PluginListSchema, rows: List<PluginRow>) {
+        val json = list.rowsJson(rows)
+        PluginPrefs.saveRows(appContext, list, json)
+        setPluginConfig(list.pluginId, org.json.JSONObject().put(list.key, org.json.JSONArray(json)).toString())
+    }
+
+    /**
+     * Re-read the registry and publish it, but only when the JSON actually
+     * moved. The settings screen polls this at 1 Hz for the connection lines,
+     * and republishing an identical registry would recompose the whole pane on
+     * every tick.
+     *
+     * RENDER THREAD only: [lastPluginsJson] is its own.
+     */
+    private var lastPluginsJson: String? = null
+
+    private fun republish(l: Lookout) {
+        val json = l.pluginsJson()
+        if (json != null && json == lastPluginsJson) return
+        lastPluginsJson = json
+        val reg = PluginRegistry.parse(json)
         main.post { pluginRegistry = reg }
+    }
+
+    // ---- live plugin status -------------------------------------------------
+    //
+    // A connection's line has to move on its own: "Reconnecting" that never
+    // becomes "Connected" is how a mariner learns the address is wrong. The
+    // plugins rebuild their status every two seconds; this samples it while the
+    // settings screen is on, and stops when it closes.
+
+    @Volatile private var polling = false
+
+    private val pollTick = object : Runnable {
+        override fun run() {
+            if (!polling) return
+            refreshPlugins()
+            main.postDelayed(this, PLUGIN_POLL_MS)
+        }
+    }
+
+    fun startPluginPolling() {
+        if (polling) return
+        polling = true
+        main.post(pollTick)
+    }
+
+    fun stopPluginPolling() {
+        polling = false
+        main.removeCallbacks(pollTick)
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -248,29 +304,70 @@ class ChartController(private val appContext: Context) {
         // that a screenshot cannot give.
         val json = l.pluginsJson()
         Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
-        nmeaAddress?.let { addr -> configureNmea(l, addr) }
-        // After the NMEA seed, so the registry the settings screen first sees
-        // already holds the connection the app was started with.
+        val restored = restoreLists(l, PluginRegistry.parse(json))
+        // The developer override, and only where the mariner has said nothing:
+        // a list they have edited is the truth, empty or not.
+        nmeaAddress?.let { addr ->
+            if (restored.contains("org.beetlebug.nmea0183/connections")) {
+                Log.i(TAG, "plugins: -e nmea ignored; the saved connection list wins")
+            } else {
+                configureNmea(l, addr)
+            }
+        }
+        // After the restore, so the registry the settings screen first sees
+        // already holds the mariner's own connections.
         val reg = PluginRegistry.parse(l.pluginsJson())
         Log.i(
             TAG,
             "plugins: sections ${reg.sections.joinToString(", ") { it.id }}" +
                 " | managed ${reg.managed.size} of ${reg.plugins.size}",
         )
+        lastPluginsJson = l.pluginsJson()
         main.post { pluginRegistry = reg }
     }
 
     /**
-     * Point the NMEA 0183 source at one gateway. A dev affordance while Android
-     * has no plugin settings pane: the connections list is what the settings
-     * window would write, so this writes the same single row.
+     * Push the mariner's saved connection lists into the plugins that just came
+     * up, and answer which lists had one. Like the raster charts, this runs on
+     * every open: the plugin layer belongs to the engine handle, and a new chart
+     * library makes a new one with the manifests' defaults back in place.
+     *
+     * A saved list REPLACES whatever the host seeded, which is what makes the
+     * editor authoritative over the launch intent.
+     */
+    private fun restoreLists(l: Lookout, reg: PluginRegistry): Set<String> {
+        val done = mutableSetOf<String>()
+        for (p in reg.plugins) {
+            for (list in p.lists) {
+                val saved = PluginPrefs.savedRows(appContext, list) ?: continue
+                val body = org.json.JSONObject()
+                    .put(list.key, org.json.JSONArray(saved))
+                    .toString()
+                val ok = l.pluginConfigSet(p.id, body)
+                Log.i(TAG, "plugins: ${p.id}/${list.key} restored ${if (ok) "ok" else "REFUSED"}")
+                if (ok) done.add("${p.id}/${list.key}")
+            }
+        }
+        return done
+    }
+
+    /**
+     * Point the NMEA 0183 source at one gateway from the launch intent:
+     *
+     *     adb shell am start -n … -e nmea 127.0.0.1:10110
+     *
+     * DEVELOPER ONLY. The mariner's route is Settings › Connections, which
+     * writes the same list and persists it; this only seeds a machine that has
+     * never had a connection typed into it, so a test rig can come up pointing
+     * at a replay without anybody touching the screen. It never overrides a
+     * saved list — see the caller.
      */
     private fun configureNmea(l: Lookout, addr: String) {
         val host = addr.substringBeforeLast(':', addr)
         val port = addr.substringAfterLast(':', "").toIntOrNull() ?: 10110
         val row = """{"connections":[{"id":"adb","name":"","host":"$host","port":$port,"enabled":true}]}"""
         val ok = l.pluginConfigSet("org.beetlebug.nmea0183", row)
-        Log.i(TAG, "plugins: nmea0183 -> $host:$port ${if (ok) "set" else "REFUSED"}")
+        Log.i(TAG, "plugins: -e nmea (developer) -> $host:$port ${if (ok) "set" else "REFUSED"}")
     }
 
     /**
@@ -647,6 +744,14 @@ class ChartController(private val appContext: Context) {
 
         /** ~10 Hz: fast enough to feel live, slow enough not to drive layout. */
         const val PUSH_INTERVAL_NS = 100_000_000L
+
+        /**
+         * How often the settings screen re-reads the plugin status. The plugins
+         * rebuild theirs every two seconds, so this is twice their cadence —
+         * fast enough that a rate never looks stuck, and the republish is
+         * skipped whenever nothing changed.
+         */
+        const val PLUGIN_POLL_MS = 1_000L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
         const val SAVE_INTERVAL_NS = 3_000_000_000L

@@ -64,10 +64,97 @@ data class PluginListSchema(
     val addLabel: String,
     /** The item field that switches a row on and off, if it has one. */
     val switchKey: String,
-)
+    /**
+     * How many rows the HOST will keep. Anything past it is dropped on the way
+     * in, so the editor stops offering Add at the cap rather than letting the
+     * mariner type a ninth gateway that silently never connects.
+     */
+    val maxRows: Int,
+) {
+    /** The switch column: the one the manifest named, else the first toggle. */
+    val switchField: PluginField?
+        get() = itemFields.firstOrNull { it.key == switchKey && it.kind == PluginField.Kind.TOGGLE }
+            ?: itemFields.firstOrNull { it.kind == PluginField.Kind.TOGGLE }
 
-/** One row in force, its cells keyed by item-field key. */
-data class PluginRow(val id: String, val cells: Map<String, String>)
+    /**
+     * The three columns a row's summary line is built from, found by what the
+     * schema DECLARES rather than by name: the optional text column is the
+     * mariner's own label for the row, the required one is the address, and the
+     * first number is the port. A plugin that declares a different shape still
+     * renders — the summary just falls back to whatever it does declare.
+     */
+    val nameField: PluginField?
+        get() = itemFields.firstOrNull { it.kind == PluginField.Kind.TEXT && it.optional }
+    val addressField: PluginField?
+        get() = itemFields.firstOrNull { it.kind == PluginField.Kind.TEXT && !it.optional }
+    val portField: PluginField?
+        get() = itemFields.firstOrNull { it.kind == PluginField.Kind.NUMBER }
+
+    /**
+     * The columns a plugin declared BEYOND the standard four — Signal K's
+     * WebSocket flag is the first. They are rendered from their kind and their
+     * label like any other control, so a manifest that adds one needs no shell
+     * change.
+     */
+    val extraFields: List<PluginField>
+        get() = itemFields.filter {
+            it != nameField && it != addressField && it != portField && it != switchField
+        }
+}
+
+/**
+ * One row in force, its cells keyed by item-field key.
+ *
+ * Cells are TEXT whatever the column's kind: a row editor binds them to text
+ * controls, and [PluginListSchema.rowsJson] types them again on the way back to
+ * the core, which clamps and coerces whatever it is sent.
+ */
+data class PluginRow(val id: String, val cells: Map<String, String>) {
+    fun text(key: String): String = cells[key].orEmpty()
+
+    /** A toggle cell. The core writes JSON booleans; "1" is taken too. */
+    fun on(key: String): Boolean = cells[key] == "true" || cells[key] == "1"
+}
+
+/**
+ * What the plugin says ONE row is doing, echoed back under the id the shell
+ * assigned when it added the row. See `plugins/common/conn.zig`, which is where
+ * every connection-holding plugin gets these from.
+ */
+data class PluginStatusItem(val id: String, val state: String, val detail: String) {
+    /** "Connected · 44 msg/s". */
+    val line: String
+        get() {
+            val word = words[state] ?: state.ifEmpty { "Waiting" }
+            return if (detail.isEmpty()) word else "$word · $detail"
+        }
+
+    /**
+     * How the line should read at a glance. The shell maps these to Material
+     * colours; the meanings are the plugin's.
+     */
+    enum class Tone { GOOD, TRYING, BAD, OFF }
+
+    val tone: Tone
+        get() = when (state) {
+            "connected" -> Tone.GOOD
+            "paused" -> Tone.OFF
+            "reconnecting" -> Tone.TRYING
+            "" -> Tone.OFF
+            else -> Tone.BAD // unreachable, refused, no_address
+        }
+
+    private companion object {
+        val words = mapOf(
+            "connected" to "Connected",
+            "paused" to "Paused",
+            "reconnecting" to "Reconnecting",
+            "unreachable" to "Unreachable",
+            "refused" to "Refused",
+            "no_address" to "No address",
+        )
+    }
+}
 
 /** One capability a manifest asks for, and whether the mariner left it granted. */
 data class PluginCapability(
@@ -98,6 +185,12 @@ data class PluginInfo(
     val lists: List<PluginListSchema>,
     val rows: Map<String, List<PluginRow>>,
     val fileTypes: List<String>,
+    /**
+     * What the plugin says about each row of its lists, by row id. Decoded from
+     * [status], which is a JSON line the plugin wrote:
+     * `{"state":…,"detail":…,"items":[{"id":…,"state":…,"detail":…},…]}`.
+     */
+    val statusItems: Map<String, PluginStatusItem> = emptyMap(),
 ) {
     val bundled: Boolean get() = origin == "bundled"
     val installed: Boolean get() = origin == "installed"
@@ -168,6 +261,14 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
     fun lists(tab: String): List<PluginListSchema> =
         plugins.flatMap { it.lists }.filter { it.tab == tab }
 
+    /** The rows of one list, as the core holds them. */
+    fun rows(list: PluginListSchema): List<PluginRow> =
+        plugins.firstOrNull { it.id == list.pluginId }?.rows?.get(list.key).orEmpty()
+
+    /** The plugin's line for one row: what that connection is doing now. */
+    fun status(list: PluginListSchema, rowId: String): PluginStatusItem? =
+        plugins.firstOrNull { it.id == list.pluginId }?.statusItems?.get(rowId)
+
     /** Which non-core sections have anything in them, and so should be listed. */
     val populatedTabs: Set<String>
         get() = (plugins.flatMap { p -> p.fields.map { it.tab } } +
@@ -200,19 +301,39 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
             if (o == null) return null
             val id = o.optString("id").ifEmpty { return null }
             val lists = o.optJSONArray("lists").objects().mapNotNull { listSchema(it, id) }
+            val status = o.optString("status")
             return PluginInfo(
                 id = id,
                 name = o.optString("name").ifEmpty { id },
                 version = o.optString("version"),
                 origin = o.optString("origin").ifEmpty { "bundled" },
                 live = o.optBoolean("live", false),
-                status = o.optString("status"),
+                status = status,
                 capabilities = o.optJSONArray("capabilities").objects().mapNotNull { capability(it) },
                 fields = o.optJSONArray("settings").objects().mapNotNull { field(it) },
                 lists = lists,
                 rows = rows(o.optJSONArray("lists")),
                 fileTypes = o.optJSONArray("file_types").strings(),
+                statusItems = statusItems(status),
             )
+        }
+
+        /**
+         * The per-row lines out of one plugin's status. A plugin that writes a
+         * plain sentence rather than the JSON line simply has none — the status
+         * is TEXT the plugin chose, and the shell must not fall over on it.
+         */
+        private fun statusItems(status: String): Map<String, PluginStatusItem> {
+            if (status.isEmpty() || !status.startsWith("{")) return emptyMap()
+            return try {
+                val items = JSONObject(status).optJSONArray("items") ?: return emptyMap()
+                items.objects().mapNotNull { it ->
+                    val id = it.optString("id").ifEmpty { return@mapNotNull null }
+                    id to PluginStatusItem(id, it.optString("state"), it.optString("detail"))
+                }.toMap()
+            } catch (e: Exception) {
+                emptyMap()
+            }
         }
 
         private fun capability(o: JSONObject): PluginCapability? {
@@ -239,6 +360,7 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
                 empty = o.optString("empty"),
                 addLabel = o.optString("add_label"),
                 switchKey = o.optString("switch_key"),
+                maxRows = o.optInt("max_rows", 8),
             )
         }
 
@@ -304,4 +426,94 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
         private fun JSONArray?.strings(): List<String> =
             if (this == null) emptyList() else (0 until length()).map { optString(it) }
     }
+}
+
+// ---- writing a list back ----------------------------------------------------
+//
+// A list is replaced WHOLE on every edit — that is the core's contract (see
+// `normalizeRows` in src/plugin/host.zig) — so every editor action, add, remove,
+// a typed character committed or a switch flipped, sends the entire array.
+
+/**
+ * A fresh row on the schema's own defaults, with the id the plugin will echo in
+ * its status items. The id is minted HERE and never changes again: it is what
+ * ties "connected, 44 msg/s" to the line the mariner is looking at.
+ */
+fun PluginListSchema.newRow(): PluginRow {
+    val cells = itemFields.associate { f ->
+        f.key to when (f.kind) {
+            PluginField.Kind.TEXT -> f.defaultText
+            PluginField.Kind.TOGGLE -> if (f.defaultValue != 0.0) "true" else "false"
+            PluginField.Kind.NUMBER -> trimmed(f.defaultValue)
+        }
+    }
+    // Short and unique: the host keeps 32 bytes of it, and it only has to be
+    // distinct within one plugin's list.
+    return PluginRow("row-" + java.util.UUID.randomUUID().toString().take(8), cells)
+}
+
+/**
+ * The rows as the core takes them: every column the schema declares, typed by
+ * its kind, with the shell's row id. A cell the row does not carry falls back to
+ * the schema's default rather than being omitted — the core would default it
+ * anyway, and sending it keeps what was written and what is in force the same
+ * shape.
+ */
+fun PluginListSchema.rowsJson(rows: List<PluginRow>): String {
+    val arr = JSONArray()
+    for (r in rows) {
+        val o = JSONObject()
+        o.put("id", r.id)
+        for (f in itemFields) {
+            val cell = r.cells[f.key]
+            when (f.kind) {
+                PluginField.Kind.TEXT -> o.put(f.key, cell ?: f.defaultText)
+                PluginField.Kind.TOGGLE -> o.put(
+                    f.key,
+                    if (cell == null) f.defaultValue != 0.0 else (cell == "true" || cell == "1"),
+                )
+                PluginField.Kind.NUMBER -> {
+                    val v = cell?.trim()?.toDoubleOrNull() ?: f.defaultValue
+                    // A whole number goes over as an integer: a port written
+                    // "10110.0" reads oddly in a log, and the core takes either.
+                    if (v == Math.floor(v) && !v.isInfinite()) o.put(f.key, v.toLong())
+                    else o.put(f.key, v)
+                }
+            }
+        }
+        arr.put(o)
+    }
+    return arr.toString()
+}
+
+/** A number with no trailing ".0" — what a text control should start out with. */
+internal fun trimmed(v: Double): String =
+    if (v == Math.floor(v) && !v.isInfinite()) v.toLong().toString() else v.toString()
+
+/**
+ * Where the mariner's connection lists live between launches.
+ *
+ * The rows are stored as the JSON array the plugin will be given, under one key
+ * per plugin and list — the Android twin of macOS's `plugins.lists.v1`
+ * UserDefaults key, and stored the same way and for the same reason: a schema
+ * belongs to its plugin and may change, and a saved column the schema no longer
+ * declares is simply dropped by the core on the way in.
+ *
+ * Without this a gateway typed at the helm would be gone at the next launch,
+ * which is the whole reason the launch intent existed.
+ */
+object PluginPrefs {
+    private const val PREFS = "plugins.lists.v1"
+
+    private fun key(pluginId: String, listKey: String) = "$pluginId/$listKey"
+
+    fun saveRows(ctx: android.content.Context, list: PluginListSchema, json: String) {
+        ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putString(key(list.pluginId, list.key), json).apply()
+    }
+
+    /** The saved array, or null when the mariner has never edited this list. */
+    fun savedRows(ctx: android.content.Context, list: PluginListSchema): String? =
+        ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .getString(key(list.pluginId, list.key), null)
 }

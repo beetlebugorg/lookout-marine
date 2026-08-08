@@ -59,8 +59,11 @@ class LookoutActivity : ComponentActivity() {
         // here rather than on the render thread: it is half a megabyte of wasm,
         // and the engine is opened the moment the surface arrives.
         controller.pluginDir = extractPlugins()
-        // A dev affordance, not a mariner one: there is no plugin settings pane
-        // on Android yet, so the NMEA source has no other way to be addressed.
+        // DEVELOPER ONLY, and only for a machine that has never had one typed
+        // in: the mariner's route to their own gateway is Settings ›
+        // Connections, which persists what it writes and always wins over this.
+        // What it is for is a test rig that must come up already pointed at a
+        // replay, with nobody touching the screen:
         //   adb shell am start -n … -e nmea 127.0.0.1:10110
         controller.nmeaAddress = intent?.getStringExtra("nmea")
 
