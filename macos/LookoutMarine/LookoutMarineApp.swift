@@ -299,6 +299,13 @@ struct ContentView: View {
                             model.settingsTab = part.count > 1 ? part[1] : "display"
                             model.openSettings()
                         case "scale": model.beginScaleEntry()
+                        // table[:key[:sort[:desc]]] opens a plugin's declared
+                        // dialog, the way the menu item the declaration asked
+                        // for does, with the sort a mariner would click for.
+                        #if os(macOS)
+                        case "table":
+                            model.openPluginTable(part.count > 1 ? part[1] : "")
+                        #endif
                         // scheme:1 dusk, scheme:2 night — the chrome must
                         // follow the chart's hours, and a screenshot proves it.
                         case "scheme":

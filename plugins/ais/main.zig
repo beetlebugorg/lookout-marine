@@ -38,12 +38,18 @@ const cpa = @import("cpa.zig");
 const vec = @import("vector.zig");
 const cfg = @import("config.zig");
 const aton = @import("aton.zig");
+const targets = @import("targets.zig");
 
 comptime {
     lk.plugin(@This());
 }
 
 pub const Settings = cfg.groups;
+
+/// The targets dialog: the same set this file draws, in a sortable table, with
+/// the alarmed vessels held at the top by their band. Declared in targets.zig;
+/// named here because the library reads the plugin's root for what it declares.
+pub const Targets = targets.Targets;
 
 // ---- the numbers, all in one place -----------------------------------------
 
@@ -165,6 +171,7 @@ pub fn draw(c: *lk.Chart) void {
 
         if (t.aton) {
             drawAid(c, t, at, g);
+            if (Targets.isOpen()) targets.aid(t, at, own);
         } else if (drawVessel(c, t, at, g, own, set)) {
             danger += 1;
         }
@@ -209,6 +216,9 @@ fn drawVessel(
         false;
     if (in_gate and !g.in_gate) alarm(t, sol.?);
     g.in_gate = in_gate;
+    // The row carries the same solution the triangle is coloured by, so the
+    // table and the chart can never disagree about which vessel is dangerous.
+    if (Targets.isOpen()) targets.vessel(t, at, own, sol, in_gate);
 
     const color: lk.Color = if (in_gate) .target_danger else .target;
     var idb: [id_len]u8 = undefined;

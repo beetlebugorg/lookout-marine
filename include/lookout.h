@@ -209,6 +209,67 @@ const char *lookout_plugin_config_get(lookout *h, const char *id, size_t *out_le
  * the JSON is not an object. Persisting the values is the shell's job. */
 int lookout_plugin_config_set(lookout *h, const char *id, const char *json);
 
+/* ---- plugin tables (see specs/plugins/table.md) -------------------------- */
+
+/* Every table the loaded plugins declare:
+ *
+ *   {"tables":[{"plugin":"org.beetlebug.ais","key":"targets",
+ *               "title":"AIS Targets","menu":"Vessels",
+ *               "columns":[{"key":"name","label":"Vessel","type":"text"},
+ *                          {"key":"cpa","label":"CPA","type":"distance"}],
+ *               "sort":{"key":"cpa","ascending":true},
+ *               "at":{"lat":"lat","lon":"lon"},
+ *               "open":false,"rows":0,"seq":0}]}
+ *
+ * A shell puts one item per table in the menu the declaration names ("Vessels
+ * > AIS Targets…") and builds the columns from "columns". A COLUMN TYPE is
+ * what makes sorting honest: distance is METRES, speed METRES PER SECOND,
+ * bearing DEGREES TRUE, duration SECONDS, and number/text/flag are what they
+ * say. The plugin sends SI and the shell formats for the mariner's units:
+ * the reverse of the pick report, because a table sorts and converts where a
+ * pick shows one formatted line. A "flag" cell is "alarm", "warning" or null,
+ * and the shell colours the row by it.
+ *
+ * "at" names two row keys carrying a position; a row that has them is
+ * locatable, and activating it centres the chart and pins its bubble, which
+ * is shell-side work. "seq" bumps on every accepted batch: reload the rows
+ * when it changes and leave the table alone when it has not.
+ *
+ * Borrowed until the next plugin query; NULL when no plugin layer is up. */
+const char *lookout_plugin_tables_json(lookout *h, size_t *out_len);
+
+/* One table's rows, ALREADY IN ORDER:
+ *
+ *   {"key":"targets","seq":42,"open":true,
+ *    "sort":{"key":"cpa","ascending":true},
+ *    "rows":[{"id":"367123450","band":0,"at":[-76.46,38.97],
+ *             "cells":["ANNE","367123450",1852,45,6.2,124,585,"alarm"]}]}
+ *
+ * "cells" is one value per declared column, in declaration order: a number, a
+ * string, or null for a cell the plugin did not send, which renders as a
+ * dash, because never heard and heard as zero are different readings.
+ *
+ * THE ORDER IS THE PLUGIN'S POLICY FIRST. Every row carries a "band" (0
+ * first); `sort_key` sorts WITHIN a band and never across one, so a plugin
+ * that puts its alarmed rows in band 0 keeps them at the top of the table
+ * whatever column the mariner sorted by. Rows equal on the sorted column keep
+ * the order they arrived in, and an empty cell sorts last in both directions.
+ * A "flag" column is the exception: an empty flag is not a reading nobody has
+ * heard, it is a row with nothing wrong with it, so a flag column sorts by
+ * severity (alarm, warning, then nothing) and reverses like any other.
+ *
+ * `sort_key` NULL or empty takes the declared default sort. Borrowed until
+ * the next plugin query; NULL when the plugin or the table is unknown. */
+const char *lookout_plugin_table_rows(lookout *h, const char *id, const char *key,
+                                      const char *sort_key, int ascending,
+                                      size_t *out_len);
+
+/* Tell the plugin its table is on screen, or is not. Call it when the dialog
+ * opens and when it closes. A plugin builds rows only while a table is open,
+ * so a dialog nobody opened costs nothing, and a closed table keeps no rows.
+ * Returns 0, or -1 when the plugin or the table is unknown. */
+int lookout_plugin_table_open(lookout *h, const char *id, const char *key, int open);
+
 /* Offer a file the mariner opened to the plugins.
  *
  * A manifest claims file types — "file_types":[".grib2",".grb"] — and this

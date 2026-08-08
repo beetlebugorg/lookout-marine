@@ -24,11 +24,13 @@
 		40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
 		4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
 		4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
+		4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
 		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
 		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
+		5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
@@ -84,6 +86,7 @@
 		51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		59E5805049B75D0B7A5BA9C5 /* PickReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReport.swift; sourceTree = "<group>"; };
+		5B39D8DB2792CC7520B0F19D /* PluginTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTable.swift; sourceTree = "<group>"; };
 		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
 		64750619C04C6E8FC58ADF3C /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
@@ -176,6 +179,7 @@
 				64750619C04C6E8FC58ADF3C /* Platform.swift */,
 				80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */,
 				08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */,
+				5B39D8DB2792CC7520B0F19D /* PluginTable.swift */,
 				D26F78CDEC3CDA7C0807297F /* SearchField.swift */,
 				51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */,
 				08B62D296D34C231163DF7C2 /* SettingsView.swift */,
@@ -438,6 +442,7 @@
 				CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */,
 				A2480AA1E94033ABBF9B678F /* PluginInstall.swift in Sources */,
 				A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */,
+				5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */,
 				3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */,
 				0B3C1DDDBE36EC375F1CA997 /* SettingsRows.swift in Sources */,
 				5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */,
@@ -464,6 +469,7 @@
 				D3A82191350619AF27200EF4 /* Platform.swift in Sources */,
 				15BC02BD89536FECE4FD9DA8 /* PluginInstall.swift in Sources */,
 				22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */,
+				4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */,
 				4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */,
 				041CE190E86B6C6013B5D705 /* SettingsRows.swift in Sources */,
 				FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */,

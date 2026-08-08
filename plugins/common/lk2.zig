@@ -1338,6 +1338,592 @@ pub fn connections(comptime opts: conn.Opts) type {
 }
 
 // ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+/// What a column carries. THE PLUGIN SENDS SI AND THE SHELL FORMATS: metres,
+/// metres per second, degrees true, seconds. That is the reverse of a pick
+/// row, and it is what lets the shell sort a column numerically and show it in
+/// the mariner's own units.
+pub const ColumnType = enum { distance, speed, bearing, duration, number, text, flag };
+
+/// One declared column. An empty label is a column with no heading, which is
+/// what a flag column usually wants.
+pub const Column = struct {
+    key: []const u8,
+    label: []const u8 = "",
+    type: ColumnType,
+};
+
+/// The column the shell sorts by until the mariner says otherwise.
+pub const TableSort = struct {
+    key: []const u8,
+    ascending: bool = true,
+};
+
+/// The two row keys carrying a position. A row that has them is locatable:
+/// the mariner activates it and the chart centres on it. They need not be
+/// columns; a position is usually not worth a column of its own.
+pub const TableAt = struct {
+    lat: []const u8,
+    lon: []const u8,
+};
+
+pub const TableOpts = struct {
+    key: []const u8,
+    title: []const u8,
+    /// The menu the shell opens the dialog from: "Vessels".
+    menu: []const u8,
+    columns: []const Column,
+    sort: ?TableSort = null,
+    at: ?TableAt = null,
+};
+
+/// Columns one table may declare. The host's budget, and the reason for it:
+/// a table wider than this is a spreadsheet, and nobody reads a spreadsheet
+/// on a moving boat.
+pub const max_columns = 16;
+
+/// Rows the library's diff table holds. The host takes 512; this is what one
+/// plugin keeps between cycles, and it is the same number the AIS plugin
+/// tracks targets with.
+pub const max_rows = 256;
+
+/// Longest row id the diff table keeps.
+pub const max_row_id = 32;
+
+/// The batch buffer: the rows that changed and the ids that went. Fifty AIS
+/// targets of eight columns come to about 6 KB.
+pub const table_bytes = 24 * 1024;
+
+/// The shortest gap between two batches, measured from the START of one cycle
+/// to the start of the next. One update per status cadence is the rule; the
+/// library holds a batch back rather than have the host refuse it, and it
+/// leaves itself the margin between this and the host's own 900 ms.
+pub const table_min_interval_ms: i64 = 950;
+
+/// A table the plugin declares and feeds:
+///
+///   pub const Targets = lk.table(.{
+///       .key = "targets", .title = "AIS Targets", .menu = "Vessels",
+///       .columns = &.{ .{ .key = "cpa", .label = "CPA", .type = .distance } },
+///       .sort = .{ .key = "cpa", .ascending = true },
+///   });
+///
+/// The library declares it at start, tells you when the mariner opens it
+/// (`isOpen`), and sends what changed once a cycle. DESCRIBE THE WHOLE SET
+/// EVERY CYCLE, the way `draw` describes the whole picture: a row you do not
+/// upsert leaves the table. The manifest carries the same declaration, and
+/// `lk.expectTables` is the test that says so.
+pub fn table(comptime opts: TableOpts) type {
+    comptime checkTable(opts);
+    return struct {
+        /// What `Declared` and `expectTables` look for.
+        pub const lk_table = opts;
+        /// The manifest's entry for this table, generated from the same
+        /// declaration the host is given.
+        pub const lk_table_json = tableJson(opts);
+
+        var t: TableState = .{};
+
+        /// True while the mariner has the dialog on screen. Skip the work of
+        /// building rows nobody is looking at.
+        pub fn isOpen() bool {
+            return t.open;
+        }
+
+        /// One row. `id` names it for its whole life; `band` is the ordering
+        /// policy: 0 first, and the mariner's column sort never crosses a
+        /// band. Every other field is a declared column key or an `at` key,
+        /// checked here at compile time.
+        pub fn upsert(row: anytype) void {
+            const R = @TypeOf(row);
+            comptime checkRow(opts, R);
+            if (!t.building) return;
+            const id = rowId(row);
+            if (id.len == 0 or id.len > max_row_id) return;
+
+            var w = TableWriter.init(&t);
+            w.raw("{\"id\":");
+            w.str(id);
+            inline for (@typeInfo(R).@"struct".fields) |f| {
+                if (comptime !std.mem.eql(u8, f.name, "id")) {
+                    w.raw(",\"" ++ f.name ++ "\":");
+                    if (comptime std.mem.eql(u8, f.name, "band")) {
+                        w.num(asFloat(@field(row, f.name)));
+                    } else {
+                        w.cell(comptime columnType(opts, f.name), @field(row, f.name));
+                    }
+                }
+            }
+            w.raw("}");
+            t.take(id, w.start, w.body);
+        }
+
+        /// Take one row out now, without waiting for a cycle to pass it by.
+        pub fn remove(id: []const u8) void {
+            t.forgetRow(id);
+        }
+
+        /// Start a cycle. The library calls this before `draw`; a plugin with
+        /// no `draw` calls it itself.
+        pub fn begin() void {
+            t.begin(opts.key);
+        }
+
+        /// Send what changed and take off what this cycle did not describe.
+        /// The library calls this after `draw`.
+        pub fn flush() void {
+            t.commit();
+        }
+
+        /// Tell the host about the declaration. The library calls this at
+        /// start.
+        pub fn lkDeclare() void {
+            if (tableDeclare(lk_table_json) < 0)
+                log(.warn, "table {s}: the host refused the declaration", .{opts.key});
+        }
+
+        /// The batch as it stands. The library's own tests read it; a plugin
+        /// has nothing to do with it.
+        pub fn lkBatch() []const u8 {
+            return t.buf[0..t.len];
+        }
+
+        /// Route one table_open / table_closed event. True when it was ours.
+        pub fn lkOpen(key: []const u8, open: bool) bool {
+            if (!std.mem.eql(u8, key, opts.key)) return false;
+            t.open = open;
+            if (!open) {
+                // The host dropped the rows when it closed the dialog, so the
+                // diff table must forget them too or the next opening sends
+                // nothing.
+                t.n = 0;
+                t.last_ms = 0;
+            }
+            return true;
+        }
+    };
+}
+
+/// One table's retained rows and its batch buffer. The same shape the scene
+/// diff has, for the same reason: an unchanged row costs a serialize and no
+/// call.
+const TableState = struct {
+    const Entry = struct {
+        id: Str(max_row_id) = .{},
+        hash: u64 = 0,
+        live: bool = false,
+        seen: bool = false,
+    };
+
+    entries: [max_rows]Entry = @splat(.{}),
+    n: usize = 0,
+
+    buf: [table_bytes]u8 = undefined,
+    len: usize = 0,
+    sets: usize = 0,
+    overflowed: bool = false,
+    /// True between `begin` and `commit`, and only while the dialog is open
+    /// and the cadence allows another batch.
+    building: bool = false,
+    open: bool = false,
+    /// When the last batch that went out was BUILT, monotonic. Measuring the
+    /// cadence from the start of a cycle rather than from the send keeps the
+    /// gap the host sees a shade wider than the one measured here, so a batch
+    /// this library was willing to send is one the host is willing to take.
+    last_ms: i64 = 0,
+    cycle_ms: i64 = 0,
+    /// The key, kept for the commit's envelope.
+    key: []const u8 = "",
+
+    fn find(self: *TableState, id: []const u8) ?*Entry {
+        for (self.entries[0..self.n]) |*e| {
+            if (e.id.eql(id)) return e;
+        }
+        return null;
+    }
+
+    fn begin(self: *TableState, key: []const u8) void {
+        self.key = key;
+        const now = tableNow();
+        self.building = self.open and (self.last_ms == 0 or now - self.last_ms >= table_min_interval_ms);
+        if (!self.building) return;
+        self.cycle_ms = now;
+        for (self.entries[0..self.n]) |*e| e.seen = false;
+        self.len = 0;
+        self.sets = 0;
+        self.overflowed = false;
+        self.put("{\"key\":\"");
+        self.put(key);
+        self.put("\",\"upsert\":[");
+    }
+
+    fn put(self: *TableState, text: []const u8) void {
+        if (self.len + text.len > self.buf.len) {
+            self.overflowed = true;
+            return;
+        }
+        @memcpy(self.buf[self.len..][0..text.len], text);
+        self.len += text.len;
+    }
+
+    /// Take one serialized row, or rewind it when the table already holds
+    /// exactly that row.
+    fn take(self: *TableState, id: []const u8, start: usize, body: usize) void {
+        if (self.overflowed) {
+            self.len = start;
+            return;
+        }
+        const hash = std.hash.Fnv1a_64.hash(self.buf[body..self.len]);
+        if (self.find(id)) |e| {
+            e.seen = true;
+            if (e.live and e.hash == hash) {
+                self.len = start;
+                return;
+            }
+            e.hash = hash;
+            e.live = true;
+            self.sets += 1;
+            return;
+        }
+        if (self.n == max_rows) {
+            self.len = start;
+            log(.warn, "table {s}: more than {d} rows; \"{s}\" dropped", .{ self.key, max_rows, id });
+            return;
+        }
+        const e = &self.entries[self.n];
+        self.n += 1;
+        e.id.set(id);
+        e.hash = hash;
+        e.live = true;
+        e.seen = true;
+        self.sets += 1;
+    }
+
+    /// Drop one row from the diff table. It goes out as a removal at the next
+    /// commit, because the commit lists everything live that this cycle did
+    /// not describe.
+    fn forgetRow(self: *TableState, id: []const u8) void {
+        if (self.find(id)) |e| e.seen = false;
+    }
+
+    fn commit(self: *TableState) void {
+        if (!self.building) return;
+        self.building = false;
+
+        var dels: usize = 0;
+        for (self.entries[0..self.n]) |*e| {
+            if (e.live and !e.seen) dels += 1;
+        }
+        if (self.sets == 0 and dels == 0) return;
+
+        self.put("],\"remove\":[");
+        var k: usize = 0;
+        for (self.entries[0..self.n]) |*e| {
+            if (!e.live or e.seen) continue;
+            if (k > 0) self.put(",");
+            k += 1;
+            self.put("\"");
+            self.put(e.id.text());
+            self.put("\"");
+        }
+        self.put("]}");
+        if (self.overflowed) {
+            // The rows that did not fit are still unsent, so the table forgets
+            // everything and describes itself again next cycle.
+            log(.warn, "table {s}: the batch did not fit in {d} bytes", .{ self.key, self.buf.len });
+            self.n = 0;
+            self.len = 0;
+            return;
+        }
+        if (tableUpdate(self.buf[0..self.len]) < 0) {
+            self.n = 0;
+            self.len = 0;
+            return;
+        }
+        self.last_ms = self.cycle_ms;
+        // A row this cycle did not describe has left the table.
+        var w: usize = 0;
+        for (self.entries[0..self.n]) |e| {
+            if (e.live and e.seen) {
+                self.entries[w] = e;
+                w += 1;
+            }
+        }
+        self.n = w;
+    }
+};
+
+/// Writes one row straight into the batch buffer.
+const TableWriter = struct {
+    t: *TableState,
+    start: usize = 0,
+    body: usize = 0,
+
+    fn init(t: *TableState) TableWriter {
+        var w = TableWriter{ .t = t, .start = t.len };
+        if (t.sets > 0) w.raw(",");
+        w.body = t.len;
+        return w;
+    }
+
+    fn raw(self: *TableWriter, text: []const u8) void {
+        self.t.put(text);
+    }
+
+    fn print(self: *TableWriter, comptime fmt: []const u8, args: anytype) void {
+        var tmp: [128]u8 = undefined;
+        var w = std.Io.Writer.fixed(&tmp);
+        w.print(fmt, args) catch {
+            self.t.overflowed = true;
+            return;
+        };
+        self.raw(w.buffered());
+    }
+
+    fn str(self: *TableWriter, s: []const u8) void {
+        self.raw("\"");
+        for (s) |c| switch (c) {
+            '"' => self.raw("\\\""),
+            '\\' => self.raw("\\\\"),
+            '\n' => self.raw("\\n"),
+            '\r' => self.raw("\\r"),
+            '\t' => self.raw("\\t"),
+            0...8, 11, 12, 14...31 => self.print("\\u{x:0>4}", .{c}),
+            else => self.raw(&[_]u8{c}),
+        };
+        self.raw("\"");
+    }
+
+    fn num(self: *TableWriter, v: f64) void {
+        if (std.math.isFinite(v)) self.print("{d}", .{v}) else self.raw("null");
+    }
+
+    /// One cell. Null is null on the wire and a dash on screen: never heard
+    /// and heard as zero are different readings.
+    fn cell(self: *TableWriter, comptime ctype: ?ColumnType, value: anytype) void {
+        const V = @TypeOf(value);
+        switch (@typeInfo(V)) {
+            .null => self.raw("null"),
+            .optional => if (value) |v| self.cell(ctype, v) else self.raw("null"),
+            else => {
+                if (comptime isTextColumn(ctype)) self.str(asText(value)) else self.num(asFloat(value));
+            },
+        }
+    }
+};
+
+/// The host calls and the clock, absent on a native build so the library's own
+/// tests reach every path here without linking the wasm imports. With no clock
+/// the cadence gate stands open, which is what a test wants.
+fn tableNow() i64 {
+    if (comptime builtin.target.cpu.arch != .wasm32) return 0;
+    return monoMs();
+}
+
+fn tableDeclare(json: []const u8) i32 {
+    if (comptime builtin.target.cpu.arch != .wasm32) return 0;
+    return raw_lk.tableDeclareJson(json);
+}
+
+fn tableUpdate(json: []const u8) i32 {
+    if (comptime builtin.target.cpu.arch != .wasm32) return 0;
+    return raw_lk.tableUpdateJson(json);
+}
+
+// -- the declaration, checked and rendered at comptime ------------------------
+
+fn checkTable(comptime opts: TableOpts) void {
+    comptime {
+        if (opts.key.len == 0) @compileError("a table needs a key");
+        if (opts.title.len == 0) @compileError("a table needs a title: it is the dialog's own name");
+        if (opts.menu.len == 0) @compileError("a table needs a menu: the shell opens the dialog from it");
+        if (opts.columns.len == 0) @compileError("a table needs at least one column");
+        if (opts.columns.len > max_columns) @compileError(std.fmt.comptimePrint(
+            "the table declares {d} columns; the host allows {d}",
+            .{ opts.columns.len, max_columns },
+        ));
+        for (opts.columns, 0..) |c, i| {
+            if (c.key.len == 0) @compileError("every table column needs a key");
+            for (opts.columns[0..i]) |other| {
+                if (std.mem.eql(u8, other.key, c.key))
+                    @compileError("two table columns called \"" ++ c.key ++ "\"");
+            }
+        }
+        if (opts.sort) |s| {
+            if (columnOf(opts, s.key) == null)
+                @compileError("the default sort names column \"" ++ s.key ++ "\", which is not declared");
+        }
+    }
+}
+
+fn columnOf(comptime opts: TableOpts, comptime key: []const u8) ?Column {
+    comptime {
+        for (opts.columns) |c| {
+            if (std.mem.eql(u8, c.key, key)) return c;
+        }
+        return null;
+    }
+}
+
+/// The column a row field feeds, or null when the field is an `at` key: a
+/// position is a number and never a column.
+fn columnType(comptime opts: TableOpts, comptime name: []const u8) ?ColumnType {
+    comptime {
+        if (columnOf(opts, name)) |c| return c.type;
+        return null;
+    }
+}
+
+fn isTextColumn(comptime ctype: ?ColumnType) bool {
+    const c = ctype orelse return false;
+    return c == .text or c == .flag;
+}
+
+/// Every row field must be `id`, `band`, a declared column or an `at` key,
+/// and must carry what that column holds. A typo in a key is a cell the shell
+/// would show as a dash forever, so it is a compile error instead.
+fn checkRow(comptime opts: TableOpts, comptime R: type) void {
+    comptime {
+        const info = switch (@typeInfo(R)) {
+            .@"struct" => |s| s,
+            else => @compileError("a table row is a struct literal"),
+        };
+        var has_id = false;
+        for (info.fields) |f| {
+            if (std.mem.eql(u8, f.name, "id")) {
+                has_id = true;
+                continue;
+            }
+            if (std.mem.eql(u8, f.name, "band")) continue;
+            if (columnOf(opts, f.name) != null) continue;
+            if (opts.at) |at| {
+                if (std.mem.eql(u8, f.name, at.lat) or std.mem.eql(u8, f.name, at.lon)) continue;
+            }
+            @compileError("table \"" ++ opts.key ++ "\" declares no column \"" ++ f.name ++ "\"");
+        }
+        if (!has_id) @compileError("a table row needs an id");
+    }
+}
+
+fn rowId(row: anytype) []const u8 {
+    return asText(@field(row, "id"));
+}
+
+/// A string field, however the plugin holds it: a slice, a literal, or one of
+/// the library's fixed `Str` buffers.
+fn asText(value: anytype) []const u8 {
+    if (comptime isStrBuffer(@TypeOf(value))) return value.text();
+    return value;
+}
+
+fn isStrBuffer(comptime V: type) bool {
+    return switch (@typeInfo(V)) {
+        .@"struct" => @hasDecl(V, "text"),
+        else => false,
+    };
+}
+
+fn asFloat(value: anytype) f64 {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .int, .comptime_int => @floatFromInt(value),
+        .float, .comptime_float => @floatCast(value),
+        .bool => if (value) 1 else 0,
+        else => @compileError("a table cell in a number column takes a number"),
+    };
+}
+
+/// The manifest entry for one declaration, rendered at comptime so the
+/// manifest and the running host are given the same text.
+pub fn tableJson(comptime opts: TableOpts) []const u8 {
+    return struct {
+        const text = build();
+
+        fn build() []const u8 {
+            comptime {
+                var out: []const u8 = "{\"key\":" ++ jsonStr(opts.key) ++
+                    ",\"title\":" ++ jsonStr(opts.title) ++
+                    ",\"menu\":" ++ jsonStr(opts.menu) ++ ",\"columns\":[";
+                for (opts.columns, 0..) |c, i| {
+                    if (i > 0) out = out ++ ",";
+                    out = out ++ "{\"key\":" ++ jsonStr(c.key) ++
+                        ",\"label\":" ++ jsonStr(c.label) ++
+                        ",\"type\":\"" ++ @tagName(c.type) ++ "\"}";
+                }
+                out = out ++ "]";
+                if (opts.sort) |s| out = out ++ ",\"sort\":{\"key\":" ++ jsonStr(s.key) ++
+                    ",\"ascending\":" ++ (if (s.ascending) "true" else "false") ++ "}";
+                if (opts.at) |a| out = out ++ ",\"at\":{\"lat\":" ++ jsonStr(a.lat) ++
+                    ",\"lon\":" ++ jsonStr(a.lon) ++ "}";
+                return out ++ "}";
+            }
+        }
+    }.text;
+}
+
+/// The `"tables"` array a manifest must carry for these declarations.
+pub fn tablesJson(comptime spec_list: anytype) []const u8 {
+    return struct {
+        const text = build();
+
+        fn build() []const u8 {
+            comptime {
+                var out: []const u8 = "[";
+                for (spec_list, 0..) |T, i| {
+                    if (i > 0) out = out ++ ",";
+                    out = out ++ T.lk_table_json;
+                }
+                return out ++ "]";
+            }
+        }
+    }.text;
+}
+
+fn jsonStr(comptime s: []const u8) []const u8 {
+    comptime {
+        var out: []const u8 = "\"";
+        for (s) |c| out = out ++ switch (c) {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            0...8, 11, 12, 14...31 => std.fmt.comptimePrint("\\u{x:0>4}", .{c}),
+            else => &[_]u8{c},
+        };
+        return out ++ "\"";
+    }
+}
+
+/// Fail when the manifest's `"tables"` is not what these declarations say, the
+/// way `expectManifest` does for settings. A plugin's own native test:
+///
+///   test "the manifest carries the table this file declares" {
+///       try lk.expectTables(@embedFile("manifest.json"), .{Targets});
+///   }
+pub fn expectTables(manifest_text: []const u8, comptime spec_list: anytype) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const want_text = comptime tablesJson(spec_list);
+    const manifest = try std.json.parseFromSliceLeaky(std.json.Value, a, manifest_text, .{});
+    const got = switch (manifest) {
+        .object => |o| o.get("tables") orelse {
+            std.debug.print("manifest declares no tables; the plugin declares:\n{s}\n", .{want_text});
+            return error.NoTablesInManifest;
+        },
+        else => return error.ManifestIsNotAnObject,
+    };
+    const want = try std.json.parseFromSliceLeaky(std.json.Value, a, want_text, .{});
+    if (!schema.equal(got, want)) {
+        std.debug.print("manifest tables do not match the declaration.\nthe plugin declares:\n{s}\n", .{want_text});
+        return error.ManifestTableMismatch;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -1365,6 +1951,7 @@ pub fn plugin(comptime P: type) void {
             if (comptime D.has_connections) {
                 P.Connections.lkStart(P, s.config);
             }
+            inline for (D.tables) |T| T.lkDeclare();
             if (comptime D.has_draw) {
                 draw_timer = raw_lk.timerSet(D.draw_rate_ms, true);
                 if (draw_timer < 0) return error.TimerRefused;
@@ -1409,6 +1996,23 @@ pub fn plugin(comptime P: type) void {
                     }
                     if (comptime D.has_connections) {
                         if (P.Connections.lkTimer(P, id)) return;
+                    }
+                },
+                // A table the mariner just opened is filled at once: the
+                // dialog must not sit empty until the next tick.
+                .table_open => |key| {
+                    var mine = false;
+                    inline for (D.tables) |T| {
+                        if (T.lkOpen(key, true)) mine = true;
+                    }
+                    if (mine) {
+                        if (comptime D.has_draw) runDraw();
+                        return;
+                    }
+                },
+                .table_closed => |key| {
+                    inline for (D.tables) |T| {
+                        if (T.lkOpen(key, false)) return;
                     }
                 },
                 .shutdown => {
@@ -1457,14 +2061,20 @@ pub fn plugin(comptime P: type) void {
                 }
                 scene.begin();
                 scene.commit(); // draws nothing, so everything drawn is deleted
+                inline for (D.tables) |T| {
+                    T.begin();
+                    T.flush(); // and describes no rows, so the table empties
+                }
                 sayText("degraded", w.buffered());
                 return;
             }
 
             var c = Chart{};
             scene.begin();
+            inline for (D.tables) |T| T.begin();
             P.draw(&c);
             scene.commit();
+            inline for (D.tables) |T| T.flush();
             if (c.said) sayText(@tagName(c.state), c.detail.text()) else sayText("running", "");
         }
     };
@@ -1517,6 +2127,17 @@ fn Declared(comptime P: type) type {
                 const T = @field(P.inputs, d.name);
                 if (@TypeOf(T) != type) continue;
                 if (@hasDecl(T, "lk_path")) out = out ++ &[_]type{T};
+            }
+            break :blk out;
+        };
+
+        /// Every table the plugin declared at its root, in declaration order.
+        const tables: []const type = blk: {
+            var out: []const type = &.{};
+            for (@typeInfo(P).@"struct".decls) |d| {
+                const T = @field(P, d.name);
+                if (@TypeOf(T) != type) continue;
+                if (@hasDecl(T, "lk_table")) out = out ++ &[_]type{T};
             }
             break :blk out;
         };
@@ -1718,4 +2339,126 @@ test "canvas encoder: a fixed canvas with no position leaves no trace" {
     cv.done();
     try expect.expectEqual(before, scene.len);
     try expect.expectEqual(@as(usize, 0), scene.sets);
+}
+
+// -- tables -------------------------------------------------------------------
+
+const TestTable = table(.{
+    .key = "targets",
+    .title = "AIS Targets",
+    .menu = "Vessels",
+    .columns = &.{
+        .{ .key = "name", .label = "Vessel", .type = .text },
+        .{ .key = "cpa", .label = "CPA", .type = .distance },
+        .{ .key = "state", .label = "", .type = .flag },
+    },
+    .sort = .{ .key = "cpa", .ascending = true },
+    .at = .{ .lat = "lat", .lon = "lon" },
+});
+
+test "a declaration renders the entry the manifest has to carry" {
+    try expect.expectEqualStrings(
+        "{\"key\":\"targets\",\"title\":\"AIS Targets\",\"menu\":\"Vessels\",\"columns\":[" ++
+            "{\"key\":\"name\",\"label\":\"Vessel\",\"type\":\"text\"}," ++
+            "{\"key\":\"cpa\",\"label\":\"CPA\",\"type\":\"distance\"}," ++
+            "{\"key\":\"state\",\"label\":\"\",\"type\":\"flag\"}]," ++
+            "\"sort\":{\"key\":\"cpa\",\"ascending\":true},\"at\":{\"lat\":\"lat\",\"lon\":\"lon\"}}",
+        TestTable.lk_table_json,
+    );
+    try expect.expectEqualStrings("[" ++ TestTable.lk_table_json ++ "]", tablesJson(.{TestTable}));
+}
+
+test "no rows are built while the dialog is shut" {
+    _ = TestTable.lkOpen("targets", false);
+    TestTable.begin();
+    try expect.expect(!TestTable.isOpen());
+    TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
+    TestTable.flush();
+    try expect.expectEqual(@as(usize, 0), TestTable.lkBatch().len);
+}
+
+test "a cycle sends the rows that changed and removes the ones it did not describe" {
+    try expect.expect(TestTable.lkOpen("targets", true));
+    defer _ = TestTable.lkOpen("targets", false);
+
+    // Everything is new, so everything goes out. A cell the plugin has no
+    // reading for is left off, and the host reads that as a dash.
+    TestTable.begin();
+    TestTable.upsert(.{
+        .id = "367123450",
+        .band = @as(i32, 0),
+        .name = "ANNE",
+        .cpa = 124.0,
+        .state = @as(?[]const u8, "alarm"),
+        .lat = 38.97,
+        .lon = -76.46,
+    });
+    TestTable.upsert(.{ .id = "366999999", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
+    TestTable.flush();
+    try expect.expectEqualStrings(
+        "{\"key\":\"targets\",\"upsert\":[" ++
+            "{\"id\":\"367123450\",\"band\":0,\"name\":\"ANNE\",\"cpa\":124,\"state\":\"alarm\"," ++
+            "\"lat\":38.97,\"lon\":-76.46}," ++
+            "{\"id\":\"366999999\",\"band\":1,\"name\":\"BRAVO\",\"cpa\":null}]," ++
+            "\"remove\":[]}",
+        TestTable.lkBatch(),
+    );
+
+    // The same picture again: nothing changed, so nothing is sent.
+    TestTable.begin();
+    TestTable.upsert(.{
+        .id = "367123450",
+        .band = @as(i32, 0),
+        .name = "ANNE",
+        .cpa = 124.0,
+        .state = @as(?[]const u8, "alarm"),
+        .lat = 38.97,
+        .lon = -76.46,
+    });
+    TestTable.upsert(.{ .id = "366999999", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
+    TestTable.flush();
+    // Not even an empty batch: the commit sees nothing to say and returns,
+    // leaving the envelope it opened unfinished.
+    try expect.expectEqualStrings("{\"key\":\"targets\",\"upsert\":[", TestTable.lkBatch());
+
+    // One row moves and the other is not described at all: one upsert, one
+    // removal, and the mariner's table follows the sea.
+    TestTable.begin();
+    TestTable.upsert(.{
+        .id = "367123450",
+        .band = @as(i32, 0),
+        .name = "ANNE",
+        .cpa = 96.0,
+        .state = @as(?[]const u8, "alarm"),
+        .lat = 38.97,
+        .lon = -76.46,
+    });
+    TestTable.flush();
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"cpa\":96") != null);
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"366999999\"]") != null);
+
+    // And a row taken out by hand leaves at the next commit.
+    TestTable.begin();
+    TestTable.upsert(.{ .id = "367123450", .band = @as(i32, 0), .name = "ANNE", .cpa = 96.0, .state = @as(?[]const u8, "alarm"), .lat = 38.97, .lon = -76.46 });
+    TestTable.remove("367123450");
+    TestTable.flush();
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"367123450\"]") != null);
+}
+
+test "closing the dialog forgets what was on it" {
+    try expect.expect(TestTable.lkOpen("targets", true));
+    TestTable.begin();
+    TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
+    TestTable.flush();
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"ANNE\"") != null);
+
+    // The host drops the rows when the dialog closes, so the library must too:
+    // the next opening has to describe the whole set again.
+    _ = TestTable.lkOpen("targets", false);
+    try expect.expect(TestTable.lkOpen("targets", true));
+    defer _ = TestTable.lkOpen("targets", false);
+    TestTable.begin();
+    TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
+    TestTable.flush();
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"ANNE\"") != null);
 }

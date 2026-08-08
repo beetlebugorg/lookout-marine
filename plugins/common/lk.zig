@@ -59,6 +59,8 @@ const host = struct {
     extern "lookout" fn ais_upsert(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn overlay(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn chrome_status(ptr: [*]const u8, len: u32) void;
+    extern "lookout" fn table_declare(ptr: [*]const u8, len: u32) i32;
+    extern "lookout" fn table_update(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn alert(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn tcp_connect(host_ptr: [*]const u8, host_len: u32, port: u32) i64;
     extern "lookout" fn tcp_send(id: i64, ptr: [*]const u8, len: u32) i32;
@@ -131,6 +133,24 @@ pub fn overlayJson(json: []const u8) i32 {
 /// status repeatedly is free.
 pub fn statusJson(json: []const u8) void {
     host.chrome_status(json.ptr, @intCast(json.len));
+}
+
+/// Declare one table: `{"key":"targets","title":"AIS Targets",
+/// "menu":"Vessels","columns":[{"key":"cpa","label":"CPA","type":"distance"}],
+/// "sort":{"key":"cpa","ascending":true},"at":{"lat":"lat","lon":"lon"}}`.
+/// The manifest declares the same table; this is what tells the running host
+/// about it. -1 when the declaration is refused, and the host says why.
+pub fn tableDeclareJson(json: []const u8) i32 {
+    return host.table_declare(json.ptr, @intCast(json.len));
+}
+
+/// One keyed batch of rows: `{"key":"targets","upsert":[{"id":"367123450",
+/// "band":0,"cpa":124,...}],"remove":["366999999"]}`. Cell values are SI:
+/// metres, metres per second, degrees true, seconds, and the shell formats
+/// them for the mariner. Returns the rows the batch touched, or -1 when it was
+/// refused whole (too fast, or over the row budget).
+pub fn tableUpdateJson(json: []const u8) i32 {
+    return host.table_update(json.ptr, @intCast(json.len));
 }
 
 /// Raise an alert, `{"severity":"alarm","title":"...","body":"..."}`. Needs
@@ -605,6 +625,12 @@ pub const Event = union(enum) {
     ws_open: WsOpen,
     ws_data: WsData,
     ws_closed: WsClosed,
+    /// The key of a declared table a shell has just put on screen. Build rows
+    /// from here on; before this one nobody was looking.
+    table_open: []const u8,
+    /// The key of a table the shell has closed. Stop building its rows; the
+    /// host has already dropped them.
+    table_closed: []const u8,
     /// Last thing you will ever be handed. Close sockets, post a final status.
     shutdown,
 };
@@ -629,6 +655,8 @@ const kind_ais_changed: u32 = 11;
 const kind_ws_open: u32 = 12;
 const kind_ws_data: u32 = 13;
 const kind_ws_closed: u32 = 14;
+const kind_table_open: u32 = 15;
+const kind_table_closed: u32 = 16;
 const kind_shutdown: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
@@ -754,6 +782,14 @@ pub fn registerPlugin(comptime P: type) void {
                         .code = @intCast(std.math.clamp(jintOpt(root.object.get("code")) orelse 0, 0, 0xffff)),
                         .reason = jstr(root.object.get("reason") orelse .{ .string = "" }) orelse "",
                     } };
+                },
+                kind_table_open, kind_table_closed => blk: {
+                    const root = envelope(payload) orelse return 0;
+                    const table_key = jstr(root.object.get("key") orelse .{ .string = "" }) orelse "";
+                    break :blk if (kind == kind_table_open)
+                        .{ .table_open = table_key }
+                    else
+                        .{ .table_closed = table_key };
                 },
                 kind_shutdown => .shutdown,
                 // The API says an unknown kind is ignored and answered 0. A

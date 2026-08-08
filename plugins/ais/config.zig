@@ -117,6 +117,10 @@ test "the manifest ships the schema this file declares" {
     try lk.expectManifest(@embedFile("manifest.json"), groups);
 }
 
+test "the manifest ships the table targets.zig declares" {
+    try lk.expectTables(@embedFile("manifest.json"), .{@import("targets.zig").Targets});
+}
+
 test "the declared defaults convert to the SI numbers the plugin works in" {
     // Nothing has read a config, so the library holds every default the groups
     // above name: ten minutes is 600 s, six minutes is 360 s.

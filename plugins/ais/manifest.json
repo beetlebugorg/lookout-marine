@@ -3,6 +3,25 @@
   "name": "AIS targets",
   "api": 1,
   "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"],
+  "tables": [
+    {
+      "key": "targets",
+      "title": "AIS Targets",
+      "menu": "Vessels",
+      "columns": [
+        {"key": "name", "label": "Vessel", "type": "text"},
+        {"key": "mmsi", "label": "MMSI", "type": "text"},
+        {"key": "range", "label": "Range", "type": "distance"},
+        {"key": "brg", "label": "Bearing", "type": "bearing"},
+        {"key": "sog", "label": "SOG", "type": "speed"},
+        {"key": "cpa", "label": "CPA", "type": "distance"},
+        {"key": "tcpa", "label": "TCPA", "type": "duration"},
+        {"key": "state", "label": "", "type": "flag"}
+      ],
+      "sort": {"key": "cpa", "ascending": true},
+      "at": {"lat": "lat", "lon": "lon"}
+    }
+  ],
   "settings": {
     "groups": [
       {

@@ -417,8 +417,8 @@ pub fn expectManifest(manifest_text: []const u8, comptime spec_list: anytype) !v
 }
 
 /// Deep equality over parsed JSON. Numbers compare by value, so 926 and 926.0
-/// are the same schema.
-fn equal(a: std.json.Value, b: std.json.Value) bool {
+/// are the same schema. `lk2.expectTables` checks a manifest's tables with it.
+pub fn equal(a: std.json.Value, b: std.json.Value) bool {
     return switch (a) {
         .null => b == .null,
         .bool => |x| b == .bool and b.bool == x,

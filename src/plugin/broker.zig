@@ -1,4 +1,4 @@
-//! The host side of the plugin API: the twenty-seven native functions a plugin
+//! The host side of the plugin API: the twenty-nine native functions a plugin
 //! imports from module `lookout`, the grants that gate them, and the one I/O
 //! thread that owns sockets, timers and the subscriber fanout.
 //!
@@ -78,6 +78,8 @@ pub const Kind = struct {
     pub const ws_open: u32 = 12;
     pub const ws_data: u32 = 13;
     pub const ws_closed: u32 = 14;
+    pub const table_open: u32 = 15;
+    pub const table_closed: u32 = 16;
     pub const shutdown: u32 = 99;
 };
 
@@ -266,6 +268,247 @@ pub const Plugin = struct {
     }
 };
 
+// ---- tables (specs/plugins/table.md) ---------------------------------------
+
+/// The budgets one table lives inside, the house pattern: a batch that would
+/// take a table past any of them is refused whole and logged, never trimmed.
+/// Sixteen columns is what a declaration may carry; 512 rows is what a shell
+/// will show.
+pub const max_table_columns = 16;
+pub const max_table_rows = 512;
+
+/// Tables one plugin may declare. One surface per declaration; a plugin with
+/// five of them is building an application, not reporting data.
+pub const max_tables = 4;
+
+/// Longest key, heading and text cell kept. Longer refuses the declaration or
+/// the batch rather than cutting a name in half.
+pub const max_table_key = 48;
+pub const max_table_label = 64;
+pub const max_table_cell = 96;
+
+/// The shortest gap between two ACCEPTED batches for one table. The spec's
+/// rate is one update per status cadence, which is a second; the slack is for
+/// a plugin timer landing a few milliseconds early.
+pub const table_min_interval_ms: i64 = 900;
+
+/// What a column carries, which is what makes shell-side sorting honest. The
+/// plugin sends SI and the shell formats for the mariner's units, the reverse
+/// of the pick report, because a table sorts and converts where a pick shows
+/// one formatted line.
+pub const ColumnType = enum {
+    /// Metres.
+    distance,
+    /// Metres per second.
+    speed,
+    /// Degrees true.
+    bearing,
+    /// Seconds.
+    duration,
+    number,
+    text,
+    /// "alarm", "warning" or null. The shell colours the row by it.
+    flag,
+
+    pub fn name(self: ColumnType) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromName(text: []const u8) ?ColumnType {
+        inline for (comptime std.enums.values(ColumnType)) |c| {
+            if (std.mem.eql(u8, text, @tagName(c))) return c;
+        }
+        return null;
+    }
+
+    /// True when the cell holds a number, which is what the shell sorts on.
+    pub fn numeric(self: ColumnType) bool {
+        return switch (self) {
+            .distance, .speed, .bearing, .duration, .number => true,
+            .text, .flag => false,
+        };
+    }
+};
+
+pub const Column = struct {
+    key: []u8,
+    label: []u8,
+    type: ColumnType,
+};
+
+/// One cell. `none` is a cell the plugin sent as null, which the shell renders
+/// as a dash: never heard and heard as zero are different readings and stay
+/// different here.
+pub const Cell = union(enum) {
+    none,
+    num: f64,
+    text: []u8,
+};
+
+/// A flag cell's rank, for sorting a `flag` column: an alarm before a warning
+/// before anything else, and a cell with nothing in it last of all.
+fn flagRank(cell: Cell) u8 {
+    return switch (cell) {
+        .text => |s| if (std.mem.eql(u8, s, "alarm"))
+            0
+        else if (std.mem.eql(u8, s, "warning")) 1 else 2,
+        else => 3,
+    };
+}
+
+pub const Row = struct {
+    id: []u8,
+    /// THE PLUGIN OWNS THE ORDERING POLICY: the mariner's column sort applies
+    /// within a band and never across one, so a plugin that puts its alarmed
+    /// rows in band 0 keeps them at the top whatever column is sorted by.
+    band: i32,
+    /// One per declared column, in declaration order.
+    cells: []Cell,
+    /// Where the row is, when the declaration's `at` named two keys and the
+    /// row carried both. A row with a position is locatable: the shell centres
+    /// the chart on it and pins its bubble.
+    lat: ?f64 = null,
+    lon: ?f64 = null,
+    /// Arrival order, which is the tiebreak that makes the sort total. Two
+    /// rows equal on the sorted column keep the order they were first seen in,
+    /// so a table does not shuffle under the mariner's hands.
+    seq: u64 = 0,
+};
+
+/// One declared table and the rows a plugin has fed it.
+pub const Table = struct {
+    /// Registry index of the plugin that declared it.
+    plugin: u32,
+    /// Manifest id, borrowed from the plugin record like `Plugin.id`.
+    plugin_id: []const u8,
+    key: []u8,
+    title: []u8,
+    /// The menu the shell opens it from: "Vessels".
+    menu: []u8,
+    columns: []Column,
+    /// The column the shell sorts by until the mariner says otherwise. Empty
+    /// when the declaration named none.
+    sort_key: []u8,
+    sort_asc: bool = true,
+    /// The two row keys carrying a position, empty when the table declares no
+    /// `at`. They need not be declared columns.
+    at_lat: []u8,
+    at_lon: []u8,
+    rows: std.ArrayList(Row) = .empty,
+    /// True while a shell has the dialog on screen. The plugin is told, so it
+    /// does not build rows nobody is looking at.
+    open: bool = false,
+    /// When the last batch was accepted, monotonic.
+    last_ms: i64 = 0,
+    /// Bumps on every accepted batch. A shell reloads when it changes and
+    /// leaves the table alone when it does not.
+    seq: u64 = 0,
+    next_row_seq: u64 = 0,
+    /// Batches refused over budget. The first one is logged and then one in a
+    /// hundred, so a plugin sending too fast says so without filling the log.
+    refused: u64 = 0,
+
+    fn column(self: *const Table, key: []const u8) ?usize {
+        for (self.columns, 0..) |c, i| {
+            if (std.mem.eql(u8, c.key, key)) return i;
+        }
+        return null;
+    }
+
+    fn row(self: *Table, id: []const u8) ?*Row {
+        for (self.rows.items) |*r| {
+            if (std.mem.eql(u8, r.id, id)) return r;
+        }
+        return null;
+    }
+};
+
+fn freeCells(alloc: std.mem.Allocator, cells: []Cell) void {
+    for (cells) |c| switch (c) {
+        .text => |s| alloc.free(s),
+        else => {},
+    };
+    alloc.free(cells);
+}
+
+fn freeRow(alloc: std.mem.Allocator, r: Row) void {
+    alloc.free(r.id);
+    freeCells(alloc, r.cells);
+}
+
+fn freeTable(alloc: std.mem.Allocator, tab: *Table) void {
+    for (tab.rows.items) |r| freeRow(alloc, r);
+    tab.rows.deinit(alloc);
+    for (tab.columns) |c| {
+        alloc.free(c.key);
+        alloc.free(c.label);
+    }
+    alloc.free(tab.columns);
+    alloc.free(tab.key);
+    alloc.free(tab.title);
+    alloc.free(tab.menu);
+    alloc.free(tab.sort_key);
+    alloc.free(tab.at_lat);
+    alloc.free(tab.at_lon);
+}
+
+/// The order a table is read in: band first and always ascending, then the
+/// column the shell asked for, then the order the rows arrived in.
+///
+/// A cell with nothing in it sorts LAST in both directions. A dash is not a
+/// small number, and the mariner sorting by CPA is asking which vessel is
+/// closest, not which one has never said.
+const Order = struct {
+    rows: []const Row,
+    col: ?usize,
+    asc: bool,
+    kind: ColumnType,
+
+    fn less(self: Order, a: u32, b: u32) bool {
+        const x = self.rows[a];
+        const y = self.rows[b];
+        if (x.band != y.band) return x.band < y.band;
+        if (self.col) |c| {
+            if (self.compare(x.cells[c], y.cells[c])) |ord| return switch (ord) {
+                .lt => self.asc,
+                .gt => !self.asc,
+                .eq => x.seq < y.seq,
+            };
+            // One of them is empty and the other is not: empty last, whichever
+            // way the column is sorted.
+            return x.cells[c] != .none;
+        }
+        return x.seq < y.seq;
+    }
+
+    /// How two cells of this column compare, or null when exactly one of them
+    /// is empty.
+    fn compare(self: Order, a: Cell, b: Cell) ?std.math.Order {
+        if (self.kind == .flag) {
+            const ra = flagRank(a);
+            const rb = flagRank(b);
+            return std.math.order(ra, rb);
+        }
+        if (a == .none and b == .none) return .eq;
+        if (a == .none or b == .none) return null;
+        return switch (a) {
+            .num => |x| std.math.order(x, if (b == .num) b.num else 0),
+            .text => |x| std.ascii.orderIgnoreCase(x, if (b == .text) b.text else ""),
+            .none => .eq,
+        };
+    }
+};
+
+/// One string field of a JSON object, or "" when it is missing or is not a
+/// string. Declarations and batches are small documents written by a plugin,
+/// so a wrong type reads as absent rather than failing the whole batch.
+fn jsonText(o: std.json.ObjectMap, key: []const u8) []const u8 {
+    return switch (o.get(key) orelse return "") {
+        .string => |s| s,
+        else => "",
+    };
+}
+
 // ---- the event queue -------------------------------------------------------
 
 pub const Event = struct {
@@ -435,6 +678,8 @@ pub const Broker = struct {
     wss: std.ArrayList(*Ws) = .empty,
     /// One key-value store per plugin, loaded from disk on first use.
     kv: std.ArrayList(KvStore) = .empty,
+    /// Every table any plugin has declared, with the rows it has fed them.
+    tables: std.ArrayList(Table) = .empty,
     /// Files the host granted to plugins.
     files: std.ArrayList(FileHandle) = .empty,
     /// Where the per-plugin key-value files live, or null when no writable
@@ -503,6 +748,8 @@ pub const Broker = struct {
         self.wss.deinit(self.alloc);
         for (self.kv.items) |*store| store.deinit(self.alloc);
         self.kv.deinit(self.alloc);
+        for (self.tables.items) |*tab| freeTable(self.alloc, tab);
+        self.tables.deinit(self.alloc);
         for (self.files.items) |*f| f.file.close(io);
         self.files.deinit(self.alloc);
         if (self.storage_dir) |d| self.alloc.free(d);
@@ -755,10 +1002,508 @@ pub const Broker = struct {
             // What it stored stays on disk. A plugin that traps and is loaded
             // again next time must find its settings where it left them.
             self.dropKvLocked(index);
+            // Its tables go with it: the declaration was the plugin's, and a
+            // dialog fed by nobody is a dialog telling the mariner lies.
+            i = 0;
+            while (i < self.tables.items.len) {
+                if (self.tables.items[i].plugin != index) {
+                    i += 1;
+                    continue;
+                }
+                var tab = self.tables.orderedRemove(i);
+                freeTable(self.alloc, &tab);
+            }
         }
         if (id.len > 0) self.overlay.remove(id);
         self.vessels.clearSource(source, now_ms);
         _ = self.ais.clearSource(source) catch {};
+    }
+
+    // -- tables ---------------------------------------------------------------
+
+    /// Take one table declaration from a plugin. A declaration under a key the
+    /// plugin already declared replaces it and drops its rows, because the
+    /// columns may have moved under them. 0 on success, -1 when the
+    /// declaration is refused, and a refusal always says why.
+    pub fn declareTable(self: *Broker, p: *Plugin, json: []const u8) i32 {
+        var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, json, .{}) catch {
+            self.say(level_warn, p.id, "table: malformed declaration JSON", .{});
+            return -1;
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) {
+            self.say(level_warn, p.id, "table: a declaration is a JSON object", .{});
+            return -1;
+        }
+        var tab = self.buildTable(p, parsed.value.object) catch return -1;
+
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.tables.items) |*old| {
+            if (old.plugin != p.index or !std.mem.eql(u8, old.key, tab.key)) continue;
+            // The dialog does not close because the plugin re-declared: the
+            // mariner is still looking at it, and the plugin still owns it.
+            tab.open = old.open;
+            freeTable(self.alloc, old);
+            old.* = tab;
+            return 0;
+        }
+        var mine: usize = 0;
+        for (self.tables.items) |old| {
+            if (old.plugin == p.index) mine += 1;
+        }
+        if (mine >= max_tables) {
+            self.say(level_warn, p.id, "table {s}: {d} tables already declared; {d} allowed", .{ tab.key, mine, max_tables });
+            freeTable(self.alloc, &tab);
+            return -1;
+        }
+        self.tables.append(self.alloc, tab) catch {
+            freeTable(self.alloc, &tab);
+            return -1;
+        };
+        return 0;
+    }
+
+    /// One declaration, allocated but not yet registered. Every refusal is
+    /// logged here, so the caller only has to pass the error on.
+    fn buildTable(self: *Broker, p: *Plugin, o: std.json.ObjectMap) !Table {
+        const alloc = self.alloc;
+        const key = jsonText(o, "key");
+        if (key.len == 0 or key.len > max_table_key) {
+            self.say(level_warn, p.id, "table: a declaration needs a key of 1 to {d} bytes", .{max_table_key});
+            return error.BadDeclaration;
+        }
+        const cols_v = o.get("columns") orelse std.json.Value{ .null = {} };
+        const n_cols = if (cols_v == .array) cols_v.array.items.len else 0;
+        if (n_cols == 0 or n_cols > max_table_columns) {
+            self.say(level_warn, p.id, "table {s}: {d} columns declared; 1 to {d} allowed", .{ key, n_cols, max_table_columns });
+            return error.BadDeclaration;
+        }
+
+        var tab = Table{
+            .plugin = p.index,
+            .plugin_id = p.id,
+            .key = try alloc.dupe(u8, key),
+            .title = try alloc.dupe(u8, jsonText(o, "title")),
+            .menu = try alloc.dupe(u8, jsonText(o, "menu")),
+            .columns = try alloc.alloc(Column, n_cols),
+            .sort_key = &.{},
+            .at_lat = &.{},
+            .at_lon = &.{},
+        };
+        // Every column starts empty, so a refusal part way through the loop
+        // frees exactly what was built and nothing else: freeing an empty
+        // slice is a no-op.
+        for (tab.columns) |*c| c.* = .{ .key = &.{}, .label = &.{}, .type = .text };
+        var built: usize = 0;
+        errdefer freeTable(alloc, &tab);
+
+        for (cols_v.array.items) |cv| {
+            if (cv != .object) {
+                self.say(level_warn, p.id, "table {s}: a column is a JSON object", .{key});
+                return error.BadDeclaration;
+            }
+            const co = cv.object;
+            const ckey = jsonText(co, "key");
+            const label = jsonText(co, "label");
+            const type_name = jsonText(co, "type");
+            const ctype = ColumnType.fromName(type_name) orelse {
+                self.say(level_warn, p.id, "table {s}: column \"{s}\" has type \"{s}\", which is not one of distance, speed, bearing, duration, number, text, flag", .{ key, ckey, type_name });
+                return error.BadDeclaration;
+            };
+            if (ckey.len == 0 or ckey.len > max_table_key or label.len > max_table_label) {
+                self.say(level_warn, p.id, "table {s}: a column needs a key of 1 to {d} bytes and a label of at most {d}", .{ key, max_table_key, max_table_label });
+                return error.BadDeclaration;
+            }
+            for (tab.columns[0..built]) |c| {
+                if (!std.mem.eql(u8, c.key, ckey)) continue;
+                self.say(level_warn, p.id, "table {s}: two columns called \"{s}\"", .{ key, ckey });
+                return error.BadDeclaration;
+            }
+            tab.columns[built] = .{
+                .key = try alloc.dupe(u8, ckey),
+                .label = try alloc.dupe(u8, label),
+                .type = ctype,
+            };
+            built += 1;
+        }
+
+        if (o.get("sort")) |sv| {
+            if (sv == .object) {
+                const want = jsonText(sv.object, "key");
+                if (want.len > 0) {
+                    if (tab.column(want) == null) {
+                        self.say(level_warn, p.id, "table {s}: the default sort names column \"{s}\", which is not declared", .{ key, want });
+                        return error.BadDeclaration;
+                    }
+                    alloc.free(tab.sort_key);
+                    tab.sort_key = try alloc.dupe(u8, want);
+                }
+                tab.sort_asc = switch (sv.object.get("ascending") orelse std.json.Value{ .bool = true }) {
+                    .bool => |b| b,
+                    else => true,
+                };
+            }
+        }
+        if (o.get("at")) |av| {
+            if (av == .object) {
+                const lat = jsonText(av.object, "lat");
+                const lon = jsonText(av.object, "lon");
+                if (lat.len == 0 or lon.len == 0 or lat.len > max_table_key or lon.len > max_table_key) {
+                    self.say(level_warn, p.id, "table {s}: \"at\" names both a lat key and a lon key or neither", .{key});
+                    return error.BadDeclaration;
+                }
+                alloc.free(tab.at_lat);
+                alloc.free(tab.at_lon);
+                tab.at_lat = try alloc.dupe(u8, lat);
+                tab.at_lon = try alloc.dupe(u8, lon);
+            }
+        }
+        return tab;
+    }
+
+    /// One keyed batch: `{"key":..,"upsert":[{..}],"remove":[".."]}`. Returns
+    /// the number of rows the batch touched, or -1 when it was refused whole.
+    ///
+    /// A batch is refused for want of a declaration, for arriving inside the
+    /// status cadence, or for taking the table past its row budget. It is
+    /// never half applied: the mariner reading a table is reading one moment.
+    pub fn updateTable(self: *Broker, p: *Plugin, json: []const u8) i32 {
+        var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, json, .{}) catch {
+            self.say(level_warn, p.id, "table: malformed update JSON", .{});
+            return -1;
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) return -1;
+        const o = parsed.value.object;
+        const key = jsonText(o, "key");
+
+        const upserts: []const std.json.Value = switch (o.get("upsert") orelse std.json.Value{ .null = {} }) {
+            .array => |a| a.items,
+            else => &.{},
+        };
+        const removes: []const std.json.Value = switch (o.get("remove") orelse std.json.Value{ .null = {} }) {
+            .array => |a| a.items,
+            else => &.{},
+        };
+
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        const tab = self.tableLocked(p.index, key) orelse {
+            self.say(level_warn, p.id, "table {s}: no such table is declared", .{key});
+            return -1;
+        };
+
+        const now = monoMs();
+        if (tab.last_ms != 0 and now - tab.last_ms < table_min_interval_ms) {
+            self.refuseBatchLocked(p, tab, "one update per status cadence; this one is {d} ms after the last", .{now - tab.last_ms});
+            return -1;
+        }
+
+        // What the table would hold afterwards, counted before anything is
+        // touched: removals first, then the ids the batch adds.
+        var final: usize = tab.rows.items.len;
+        for (removes, 0..) |rv, i| {
+            const id = if (rv == .string) rv.string else continue;
+            // An id listed twice takes one row off, not two.
+            var earlier = false;
+            for (removes[0..i]) |pv| {
+                if (pv == .string and std.mem.eql(u8, pv.string, id)) earlier = true;
+            }
+            if (!earlier and tab.row(id) != null) final -= 1;
+        }
+        for (upserts, 0..) |uv, i| {
+            if (uv != .object) continue;
+            const id = jsonText(uv.object, "id");
+            if (id.len == 0) continue;
+            if (tab.row(id) != null) {
+                // A row this batch removed and then sent again is back.
+                var was_removed = false;
+                for (removes) |rv| {
+                    if (rv == .string and std.mem.eql(u8, rv.string, id)) was_removed = true;
+                }
+                if (was_removed) final += 1;
+                continue;
+            }
+            var earlier = false;
+            for (upserts[0..i]) |pv| {
+                if (pv == .object and std.mem.eql(u8, jsonText(pv.object, "id"), id)) earlier = true;
+            }
+            if (!earlier) final += 1;
+        }
+        if (final > max_table_rows) {
+            self.refuseBatchLocked(p, tab, "{d} rows over the {d}-row budget", .{ final - max_table_rows, max_table_rows });
+            return -1;
+        }
+
+        var touched: i32 = 0;
+        for (removes) |rv| {
+            const id = if (rv == .string) rv.string else continue;
+            for (tab.rows.items, 0..) |r, i| {
+                if (!std.mem.eql(u8, r.id, id)) continue;
+                freeRow(self.alloc, tab.rows.orderedRemove(i));
+                touched += 1;
+                break;
+            }
+        }
+        for (upserts) |uv| {
+            if (uv != .object) continue;
+            if (self.applyRowLocked(p, tab, uv.object)) touched += 1;
+        }
+
+        tab.last_ms = now;
+        tab.seq += 1;
+        return touched;
+    }
+
+    /// One upserted row, replacing whatever stood under its id. False when the
+    /// row could not be taken; the batch carries on, the way a bad update in a
+    /// publish batch does.
+    fn applyRowLocked(self: *Broker, p: *Plugin, tab: *Table, o: std.json.ObjectMap) bool {
+        const alloc = self.alloc;
+        const id = jsonText(o, "id");
+        if (id.len == 0 or id.len > max_table_key) return false;
+
+        const cells = alloc.alloc(Cell, tab.columns.len) catch return false;
+        var built: usize = 0;
+        for (tab.columns) |c| {
+            const v = o.get(c.key) orelse std.json.Value{ .null = {} };
+            cells[built] = cell: {
+                if (c.type.numeric()) {
+                    const n = jsonNum(v) orelse break :cell .none;
+                    break :cell .{ .num = n };
+                }
+                const s = switch (v) {
+                    .string => |x| x,
+                    else => break :cell .none,
+                };
+                if (s.len == 0) break :cell .none;
+                if (s.len > max_table_cell) {
+                    self.say(level_warn, p.id, "table {s}: a \"{s}\" cell of {d} bytes is over the {d}-byte cell budget", .{ tab.key, c.key, s.len, max_table_cell });
+                    break :cell .none;
+                }
+                break :cell .{ .text = alloc.dupe(u8, s) catch break :cell .none };
+            };
+            built += 1;
+        }
+
+        var lat: ?f64 = null;
+        var lon: ?f64 = null;
+        if (tab.at_lat.len > 0) {
+            lat = jsonNum(o.get(tab.at_lat) orelse std.json.Value{ .null = {} });
+            lon = jsonNum(o.get(tab.at_lon) orelse std.json.Value{ .null = {} });
+            if (lat == null or lon == null) {
+                lat = null;
+                lon = null;
+            }
+        }
+        const band: i32 = @intCast(std.math.clamp(jsonInt(o.get("band")) orelse 0, 0, 255));
+
+        if (tab.row(id)) |r| {
+            freeCells(alloc, r.cells);
+            r.cells = cells;
+            r.band = band;
+            r.lat = lat;
+            r.lon = lon;
+            return true;
+        }
+        const owned_id = alloc.dupe(u8, id) catch {
+            freeCells(alloc, cells);
+            return false;
+        };
+        tab.rows.append(alloc, .{
+            .id = owned_id,
+            .band = band,
+            .cells = cells,
+            .lat = lat,
+            .lon = lon,
+            .seq = tab.next_row_seq,
+        }) catch {
+            alloc.free(owned_id);
+            freeCells(alloc, cells);
+            return false;
+        };
+        tab.next_row_seq += 1;
+        return true;
+    }
+
+    /// A batch dropped over budget. The first one is said out loud and then one
+    /// in a hundred: a plugin sending too fast has to hear about it, and a
+    /// plugin sending too fast must not be able to fill the log.
+    fn refuseBatchLocked(self: *Broker, p: *Plugin, tab: *Table, comptime fmt: []const u8, args: anytype) void {
+        tab.refused += 1;
+        if (tab.refused != 1 and tab.refused % 100 != 0) return;
+        var buf: [200]u8 = undefined;
+        const why = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..0];
+        self.say(level_warn, p.id, "table {s}: batch refused, {s} ({d} refused so far)", .{ tab.key, why, tab.refused });
+    }
+
+    fn tableLocked(self: *Broker, plugin: u32, key: []const u8) ?*Table {
+        for (self.tables.items) |*tab| {
+            if (tab.plugin == plugin and std.mem.eql(u8, tab.key, key)) return tab;
+        }
+        return null;
+    }
+
+    fn tableByIdLocked(self: *Broker, plugin_id: []const u8, key: []const u8) ?*Table {
+        for (self.tables.items) |*tab| {
+            if (std.mem.eql(u8, tab.plugin_id, plugin_id) and std.mem.eql(u8, tab.key, key)) return tab;
+        }
+        return null;
+    }
+
+    /// Every table every plugin has declared: what a shell builds its menu and
+    /// its columns from.
+    pub fn tablesJson(self: *Broker, out: *std.ArrayList(u8)) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const alloc = self.alloc;
+        try out.appendSlice(alloc, "{\"tables\":[");
+        for (self.tables.items, 0..) |*tab, i| {
+            if (i > 0) try out.append(alloc, ',');
+            try out.appendSlice(alloc, "{\"plugin\":");
+            try writeJsonString(out, alloc, tab.plugin_id);
+            try out.appendSlice(alloc, ",\"key\":");
+            try writeJsonString(out, alloc, tab.key);
+            try out.appendSlice(alloc, ",\"title\":");
+            try writeJsonString(out, alloc, tab.title);
+            try out.appendSlice(alloc, ",\"menu\":");
+            try writeJsonString(out, alloc, tab.menu);
+            try out.appendSlice(alloc, ",\"columns\":[");
+            for (tab.columns, 0..) |c, k| {
+                if (k > 0) try out.append(alloc, ',');
+                try out.appendSlice(alloc, "{\"key\":");
+                try writeJsonString(out, alloc, c.key);
+                try out.appendSlice(alloc, ",\"label\":");
+                try writeJsonString(out, alloc, c.label);
+                try out.appendSlice(alloc, ",\"type\":\"");
+                try out.appendSlice(alloc, c.type.name());
+                try out.appendSlice(alloc, "\"}");
+            }
+            try out.appendSlice(alloc, "],\"sort\":{\"key\":");
+            try writeJsonString(out, alloc, tab.sort_key);
+            try out.print(alloc, ",\"ascending\":{s}}}", .{if (tab.sort_asc) "true" else "false"});
+            if (tab.at_lat.len > 0) {
+                try out.appendSlice(alloc, ",\"at\":{\"lat\":");
+                try writeJsonString(out, alloc, tab.at_lat);
+                try out.appendSlice(alloc, ",\"lon\":");
+                try writeJsonString(out, alloc, tab.at_lon);
+                try out.append(alloc, '}');
+            }
+            try out.print(alloc, ",\"open\":{s},\"rows\":{d},\"seq\":{d}}}", .{
+                if (tab.open) "true" else "false",
+                tab.rows.items.len,
+                tab.seq,
+            });
+        }
+        try out.appendSlice(alloc, "]}");
+    }
+
+    /// One table's rows, IN ORDER: band first, then the column the shell asked
+    /// for, then arrival. The band is the plugin's ordering policy and the
+    /// column sort never crosses one, so an alarmed row holds the top of the
+    /// table whatever the mariner sorted by.
+    ///
+    /// `sort_key` empty (or naming no column) takes the declared default.
+    /// False when no such table is declared.
+    pub fn tableRowsJson(
+        self: *Broker,
+        plugin_id: []const u8,
+        key: []const u8,
+        sort_key: []const u8,
+        ascending: bool,
+        out: *std.ArrayList(u8),
+    ) !bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const alloc = self.alloc;
+        const tab = self.tableByIdLocked(plugin_id, key) orelse return false;
+
+        var col: ?usize = null;
+        var asc = ascending;
+        if (sort_key.len > 0) col = tab.column(sort_key);
+        if (col == null) {
+            col = if (tab.sort_key.len > 0) tab.column(tab.sort_key) else null;
+            asc = tab.sort_asc;
+        }
+
+        const order = try alloc.alloc(u32, tab.rows.items.len);
+        defer alloc.free(order);
+        for (order, 0..) |*x, i| x.* = @intCast(i);
+        const kind: ColumnType = if (col) |c| tab.columns[c].type else .text;
+        std.mem.sort(u32, order, Order{
+            .rows = tab.rows.items,
+            .col = col,
+            .asc = asc,
+            .kind = kind,
+        }, Order.less);
+
+        try out.appendSlice(alloc, "{\"key\":");
+        try writeJsonString(out, alloc, tab.key);
+        try out.print(alloc, ",\"seq\":{d},\"open\":{s},\"sort\":{{\"key\":", .{ tab.seq, if (tab.open) "true" else "false" });
+        try writeJsonString(out, alloc, if (col) |c| tab.columns[c].key else "");
+        try out.print(alloc, ",\"ascending\":{s}}},\"rows\":[", .{if (asc) "true" else "false"});
+        for (order, 0..) |idx, n| {
+            const r = tab.rows.items[idx];
+            if (n > 0) try out.append(alloc, ',');
+            try out.appendSlice(alloc, "{\"id\":");
+            try writeJsonString(out, alloc, r.id);
+            try out.print(alloc, ",\"band\":{d}", .{r.band});
+            if (r.lat) |lat| {
+                if (r.lon) |lon| try out.print(alloc, ",\"at\":[{d},{d}]", .{ lon, lat });
+            }
+            try out.appendSlice(alloc, ",\"cells\":[");
+            for (r.cells, 0..) |c, k| {
+                if (k > 0) try out.append(alloc, ',');
+                switch (c) {
+                    .none => try out.appendSlice(alloc, "null"),
+                    .num => |x| if (std.math.isFinite(x))
+                        try out.print(alloc, "{d}", .{x})
+                    else
+                        try out.appendSlice(alloc, "null"),
+                    .text => |x| try writeJsonString(out, alloc, x),
+                }
+            }
+            try out.appendSlice(alloc, "]}");
+        }
+        try out.appendSlice(alloc, "]}");
+        return true;
+    }
+
+    /// Tell a plugin its table is on screen, or is not. The plugin builds rows
+    /// only while it is: a dialog nobody opened costs the boat nothing.
+    /// False when no such table is declared.
+    pub fn setTableOpen(self: *Broker, plugin_id: []const u8, key: []const u8, open: bool) bool {
+        var plugin: u32 = 0;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            const tab = self.tableByIdLocked(plugin_id, key) orelse return false;
+            if (tab.open == open) return true;
+            tab.open = open;
+            plugin = tab.plugin;
+            // A table nobody is watching keeps no rows: the plugin describes
+            // the whole set again the moment it is opened.
+            if (!open) {
+                for (tab.rows.items) |r| freeRow(self.alloc, r);
+                tab.rows.clearRetainingCapacity();
+                tab.last_ms = 0;
+                tab.seq += 1;
+            }
+        }
+        var buf: [max_table_key + 16]u8 = undefined;
+        const payload = std.fmt.bufPrint(&buf, "{{\"key\":\"{s}\"}}", .{key}) catch "{}";
+        self.push(plugin, if (open) Kind.table_open else Kind.table_closed, 0, payload);
+        return true;
+    }
+
+    /// True while a shell has this table on screen.
+    pub fn tableOpen(self: *Broker, plugin_id: []const u8, key: []const u8) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const tab = self.tableByIdLocked(plugin_id, key) orelse return false;
+        return tab.open;
     }
 
     // -- sockets, as the natives use them ------------------------------------
@@ -2574,6 +3319,19 @@ fn hostChromeStatus(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) ca
     if (p.setStatus(text)) p.broker.say(level_info, p.id, "status {s}", .{text});
 }
 
+/// A table declaration, and the rows that feed it. Chrome, like
+/// `chrome_status`: no capability gates either, because a table shows the
+/// mariner what the plugin is already allowed to know.
+fn hostTableDeclare(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    return p.broker.declareTable(p, bytes(ptr, len));
+}
+
+fn hostTableUpdate(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    return p.broker.updateTable(p, bytes(ptr, len));
+}
+
 /// The log level an alert of this severity goes out at: alarm at error,
 /// warning at warn, notice and caution at info.
 ///
@@ -3047,6 +3805,8 @@ var natives = wasm.nativeSymbols(&.{
     .{ .name = "ais_upsert", .func = @ptrCast(&hostAisUpsert), .signature = "(*~)i" },
     .{ .name = "overlay", .func = @ptrCast(&hostOverlay), .signature = "(*~)i" },
     .{ .name = "chrome_status", .func = @ptrCast(&hostChromeStatus), .signature = "(*~)" },
+    .{ .name = "table_declare", .func = @ptrCast(&hostTableDeclare), .signature = "(*~)i" },
+    .{ .name = "table_update", .func = @ptrCast(&hostTableUpdate), .signature = "(*~)i" },
     .{ .name = "alert", .func = @ptrCast(&hostAlert), .signature = "(*~)i" },
     .{ .name = "tcp_connect", .func = @ptrCast(&hostTcpConnect), .signature = "(*~i)I" },
     .{ .name = "tcp_send", .func = @ptrCast(&hostTcpSend), .signature = "(I*~)i" },
@@ -3323,6 +4083,331 @@ test "a plugin that stops consuming loses its own events and nobody else's" {
     b.push(0, Kind.shutdown, 0, "");
     try t.expectEqual(@as(usize, max_queued), b.queuedFor(0));
     try t.expectEqual(@as(u64, 50), b.droppedFor(0));
+}
+
+// ---- tables ----------------------------------------------------------------
+
+/// A broker with one plugin record, for the table tests. The record is the
+/// host's in the real thing; here it is a local the fixture lends out.
+const TableFixture = struct {
+    vessels: *vstore.Store,
+    ais: *ais_store.AisStore,
+    broker: Broker,
+    plugin: Plugin = undefined,
+
+    fn init() !*TableFixture {
+        const a = t.allocator;
+        const self = try a.create(TableFixture);
+        self.vessels = try a.create(vstore.Store);
+        self.vessels.* = try vstore.Store.init(a);
+        self.ais = try a.create(ais_store.AisStore);
+        self.ais.* = ais_store.AisStore.init(a);
+        self.broker = Broker.init(a, self.vessels, self.ais, .{});
+        self.broker.setLog(null, silentLog);
+        self.plugin = .{
+            .broker = &self.broker,
+            .index = 0,
+            .id = "org.example.table",
+            .source = 1,
+            .caps = Caps.initEmpty(),
+        };
+        return self;
+    }
+
+    fn deinit(self: *TableFixture) void {
+        const a = t.allocator;
+        self.broker.deinit();
+        self.ais.deinit();
+        self.vessels.deinit();
+        a.destroy(self.ais);
+        a.destroy(self.vessels);
+        a.destroy(self);
+    }
+
+    fn declare(self: *TableFixture, json: []const u8) i32 {
+        return self.broker.declareTable(&self.plugin, json);
+    }
+
+    fn update(self: *TableFixture, json: []const u8) i32 {
+        return self.broker.updateTable(&self.plugin, json);
+    }
+
+    /// Let the next batch through. The cadence is a wall-clock rule and a test
+    /// is not going to wait a second for it.
+    fn rewindCadence(self: *TableFixture) void {
+        self.broker.mu.lock();
+        defer self.broker.mu.unlock();
+        for (self.broker.tables.items) |*tab| tab.last_ms = 0;
+    }
+
+    fn rows(self: *TableFixture, sort_key: []const u8, ascending: bool, out: *std.ArrayList(u8)) !void {
+        out.clearRetainingCapacity();
+        try t.expect(try self.broker.tableRowsJson("org.example.table", "targets", sort_key, ascending, out));
+    }
+};
+
+/// The declaration the tests work against: one of every kind of column that
+/// sorts differently, and a position.
+const test_table_decl =
+    "{\"key\":\"targets\",\"title\":\"AIS Targets\",\"menu\":\"Vessels\",\"columns\":[" ++
+    "{\"key\":\"name\",\"label\":\"Vessel\",\"type\":\"text\"}," ++
+    "{\"key\":\"cpa\",\"label\":\"CPA\",\"type\":\"distance\"}," ++
+    "{\"key\":\"state\",\"label\":\"\",\"type\":\"flag\"}]," ++
+    "\"sort\":{\"key\":\"cpa\",\"ascending\":true},\"at\":{\"lat\":\"lat\",\"lon\":\"lon\"}}";
+
+/// The ids of the rows a query answers with, in order.
+fn rowOrder(alloc: std.mem.Allocator, json: []const u8, out: *std.ArrayList([]const u8)) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+    defer parsed.deinit();
+    for (out.items) |s| alloc.free(s);
+    out.clearRetainingCapacity();
+    for (parsed.value.object.get("rows").?.array.items) |r| {
+        // The slice is the parse's, so it is copied into the caller's list.
+        try out.append(alloc, try alloc.dupe(u8, r.object.get("id").?.string));
+    }
+}
+
+fn freeOrder(alloc: std.mem.Allocator, list: *std.ArrayList([]const u8)) void {
+    for (list.items) |s| alloc.free(s);
+    list.deinit(alloc);
+}
+
+test "the mariner's sort applies within a band and never across one" {
+    const a = t.allocator;
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+
+    // ALARM is the alarmed vessel: it is the farthest away and its name sorts
+    // last, so every sort below would put it at the bottom if the band did not
+    // hold it at the top.
+    try t.expectEqual(@as(i32, 4), f.update(
+        "{\"key\":\"targets\",\"upsert\":[" ++
+            "{\"id\":\"1\",\"band\":1,\"name\":\"BRAVO\",\"cpa\":400,\"lat\":38.9,\"lon\":-76.4}," ++
+            "{\"id\":\"2\",\"band\":1,\"name\":\"ALPHA\",\"cpa\":900}," ++
+            "{\"id\":\"3\",\"band\":1,\"name\":\"CHARLIE\"}," ++
+            "{\"id\":\"4\",\"band\":0,\"name\":\"ZULU\",\"cpa\":5000,\"state\":\"alarm\"}]}",
+    ));
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    var order: std.ArrayList([]const u8) = .empty;
+    defer freeOrder(a, &order);
+
+    // By CPA, the declared sort: the alarm first because of its band, then the
+    // closest, and the vessel that has never reported one LAST, because a dash is not
+    // a small number.
+    try f.rows("cpa", true, &json);
+    try rowOrder(a, json.items, &order);
+    try t.expectEqual(@as(usize, 4), order.items.len);
+    try t.expectEqualStrings("4", order.items[0]);
+    try t.expectEqualStrings("1", order.items[1]);
+    try t.expectEqualStrings("2", order.items[2]);
+    try t.expectEqualStrings("3", order.items[3]);
+
+    // By name, ascending and descending: the order under the alarm turns over,
+    // the alarm does not move.
+    try f.rows("name", true, &json);
+    try rowOrder(a, json.items, &order);
+    try t.expectEqualStrings("4", order.items[0]);
+    try t.expectEqualStrings("2", order.items[1]);
+    try t.expectEqualStrings("1", order.items[2]);
+    try t.expectEqualStrings("3", order.items[3]);
+
+    try f.rows("name", false, &json);
+    try rowOrder(a, json.items, &order);
+    try t.expectEqualStrings("4", order.items[0]);
+    try t.expectEqualStrings("3", order.items[1]);
+    try t.expectEqualStrings("1", order.items[2]);
+    try t.expectEqualStrings("2", order.items[3]);
+
+    // Sorted by the flag column itself, the alarm is still one band up and the
+    // rest keep the order they arrived in.
+    try f.rows("state", false, &json);
+    try rowOrder(a, json.items, &order);
+    try t.expectEqualStrings("4", order.items[0]);
+    try t.expectEqualStrings("1", order.items[1]);
+
+    // An unknown sort key falls back to the declared one rather than to no
+    // order at all.
+    try f.rows("nonesuch", false, &json);
+    try rowOrder(a, json.items, &order);
+    try t.expectEqualStrings("4", order.items[0]);
+    try t.expectEqualStrings("1", order.items[1]);
+    try t.expectEqualStrings("2", order.items[2]);
+
+    // The position rides with the row that has one, and only with that row.
+    try t.expect(std.mem.indexOf(u8, json.items, "\"at\":[-76.4,38.9]") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"id\":\"2\",\"band\":1,\"cells\"") != null);
+    // A cell the plugin did not send is null on the wire, and a dash on screen.
+    try t.expect(std.mem.indexOf(u8, json.items, "[\"CHARLIE\",null,null]") != null);
+}
+
+test "rows equal on the sorted column keep the order they arrived in" {
+    const a = t.allocator;
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+    try t.expectEqual(@as(i32, 3), f.update(
+        "{\"key\":\"targets\",\"upsert\":[" ++
+            "{\"id\":\"c\",\"band\":1,\"name\":\"SAME\",\"cpa\":100}," ++
+            "{\"id\":\"a\",\"band\":1,\"name\":\"SAME\",\"cpa\":100}," ++
+            "{\"id\":\"b\",\"band\":1,\"name\":\"SAME\",\"cpa\":100}]}",
+    ));
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    var order: std.ArrayList([]const u8) = .empty;
+    defer freeOrder(a, &order);
+    for ([_]bool{ true, false }) |asc| {
+        try f.rows("cpa", asc, &json);
+        try rowOrder(a, json.items, &order);
+        try t.expectEqualStrings("c", order.items[0]);
+        try t.expectEqualStrings("a", order.items[1]);
+        try t.expectEqualStrings("b", order.items[2]);
+    }
+}
+
+test "a batch over a budget is refused whole, and the table keeps what it had" {
+    const a = t.allocator;
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+
+    // Exactly the budget goes in.
+    var batch: std.ArrayList(u8) = .empty;
+    defer batch.deinit(a);
+    try batch.appendSlice(a, "{\"key\":\"targets\",\"upsert\":[");
+    for (0..max_table_rows) |i| {
+        if (i > 0) try batch.append(a, ',');
+        try batch.print(a, "{{\"id\":\"{d}\",\"band\":1,\"cpa\":{d}}}", .{ i, i });
+    }
+    try batch.appendSlice(a, "]}");
+    try t.expectEqual(@as(i32, max_table_rows), f.update(batch.items));
+
+    // One more row is one row too many: the batch is refused whole.
+    f.rewindCadence();
+    try t.expectEqual(@as(i32, -1), f.update(
+        "{\"key\":\"targets\",\"upsert\":[{\"id\":\"over\",\"band\":1,\"cpa\":1}]}",
+    ));
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try f.rows("cpa", true, &json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"over\"") == null);
+
+    // A batch that makes room for what it adds is taken.
+    f.rewindCadence();
+    try t.expectEqual(@as(i32, 2), f.update(
+        "{\"key\":\"targets\",\"remove\":[\"0\"]," ++
+            "\"upsert\":[{\"id\":\"over\",\"band\":1,\"cpa\":1}]}",
+    ));
+    try f.rows("cpa", true, &json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"over\"") != null);
+
+    // And a batch inside the status cadence is refused whatever is in it.
+    try t.expectEqual(@as(i32, -1), f.update(
+        "{\"key\":\"targets\",\"upsert\":[{\"id\":\"over\",\"band\":1,\"cpa\":2}]}",
+    ));
+
+    // A batch for a table nobody declared is refused too.
+    f.rewindCadence();
+    try t.expectEqual(@as(i32, -1), f.update("{\"key\":\"nosuch\",\"upsert\":[]}"));
+}
+
+test "a declaration the shell could not render is refused with a reason" {
+    const f = try TableFixture.init();
+    defer f.deinit();
+
+    // Seventeen columns, one over the budget.
+    var wide: std.ArrayList(u8) = .empty;
+    defer wide.deinit(t.allocator);
+    try wide.appendSlice(t.allocator, "{\"key\":\"wide\",\"title\":\"W\",\"menu\":\"M\",\"columns\":[");
+    for (0..max_table_columns + 1) |i| {
+        if (i > 0) try wide.append(t.allocator, ',');
+        try wide.print(t.allocator, "{{\"key\":\"c{d}\",\"label\":\"C\",\"type\":\"number\"}}", .{i});
+    }
+    try wide.appendSlice(t.allocator, "]}");
+    try t.expectEqual(@as(i32, -1), f.declare(wide.items));
+
+    // A column type the shell has no idea how to sort or show.
+    try t.expectEqual(@as(i32, -1), f.declare(
+        "{\"key\":\"t\",\"title\":\"T\",\"menu\":\"M\"," ++
+            "\"columns\":[{\"key\":\"a\",\"label\":\"A\",\"type\":\"colour\"}]}",
+    ));
+    // A default sort naming a column that is not there.
+    try t.expectEqual(@as(i32, -1), f.declare(
+        "{\"key\":\"t\",\"title\":\"T\",\"menu\":\"M\"," ++
+            "\"columns\":[{\"key\":\"a\",\"label\":\"A\",\"type\":\"number\"}]," ++
+            "\"sort\":{\"key\":\"b\"}}",
+    ));
+    // Two columns under one key: a cell would land in both.
+    try t.expectEqual(@as(i32, -1), f.declare(
+        "{\"key\":\"t\",\"title\":\"T\",\"menu\":\"M\",\"columns\":[" ++
+            "{\"key\":\"a\",\"label\":\"A\",\"type\":\"number\"}," ++
+            "{\"key\":\"a\",\"label\":\"B\",\"type\":\"text\"}]}",
+    ));
+    try t.expectEqual(@as(i32, -1), f.declare("not json at all"));
+
+    // None of them left anything behind.
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(t.allocator);
+    try f.broker.tablesJson(&json);
+    try t.expectEqualStrings("{\"tables\":[]}", json.items);
+}
+
+test "a declaration reaches the shell, and closing the dialog empties it" {
+    const a = t.allocator;
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+    try t.expectEqual(@as(i32, 1), f.update(
+        "{\"key\":\"targets\",\"upsert\":[{\"id\":\"1\",\"band\":0,\"name\":\"ZULU\",\"state\":\"alarm\"}]}",
+    ));
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try f.broker.tablesJson(&json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"plugin\":\"org.example.table\"") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"menu\":\"Vessels\"") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"type\":\"distance\"") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"sort\":{\"key\":\"cpa\",\"ascending\":true}") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"at\":{\"lat\":\"lat\",\"lon\":\"lon\"}") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"rows\":1") != null);
+
+    // Opening tells the plugin so, and so does closing.
+    try t.expect(f.broker.setTableOpen("org.example.table", "targets", true));
+    try t.expect(f.broker.tableOpen("org.example.table", "targets"));
+    const opened = f.broker.popFor(0).?;
+    defer f.broker.freeEvent(opened);
+    try t.expectEqual(Kind.table_open, opened.kind);
+    try t.expectEqualStrings("{\"key\":\"targets\"}", opened.payload);
+
+    try t.expect(f.broker.setTableOpen("org.example.table", "targets", false));
+    const closed = f.broker.popFor(0).?;
+    defer f.broker.freeEvent(closed);
+    try t.expectEqual(Kind.table_closed, closed.kind);
+    // A table nobody is watching keeps no rows: the plugin describes the whole
+    // set again the moment it is opened.
+    json.clearRetainingCapacity();
+    try f.broker.tablesJson(&json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"rows\":0") != null);
+    // And a table the plugin never declared answers nothing at all.
+    try t.expect(!f.broker.setTableOpen("org.example.table", "nosuch", true));
+    json.clearRetainingCapacity();
+    try t.expect(!try f.broker.tableRowsJson("org.example.other", "targets", "", true, &json));
+}
+
+test "a plugin that goes takes its tables with it" {
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try f.broker.registerPlugin(&f.plugin);
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+    f.broker.dropPlugin(0, 1000);
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(t.allocator);
+    try f.broker.tablesJson(&json);
+    try t.expectEqualStrings("{\"tables\":[]}", json.items);
 }
 
 test "an alert's severity picks the log level it goes out at" {

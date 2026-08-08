@@ -58,6 +58,10 @@ const USAGE =
     \\  --width W --height H  render size (default 1600x1200)
     \\  --scheme day|dusk|night   palette (default day)
     \\  --print WHAT      all | deltas | overlay | alert | status (default all)
+    \\  --table ID:KEY[:SORT[:desc]]  open a plugin's declared table for the run
+    \\                    and print its rows, in order, at the end: what the
+    \\                    dialog would show, without a window, e.g.
+    \\                    --table org.beetlebug.ais:targets:name
     \\  --set-config ID JSON  change a plugin's settings mid-replay, e.g.
     \\                    --set-config 200@org.beetlebug.ais '{"cpa_limit":100}'
     \\                    The SECONDS@ prefix is the replay second to do it at;
@@ -524,6 +528,86 @@ fn pluginsRef(l: *lk.Lookout) ?PluginsRef {
     };
 }
 
+/// A JSON number however it was written: a whole degree comes back as an
+/// integer and reading it as a float would trap.
+fn jsonDouble(v: std.json.Value) f64 {
+    return switch (v) {
+        .integer => |x| @floatFromInt(x),
+        .float => |x| x,
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch 0,
+        else => 0,
+    };
+}
+
+/// What the dialog would show: the declaration, then every row in the order
+/// the shell would draw it: the plugin's bands first, then the column asked
+/// for. The values are the SI the plugin sent; the shell is what turns them
+/// into knots and miles.
+fn dumpTable(alloc: std.mem.Allocator, p: PluginsRef, w: TableWatch) void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    p.br.tablesJson(&out) catch return;
+
+    var decls = std.json.parseFromSlice(std.json.Value, alloc, out.items, .{}) catch return;
+    defer decls.deinit();
+    var keys: std.ArrayList([]const u8) = .empty;
+    defer keys.deinit(alloc);
+    var title: []const u8 = w.key;
+    var menu: []const u8 = "";
+    for (decls.value.object.get("tables").?.array.items) |d| {
+        const o = d.object;
+        if (!std.mem.eql(u8, o.get("plugin").?.string, w.id)) continue;
+        if (!std.mem.eql(u8, o.get("key").?.string, w.key)) continue;
+        title = o.get("title").?.string;
+        menu = o.get("menu").?.string;
+        for (o.get("columns").?.array.items) |c|
+            keys.append(alloc, c.object.get("key").?.string) catch return;
+    }
+    if (keys.items.len == 0) {
+        emit("table {s}:{s}: not declared\n", .{ w.id, w.key });
+        return;
+    }
+
+    out.clearRetainingCapacity();
+    const found = p.br.tableRowsJson(w.id, w.key, w.sort, w.ascending, &out) catch return;
+    if (!found) return;
+    var rows = std.json.parseFromSlice(std.json.Value, alloc, out.items, .{}) catch return;
+    defer rows.deinit();
+    const items = rows.value.object.get("rows").?.array.items;
+    const sort = rows.value.object.get("sort").?.object;
+    emit("table {s}:{s} \"{s}\" (menu {s}): {d} row(s), sorted by {s} {s} within each band\n", .{
+        w.id,
+        w.key,
+        title,
+        menu,
+        items.len,
+        sort.get("key").?.string,
+        if (sort.get("ascending").?.bool) "ascending" else "descending",
+    });
+    for (items) |r| {
+        var line: [512]u8 = undefined;
+        var lw = std.Io.Writer.fixed(&line);
+        lw.print("  band {d}  {s: <12}", .{ r.object.get("band").?.integer, r.object.get("id").?.string }) catch {};
+        for (r.object.get("cells").?.array.items, 0..) |c, k| {
+            if (k >= keys.items.len) break;
+            lw.print(" {s}=", .{keys.items[k]}) catch {};
+            switch (c) {
+                .null => lw.print("-", .{}) catch {},
+                .integer => |x| lw.print("{d}", .{x}) catch {},
+                .float => |x| lw.print("{d:.1}", .{x}) catch {},
+                .number_string => |x| lw.print("{s}", .{x}) catch {},
+                .string => |x| lw.print("{s}", .{x}) catch {},
+                else => {},
+            }
+        }
+        if (r.object.get("at")) |at| lw.print(" at={d:.5},{d:.5}", .{
+            jsonDouble(at.array.items[1]),
+            jsonDouble(at.array.items[0]),
+        }) catch {};
+        emit("{s}\n", .{lw.buffered()});
+    }
+}
+
 // ---------------------------------------------------------------------------
 // charts
 // ---------------------------------------------------------------------------
@@ -592,7 +676,33 @@ const Args = struct {
     height: u32 = 1200,
     scheme: lk.Scheme = @import("c.zig").c.TILE57_SCHEME_DAY,
     print: Print = .all,
+    table: ?TableWatch = null,
 };
+
+/// `--table ID:KEY[:SORT[:desc]]`: open a declared table for the whole run and
+/// print its rows, in order, at the end. What the dialog would show, without a
+/// window.
+const TableWatch = struct {
+    id: [:0]const u8,
+    key: []const u8,
+    sort: []const u8 = "",
+    ascending: bool = true,
+};
+
+fn parseTableWatch(text: [:0]const u8) TableWatch {
+    var it = std.mem.splitScalar(u8, text, ':');
+    const id = it.next() orelse fail("--table wants ID:KEY[:SORT[:desc]]", .{});
+    const key = it.next() orelse fail("--table wants ID:KEY[:SORT[:desc]]", .{});
+    if (id.len == 0 or key.len == 0) fail("--table wants ID:KEY[:SORT[:desc]]", .{});
+    const sort = it.next() orelse "";
+    const dir = it.next() orelse "asc";
+    return .{
+        .id = text[0..id.len :0],
+        .key = key,
+        .sort = sort,
+        .ascending = !std.mem.eql(u8, dir, "desc"),
+    };
+}
 
 /// `lon,lat,zoom[,rotation_deg]`. The rotation is there because overlay
 /// geometry under a turned camera is only verifiable by rendering one.
@@ -696,6 +806,9 @@ pub fn main(init: std.process.Init) !void {
                 .arg = argv[i + 2][0.. :0],
             });
             i += 2;
+        } else if (std.mem.eql(u8, arg, "--table")) {
+            a.table = parseTableWatch(next orelse fail("--table needs ID:KEY[:SORT[:desc]]", .{}));
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--print")) {
             a.print = std.meta.stringToEnum(Print, next orelse "") orelse
                 fail("--print wants all, deltas, overlay, alert or status", .{});
@@ -760,6 +873,14 @@ pub fn main(init: std.process.Init) !void {
         // The directory can also arrive as LOOKOUT_PLUGINS from the caller's
         // environment, which is why this does not assume --plugins was given.
         emit("harness: {d} plugin(s) loaded from {s}\n", .{ p.host.count(), a.plugins_dir orelse "$LOOKOUT_PLUGINS" });
+        // A watched table is opened here, before the replay starts: a plugin
+        // builds no rows until a shell says somebody is looking.
+        if (a.table) |w| {
+            if (p.br.setTableOpen(w.id, w.key, true))
+                emit("harness: table {s}:{s} opened\n", .{ w.id, w.key })
+            else
+                emit("harness: no table {s}:{s} is declared\n", .{ w.id, w.key });
+        }
     } else if (a.plugins_dir != null) {
         emit("harness: LOOKOUT_PLUGINS was set but no plugin layer came up\n", .{});
     }
@@ -875,6 +996,9 @@ pub fn main(init: std.process.Init) !void {
     if (feeder_thread) |th| th.join();
 
     if (watcher) |*w| w.inventory();
+    if (a.table) |w| {
+        if (ps) |p| dumpTable(alloc, p, w);
+    }
 
     var trapped = state.trapped.load(.monotonic);
     if (ps) |p| {

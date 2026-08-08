@@ -275,6 +275,60 @@ export fn lookout_plugin_grant_set(h: ?*lookout, id: [*:0]const u8, cap: [*:0]co
     return 0;
 }
 
+/// Every table the loaded plugins declare, as JSON. A shell builds the menu
+/// item and the columns from this and knows nothing about what any plugin
+/// does. Borrowed until the next plugin query; NULL when no layer is up.
+export fn lookout_plugin_tables_json(h: ?*lookout, out_len: ?*usize) ?[*]const u8 {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return null;
+    ps.json.clearRetainingCapacity();
+    ps.br.tablesJson(&ps.json) catch return null;
+    if (out_len) |p| p.* = ps.json.items.len;
+    return ps.json.items.ptr;
+}
+
+/// One table's rows, already in the order they are to be shown: the plugin's
+/// bands first, then `sort_key` within each band, then arrival. `sort_key`
+/// NULL or empty takes the declared default sort. Borrowed until the next
+/// plugin query; NULL when the plugin or the table is unknown.
+export fn lookout_plugin_table_rows(
+    h: ?*lookout,
+    id: [*:0]const u8,
+    key: [*:0]const u8,
+    sort_key: ?[*:0]const u8,
+    ascending: c_int,
+    out_len: ?*usize,
+) ?[*]const u8 {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return null;
+    ps.json.clearRetainingCapacity();
+    const want: []const u8 = if (sort_key) |s| std.mem.span(s) else "";
+    const found = ps.br.tableRowsJson(
+        std.mem.span(id),
+        std.mem.span(key),
+        want,
+        ascending != 0,
+        &ps.json,
+    ) catch return null;
+    if (!found) return null;
+    if (out_len) |p| p.* = ps.json.items.len;
+    return ps.json.items.ptr;
+}
+
+/// Tell the plugin its table is on screen, or is not. 0 on success, -1 when
+/// the plugin or the table is unknown.
+export fn lookout_plugin_table_open(h: ?*lookout, id: [*:0]const u8, key: [*:0]const u8, open: c_int) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return -1;
+    return if (ps.br.setTableOpen(std.mem.span(id), std.mem.span(key), open != 0)) 0 else -1;
+}
+
 /// The plugin layer with the installed set loaded, created on first need.
 /// True when the layer is up afterwards. The install root is created empty
 /// rather than treated as an error: a first install has nothing yet.

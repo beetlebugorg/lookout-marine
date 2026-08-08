@@ -442,6 +442,45 @@ final class AppModel: ObservableObject {
         if pinned != nil { pinned = nil }
         if pinnedPoint != nil { pinnedPoint = nil }
     }
+
+    #if os(macOS)
+    /// The tables the loaded plugins declare, and the menu items that open
+    /// them. Called once the plugin sets are up.
+    func refreshPluginTables() {
+        guard let c = controller else { return }
+        PluginTableMenu.install(c.tableSpecs(), model: self)
+    }
+
+    /// Show a place a plugin table row named: centre the chart on it and pin
+    /// the bubble of whatever the plugin draws there. A row with no position
+    /// never gets here.
+    func revealOnChart(lon: Double, lat: Double) {
+        guard let c = controller else { return }
+        if let hit = c.reveal(lon: lon, lat: lat) { pin(hit) } else { closePin() }
+    }
+
+    /// Open one declared table, for the screenshot protocol's
+    /// LOOKOUT_SHOW=table[:key[:sort[:asc|desc[:activate]]]]. The first
+    /// declaration when no key is named, and the declared sort unless one is
+    /// asked for — which is the same choice a mariner makes by clicking a
+    /// column heading. `activate` opens the top row the way a double-click
+    /// does, so the locate-on-chart path can be photographed.
+    func openPluginTable(_ spec: String) {
+        guard let c = controller else { return }
+        let parts = spec.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        let key = parts.first ?? ""
+        let specs = c.tableSpecs()
+        let want = key.isEmpty ? specs.first : specs.first { $0.key == key }
+        guard let want else { return }
+        let window = PluginTableWindowController.show(want, model: self,
+                                                      sortKey: parts.count > 1 ? parts[1] : nil,
+                                                      ascending: parts.count < 3 || parts[2] != "desc")
+        guard parts.count > 3, parts[3] == "activate" else { return }
+        // A moment for the plugin's first batch: it builds no rows until it is
+        // told the dialog is open.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { window.activateTopRow() }
+    }
+    #endif
     /// Scheme changes from the MENU must persist like ones from the settings
     /// form (the form saves in its own apply path).
     func cycleScheme() {
