@@ -267,6 +267,17 @@ pub fn Connections(comptime opts: Opts) type {
         var conns: [schema.max_rows]Connection = @splat(.{});
         var status_timer: i64 = -1;
         var last_status: schema.Str(768) = .{};
+        /// Rows in the mariner's list that this plugin could not take, because
+        /// the list is full. A silent drop is a row in the settings window that
+        /// looks like every other row and does nothing, so the count goes on
+        /// the status line and into the log.
+        ///
+        /// The host caps a list at its own `max_list_rows`, which is the same
+        /// eight, so it normally drops the ninth row before the plugin ever
+        /// sees it and this stays zero. It is the SDK's own guard: what the
+        /// plugin can hold is the plugin's to report, and a host that ever
+        /// carries more rows than the SDK does must not lose them quietly.
+        var over_capacity: usize = 0;
 
         /// The used connections, in the order the settings window shows.
         fn ordered(buf: *[schema.max_rows]*Connection) []*Connection {
@@ -375,6 +386,7 @@ pub fn Connections(comptime opts: Opts) type {
             }
             if (status_timer >= 0) raw.timerCancel(status_timer);
             status_timer = -1;
+            over_capacity = 0;
         }
 
         // ---- the connection itself ------------------------------------------
@@ -459,6 +471,7 @@ pub fn Connections(comptime opts: Opts) type {
         fn reconcile(comptime P: type, config: std.json.Value) void {
             for (&conns) |*r| r.seen = false;
 
+            var over: usize = 0;
             const list = listOf(config);
             for (list, 0..) |item, order| {
                 if (item != .object) continue;
@@ -466,7 +479,10 @@ pub fn Connections(comptime opts: Opts) type {
                 const id = str(o.get("id")) orelse continue;
                 if (id.len == 0) continue;
 
-                const r = byId(id) orelse freeSlot() orelse continue;
+                const r = byId(id) orelse freeSlot() orelse {
+                    over += 1;
+                    continue;
+                };
                 const fresh = !r.used;
                 const was_enabled = !fresh and r.enabled;
                 const old_host = r.host;
@@ -517,6 +533,17 @@ pub fn Connections(comptime opts: Opts) type {
                 if (!r.used or r.seen) continue;
                 r.closeSocket();
                 r.* = .{};
+            }
+
+            // Said once per change, not once per reconcile: the same list
+            // arrives again on every settings edit.
+            if (over != over_capacity) {
+                if (over > 0) raw.logf(
+                    .warn,
+                    "{d} connection(s) past the {d} this plugin holds; they are not dialled",
+                    .{ over, schema.max_rows },
+                );
+                over_capacity = over;
             }
         }
 
@@ -573,12 +600,16 @@ pub fn Connections(comptime opts: Opts) type {
                 }
             }
 
+            // A list with rows it cannot hold is not doing what the mariner
+            // asked, however well the ones it did take are running.
+            const state = if (live > 0 and over_capacity == 0) "running" else "degraded";
+
             var buf: [768]u8 = undefined;
             var b = raw.Buf.init(&buf);
             b.raw("{\"state\":");
-            b.str(if (live > 0) "running" else "degraded");
+            b.str(state);
             b.raw(",\"detail\":");
-            var detail: [120]u8 = undefined;
+            var detail: [160]u8 = undefined;
             var d = raw.Buf.init(&detail);
             if (order.len == 0) {
                 d.raw(opts.status_empty);
@@ -587,6 +618,10 @@ pub fn Connections(comptime opts: Opts) type {
             } else {
                 d.print("0 of {d} connected", .{order.len});
             }
+            if (over_capacity > 0) d.print(
+                "; {d} more than the {d} this plugin holds",
+                .{ over_capacity, schema.max_rows },
+            );
             b.str(d.bytes());
 
             b.raw(",\"items\":[");
@@ -613,7 +648,7 @@ pub fn Connections(comptime opts: Opts) type {
             if (b.overflowed) {
                 // Too many connections to describe at once: the line still
                 // goes out, so the chrome never falls silent.
-                raw.status(if (live > 0) "running" else "degraded", "{d} of {d} connected", .{ live, order.len });
+                raw.status(state, "{d} of {d} connected", .{ live, order.len });
                 return;
             }
             // The host logs a status text it has not seen, so a 2 s repeat of

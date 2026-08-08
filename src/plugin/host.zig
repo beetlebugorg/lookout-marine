@@ -39,12 +39,21 @@
 //! running — each holds a pointer into it — so loading is refused once `start`
 //! has been called.
 //!
-//! A TRAPPED PLUGIN IS DISABLED, not retried. WAMR's exception text is logged,
-//! the instance is left instantiated but never entered again, and everything
-//! the plugin contributed — overlay objects, vessel paths, AIS targets,
-//! sockets, timers, queued events — is dropped. A chartplotter that keeps
-//! drawing the last position a crashed plugin published is worse than one that
-//! draws nothing.
+//! A TRAPPED PLUGIN IS TAKEN OUT OF SERVICE FIRST. WAMR's exception text is
+//! logged, the instance is never entered again, and everything the plugin
+//! contributed — overlay objects, vessel paths, AIS targets, sockets, timers,
+//! queued events — is dropped. A chartplotter that keeps drawing the last
+//! position a crashed plugin published is worse than one that draws nothing.
+//!
+//! THEN IT IS RESTARTED, on `default_restart_backoff_ms`: after a second, then
+//! five, then thirty, and then not again. A plugin that traps once has probably
+//! met one malformed sentence, and the mariner's instruments should come back
+//! without a relaunch; a plugin that traps every time is broken, and the status
+//! line says it stopped rather than restarting it under the mariner for ever.
+//! The restart runs on the plugin's OWN dispatch thread, which is the only
+//! thread allowed inside that instance. It gets a new instance of the module it
+//! already has, its settings and its connections as they stand now, and an
+//! empty scene; it does not get its globals back, because the instance is new.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -211,6 +220,19 @@ pub const max_row_id = 32;
 /// criticality tiers that would let a chart-drawing plugin die while the
 /// autopilot's is given longer, are the obvious next thing and are not built.
 pub const default_event_budget_ms: i64 = 1000;
+
+/// How long the host waits before each attempt to bring a faulted plugin back,
+/// and — by its length — how many attempts there are.
+///
+/// A second is long enough that the bad event is behind it and short enough
+/// that a mariner watching the wind instrument go blank sees it come back
+/// rather than reaching for the app switcher. The five and the thirty are for a
+/// plugin whose trouble is not one sentence: a server answering nonsense, a
+/// gateway sending a frame it cannot parse. After the third the host stops,
+/// because a plugin that cannot survive three starts is not going to survive a
+/// fourth, and a restart loop under way at sea is worse than a plugin that is
+/// visibly off.
+pub const default_restart_backoff_ms = [_]i64{ 1_000, 5_000, 30_000 };
 
 /// A plugin's manifest.json:
 /// `{"id":"org.beetlebug.ais","name":"AIS","api":1,"capabilities":[...],
@@ -807,11 +829,43 @@ fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
 ///   - `developer`: the LOOKOUT_PLUGINS override.
 ///
 /// It decides three things. Whether Settings offers Uninstall (only
-/// `installed`). Who wins an id collision: the first origin loaded keeps the
-/// id, and the shell loads the developer directory, then the bundled set, then
-/// the installed set. And whether an id may be installed at all, since
-/// `unpackToTemp` refuses a package that claims a bundled id.
-pub const Origin = enum { bundled, installed, developer };
+/// `installed`). Who wins an id collision, which is `precedence` below. And
+/// whether an id may be installed at all, since `unpackToTemp` refuses a
+/// package that claims a bundled id.
+pub const Origin = enum {
+    bundled,
+    installed,
+    developer,
+
+    /// WHO WINS AN ID TWO DIRECTORIES BOTH OFFER. Highest precedence keeps the
+    /// id, whatever order the directories were scanned in.
+    ///
+    ///   developer beats everything: a developer who points LOOKOUT_PLUGINS at
+    ///   a build directory is saying "run this copy", and the whole point of
+    ///   the override is that it overrides.
+    ///
+    ///   bundled beats installed: the core plugins are the product's, and a
+    ///   stale copy of one left under the install root from an older release
+    ///   must not shadow the one inside the application. `unpackToTemp` refuses
+    ///   a package claiming a bundled id, so the only way to have both is a
+    ///   leftover, and a leftover never wins.
+    ///
+    /// Equal precedence keeps the copy already loaded, which is what makes
+    /// loading the same directory twice a no-op.
+    ///
+    /// This used to be first-loaded-wins, which gave the same answer only
+    /// because the shell happened to scan developer, then bundled, then
+    /// installed. It is a rule now, so a shell that scans them in another order
+    /// — or loads the installed set late, the way `lookout_plugins_load_installed`
+    /// does — still runs the copy the mariner would expect.
+    pub fn precedence(self: Origin) u8 {
+        return switch (self) {
+            .developer => 2,
+            .bundled => 1,
+            .installed => 0,
+        };
+    }
+};
 
 /// One loaded plugin, and the thread that runs it.
 ///
@@ -852,8 +906,17 @@ pub const Entry = struct {
     /// terminated once.
     killed_ms: std.atomic.Value(i64) = .init(0),
     /// Set once everything the plugin contributed has been dropped, so the
-    /// clean-up runs exactly once whichever path reaches it.
+    /// clean-up runs exactly once whichever path reaches it. Cleared again by a
+    /// restart, which is a plugin coming back into service.
     retired: std.atomic.Value(bool) = .init(false),
+    /// Restart attempts spent since this plugin last started clean, indexing
+    /// `Options.restart_backoff_ms`. Only the plugin's own dispatch thread
+    /// writes it, and only that thread and the harness read it.
+    restarts: usize = 0,
+    /// Monotonic ms at which the dispatch thread should try to bring this
+    /// plugin back, or 0 when it is finished for good. Written by the thread
+    /// that retired it, taken by the dispatch thread.
+    restart_at: std.atomic.Value(i64) = .init(0),
     /// Where this plugin came from; see `Origin`.
     origin: Origin = .bundled,
     /// The capabilities in force: the manifest's set minus what the mariner
@@ -886,6 +949,11 @@ pub const Options = struct {
     /// The watchdog's budget for one module call. See
     /// `default_event_budget_ms`.
     event_budget_ms: i64 = default_event_budget_ms,
+    /// The wait before each attempt to bring a faulted plugin back, and how
+    /// many attempts there are. See `default_restart_backoff_ms`. An empty
+    /// schedule never restarts anything, which is what the host did before
+    /// there was a schedule.
+    restart_backoff_ms: []const i64 = &default_restart_backoff_ms,
     /// Where installed plugins live, overriding the platform's own place
     /// (install.md's table). Tests point it at scratch; a platform with no
     /// path in the environment (Android) must set it.
@@ -1050,12 +1118,9 @@ pub const Host = struct {
     ///     `installPackage` writes under the install root.
     ///
     /// A plugin that fails to load is logged and skipped — one bad module must
-    /// not take the others down with it. An id already in the registry is
-    /// skipped too, so whoever loads first keeps the id. The shell loads the
-    /// developer directory (LOOKOUT_PLUGINS), then the bundled set inside the
-    /// application, then the installed set, which is what makes a developer
-    /// copy override a bundled plugin and a bundled plugin override a stale
-    /// installed one of the same id.
+    /// not take the others down with it. An id two directories both offer goes
+    /// to the higher `Origin.precedence`: developer over bundled over
+    /// installed, whichever directory was scanned first.
     ///
     /// Load order is the sorted file order, and load order IS source priority
     /// in the vessel store, so it is deterministic across machines. Loading
@@ -1134,18 +1199,26 @@ pub const Host = struct {
         errdefer manifest.deinit(self.alloc);
         if (manifest.api != api_version) return Error.ApiMismatch;
 
-        // First loaded keeps the id. The status the mariner reads says which
-        // copy is running, so a developer set beside an installed one is not a
-        // mystery.
+        // Two copies of one id: `Origin.precedence` decides, not scan order.
+        // The status the mariner reads says which copy is running, so a
+        // developer set beside an installed one is not a mystery.
+        //
+        // The lesser copy is only unloaded further down, once this one is known
+        // to be a plugin at all. A developer directory holding a manifest and
+        // no module must not take the bundled plugin off the chart.
+        var replacing: ?*Entry = null;
         if (self.entryFor(manifest.id)) |have| {
-            self.br.say(
-                broker.level_warn,
-                manifest.id,
-                "already loaded ({s} copy wins); {s} copy skipped",
-                .{ @tagName(have.origin), @tagName(origin) },
-            );
-            manifest.deinit(self.alloc);
-            return;
+            if (origin.precedence() <= have.origin.precedence()) {
+                self.br.say(
+                    broker.level_warn,
+                    manifest.id,
+                    "already loaded ({s} copy wins); {s} copy skipped",
+                    .{ @tagName(have.origin), @tagName(origin) },
+                );
+                manifest.deinit(self.alloc);
+                return;
+            }
+            replacing = have;
         }
 
         // Every setting starts at its schema default. A shell that has one
@@ -1264,6 +1337,21 @@ pub const Host = struct {
             self.br.removePlugin(state);
         }
 
+        // The new copy is a real module that speaks this API, so the id changes
+        // hands here — before `lk_start`, so the copy going out takes its
+        // overlay objects with it rather than erasing the ones the copy coming
+        // in is about to draw. Only the instance goes: nothing on disk is
+        // touched, because both copies are somebody's real files.
+        if (replacing) |have| {
+            self.br.say(
+                broker.level_warn,
+                manifest.id,
+                "{s} copy takes the id from the {s} copy, which is now unloaded",
+                .{ @tagName(origin), @tagName(have.origin) },
+            );
+            self.unload(have);
+        }
+
         const cfg = try self.startJson(&manifest, values, rows);
         defer self.alloc.free(cfg);
         const rc = inst.start(cfg) catch |e| {
@@ -1362,6 +1450,8 @@ pub const Host = struct {
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.alloc);
         var index: u32 = 0;
+        // Rows the list caps dropped, said out loud after the lock.
+        var over: usize = 0;
 
         {
             var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, json, .{}) catch
@@ -1380,7 +1470,7 @@ pub const Host = struct {
                 // A list arrives whole: the shell sends every row it wants to
                 // keep, so a removed row is simply absent from the array.
                 if (e.manifest.list(kv.key_ptr.*)) |li| {
-                    const text = try normalizeRows(self.alloc, e.manifest.lists[li], kv.value_ptr.*);
+                    const text = try normalizeRows(self.alloc, e.manifest.lists[li], kv.value_ptr.*, &over);
                     self.alloc.free(e.rows[li]);
                     e.rows[li] = text;
                     continue;
@@ -1407,6 +1497,16 @@ pub const Host = struct {
 
         self.br.push(index, broker.Kind.config_changed, 0, payload.items);
         self.br.say(broker.level_info, id, "config {s}", .{payload.items});
+        // The mariner added a row past what the list holds. The plugin will
+        // never see it, so the row would sit there looking like every other one
+        // and doing nothing; `max_rows` in the registry JSON is how a shell
+        // stops offering Add before this happens.
+        if (over > 0) self.br.say(
+            broker.level_warn,
+            id,
+            "{d} row{s} past the {d} a list holds {s} dropped and will not be used",
+            .{ over, plural(over), max_list_rows, if (over == 1) "was" else "were" },
+        );
     }
 
     // -- files the mariner chose ------------------------------------------------
@@ -1578,7 +1678,12 @@ pub const Host = struct {
                         try out.append(alloc, ':');
                         try writeJsonString(out, alloc, pair[1]);
                     }
-                    try out.print(alloc, ",\"tab\":\"{s}\",\"item_fields\":[", .{@tagName(l.tab)});
+                    // HOW MANY ROWS THIS LIST HOLDS. The cap is the host's, not
+                    // the manifest's, and `normalizeRows` enforces it by
+                    // dropping what is over. A shell that knows the number can
+                    // stop offering Add at the cap; one that does not lets the
+                    // mariner add a ninth row that quietly never connects.
+                    try out.print(alloc, ",\"tab\":\"{s}\",\"max_rows\":{d},\"item_fields\":[", .{ @tagName(l.tab), max_list_rows });
                     for (l.items, 0..) |f, j| {
                         if (j > 0) try out.append(alloc, ',');
                         try out.append(alloc, '{');
@@ -2089,7 +2194,15 @@ pub const Host = struct {
         return n;
     }
 
-    /// One plugin's dispatch thread: its queue, its instance, nobody else's.
+    /// One plugin's dispatch thread: its queue, its instance, its restarts,
+    /// nobody else's.
+    ///
+    /// The restart happens HERE, and not on the watchdog's thread or the
+    /// shell's, because bringing a plugin back means calling `lk_start` — wasm,
+    /// on a thread with a runtime environment, in the one place that is allowed
+    /// inside this instance. The thread outlives the fault for exactly as long
+    /// as the backoff says, and goes when the schedule runs out or the host
+    /// stops.
     fn dispatchMain(self: *Host, index: u32) void {
         const e = self.entries.items[index];
         // WAMR keeps the interpreter's native stack boundary per THREAD, and
@@ -2103,6 +2216,24 @@ pub const Host = struct {
         };
         defer wasm.destroyThreadEnv();
 
+        while (true) {
+            self.serveEvents(index);
+            // A fault leaves a restart time behind; anything else — SHUTDOWN,
+            // an unload, the last attempt of the schedule — leaves zero, and
+            // this thread is done.
+            const at = e.restart_at.swap(0, .acq_rel);
+            if (at == 0) break;
+            while (!e.stopping.load(.acquire) and broker.monoMs() < at) broker.sleepMs(2);
+            if (e.stopping.load(.acquire)) break;
+            _ = self.restart(index);
+        }
+        // Anything still queued belongs to nobody now.
+        self.br.clearQueue(index);
+    }
+
+    /// Deliver this plugin's events until it stops, faults or is told to stop.
+    fn serveEvents(self: *Host, index: u32) void {
+        const e = self.entries.items[index];
         // Polled rather than waited on a condition variable, for the same
         // reason raster.zig's worker is: Zig 0.16 has no std.Thread.Condition
         // outside an Io. The backoff keeps an idle plugin off the CPU; the
@@ -2114,7 +2245,7 @@ pub const Host = struct {
             // plugin overran and is finished.
             if (e.killed_ms.load(.acquire) != 0) {
                 self.disableStuck(index);
-                break;
+                return;
             }
             const ev = self.br.popFor(index) orelse {
                 broker.sleepMs(idle_ms);
@@ -2125,8 +2256,134 @@ pub const Host = struct {
             defer self.br.freeEvent(ev);
             self.deliverTo(index, ev.kind, ev.handle, ev.payload);
         }
-        // Anything still queued belongs to nobody now.
-        self.br.clearQueue(index);
+    }
+
+    /// Bring a faulted plugin back, on its own dispatch thread. True when it is
+    /// running again.
+    ///
+    /// WHAT IT GETS BACK. Its settings and its connection rows, exactly as they
+    /// stand — including anything the mariner changed while it was down — and
+    /// nothing else. The instance is NEW, so its globals are gone; the scene is
+    /// empty, because `retire` erased everything it had drawn and published;
+    /// the queue is empty, because what arrived while it was dead went with it.
+    /// Its persisted storage is untouched on disk and it may read it back.
+    ///
+    /// A restart that cannot instantiate, or whose `lk_start` traps or refuses,
+    /// is one more failed attempt: the schedule decides whether there is
+    /// another.
+    fn restart(self: *Host, index: u32) bool {
+        const e = self.entries.items[index];
+        e.restarts += 1;
+
+        var err: wasm.ErrBuf = .{};
+        var fresh = wasm.Instance.init(e.module, self.opts.limits, &err) catch |ie| {
+            self.br.say(broker.level_err, e.manifest.id, "restart {d}: instantiate failed: {s}", .{ e.restarts, err.msg() });
+            self.giveUp(index, @errorName(ie));
+            return false;
+        };
+        fresh.setUserData(e.state);
+        {
+            // The watchdog reads this instance on the I/O thread while it walks
+            // the registry, so the swap happens under the registry lock. The
+            // plugin is not live either side of it, so nothing is inside.
+            self.reg_mu.lock();
+            defer self.reg_mu.unlock();
+            e.inst.deinit();
+            e.inst = fresh;
+        }
+
+        const cfg = blk: {
+            self.cfg_mu.lock();
+            defer self.cfg_mu.unlock();
+            break :blk self.startJson(&e.manifest, e.values, e.rows) catch |ce| {
+                self.giveUp(index, @errorName(ce));
+                return false;
+            };
+        };
+        defer self.alloc.free(cfg);
+
+        // Live again BEFORE the call: `lk_start` subscribes, dials, draws and
+        // posts a status, and every one of those goes through the broker record
+        // this flips back on. The stamp goes with it, so a plugin that hangs in
+        // lk_start is the watchdog's business like any other call.
+        e.killed_ms.store(0, .release);
+        e.retired.store(false, .release);
+        {
+            self.br.mu.lock();
+            defer self.br.mu.unlock();
+            e.state.enabled = true;
+        }
+        e.live.store(true, .release);
+        e.entered_ms.store(broker.monoMs(), .release);
+        const rc = e.inst.start(cfg) catch |se| {
+            e.entered_ms.store(0, .release);
+            var tbuf: [max_reason]u8 = undefined;
+            const text = e.inst.exception() orelse @errorName(se);
+            const kept = tbuf[0..@min(text.len, tbuf.len)];
+            @memcpy(kept, text[0..kept.len]);
+            e.inst.clearException();
+            self.br.say(broker.level_err, e.manifest.id, "restart {d}: lk_start trapped: {s}", .{ e.restarts, kept });
+            self.retire(index, true, kept);
+            self.scheduleRestart(index, kept);
+            return false;
+        };
+        e.entered_ms.store(0, .release);
+        if (rc != 0) {
+            var buf: [max_reason]u8 = undefined;
+            const why = std.fmt.bufPrint(&buf, "lk_start refused with {d}", .{rc}) catch "lk_start refused";
+            self.br.say(broker.level_err, e.manifest.id, "restart {d}: {s}", .{ e.restarts, why });
+            self.retire(index, true, why);
+            self.scheduleRestart(index, why);
+            return false;
+        }
+        self.br.say(
+            broker.level_info,
+            e.manifest.id,
+            "restarted (attempt {d} of {d}); settings and connections restored, scene empty",
+            .{ e.restarts, self.opts.restart_backoff_ms.len },
+        );
+        return true;
+    }
+
+    /// Arrange for a faulted plugin's own dispatch thread to bring it back, or
+    /// say on its status line that this was the last time.
+    ///
+    /// Called from that thread, right after `retire`, so a plugin with no
+    /// thread to serve the restart is never promised one.
+    fn scheduleRestart(self: *Host, index: u32, reason: []const u8) void {
+        const e = self.entries.items[index];
+        const schedule = self.opts.restart_backoff_ms;
+        // Nothing to promise: the schedule is switched off, the host is
+        // stopping, or this plugin has had every attempt it is going to get.
+        if (schedule.len == 0 or e.stopping.load(.acquire)) return;
+        if (e.restarts >= schedule.len) {
+            self.giveUp(index, reason);
+            return;
+        }
+        const wait_ms = schedule[e.restarts];
+        e.restart_at.store(broker.monoMs() + wait_ms, .release);
+        self.br.say(
+            broker.level_warn,
+            e.manifest.id,
+            "restarting in {d} ms (attempt {d} of {d})",
+            .{ wait_ms, e.restarts + 1, schedule.len },
+        );
+        setFaultStatus(e, "{s}; restarting (attempt {d} of {d})", .{ reason, e.restarts + 1, schedule.len });
+    }
+
+    /// The end of the line: this plugin is not coming back, and the status line
+    /// the mariner reads says why in as many words. Nothing is restarted after
+    /// this without a relaunch.
+    fn giveUp(self: *Host, index: u32, reason: []const u8) void {
+        const e = self.entries.items[index];
+        e.restart_at.store(0, .release);
+        self.br.say(
+            broker.level_err,
+            e.manifest.id,
+            "stopped after {d} failed restart{s}: {s}",
+            .{ e.restarts, plural(e.restarts), reason },
+        );
+        setFaultStatus(e, "stopped after {d} failed restart{s}: {s}", .{ e.restarts, plural(e.restarts), reason });
     }
 
     fn deliverTo(self: *Host, index: u32, kind: u32, handle: u64, payload: []const u8) void {
@@ -2158,6 +2415,10 @@ pub const Host = struct {
             e.inst.clearException();
             self.br.say(broker.level_err, e.manifest.id, "lk_event trapped: {s}", .{kept});
             self.retire(index, true, kept);
+            // One malformed sentence should not cost the mariner the plugin
+            // for the rest of the passage. A plugin that traps on its way out
+            // is on its way out, though, and is not brought back.
+            if (kind != broker.Kind.shutdown) self.scheduleRestart(index, kept);
             return;
         };
         e.entered_ms.store(0, .release);
@@ -2188,6 +2449,10 @@ pub const Host = struct {
             .{e.killed_ms.load(.acquire)},
         ) catch "stuck in lk_event";
         self.retire(index, true, reason);
+        // A plugin that overran is restarted like one that trapped: the event
+        // it choked on is gone with its queue, and the next start may well be
+        // the plugin working again.
+        self.scheduleRestart(index, reason);
     }
 
     /// Take a plugin out of service and erase everything it contributed:
@@ -2200,20 +2465,8 @@ pub const Host = struct {
         e.live.store(false, .release);
         if (e.retired.swap(true, .acq_rel)) return;
         if (fault) {
-            // The reason goes into a JSON status line, and part of it is text
-            // WAMR wrote, so quotes, backslashes and control bytes are folded
-            // to spaces rather than escaped: this is a one-line status, not a
-            // document, and it must not be able to break the shape.
-            var safe: [max_reason]u8 = undefined;
-            const n = @min(reason.len, safe.len);
-            for (reason[0..n], 0..) |ch, i| safe[i] = switch (ch) {
-                '"', '\\', 0...31, 127 => ' ',
-                else => ch,
-            };
-            var buf: [broker.max_status]u8 = undefined;
-            const line = std.fmt.bufPrint(&buf, "{{\"state\":\"disabled\",\"detail\":\"{s}\"}}", .{safe[0..n]}) catch "{\"state\":\"disabled\"}";
-            _ = e.state.setStatus(line);
-            self.br.say(broker.level_err, e.manifest.id, "disabled: {s}; overlays and published values cleared", .{safe[0..n]});
+            setFaultStatus(e, "{s}", .{reason});
+            self.br.say(broker.level_err, e.manifest.id, "disabled: {s}; overlays and published values cleared", .{reason});
         }
         self.br.dropPlugin(index, broker.wallMs());
     }
@@ -2255,6 +2508,32 @@ pub const Host = struct {
 
 fn lessName(_: void, a: []u8, b: []u8) bool {
     return std.mem.lessThan(u8, a, b);
+}
+
+fn plural(n: usize) []const u8 {
+    return if (n == 1) "" else "s";
+}
+
+/// Replace a plugin's status line with one the HOST wrote, in the one case
+/// where nobody is left inside the module to say what happened.
+///
+/// Part of the detail is text WAMR wrote, so quotes, backslashes and control
+/// bytes are folded to spaces rather than escaped: this is a one-line status,
+/// not a document, and it must not be able to break the shape.
+fn setFaultStatus(e: *Entry, comptime fmt: []const u8, args: anytype) void {
+    var detail: [max_reason]u8 = undefined;
+    const written = std.fmt.bufPrint(&detail, fmt, args) catch detail[0..];
+    for (written) |*ch| ch.* = switch (ch.*) {
+        '"', '\\', 0...31, 127 => ' ',
+        else => ch.*,
+    };
+    var buf: [broker.max_status]u8 = undefined;
+    const line = std.fmt.bufPrint(
+        &buf,
+        "{{\"state\":\"disabled\",\"detail\":\"{s}\"}}",
+        .{written},
+    ) catch "{\"state\":\"disabled\"}";
+    _ = e.state.setStatus(line);
 }
 
 // ---- install: the package, the grants, the consent sentences ----------------
@@ -2540,14 +2819,23 @@ fn writeSettings(
 /// declare is dropped. A row is dropped only if it is not an object, and rows
 /// past `max_list_rows` are dropped: a boat with nine NMEA gateways is a
 /// misconfiguration, not a use case.
-fn normalizeRows(alloc: std.mem.Allocator, l: List, v: std.json.Value) ![]u8 {
+///
+/// `over` counts the rows the cap dropped. The caller says so, because a row
+/// the mariner filled in and the host quietly forgot is a row they will sit and
+/// wait for.
+fn normalizeRows(alloc: std.mem.Allocator, l: List, v: std.json.Value, over: *usize) ![]u8 {
     if (v != .array) return Error.BadConfig;
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
     try out.append(alloc, '[');
     var written: usize = 0;
     for (v.array.items) |rv| {
-        if (written >= max_list_rows) break;
+        if (written >= max_list_rows) {
+            // Not an object is not a row at all, and is not counted as one the
+            // mariner will miss.
+            if (rv == .object) over.* += 1;
+            continue;
+        }
         const ro = switch (rv) {
             .object => |o| o,
             else => continue,
@@ -3010,6 +3298,7 @@ test "a list group parses, and its rows are policed like any other setting" {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const ja = arena.allocator();
+    var over: usize = 0;
     const rows = try normalizeRows(
         a,
         l,
@@ -3017,8 +3306,10 @@ test "a list group parses, and its rows are policed like any other setting" {
             \\[{"id":"c1","name":"Masthead","host":"10.0.0.9","port":99999,"enabled":false,"junk":1},
             \\ {"host":"nav.local"}]
         , .{ .allocate = .alloc_if_needed }),
+        &over,
     );
     defer a.free(rows);
+    try t.expectEqual(@as(usize, 0), over);
     try t.expectEqualStrings(
         "[{\"id\":\"c1\",\"name\":\"Masthead\",\"host\":\"10.0.0.9\",\"port\":65535,\"enabled\":false}," ++
             "{\"id\":\"row2\",\"name\":\"\",\"host\":\"nav.local\",\"port\":10110,\"enabled\":true}]",
@@ -3026,7 +3317,9 @@ test "a list group parses, and its rows are policed like any other setting" {
     );
 
     // Rows past the cap are dropped, and a row that is not an object is not a
-    // row at all.
+    // row at all. The three that were dropped are COUNTED, because the mariner
+    // typed them in and would otherwise sit waiting for a connection that was
+    // never made; the 7 on the end is not counted, because it is not a row.
     var many: std.ArrayList(u8) = .empty;
     defer many.deinit(a);
     try many.append(a, '[');
@@ -3035,12 +3328,14 @@ test "a list group parses, and its rows are policed like any other setting" {
         try many.print(a, "{{\"host\":\"h{d}\"}}", .{i});
     }
     try many.appendSlice(a, ",7]");
-    const capped = try normalizeRows(a, l, try std.json.parseFromSliceLeaky(std.json.Value, ja, many.items, .{}));
+    over = 0;
+    const capped = try normalizeRows(a, l, try std.json.parseFromSliceLeaky(std.json.Value, ja, many.items, .{}), &over);
     defer a.free(capped);
     try t.expectEqual(max_list_rows, std.mem.count(u8, capped, "\"host\":"));
+    try t.expectEqual(@as(usize, 3), over);
 
     // A list that is not an array is a shell fault, not a clamp.
-    try t.expectError(Error.BadConfig, normalizeRows(a, l, .{ .bool = true }));
+    try t.expectError(Error.BadConfig, normalizeRows(a, l, .{ .bool = true }, &over));
 
     // The registry JSON carries the schema of one row and the rows in force.
     var json: std.ArrayList(u8) = .empty;
@@ -3202,6 +3497,27 @@ test "version order decides only the downgrade sentence" {
     try t.expect(versionLess("", "0.1"));
     // Unparseable segments fall back to text order rather than lying.
     try t.expect(versionLess("1.0-beta", "1.0-rc"));
+}
+
+test "an id two directories both offer goes by origin, not by scan order" {
+    // Developer over bundled over installed. The shell scans them in that order
+    // today; the rule is what keeps the answer the same when something does
+    // not — a shell that loads the installed set late, the way
+    // `lookout_plugins_load_installed` does, still runs the developer copy.
+    // Equal precedence is not a win, which is what makes loading one directory
+    // twice a no-op; test/host_restart.zig drives all three end to end.
+    try t.expect(Origin.developer.precedence() > Origin.bundled.precedence());
+    try t.expect(Origin.bundled.precedence() > Origin.installed.precedence());
+    try t.expect(Origin.developer.precedence() > Origin.installed.precedence());
+}
+
+test "the restart schedule is a second, then five, then thirty, then no more" {
+    try t.expectEqualSlices(i64, &.{ 1_000, 5_000, 30_000 }, &default_restart_backoff_ms);
+    // A host built with the default Options restarts on it. A schedule of no
+    // entries is the old behaviour — disabled for good — and stays reachable
+    // for a shell that wants it.
+    const shipped = Options{};
+    try t.expectEqualSlices(i64, &default_restart_backoff_ms, shipped.restart_backoff_ms);
 }
 
 test "an id that could leave the install root is refused" {

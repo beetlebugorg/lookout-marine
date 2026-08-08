@@ -790,6 +790,35 @@ pub fn build(b: *std.Build) void {
             const isolation_run = b.addRunArtifact(b.addTest(.{ .root_module = isolation_mod }));
             b.step("host-isolation", "Run the per-plugin thread + watchdog test").dependOn(&isolation_run.step);
             test_step.dependOn(&isolation_run.step);
+
+            // Faults, restarts and load precedence: echo beside a plugin that
+            // traps on cue, in lk_event and in lk_start. Built and never
+            // installed, like echo and the spinner.
+            const trap_mod = b.createModule(.{
+                .root_source_file = b.path("test/trap_plugin.zig"),
+                .target = wasm_target,
+                .optimize = .ReleaseSmall,
+            });
+            trap_mod.addImport("lk", lk_mod);
+            const trap_plugin = b.addExecutable(.{ .name = "trap_plugin", .root_module = trap_mod });
+            trap_plugin.entry = .disabled;
+            trap_plugin.rdynamic = true;
+
+            const restart_mod = b.createModule(.{
+                .root_source_file = b.path("test/host_restart.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            });
+            restart_mod.addImport("host", host_mod);
+            restart_mod.addImport("overlay", ov_mod);
+            restart_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
+            restart_mod.addAnonymousImport("echo_manifest", .{ .root_source_file = b.path("plugins/echo/manifest.json") });
+            restart_mod.addAnonymousImport("trap_plugin_wasm", .{ .root_source_file = trap_plugin.getEmittedBin() });
+
+            const restart_run = b.addRunArtifact(b.addTest(.{ .root_module = restart_mod }));
+            b.step("host-restart", "Run the plugin fault, restart and load-precedence test").dependOn(&restart_run.step);
+            test_step.dependOn(&restart_run.step);
         }
     }
     if (plugins_fail) |fail| test_step.dependOn(fail);
