@@ -12,9 +12,7 @@ allowed to do. Lookout loads the pair, runs the module in a sandbox, and gives i
 a fixed set of calls into Lookout.
 
 You write one to get something off your boat and onto the chart. **Zig, Go and
-Rust all run**, and so does any other toolchain that emits a wasm module the host
-can load. The wire protocol is the specification, and a language SDK is only a
-convenience over it.
+Rust are currently supported.**
 
 | Language | Target | Module size |
 |---|---|---|
@@ -110,20 +108,19 @@ Where you can run a plugin:
 
 | Platform | Plugin host | Overlay rendering |
 |---|---|---|
-| macOS | Runs. The reference. | Metal, seen on screen |
-| iOS, iPadOS | Runs on the simulator | Metal, seen on screen |
-| Linux | Compiles and links; no socket has carried a byte | Vulkan, run offscreen through MoltenVK, never on a Linux driver |
-| Windows | Compiles and links; never run | Direct3D 12, compiled, never rendered |
-| Android | No WAMR archive, and Lookout does not start the host yet | The Vulkan pass is in the APK; the plugin host is not |
+| macOS | Runs. The reference. | Metal, on screen |
+| Android | Runs on a device | Vulkan, on screen |
+| iOS, iPadOS | Runs on the simulator | Metal, on screen |
+| Linux | Compiles and links, not yet run | Vulkan, run offscreen through MoltenVK, not yet on a Linux driver |
+| Windows | Compiles and links, not yet run | Direct3D 12, compiles, not yet rendered |
 
-Develop on macOS. It is the only platform where the whole loop has been run.
+Your module is interpreted on every platform, by [WAMR]'s fast interpreter,
+built by `scripts/build-wamr.sh`. There is no JIT: iOS refuses a process that
+asks the operating system for executable pages at run time. Interpreted code
+runs well short of native speed, so keep event handlers small.
 
-Your module is executed by [WAMR]'s fast interpreter, built by
-`scripts/build-wamr.sh`. There is no JIT and no AOT compilation, which is what
-makes iOS possible: the host never asks the operating system for executable
-pages. It also means your code runs well short of native speed, so keep event
-handlers small. On macOS and iOS the host turns on whenever the WAMR archive is
-present; elsewhere it needs `-Dplugins=true`.
+On macOS, iOS and Android the host turns on whenever the WAMR archive is
+present; on Linux and Windows it needs `-Dplugins=true`.
 
 Built and usable today:
 
