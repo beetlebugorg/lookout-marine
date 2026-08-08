@@ -869,9 +869,6 @@ final class AppModel: ObservableObject {
     }
 
     func closePick() {
-        if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-            NSLog("[pick] closePick from:\n%@", Thread.callStackSymbols.prefix(8).joined(separator: "\n"))
-        }
         // Put the chart back where the mariner left it (§2.5). This undoes
         // only the lift the app made.
         if pickLift != 0 {
