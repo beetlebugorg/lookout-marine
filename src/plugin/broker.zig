@@ -3068,7 +3068,7 @@ const KvStore = struct {
 /// survive. Deliberately NOT the cache root `lookout_set_cache_dir` names: a
 /// cache is purgeable and a mariner's saved plugin state is not.
 fn defaultStorageDir(alloc: std.mem.Allocator) ?[]u8 {
-    if (builtin.os.tag == .windows) {
+    if (comptime builtin.os.tag == .windows) {
         const appdata = std.c.getenv("APPDATA") orelse return null;
         const s = std.mem.span(appdata);
         if (s.len == 0) return null;
@@ -3871,7 +3871,7 @@ pub fn unregisterNatives() void {
 /// what the stores are stamped with. Zig 0.16 dropped std.time.milliTimestamp,
 /// so this reads the platform clock directly.
 pub fn wallMs() i64 {
-    if (builtin.os.tag == .windows) {
+    if (comptime builtin.os.tag == .windows) {
         // FILETIME counts 100 ns ticks from 1601-01-01. 11644473600 seconds
         // separate that epoch from the Unix one.
         var ft: [2]u32 = .{ 0, 0 };
@@ -3888,7 +3888,7 @@ pub fn wallMs() i64 {
 /// Monotonic milliseconds: timer deadlines and fanout pacing, which must not
 /// jump when the clock is set.
 pub fn monoMs() i64 {
-    if (builtin.os.tag == .windows) {
+    if (comptime builtin.os.tag == .windows) {
         // The performance counter is the monotonic clock on Windows.
         // GetTickCount64 is monotonic too but steps by the 10-16 ms timer
         // tick, which is coarse against a 5 ms plugin timer. The 128-bit
@@ -3908,7 +3908,7 @@ pub fn monoMs() i64 {
 /// A kernel sleep. Zig 0.16's std.Thread.sleep wants an Io this layer does not
 /// take; the same externs the rest of the core uses (src/lock.zig).
 pub fn sleepMs(ms: u32) void {
-    if (builtin.os.tag == .windows) {
+    if (comptime builtin.os.tag == .windows) {
         win.Sleep(ms);
     } else {
         const p = struct {

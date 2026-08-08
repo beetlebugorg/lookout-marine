@@ -293,32 +293,62 @@ fn wasiDeinit() void {
 /// HANDLE on Windows. Opened here rather than through std.Io, which in Zig
 /// 0.16 needs an Io implementation this layer has no business holding.
 fn openNullDevice() i64 {
-    if (builtin.os.tag == .windows) {
-        const w = std.os.windows;
-        const h = w.kernel32.CreateFileW(
+    // An `else` rather than an early return: a plain `if` leaves the POSIX
+    // body in the analysed path on Windows, where std.c.open does not compile.
+    if (comptime builtin.os.tag == .windows) {
+        const h = win32CreateFileW(
             std.unicode.utf8ToUtf16LeStringLiteral("NUL"),
-            w.GENERIC_READ | w.GENERIC_WRITE,
-            w.FILE_SHARE_READ | w.FILE_SHARE_WRITE,
+            win32.generic_read | win32.generic_write,
+            win32.file_share_read | win32.file_share_write,
             null,
-            w.OPEN_EXISTING,
+            win32.open_existing,
             0,
             null,
         );
-        if (h == w.INVALID_HANDLE_VALUE) return -1;
+        if (@intFromPtr(h) == win32.invalid_handle) return -1;
         return @bitCast(@as(u64, @intFromPtr(h)));
+    } else {
+        const fd = std.c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
+        return if (fd < 0) -1 else @intCast(fd);
     }
-    const fd = std.c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
-    return if (fd < 0) -1 else @intCast(fd);
 }
 
 fn closeNullDevice() void {
     if (null_handle < 0) return;
-    if (builtin.os.tag == .windows) {
-        _ = std.os.windows.kernel32.CloseHandle(@ptrFromInt(@as(usize, @intCast(null_handle))));
+    if (comptime builtin.os.tag == .windows) {
+        _ = win32CloseHandle(@ptrFromInt(@as(usize, @intCast(null_handle))));
     } else {
         _ = std.c.close(@intCast(null_handle));
     }
 }
+
+/// Win32 values the null device needs. std.os.windows moved these into nested
+/// namespaces in Zig 0.16, and they are ABI constants, so they are written out
+/// here rather than tracked through the standard library's layout.
+const win32 = struct {
+    const generic_read: std.os.windows.DWORD = 0x8000_0000;
+    const generic_write: std.os.windows.DWORD = 0x4000_0000;
+    const file_share_read: std.os.windows.DWORD = 0x0000_0001;
+    const file_share_write: std.os.windows.DWORD = 0x0000_0002;
+    const open_existing: std.os.windows.DWORD = 3;
+    const invalid_handle: usize = std.math.maxInt(usize);
+};
+
+// std.os.windows.kernel32 does not declare these in Zig 0.16, so the two the
+// null device needs are declared here.
+extern "kernel32" fn CreateFileW(
+    lpFileName: [*:0]const u16,
+    dwDesiredAccess: std.os.windows.DWORD,
+    dwShareMode: std.os.windows.DWORD,
+    lpSecurityAttributes: ?*std.os.windows.SECURITY_ATTRIBUTES,
+    dwCreationDisposition: std.os.windows.DWORD,
+    dwFlagsAndAttributes: std.os.windows.DWORD,
+    hTemplateFile: ?std.os.windows.HANDLE,
+) callconv(.winapi) std.os.windows.HANDLE;
+const win32CreateFileW = CreateFileW;
+
+extern "kernel32" fn CloseHandle(hObject: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
+const win32CloseHandle = CloseHandle;
 
 /// Give a loaded module the WASI context described at the top of this section.
 /// WAMR reads these at instantiation, so they are set on the module and not on

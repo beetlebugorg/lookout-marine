@@ -22,6 +22,7 @@
 //! Signal K socket needs none of them.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const net = @import("net.zig");
 
 const tls = std.crypto.tls;
@@ -149,11 +150,26 @@ pub fn deinitCaBundle() void {
     bundle = .empty;
 }
 
+/// Seconds since the Unix epoch, for the certificate validity window. Read
+/// from the platform's own clock: POSIX clock_gettime has no declaration
+/// Windows can compile, and importing the broker's wallMs here would make the
+/// two files import each other.
 fn wallSec() i64 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
-    return @intCast(ts.sec);
+    if (comptime builtin.os.tag == .windows) {
+        // FILETIME counts 100 ns ticks from 1601-01-01. 11644473600 seconds
+        // separate that epoch from the Unix one.
+        var ft: [2]u32 = .{ 0, 0 };
+        GetSystemTimeAsFileTime(&ft);
+        const ticks = (@as(u64, ft[1]) << 32) | ft[0];
+        return @intCast(@divTrunc(ticks, 10_000_000) -% 11_644_473_600);
+    } else {
+        var ts: std.c.timespec = undefined;
+        if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
+        return @intCast(ts.sec);
+    }
 }
+
+extern "kernel32" fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *[2]u32) callconv(.winapi) void;
 
 // ---- the stream ---------------------------------------------------------------
 
