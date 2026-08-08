@@ -156,6 +156,11 @@ struct PluginListSections: View {
                 } label: {
                     Label(list.addLabel.isEmpty ? "Add" : list.addLabel, systemImage: "plus")
                 }
+                // AT THE CAP THERE IS NOTHING TO ADD. The core keeps
+                // `max_rows` and drops the rest, so a mariner who typed a
+                // ninth gateway address would be left with a row that looks
+                // like the other eight and never connects.
+                .disabled(p.isFull(list))
             } header: {
                 SectionHead(list.group)
             } footer: {
@@ -163,10 +168,15 @@ struct PluginListSections: View {
                 // two lists now — NMEA gateways and Signal K servers — and a
                 // line about WiFi gateways under a list of Signal K servers is
                 // an instruction that sends the mariner to the wrong port.
-                if !list.footer.isEmpty {
-                    Text(list.footer)
-                        .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    if p.isFull(list) {
+                        Text("\(list.maxRows) is the most this list holds. Remove one to add another.")
+                    }
+                    if !list.footer.isEmpty {
+                        Text(list.footer)
+                    }
                 }
+                .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

@@ -234,6 +234,11 @@ pub const Plugin = struct {
     http_hosts: []const []const u8 = &.{},
     /// The same for `ws_connect`, from the `net.ws` grant.
     ws_hosts: []const []const u8 = &.{},
+    /// The table keys the manifest declared, borrowed from the host like `id`.
+    /// `declareTable` refuses anything else: a table the mariner never saw on
+    /// the consent sheet does not appear in a menu because the module asked
+    /// for it at run time.
+    table_keys: []const []const u8 = &.{},
     /// False once the plugin has trapped or been shut down: natives from an
     /// in-flight call still work, but nothing new is delivered.
     enabled: bool = true,
@@ -1023,8 +1028,9 @@ pub const Broker = struct {
 
     /// Take one table declaration from a plugin. A declaration under a key the
     /// plugin already declared replaces it and drops its rows, because the
-    /// columns may have moved under them. 0 on success, -1 when the
-    /// declaration is refused, and a refusal always says why.
+    /// columns may have moved under them. The key must be one the manifest
+    /// carried. 0 on success, -1 when the declaration is refused, and a
+    /// refusal always says why.
     pub fn declareTable(self: *Broker, p: *Plugin, json: []const u8) i32 {
         var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, json, .{}) catch {
             self.say(level_warn, p.id, "table: malformed declaration JSON", .{});
@@ -1064,6 +1070,14 @@ pub const Broker = struct {
         return 0;
     }
 
+    /// True when `key` is one of the table keys the manifest declared.
+    fn keyDeclared(keys: []const []const u8, key: []const u8) bool {
+        for (keys) |k| {
+            if (std.mem.eql(u8, k, key)) return true;
+        }
+        return false;
+    }
+
     /// One declaration, allocated but not yet registered. Every refusal is
     /// logged here, so the caller only has to pass the error on.
     fn buildTable(self: *Broker, p: *Plugin, o: std.json.ObjectMap) !Table {
@@ -1071,6 +1085,17 @@ pub const Broker = struct {
         const key = jsonText(o, "key");
         if (key.len == 0 or key.len > max_table_key) {
             self.say(level_warn, p.id, "table: a declaration needs a key of 1 to {d} bytes", .{max_table_key});
+            return error.BadDeclaration;
+        }
+        // THE MANIFEST IS THE CONSENT. A table is a window with a menu item in
+        // front of the mariner, and the manifest is where they were told about
+        // it. A module that asks for one the manifest never carried is asking
+        // for a surface nobody agreed to, so it is refused by key and named in
+        // the log. The SDK generates both declarations from one source, so a
+        // plugin only ever reaches this line after its manifest was edited
+        // apart from its code.
+        if (!keyDeclared(p.table_keys, key)) {
+            self.say(level_warn, p.id, "table {s}: the manifest declares no table under that key; refused", .{key});
             return error.BadDeclaration;
         }
         const cols_v = o.get("columns") orelse std.json.Value{ .null = {} };
@@ -4110,6 +4135,7 @@ const TableFixture = struct {
             .id = "org.example.table",
             .source = 1,
             .caps = Caps.initEmpty(),
+            .table_keys = &test_table_keys,
         };
         return self;
     }
@@ -4145,6 +4171,11 @@ const TableFixture = struct {
         try t.expect(try self.broker.tableRowsJson("org.example.table", "targets", sort_key, ascending, out));
     }
 };
+
+/// The keys the fixture's manifest declares. "wide" and "t" are here so the
+/// refusal tests below fail on the reason they are testing rather than on the
+/// manifest check.
+const test_table_keys = [_][]const u8{ "targets", "wide", "t" };
 
 /// The declaration the tests work against: one of every kind of column that
 /// sorts differently, and a position.
@@ -4395,6 +4426,42 @@ test "a declaration reaches the shell, and closing the dialog empties it" {
     try t.expect(!f.broker.setTableOpen("org.example.table", "nosuch", true));
     json.clearRetainingCapacity();
     try t.expect(!try f.broker.tableRowsJson("org.example.other", "targets", "", true, &json));
+}
+
+// THE MANIFEST IS THE CONSENT. The runtime declaration and the manifest block
+// come out of one comptime source in the SDK, so a plugin only reaches this
+// refusal when its manifest was edited apart from its code — or when a module
+// is asking for a surface its manifest never showed the mariner.
+test "a table the manifest never declared is refused by key" {
+    const f = try TableFixture.init();
+    defer f.deinit();
+
+    // Everything about it is well formed; only the key is unaccounted for.
+    try t.expectEqual(@as(i32, -1), f.declare(
+        "{\"key\":\"smuggled\",\"title\":\"Smuggled\",\"menu\":\"Vessels\"," ++
+            "\"columns\":[{\"key\":\"a\",\"label\":\"A\",\"type\":\"text\"}]}",
+    ));
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(t.allocator);
+    try f.broker.tablesJson(&json);
+    try t.expectEqualStrings("{\"tables\":[]}", json.items);
+
+    // A key the manifest does carry still goes through, so the check refuses
+    // the undeclared table and nothing else.
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+    json.clearRetainingCapacity();
+    try f.broker.tablesJson(&json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"key\":\"targets\"") != null);
+
+    // A plugin whose manifest declares no tables at all may declare none: the
+    // key that worked a line ago is refused once the manifest stops carrying
+    // it, and the table already registered is left where it is.
+    f.plugin.table_keys = &.{};
+    try t.expectEqual(@as(i32, -1), f.declare(test_table_decl));
+    json.clearRetainingCapacity();
+    try f.broker.tablesJson(&json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"key\":\"targets\"") != null);
 }
 
 test "a plugin that goes takes its tables with it" {

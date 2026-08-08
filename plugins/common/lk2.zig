@@ -56,6 +56,13 @@
 //!   onEvent(e)            every event the library did not consume
 //!   onShutdown()          the last word
 //!
+//! MIXING TIERS. A plugin may declare `inputs` and still want a path raw.
+//! Ask for it with `lk.subscribeAlso`, never `lk.raw.subscribePaths`: the host
+//! holds ONE subscription per plugin and a second call replaces the first, so
+//! the raw form takes the declared inputs off the wire without saying so. The
+//! declared readings go to the inputs; the rest reach `onEvent` as a
+//! `.store_changed` carrying only those.
+//!
 //! TARGET. wasm32-freestanding: no threads, no filesystem, no clock but the
 //! two the host lends. Everything is single-threaded by contract, so plugin
 //! state is plain globals. `lk.scratch()` is reset the moment your function
@@ -356,6 +363,58 @@ pub fn subscribeNumber(comptime path: []const u8, comptime opts: InputOpts) type
 /// A position off the vessel store, as a `Point`.
 pub fn subscribePosition(comptime path: []const u8, comptime opts: InputOpts) type {
     return Input(Point, path, opts);
+}
+
+/// Paths one plugin may hold at once, its declared inputs and its raw ones
+/// together. The host takes a list; this is what `subscribeAlso` will build.
+pub const max_subscribe_paths = 16;
+
+/// The paths `plugin()` subscribed to on the plugin's behalf. Read by
+/// `subscribeAlso`, which has to send them again.
+var declared_paths: []const []const u8 = &.{};
+
+/// Subscribe to `extra` BESIDE the inputs the plugin declared.
+///
+/// THE HOST HOLDS ONE SUBSCRIPTION PER PLUGIN, and a second `subscribePaths`
+/// REPLACES the first. A plugin that declares `inputs` and then calls
+/// `lk.raw.subscribePaths` for a path of its own therefore takes its own
+/// declared inputs off the wire, silently, and the draw goes to "no position"
+/// for ever. This sends the union instead, so both keep arriving.
+///
+/// The declared readings go to the inputs as usual; the rest reach the
+/// plugin's own `onEvent` as a `.store_changed` carrying only those.
+pub fn subscribeAlso(extra: []const []const u8) i32 {
+    var all: [max_subscribe_paths][]const u8 = undefined;
+    const n = unionPaths(&all, extra) orelse {
+        log(.warn, "subscribe: more than {d} paths between the declared inputs and this call; refused", .{max_subscribe_paths});
+        return -1;
+    };
+    if (n == 0) return -1;
+    return raw_lk.subscribePaths(all[0..n]);
+}
+
+/// The declared paths followed by `extra`, duplicates dropped, written into
+/// `out`. Null when the union would not fit, which refuses the subscription
+/// whole rather than trimming it: a plugin missing one path it asked for is
+/// worse than one told it asked for too many.
+fn unionPaths(out: *[max_subscribe_paths][]const u8, extra: []const []const u8) ?usize {
+    var n: usize = 0;
+    for (declared_paths) |p| {
+        if (n == out.len) return null;
+        out[n] = p;
+        n += 1;
+    }
+    for (extra) |p| {
+        var seen = false;
+        for (out[0..n]) |had| {
+            if (std.mem.eql(u8, had, p)) seen = true;
+        }
+        if (seen) continue;
+        if (n == out.len) return null;
+        out[n] = p;
+        n += 1;
+    }
+    return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -1927,6 +1986,105 @@ pub fn expectTables(manifest_text: []const u8, comptime spec_list: anytype) !voi
 // Registration
 // ---------------------------------------------------------------------------
 
+/// Room for the readings one batch can spill.
+///
+/// The worst case is a batch in which no declared input claims anything:
+/// `max_subscribe_paths` readings, each a path and a value the vessel store
+/// bounds at 512 bytes of JSON, with the envelope. That is a little over ten
+/// kilobytes and this is the round number above it. A batch past it goes
+/// through whole rather than being cut, so the number is a working set and not
+/// a correctness bound.
+const store_spill_bytes = 12 * 1024;
+
+/// Where the rebuild is written. A global rather than scratch because the
+/// scratch arena grows through `@wasmMemorySize`, which does not exist off
+/// wasm, and this routing has to be testable natively. One plugin, one event
+/// at a time, by the same contract that makes every other buffer here a
+/// global.
+var spill_buf: [store_spill_bytes]u8 = undefined;
+
+/// The readings in one `.store_changed` batch that no declared input claimed,
+/// rebuilt as a payload of the same shape for the plugin's own `onEvent`.
+///
+/// A plugin that mixes tiers — declared `inputs` for what the library should
+/// age and gate on, `subscribeAlso` for a path it wants raw — used to lose the
+/// raw half here: the library matched the declared paths and returned. This
+/// carries the rest through, and only the rest, so a handler looking for its
+/// own path is not handed readings it already has through an input.
+///
+/// A batch that overruns the buffer goes through WHOLE instead. A plugin
+/// seeing a reading it already has through an input is a plugin that can
+/// ignore it; one that never sees its own is the bug being fixed.
+const RawSpill = struct {
+    src: []const u8,
+    w: std.Io.Writer = .fixed(&spill_buf),
+    n: usize = 0,
+    over: bool = false,
+
+    fn init(payload: []const u8) RawSpill {
+        return .{ .src = payload, .w = .fixed(&spill_buf) };
+    }
+
+    fn take(self: *RawSpill, r: raw_lk.Reading) void {
+        if (self.over) return;
+        if (self.n == 0) {
+            self.w.writeAll("{\"values\":[") catch {
+                self.over = true;
+                return;
+            };
+        }
+        self.write(r) catch {
+            self.over = true;
+        };
+        self.n += 1;
+    }
+
+    fn write(self: *RawSpill, r: raw_lk.Reading) !void {
+        if (self.n > 0) try self.w.writeByte(',');
+        try self.w.writeAll("{\"path\":");
+        try std.json.Stringify.value(r.path, .{}, &self.w);
+        try self.w.writeAll(",\"value\":");
+        try std.json.Stringify.value(r.value, .{}, &self.w);
+        try self.w.print(",\"ts\":{d},\"age_ms\":{d}}}", .{ r.ts_ms, r.age_ms });
+    }
+
+    /// The unclaimed readings as a payload, or null when every reading in the
+    /// batch was claimed and there is nothing to pass on.
+    fn rest(self: *RawSpill) ?[]const u8 {
+        if (self.n == 0) return null;
+        if (self.over) return self.src;
+        self.w.writeAll("]}") catch return self.src;
+        return self.w.buffered();
+    }
+};
+
+/// Route one `.store_changed` batch: hand each reading to the input that
+/// declared its path, and give back the readings nobody claimed, or null when
+/// the declared inputs took the lot.
+///
+/// The batch arrives already parsed, and the clock arrives as an argument,
+/// because `readings` and `monoMs` both reach the host: keeping them out is
+/// what lets the routing be tested natively, the same reason `lkRecord` takes
+/// a clock. `src` is the payload they came from, which is what goes through
+/// unsplit if the rebuild will not fit.
+fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, src: []const u8, mono: i64) ?[]const u8 {
+    var spill = RawSpill.init(src);
+    for (list) |r| {
+        var claimed = false;
+        inline for (inputs) |In| {
+            if (std.mem.eql(u8, r.path, In.lk_path)) {
+                In.lkRecord(r, mono);
+                claimed = true;
+            }
+        }
+        // A plugin may declare inputs AND raw-subscribe paths of its own; see
+        // `subscribeAlso`. The readings no input claimed are that plugin's,
+        // and swallowing them here is how they used to be lost.
+        if (!claimed) spill.take(r);
+    }
+    return spill.rest();
+}
+
 /// Emit the API exports and wire them to what the plugin declares. Call once,
 /// at container scope:
 ///
@@ -1943,6 +2101,10 @@ pub fn plugin(comptime P: type) void {
             readSettings(P, s.config);
 
             if (comptime D.inputs.len > 0) {
+                // Kept where `subscribeAlso` can find them: a plugin adding a
+                // raw path of its own has to send these again or the host
+                // replaces the whole subscription with just its own.
+                declared_paths = &D.paths;
                 if (raw_lk.subscribePaths(&D.paths) < 0) return error.SubscribeRefused;
             }
             if (comptime D.has_ais) {
@@ -1965,11 +2127,9 @@ pub fn plugin(comptime P: type) void {
         pub fn onEvent(e: raw_lk.Event) !void {
             switch (e) {
                 .store_changed => |payload| if (comptime D.inputs.len > 0) {
-                    const mono = monoMs();
-                    for (raw_lk.readings(payload)) |r| {
-                        inline for (D.inputs) |In| {
-                            if (std.mem.eql(u8, r.path, In.lk_path)) In.lkRecord(r, mono);
-                        }
+                    const rest = routeReadings(D.inputs, raw_lk.readings(payload), payload, monoMs());
+                    if (comptime @hasDecl(P, "onEvent")) {
+                        if (rest) |json| try P.onEvent(.{ .store_changed = json });
                     }
                     return;
                 },
@@ -2461,4 +2621,122 @@ test "closing the dialog forgets what was on it" {
     TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
     TestTable.flush();
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"ANNE\"") != null);
+}
+
+// -- mixing declared inputs with raw subscriptions -----------------------------
+
+/// The plugin under test: one declared input, and one path it wants raw.
+const MixedSpeed = subscribeNumber("navigation.speedOverGround", .{});
+const raw_path = "environment.depth.belowTransducer";
+
+fn reading(path: []const u8, v: std.json.Value, ts: i64, age: i64) raw_lk.Reading {
+    return .{ .path = path, .value = v, .ts_ms = ts, .age_ms = age };
+}
+
+/// The rebuilt payload, parsed the way a plugin's own handler would parse it.
+/// `raw_lk.readings` cannot be used here: it allocates from the scratch arena,
+/// which grows through a wasm builtin this test does not have.
+fn spilled(alloc: std.mem.Allocator, json: []const u8) !std.json.Parsed(std.json.Value) {
+    return std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+}
+
+test "a plugin that declares one input and raw-subscribes another sees both" {
+    const a = expect.allocator;
+
+    const rest = routeReadings(&.{MixedSpeed}, &.{
+        reading("navigation.speedOverGround", .{ .float = 3.2 }, 1, 10),
+        reading(raw_path, .{ .float = 4.5 }, 2, 20),
+    }, "", 100_000);
+
+    // THE DECLARED HALF still lands in its input, aged and gated as always.
+    try expect.expectApproxEqAbs(@as(f64, 3.2), MixedSpeed.get(), 1e-9);
+
+    // THE RAW HALF reaches the plugin instead of being swallowed. This is the
+    // whole bug: the library matched the declared paths and returned.
+    var parsed = try spilled(a, rest orelse return error.RawReadingLost);
+    defer parsed.deinit();
+    const values = parsed.value.object.get("values").?.array.items;
+    try expect.expectEqual(@as(usize, 1), values.len);
+    try expect.expectEqualStrings(raw_path, values[0].object.get("path").?.string);
+    try expect.expectApproxEqAbs(@as(f64, 4.5), values[0].object.get("value").?.float, 1e-9);
+    try expect.expectEqual(@as(i64, 2), values[0].object.get("ts").?.integer);
+    try expect.expectEqual(@as(i64, 20), values[0].object.get("age_ms").?.integer);
+
+    // ...and only that half: a handler looking for its own path is not handed
+    // readings it already has through an input.
+    try expect.expect(std.mem.indexOf(u8, rest.?, "speedOverGround") == null);
+}
+
+test "a batch the declared inputs took whole reaches no handler" {
+    const rest = routeReadings(&.{MixedSpeed}, &.{
+        reading("navigation.speedOverGround", .{ .float = 6.1 }, 3, 0),
+    }, "", 200_000);
+    try expect.expect(rest == null);
+    try expect.expectApproxEqAbs(@as(f64, 6.1), MixedSpeed.get(), 1e-9);
+}
+
+test "a removal and an object value survive the rebuild" {
+    const a = expect.allocator;
+    // A null is "this path has no source any more", which is not the same as
+    // zero and must reach the plugin as a null. A position is an object, and
+    // the rebuild must not flatten it.
+    var at: std.json.ObjectMap = .empty;
+    defer at.deinit(a);
+    try at.put(a, "lat", .{ .float = 38.9763 });
+    try at.put(a, "lon", .{ .float = -76.4767 });
+
+    const rest = routeReadings(&.{MixedSpeed}, &.{
+        reading(raw_path, .null, 4, 0),
+        reading("navigation.position", .{ .object = at }, 5, 0),
+    }, "", 300_000);
+
+    var parsed = try spilled(a, rest orelse return error.RawReadingLost);
+    defer parsed.deinit();
+    const values = parsed.value.object.get("values").?.array.items;
+    try expect.expectEqual(@as(usize, 2), values.len);
+    try expect.expect(values[0].object.get("value").? == .null);
+    const back = values[1].object.get("value").?.object;
+    try expect.expectApproxEqAbs(@as(f64, 38.9763), back.get("lat").?.float, 1e-9);
+    try expect.expectApproxEqAbs(@as(f64, -76.4767), back.get("lon").?.float, 1e-9);
+}
+
+test "a rebuild that will not fit passes the whole batch through" {
+    // The fallback, which is what keeps the buffer a working set rather than a
+    // correctness bound: the plugin sees everything, including readings it
+    // already has, rather than nothing.
+    const long = "x" ** (store_spill_bytes / 8);
+    var many: [16]raw_lk.Reading = @splat(reading(raw_path, .{ .string = long }, 6, 0));
+    const src = "{\"values\":[]}";
+    const rest = routeReadings(&.{MixedSpeed}, &many, src, 400_000);
+    try expect.expectEqualStrings(src, rest.?);
+}
+
+test "subscribeAlso sends the declared paths beside the plugin's own" {
+    // The union, in declaration order and without duplicates. `subscribeAlso`
+    // exists because the host holds ONE subscription per plugin: a plugin
+    // calling raw.subscribePaths for a path of its own would replace the
+    // declared inputs with it and never be told.
+    declared_paths = &.{ "navigation.position", "navigation.speedOverGround" };
+    defer declared_paths = &.{};
+
+    var all: [max_subscribe_paths][]const u8 = undefined;
+    const n = unionPaths(&all, &.{ raw_path, "navigation.position" });
+    try expect.expectEqual(@as(usize, 3), n.?);
+    try expect.expectEqualStrings("navigation.position", all[0]);
+    try expect.expectEqualStrings("navigation.speedOverGround", all[1]);
+    try expect.expectEqualStrings(raw_path, all[2]);
+
+    // A path already declared is not sent twice: the host would take it, but
+    // the reading would then match an input and never spill.
+    try expect.expectEqual(@as(usize, 2), unionPaths(&all, &.{"navigation.position"}).?);
+
+    // One past the budget is refused whole rather than trimmed: a plugin
+    // missing a path it asked for is worse than one told it asked for too many.
+    const full = comptime blk: {
+        var out: [max_subscribe_paths][]const u8 = undefined;
+        for (&out, 0..) |*slot, i| slot.* = std.fmt.comptimePrint("sensors.n{d}", .{i});
+        break :blk out;
+    };
+    declared_paths = &full;
+    try expect.expect(unionPaths(&all, &.{"one.too.many"}) == null);
 }

@@ -612,4 +612,11 @@ test "every manifest the app ships parses under the real parser" {
         defer m.deinit(a);
         try std.testing.expect(m.id.len > 0);
     }
+
+    // The AIS targets dialog only opens because the manifest carries its key:
+    // the host refuses a runtime declaration the manifest does not account
+    // for, so a manifest edited apart from the module loses the dialog.
+    var ais = try host.parseManifest(a, ais_manifest);
+    defer ais.deinit(a);
+    try std.testing.expect(ais.declaresTable("targets"));
 }

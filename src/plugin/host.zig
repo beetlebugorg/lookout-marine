@@ -54,6 +54,9 @@
 //! thread allowed inside that instance. It gets a new instance of the module it
 //! already has, its settings and its connections as they stand now, and an
 //! empty scene; it does not get its globals back, because the instance is new.
+//! THE ALLOWANCE IS GIVEN BACK after `default_restart_clean_ms` of clean
+//! running, so the three attempts are three attempts at one bout of trouble
+//! rather than three for the life of the app.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -234,6 +237,27 @@ pub const default_event_budget_ms: i64 = 1000;
 /// visibly off.
 pub const default_restart_backoff_ms = [_]i64{ 1_000, 5_000, 30_000 };
 
+/// How long a plugin has to run clean before its restart allowance is given
+/// back whole.
+///
+/// WITHOUT THIS the allowance is spent for the life of the app. A plugin that
+/// meets one malformed sentence every few hours would use its three attempts
+/// somewhere off Solomons and be dark for the rest of the passage, having in
+/// fact recovered from every one of them. The schedule is there to stop a
+/// restart LOOP, and three faults hours apart are not a loop.
+///
+/// Five minutes, and the number is chosen from the schedule rather than from
+/// the sea: the whole backoff spans thirty-six seconds, so five minutes is an
+/// order of magnitude past the longest wait in it. A plugin that flaps on the
+/// same repeated input never reaches it — it faults again inside a second, as
+/// the ones this schedule exists for do — and a plugin that ran clean for five
+/// minutes did not fail to start; it met something in the data.
+///
+/// The clock starts when `lk_start` returns cleanly, and it starts again at
+/// every restart, so a restart that comes up and falls straight back over
+/// counts as the failed attempt it is.
+pub const default_restart_clean_ms: i64 = 5 * 60 * 1000;
+
 /// A plugin's manifest.json:
 /// `{"id":"org.beetlebug.ais","name":"AIS","api":1,"capabilities":[...],
 ///   "settings":{"groups":[{"label":"Collision alarm","tab":"alarms","fields":[
@@ -251,6 +275,10 @@ pub const default_restart_backoff_ms = [_]i64{ 1_000, 5_000, 30_000 };
 /// A manifest may also claim FILE TYPES: `"file_types":[".grib2",".grb"]`. The
 /// mariner opens one of those files the way they open a chart, and `openFile`
 /// hands it to this plugin.
+///
+/// It declares its TABLES the same way: `"tables":[{"key":"targets",…}]`. Only
+/// the keys are kept here — the columns are the runtime declaration's business
+/// — and a key the manifest does not carry is a table the host refuses.
 pub const Manifest = struct {
     id: []u8,
     name: []u8,
@@ -268,6 +296,10 @@ pub const Manifest = struct {
     /// leading dot. Empty unless the manifest declares some, and never
     /// non-empty without the `files` capability.
     file_types: [][]u8 = &.{},
+    /// The keys of the tables this plugin declared, in manifest order. Empty
+    /// when it declared none, which is a plugin that may declare none at run
+    /// time either.
+    tables: [][]u8 = &.{},
     /// The settings schema, empty when the manifest declares none.
     settings: []Field = &.{},
     /// The repeating groups, empty when the manifest declares none.
@@ -280,6 +312,7 @@ pub const Manifest = struct {
         freeStrings(alloc, self.http_hosts);
         freeStrings(alloc, self.ws_hosts);
         freeStrings(alloc, self.file_types);
+        freeStrings(alloc, self.tables);
         freeFields(alloc, self.settings, self.settings.len);
         freeLists(alloc, self.lists, self.lists.len);
         self.* = undefined;
@@ -306,6 +339,16 @@ pub const Manifest = struct {
             if (std.mem.eql(u8, l.key, key)) return i;
         }
         return null;
+    }
+
+    /// True when the manifest declared a table under this key. The runtime
+    /// declaration is checked against it, so a plugin can only put on screen
+    /// what the mariner saw when the plugin was installed.
+    pub fn declaresTable(self: *const Manifest, key: []const u8) bool {
+        for (self.tables) |declared| {
+            if (std.mem.eql(u8, declared, key)) return true;
+        }
+        return false;
     }
 };
 
@@ -437,9 +480,11 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     var http_hosts: [][]u8 = &.{};
     var ws_hosts: [][]u8 = &.{};
     var file_types: [][]u8 = &.{};
+    var table_keys: [][]u8 = &.{};
     errdefer freeStrings(alloc, http_hosts);
     errdefer freeStrings(alloc, ws_hosts);
     errdefer freeStrings(alloc, file_types);
+    errdefer freeStrings(alloc, table_keys);
     if (o.get("capabilities")) |c| {
         if (c != .array) return Error.BadManifest;
         for (c.array.items) |item| switch (item) {
@@ -480,6 +525,10 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         if (!caps.contains(.files)) return Error.BadManifest;
         file_types = try parseFileTypes(alloc, v);
     }
+
+    // The tables the plugin declared. The columns are not kept: this list is
+    // what `declareTable` measures a runtime declaration against.
+    if (o.get("tables")) |v| table_keys = try parseTableKeys(alloc, v);
 
     const id_owned = try alloc.dupe(u8, id);
     errdefer alloc.free(id_owned);
@@ -573,9 +622,47 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         .http_hosts = http_hosts,
         .ws_hosts = ws_hosts,
         .file_types = file_types,
+        .tables = table_keys,
         .settings = fields,
         .lists = lists,
     };
+}
+
+/// The keys of a `"tables":[{"key":"targets",…}]` block, in declaration order.
+///
+/// Only the keys. Everything else about a table — its columns, its title, the
+/// menu it hangs from — is the runtime declaration's, and the SDK generates
+/// both from one comptime source so the two cannot drift. What the host needs
+/// from the manifest is the answer to one question: did the mariner consent to
+/// this table when they installed the plugin?
+///
+/// An empty list refuses the manifest, like `file_types`: it is the same claim
+/// as not asking, written in a way that looks like asking. So does a duplicate
+/// key, which would make one of the two declarations unreachable.
+fn parseTableKeys(alloc: std.mem.Allocator, v: std.json.Value) ![][]u8 {
+    if (v != .array) return Error.BadManifest;
+    const items = v.array.items;
+    if (items.len == 0 or items.len > broker.max_tables) return Error.BadManifest;
+    const out = try alloc.alloc([]u8, items.len);
+    var built: usize = 0;
+    errdefer {
+        for (out[0..built]) |k| alloc.free(k);
+        alloc.free(out);
+    }
+    for (items) |item| {
+        if (item != .object) return Error.BadManifest;
+        const key = switch (item.object.get("key") orelse return Error.BadManifest) {
+            .string => |s| s,
+            else => return Error.BadManifest,
+        };
+        if (key.len == 0 or key.len > broker.max_table_key) return Error.BadManifest;
+        for (out[0..built]) |seen| {
+            if (std.mem.eql(u8, seen, key)) return Error.BadManifest;
+        }
+        out[built] = try alloc.dupe(u8, key);
+        built += 1;
+    }
+    return out;
 }
 
 /// Most file types one plugin may claim. A plugin that answers for nine kinds
@@ -917,6 +1004,10 @@ pub const Entry = struct {
     /// plugin back, or 0 when it is finished for good. Written by the thread
     /// that retired it, taken by the dispatch thread.
     restart_at: std.atomic.Value(i64) = .init(0),
+    /// Monotonic ms at which this plugin last came up cleanly, or 0 while an
+    /// attempt is in flight. `scheduleRestart` reads it to decide whether the
+    /// plugin has earned its allowance back; see `default_restart_clean_ms`.
+    clean_since_ms: std.atomic.Value(i64) = .init(0),
     /// Where this plugin came from; see `Origin`.
     origin: Origin = .bundled,
     /// The capabilities in force: the manifest's set minus what the mariner
@@ -954,6 +1045,10 @@ pub const Options = struct {
     /// schedule never restarts anything, which is what the host did before
     /// there was a schedule.
     restart_backoff_ms: []const i64 = &default_restart_backoff_ms,
+    /// How long a plugin must run clean before the attempts it spent are given
+    /// back. See `default_restart_clean_ms`. Zero never gives them back, which
+    /// is what the host did before the counter decayed.
+    restart_clean_ms: i64 = default_restart_clean_ms,
     /// Where installed plugins live, overriding the platform's own place
     /// (install.md's table). Tests point it at scratch; a platform with no
     /// path in the environment (Android) must set it.
@@ -1106,6 +1201,23 @@ pub const Host = struct {
     pub fn find(self: *Host, id: []const u8) ?*broker.Plugin {
         const e = self.entryFor(id) orelse return null;
         return e.state;
+    }
+
+    /// How many restart attempts this plugin has spent since it last ran
+    /// clean, for the tests. `restart_clean_ms` of clean running puts it back
+    /// to zero; see `decayRestarts`.
+    pub fn restartsFor(self: *Host, id: []const u8) ?usize {
+        const e = self.entryFor(id) orelse return null;
+        return e.restarts;
+    }
+
+    /// Move the clock that decides whether a plugin has earned its restart
+    /// attempts back, for the tests. Backdating it is how a test proves the
+    /// rule in milliseconds instead of sitting out five real minutes on a
+    /// machine whose load it does not control.
+    pub fn setCleanSince(self: *Host, id: []const u8, mono_ms: i64) void {
+        const e = self.entryFor(id) orelse return;
+        e.clean_since_ms.store(mono_ms, .release);
     }
 
     // -- loading -------------------------------------------------------------
@@ -1314,6 +1426,7 @@ pub const Host = struct {
             .caps = grants,
             .http_hosts = manifest.http_hosts,
             .ws_hosts = manifest.ws_hosts,
+            .table_keys = manifest.tables,
         };
         inst.setUserData(state);
 
@@ -1379,6 +1492,9 @@ pub const Host = struct {
             .grants = grants,
             .dir = dir_owned,
         };
+        // `lk_start` returned cleanly above, so the clean run starts here. This
+        // is what `scheduleRestart` measures a first fault against.
+        entry.clean_since_ms.store(broker.monoMs(), .release);
 
         self.next_source += 1;
         {
@@ -2274,6 +2390,11 @@ pub const Host = struct {
     fn restart(self: *Host, index: u32) bool {
         const e = self.entries.items[index];
         e.restarts += 1;
+        // The clean run is over the moment an attempt begins. Without this a
+        // plugin that ran for hours and then could not come up at all would
+        // have its allowance handed back after every failed attempt, which is
+        // the restart loop the schedule exists to prevent.
+        e.clean_since_ms.store(0, .release);
 
         var err: wasm.ErrBuf = .{};
         var fresh = wasm.Instance.init(e.module, self.opts.limits, &err) catch |ie| {
@@ -2336,6 +2457,7 @@ pub const Host = struct {
             self.scheduleRestart(index, why);
             return false;
         }
+        e.clean_since_ms.store(broker.monoMs(), .release);
         self.br.say(
             broker.level_info,
             e.manifest.id,
@@ -2356,6 +2478,7 @@ pub const Host = struct {
         // Nothing to promise: the schedule is switched off, the host is
         // stopping, or this plugin has had every attempt it is going to get.
         if (schedule.len == 0 or e.stopping.load(.acquire)) return;
+        self.decayRestarts(e);
         if (e.restarts >= schedule.len) {
             self.giveUp(index, reason);
             return;
@@ -2369,6 +2492,28 @@ pub const Host = struct {
             .{ wait_ms, e.restarts + 1, schedule.len },
         );
         setFaultStatus(e, "{s}; restarting (attempt {d} of {d})", .{ reason, e.restarts + 1, schedule.len });
+    }
+
+    /// Give a plugin its attempts back when it earned them: a stretch of clean
+    /// running since it last came up says the fault behind it was the data, not
+    /// the plugin, and a plugin that meets one bad sentence an hour must not go
+    /// dark partway through a passage.
+    ///
+    /// Called on the plugin's own dispatch thread at the moment of the NEXT
+    /// fault, so there is no timer and nothing to cancel: the question is only
+    /// ever asked when the answer matters.
+    fn decayRestarts(self: *Host, e: *Entry) void {
+        const since = e.clean_since_ms.load(.acquire);
+        const now = broker.monoMs();
+        if (!allowanceWhole(e.restarts, since, now, self.opts.restart_clean_ms)) return;
+        const ran_ms = now - since;
+        self.br.say(
+            broker.level_info,
+            e.manifest.id,
+            "ran clean for {d} s after {d} restart{s}; the restart allowance is whole again",
+            .{ @divTrunc(ran_ms, 1000), e.restarts, plural(e.restarts) },
+        );
+        e.restarts = 0;
     }
 
     /// The end of the line: this plugin is not coming back, and the status line
@@ -2512,6 +2657,22 @@ fn lessName(_: void, a: []u8, b: []u8) bool {
 
 fn plural(n: usize) []const u8 {
     return if (n == 1) "" else "s";
+}
+
+/// THE DECAY RULE, with every input an argument: how many attempts are spent,
+/// when the plugin last came up, what time it is, and how long a clean run has
+/// to be. True when the attempts are given back.
+///
+/// A free function so the rule can be checked without a clock, a thread or a
+/// wasm module. `decayRestarts` is the only caller in the host, and it does
+/// nothing but read the entry, ask this, and log.
+///
+/// `clean_since_ms` of 0 means an attempt is in flight, which is no clean run
+/// at all whatever the clock says: that is what keeps a plugin that cannot come
+/// up from being restarted for ever. `clean_ms` of 0 switches the rule off.
+fn allowanceWhole(restarts: usize, clean_since_ms: i64, now_ms: i64, clean_ms: i64) bool {
+    if (restarts == 0 or clean_ms <= 0 or clean_since_ms == 0) return false;
+    return now_ms - clean_since_ms >= clean_ms;
 }
 
 /// Replace a plugin's status line with one the HOST wrote, in the one case
@@ -3104,6 +3265,52 @@ test "a manifest claims file types, lowercase and dotted, and only with files" {
     try t.expectEqual(@as(usize, 0), quiet.file_types.len);
 }
 
+test "a manifest declares its table keys, and the runtime declaration is held to them" {
+    const a = t.allocator;
+    var m = try parseManifest(a,
+        \\{"id":"org.beetlebug.ais","api":1,"capabilities":["ais.read"],
+        \\ "tables":[{"key":"targets","title":"AIS Targets","menu":"Vessels",
+        \\   "columns":[{"key":"mmsi","label":"MMSI","type":"text"}]}]}
+    );
+    defer m.deinit(a);
+    try t.expectEqual(@as(usize, 1), m.tables.len);
+    try t.expectEqualStrings("targets", m.tables[0]);
+    try t.expect(m.declaresTable("targets"));
+    try t.expect(!m.declaresTable("smuggled"));
+
+    const bad = [_][]const u8{
+        // Declaring nothing, written like a declaration.
+        "{\"id\":\"x\",\"api\":1,\"tables\":[]}",
+        "{\"id\":\"x\",\"api\":1,\"tables\":{\"key\":\"targets\"}}",
+        // An entry the check could never match against a runtime key.
+        "{\"id\":\"x\",\"api\":1,\"tables\":[\"targets\"]}",
+        "{\"id\":\"x\",\"api\":1,\"tables\":[{\"title\":\"No key\"}]}",
+        "{\"id\":\"x\",\"api\":1,\"tables\":[{\"key\":\"\"}]}",
+        "{\"id\":\"x\",\"api\":1,\"tables\":[{\"key\":7}]}",
+        // The same key twice would leave one of the two unreachable.
+        "{\"id\":\"x\",\"api\":1,\"tables\":[{\"key\":\"a\"},{\"key\":\"a\"}]}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+
+    // One more than a plugin may have on screen.
+    var many: std.ArrayList(u8) = .empty;
+    defer many.deinit(a);
+    try many.appendSlice(a, "{\"id\":\"x\",\"api\":1,\"tables\":[");
+    for (0..broker.max_tables + 1) |i| {
+        if (i > 0) try many.append(a, ',');
+        try many.print(a, "{{\"key\":\"t{d}\"}}", .{i});
+    }
+    try many.appendSlice(a, "]}");
+    try t.expectError(Error.BadManifest, parseManifest(a, many.items));
+
+    // A manifest that declares none keeps an empty list, and that plugin may
+    // declare no table at run time either.
+    var quiet = try parseManifest(a, "{\"id\":\"x\",\"api\":1}");
+    defer quiet.deinit(a);
+    try t.expectEqual(@as(usize, 0), quiet.tables.len);
+    try t.expect(!quiet.declaresTable("targets"));
+}
+
 test "the extension is read from the name, lowercased, dot kept" {
     var buf: [max_file_type]u8 = undefined;
     try t.expectEqualStrings(".grib2", fileExtension("gfs.grib2", &buf).?);
@@ -3518,6 +3725,38 @@ test "the restart schedule is a second, then five, then thirty, then no more" {
     // for a shell that wants it.
     const shipped = Options{};
     try t.expectEqualSlices(i64, &default_restart_backoff_ms, shipped.restart_backoff_ms);
+    // ...and it is spent per bout of trouble, not per run of the app.
+    try t.expectEqual(@as(i64, 5 * 60 * 1000), shipped.restart_clean_ms);
+    // Five minutes is an order of magnitude past the longest wait in the
+    // schedule, which is what makes it a threshold and not a coin toss.
+    try t.expect(default_restart_clean_ms >= 10 * default_restart_backoff_ms[default_restart_backoff_ms.len - 1]);
+}
+
+// THE DECAY RULE ITSELF, on arithmetic alone: no clock, no threads, no module,
+// so the answer is the same on an idle machine and on one running five builds.
+test "the restart allowance comes back only after a clean run past the window" {
+    const window: i64 = 5 * 60 * 1000;
+    const now: i64 = 1_000_000;
+
+    // Attempts spent, and up for twice the window: the fault in front of it is
+    // a new bout of trouble and the plugin starts again from one.
+    try t.expect(allowanceWhole(1, now - 2 * window, now, window));
+    try t.expect(allowanceWhole(3, now - window, now, window));
+
+    // A moment short of the window is the same bout of trouble.
+    try t.expect(!allowanceWhole(2, now - window + 1, now, window));
+    try t.expect(!allowanceWhole(2, now - 250, now, window));
+
+    // Nothing spent, nothing to give back.
+    try t.expect(!allowanceWhole(0, now - 2 * window, now, window));
+
+    // An attempt in flight has no clean run behind it, whatever the clock
+    // says. This is what stops a plugin that cannot come up at all from being
+    // restarted for ever.
+    try t.expect(!allowanceWhole(2, 0, now, window));
+
+    // Switched off: the host does what it did before the counter decayed.
+    try t.expect(!allowanceWhole(2, now - 2 * window, now, 0));
 }
 
 test "an id that could leave the install root is refused" {

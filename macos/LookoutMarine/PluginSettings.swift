@@ -219,6 +219,11 @@ struct PluginListSchema: Identifiable {
     /// Which toggle column is the row's own on/off switch. Empty means the
     /// first toggle column, which is what a list with one toggle wants.
     let switchKey: String
+    /// How many rows the CORE will keep. Past this the host drops the row and
+    /// logs, and the mariner is left with a connection that looks like every
+    /// other one and never connects, so the window stops offering Add here
+    /// instead. Zero means a core that did not say, which offers Add as before.
+    let maxRows: Int
 
     var id: String { "\(pluginID)/\(key)" }
 }
@@ -291,16 +296,45 @@ final class PluginSettings: ObservableObject {
     /// `plugins.v1` because a row is not a number: one key, one shape.
     private static let listsKey = "plugins.lists.v1"
 
+    /// True while the core is not answering. Kept so the log line is written
+    /// once, on the way into trouble and on the way out: the status poll asks
+    /// every second, and a line a second is a line nobody reads.
+    private var registryUnread = false
+
     // MARK: - Binding
 
     /// Load the schemas from the live chart, then auto-apply and save edits.
     func bind(to controller: ChartController?) {
         self.controller = controller
-        plugins = Self.parse(controller?.pluginsJSON())
+        if let fresh = readRegistry() { plugins = fresh }
         guard applyCancellable == nil else { return }
         applyCancellable = edits
             .debounce(for: .milliseconds(60), scheduler: RunLoop.main)
             .sink { [weak self] in self?.applyAndSave() }
+    }
+
+    /// The registry as the core has it, or nil when the core did not answer.
+    ///
+    /// NIL IS NOT AN EMPTY REGISTRY. `lookout_plugins_json` returns NULL with
+    /// no chart open, in a build with the plugin layer compiled out, and if
+    /// the registry JSON cannot be built at all; a core holding no plugins
+    /// answers `{"plugins":[]}` instead. Reading the two the same way is what
+    /// emptied this whole window — Vessels, Alarms, Connections and every
+    /// plugin row — the moment one read came back nil, which looked from the
+    /// outside like a trapping plugin taking the settings schema with it.
+    private func readRegistry() -> [PluginInfo]? {
+        guard let fresh = Self.registry(controller?.pluginsJSON()) else {
+            if !registryUnread {
+                registryUnread = true
+                lkLog("plugins: the core did not answer with a registry; keeping the last one, \(plugins.count) plugin(s)")
+            }
+            return nil
+        }
+        if registryUnread {
+            registryUnread = false
+            lkLog("plugins: the registry is readable again, \(fresh.count) plugin(s)")
+        }
+        return fresh
     }
 
     /// An edit happened. Debounced so a stepper drag does not push per tick.
@@ -328,7 +362,7 @@ final class PluginSettings: ObservableObject {
     }
 
     private func refreshStatus() {
-        let fresh = Self.parse(controller?.pluginsJSON())
+        guard let fresh = readRegistry() else { return }
         for (i, p) in plugins.enumerated() {
             guard let f = fresh.first(where: { $0.id == p.id }), f.status != p.status else { continue }
             plugins[i].status = f.status
@@ -338,9 +372,11 @@ final class PluginSettings: ObservableObject {
     // MARK: - Install, grants, uninstall
 
     /// Re-read the registry whole. After an install or an uninstall the plugin
-    /// LIST changed, not just a status line.
+    /// LIST changed, not just a status line. A read that fails leaves the last
+    /// good one on screen, which is the only thing a mariner can act on.
     func reload() {
-        plugins = Self.parse(controller?.pluginsJSON())
+        guard let fresh = readRegistry() else { return }
+        plugins = fresh
     }
 
     /// The switch over one grant. Flipping it off revokes live — the plugin
@@ -413,9 +449,17 @@ final class PluginSettings: ObservableObject {
         plugins.first { $0.id == list.pluginID }?.statusItems[rowID]
     }
 
+    /// True when the list holds every row the core will keep. The window
+    /// stops offering Add here: a row past the cap is dropped by the host and
+    /// the mariner is never told which of their connections is the dead one.
+    func isFull(_ list: PluginListSchema) -> Bool {
+        list.maxRows > 0 && rows(list).count >= list.maxRows
+    }
+
     /// Add a row on the schema's defaults. The id is minted here and never
     /// changes again: it is what the plugin's status items point at.
     func addRow(_ list: PluginListSchema) {
+        if isFull(list) { return }
         guard let pi = plugins.firstIndex(where: { $0.id == list.pluginID }) else { return }
         var cells: [String: PluginValue] = [:]
         for f in list.itemFields { cells[f.key] = PluginValue(nil, f) }
@@ -629,11 +673,22 @@ final class PluginSettings: ObservableObject {
 
     // MARK: - Parsing the registry JSON
 
+    /// The registry, or an empty list when the core did not answer. For the
+    /// callers that have nothing to fall back on; anything holding a previous
+    /// registry wants `registry(_:)` and its nil.
     static func parse(_ json: String?) -> [PluginInfo] {
+        registry(json) ?? []
+    }
+
+    /// The registry, or NIL when there was no registry to read: no chart open,
+    /// no plugin layer, or JSON that is not one. A core with no plugins loaded
+    /// answers `{"plugins":[]}`, which parses to an empty list and is a
+    /// different thing.
+    static func registry(_ json: String?) -> [PluginInfo]? {
         guard let json, let data = json.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = root["plugins"] as? [[String: Any]]
-        else { return [] }
+        else { return nil }
 
         return list.compactMap { o in
             guard let id = o["id"] as? String else { return nil }
@@ -673,7 +728,8 @@ final class PluginSettings: ObservableObject {
             footer: o["footer"] as? String ?? "",
             empty: o["empty"] as? String ?? "",
             addLabel: o["add_label"] as? String ?? "",
-            switchKey: o["switch_key"] as? String ?? ""
+            switchKey: o["switch_key"] as? String ?? "",
+            maxRows: (o["max_rows"] as? NSNumber)?.intValue ?? 0
         )
     }
 
