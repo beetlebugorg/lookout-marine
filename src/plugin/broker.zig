@@ -143,12 +143,28 @@ pub const Cap = enum {
         };
     }
 
-    /// True when the capability is meaningless without a list of hosts. A
-    /// manifest that asks for one of these as a bare name is refused: "may
-    /// reach any server on the internet" is not a sentence a mariner can
-    /// consent to, and an empty list is the same grant written shorter.
-    pub fn needsHosts(self: Cap) bool {
-        return self == .net_http or self == .net_ws;
+    /// What a capability's manifest entry carries beyond its own name.
+    ///
+    /// Every grant that reaches OUTWARD carries the reach: the addresses a
+    /// plugin may dial, or the ports it may listen on. A manifest that asks
+    /// for one of these as a bare name is refused, because "may reach any
+    /// server on the internet" is not a sentence a mariner can consent to,
+    /// and an empty list is the same grant written shorter.
+    pub const Carries = enum {
+        /// Nothing: the grant is the whole permission.
+        nothing,
+        /// Addresses, each a hostname or the `local` token.
+        addresses,
+        /// Port numbers.
+        ports,
+    };
+
+    pub fn carries(self: Cap) Carries {
+        return switch (self) {
+            .net_tcp_client, .net_http, .net_ws => .addresses,
+            .net_udp => .ports,
+            else => .nothing,
+        };
     }
 
     pub fn fromName(text: []const u8) ?Cap {
@@ -215,6 +231,86 @@ pub const max_status = 768;
 /// Longest alert text kept per plugin (severity + title + body, as posted).
 pub const max_alert = 400;
 
+// ---- the budgets -----------------------------------------------------------
+//
+// The watchdog catches a plugin that spins. These catch the other three ways a
+// plugin can take more than its share without ever looping: allocating without
+// bound, flooding the wire, and drowning the log. Each is metered per plugin,
+// so a badly behaved plugin costs its neighbours nothing.
+//
+// EVERY BREACH IS VISIBLE. It is said out loud, and it is named on the
+// plugin's own status line until the plugin is reloaded. A plugin that cannot
+// tell it is being throttled gets reported as slow rather than fixed.
+
+/// Sustained bytes per second one plugin may hand the host to put on the wire.
+///
+/// The allowance is a bucket that refills at this rate and holds one second's
+/// worth: a plugin that sends a 300 KB batch and then goes quiet is not
+/// flooding, and one that sends 300 KB every 100 ms is. It counts what the
+/// plugin ASKS to send. Bytes arriving are not metered — a plugin does not
+/// choose how fast its gateway talks.
+pub const default_wire_bytes_per_s: i64 = 1024 * 1024;
+
+/// Sustained log lines per second one plugin may write. A plugin logging every
+/// sentence at 20 Hz is a plugin whose log nobody can read, and the lines it
+/// drops are counted and reported.
+pub const default_log_lines_per_s: i64 = 10;
+
+/// How often a breach that keeps happening is said again. The first one is
+/// said at once; after that, once a minute, so a plugin being throttled for
+/// flooding the log cannot flood the log with the news.
+pub const budget_say_ms: i64 = 60_000;
+
+/// The metered ceilings, per plugin. The shipped numbers are the defaults and
+/// nothing in the app moves them.
+///
+/// They are settable because a HARNESS drives a plugin harder than any mariner
+/// would: the host tests that count a fixture's log lines as proof its handler
+/// ran to the end need a fixture that may log once per event, which is fifty a
+/// second. The budgets themselves are proved by the tests that are about them.
+pub const Budgets = struct {
+    wire_bytes_per_s: i64 = default_wire_bytes_per_s,
+    log_lines_per_s: i64 = default_log_lines_per_s,
+
+    /// What may go out in one go. One second's worth of wire, and two of log
+    /// lines so a plugin's start-up chatter is not clipped.
+    pub fn wireBurst(self: Budgets) i64 {
+        return self.wire_bytes_per_s;
+    }
+
+    pub fn logBurst(self: Budgets) i64 {
+        return 2 * self.log_lines_per_s;
+    }
+};
+
+/// Which budget a plugin last ran into. It rides on the status line so the
+/// mariner reads "throttled" rather than guessing at "slow".
+pub const Budget = enum {
+    none,
+    /// Linear memory: a `memory.grow` refused at the per-plugin ceiling.
+    memory,
+    /// The wire allowance: a send refused, answered -1.
+    wire,
+    /// The log allowance: lines dropped.
+    logs,
+    /// The event queue: events dropped because the plugin stopped consuming.
+    events,
+
+    pub fn name(self: Budget) []const u8 {
+        return switch (self) {
+            .none => "",
+            .memory => "memory",
+            .wire => "wire",
+            .logs => "logs",
+            .events => "events",
+        };
+    }
+};
+
+/// Room for the host's `,"budget":"memory"` note on top of what the plugin
+/// wrote for itself.
+pub const max_budget_note = 24;
+
 /// What a native needs to know about its caller. The host allocates one per
 /// plugin and hands its address to `Instance.setUserData`, so every native
 /// reaches it with one `wasm.callerUserData`.
@@ -234,6 +330,11 @@ pub const Plugin = struct {
     http_hosts: []const []const u8 = &.{},
     /// The same for `ws_connect`, from the `net.ws` grant.
     ws_hosts: []const []const u8 = &.{},
+    /// The addresses `tcp_connect` may dial, from the `net.tcp-client` grant.
+    /// The `local` token stands for the boat's own network; see `isLocalHost`.
+    tcp_addrs: []const []const u8 = &.{},
+    /// The ports `udp_open` may bind, from the `net.udp` grant.
+    udp_ports: []const u16 = &.{},
     /// The table keys the manifest declared, borrowed from the host like `id`.
     /// `declareTable` refuses anything else: a table the mariner never saw on
     /// the consent sheet does not appear in a menu because the module asked
@@ -245,33 +346,186 @@ pub const Plugin = struct {
     /// Its vessel-store subscription, once it has called `subscribe`.
     sub: ?vstore.SubId = null,
     ais_sub: bool = false,
+    /// What the plugin last said about itself, through `chrome_status`.
     status_buf: [max_status]u8 = @splat(0),
     status_len: usize = 0,
+    /// What a reader is shown: the same words with any budget note folded in.
+    /// Kept alongside rather than composed on demand so `status()` stays a
+    /// slice every caller can hold.
+    line_buf: [max_status + max_budget_note]u8 = @splat(0),
+    line_len: usize = 0,
     alert_buf: [max_alert]u8 = @splat(0),
     alert_len: usize = 0,
     /// Calls refused for want of a capability. The smoke test asserts on this.
     denied: u32 = 0,
 
+    // -- the budgets ---------------------------------------------------------
+    // Written from the plugin's own dispatch thread, which is the only thread
+    // inside its module. The one breach that is noticed elsewhere is the event
+    // queue, filled by the I/O thread: that one raises `queue_over` and the
+    // dispatch thread turns it into a note, so the status line has a single
+    // writer.
+
+    /// The budget this plugin last ran into, and the ones it has already been
+    /// told about, so a breach that keeps happening is not said every time.
+    budget: Budget = .none,
+    budgets_seen: std.EnumSet(Budget) = std.EnumSet(Budget).initEmpty(),
+    budget_said_ms: i64 = 0,
+    /// Bytes left in the wire allowance, and when it was last topped up. A
+    /// zero clock means untouched, and the first charge fills the bucket.
+    wire_tokens: i64 = 0,
+    wire_ms: i64 = 0,
+    /// Sends refused over the wire allowance.
+    wire_throttled: u64 = 0,
+    /// The same for the log allowance, in lines.
+    log_tokens: i64 = 0,
+    log_ms: i64 = 0,
+    logs_dropped: u64 = 0,
+    /// Raised by the I/O thread when this plugin's event queue drops an event.
+    queue_over: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Events lost to a full queue, written by the I/O thread under the
+    /// broker's lock and read when the note above is drained.
+    dropped_events: u64 = 0,
+
     pub fn status(self: *const Plugin) []const u8 {
-        return self.status_buf[0..self.status_len];
+        return self.line_buf[0..self.line_len];
     }
 
     /// Replace the chrome status. Normally the plugin's own words, through
     /// `chrome_status`; the host also writes here when it disables a plugin,
     /// which is the one case where nobody is left inside the module to say
-    /// what happened. Returns true when the text actually changed.
+    /// what happened. Returns true when the line a reader sees changed.
     pub fn setStatus(self: *Plugin, text: []const u8) bool {
         const n = @min(text.len, max_status);
-        const changed = n != self.status_len or !std.mem.eql(u8, self.status_buf[0..n], text[0..n]);
         @memcpy(self.status_buf[0..n], text[0..n]);
         self.status_len = n;
+        return self.composeLine();
+    }
+
+    /// Fold the budget note into the plugin's own words. The status is JSON
+    /// the plugin wrote, so the note goes in as one more member of it; a
+    /// plugin that has said nothing yet, or said something that is not an
+    /// object, still gets a line that names the budget.
+    ///
+    /// Returns true when the composed line changed.
+    fn composeLine(self: *Plugin) bool {
+        var buf: [max_status + max_budget_note]u8 = undefined;
+        const raw = self.status_buf[0..self.status_len];
+        const line = if (self.budget == .none)
+            raw
+        else if (raw.len >= 2 and raw[0] == '{' and raw[raw.len - 1] == '}')
+            std.fmt.bufPrint(&buf, "{{{s}{s}\"budget\":\"{s}\"}}", .{
+                raw[1 .. raw.len - 1],
+                if (raw.len > 2) "," else "",
+                self.budget.name(),
+            }) catch raw
+        else if (raw.len == 0)
+            std.fmt.bufPrint(&buf, "{{\"budget\":\"{s}\"}}", .{self.budget.name()}) catch raw
+        else
+            std.fmt.bufPrint(&buf, "{s} [budget: {s}]", .{ raw, self.budget.name() }) catch raw;
+
+        const changed = line.len != self.line_len or !std.mem.eql(u8, self.line_buf[0..line.len], line);
+        @memcpy(self.line_buf[0..line.len], line);
+        self.line_len = line.len;
         return changed;
+    }
+
+    /// Record a budget breach: name it on the status line, and say it out
+    /// loud. The first breach of a budget goes out at error level so no log
+    /// filter can hide it; after that, once a minute.
+    pub fn noteBudget(self: *Plugin, which: Budget, comptime fmt: []const u8, args: anytype) void {
+        const first = !self.budgets_seen.contains(which);
+        if (self.budget != which) {
+            self.budget = which;
+            _ = self.composeLine();
+        }
+        const now = monoMs();
+        if (!first and now - self.budget_said_ms < budget_say_ms) return;
+        self.budgets_seen.insert(which);
+        self.budget_said_ms = now;
+        self.broker.say(if (first) level_err else level_warn, self.id, fmt, args);
+    }
+
+    /// Charge `n` bytes to the wire allowance. False when it is spent, and the
+    /// caller answers -1: this is the only place a send is refused for pace
+    /// rather than for a grant, so it does not count as a denied call.
+    pub fn chargeWire(self: *Plugin, call: []const u8, n: usize) bool {
+        const b = self.broker.budgets;
+        refill(&self.wire_tokens, &self.wire_ms, monoMs(), b.wire_bytes_per_s, b.wireBurst());
+        const want: i64 = @intCast(n);
+        if (want <= self.wire_tokens) {
+            self.wire_tokens -= want;
+            return true;
+        }
+        self.wire_throttled += 1;
+        self.noteBudget(
+            .wire,
+            "throttled: {s} of {d} bytes is over the {d} KiB/s wire budget ({d} call{s} throttled)",
+            .{ call, n, @divTrunc(b.wire_bytes_per_s, 1024), self.wire_throttled, plural(self.wire_throttled) },
+        );
+        return false;
+    }
+
+    /// Charge one line to the log allowance. False when it is spent and the
+    /// line is dropped.
+    pub fn chargeLog(self: *Plugin) bool {
+        const b = self.broker.budgets;
+        refill(&self.log_tokens, &self.log_ms, monoMs(), b.log_lines_per_s, b.logBurst());
+        if (self.log_tokens >= 1) {
+            self.log_tokens -= 1;
+            return true;
+        }
+        self.logs_dropped += 1;
+        self.noteBudget(
+            .logs,
+            "throttled: {d} log line{s} dropped over the {d}/s log budget",
+            .{ self.logs_dropped, plural(self.logs_dropped), b.log_lines_per_s },
+        );
+        return false;
+    }
+
+    /// Turn a queue overflow raised by the I/O thread into a note, on this
+    /// plugin's own dispatch thread. Called between events, so the status line
+    /// has one writer and the count is read where it is safe to read.
+    pub fn drainQueueBudget(self: *Plugin) void {
+        if (!self.queue_over.load(.monotonic)) return;
+        self.queue_over.store(false, .monotonic);
+        self.noteBudget(
+            .events,
+            "throttled: {d} event{s} dropped over the {d}-event queue budget",
+            .{ self.dropped_events, plural(self.dropped_events), max_queued },
+        );
     }
 
     pub fn lastAlert(self: *const Plugin) []const u8 {
         return self.alert_buf[0..self.alert_len];
     }
 };
+
+fn plural(n: u64) []const u8 {
+    return if (n == 1) "" else "s";
+}
+
+/// A token bucket: `tokens` tops up at `per_s` a second, capped at `burst`.
+/// A zero clock is a bucket nobody has drawn on yet, and it starts full.
+///
+/// `since` moves only by the time actually turned into tokens, never simply to
+/// `now`. A caller arriving every few milliseconds would otherwise convert an
+/// elapsed span too short to be worth a whole token, keep the remainder of
+/// nothing, and never refill at all.
+fn refill(tokens: *i64, since: *i64, now: i64, per_s: i64, burst: i64) void {
+    if (since.* == 0) {
+        since.* = now;
+        tokens.* = burst;
+        return;
+    }
+    const elapsed = now - since.*;
+    if (elapsed <= 0) return;
+    const gained = @divTrunc(elapsed * per_s, 1000);
+    if (gained <= 0) return;
+    tokens.* = @min(burst, tokens.* + gained);
+    since.* += @divTrunc(gained * 1000, per_s);
+}
 
 // ---- tables (specs/plugins/table.md) ---------------------------------------
 
@@ -668,6 +922,9 @@ pub const Broker = struct {
     watchdog: WatchdogSink = .{},
     log_ctx: ?*anyopaque = null,
     log_fn: LogFn = defaultLog,
+    /// The metered ceilings every plugin lives inside. The shipped numbers
+    /// unless a harness moves them; see `Budgets`.
+    budgets: Budgets = .{},
 
     mu: Lock = .{},
     /// One FIFO per plugin, indexed by the host's registry index.
@@ -850,18 +1107,31 @@ pub const Broker = struct {
 
     /// A dropped event, counted and — for the first one, and then rarely —
     /// said out loud. A silent drop is a plugin that quietly misses fixes.
+    ///
+    /// The plugin is told through a flag rather than a note: this runs on the
+    /// I/O thread, and the status line is the dispatch thread's to write. The
+    /// dispatch thread picks the flag up between events.
     fn dropLocked(self: *Broker, q: *Queue, plugin: u32, kind: u32) void {
         q.dropped += 1;
+        if (self.pluginAtLocked(plugin)) |p| {
+            p.dropped_events = q.dropped;
+            p.queue_over.store(true, .monotonic);
+        }
         if (q.dropped != 1 and q.dropped % 1000 != 0) return;
         const id = self.idOfLocked(plugin);
         self.say(level_warn, id, "queue full at {d} events: dropped event {d} ({d} dropped so far)", .{ max_queued, kind, q.dropped });
     }
 
-    fn idOfLocked(self: *Broker, plugin: u32) []const u8 {
+    fn pluginAtLocked(self: *Broker, plugin: u32) ?*Plugin {
         for (self.plugins.items) |p| {
-            if (p.index == plugin) return p.id;
+            if (p.index == plugin) return p;
         }
-        return "host";
+        return null;
+    }
+
+    fn idOfLocked(self: *Broker, plugin: u32) []const u8 {
+        const p = self.pluginAtLocked(plugin) orelse return "host";
+        return p.id;
     }
 
     /// The next event for one plugin, or null. The caller owns the payload and
@@ -3222,6 +3492,7 @@ fn allow(p: *Plugin, cap: Cap, call: []const u8) bool {
 
 fn hostLog(env: wasm.c.wasm_exec_env_t, level: u32, ptr: [*c]const u8, len: u32) callconv(.c) void {
     const p = caller(env) orelse return;
+    if (!p.chargeLog()) return;
     p.broker.log_fn(p.broker.log_ctx, @min(level, level_err), p.id, bytes(ptr, len));
 }
 
@@ -3409,13 +3680,17 @@ fn hostTcpConnect(env: wasm.c.wasm_exec_env_t, host_ptr: [*c]const u8, host_len:
     const p = caller(env) orelse return -1;
     if (!allow(p, .net_tcp_client, "tcp_connect")) return -1;
     if (port == 0 or port > 65535) return -1;
-    return p.broker.openConn(p.index, bytes(host_ptr, host_len), @intCast(port));
+    const addr = bytes(host_ptr, host_len);
+    if (!allowAddress(p, "tcp_connect", addr)) return -1;
+    return p.broker.openConn(p.index, addr, @intCast(port));
 }
 
 fn hostTcpSend(env: wasm.c.wasm_exec_env_t, id: i64, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
     const p = caller(env) orelse return -1;
     if (!allow(p, .net_tcp_client, "tcp_send")) return -1;
-    return p.broker.sendConn(p.index, id, bytes(ptr, len));
+    const data = bytes(ptr, len);
+    if (!p.chargeWire("tcp_send", data.len)) return -1;
+    return p.broker.sendConn(p.index, id, data);
 }
 
 fn hostTcpClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
@@ -3510,6 +3785,7 @@ fn hostUdpOpen(env: wasm.c.wasm_exec_env_t, port: u32) callconv(.c) i64 {
     const p = caller(env) orelse return -1;
     if (!allow(p, .net_udp, "udp_open")) return -1;
     if (port > 65535) return -1;
+    if (!allowPort(p, "udp_open", @intCast(port))) return -1;
     return p.broker.openUdp(p.index, @intCast(port));
 }
 
@@ -3525,7 +3801,9 @@ fn hostUdpSend(
     const p = caller(env) orelse return -1;
     if (!allow(p, .net_udp, "udp_send")) return -1;
     if (port == 0 or port > 65535) return -1;
-    return p.broker.sendUdp(p.index, id, bytes(ptr, len), bytes(host_ptr, host_len), @intCast(port));
+    const data = bytes(ptr, len);
+    if (!p.chargeWire("udp_send", data.len)) return -1;
+    return p.broker.sendUdp(p.index, id, data, bytes(host_ptr, host_len), @intCast(port));
 }
 
 fn hostUdpClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
@@ -3588,13 +3866,54 @@ pub fn isLocalHost(host: []const u8) bool {
     };
 }
 
+/// Whether one address is covered by a grant's list. `local` matches anything
+/// on the boat's own network; everything else is an exact, case-insensitive
+/// hostname match. There are no wildcards: a plugin that needs two servers
+/// names two servers, and nobody has to reason about what `*.noaa.gov` covers
+/// at three in the morning.
+fn addressListed(list: []const []const u8, addr: []const u8) bool {
+    for (list) |entry| {
+        if (std.mem.eql(u8, entry, local_token)) {
+            if (isLocalHost(addr)) return true;
+            continue;
+        }
+        if (webio.sameHost(entry, addr)) return true;
+    }
+    return false;
+}
+
+/// Whether this plugin's `net.tcp-client` grant covers the address it is
+/// dialling. Checked HERE, at the call, the way the http and ws host lists
+/// are: a refused dial is a denied call that answers -1, never a trap.
+///
+/// The plugin holds the capability by this point, so the refusal is about
+/// reach: a gateway plugin granted `local` cannot dial the internet however
+/// its connection rows are filled in.
+fn allowAddress(p: *Plugin, call: []const u8, addr: []const u8) bool {
+    if (addressListed(p.tcp_addrs, addr)) return true;
+    p.denied += 1;
+    p.broker.denied += 1;
+    p.broker.say(level_err, p.id, "denied {s}: {s} is not in the manifest's net.tcp-client address list", .{ call, addr });
+    return false;
+}
+
+/// Whether this plugin's `net.udp` grant covers the port it is binding. Port 0
+/// asks the system for whatever is free, which is not a port the mariner was
+/// shown, so it is refused like any other unlisted one.
+fn allowPort(p: *Plugin, call: []const u8, port: u16) bool {
+    for (p.udp_ports) |granted| {
+        if (granted == port) return true;
+    }
+    p.denied += 1;
+    p.broker.denied += 1;
+    p.broker.say(level_err, p.id, "denied {s}: port {d} is not in the manifest's net.udp port list", .{ call, port });
+    return false;
+}
+
 /// Whether this plugin's manifest named the host in `url`.
 ///
 /// The grant is per HOST, not per capability: `net.http` on its own grants
-/// nothing, and the allowlist is what the mariner consented to. Matching is
-/// exact and case-insensitive. There are no wildcards: a plugin that needs two
-/// servers names two servers, and nobody has to reason about what `*.noaa.gov`
-/// covers at three in the morning.
+/// nothing, and the allowlist is what the mariner consented to.
 fn allowUrl(p: *Plugin, cap: Cap, call: []const u8, url_text: []const u8) bool {
     if (!allow(p, cap, call)) return false;
     const url = webio.Url.parse(url_text) catch {
@@ -3602,13 +3921,7 @@ fn allowUrl(p: *Plugin, cap: Cap, call: []const u8, url_text: []const u8) bool {
         return false;
     };
     const hosts = if (cap == .net_http) p.http_hosts else p.ws_hosts;
-    for (hosts) |h| {
-        if (std.mem.eql(u8, h, local_token)) {
-            if (isLocalHost(url.host)) return true;
-            continue;
-        }
-        if (webio.sameHost(h, url.host)) return true;
-    }
+    if (addressListed(hosts, url.host)) return true;
     p.denied += 1;
     p.broker.denied += 1;
     p.broker.say(level_err, p.id, "denied {s}: {s} is not in the manifest's {s} host list", .{ call, url.host, cap.name() });
@@ -3756,7 +4069,9 @@ fn hostWsConnect(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callc
 fn hostWsSend(env: wasm.c.wasm_exec_env_t, id: i64, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
     const p = caller(env) orelse return -1;
     if (!allow(p, .net_ws, "ws_send")) return -1;
-    return p.broker.sendWs(p.index, id, bytes(ptr, len));
+    const data = bytes(ptr, len);
+    if (!p.chargeWire("ws_send", data.len)) return -1;
+    return p.broker.sendWs(p.index, id, data);
 }
 
 fn hostWsClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
@@ -3859,11 +4174,53 @@ var natives = wasm.nativeSymbols(&.{
 /// instantiation. The host does this.
 pub fn registerNatives() wasm.Error!void {
     try wasm.registerNatives("lookout", &natives);
+    wasm.c.wasm_runtime_set_enlarge_mem_error_callback(&memoryRefused, null);
 }
 
 pub fn unregisterNatives() void {
+    wasm.c.wasm_runtime_set_enlarge_mem_error_callback(null, null);
     wasm.unregisterNatives("lookout", &natives);
 }
+
+/// A `memory.grow` the runtime refused, which is the linear-memory budget
+/// biting. WAMR has already answered the module -1, so the plugin sees its own
+/// allocation fail and decides what to do; this only makes the refusal
+/// visible, on the plugin's own dispatch thread.
+///
+/// MAX_SIZE_REACHED is the ceiling. Anything else is the host itself out of
+/// memory, which is not the plugin's budget and is not named as one.
+fn memoryRefused(
+    inc_pages: u32,
+    current_bytes: u64,
+    memory_index: u32,
+    reason: wasm.c.enlarge_memory_error_reason_t,
+    inst: wasm.c.wasm_module_inst_t,
+    env: wasm.c.wasm_exec_env_t,
+    user_data: ?*anyopaque,
+) callconv(.c) void {
+    _ = memory_index;
+    _ = user_data;
+    // The exec env is the interpreter's and is set for the whole call, but the
+    // instance carries the same pointer for the paths where it is not.
+    const raw = (if (env != null) wasm.callerUserData(env) else null) orelse
+        wasm.c.wasm_runtime_get_custom_data(inst) orelse return;
+    const p: *Plugin = @ptrCast(@alignCast(raw));
+    if (reason != @as(@TypeOf(reason), @intCast(wasm.c.MAX_SIZE_REACHED))) {
+        p.broker.say(level_err, p.id, "memory.grow of {d} page(s) failed inside the host", .{inc_pages});
+        return;
+    }
+    p.noteBudget(
+        .memory,
+        "throttled: memory.grow of {d} page(s) refused at the {d} MiB linear-memory budget ({d} MiB in use)",
+        .{ inc_pages, @divTrunc(max_memory_bytes, 1024 * 1024), @divTrunc(current_bytes, 1024 * 1024) },
+    );
+}
+
+/// Linear memory one plugin may hold. Kept here beside the other budgets; the
+/// host turns it into the page count it instantiates with.
+pub const max_memory_bytes: i64 = 64 * 1024 * 1024;
+pub const wasm_page_bytes: u32 = 64 * 1024;
+pub const max_memory_pages: u32 = @intCast(@divTrunc(max_memory_bytes, wasm_page_bytes));
 
 // ---- small helpers ----------------------------------------------------------
 
@@ -3982,11 +4339,14 @@ test "capability names round-trip" {
         try t.expectEqual(c, Cap.fromName(c.name()).?);
     }
     try t.expect(Cap.fromName("net.mqtt") == null);
-    // Only the two that reach a named server take a host list.
-    try t.expect(Cap.net_http.needsHosts());
-    try t.expect(Cap.net_ws.needsHosts());
-    try t.expect(!Cap.net_tcp_client.needsHosts());
-    try t.expect(!Cap.storage.needsHosts());
+    // Every grant that reaches outward carries its reach, and nothing else
+    // carries anything.
+    try t.expectEqual(Cap.Carries.addresses, Cap.net_http.carries());
+    try t.expectEqual(Cap.Carries.addresses, Cap.net_ws.carries());
+    try t.expectEqual(Cap.Carries.addresses, Cap.net_tcp_client.carries());
+    try t.expectEqual(Cap.Carries.ports, Cap.net_udp.carries());
+    try t.expectEqual(Cap.Carries.nothing, Cap.storage.carries());
+    try t.expectEqual(Cap.Carries.nothing, Cap.overlay_draw.carries());
 }
 
 test "STORE_CHANGED carries values, and a cleared path as a bare null" {
@@ -4673,11 +5033,37 @@ const Listener = struct {
 // head parsed off a socket, an RFC 6455 handshake with its accept hash, a file
 // on disk. No test here reaches the network, and none needs python.
 
+/// Everything the broker said during a test, concatenated. A refusal that is
+/// not reported is a refusal the mariner never learns about, so the tests
+/// assert on the words and not only on the return value.
+const Log = struct {
+    buf: [16 * 1024]u8 = undefined,
+    len: usize = 0,
+    lines: usize = 0,
+
+    fn write(ctx: ?*anyopaque, _: u32, _: []const u8, msg: []const u8) void {
+        const self: *Log = @ptrCast(@alignCast(ctx orelse return));
+        const n = @min(msg.len, self.buf.len - self.len);
+        @memcpy(self.buf[self.len..][0..n], msg[0..n]);
+        self.len += n;
+        self.lines += 1;
+    }
+
+    fn has(self: *const Log, needle: []const u8) bool {
+        return std.mem.indexOf(u8, self.buf[0..self.len], needle) != null;
+    }
+
+    fn count(self: *const Log) usize {
+        return self.lines;
+    }
+};
+
 /// The four stores every broker test needs, in one place.
 const Fixture = struct {
     vessels: vstore.Store,
     ais: ais_store.AisStore,
     br: Broker,
+    sink: Log = .{},
 
     fn init(alloc: std.mem.Allocator) !*Fixture {
         const self = try alloc.create(Fixture);
@@ -4687,7 +5073,7 @@ const Fixture = struct {
             .br = undefined,
         };
         self.br = Broker.init(alloc, &self.vessels, &self.ais, .{});
-        self.br.setLog(null, silentLog);
+        self.br.setLog(&self.sink, Log.write);
         return self;
     }
 
@@ -5485,6 +5871,226 @@ test "a URL outside the manifest's host list is refused before a socket opens" {
     // what an ungranted plugin looks like from here.
     var bare = Plugin{ .broker = b, .index = 0, .id = "org.beetlebug.bare", .source = 1, .caps = caps };
     try t.expect(!allowUrl(&bare, .net_http, "http_fetch", "https://nomads.ncep.noaa.gov/x"));
+}
+
+test "a plugin granted local dials the boat's network and nothing beyond it" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var caps = Caps.initEmpty();
+    caps.insert(.net_tcp_client);
+    var p = Plugin{
+        .broker = b,
+        .index = 0,
+        .id = "org.beetlebug.nmea0183",
+        .source = 1,
+        .caps = caps,
+        .tcp_addrs = &.{local_token},
+    };
+
+    // The boat's own network: loopback, the three private ranges, link-local,
+    // IPv6 unique-local, and the names mDNS serves. This is every address a
+    // mariner's gateway can actually be at.
+    for ([_][]const u8{
+        "127.0.0.1",     "localhost",   "10.0.1.7",
+        "172.16.4.1",    "192.168.1.1", "169.254.3.9",
+        "gateway.local", "fd00::1",     "::1",
+    }) |addr| {
+        try t.expect(allowAddress(&p, "tcp_connect", addr));
+    }
+    try t.expectEqual(@as(u32, 0), p.denied);
+
+    // The internet, however the address is written. A gateway plugin that is
+    // handed a public address in its connection rows does not dial it.
+    for ([_][]const u8{
+        "example.com", "8.8.8.8", "172.32.0.1", "11.0.0.1", "192.169.1.1", "2606:4700::1",
+    }) |addr| {
+        try t.expect(!allowAddress(&p, "tcp_connect", addr));
+    }
+    try t.expectEqual(@as(u32, 6), p.denied);
+    try t.expectEqual(@as(u32, 6), b.denied);
+    try t.expect(fx.sink.has("denied tcp_connect: example.com is not in the manifest's net.tcp-client address list"));
+
+    // A named address is exact and case-insensitive, and grants nothing else.
+    var named = Plugin{
+        .broker = b,
+        .index = 0,
+        .id = "org.example.cloud",
+        .source = 1,
+        .caps = caps,
+        .tcp_addrs = &.{"tiles.example.org"},
+    };
+    try t.expect(allowAddress(&named, "tcp_connect", "TILES.example.ORG"));
+    try t.expect(!allowAddress(&named, "tcp_connect", "a.tiles.example.org"));
+    try t.expect(!allowAddress(&named, "tcp_connect", "127.0.0.1"));
+
+    // The capability with no addresses reaches nothing, which is what an
+    // ungranted plugin looks like from here.
+    var nowhere = Plugin{ .broker = b, .index = 0, .id = "org.example.bare", .source = 1, .caps = caps };
+    try t.expect(!allowAddress(&nowhere, "tcp_connect", "127.0.0.1"));
+}
+
+test "a udp grant binds the ports it named and no others" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var caps = Caps.initEmpty();
+    caps.insert(.net_udp);
+    var p = Plugin{
+        .broker = b,
+        .index = 0,
+        .id = "org.example.listener",
+        .source = 1,
+        .caps = caps,
+        .udp_ports = &.{ 10110, 4001 },
+    };
+    try t.expect(allowPort(&p, "udp_open", 10110));
+    try t.expect(allowPort(&p, "udp_open", 4001));
+    try t.expectEqual(@as(u32, 0), p.denied);
+
+    // A neighbouring port, and the ephemeral bind: neither is a port the
+    // mariner was shown.
+    try t.expect(!allowPort(&p, "udp_open", 10111));
+    try t.expect(!allowPort(&p, "udp_open", 0));
+    try t.expectEqual(@as(u32, 2), p.denied);
+    try t.expect(fx.sink.has("denied udp_open: port 10111 is not in the manifest's net.udp port list"));
+}
+
+// -- the budgets -------------------------------------------------------------
+
+test "the wire budget throttles at its ceiling and says so on the status line" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var p = Plugin{ .broker = b, .index = 0, .id = "org.example.firehose", .source = 1, .caps = Caps.initEmpty() };
+    _ = p.setStatus("{\"state\":\"connected\",\"detail\":\"2 sources\"}");
+    try t.expectEqualStrings("{\"state\":\"connected\",\"detail\":\"2 sources\"}", p.status());
+
+    // One second's worth goes out in a burst; the byte after it does not. The
+    // bucket's clock is pinned AHEAD of now, so no elapsed time exists to
+    // refill from and what is measured is the ceiling and not the wall clock.
+    const frozen = monoMs() + 60_000;
+    p.wire_ms = frozen;
+    p.wire_tokens = b.budgets.wireBurst();
+    const chunk: usize = 64 * 1024;
+    const burst: usize = @intCast(b.budgets.wireBurst());
+    var sent: usize = 0;
+    while (sent < burst) : (sent += chunk) {
+        try t.expect(p.chargeWire("tcp_send", chunk));
+    }
+    try t.expect(!p.chargeWire("tcp_send", chunk));
+    try t.expectEqual(@as(u64, 1), p.wire_throttled);
+
+    // The plugin's own words, with the budget it hit folded in: a plugin that
+    // cannot tell it is being throttled is reported as slow rather than fixed.
+    try t.expectEqualStrings(
+        "{\"state\":\"connected\",\"detail\":\"2 sources\",\"budget\":\"wire\"}",
+        p.status(),
+    );
+    try t.expect(fx.sink.has("over the 1024 KiB/s wire budget"));
+    // It is a pace refusal, not a grant refusal, so it does not count denied.
+    try t.expectEqual(@as(u32, 0), p.denied);
+
+    // The note survives the plugin posting a new status of its own.
+    _ = p.setStatus("{\"state\":\"connected\",\"detail\":\"3 sources\"}");
+    try t.expectEqualStrings(
+        "{\"state\":\"connected\",\"detail\":\"3 sources\",\"budget\":\"wire\"}",
+        p.status(),
+    );
+
+    // A second of quiet buys the allowance back.
+    p.wire_ms = monoMs() - 1000;
+    try t.expect(p.chargeWire("tcp_send", chunk));
+}
+
+test "the log budget drops lines at its ceiling, counts them and reports once a minute" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var p = Plugin{ .broker = b, .index = 0, .id = "org.example.chatty", .source = 1, .caps = Caps.initEmpty() };
+    const frozen = monoMs() + 60_000;
+    p.log_ms = frozen;
+    p.log_tokens = b.budgets.logBurst();
+    var i: i64 = 0;
+    while (i < b.budgets.logBurst()) : (i += 1) try t.expect(p.chargeLog());
+    try t.expect(!p.chargeLog());
+    try t.expectEqual(@as(u64, 1), p.logs_dropped);
+    try t.expectEqualStrings("{\"budget\":\"logs\"}", p.status());
+    try t.expect(fx.sink.has("1 log line dropped over the 10/s log budget"));
+
+    // The next thousand drops are counted and stay quiet: the news about a
+    // plugin flooding the log must not itself flood the log.
+    const said = fx.sink.count();
+    var n: usize = 0;
+    while (n < 1000) : (n += 1) try t.expect(!p.chargeLog());
+    try t.expectEqual(@as(u64, 1001), p.logs_dropped);
+    try t.expectEqual(said, fx.sink.count());
+
+    // A minute on, it is said again with the running count.
+    p.budget_said_ms = monoMs() - budget_say_ms;
+    try t.expect(!p.chargeLog());
+    try t.expect(fx.sink.has("1002 log lines dropped over the 10/s log budget"));
+
+    // A second of quiet buys ten lines back, and no more.
+    p.log_ms = monoMs() - 1000;
+    p.log_tokens = 0;
+    i = 0;
+    while (i < b.budgets.log_lines_per_s) : (i += 1) try t.expect(p.chargeLog());
+    p.log_ms = monoMs() + 60_000;
+    try t.expect(!p.chargeLog());
+}
+
+test "a full event queue names the events budget on the status line" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    const b = &fx.br;
+
+    var p = Plugin{ .broker = b, .index = 0, .id = "org.example.deaf", .source = 1, .caps = Caps.initEmpty() };
+    try b.registerPlugin(&p);
+    defer b.removePlugin(&p);
+    _ = p.setStatus("{\"state\":\"running\"}");
+
+    // Fill the queue past its cap without ever draining it.
+    var i: usize = 0;
+    while (i < max_queued + 4) : (i += 1) b.push(0, Kind.timer, 0, "");
+    defer b.clearQueue(0);
+    try t.expect(b.droppedFor(0) >= 4);
+
+    // The I/O thread only raises the flag; the note is written where the
+    // status line has one writer, which is the dispatch thread.
+    try t.expectEqualStrings("{\"state\":\"running\"}", p.status());
+    p.drainQueueBudget();
+    try t.expectEqualStrings("{\"state\":\"running\",\"budget\":\"events\"}", p.status());
+    try t.expect(fx.sink.has("over the 1024-event queue budget"));
+}
+
+test "a budget note lands on a status line whatever shape the plugin gave it" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+
+    var p = Plugin{ .broker = &fx.br, .index = 0, .id = "org.example.quiet", .source = 1, .caps = Caps.initEmpty() };
+    // A plugin that has said nothing yet still reads as throttled.
+    p.noteBudget(.memory, "out of memory", .{});
+    try t.expectEqualStrings("{\"budget\":\"memory\"}", p.status());
+    // An empty object, and text that is not JSON at all.
+    _ = p.setStatus("{}");
+    try t.expectEqualStrings("{\"budget\":\"memory\"}", p.status());
+    _ = p.setStatus("running");
+    try t.expectEqualStrings("running [budget: memory]", p.status());
+    // A status longer than the buffer is truncated, not overflowed.
+    const long = "x" ** (max_status + 64);
+    _ = p.setStatus(long);
+    try t.expect(p.status().len <= max_status + max_budget_note);
 }
 
 test "the fetch count is capped, and a refused fetch frees what it was given" {

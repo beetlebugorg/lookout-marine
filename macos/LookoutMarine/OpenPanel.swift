@@ -119,8 +119,14 @@ extension AppModel {
 import Foundation
 
 extension AppModel {
-    /// Open the mariner form. On iOS it is a sheet, so the flag is enough.
-    func openSettings() { showSettings = true }
+    /// Open the mariner form. On iOS it is a sheet, and it opens on the LIST
+    /// of sections: the list is the form's first page here, the way the
+    /// sidebar is the Mac window's left edge. A caller that wants a particular
+    /// section (the screenshot hook) sets `settingsTab` after this.
+    func openSettings() {
+        settingsTab = ""
+        showSettings = true
+    }
 
     /// Import a picked chart (or folder of cells) into the app container, then
     /// open the copy. Copying sidesteps security-scope lifetime: the engine

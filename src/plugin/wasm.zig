@@ -70,6 +70,18 @@ pub fn initRuntime() Error!void {
     // and a pool would put a second, unrelated cap on top of the per-instance
     // memory cap.
     args.mem_alloc_type = c.Alloc_With_System_Allocator;
+    // The default mode for a BYTECODE module, and the only one this archive
+    // has: build-wamr.sh compiles the fast interpreter and no JIT of either
+    // flavour. Saying it rather than leaving Mode_Default means a build that
+    // grew a JIT would still interpret until someone chose otherwise here.
+    //
+    // It says nothing about an AOT module. RunningMode has no Mode_AOT — an
+    // AOT module is native code and there is no interpreter to run it in —
+    // and wasm_runtime_set_running_mode applies to interpreter instances
+    // only. The AOT loader is compiled in (WAMR_BUILD_AOT=1) so the five core
+    // plugins can be shipped as code we compiled ourselves; see
+    // scripts/build-plugin-aot.sh, and `aotRefusal` below for what the host
+    // checks before it hands one over.
     args.running_mode = c.Mode_Interp;
     if (!c.wasm_runtime_full_init(&args)) return error.RuntimeInit;
     errdefer c.wasm_runtime_destroy();
@@ -480,6 +492,146 @@ pub const Module = struct {
     }
 };
 
+// ---- ahead-of-time modules ----
+//
+// `Module.load` takes either kind: wasm_runtime_load reads the first four
+// bytes and dispatches, so nothing in the host has to say which it has. What
+// the host DOES have to do is decide whether an .aot on disk belongs to THIS
+// binary before handing it over, and that is what the two functions below are
+// for. See src/plugin/host.zig for the policy and scripts/build-plugin-aot.sh
+// for how the files are produced.
+
+/// What a module file holds, from its first four bytes: `\0asm` bytecode or
+/// `\0aot`. Anything else — an empty file, a truncated download, a zip — is
+/// `unknown`.
+pub const Package = enum { bytecode, aot, unknown };
+
+pub fn packageType(bytes: []const u8) Package {
+    return switch (c.wasm_runtime_get_file_package_type(bytes.ptr, @intCast(bytes.len))) {
+        c.Wasm_Module_Bytecode => .bytecode,
+        c.Wasm_Module_AoT => .aot,
+        else => .unknown,
+    };
+}
+
+/// The machine name WAMR's AOT loader accepts in this binary. It comes from
+/// the archive's BUILD_TARGET, so it is the host CPU: `get_current_target` in
+/// core/iwasm/aot/arch/aot_reloc_<arch>.c writes "aarch64v8" for an AARCH64
+/// build and "x86_64" for an x86-64 one, and compares it against the file's
+/// with a PREFIX match, which is why the aarch64 sub-version is not spelled
+/// out here. Empty on an architecture whose runtime has no AOT relocations at
+/// all, and an empty expectation refuses every .aot, which is the right answer
+/// there.
+pub const aot_arch: []const u8 = switch (builtin.cpu.arch) {
+    .aarch64, .aarch64_be => "aarch64",
+    .x86_64 => "x86_64",
+    else => "",
+};
+
+/// The wamrc flag set every .aot this host will run was compiled with. It is
+/// `AOT_FLAGS_ID` in scripts/build-plugin-aot.sh, and the two must be changed
+/// together: the script writes it into the AOT_VERSION stamp, and a file whose
+/// stamp does not carry this exact word is refused.
+///
+/// It reads as a build detail and it is a SAFETY CHECK. The first of the four
+/// flags it names is --bounds-checks=1, and an .aot compiled without it has no
+/// memory sandbox at all — no software check, and no hardware one either,
+/// because this runtime is built with WAMR_DISABLE_HW_BOUND_CHECK. The AOT
+/// format does not record the setting, so this stamp is the only thing that
+/// distinguishes a file we compiled from one we did not.
+pub const aot_flags_id = "swbounds+threadmgr+nosimd+extconst";
+
+/// Why the AOT_VERSION stamp beside a set of .aot files does not describe this
+/// binary's runtime, or null when it does. The message is written into `buf`.
+///
+/// The stamp is `<WAMR tag> <commit> <runtime features> <wamrc flags> <target>
+/// <input digest>`. Two of those fields are checked: the release, against the
+/// runtime linked in here, and the flag word. The rest is there to read.
+pub fn aotStampRefusal(stamp: []const u8, buf: []u8) ?[]const u8 {
+    var major: u32 = 0;
+    var minor: u32 = 0;
+    var patch: u32 = 0;
+    c.wasm_runtime_get_version(&major, &minor, &patch);
+    var want_buf: [32]u8 = undefined;
+    const want = std.fmt.bufPrint(&want_buf, "WAMR-{d}.{d}.{d}", .{ major, minor, patch }) catch return "the WAMR version is unreadable";
+
+    if (stamp.len == 0)
+        return std.fmt.bufPrint(buf, "there is no AOT_VERSION beside it saying which {s} build it belongs to", .{want}) catch
+            "there is no AOT_VERSION beside it";
+
+    var it = std.mem.tokenizeAny(u8, stamp, " \t");
+    const tag = it.next() orelse "";
+    if (!std.mem.eql(u8, tag, want))
+        return std.fmt.bufPrint(buf, "it was built against {s} and this is {s}", .{ tag, want }) catch
+            "it was built against another WAMR release";
+
+    while (it.next()) |word| {
+        if (std.mem.eql(u8, word, aot_flags_id)) return null;
+    }
+    return std.fmt.bufPrint(buf, "its AOT_VERSION does not name the {s} flag set", .{aot_flags_id}) catch
+        "its AOT_VERSION does not name the flag set this host requires";
+}
+
+/// Why this .aot must not be loaded in this process, in a sentence, or null
+/// when nothing is wrong with it. The message is written into `buf`.
+///
+/// WHY LOOK AT ALL, when the runtime checks the same things. Because the
+/// answer belongs in the log with the plugin's name beside it, and because a
+/// file that fails here is never handed to the loader: no mapping, no
+/// relocation, no partially built module to tear down. WAMR then re-checks
+/// every one of these — this is a gate, not a substitute.
+///
+/// WHAT IT CANNOT SEE. Whether the file was compiled with software bounds
+/// checks. Nothing in the format records it and nothing in the loader looks,
+/// so an .aot built with wamrc's default --bounds-checks=0 would load here and
+/// run with no memory sandbox at all. That is the whole reason the host also
+/// insists on the AOT_VERSION stamp beside the file: the stamp names the flag
+/// set, and only files this project compiled carry it.
+pub fn aotRefusal(bytes: []const u8, buf: []u8) ?[]const u8 {
+    const say = struct {
+        fn f(b: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
+            // A message that will not fit is still a refusal.
+            return std.fmt.bufPrint(b, fmt, args) catch "it is not usable in this build";
+        }
+    }.f;
+
+    if (packageType(bytes) != .aot) return say(buf, "it is not an AOT module", .{});
+
+    // The file header is `\0aot` + a u32 format version, and the target info
+    // section always comes first: a u32 type (0) and a u32 size, then the 48
+    // bytes read below. Layout from aot_emit_target_info_section().
+    if (bytes.len < 64) return say(buf, "it is too short to hold target information", .{});
+
+    const version = std.mem.readInt(u32, bytes[4..][0..4], .little);
+    const want = c.wasm_runtime_get_current_package_version(c.Wasm_Module_AoT);
+    if (version != want)
+        return say(buf, "it is AOT format version {d} and this WAMR build reads {d}", .{ version, want });
+
+    if (std.mem.readInt(u32, bytes[8..][0..4], .little) != 0 or
+        std.mem.readInt(u32, bytes[12..][0..4], .little) < 48)
+        return say(buf, "its target information section is missing or short", .{});
+
+    // bin_type: bit 0 set means big endian, bit 1 set means 64-bit.
+    const bin_type = std.mem.readInt(u16, bytes[16..][0..2], .little);
+    const file_big_endian = bin_type & 1 != 0;
+    const file_64_bit = bin_type & 2 != 0;
+    if (file_big_endian != (builtin.cpu.arch.endian() == .big) or file_64_bit != (@sizeOf(usize) == 8))
+        return say(buf, "it is a {s} {s} file and this is a {s} {s} build", .{
+            if (file_64_bit) "64-bit" else "32-bit",
+            if (file_big_endian) "big-endian" else "little-endian",
+            if (@sizeOf(usize) == 8) "64-bit" else "32-bit",
+            if (builtin.cpu.arch.endian() == .big) "big-endian" else "little-endian",
+        });
+
+    const arch = std.mem.sliceTo(bytes[48..64], 0);
+    if (aot_arch.len == 0)
+        return say(buf, "this build has no AOT support for {s}", .{@tagName(builtin.cpu.arch)});
+    if (!std.mem.startsWith(u8, arch, aot_arch))
+        return say(buf, "it is compiled for {s} and this is {s}", .{ arch, aot_arch });
+
+    return null;
+}
+
 /// Instantiation limits. Sizes are bytes except where noted.
 pub const Limits = struct {
     /// Interpreter stack for this instance's execution environment.
@@ -488,9 +640,14 @@ pub const Limits = struct {
     /// Zero: the API routes host-to-plugin buffers through the module's own
     /// lk_alloc, so nothing needs it.
     heap_bytes: u32 = 0,
-    /// Hard cap on linear memory, in 64 KiB wasm pages. 256 pages = 16 MiB,
-    /// the default an ordinary plugin never approaches. Instantiation fails
-    /// if the module's declared minimum memory exceeds it.
+    /// Hard cap on linear memory, in 64 KiB wasm pages. Past it `memory.grow`
+    /// is refused and the module's own allocation fails; instantiation fails
+    /// outright if the module's declared minimum memory exceeds it.
+    ///
+    /// 256 pages = 16 MiB is the floor for anything driven directly, such as
+    /// the smoke test. The HOST sets the real per-plugin budget from
+    /// `broker.max_memory_pages`, and registers the callback that makes a
+    /// refusal visible.
     max_memory_pages: u32 = 256,
 };
 
@@ -564,8 +721,13 @@ pub const Instance = struct {
 
     /// Pointer handed to every native this instance calls, via
     /// callerUserData(exec_env) — the broker's per-plugin state.
+    ///
+    /// It is set on the INSTANCE as well, because a runtime callback that is
+    /// not a native — the one for a refused `memory.grow` — is handed the
+    /// instance and only sometimes an exec env.
     pub fn setUserData(self: *Instance, ptr: ?*anyopaque) void {
         c.wasm_runtime_set_user_data(self.env, ptr);
+        c.wasm_runtime_set_custom_data(self.inst, ptr);
     }
 
     /// WAMR's text for the last trap, or null. Cleared by clearException().

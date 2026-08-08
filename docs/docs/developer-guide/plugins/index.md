@@ -119,6 +119,21 @@ built by `scripts/build-wamr.sh`. There is no JIT: iOS refuses a process that
 asks the operating system for executable pages at run time. Interpreted code
 runs well short of native speed, so keep event handlers small.
 
+That is true of your plugin whatever else changes. Lookout's own five plugins
+are additionally compiled ahead of time at build time, into a `.aot` beside the
+`.wasm`, and the host loads that one where it exists; a package you install
+carries `manifest.json` and one `.wasm` and nothing else, and a package holding
+anything more — an `.aot` included — is refused by name.
+
+This is not a tier you can buy into, and it is not about trust in you. A `.aot`
+is native machine code. Lookout ships the ones it compiled itself, from modules
+built in the same tree, with compiler flags chosen to match the runtime — most
+of all the software bounds check that keeps a plugin inside its own memory,
+which the format does not record and the loader cannot verify. A `.aot` that
+arrived from anywhere else could not be checked for that, so there would be
+nothing between it and the rest of the process. Lookout compiles it, or Lookout
+interprets it.
+
 On macOS, iOS and Android the host turns on whenever the WAMR archive is
 present; on Linux and Windows it needs `-Dplugins=true`.
 

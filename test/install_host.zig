@@ -7,7 +7,8 @@
 //! this proves, which nothing else does:
 //!
 //!   - a zip that is not exactly manifest.json + <id>.wasm is refused BY
-//!     NAME, with the sentence the shell shows;
+//!     NAME, with the sentence the shell shows — INCLUDING a package that
+//!     brings an .aot, which is the case that keeps native code out;
 //!   - an installed package lands under the install root, loads, and draws;
 //!   - a grant revoked live behaves exactly like one the manifest never
 //!     asked for: the call answers -1, denied counts, the plugin runs on;
@@ -330,6 +331,30 @@ test "a package that is not exactly manifest.json and <id>.wasm is refused by na
             .{ .name = "manifest.json", .data = manifest_v1 },
             .{ .name = downwind_id ++ ".wasm", .data = "fake" },
             .{ .name = "sub/", .data = "" },
+        } },
+        // A PACKAGE MAY NOT BRING NATIVE CODE. An .aot is compiled machine
+        // code, and the five plugins the app ships have one because THIS
+        // project compiled them: from modules built here, on a build machine,
+        // with wamrc flags chosen to match the runtime — software bounds
+        // checks on, because the runtime installs no signal handler to catch
+        // an out-of-range access (scripts/build-plugin-aot.sh).
+        //
+        // A third-party .aot is none of that. It is native code nobody here
+        // compiled, and nothing in the AOT format records whether its bounds
+        // checks were switched on, so there is no inspection that would make
+        // it safe to run — it would simply be a plugin outside the sandbox.
+        // We compile it, or we interpret it. There is no third option, and
+        // this is where that is enforced: an .aot is not manifest.json and
+        // does not end in .wasm, so the member is refused BY NAME, whether it
+        // arrives beside a module or instead of one.
+        .{ .name = "aot-beside.lkplug", .says = downwind_id ++ ".aot", .members = &.{
+            .{ .name = "manifest.json", .data = manifest_v1 },
+            .{ .name = downwind_id ++ ".wasm", .data = "fake" },
+            .{ .name = downwind_id ++ ".aot", .data = "\x00aot" },
+        } },
+        .{ .name = "aot-only.lkplug", .says = downwind_id ++ ".aot", .members = &.{
+            .{ .name = "manifest.json", .data = manifest_v1 },
+            .{ .name = downwind_id ++ ".aot", .data = "\x00aot" },
         } },
     };
     for (cases) |case| {

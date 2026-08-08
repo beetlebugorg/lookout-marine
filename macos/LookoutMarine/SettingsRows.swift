@@ -26,11 +26,49 @@ struct SectionHead: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
+            // A hint names a KEYSTROKE, and the platform it is written for is
+            // the one with a menu bar. A phone shows a chord beside a heading
+            // it has no way to type, so the hint stays on the Mac.
+            #if os(macOS)
             if let hint {
                 Spacer()
                 Text(hint).font(.caption).foregroundStyle(.tertiary)
             }
+            #endif
         }
+    }
+}
+
+/// A choice out of two or three, drawn as segments. macOS puts the label
+/// beside the control the way every other row in this window does; iOS DROPS
+/// a segmented picker's label entirely — the segments arrive with nothing
+/// saying what they set — so there the label stands above them and the
+/// control keeps the width it needs.
+struct SegmentedRow<Selection: Hashable, Options: View>: View {
+    let title: String
+    @Binding var selection: Selection
+    let options: Options
+
+    init(_ title: String,
+         selection: Binding<Selection>,
+         @ViewBuilder options: () -> Options) {
+        self.title = title
+        self._selection = selection
+        self.options = options()
+    }
+
+    var body: some View {
+        #if os(macOS)
+        Picker(title, selection: $selection) { options }
+            .pickerStyle(.segmented)
+        #else
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+            Picker(title, selection: $selection) { options }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+        }
+        #endif
     }
 }
 
@@ -82,6 +120,35 @@ struct DescribedRow<Content: View>: View {
                 }
             }
         }
+    }
+}
+
+/// A typed value — an address, a port — with its label and explanation.
+///
+/// The Mac keeps its controls in one column down the right of the form, and
+/// the label and its sentence fit beside a 190pt field. A phone has no such
+/// column: a full sentence and a field cannot share 402pt, so LabeledContent
+/// truncated whichever it liked per row and the fields came out at three
+/// different widths with dead space beside them. Here the label and sentence
+/// stand above a field that fills the row, which is what every other iOS form
+/// does with a field this size.
+struct FieldRow<Content: View>: View {
+    let title: String
+    let desc: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        #if os(macOS)
+        DescribedRow(title: title, desc: desc) { content }
+        #else
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+            if !desc.isEmpty {
+                Text(desc).font(.caption).foregroundStyle(.secondary)
+            }
+            content.frame(maxWidth: .infinity)
+        }
+        #endif
     }
 }
 
@@ -207,7 +274,10 @@ struct PluginRowEditor: View {
         let name = row.text("name")
         if !name.isEmpty { return name }
         let host = row.text("host")
-        if host.isEmpty { return "New connection" }
+        // The list's own word for one of its rows, never this window's: the
+        // Signal K list adds a SERVER, and calling its empty row a connection
+        // is the window telling the mariner the wrong thing about the plugin.
+        if host.isEmpty { return list.newLabel }
         return "\(host):\(PluginSettings.trimmed(row.number("port")))"
     }
 
@@ -223,22 +293,33 @@ struct PluginRowEditor: View {
             ForEach(list.itemFields) { f in
                 switch f.kind {
                 case .text:
-                    DescribedRow(title: f.label, desc: f.desc) {
+                    FieldRow(title: f.label, desc: f.desc) {
                         CommitTextField(
                             placeholder: f.optional ? "Optional" : "",
                             value: p.cellText(list, rowID, f.key)
                         )
-                        .frame(width: 190)
                         .textFieldStyle(.roundedBorder)
+                        #if os(macOS)
+                        .frame(width: 190)
+                        #endif
                     }
                     .padding(.leading, Self.childInset)
                 case .number:
-                    DescribedRow(title: f.label, desc: f.desc) {
+                    FieldRow(title: f.label, desc: f.desc) {
                         TextField("", value: p.cellNumber(list, rowID, f.key), format: .number.grouping(.never))
                             .labelsHidden()
-                            .frame(width: 80)
                             .multilineTextAlignment(.trailing)
                             .textFieldStyle(.roundedBorder)
+                            #if os(macOS)
+                            .frame(width: 80)
+                            #else
+                            // A port is digits. The full QWERTY it raised
+                            // otherwise has no business here, and the number
+                            // pad it raises instead has no Return key — hence
+                            // the Done above it.
+                            .keyboardType(.numberPad)
+                            .keyboardDone()
+                            #endif
                     }
                     .padding(.leading, Self.childInset)
                 case .toggle:
@@ -248,10 +329,14 @@ struct PluginRowEditor: View {
                         EmptyView()
                     } else {
                         DescribedRow(title: f.label, desc: f.desc) {
-                            Toggle("", isOn: p.cellToggle(list, rowID, f.key))
+                            // The label is a sibling Text, which leaves the
+                            // switch itself unnamed to VoiceOver — the same
+                            // gap the row's own pause switch had.
+                            Toggle(f.label, isOn: p.cellToggle(list, rowID, f.key))
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
+                                .accessibilityHint(f.desc)
                         }
                         .padding(.leading, Self.childInset)
                     }
@@ -260,7 +345,7 @@ struct PluginRowEditor: View {
             Button(role: .destructive) {
                 p.removeRow(list, rowID)
             } label: {
-                Label("Remove Connection", systemImage: "trash")
+                Label(list.removeLabel, systemImage: "trash")
             }
             .padding(.leading, Self.childInset)
         }
@@ -310,11 +395,18 @@ struct PluginRowEditor: View {
             // The pause switch: off closes the socket and stops the retries,
             // on dials again. Outside the button, or it could not be touched.
             if let sw = rowSwitch {
-                Toggle("", isOn: p.cellToggle(list, rowID, sw.key))
+                Toggle(sw.label, isOn: p.cellToggle(list, rowID, sw.key))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                    // .help is a POINTER tooltip, and a phone has no pointer.
+                    // A switch drawn with its label hidden and no label given
+                    // announces as an unnamed switch, so the words travel on
+                    // the control itself: which row, which switch, and the
+                    // plugin's sentence as the hint.
                     .help(sw.desc)
+                    .accessibilityLabel("\(sw.label), \(title)")
+                    .accessibilityHint(sw.desc)
             }
         }
         .onAppear { if startOpen { open = true } }
@@ -337,6 +429,25 @@ struct CommitTextField: View {
             .multilineTextAlignment(.trailing)
             .focused($editing)
             .onSubmit { value = draft }
+            #if os(iOS)
+            // An address is TYPED, not written. Autocapitalisation turns
+            // raymarine.local into Raymarine.local and autocorrect turns a
+            // dotted quad into words, and either way the plugin dials a host
+            // that does not exist. The URL keyboard also puts the dot and the
+            // slash on the row the thumbs are already on.
+            .keyboardType(.URL)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .toolbar {
+                if editing {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { editing = false }
+                    }
+                }
+            }
+            #endif
             .onChange(of: editing) { _, nowEditing in
                 if nowEditing { draft = value } else { value = draft }
             }
@@ -344,6 +455,45 @@ struct CommitTextField: View {
                 if !editing { draft = fresh }
             }
             .onAppear { draft = value }
+    }
+}
+
+#if os(iOS)
+/// A Done button over the keyboard. The number pads these fields raise have
+/// no Return key, so without one the keyboard covers the form until the
+/// mariner finds somewhere harmless to tap — and the fields commit on Return
+/// or on losing focus, so "somewhere harmless" is also how the value lands.
+///
+/// Only the FOCUSED field puts a bar up. Every number field in the window
+/// declaring one unconditionally would leave several fighting over the same
+/// slot.
+private struct KeyboardDone: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused($focused)
+            .toolbar {
+                if focused {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { focused = false }
+                    }
+                }
+            }
+    }
+}
+#endif
+
+extension View {
+    /// The keyboard's own Done button, on the platform that has a keyboard to
+    /// put away. Nothing on macOS.
+    func keyboardDone() -> some View {
+        #if os(iOS)
+        modifier(KeyboardDone())
+        #else
+        self
+        #endif
     }
 }
 
@@ -379,12 +529,22 @@ struct PluginNumberRow: View {
                         .frame(width: 68)
                         .multilineTextAlignment(.trailing)
                         #if os(iOS)
+                        // Borderless, a number reads as a printed value rather
+                        // than something to change. The row editors already
+                        // wear the border; these match them.
+                        .textFieldStyle(.roundedBorder)
                         .keyboardType(.decimalPad)
+                        .keyboardDone()
                         #endif
                     Stepper("", value: $value, in: field.min...field.max, step: field.step)
                         .labelsHidden()
+                    // The units line up in a column, but the column may not
+                    // CLIP one: 24pt fits a Mac's 13pt "min" and folds it to
+                    // "mi / n" at iOS body size, and at an accessibility text
+                    // size it would fold anything.
                     Text(field.unit).foregroundStyle(.secondary)
-                        .frame(width: 24, alignment: .leading)
+                        .fixedSize()
+                        .frame(minWidth: 24, alignment: .leading)
                 }
                 Text(field.rangeText).font(.caption2).foregroundStyle(.tertiary)
             }

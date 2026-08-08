@@ -2,7 +2,7 @@
   "id": "org.beetlebug.signalk",
   "name": "Signal K",
   "api": 1,
-  "capabilities": ["net.tcp-client", {"net.ws": ["local"]}, "vessel.publish", "ais.publish"],
+  "capabilities": [{"net.tcp-client": ["local"]}, {"net.ws": ["local"]}, "vessel.publish", "ais.publish"],
   "settings": {
     "groups": [
       {

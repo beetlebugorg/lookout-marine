@@ -31,10 +31,11 @@ const spin_manifest =
     \\{"id":"org.beetlebug.spin","name":"Spinner","api":1,"capabilities":["overlay.draw"]}
 ;
 
-/// The timer ids test/spin_plugin.zig treats as "stop returning" and "trap
-/// now".
+/// The timer ids test/spin_plugin.zig treats as "stop returning", "trap now"
+/// and "allocate until the host refuses".
 const trigger_timer_id: u64 = 424242;
 const trap_timer_id: u64 = 424243;
+const hog_timer_id: u64 = 424244;
 
 /// One synthetic STORE_CHANGED, the shape the fanout tick builds. Echo answers
 /// each one with a log line naming the path's age, which is how this test
@@ -143,9 +144,16 @@ test "a plugin stuck in a loop is terminated, and only that plugin stops" {
     });
     defer br.deinit();
     br.setLog(&sink, LogSink.write);
+    // Echo is fed an event every 20 ms below and logs one line for each, so
+    // the count of those lines is the proof its dispatch thread kept running
+    // while its neighbour was wedged. Fifty lines a second is far over the
+    // shipped log budget, which would drop most of them and read here as a
+    // plugin that stopped, so this test lifts the ceiling. The log budget is
+    // proved where it belongs, in broker.zig's own tests.
+    br.budgets.log_lines_per_s = 1_000_000;
 
-    // The shipped budget, not a shortened one: what this test proves is what
-    // the host does by default.
+    // The shipped watchdog budget, not a shortened one: what this test proves
+    // is what the host does by default.
     var h = host.Host.init(alloc, &br, .{});
     defer h.deinit();
     const budget = h.opts.event_budget_ms;
@@ -292,6 +300,81 @@ test "shutdown does not wait on a plugin that is still spinning" {
     // shutdown_ms of draining, then the grace period, then the join.
     try std.testing.expect(took < 3_000);
     try std.testing.expect(!hasObject(&ov, spin_id ++ "/spin"));
+}
+
+// MEMORY ISOLATION, the budget rather than the watchdog. A plugin that
+// allocates without bound is not stuck and does not trap, so nothing above
+// catches it: what stops it is the per-plugin ceiling on linear memory. The
+// allocation fails, the plugin is told, it keeps running, and the refusal is
+// on its status line — a plugin that cannot tell it hit a budget is reported
+// as slow rather than fixed.
+test "a plugin that allocates without bound is refused at the memory budget" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try stage(alloc, &tmp);
+    defer alloc.free(dir_path);
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var ov = overlay.Store.init(alloc);
+    defer ov.deinit();
+    var sink = LogSink{ .alloc = alloc };
+    defer sink.text.deinit(alloc);
+
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{
+        .ctx = &ov,
+        .applyFn = OvSink.apply,
+        .removeFn = OvSink.remove,
+    });
+    defer br.deinit();
+    br.setLog(&sink, LogSink.write);
+
+    // The shipped ceiling, not a shortened one.
+    var h = host.Host.init(alloc, &br, .{});
+    defer h.deinit();
+    try std.testing.expectEqual(broker.max_memory_pages, h.opts.limits.max_memory_pages);
+    try std.testing.expectEqual(@as(i64, 64 * 1024 * 1024), broker.max_memory_bytes);
+
+    try h.loadDir(dir_path);
+    const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
+    const spin = h.find(spin_id) orelse return error.SpinNotLoaded;
+    try h.start();
+
+    br.push(spin.index, broker.Kind.timer, hog_timer_id, "");
+    _ = try waitFor(5_000, &sink, struct {
+        fn f(s: *LogSink) bool {
+            return s.has("out of memory after ");
+        }
+    }.f);
+
+    // The host said which budget it was, with the ceiling in it.
+    try std.testing.expect(sink.has("refused at the 64 MiB linear-memory budget"));
+    // The plugin saw the failure itself: it got some memory and then an error,
+    // rather than a trap or a silent zero.
+    try std.testing.expect(!sink.has("out of memory after 0 MiB"));
+    // It is still running. A budget is not a kill.
+    try std.testing.expect(spin.enabled);
+    try std.testing.expect(!sink.has("lk_event trapped"));
+    try std.testing.expect(!sink.has("stuck in lk_event"));
+    // ...and its own status line names the budget beside its own words.
+    try std.testing.expect(std.mem.indexOf(u8, spin.status(), "\"budget\":\"memory\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, spin.status(), "out of memory after ") != null);
+
+    // The neighbour never noticed.
+    br.push(echo.index, broker.Kind.store_changed, 0, position_event);
+    _ = try waitFor(2_000, &sink, struct {
+        fn f(s: *LogSink) bool {
+            return s.count(echo_handled) >= 1;
+        }
+    }.f);
+    try std.testing.expect(echo.enabled);
+    try std.testing.expect(std.mem.indexOf(u8, echo.status(), "budget") == null);
+
+    h.stop();
 }
 
 // The watchdog message must not swallow the ordinary one. A plugin that traps

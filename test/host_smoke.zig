@@ -323,6 +323,12 @@ test "a plugin survives repeated events whose scratch outgrows its arena" {
     });
     defer br.deinit();
     br.setLog(&sink, LogSink.write);
+    // The proof below is a count of the fixture's own log lines, one per
+    // snapshot, pushed as fast as `pump` will take them. That is far over the
+    // shipped log budget, which would drop most of them and read here as
+    // events that never ran, so this test lifts the ceiling. The budget is
+    // proved where it belongs, in broker.zig's own tests.
+    br.budgets.log_lines_per_s = 1_000_000;
 
     var h = host.Host.init(alloc, &br, .{});
     defer h.deinit();
@@ -619,4 +625,21 @@ test "every manifest the app ships parses under the real parser" {
     var ais = try host.parseManifest(a, ais_manifest);
     defer ais.deinit(a);
     try std.testing.expect(ais.declaresTable("targets"));
+
+    // The gateway plugin dials the boat's own network and asks for no more
+    // than that. A shipped manifest that lost its address list would be a
+    // plugin refused at its first connection, on the water.
+    var nmea = try host.parseManifest(a, nmea_manifest);
+    defer nmea.deinit(a);
+    try std.testing.expect(nmea.caps.contains(.net_tcp_client));
+    try std.testing.expectEqual(@as(usize, 1), nmea.tcp_addrs.len);
+    try std.testing.expectEqualStrings("local", nmea.tcp_addrs[0]);
+    try std.testing.expect(!nmea.caps.contains(.net_http));
+    try std.testing.expect(!nmea.caps.contains(.net_udp));
+
+    // ...and the sentence the mariner reads says which network that is.
+    var sentence: std.ArrayList(u8) = .empty;
+    defer sentence.deinit(a);
+    try host.writeSentence(&sentence, a, .net_tcp_client, &nmea);
+    try std.testing.expectEqualStrings("Connect to instruments on: your own network.", sentence.items);
 }

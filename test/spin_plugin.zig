@@ -23,6 +23,16 @@ pub const trigger_timer_id: i64 = 424242;
 /// has always handled, so the test can tell the two disable paths apart.
 pub const trap_timer_id: i64 = 424243;
 
+/// The timer id that means "allocate until the host refuses": the
+/// linear-memory budget, seen from inside the module. Unlike the two above
+/// this one is survivable — the allocation fails, the plugin is told, and it
+/// carries on — which is the whole point of a budget rather than a kill.
+pub const hog_timer_id: i64 = 424244;
+
+/// How much the hog asks for at a time. Big enough that the ceiling is reached
+/// in a handful of grows, so the test never comes near the watchdog's budget.
+const hog_chunk = 4 * 1024 * 1024;
+
 /// Where the symbol goes: Annapolis harbour, a little east of the echo
 /// plugin's, so the two objects are distinguishable.
 const lon: f64 = -76.4700;
@@ -56,6 +66,22 @@ pub fn onEvent(e: lk.Event) !void {
                 // The wasm `unreachable` opcode. WAMR reports it by that name,
                 // which is the text the host must keep.
                 @trap();
+            }
+            if (id == hog_timer_id) {
+                const a = lk.scratch();
+                var held: usize = 0;
+                while (true) {
+                    const mem = a.alloc(u8, hog_chunk) catch break;
+                    // Touched at both ends: an allocation nothing reads is one
+                    // the optimiser may delete, and the pages have to be real.
+                    mem[0] = 1;
+                    mem[mem.len - 1] = 1;
+                    held += hog_chunk;
+                }
+                const mib = held / (1024 * 1024);
+                lk.logf(.warn, "out of memory after {d} MiB", .{mib});
+                lk.status("running", "out of memory after {d} MiB", .{mib});
+                return;
             }
             lk.status("running", "{d} events", .{events});
         },

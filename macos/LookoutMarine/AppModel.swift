@@ -218,6 +218,14 @@ final class AppModel: ObservableObject {
     /// two import different things to different places: an ENC is copied into
     /// the container and opened, a raster chart is added to the underlay.
     @Published var showRasterImporter = false
+    /// The same two pickers again, for the SETTINGS sheet. A presented sheet
+    /// cannot present another one from the view it came up over — the pair
+    /// above hang on the chart view — so the form attaches its own and these
+    /// are the flags that raise them. Add Charts used to dismiss the form and
+    /// re-present the picker 0.45s later to get around it; Add Raster Charts
+    /// never got that treatment and simply did nothing.
+    @Published var showSettingsImporter = false
+    @Published var showSettingsRasterImporter = false
     @Published var showSettings = false
     /// Which settings section shows, by its core name — "display", "depths",
     /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
@@ -389,12 +397,13 @@ final class AppModel: ObservableObject {
         #endif
     }
 
-    /// "Add charts" from the SETTINGS sheet (iOS): the importer and the sheet
-    /// share one presenting host, so dismiss the sheet first.
+    /// "Add charts" from the SETTINGS sheet (iOS): the form's own importer,
+    /// which comes up over the sheet and leaves it where it was. It used to
+    /// dismiss the sheet and re-present the chart view's importer 0.45s later,
+    /// because that one cannot appear while the sheet is over it.
     func addChartsFromSettings() {
         #if os(iOS)
-        showSettings = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { self.showImporter = true }
+        showSettingsImporter = true
         #else
         presentOpenPanel()
         #endif

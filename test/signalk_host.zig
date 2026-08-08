@@ -761,3 +761,42 @@ test "a websocket to a server off this boat's network is refused by the grant" {
     }.ready);
     try must(rig.log.has("is not in the manifest's net.ws host list"), "the log names the host that was refused");
 }
+
+test "a plain connection to a server off this boat's network is refused by the grant" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try plugDir(alloc, &tmp, .sk);
+    defer alloc.free(dir_path);
+
+    var rig = try Rig.init(alloc, dir_path);
+    defer rig.deinit();
+    try rig.h.start();
+
+    // The same grant, the other transport. `net.tcp-client` carries the
+    // addresses it may dial, and `local` is this boat's own network: a public
+    // server is refused before a socket opens, and it is refused ONCE rather
+    // than retried every two seconds for ever.
+    var cfg: std.ArrayList(u8) = .empty;
+    defer cfg.deinit(alloc);
+    try cfg.appendSlice(alloc, "{\"servers\":[{\"id\":\"s-far\",\"name\":\"Demo\"," ++
+        "\"host\":\"demo.signalk.org\",\"port\":8375,\"websocket\":false,\"enabled\":true}]}");
+    try rig.h.configSet(sk_id, cfg.items);
+
+    const plugin = rig.h.find(sk_id) orelse return error.PluginNotLoaded;
+    try waitFor("the refusal to reach the row's line", plugin, struct {
+        fn ready(p: *broker.Plugin) bool {
+            return std.mem.indexOf(u8, p.status(), "outside what this plugin may dial") != null;
+        }
+    }.ready);
+    try must(
+        rig.log.has("is not in the manifest's net.tcp-client address list"),
+        "the log names the address that was refused",
+    );
+
+    // One refusal, not a stream of them: the row stopped.
+    const first = plugin.denied;
+    broker.sleepMs(3 * 1000);
+    try must(plugin.denied == first, "a refused address is not dialled again");
+}

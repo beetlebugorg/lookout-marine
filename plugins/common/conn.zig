@@ -81,7 +81,12 @@ pub const Opts = struct {
     /// What a connection says when the host would not dial it at all. That only
     /// happens when the manifest's grant does not cover the address, and only
     /// the plugin knows which grant it asked for.
+    ///
+    /// Two of them because a plugin that offers both transports names them
+    /// differently, and the grants are separate: `net.ws` carries its hosts and
+    /// `net.tcp-client` carries its addresses.
     refused_detail: []const u8 = "the host refused this address",
+    refused_detail_tcp: []const u8 = "the address is outside what this plugin may dial",
 };
 
 /// What one connection is doing, in the words the shell shows.
@@ -432,16 +437,13 @@ pub fn Connections(comptime opts: Opts) type {
             if (r.sock < 0) {
                 r.sock = -1;
                 // The host would not make the call at all, and the only reason
-                // it does that is the grant. Retrying is a refusal every two
-                // seconds for ever, so the connection stops and says what is
-                // wrong.
-                if (r.ws) {
-                    r.conn = .refused;
-                    r.detail.set(opts.refused_detail);
-                    return;
-                }
-                r.noteFailure();
-                r.scheduleRetry();
+                // it does that is the grant: the address is outside what the
+                // manifest named. Retrying is a refused dial every two seconds
+                // for ever, so the connection stops and says what is wrong.
+                // Both transports, because both grants carry their reach.
+                r.conn = .refused;
+                r.detail.set(if (r.ws) opts.refused_detail else opts.refused_detail_tcp);
+                return;
             }
         }
 

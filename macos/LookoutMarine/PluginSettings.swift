@@ -226,6 +226,24 @@ struct PluginListSchema: Identifiable {
     let maxRows: Int
 
     var id: String { "\(pluginID)/\(key)" }
+
+    /// What this list calls ONE of its rows, taken from the wording it already
+    /// declared for Add. The window used to say "connection" for every list;
+    /// Connections holds two, and the Signal K list adds a server, so a row of
+    /// it that said "Remove Connection" was the window contradicting the
+    /// button directly above it. A list that declared no Add label gets the
+    /// generic wording below instead of a noun invented for it.
+    var itemNoun: String {
+        let add = addLabel.trimmingCharacters(in: .whitespaces)
+        guard add.count > 4, add.lowercased().hasPrefix("add ") else { return "" }
+        return String(add.dropFirst(4))
+    }
+
+    /// The title of a row with no address yet.
+    var newLabel: String { itemNoun.isEmpty ? "New item" : "New \(itemNoun)" }
+
+    /// The button that takes a row away.
+    var removeLabel: String { itemNoun.isEmpty ? "Remove" : "Remove \(itemNoun)" }
 }
 
 /// One value in a row. A row is not a settings field: it holds text as well as

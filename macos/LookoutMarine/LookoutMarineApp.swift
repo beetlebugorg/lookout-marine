@@ -295,9 +295,13 @@ struct ContentView: View {
                         // settings:<section>, the section named as the core
                         // names it (display, depths, text, charts, vessels,
                         // alarms, connections, advanced).
+                        // The section is named AFTER the window opens: on iOS
+                        // openSettings puts the form on its list of sections,
+                        // and this is what pushes one of them.
                         case "settings":
-                            model.settingsTab = part.count > 1 ? part[1] : "display"
+                            let want = part.count > 1 ? part[1] : "display"
                             model.openSettings()
+                            model.settingsTab = want
                         case "scale": model.beginScaleEntry()
                         // table[:key[:sort[:desc]]] opens a plugin's declared
                         // dialog, the way the menu item the declaration asked

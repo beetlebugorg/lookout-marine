@@ -131,7 +131,14 @@ struct PluginConsentSheet: View {
             }
         }
         .padding(20)
+        // 440 is the Mac panel's width. A phone is 402pt across, so a fixed
+        // 440 puts a consent sentence and the Install button past the edge of
+        // the screen the mariner is being asked to consent on.
+        #if os(macOS)
         .frame(width: 440)
+        #else
+        .frame(maxWidth: 440)
+        #endif
     }
 
     private func reinstallNote(_ was: String) -> String {

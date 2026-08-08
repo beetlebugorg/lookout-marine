@@ -852,8 +852,11 @@ struct ChartView: View {
         // surface (ChartUIView) lives in the plain-UIKit input window between
         // them — SwiftUI never sees chart touches (see SceneDelegate).
         OverlayLayer(model: model)
+        // The form brings its OWN navigation: a stack on a phone, a sidebar
+        // and pane on an iPad. It cannot be given one from out here, because
+        // only the form knows how wide it came up.
         .sheet(isPresented: $model.showSettings) {
-            NavigationStack { settingsSheetContent }
+            SettingsView(model: model)
                 // The form follows the chart's scheme, like the rest of the
                 // chrome. The scheme is set here because OverlayLayer sets it
                 // inside its own body, and this sheet is attached outside
@@ -873,13 +876,6 @@ struct ChartView: View {
                       allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { model.importRasterCharts(urls) }
         }
-    }
-
-    private var settingsSheetContent: some View {
-        SettingsView(model: model)
-            .navigationTitle("Mariner Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { model.showSettings = false } }
     }
 }
 

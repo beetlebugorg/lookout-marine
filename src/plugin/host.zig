@@ -292,6 +292,11 @@ pub const Manifest = struct {
     /// the capability was granted, and a granted one is never empty.
     http_hosts: [][]u8 = &.{},
     ws_hosts: [][]u8 = &.{},
+    /// The addresses `net.tcp-client` named, same rule. `local` stands for the
+    /// boat's own network, which is the whole grant a gateway plugin needs.
+    tcp_addrs: [][]u8 = &.{},
+    /// The ports `net.udp` named, same rule.
+    udp_ports: []u16 = &.{},
     /// The file extensions this plugin claims, each lowercase and with the
     /// leading dot. Empty unless the manifest declares some, and never
     /// non-empty without the `files` capability.
@@ -311,6 +316,8 @@ pub const Manifest = struct {
         if (self.version.len > 0) alloc.free(self.version);
         freeStrings(alloc, self.http_hosts);
         freeStrings(alloc, self.ws_hosts);
+        freeStrings(alloc, self.tcp_addrs);
+        if (self.udp_ports.len > 0) alloc.free(self.udp_ports);
         freeStrings(alloc, self.file_types);
         freeStrings(alloc, self.tables);
         freeFields(alloc, self.settings, self.settings.len);
@@ -472,17 +479,22 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         else => return Error.BadManifest,
     };
 
-    // A capability is a NAME, or a one-key object whose value is the list of
-    // hosts the grant covers: `{"net.http":["nomads.ncep.noaa.gov"]}`. The
-    // object form exists because "may reach the internet" is not a permission
-    // a mariner can weigh, and "may reach nomads.ncep.noaa.gov" is.
+    // A capability is a NAME, or a one-key object whose value is the list the
+    // grant covers: `{"net.http":["nomads.ncep.noaa.gov"]}`, or
+    // `{"net.tcp-client":["local"]}`, or `{"net.udp":[10110]}`. The object
+    // form exists because "may reach the internet" is not a permission a
+    // mariner can weigh, and "may reach the boat's own network" is.
     var caps = broker.Caps.initEmpty();
     var http_hosts: [][]u8 = &.{};
     var ws_hosts: [][]u8 = &.{};
+    var tcp_addrs: [][]u8 = &.{};
+    var udp_ports: []u16 = &.{};
     var file_types: [][]u8 = &.{};
     var table_keys: [][]u8 = &.{};
     errdefer freeStrings(alloc, http_hosts);
     errdefer freeStrings(alloc, ws_hosts);
+    errdefer freeStrings(alloc, tcp_addrs);
+    errdefer if (udp_ports.len > 0) alloc.free(udp_ports);
     errdefer freeStrings(alloc, file_types);
     errdefer freeStrings(alloc, table_keys);
     if (o.get("capabilities")) |c| {
@@ -490,7 +502,9 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         for (c.array.items) |item| switch (item) {
             .string => |text| {
                 const cap = broker.Cap.fromName(text) orelse return Error.BadManifest;
-                if (cap.needsHosts()) return Error.BadManifest;
+                // A grant that carries its reach may not be written bare: the
+                // bare name is "may reach anything", which no manifest asks.
+                if (cap.carries() != .nothing) return Error.BadManifest;
                 caps.insert(cap);
             },
             .object => |entry| {
@@ -498,19 +512,31 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
                 var it = entry.iterator();
                 const kv = it.next().?;
                 const cap = broker.Cap.fromName(kv.key_ptr.*) orelse return Error.BadManifest;
-                if (!cap.needsHosts()) return Error.BadManifest;
-                const hosts = try parseHosts(alloc, kv.value_ptr.*);
-                errdefer freeStrings(alloc, hosts);
-                switch (cap) {
-                    .net_http => {
-                        if (http_hosts.len > 0) return Error.BadManifest;
-                        http_hosts = hosts;
+                switch (cap.carries()) {
+                    .nothing => return Error.BadManifest,
+                    .ports => {
+                        if (udp_ports.len > 0) return Error.BadManifest;
+                        udp_ports = try parsePorts(alloc, kv.value_ptr.*);
                     },
-                    .net_ws => {
-                        if (ws_hosts.len > 0) return Error.BadManifest;
-                        ws_hosts = hosts;
+                    .addresses => {
+                        const hosts = try parseHosts(alloc, kv.value_ptr.*);
+                        errdefer freeStrings(alloc, hosts);
+                        switch (cap) {
+                            .net_http => {
+                                if (http_hosts.len > 0) return Error.BadManifest;
+                                http_hosts = hosts;
+                            },
+                            .net_ws => {
+                                if (ws_hosts.len > 0) return Error.BadManifest;
+                                ws_hosts = hosts;
+                            },
+                            .net_tcp_client => {
+                                if (tcp_addrs.len > 0) return Error.BadManifest;
+                                tcp_addrs = hosts;
+                            },
+                            else => unreachable,
+                        }
                     },
-                    else => unreachable,
                 }
                 caps.insert(cap);
             },
@@ -621,6 +647,8 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         .caps = caps,
         .http_hosts = http_hosts,
         .ws_hosts = ws_hosts,
+        .tcp_addrs = tcp_addrs,
+        .udp_ports = udp_ports,
         .file_types = file_types,
         .tables = table_keys,
         .settings = fields,
@@ -734,8 +762,32 @@ pub fn fileExtension(path: []const u8, buf: []u8) ?[]const u8 {
 }
 
 /// Most hosts one capability may name. A plugin that needs nine servers is a
-/// plugin nobody can read the grant sentence for.
+/// plugin nobody can read the grant sentence for. The same cap serves the
+/// ports a `net.udp` grant lists, for the same reason.
 pub const max_hosts = 8;
+
+/// The ports a `{"net.udp":[10110]}` entry names. Numbers, not strings, and
+/// each a real port: an empty list refuses the manifest exactly as an empty
+/// host list does, and so does a duplicate, which is a grant written twice.
+fn parsePorts(alloc: std.mem.Allocator, v: std.json.Value) ![]u16 {
+    if (v != .array) return Error.BadManifest;
+    const items = v.array.items;
+    if (items.len == 0 or items.len > max_hosts) return Error.BadManifest;
+    const out = try alloc.alloc(u16, items.len);
+    errdefer alloc.free(out);
+    for (items, 0..) |item, i| {
+        const n = switch (item) {
+            .integer => |x| x,
+            else => return Error.BadManifest,
+        };
+        if (n < 1 or n > 65535) return Error.BadManifest;
+        out[i] = @intCast(n);
+        for (out[0..i]) |seen| {
+            if (seen == out[i]) return Error.BadManifest;
+        }
+    }
+    return out;
+}
 
 /// The hosts a `{"net.http":[…]}` entry names. An empty list refuses the
 /// manifest: it is the same grant as not asking, written in a way that looks
@@ -1032,7 +1084,11 @@ pub const Options = struct {
     /// `LOOKOUT_NMEA=host:port`, passed to the nmea0183 plugin's config.
     nmea_host: []const u8 = "127.0.0.1",
     nmea_port: u16 = 10110,
-    limits: wasm.Limits = .{},
+    /// Instantiation limits, carrying the linear-memory budget: 64 MiB per
+    /// plugin, past which `memory.grow` is refused and the plugin's own
+    /// allocation fails. The plugin sees the error, keeps running, and the
+    /// refusal is named on its status line.
+    limits: wasm.Limits = .{ .max_memory_pages = broker.max_memory_pages },
     /// How long `stop` waits for SHUTDOWN to reach every plugin before the
     /// dispatch threads are torn down anyway. Best effort by contract: a plugin
     /// stuck in a loop must not stop the app from closing.
@@ -1103,8 +1159,12 @@ fn runtimeAcquire() !void {
 /// carry the plugin's name instead of arriving anonymously on the host's own
 /// stderr. stdout goes out at info and stderr at warn: a language runtime uses
 /// stderr for what it wants somebody to read.
+///
+/// A println costs the same log allowance as a `log` call: a plugin cannot get
+/// around the budget by writing to stdout instead.
 fn stdioToLog(user_data: ?*anyopaque, stream: wasm.Stream, line: []const u8) void {
     const p: *broker.Plugin = @ptrCast(@alignCast(user_data orelse return));
+    if (!p.chargeLog()) return;
     p.broker.say(if (stream == .err) broker.level_warn else broker.level_info, p.id, "{s}", .{line});
 }
 
@@ -1300,6 +1360,59 @@ pub const Host = struct {
         try self.loadOne(sub, "", "manifest.json", .installed, dir_path);
     }
 
+    /// The stamp file scripts/build-plugin-aot.sh writes beside the .aot
+    /// files it produced, naming the WAMR build and the wamrc flags they were
+    /// compiled under. See `readAot`.
+    const aot_stamp_file = "AOT_VERSION";
+
+    /// `<stem>.aot` for this plugin, when there is one that belongs to this
+    /// binary; null to interpret the .wasm instead.
+    ///
+    /// WHO GETS ONE. The five core plugins, on the platforms the build machine
+    /// compiled them for. Nobody else, ever: a .lkplug holds manifest.json and
+    /// one .wasm and `unpackToTemp` refuses anything else, so no installed
+    /// plugin can bring native code with it. We compile it, or we interpret
+    /// it — a third-party .aot would be native code with no sandbox we could
+    /// vouch for and no way to tell from the file whether its bounds checks
+    /// were even switched on.
+    ///
+    /// WHY A STALE OR FOREIGN FILE IS REFUSED BY NAME rather than tried. An
+    /// .aot is tied to two things at once — the architecture and the exact
+    /// WAMR build — and when either has moved the failure the mariner would
+    /// otherwise see is "plugin stopped", days after an upgrade, with no way
+    /// to connect it to the file left in the plugins directory. So both are
+    /// checked here and both are logged with the reason in them, and the
+    /// plugin runs interpreted rather than not at all.
+    ///
+    ///   * the file itself — format version, endianness, word size,
+    ///     architecture — in `wasm.aotRefusal`, which reads the header WAMR's
+    ///     loader would read.
+    ///   * the WAMR build and the wamrc flags — in `wasm.aotStampRefusal`,
+    ///     against the AOT_VERSION file the build script wrote beside it.
+    ///     This is the half the runtime cannot do: nothing in the AOT format
+    ///     records whether the code has bounds checks in it, so a file with no
+    ///     stamp is a file we cannot vouch for and is not run.
+    fn readAot(self: *Host, dir: std.Io.Dir, stem: []const u8, id: []const u8) !?[]u8 {
+        var name_buf: [160]u8 = undefined;
+        const aot_name = std.fmt.bufPrint(&name_buf, "{s}.aot", .{stem}) catch return null;
+        const bytes = dir.readFileAlloc(io, aot_name, self.alloc, .limited(max_module_bytes)) catch return null;
+        errdefer self.alloc.free(bytes);
+
+        var why_buf: [192]u8 = undefined;
+        const stamp = dir.readFileAlloc(io, aot_stamp_file, self.alloc, .limited(1024)) catch "";
+        defer if (stamp.len > 0) self.alloc.free(stamp);
+
+        const refusal = wasm.aotStampRefusal(std.mem.trim(u8, stamp, " \t\r\n"), &why_buf) orelse
+            wasm.aotRefusal(bytes, &why_buf);
+        if (refusal) |why| {
+            self.br.say(broker.level_warn, id, "{s} ignored: {s}; running the module interpreted", .{ aot_name, why });
+            self.alloc.free(bytes);
+            return null;
+        }
+        self.br.say(broker.level_info, id, "loading the ahead-of-time build ({s})", .{aot_name});
+        return bytes;
+    }
+
     /// Read, validate, instantiate and start one plugin. `stem` names the
     /// module file (`<stem>.wasm`); empty means the manifest's id names it,
     /// which is the installed layout. `plugin_dir` is copied into the entry;
@@ -1368,9 +1481,15 @@ pub const Host = struct {
 
         // Flat layout names the module after the file stem; the installed
         // layout names it after the manifest's id, which is authoritative.
-        const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{if (stem.len > 0) stem else manifest.id});
+        const module_stem = if (stem.len > 0) stem else manifest.id;
+        const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{module_stem});
         defer self.alloc.free(wasm_name);
-        const raw = try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
+        // The ahead-of-time build of this plugin, if this platform has one and
+        // it belongs to this binary. Absent, stale or foreign, the .wasm below
+        // is read instead and the plugin is interpreted, which is what every
+        // third-party plugin does always.
+        const raw = (try self.readAot(dir, module_stem, manifest.id)) orelse
+            try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
         defer self.alloc.free(raw);
 
         // The grants in force: what the manifest asked for, minus whatever the
@@ -1426,6 +1545,8 @@ pub const Host = struct {
             .caps = grants,
             .http_hosts = manifest.http_hosts,
             .ws_hosts = manifest.ws_hosts,
+            .tcp_addrs = manifest.tcp_addrs,
+            .udp_ports = manifest.udp_ports,
             .table_keys = manifest.tables,
         };
         inst.setUserData(state);
@@ -1731,9 +1852,13 @@ pub const Host = struct {
                 defer sentence.deinit(alloc);
                 try writeSentence(&sentence, alloc, cap, &e.manifest);
                 try writeJsonString(out, alloc, sentence.items);
+                // What the grant carries, so a shell can show the reach
+                // beside the sentence: the addresses it may dial, or the
+                // ports it may listen on.
                 const hosts: []const []u8 = switch (cap) {
                     .net_http => e.manifest.http_hosts,
                     .net_ws => e.manifest.ws_hosts,
+                    .net_tcp_client => e.manifest.tcp_addrs,
                     else => &.{},
                 };
                 if (hosts.len > 0) {
@@ -1741,6 +1866,14 @@ pub const Host = struct {
                     for (hosts, 0..) |h, k| {
                         if (k > 0) try out.append(alloc, ',');
                         try writeJsonString(out, alloc, h);
+                    }
+                    try out.append(alloc, ']');
+                }
+                if (cap == .net_udp and e.manifest.udp_ports.len > 0) {
+                    try out.appendSlice(alloc, ",\"ports\":[");
+                    for (e.manifest.udp_ports, 0..) |port, k| {
+                        if (k > 0) try out.append(alloc, ',');
+                        try out.print(alloc, "{d}", .{port});
                     }
                     try out.append(alloc, ']');
                 }
@@ -2363,6 +2496,9 @@ pub const Host = struct {
                 self.disableStuck(index);
                 return;
             }
+            // A queue that overflowed was filled by the I/O thread; the note
+            // is written here, where the status line has one writer.
+            e.state.drainQueueBudget();
             const ev = self.br.popFor(index) orelse {
                 broker.sleepMs(idle_ms);
                 if (idle_ms < 8) idle_ms *= 2;
@@ -2741,8 +2877,20 @@ pub fn writeSentence(out: *std.ArrayList(u8), alloc: std.mem.Allocator, cap: bro
         .ais_publish => try out.appendSlice(alloc, "Provide AIS targets to the chart."),
         .overlay_draw => try out.appendSlice(alloc, "Draw on the chart."),
         .alerts_raise => try out.appendSlice(alloc, "Raise alarms."),
-        .net_tcp_client => try out.appendSlice(alloc, "Connect to instruments on your network."),
-        .net_udp => try out.appendSlice(alloc, "Listen for broadcasts on your network."),
+        .net_tcp_client => {
+            try out.appendSlice(alloc, "Connect to instruments on: ");
+            try writeHostList(out, alloc, m.tcp_addrs);
+            try out.append(alloc, '.');
+        },
+        .net_udp => {
+            try out.appendSlice(alloc, "Listen for broadcasts on ");
+            try out.appendSlice(alloc, if (m.udp_ports.len == 1) "port " else "ports ");
+            for (m.udp_ports, 0..) |port, i| {
+                if (i > 0) try out.appendSlice(alloc, if (i + 1 == m.udp_ports.len) " and " else ", ");
+                try out.print(alloc, "{d}", .{port});
+            }
+            try out.append(alloc, '.');
+        },
         .net_http => {
             try out.appendSlice(alloc, "Fetch data from: ");
             try writeHostList(out, alloc, m.http_hosts);
@@ -3176,41 +3324,61 @@ test "a manifest is refused rather than half-read" {
     try t.expectError(Error.BadManifest, parseManifest(a, "{\"id\":\"x\",\"api\":1,\"capabilities\":\"vessel.read\"}"));
 }
 
-test "a net.http or net.ws grant carries the hosts it covers, and nothing else" {
+test "every outward grant carries its reach, and a bare one is refused" {
     const a = t.allocator;
     var m = try parseManifest(a,
         \\{"id":"org.beetlebug.grib","api":1,"capabilities":[
         \\  {"net.http":["nomads.ncep.noaa.gov","opendap.nasa.gov"]},
         \\  {"net.ws":["demo.signalk.org"]},
-        \\  "storage","files","net.udp"]}
+        \\  {"net.tcp-client":["local","gateway.example.com"]},
+        \\  {"net.udp":[10110,4001]},
+        \\  "storage","files"]}
     );
     defer m.deinit(a);
     try t.expect(m.caps.contains(.net_http));
     try t.expect(m.caps.contains(.net_ws));
+    try t.expect(m.caps.contains(.net_tcp_client));
+    try t.expect(m.caps.contains(.net_udp));
     try t.expect(m.caps.contains(.storage));
     try t.expect(m.caps.contains(.files));
-    try t.expect(m.caps.contains(.net_udp));
     try t.expectEqual(@as(usize, 2), m.http_hosts.len);
     try t.expectEqualStrings("nomads.ncep.noaa.gov", m.http_hosts[0]);
     try t.expectEqualStrings("opendap.nasa.gov", m.http_hosts[1]);
     try t.expectEqual(@as(usize, 1), m.ws_hosts.len);
     try t.expectEqualStrings("demo.signalk.org", m.ws_hosts[0]);
+    try t.expectEqual(@as(usize, 2), m.tcp_addrs.len);
+    try t.expectEqualStrings("local", m.tcp_addrs[0]);
+    try t.expectEqualStrings("gateway.example.com", m.tcp_addrs[1]);
+    try t.expectEqualSlices(u16, &.{ 10110, 4001 }, m.udp_ports);
 
     const bad = [_][]const u8{
-        // A bare net.http is "may reach anything", which no manifest may ask
+        // A bare grant is "may reach anything", which no manifest may ask
         // for, and an empty list is the same grant written longer.
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.http\"]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.ws\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.tcp-client\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"net.udp\"]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[]}]}",
-        // A capability that reaches no named server takes no list.
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.tcp-client\":[]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[]}]}",
+        // A capability that reaches nothing outward takes no list.
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"storage\":[\"a.example\"]}]}",
         // A URL, a wildcard and a path are not hostnames.
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"https://a.example\"]}]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"*.example\"]}]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"a.example/x\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.tcp-client\":[\"tcp://a.example\"]}]}",
+        // A port list holds numbers, each of them a real port, each once.
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[\"10110\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[0]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[65536]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[10110,10110]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":10110}]}",
         // One entry, one capability; and one list per capability.
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"a.example\"],\"net.ws\":[\"b.example\"]}]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":[\"a.example\"]},{\"net.http\":[\"b.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.tcp-client\":[\"a.example\"]},{\"net.tcp-client\":[\"b.example\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[10110]},{\"net.udp\":[4001]}]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":\"a.example\"}]}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
@@ -3613,7 +3781,9 @@ test "the consent sentences read exactly as install.md words them" {
     var m = try parseManifest(a,
         \\{"id":"org.example.everything","api":1,"capabilities":[
         \\ "vessel.read","ais.read","vessel.publish","ais.publish",
-        \\ "overlay.draw","alerts.raise","net.tcp-client","net.udp",
+        \\ "overlay.draw","alerts.raise",
+        \\ {"net.tcp-client":["local"]},
+        \\ {"net.udp":[10110,4001]},
         \\ {"net.http":["nomads.ncep.noaa.gov"]},
         \\ {"net.ws":["demo.signalk.org","local"]},
         \\ "storage","files"],
@@ -3628,8 +3798,8 @@ test "the consent sentences read exactly as install.md words them" {
         "Provide AIS targets to the chart.",
         "Draw on the chart.",
         "Raise alarms.",
-        "Connect to instruments on your network.",
-        "Listen for broadcasts on your network.",
+        "Connect to instruments on: your own network.",
+        "Listen for broadcasts on ports 10110 and 4001.",
         "Fetch data from: nomads.ncep.noaa.gov.",
         "Stream data from: demo.signalk.org, your own network.",
         "Keep its own settings and data.",
@@ -3662,6 +3832,20 @@ test "the consent sentences read exactly as install.md words them" {
     defer delta.deinit(a);
     try writeSentences(&delta, a, &other, &m);
     try t.expectEqualStrings("\"Fetch data from: tiles.example.org.\"", delta.items);
+
+    // One address, and one port, read in the singular.
+    var one = try parseManifest(a,
+        \\{"id":"org.example.one","api":1,"capabilities":[
+        \\ {"net.tcp-client":["gateway.example.com"]},{"net.udp":[10110]}]}
+    );
+    defer one.deinit(a);
+    var s: std.ArrayList(u8) = .empty;
+    defer s.deinit(a);
+    try writeSentence(&s, a, .net_tcp_client, &one);
+    try t.expectEqualStrings("Connect to instruments on: gateway.example.com.", s.items);
+    s.clearRetainingCapacity();
+    try writeSentence(&s, a, .net_udp, &one);
+    try t.expectEqualStrings("Listen for broadcasts on port 10110.", s.items);
 }
 
 test "grants.json round-trips, and a malformed one grants nothing" {
