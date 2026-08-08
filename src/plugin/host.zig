@@ -1365,6 +1365,34 @@ pub const Host = struct {
     /// compiled under. See `readAot`.
     const aot_stamp_file = "AOT_VERSION";
 
+    /// Whether `<stem>.aot` is loaded in preference to `<stem>.wasm`.
+    ///
+    /// An AOT module is native code, and wamrc decides which registers that
+    /// code may use from the target triple it is handed.
+    /// scripts/build-plugin-aot.sh names an architecture and an ABI with no
+    /// platform in them, so the code it emits treats x18 as an ordinary
+    /// register. Darwin, iOS, Android and Windows on arm64 all reserve x18 for
+    /// the platform and overwrite it at any instruction boundary, so a pointer
+    /// held there reads back as null and the next load through it faults.
+    ///
+    /// Naming a full triple does not settle it: wamrc reserves x18 only when
+    /// it is given `--cpu` and `--cpu-features=+reserve-x18` together, and a
+    /// file built with `--target=aarch64-apple-darwin` alone still uses the
+    /// register.
+    ///
+    /// The AOT format records the architecture but not the ABI or the
+    /// platform, so `wasm.aotRefusal` cannot separate a file that is safe here
+    /// from one that is not, and this constant is the only gate. Turning it on
+    /// requires the build script to reserve the platform's registers on every
+    /// target it emits, and the watchdog to be shown terminating a spinning
+    /// plugin whose code is native.
+    const load_aot_modules = false;
+
+    comptime {
+        // The loader stays analyzed while `load_aot_modules` is false.
+        _ = &readAot;
+    }
+
     /// `<stem>.aot` for this plugin, when there is one that belongs to this
     /// binary; null to interpret the .wasm instead.
     ///
@@ -1393,6 +1421,7 @@ pub const Host = struct {
     ///     records whether the code has bounds checks in it, so a file with no
     ///     stamp is a file we cannot vouch for and is not run.
     fn readAot(self: *Host, dir: std.Io.Dir, stem: []const u8, id: []const u8) !?[]u8 {
+        if (!load_aot_modules) return null;
         var name_buf: [160]u8 = undefined;
         const aot_name = std.fmt.bufPrint(&name_buf, "{s}.aot", .{stem}) catch return null;
         const bytes = dir.readFileAlloc(io, aot_name, self.alloc, .limited(max_module_bytes)) catch return null;

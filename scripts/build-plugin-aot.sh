@@ -256,7 +256,19 @@ for t in "${targets[@]}"; do build_one "$t"; done
 # whole, so its platform's .aot travels with it and nothing else has to know.
 # The other targets stay in vendor/wamr-dist-aot/ for the platform that packages
 # them.
+#
+# INSTALLING IS OPT IN, through LOOKOUT_AOT_INSTALL=1. The files wamrc produces
+# here are compiled for an architecture and an ABI with no platform in them, so
+# their code uses registers that Darwin, iOS, Android and Windows on arm64
+# reserve for the platform. `load_aot_modules` in src/plugin/host.zig is the
+# matching gate and is off, so an installed file is read by nothing until both
+# are turned on together.
 host="$(host_target || true)"
+if [ "${LOOKOUT_AOT_INSTALL:-0}" != "1" ]; then
+    echo "aot: vendor/wamr-dist-aot only; set LOOKOUT_AOT_INSTALL=1 to copy the"
+    echo "aot: $host set beside the modules in zig-out (see load_aot_modules)."
+    exit 0
+fi
 for t in "${targets[@]}"; do
     [ "$t" = "$host" ] || continue
     for d in "$root/zig-out/plugins" "$root/zig-out/plugins-bundled"; do

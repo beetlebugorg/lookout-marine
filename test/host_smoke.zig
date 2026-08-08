@@ -643,3 +643,115 @@ test "every manifest the app ships parses under the real parser" {
     try host.writeSentence(&sentence, a, .net_tcp_client, &nmea);
     try std.testing.expectEqualStrings("Connect to instruments on: your own network.", sentence.items);
 }
+
+/// An `<id>.aot` that clears every check `wasm.aotRefusal` makes: the `\0aot`
+/// magic, this WAMR build's AOT format version, a target information section
+/// whose bin_type says 64-bit little-endian, and this architecture's name.
+/// The bytes past the header are not machine code, so a runtime that loaded
+/// this file would fail to build a module from it.
+fn fakeAot(out: *[128]u8) []const u8 {
+    @memset(out, 0);
+    @memcpy(out[0..4], "\x00aot");
+    std.mem.writeInt(u32, out[4..8], host.wasm.c.wasm_runtime_get_current_package_version(
+        host.wasm.c.Wasm_Module_AoT,
+    ), .little);
+    std.mem.writeInt(u32, out[8..12], 0, .little); // target information section
+    std.mem.writeInt(u32, out[12..16], 48, .little);
+    std.mem.writeInt(u16, out[16..18], 2, .little); // 64-bit, little-endian
+    @memcpy(out[48..][0..host.wasm.aot_arch.len], host.wasm.aot_arch);
+    return out[0..];
+}
+
+/// The AOT_VERSION text `wasm.aotStampRefusal` accepts: this WAMR release, and
+/// the word naming the wamrc flag set the host requires.
+fn stampFor(buf: []u8) ![]const u8 {
+    var major: u32 = 0;
+    var minor: u32 = 0;
+    var patch: u32 = 0;
+    host.wasm.c.wasm_runtime_get_version(&major, &minor, &patch);
+    return std.fmt.bufPrint(buf, "WAMR-{d}.{d}.{d} deadbeef interp+aot+wasi {s} macos-arm64 0", .{
+        major, minor, patch, host.wasm.aot_flags_id,
+    });
+}
+
+test "a plugin runs its .wasm even with an .aot and a matching stamp beside it" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const dir_path = try stage(alloc, &tmp);
+    defer alloc.free(dir_path);
+
+    // The pair a build of the core plugins leaves beside the module. Both
+    // satisfy the checks the host makes before it would hand a file to the
+    // loader, so only `load_aot_modules` keeps this module interpreted.
+    var aot_buf: [128]u8 = undefined;
+    try tmp.dir.writeFile(io, .{ .sub_path = echo_id ++ ".aot", .data = fakeAot(&aot_buf) });
+    var stamp_buf: [128]u8 = undefined;
+    try tmp.dir.writeFile(io, .{ .sub_path = "AOT_VERSION", .data = try stampFor(&stamp_buf) });
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var ov = overlay.Store.init(alloc);
+    defer ov.deinit();
+    var sink = LogSink{ .alloc = alloc };
+    defer sink.text.deinit(alloc);
+
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{
+        .ctx = &ov,
+        .applyFn = OvSink.apply,
+        .removeFn = OvSink.remove,
+    });
+    defer br.deinit();
+    br.setLog(&sink, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{});
+    defer h.deinit();
+
+    try h.loadDir(dir_path);
+
+    // The module came from the .wasm: it loaded at all, and it reached lk_start.
+    try std.testing.expectEqual(@as(usize, 1), h.count());
+    const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
+    try std.testing.expect(std.mem.indexOf(u8, echo.status(), "\"running\"") != null);
+    try std.testing.expect(!sink.has("ahead-of-time"));
+}
+
+test "the AOT gate reads the file header and the stamp beside it" {
+    var buf: [192]u8 = undefined;
+    var aot_buf: [128]u8 = undefined;
+    const good = fakeAot(&aot_buf);
+
+    // Nothing wrong with the file itself.
+    try std.testing.expect(host.wasm.aotRefusal(good, &buf) == null);
+
+    // A bytecode module is not an AOT module.
+    try std.testing.expect(host.wasm.aotRefusal("\x00asm\x01\x00\x00\x00", &buf) != null);
+
+    // The architecture in the header has to be this one.
+    var wrong = aot_buf;
+    @memset(wrong[48..64], 0);
+    @memcpy(wrong[48..][0.."mips".len], "mips");
+    try std.testing.expect(host.wasm.aotRefusal(&wrong, &buf) != null);
+
+    // An AOT format version this WAMR build does not read.
+    var old = aot_buf;
+    std.mem.writeInt(u32, old[4..8], 1, .little);
+    try std.testing.expect(host.wasm.aotRefusal(&old, &buf) != null);
+
+    // The stamp names the WAMR release and the wamrc flag set. Both are
+    // compared: a file with no stamp beside it is refused, and so is one from
+    // another release or another flag set.
+    var stamp_buf: [128]u8 = undefined;
+    const stamp = try stampFor(&stamp_buf);
+    try std.testing.expect(host.wasm.aotStampRefusal(stamp, &buf) == null);
+    try std.testing.expect(host.wasm.aotStampRefusal("", &buf) != null);
+    try std.testing.expect(host.wasm.aotStampRefusal("WAMR-1.0.0 x interp+aot+wasi " ++
+        host.wasm.aot_flags_id, &buf) != null);
+    var no_flags: [128]u8 = undefined;
+    const trimmed = stamp[0 .. std.mem.indexOf(u8, stamp, host.wasm.aot_flags_id) orelse stamp.len];
+    @memcpy(no_flags[0..trimmed.len], trimmed);
+    try std.testing.expect(host.wasm.aotStampRefusal(no_flags[0..trimmed.len], &buf) != null);
+}
