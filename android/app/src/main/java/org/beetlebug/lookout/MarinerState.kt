@@ -73,9 +73,25 @@ object MI {
 
 enum class Scheme(val label: String) { DAY("Day"), DUSK("Dusk"), NIGHT("Night") }
 enum class DepthUnit(val label: String) { METERS("Meters"), FEET("Feet") }
-enum class DisplayCategory(val label: String) { BASE("Base"), STANDARD("Standard"), OTHER("Other") }
+/**
+ * The S-52 display category. Each contains the one before it (S-52 §10.2), so
+ * each description says what it ADDS. The wording is the product's, shared with
+ * the other shells word for word — a mariner who read it on the Mac should not
+ * have to read a different sentence here.
+ */
+enum class DisplayCategory(val label: String, val desc: String) {
+    BASE("Base", "Coastline, safety contour, dangers and traffic lanes — never hidden"),
+    STANDARD("Standard", "Adds buoys, beacons, lights, restricted areas and ferry routes"),
+    OTHER("Other", "Adds spot soundings, contour labels, seabed quality and cables"),
+}
+
 enum class BoundaryStyle(val label: String) { SYMBOLIZED("Symbolized"), PLAIN("Plain") }
-enum class SoundingsMode(val label: String) { FOLLOW("Follow category"), ON("Always on"), OFF("Always off") }
+
+enum class SoundingsMode(val label: String, val desc: String) {
+    FOLLOW("Follow category", "Drawn when the category includes them, which is Other"),
+    ON("Always on", "Spot depths, whatever the category"),
+    OFF("Always off", "No spot depths, whatever the category"),
+}
 
 private inline fun <reified E : Enum<E>> entryAt(i: Int): E =
     enumValues<E>()[i.coerceIn(0, enumValues<E>().size - 1)]
