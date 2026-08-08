@@ -1213,7 +1213,9 @@ pub const Lookout = struct {
             if (self.glyph_atlas != null) .{ .ctx = @ptrCast(&self.glyph_atlas.?), .lookup = overlayGlyphLookup } else null,
             if (self.glyph_bold_atlas != null) .{ .ctx = @ptrCast(&self.glyph_bold_atlas.?), .lookup = overlayGlyphLookup } else null,
         );
-        const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.overlayScheme(), self.ship_at) catch |e| {
+        // The view rotation goes in because a canvas may hold a readout level
+        // on screen; the store ignores it unless one does.
+        const frame = ps.overlay.buildIfNeeded(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at) catch |e| {
             std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
             return;
         };
@@ -1235,7 +1237,7 @@ pub const Lookout = struct {
     fn overlayWantsFrame(self: *Lookout) bool {
         if (!plugins_on) return false;
         const ps = self.plugins orelse return false;
-        return ps.overlay.needsRebuild(self.cam.zoom, self.overlayScheme(), self.ship_at);
+        return ps.overlay.needsRebuild(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at);
     }
 
     /// True once a plugin layer is up. A shell asks so it can keep polling
@@ -1685,6 +1687,8 @@ pub const Lookout = struct {
     /// (prev) to (cur), both logical points — a grab-and-spin (course-up)
     /// gesture. Rotation is a shader uniform, so this only redraws: markDirty
     /// sets view_dirty, and needsRebuild ignores rotation, so no scene rebuild.
+    /// The plugin overlay is the one exception, and only when a canvas holds
+    /// content level on screen: that geometry is turned back at build time.
     pub fn rotateDragLogical(self: *Lookout, prev_x: f32, prev_y: f32, cur_x: f32, cur_y: f32) void {
         const sz = self.logicalSize();
         const cx = sz[0] * 0.5;
@@ -2592,6 +2596,9 @@ test {
     // Same for the raster underlay: a test build reaches the Layer type but not
     // its body, so the set-name and election tests were never running.
     _ = rasterlayer;
+    // The camera's own round trips. root.zig calls two of its functions, which
+    // is not enough to collect the file's tests.
+    _ = camera;
 }
 
 test "camera roundtrip" {
