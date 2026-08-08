@@ -1086,7 +1086,10 @@ pub const Store = struct {
         const hw = w_world * 0.5;
         const on = DASH_ON * wpp;
         const period = (DASH_ON + DASH_OFF) * wpp;
-        var phase: f64 = 0; // distance along the whole line, so dashes run through vertices
+        // Where the next segment starts WITHIN the dash cycle, so the pattern
+        // runs through a vertex instead of restarting at it. Kept reduced to
+        // [0, period).
+        var phase: f64 = 0;
         var i: usize = 0;
         while (i + 1 < pts.len) : (i += 1) {
             const a = geo(.{ pts[i][0] + shift[0], pts[i][1] + shift[1] });
@@ -1101,28 +1104,44 @@ pub const Store = struct {
             const solid = !dash or !(period > 0) or len / period > MAX_DASHES_PER_SEG;
             if (solid) {
                 try self.quad(a, b, dx / len, dy / len, hw, c);
-                phase += len;
+                phase = if (period > 0) @mod(phase + len, period) else 0;
                 continue;
             }
-            // Walk the segment, cutting at the dash boundaries. Every step must
-            // ADVANCE: a run shorter than d's own ULP leaves d unchanged, and
-            // the loop then never ends (seen as an out-of-memory kill, not a
-            // hang, because each turn appends a quad).
-            var d: f64 = 0;
-            while (d < len) {
-                const cyc = @mod(phase + d, period);
-                const run = @min(if (cyc < on) on - cyc else period - cyc, len - d);
-                if (!(run > 0)) break;
-                if (cyc < on) {
-                    const p0 = camera.Vec2{ .x = a.x + dx * (d / len), .y = a.y + dy * (d / len) };
-                    const p1 = camera.Vec2{ .x = a.x + dx * ((d + run) / len), .y = a.y + dy * ((d + run) / len) };
+            // Cut the segment against the dash cycles, INDEXED off the phase
+            // rather than walked one run at a time.
+            //
+            // The walk was the bug. It advanced `d` by the length of each run
+            // and re-derived the phase as @mod(phase + d, period). Only at an
+            // INTEGER zoom is `period` a power of two and every boundary
+            // exact; at any other zoom `d` drifts a few ULP, and once it lands
+            // a hair BELOW a cycle boundary @mod reads the phase as a whole
+            // period instead of none. The run then comes out as that hair —
+            // orders of magnitude under the ULP of `d` — and the guard that
+            // stops a runaway (a run too small to advance) took it for the end
+            // of the line. Every dashed line at a fractional zoom stopped
+            // after three to eleven dashes: at zoom 15.2 own ship's 926 m
+            // speed vector drew 100 m of itself, shorter than the 185 m
+            // heading line beside it.
+            //
+            // An index cannot drift and cannot fail to advance: cycle k covers
+            // [k*period, k*period + on) measured from the line's own start.
+            var k: f64 = 0;
+            while (true) : (k += 1) {
+                const c0 = k * period - phase; // cycle start, measured from `a`
+                if (!(c0 < len)) break;
+                const s0 = @max(c0, 0);
+                const s1 = @min(c0 + on, len);
+                if (s1 > s0) {
+                    const p0 = camera.Vec2{ .x = a.x + dx * (s0 / len), .y = a.y + dy * (s0 / len) };
+                    const p1 = camera.Vec2{ .x = a.x + dx * (s1 / len), .y = a.y + dy * (s1 / len) };
                     try self.quad(p0, p1, dx / len, dy / len, hw, c);
                 }
-                const next = d + run;
-                if (!(next > d)) break;
-                d = next;
             }
-            phase += len;
+            // Carry the phase to the next segment REDUCED: the pattern only
+            // depends on the phase within a cycle, and a raw running total
+            // over a long track would swamp `period` in the k*period - phase
+            // above.
+            phase = @mod(phase + len, period);
         }
     }
 
@@ -2340,6 +2359,112 @@ test "a dashed line keeps its width and dashes at every angle, zoom and density"
                     };
                     if (i + 1 < quads) t.expectApproxEqAbs(DASH_ON, l, 0.1) catch |e| {
                         std.debug.print("dash failed at z{d} density {d} bearing {d} rot {d} quad {d}: {d:.3} pt\n", .{ zoom, density, deg, rot, i, l });
+                        return e;
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// Where you get to on `bearing_deg` true after `dist_m`, over the same sphere
+/// the plugin SDK's `Point.destination` uses. The test needs the plugin's own
+/// answer, not the host's, because that is what a plugin posts.
+fn destination(lon_deg: f64, lat_deg: f64, bearing_deg: f64, dist_m: f64) [2]f64 {
+    const R: f64 = 6371008.8;
+    const lat1 = lat_deg * std.math.pi / 180.0;
+    const lon1 = lon_deg * std.math.pi / 180.0;
+    const brg = bearing_deg * std.math.pi / 180.0;
+    const d = dist_m / R;
+    const sin_lat2 = std.math.clamp(@sin(lat1) * @cos(d) + @cos(lat1) * @sin(d) * @cos(brg), -1.0, 1.0);
+    const lat2 = std.math.asin(sin_lat2);
+    const lon2 = lon1 + std.math.atan2(@sin(brg) * @sin(d) * @cos(lat1), @cos(d) - @sin(lat1) * sin_lat2);
+    return .{ lon2 * 180.0 / std.math.pi, lat2 * 180.0 / std.math.pi };
+}
+
+// A line must REACH where the geodesy puts its far end. A plugin says "six
+// minutes of travel"; the mariner reads that reach off the chart and decides
+// whether there is sea room. A line that stops short is a lie about distance,
+// and a quiet one — it still looks like a speed vector.
+//
+// The dash cut used to WALK the segment, advancing by one run at a time and
+// taking the phase from @mod of the running total. That is exact only where the
+// dash period is a power of two, which means an INTEGER zoom — and every dash
+// test in this file ran at one. At any other zoom the total drifted a few ULP
+// under a cycle boundary, @mod read the phase as a whole period instead of
+// none, the next run came out below the ULP of the distance walked, and the
+// guard that stops a runaway (see "a dashed line cannot run away") took that
+// for the end of the line. Measured in the app at zoom 15.2: own ship's 926 m
+// speed vector drew 100 m of itself, next to a 185 m heading line that was
+// right because a solid line never enters the cut loop at all.
+//
+// So this sweeps the lengths own ship actually posts, at the fractional zooms a
+// pinch leaves behind, dashed and solid, on the ownship anchor and off it.
+test "a line reaches its geodesic far end at every zoom, anchored or not" {
+    const lon0: f64 = -76.47494;
+    const lat0: f64 = 38.97655;
+    const brg: f64 = 85.0;
+    const width_pt: f64 = 1.5;
+
+    // Integer zooms, and the fractional ones a pinch or a zoom ease sits on.
+    for ([_]f64{ 12.0, 15.0, 15.2, 15.73, 17.0, 18.45, 21.0 }) |zoom| {
+        const wpp = worldPerPt(zoom);
+        const wpm = worldPerMetre(lat0);
+        // The heading line (0.1 nm), and six minutes of travel at 5 and 10 kn.
+        for ([_]f64{ 185.2, 926.0, 1852.0 }) |metres| {
+            for ([_]bool{ false, true }) |dashed| {
+                // Off the anchor, and on it with the boat carried away from
+                // the posted fix as the display position does between fixes.
+                for ([_]?[2]f64{ null, .{ lon0 + 0.00003, lat0 + 0.00001 } }) |ship| {
+                    var s = Store.init(t.allocator);
+                    defer s.deinit();
+                    const far = destination(lon0, lat0, brg, metres);
+                    var buf: [512]u8 = undefined;
+                    const batch = try std.fmt.bufPrint(&buf, "{{\"set\":[{{\"id\":\"v\",\"kind\":\"polyline\"," ++
+                        "\"pts\":[[{d},{d}],[{d},{d}]],\"width_pt\":{d},\"dash\":{s}," ++
+                        "\"color\":\"ownship\",\"anchor\":\"ownship\"}}]}}", .{ lon0, lat0, far[0], far[1], width_pt, if (dashed) "true" else "false" });
+                    try s.applyBatch("p", batch);
+                    const fr = try s.buildIfNeeded(zoom, 0, .day, ship);
+
+                    // Both ends ride the anchor, so the line keeps its shape
+                    // and travels with own ship's display position.
+                    const sh = if (ship) |sp| [2]f64{ sp[0] - lon0, sp[1] - lat0 } else [2]f64{ 0, 0 };
+                    const near_w = geo(.{ lon0 + sh[0], lat0 + sh[1] });
+                    const far_w = geo(.{ far[0] + sh[0], far[1] + sh[1] });
+
+                    var reach: f64 = 0;
+                    var tip = near_w;
+                    var hug: f64 = std.math.inf(f64);
+                    for (0..fr.verts.len) |i| {
+                        const v = absAt(fr, i);
+                        const r = dist(v, near_w);
+                        if (r > reach) {
+                            reach = r;
+                            tip = v;
+                        }
+                        hug = @min(hug, r);
+                    }
+
+                    // A dashed line may end inside a gap, so its last cut can
+                    // sit up to one gap short of the true end; either way the
+                    // corners stand half a width off the centreline.
+                    const slack = (if (dashed) @as(f64, DASH_OFF) else 0.0) * wpp + width_pt * wpp;
+                    const off_m = dist(tip, far_w) / wpm;
+                    t.expect(dist(tip, far_w) <= slack) catch |e| {
+                        std.debug.print("z{d} {d:.0} m dash={} anchored={}: far end {d:.1} m adrift, reach {d:.1} m of {d:.1}\n", .{ zoom, metres, dashed, ship != null, off_m, reach / wpm, dist(near_w, far_w) / wpm });
+                        return e;
+                    };
+                    // ...and the near end is ON the anchor, not somewhere along it.
+                    try t.expect(hug <= width_pt * wpp);
+
+                    // The pattern itself: one quad per cycle the line covers,
+                    // not the three the drifting walk stopped at.
+                    const len_w = dist(near_w, far_w);
+                    const cycles = @ceil(len_w / ((DASH_ON + DASH_OFF) * wpp));
+                    const want: usize = if (!dashed) 1 else @intFromFloat(cycles);
+                    if (dashed and cycles > MAX_DASHES_PER_SEG) continue; // draws solid by design
+                    t.expectEqual(want, fr.verts.len / 6) catch |e| {
+                        std.debug.print("z{d} {d:.0} m dash={}: {d} quads, wanted {d}\n", .{ zoom, metres, dashed, fr.verts.len / 6, want });
                         return e;
                     };
                 }
