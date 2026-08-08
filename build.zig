@@ -898,10 +898,14 @@ pub fn build(b: *std.Build) void {
         "src/pick.zig",
         "src/raster.zig",
         // The host test module's root, and the plugin layer under it. The
-        // broker's parts are reached through broker.zig's comptime block.
+        // host's and the broker's parts are reached through the comptime block
+        // in host.zig and broker.zig.
         "src/plugin/host.zig",
         "src/plugin/broker.zig",
         "src/plugin/webio.zig",
+        "src/plugin/host/install.zig",
+        "src/plugin/host/manifest.zig",
+        "src/plugin/host/settings_json.zig",
         "src/plugin/broker/budgets.zig",
         "src/plugin/broker/caps.zig",
         "src/plugin/broker/http.zig",
