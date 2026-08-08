@@ -76,6 +76,54 @@ fn manifestId(b: *std.Build, dir_name: []const u8) []const u8 {
     };
 }
 
+/// True when `text` declares a test at top level. zig fmt puts every one of
+/// them at column 0, so a line prefix finds them all. The three spellings are
+/// a named test, an anonymous one, and one named after a declaration.
+fn carriesTests(text: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "test")) continue;
+        if (line.len > 4 and (line[4] == ' ' or line[4] == '{' or line[4] == '"')) return true;
+    }
+    return false;
+}
+
+/// Fail the test step for any .zig under src/, plugins/, test/ or tools/ that
+/// carries tests and appears on neither list.
+///
+/// A Zig test build collects a file's tests only when it ANALYSES that file,
+/// and reaching a type through a re-export does not analyse the file it came
+/// from. So a file can carry tests that nothing ever runs while every build
+/// and every gate stays green, which is silent and has happened. Naming every
+/// test-bearing file turns the next one into a build error with the fix in it.
+///
+/// Only those four trees are scanned: that is where code lives. Symlinked
+/// directories (tools/) are not descended into, so the files under them are
+/// seen once, under their real path.
+fn checkTestCoverage(b: *std.Build, step: *std.Build.Step, roots: []const []const u8, reached: []const []const u8) void {
+    const io = b.graph.io;
+    for ([_][]const u8{ "src", "plugins", "test", "tools" }) |tree| {
+        var dir = std.Io.Dir.cwd().openDir(io, b.pathFromRoot(tree), .{ .iterate = true }) catch continue;
+        defer dir.close(io);
+        var walker = dir.walk(b.allocator) catch continue;
+        defer walker.deinit();
+        while (walker.next(io) catch null) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+            const rel = b.fmt("{s}/{s}", .{ tree, entry.path });
+            const text = std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(rel), b.allocator, .limited(4 * 1024 * 1024)) catch continue;
+            if (!carriesTests(text)) continue;
+            var declared = false;
+            for (roots) |p| declared = declared or std.mem.eql(u8, p, rel);
+            for (reached) |p| declared = declared or std.mem.eql(u8, p, rel);
+            if (declared) continue;
+            step.dependOn(&b.addFail(b.fmt(
+                "{s} carries tests and nothing collects them. Either root it: add it to pure_test_roots in build.zig. Or reference it from a file already collected (src/root.zig's test block, src/plugin/broker.zig's comptime block) and add it to reached_test_files. Prove whichever you chose the only reliable way: make one of the file's tests fail and check `zig build test` names it.",
+                .{rel},
+            )).step);
+        }
+    }
+}
+
 // The NDK triple for an *-linux-android target (null otherwise). Mirrors
 // tile57's build.zig: the C deps need the NDK sysroot's bionic + arch headers.
 fn androidTriple(target: std.Build.ResolvedTarget) ?[]const u8 {
@@ -460,7 +508,7 @@ pub fn build(b: *std.Build) void {
     // Each file rooted the way its own `zig test <file>` roots it, so what the
     // phase gate runs and what an agent runs by hand are the same compilation.
     // These do not need tile57 or a GPU, so they skip cfg.apply.
-    for ([_][]const u8{
+    const pure_test_roots = [_][]const u8{
         "src/plugin/store.zig",
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
@@ -489,7 +537,8 @@ pub fn build(b: *std.Build) void {
         // It reaches parser.zig and cpa.zig through the tools/ symlinks, which
         // is why their tests appear twice in the summary.
         "tools/nmea_gen.zig",
-    }) |path| {
+    };
+    for (pure_test_roots) |path| {
         const mod = b.createModule(.{
             .root_source_file = b.path(path),
             .target = target,
@@ -835,4 +884,44 @@ pub fn build(b: *std.Build) void {
         }
     }
     if (plugins_fail) |fail| test_step.dependOn(fail);
+
+    // Every other test-bearing .zig, and the compilation that analyses it.
+    // These are not roots of their own: each rides into a compilation rooted
+    // somewhere else, so listing it here is the claim that it is analysed
+    // there. checkTestCoverage fails the test step for a test-bearing file on
+    // neither list.
+    const reached_test_files = [_][]const u8{
+        // The test module's root, and the core files it reaches. camera, pick
+        // and raster are reached only through root.zig's `test` block.
+        "src/root.zig",
+        "src/camera.zig",
+        "src/pick.zig",
+        "src/raster.zig",
+        // The host test module's root, and the plugin layer under it. The
+        // broker's parts are reached through broker.zig's comptime block.
+        "src/plugin/host.zig",
+        "src/plugin/broker.zig",
+        "src/plugin/webio.zig",
+        "src/plugin/broker/budgets.zig",
+        "src/plugin/broker/caps.zig",
+        "src/plugin/broker/http.zig",
+        "src/plugin/broker/natives.zig",
+        "src/plugin/broker/queue.zig",
+        "src/plugin/broker/registry_json.zig",
+        "src/plugin/broker/sockets.zig",
+        "src/plugin/broker/storage.zig",
+        "src/plugin/broker/tables.zig",
+        "src/plugin/broker/ws.zig",
+        // One module each, rooted by the host test steps. They need WAMR, so
+        // with -Dplugins=false none of them is built and none of their tests
+        // runs.
+        "test/wasm_smoke.zig",
+        "test/host_smoke.zig",
+        "test/nmea_multi.zig",
+        "test/signalk_host.zig",
+        "test/install_host.zig",
+        "test/host_isolation.zig",
+        "test/host_restart.zig",
+    };
+    checkTestCoverage(b, test_step, &pure_test_roots, &reached_test_files);
 }

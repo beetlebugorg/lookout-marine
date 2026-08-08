@@ -90,6 +90,11 @@ macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
   Dock and file dialogs carry personal data. See `macos/screenshots.sh`.
 - **macOS preferences ignore a redirected HOME.** CFPreferences resolves the
   domain from the login session; use the NSUserDefaults argument domain.
+- **A test build collects a file's tests only if it ANALYSES the file.** A
+  re-export is not enough. Every test-bearing `.zig` must therefore be named in
+  build.zig, on `pure_test_roots` or `reached_test_files`; the `test` step
+  fails for one that is not. Being listed is a claim, not a proof: prove a new
+  entry by making one of its tests fail and checking the suite names it.
 - **Check disk before a big build**: `df -h /System/Volumes/Data`. The caches
   here fill 100 GB fast.
 - **Licensed imagery must never reach docs.** No C-MAP chart, drawn or named.
