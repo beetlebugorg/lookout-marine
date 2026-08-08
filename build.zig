@@ -531,6 +531,12 @@ pub fn build(b: *std.Build) void {
         // natively beside everything else.
         "plugins/common/schema.zig",
         "plugins/common/lk2.zig",
+        // The connection library, rooted on its own: lk2.zig imports it but
+        // does not analyse it, so nothing else collects its tests. They reach
+        // the host imports, which under a test build resolve to the seam at the
+        // bottom of plugins/common/lk.zig. schema.zig rides in with it, which
+        // is why its tests appear twice in the summary.
+        "plugins/common/conn.zig",
         // The generator's round trip re-parses the log it writes and runs the
         // ais plugin's own solver over it, so the scenario the harness replays
         // is checked by the gate here rather than only by eye in the harness.

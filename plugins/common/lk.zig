@@ -43,6 +43,7 @@
 //! payloads into a caller buffer.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// The API version this library speaks. `lk_abi` returns it.
 pub const api_version: u32 = 1;
@@ -51,7 +52,11 @@ pub const api_version: u32 = 1;
 // The host imports, exactly as PROTOTYPE.md freezes them
 // ---------------------------------------------------------------------------
 
-const host = struct {
+/// A native test binary has no `lookout` module to link these against, so a
+/// test build takes `TestHost` at the bottom of this file instead. The wasm
+/// build is the `else` branch and is untouched by that: the module it emits
+/// imports the same names, in the same order, with the same signatures.
+const host = if (builtin.is_test) TestHost else struct {
     extern "lookout" fn log(level: u32, ptr: [*]const u8, len: u32) void;
     extern "lookout" fn now_ms() i64;
     extern "lookout" fn mono_ms() i64;
@@ -1395,3 +1400,396 @@ pub fn raiseAlert(severity: Severity, title: []const u8, body: []const u8) i32 {
     if (b.overflowed) return -1;
     return alertJson(b.bytes());
 }
+
+// ---------------------------------------------------------------------------
+// The host imports under a test build
+// ---------------------------------------------------------------------------
+
+/// The test seam. A test drives the host through this and reads back what the
+/// library asked the host to do. Empty outside a test build, where the real
+/// imports are in force.
+pub const test_hooks = if (builtin.is_test) TestHost.hooks else struct {};
+
+/// What `host` resolves to under the test runner: the same imports, answered
+/// here instead of by the wasm host.
+///
+/// Every call is recorded with its arguments and its result. Both clocks are
+/// variables, so an interval is set rather than waited for, and a dial or a
+/// timer can be made to fail on demand.
+///
+/// NOTHING HERE READS A REAL CLOCK. A test that measures thirty seconds of
+/// silence advances `mono` by thirty seconds.
+const TestHost = struct {
+    /// Calls kept, and bytes kept of each call's payload. A chrome status line
+    /// is the longest payload the library sends.
+    const max_calls = 256;
+    const max_payload = 1024;
+
+    /// Which import was called.
+    const Name = enum {
+        log,
+        now_ms,
+        mono_ms,
+        publish,
+        ais_upsert,
+        overlay,
+        chrome_status,
+        table_declare,
+        table_update,
+        alert,
+        tcp_connect,
+        tcp_send,
+        tcp_close,
+        timer_set,
+        timer_cancel,
+        subscribe,
+        ais_subscribe,
+        udp_open,
+        udp_send,
+        udp_close,
+        http_fetch,
+        ws_connect,
+        ws_send,
+        ws_close,
+        storage_get,
+        storage_put,
+        file_read,
+        file_write,
+        file_close,
+    };
+
+    /// One recorded call. `id` is the handle it carried or the handle it
+    /// returned, `num` the other number it carried (a port, a level, a delay),
+    /// `flag` the one boolean (a periodic timer), and the payload whatever
+    /// bytes went with it.
+    const Call = struct {
+        name: Name,
+        id: i64 = 0,
+        num: i64 = 0,
+        flag: bool = false,
+        buf: [max_payload]u8 = undefined,
+        len: usize = 0,
+
+        pub fn payload(self: *const Call) []const u8 {
+            return self.buf[0..self.len];
+        }
+    };
+
+    var record_buf: [max_calls]Call = undefined;
+    var record_len: usize = 0;
+    /// Calls past what the record holds.
+    var record_overflow: usize = 0;
+
+    var mono: i64 = 0;
+    var wall: i64 = 0;
+    var next_socket: i64 = 1;
+    var next_timer: i64 = 1;
+    var next_request: i64 = 1;
+    /// A result a test put in front of the next few calls of one import.
+    const Forced = struct {
+        result: i64 = 0,
+        left: usize = 0,
+
+        /// The forced result while any is left, otherwise the next handle in
+        /// the series.
+        fn take(self: *Forced, series: *i64) i64 {
+            if (self.left > 0) {
+                self.left -= 1;
+                return self.result;
+            }
+            const id = series.*;
+            series.* += 1;
+            return id;
+        }
+    };
+
+    var forced_tcp_connect: Forced = .{};
+    var forced_ws_connect: Forced = .{};
+    var forced_timer_set: Forced = .{};
+
+    const Args = struct {
+        id: i64 = 0,
+        num: i64 = 0,
+        flag: bool = false,
+        payload: []const u8 = "",
+    };
+
+    fn record(which: Name, a: Args) void {
+        if (record_len == max_calls) {
+            record_overflow += 1;
+            return;
+        }
+        const c = &record_buf[record_len];
+        record_len += 1;
+        c.name = which;
+        c.id = a.id;
+        c.num = a.num;
+        c.flag = a.flag;
+        c.len = @min(a.payload.len, max_payload);
+        @memcpy(c.buf[0..c.len], a.payload[0..c.len]);
+    }
+
+    // ---- the imports, in the order the wasm build declares them ------------
+
+    fn log(level: u32, ptr: [*]const u8, len: u32) void {
+        record(.log, .{ .num = level, .payload = ptr[0..@intCast(len)] });
+    }
+
+    fn now_ms() i64 {
+        record(.now_ms, .{ .id = wall });
+        return wall;
+    }
+
+    fn mono_ms() i64 {
+        record(.mono_ms, .{ .id = mono });
+        return mono;
+    }
+
+    fn publish(ptr: [*]const u8, len: u32) i32 {
+        record(.publish, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn ais_upsert(ptr: [*]const u8, len: u32) i32 {
+        record(.ais_upsert, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn overlay(ptr: [*]const u8, len: u32) i32 {
+        record(.overlay, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn chrome_status(ptr: [*]const u8, len: u32) void {
+        record(.chrome_status, .{ .payload = ptr[0..@intCast(len)] });
+    }
+
+    fn table_declare(ptr: [*]const u8, len: u32) i32 {
+        record(.table_declare, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn table_update(ptr: [*]const u8, len: u32) i32 {
+        record(.table_update, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn alert(ptr: [*]const u8, len: u32) i32 {
+        record(.alert, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn tcp_connect(host_ptr: [*]const u8, host_len: u32, port: u32) i64 {
+        const id = forced_tcp_connect.take(&next_socket);
+        record(.tcp_connect, .{ .id = id, .num = port, .payload = host_ptr[0..@intCast(host_len)] });
+        return id;
+    }
+
+    fn tcp_send(id: i64, ptr: [*]const u8, len: u32) i32 {
+        record(.tcp_send, .{ .id = id, .payload = ptr[0..@intCast(len)] });
+        return @intCast(len);
+    }
+
+    fn tcp_close(id: i64) void {
+        record(.tcp_close, .{ .id = id });
+    }
+
+    fn timer_set(delay_ms: i64, periodic: u32) i64 {
+        const id = forced_timer_set.take(&next_timer);
+        record(.timer_set, .{ .id = id, .num = delay_ms, .flag = periodic != 0 });
+        return id;
+    }
+
+    fn timer_cancel(id: i64) void {
+        record(.timer_cancel, .{ .id = id });
+    }
+
+    fn subscribe(ptr: [*]const u8, len: u32) i32 {
+        record(.subscribe, .{ .payload = ptr[0..@intCast(len)] });
+        return 0;
+    }
+
+    fn ais_subscribe() i32 {
+        record(.ais_subscribe, .{});
+        return 0;
+    }
+
+    fn udp_open(port: u32) i64 {
+        const id = next_socket;
+        next_socket += 1;
+        record(.udp_open, .{ .id = id, .num = port });
+        return id;
+    }
+
+    fn udp_send(id: i64, ptr: [*]const u8, len: u32, host_ptr: [*]const u8, host_len: u32, port: u32) i32 {
+        _ = host_ptr;
+        _ = host_len;
+        record(.udp_send, .{ .id = id, .num = port, .payload = ptr[0..@intCast(len)] });
+        return @intCast(len);
+    }
+
+    fn udp_close(id: i64) void {
+        record(.udp_close, .{ .id = id });
+    }
+
+    fn http_fetch(ptr: [*]const u8, len: u32) i64 {
+        const id = next_request;
+        next_request += 1;
+        record(.http_fetch, .{ .id = id, .payload = ptr[0..@intCast(len)] });
+        return id;
+    }
+
+    fn ws_connect(ptr: [*]const u8, len: u32) i64 {
+        const id = forced_ws_connect.take(&next_socket);
+        record(.ws_connect, .{ .id = id, .payload = ptr[0..@intCast(len)] });
+        return id;
+    }
+
+    fn ws_send(id: i64, ptr: [*]const u8, len: u32) i32 {
+        record(.ws_send, .{ .id = id, .payload = ptr[0..@intCast(len)] });
+        return @intCast(len);
+    }
+
+    fn ws_close(id: i64) void {
+        record(.ws_close, .{ .id = id });
+    }
+
+    /// No key is ever present. A test that needs one drives the library's own
+    /// storage path instead.
+    fn storage_get(kptr: [*]const u8, klen: u32, vptr: [*]u8, vcap: u32) i32 {
+        _ = vptr;
+        record(.storage_get, .{ .num = vcap, .payload = kptr[0..@intCast(klen)] });
+        return -1;
+    }
+
+    fn storage_put(kptr: [*]const u8, klen: u32, vptr: [*]const u8, vlen: u32) i32 {
+        _ = vptr;
+        record(.storage_put, .{ .num = vlen, .payload = kptr[0..@intCast(klen)] });
+        return 0;
+    }
+
+    fn file_read(handle: i64, offset: i64, ptr: [*]u8, cap: u32) i32 {
+        _ = ptr;
+        record(.file_read, .{ .id = handle, .num = offset, .flag = cap > 0 });
+        return -1;
+    }
+
+    fn file_write(handle: i64, ptr: [*]const u8, len: u32) i32 {
+        record(.file_write, .{ .id = handle, .payload = ptr[0..@intCast(len)] });
+        return @intCast(len);
+    }
+
+    fn file_close(handle: i64) void {
+        record(.file_close, .{ .id = handle });
+    }
+
+    // ---- what a test drives and reads --------------------------------------
+
+    const hooks = struct {
+        pub const Kind = Name;
+        pub const Record = Call;
+
+        /// Forget every call, every forced result and both clocks. The record
+        /// is module state and outlives one test, so every test starts here.
+        pub fn reset() void {
+            record_len = 0;
+            record_overflow = 0;
+            mono = 0;
+            wall = 0;
+            next_socket = 1;
+            next_timer = 1;
+            next_request = 1;
+            forced_tcp_connect = .{};
+            forced_ws_connect = .{};
+            forced_timer_set = .{};
+        }
+
+        /// Every call the library made, oldest first.
+        pub fn calls() []const Call {
+            return record_buf[0..record_len];
+        }
+
+        /// How many calls the record could not hold. Anything but zero means
+        /// `calls` is short of the truth.
+        pub fn overflowed() usize {
+            return record_overflow;
+        }
+
+        /// Where the record stands. Pass it to `countSince` or `lastSince` to
+        /// read only what happened after this point.
+        pub fn mark() usize {
+            return record_len;
+        }
+
+        pub fn count(which: Name) usize {
+            return countSince(0, which);
+        }
+
+        pub fn countSince(from: usize, which: Name) usize {
+            var n: usize = 0;
+            for (record_buf[@min(from, record_len)..record_len]) |c| {
+                if (c.name == which) n += 1;
+            }
+            return n;
+        }
+
+        pub fn last(which: Name) ?Call {
+            return lastSince(0, which);
+        }
+
+        pub fn lastSince(from: usize, which: Name) ?Call {
+            const seen = record_buf[@min(from, record_len)..record_len];
+            var i = seen.len;
+            while (i > 0) : (i -= 1) {
+                if (seen[i - 1].name == which) return seen[i - 1];
+            }
+            return null;
+        }
+
+        /// The `i`th call of this kind, counting from the oldest.
+        pub fn nth(which: Name, i: usize) ?Call {
+            var seen: usize = 0;
+            for (record_buf[0..record_len]) |c| {
+                if (c.name != which) continue;
+                if (seen == i) return c;
+                seen += 1;
+            }
+            return null;
+        }
+
+        /// Monotonic milliseconds, as the library sees them.
+        pub fn monoNow() i64 {
+            return mono;
+        }
+
+        /// Move both clocks on. Neither moves on its own.
+        pub fn advance(ms: i64) void {
+            mono += ms;
+            wall += ms;
+        }
+
+        /// Put both clocks where the test wants them.
+        pub fn setClocks(mono_value: i64, wall_value: i64) void {
+            mono = mono_value;
+            wall = wall_value;
+        }
+
+        /// What the next `times` calls of `tcp_connect` return, instead of a
+        /// fresh id. -1 is the host refusing the dial.
+        pub fn forceTcpConnect(result: i64, times: usize) void {
+            forced_tcp_connect = .{ .result = result, .left = times };
+        }
+
+        /// What the next `times` calls of `ws_connect` return. -1 is the host
+        /// refusing the dial.
+        pub fn forceWsConnect(result: i64, times: usize) void {
+            forced_ws_connect = .{ .result = result, .left = times };
+        }
+
+        /// What the next `times` calls of `timer_set` return. -1 is the host
+        /// with no timer to give.
+        pub fn forceTimerSet(result: i64, times: usize) void {
+            forced_timer_set = .{ .result = result, .left = times };
+        }
+    };
+};
