@@ -262,4 +262,74 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nRasterEnabled(long h, String path);
     private static native void nToggleChart(long h);
     private static native boolean nChartHidden(long h);
+
+    // ---- wasm plugins ------------------------------------------------------
+    //
+    // Own ship, AIS targets and laylines are wasm modules, not core code: they
+    // read the vessel data a source plugin publishes and post overlay geometry
+    // the engine draws with the chart. Android has no bundle Resources dir, so
+    // the shell extracts the set out of the APK assets and names that directory
+    // — see LookoutActivity.extractPlugins.
+    //
+    // A core built without the plugin host answers false/null to all of these
+    // rather than failing to link.
+
+    /** Load and start every plugin in {@code dir}. False when none could. */
+    public boolean pluginsLoad(String dir)       { return h != 0 && nPluginsLoad(h, dir); }
+
+    /**
+     * True while a plugin layer is running. A plugin posts geometry from its
+     * own thread with no gesture behind it, so a render-on-demand loop must
+     * keep polling {@link #needsRedraw} while this holds.
+     */
+    public boolean pluginsActive()               { return h != 0 && nPluginsActive(h); }
+
+    /** Every loaded plugin with its settings schema, as JSON. Null when none. */
+    public String pluginsJson()                  { return h == 0 ? null : nPluginsJson(h); }
+
+    /** One plugin's settings as a JSON object, or null for an unknown id. */
+    public String pluginConfigGet(String id)     { return h == 0 ? null : nPluginConfigGet(h, id); }
+
+    /** Apply settings to one plugin at once. {@code json} is a JSON object. */
+    public boolean pluginConfigSet(String id, String json) {
+        return h != 0 && nPluginConfigSet(h, id, json);
+    }
+
+    // ---- overlay pick (tap an AIS target) ----------------------------------
+    //
+    // A plugin's symbol can carry a pick payload. A tap on one pins a bubble to
+    // it; the bubble re-reads the object every frame so it follows the target
+    // and closes itself when the target ages out.
+
+    /**
+     * The overlay object nearest a point (logical pts), as {id, infoJson}, or
+     * null when no symbol carrying a payload is within about 14 pt. Fills
+     * {@code outLonLat} (length >= 2) with where the object draws now.
+     */
+    public String[] overlayHit(float xPts, float yPts, double[] outLonLat) {
+        return h == 0 ? null : nOverlayHit(h, xPts, yPts, outLonLat);
+    }
+
+    /**
+     * What a pinned object says NOW, as {id, infoJson}, or null once it is gone
+     * — which is how a pinned bubble learns to close itself.
+     */
+    public String[] overlayInfo(String id, double[] outLonLat) {
+        return h == 0 ? null : nOverlayInfo(h, id, outLonLat);
+    }
+
+    /** Geographic -> logical points. Fills {@code out} (length >= 2) as {x, y}. */
+    public void geoToScreen(double lon, double lat, float[] out) {
+        if (h != 0) nGeoToScreen(h, lon, lat, out);
+    }
+
+    private static native String[] nOverlayHit(long h, float xPts, float yPts, double[] outLonLat);
+    private static native String[] nOverlayInfo(long h, String id, double[] outLonLat);
+    private static native void nGeoToScreen(long h, double lon, double lat, float[] out);
+
+    private static native boolean nPluginsLoad(long h, String dir);
+    private static native boolean nPluginsActive(long h);
+    private static native String nPluginsJson(long h);
+    private static native String nPluginConfigGet(long h, String id);
+    private static native boolean nPluginConfigSet(long h, String id, String json);
 }

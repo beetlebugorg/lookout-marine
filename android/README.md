@@ -39,6 +39,13 @@ Prerequisites: JDK 17, Android SDK (platform 35, build-tools 35, **NDK
 ./gradlew assembleDebug    # -> app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Homebrew's JDK is keg-only, so it is not on the PATH; gradle needs it named:
+
+```sh
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
+  ./gradlew assembleDebug
+```
+
 One step: gradle's `buildZigCore<Variant>` task runs `build-libs.sh` before the
 CMake link (with the exact NDK gradle resolved from `ndkVersion`). The debug
 APK compiles the core `-Doptimize=Debug` (fast iteration); release gets
@@ -60,6 +67,36 @@ adb logcat -s lookout   # logs
 
 Gestures: one finger pans, pinch zooms about the focal point, double-tap zooms
 in a level, long-press cycles day/dusk/night.
+
+## Plugins
+
+Own ship, AIS targets, laylines and the NMEA 0183 / Signal K sources are wasm
+modules run by the host in `src/plugin/`, which on Android is the **interpreter**
+(no JIT, so no executable pages; WAMR's hardware bound check is off, so the JVM
+keeps SIGSEGV). `build-libs.sh` passes `-Dplugins=true` for `arm64-v8a` and
+copies `libvmlib.a` beside the two core archives; `jni/src/CMakeLists.txt` links
+it when it is there, so an ABI without a `vendor/wamr-dist-android-*` archive
+still builds — without the host.
+
+The shipped set (`zig-out/plugins-bundled`) rides in the APK as assets under
+`assets/plugins/`, staged by the `stageBundledPlugins` gradle task. An APK asset
+has no filesystem path and the host loads a DIRECTORY, so `LookoutActivity`
+extracts them to `filesDir/plugins` at first run — the same shape as the bundled
+chart — and `ChartController` names that path to `lookout_plugins_load`.
+
+There is no plugin settings pane on Android yet, so the NMEA source is addressed
+from the launch intent — a developer affordance, not a mariner one:
+
+```sh
+adb reverse tcp:10110 tcp:10110    # device localhost -> the host's replay
+adb shell am start -n org.beetlebug.lookout/.LookoutActivity \
+  -e nmea 127.0.0.1:10110
+adb logcat -s lookout | grep plugin
+```
+
+The core plugins need `android.permission.INTERNET` (a normal permission,
+granted at install): without it bionic's `connect()` answers EACCES and every
+source plugin sits reconnecting.
 
 The bundled chart (`assets/charts/US5MD1MC.pmtiles`, Annapolis) is copied to
 internal storage on first launch. Bake your own with

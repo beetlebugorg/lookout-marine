@@ -748,3 +748,156 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartHidden(env: [*c]j.JNIEnv, cls
     const h = fromLong(hl) orelse return 0;
     return if (lookout_chart_hidden(h.l) != 0) 1 else 0;
 }
+
+// ---- wasm plugins ----------------------------------------------------------
+//
+// The Android analogue of ChartController.swift's plugin calls. Android has no
+// bundle Resources dir, so the shell extracts the plugin set out of the APK's
+// assets into filesDir/plugins and names THAT directory here — the ordinary
+// directory load every host uses, so origin comes out `bundled` (nothing sets
+// LOOKOUT_PLUGINS on Android) and the ids belong to the application.
+//
+// Every one of these is a no-op returning the failure value when the core was
+// built without -Dplugins: capi.zig's entry points check at comptime, so the
+// natives link and answer -1/false either way.
+
+extern fn lookout_plugins_load(h: ?*anyopaque, dir: [*:0]const u8) c_int;
+extern fn lookout_plugins_active(h: ?*anyopaque) c_int;
+extern fn lookout_plugins_json(h: ?*anyopaque, out_len: ?*usize) ?[*]const u8;
+extern fn lookout_plugin_config_get(h: ?*anyopaque, id: [*:0]const u8, out_len: ?*usize) ?[*]const u8;
+extern fn lookout_plugin_config_set(h: ?*anyopaque, id: [*:0]const u8, json: [*:0]const u8) c_int;
+
+/// The plugin queries hand back a BORROWED slice that carries its own length
+/// and no terminator, while NewStringUTF wants a C string — so copy through a
+/// NUL-terminated buffer rather than reading one byte past the borrow.
+fn jstringFromSlice(env: [*c]j.JNIEnv, ptr: ?[*]const u8, len: usize) j.jstring {
+    const p = ptr orelse return null;
+    const buf = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(buf);
+    @memcpy(buf, p[0..len]);
+    return env_(env).NewStringUTF.?(env, buf.ptr);
+}
+
+/// boolean nPluginsLoad(long h, String dir) -- load and start every
+/// `<id>.manifest.json` + `<id>.wasm` pair in `dir`.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsLoad(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, dir: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cdir = env_(env).GetStringUTFChars.?(env, dir, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, dir, cdir);
+    return if (lookout_plugins_load(h.l, @ptrCast(cdir)) == 0) 1 else 0;
+}
+
+/// boolean nPluginsActive(long h) -- true while a plugin layer is running.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_plugins_active(h.l) != 0) 1 else 0;
+}
+
+/// String nPluginsJson(long h) -- every loaded plugin with its settings schema
+/// and the values in force. null when no layer is up.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var len: usize = 0;
+    return jstringFromSlice(env, lookout_plugins_json(h.l, &len), len);
+}
+
+/// String nPluginConfigGet(long h, String id) -- one plugin's settings object.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigGet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    var len: usize = 0;
+    return jstringFromSlice(env, lookout_plugin_config_get(h.l, @ptrCast(cid), &len), len);
+}
+
+// ---- overlay pick (tap an AIS target) --------------------------------------
+//
+// A plugin's symbol can carry a pick payload, and a tap on one pins a bubble to
+// it — the Android side of what the macOS shell does with the same three calls.
+// `nOverlayHit` answers the object under the finger; `nOverlayInfo` re-reads
+// that object by id every frame so the bubble follows it and closes itself when
+// the target ages out; `nGeoToScreen` projects its anchor.
+//
+// Both hit and info answer a String[2] {id, infoJson} and fill a double[2] with
+// the anchor, so one crossing carries the whole object. Every pointer in the
+// struct is borrowed until the next overlay call, so both strings are copied
+// out before anything else runs.
+
+const lookout_overlay_obj = extern struct {
+    id: ?[*]const u8,
+    id_len: usize,
+    info: ?[*]const u8,
+    info_len: usize,
+    lon: f64,
+    lat: f64,
+};
+extern fn lookout_overlay_hit(h: ?*anyopaque, x_pt: f32, y_pt: f32, out: *lookout_overlay_obj) c_int;
+extern fn lookout_overlay_info(h: ?*anyopaque, id: [*:0]const u8, out: *lookout_overlay_obj) c_int;
+extern fn lookout_geo_to_screen(h: ?*anyopaque, lon: f64, lat: f64, x_pt: *f32, y_pt: *f32) void;
+
+/// The {id, info} pair as a Java String[2], with the anchor written into
+/// `out_lonlat`. null when the object carries no payload — a symbol with
+/// nothing to say is not something a bubble can be pinned to.
+fn overlayPair(env: [*c]j.JNIEnv, o: *const lookout_overlay_obj, out_lonlat: j.jdoubleArray) j.jobjectArray {
+    if (o.info == null or o.info_len == 0) return null;
+    const string_cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, 2, string_cls, null) orelse return null;
+    const id = jstringFromSlice(env, o.id, o.id_len) orelse return null;
+    env_(env).SetObjectArrayElement.?(env, arr, 0, id);
+    env_(env).DeleteLocalRef.?(env, id);
+    const info = jstringFromSlice(env, o.info, o.info_len) orelse return null;
+    env_(env).SetObjectArrayElement.?(env, arr, 1, info);
+    env_(env).DeleteLocalRef.?(env, info);
+    if (out_lonlat != null) {
+        var ll = [2]f64{ o.lon, o.lat };
+        env_(env).SetDoubleArrayRegion.?(env, out_lonlat, 0, 2, &ll);
+    }
+    return arr;
+}
+
+/// String[] nOverlayHit(long h, float xPt, float yPt, double[] outLonLat)
+export fn Java_org_beetlebug_lookout_Lookout_nOverlayHit(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, x_pt: j.jfloat, y_pt: j.jfloat, out_lonlat: j.jdoubleArray) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var o: lookout_overlay_obj = undefined;
+    if (lookout_overlay_hit(h.l, x_pt, y_pt, &o) == 0) return null;
+    return overlayPair(env, &o, out_lonlat);
+}
+
+/// String[] nOverlayInfo(long h, String id, double[] outLonLat) -- null once
+/// the object is gone, which is how a pinned bubble learns to close.
+export fn Java_org_beetlebug_lookout_Lookout_nOverlayInfo(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, out_lonlat: j.jdoubleArray) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    var o: lookout_overlay_obj = undefined;
+    if (lookout_overlay_info(h.l, @ptrCast(cid), &o) == 0) return null;
+    return overlayPair(env, &o, out_lonlat);
+}
+
+/// void nGeoToScreen(long h, double lon, double lat, float[] out) -- LOGICAL
+/// points, the inverse of nScreenToGeo and in the same unit.
+export fn Java_org_beetlebug_lookout_Lookout_nGeoToScreen(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, lon: j.jdouble, lat: j.jdouble, out: j.jfloatArray) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    var xy = [2]f32{ 0, 0 };
+    lookout_geo_to_screen(h.l, lon, lat, &xy[0], &xy[1]);
+    env_(env).SetFloatArrayRegion.?(env, out, 0, 2, &xy);
+}
+
+/// boolean nPluginConfigSet(long h, String id, String json)
+export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, json: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const cjson = env_(env).GetStringUTFChars.?(env, json, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, json, cjson);
+    return if (lookout_plugin_config_set(h.l, @ptrCast(cid), @ptrCast(cjson)) == 0) 1 else 0;
+}

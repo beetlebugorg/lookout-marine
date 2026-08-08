@@ -12,6 +12,44 @@ import androidx.compose.runtime.setValue
 /** One feature under the cursor: S-57 object class, its acronym, source cell. */
 data class PickFeature(val cls: String, val s57: String, val chart: String)
 
+/**
+ * What a plugin overlay symbol says about itself — an AIS target's name, MMSI,
+ * speed and closest approach, say. Decoded from the JSON the core's overlay
+ * pick returns: {"title":"…","rows":[["key","value"],…]}.
+ *
+ * The shell renders the rows it is given and knows nothing about what any of
+ * them mean; the plugin that drew the symbol chose them.
+ */
+data class OverlayInfo(val title: String, val rows: List<Pair<String, String>>) {
+    companion object {
+        fun parse(json: String?): OverlayInfo? {
+            if (json.isNullOrEmpty()) return null
+            return try {
+                val top = org.json.JSONObject(json)
+                val title = top.optString("title")
+                if (title.isEmpty()) return null
+                val arr = top.optJSONArray("rows")
+                val rows = buildList {
+                    for (i in 0 until (arr?.length() ?: 0)) {
+                        val r = arr!!.optJSONArray(i) ?: continue
+                        if (r.length() >= 2) add(r.optString(0) to r.optString(1))
+                    }
+                }
+                OverlayInfo(title, rows)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+}
+
+/**
+ * One overlay object the mariner pinned: which object it is, what it says now,
+ * and where it draws now. Re-read from the core every frame rather than
+ * remembered — the target moves, its values change, and it eventually goes.
+ */
+data class OverlayPin(val id: String, val info: OverlayInfo, val lon: Double, val lat: Double)
+
 /** Everything the HUD shows, refreshed off the frame loop. */
 data class Readouts(
     val lon: Double = 0.0,
@@ -38,6 +76,42 @@ class ChartController(private val appContext: Context) {
 
     @Volatile private var lk: Lookout? = null
 
+    /**
+     * Where the wasm plugin set was extracted to (filesDir/plugins), or null in
+     * a build that ships none. Set by the Activity before the first surface, so
+     * it is written once on the main thread and read on the render thread.
+     */
+    @Volatile var pluginDir: String? = null
+
+    /** "host:port" for the NMEA source, from the launch intent. See the Activity. */
+    @Volatile var nmeaAddress: String? = null
+
+    /**
+     * The plugin settings registry — every loaded plugin with its schema and
+     * the values in force. What the settings screen renders its plugin-declared
+     * sections from; empty until the layer is up, and re-read whenever a change
+     * is applied, since the core answers with the values as clamped.
+     */
+    var pluginRegistry by mutableStateOf(PluginRegistry())
+        private set
+
+    /** Re-read the registry from the core. Safe to call on any thread. */
+    fun refreshPlugins() = onEngine { l ->
+        val reg = PluginRegistry.parse(l.pluginsJson())
+        main.post { pluginRegistry = reg }
+    }
+
+    /**
+     * Apply one plugin's settings and re-read the registry, because the core
+     * clamps a number outside its range and ignores a key the schema does not
+     * declare — so what the mariner asked for is not always what is in force.
+     */
+    fun setPluginConfig(id: String, json: String) = onEngine { l ->
+        if (!l.pluginConfigSet(id, json)) Log.w(TAG, "plugin config refused: $id $json")
+        val reg = PluginRegistry.parse(l.pluginsJson())
+        main.post { pluginRegistry = reg }
+    }
+
     private val main = Handler(Looper.getMainLooper())
 
     /** The render thread's queue; null while detached. */
@@ -50,6 +124,12 @@ class ChartController(private val appContext: Context) {
     }
     private val readoutBuf = DoubleArray(Lookout.READOUTS_LEN)
     private val geoBuf = DoubleArray(2)
+
+    // The pinned bubble is re-read every frame, so its two crossings reuse
+    // their buffers rather than allocating on the frame loop. Both are touched
+    // only from the render thread (identifyAt and followPin both run there).
+    private val pinLonLat = DoubleArray(2)
+    private val screenBuf = FloatArray(2)
 
     /** Live HUD state. */
     var readouts by mutableStateOf(Readouts())
@@ -65,6 +145,27 @@ class ChartController(private val appContext: Context) {
 
     /** Result of the last tap-to-identify; empty hides the report. */
     var identify by mutableStateOf<List<PickFeature>>(emptyList())
+
+    /**
+     * The pinned overlay bubble, and where on screen it is anchored (logical
+     * pts). Both are refreshed off the frame loop, so the bubble travels with
+     * its target as the vessel moves and as the chart pans, zooms and turns.
+     */
+    var pinned by mutableStateOf<OverlayPin?>(null)
+        private set
+    var pinnedPoint by mutableStateOf<Offset?>(null)
+        private set
+
+    /**
+     * The pinned id as the RENDER thread sees it. `pinned` is Compose state and
+     * belongs to the main thread; the frame loop needs the id without reading
+     * it, and gets the answer back to Compose with a post.
+     */
+    @Volatile private var pinnedId: String? = null
+
+    /** What the render thread last told Compose, so it can skip saying it again. */
+    private var postedPin: OverlayPin? = null
+    private var postedPoint: Offset? = null
 
     /** Which object of the pick the report shows. */
     var identifyIndex by mutableStateOf(0)
@@ -123,8 +224,70 @@ class ChartController(private val appContext: Context) {
             else if (!rasterCharts.isEnabled(p)) l.rasterSetEnabled(p, false)
         }
         pushRaster(l)
+        loadPlugins(l)
         val loaded = date
         main.post { mariner.loadFrom(v, loaded) }
+    }
+
+    /**
+     * Bring the wasm plugin layer up on the chart just opened. Like the raster
+     * charts above this runs on every open, not once: the layer belongs to the
+     * engine handle, and switching chart library makes a new one.
+     *
+     * The set is the one LookoutActivity extracted out of the APK assets, loaded
+     * through the ordinary directory call — nothing sets LOOKOUT_PLUGINS here,
+     * so the host files them as `bundled` and the ids belong to the application.
+     */
+    private fun loadPlugins(l: Lookout) {
+        val dir = pluginDir ?: return
+        if (!l.pluginsLoad(dir)) {
+            Log.w(TAG, "plugins: none loaded from $dir (no host in this build?)")
+            return
+        }
+        // What actually came up, by id — the answer to "did the module load"
+        // that a screenshot cannot give.
+        val json = l.pluginsJson()
+        Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
+        nmeaAddress?.let { addr -> configureNmea(l, addr) }
+        // After the NMEA seed, so the registry the settings screen first sees
+        // already holds the connection the app was started with.
+        val reg = PluginRegistry.parse(l.pluginsJson())
+        Log.i(
+            TAG,
+            "plugins: sections ${reg.sections.joinToString(", ") { it.id }}" +
+                " | managed ${reg.managed.size} of ${reg.plugins.size}",
+        )
+        main.post { pluginRegistry = reg }
+    }
+
+    /**
+     * Point the NMEA 0183 source at one gateway. A dev affordance while Android
+     * has no plugin settings pane: the connections list is what the settings
+     * window would write, so this writes the same single row.
+     */
+    private fun configureNmea(l: Lookout, addr: String) {
+        val host = addr.substringBeforeLast(':', addr)
+        val port = addr.substringAfterLast(':', "").toIntOrNull() ?: 10110
+        val row = """{"connections":[{"id":"adb","name":"","host":"$host","port":$port,"enabled":true}]}"""
+        val ok = l.pluginConfigSet("org.beetlebug.nmea0183", row)
+        Log.i(TAG, "plugins: nmea0183 -> $host:$port ${if (ok) "set" else "REFUSED"}")
+    }
+
+    /**
+     * The loaded ids out of the plugins JSON. Parsed rather than pattern
+     * matched: a plugin's settings can carry list ROWS with their own "id", and
+     * scanning the text for one reported a gateway row ("lookout-nmea") as
+     * though it were a sixth plugin.
+     */
+    private fun summarize(json: String?): String {
+        if (json.isNullOrEmpty()) return "(no plugin json)"
+        val ids = try {
+            val arr = org.json.JSONObject(json).getJSONArray("plugins")
+            (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("id").ifEmpty { null } }
+        } catch (e: Exception) {
+            return "(unreadable plugin json: $e)"
+        }
+        return if (ids.isEmpty()) "(none loaded)" else "loaded: ${ids.joinToString(", ")}"
     }
 
     /**
@@ -175,6 +338,9 @@ class ChartController(private val appContext: Context) {
      */
     fun onFrameRendered(frameTimeNanos: Long) {
         val l = lk ?: return
+        // Before the HUD throttle: the bubble follows its target at frame rate,
+        // the readouts at 10 Hz.
+        followPin(l)
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
@@ -366,6 +532,36 @@ class ChartController(private val appContext: Context) {
      */
     fun identifyAt(xPts: Float, yPts: Float) = onEngine { l ->
         val where = Offset(xPts, yPts)
+        // An overlay symbol answers FIRST and takes the tap: a tap on a target
+        // pins its bubble and does not also open the chart's pick report, or
+        // the report would cover the target the mariner just asked about.
+        // Tapping the target that is already pinned closes it — the touch
+        // equivalent of the pointer platform's click-elsewhere, kept because a
+        // finger is on the target and there may be nowhere clear to tap.
+        val hit = l.overlayHit(xPts, yPts, pinLonLat)
+        if (hit != null && hit.size >= 2) {
+            val info = OverlayInfo.parse(hit[1])
+            if (info != null) {
+                val id = hit[0]
+                val again = id == pinnedId
+                val next = if (again) null else OverlayPin(id, info, pinLonLat[0], pinLonLat[1])
+                val at = if (again) null else screenPointFor(l, pinLonLat[0], pinLonLat[1])
+                pinnedId = if (again) null else id
+                postedPin = next
+                postedPoint = at
+                main.post {
+                    pinned = next
+                    pinnedPoint = at
+                    if (next != null) dismissIdentify()
+                }
+                return@onEngine
+            }
+        }
+        // A tap on open water closes the bubble and picks the chart, as it did
+        // before there were overlay objects to tap.
+        pinnedId = null
+        postedPin = null
+        postedPoint = null
         l.screenToGeo(xPts, yPts, geoBuf)
         val flat = l.pick(geoBuf[0], geoBuf[1])
         val found = if (flat == null || flat.isEmpty()) {
@@ -381,11 +577,62 @@ class ChartController(private val appContext: Context) {
         }
         val pose = lastPushed
         main.post {
+            pinned = null
+            pinnedPoint = null
             identify = found
             identifyIndex = 0
             identifyPoint = if (found.isEmpty()) null else where
             pickPose = if (found.isEmpty()) null else pose
         }
+    }
+
+    /** Close the pinned bubble (its own close button, and the back gesture). */
+    fun dismissPin() {
+        pinnedId = null
+        pinned = null
+        pinnedPoint = null
+        postedPin = null
+        postedPoint = null
+    }
+
+    /**
+     * Re-read the pinned object and re-project its anchor. Called every frame:
+     * an AIS target moves under its own steam and the chart moves under the
+     * mariner's, so a remembered screen point would drift off the symbol within
+     * a second. A gone target (aged out, or its plugin stopped) closes the
+     * bubble rather than leaving it pinned to water.
+     */
+    private fun followPin(l: Lookout) {
+        val id = pinnedId ?: return
+        val cur = l.overlayInfo(id, pinLonLat)
+        if (cur == null || cur.size < 2) {
+            pinnedId = null
+            main.post { if (pinned?.id == id) dismissPin() }
+            return
+        }
+        val info = OverlayInfo.parse(cur[1]) ?: return
+        val next = OverlayPin(id, info, pinLonLat[0], pinLonLat[1])
+        val at = screenPointFor(l, pinLonLat[0], pinLonLat[1])
+        // Every frame, but posted only when something actually moved: the
+        // anchor has to keep up with a pan (a 10 Hz bubble visibly lags the
+        // symbol under it), while a target sitting still must not recompose
+        // the bubble at display rate. The shadows are the render thread's own
+        // copy of what Compose was last told, so the comparison never reads
+        // Compose state off the main thread.
+        if (next == postedPin && at == postedPoint) return
+        postedPin = next
+        postedPoint = at
+        main.post {
+            if (pinnedId != id) return@post          // retired while this hopped threads
+            pinned = next
+            pinnedPoint = at
+        }
+    }
+
+    /** Where a geographic point lands on screen, in logical points. */
+    private fun screenPointFor(l: Lookout, lon: Double, lat: Double): Offset {
+        l.geoToScreen(lon, lat, screenBuf)
+        return Offset(screenBuf[0], screenBuf[1])
     }
 
     fun dismissIdentify() {

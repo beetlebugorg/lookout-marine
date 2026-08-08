@@ -25,6 +25,14 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
+    <!--
+      The instrument network. A source plugin (NMEA 0183, Signal K) opens a TCP
+      client to the boat's gateway; that is the whole of what the app talks to,
+      and the mariner names the address themselves in settings. INTERNET is a
+      normal permission — granted at install, no runtime prompt — and without it
+      bionic's connect() answers EACCES and every source plugin sits retrying.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- The launcher icon resolves to mipmap-anydpi-v26/ic_launcher.xml (the
          adaptive icon) on API 26 and up, and to the per-density
          mipmap-*/ic_launcher.png on API 24-25. -->

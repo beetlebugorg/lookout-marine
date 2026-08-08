@@ -149,6 +149,39 @@ fun ChartScreen(
                 .padding(start = Chrome.margin, bottom = Chrome.gap + capsuleH + Chrome.gap),
         )
 
+        // ---- a tapped overlay object, in a bubble pinned to it ---------------
+        // The bubble follows the symbol: the controller re-reads the object and
+        // re-projects its anchor every frame, so this only has to place it.
+        val pin = controller.pinned
+        val pinAt = controller.pinnedPoint
+        if (pin != null && pinAt != null) {
+            val place = calloutPlacement(
+                pointX = pinAt.x.dp,
+                pointY = pinAt.y.dp,
+                width = OVERLAY_BUBBLE_MAX_WIDTH,
+                viewWidth = viewW,
+                viewHeight = viewH,
+                hudBand = HUD_BAND,
+                topInset = topInset,
+            )
+            val alignment = if (place.edge == CalloutEdge.ABOVE) {
+                Alignment.BottomStart
+            } else {
+                Alignment.TopStart
+            }
+            OverlayBubble(
+                info = pin.info,
+                onDismiss = { controller.dismissPin() },
+                modifier = Modifier
+                    .align(alignment)
+                    .padding(
+                        start = place.x,
+                        top = if (place.edge == CalloutEdge.BELOW) place.y else 0.dp,
+                        bottom = if (place.edge == CalloutEdge.ABOVE) viewH - place.y else 0.dp,
+                    ),
+            )
+        }
+
         // ---- the pick, marked on the chart and reported over it --------------
         val pick = controller.identifyPoint
         if (pick != null && controller.identify.isNotEmpty()) {

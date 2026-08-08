@@ -54,6 +54,15 @@ class LookoutActivity : ComponentActivity() {
             return
         }
         controller = ChartController(applicationContext)
+        // The plugin set rides in the APK as assets, which have no filesystem
+        // path — the host loads a DIRECTORY, so extract it to one first. Done
+        // here rather than on the render thread: it is half a megabyte of wasm,
+        // and the engine is opened the moment the surface arrives.
+        controller.pluginDir = extractPlugins()
+        // A dev affordance, not a mariner one: there is no plugin settings pane
+        // on Android yet, so the NMEA source has no other way to be addressed.
+        //   adb shell am start -n … -e nmea 127.0.0.1:10110
+        controller.nmeaAddress = intent?.getStringExtra("nmea")
 
         setContent {
             // The chrome follows the CHART's scheme, not the system's: a white
@@ -144,10 +153,57 @@ class LookoutActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Extract assets/plugins into filesDir/plugins and answer its path, or null
+     * when the APK ships no plugin set (a build with the host switched off).
+     *
+     * Copied rather than read in place because the wasm host is handed a
+     * DIRECTORY PATH: it lists the `<id>.manifest.json` + `<id>.wasm` pairs and
+     * reads them with ordinary file calls, and an APK asset has neither a path
+     * nor a listing an outside reader can walk. Length is the freshness test,
+     * the same one the chart uses — an upgrade that changes a module changes its
+     * size, and the whole set re-extracts in well under a second anyway.
+     */
+    private fun extractPlugins(): String? {
+        val names = try {
+            assets.list(PLUGIN_ASSET_DIR)?.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.e(TAG, "plugin assets: $e")
+            null
+        } ?: run {
+            Log.w(TAG, "no plugin assets in this build")
+            return null
+        }
+        val dir = File(filesDir, PLUGIN_DIR_NAME)
+        if (!dir.isDirectory && !dir.mkdirs()) {
+            Log.e(TAG, "cannot create $dir")
+            return null
+        }
+        var wrote = 0
+        for (n in names) {
+            val out = File(dir, n)
+            try {
+                val len = assets.open("$PLUGIN_ASSET_DIR/$n").use { it.available().toLong() }
+                if (out.length() == len && len > 0L) continue
+                assets.open("$PLUGIN_ASSET_DIR/$n").use { input ->
+                    FileOutputStream(out).use { output -> input.copyTo(output) }
+                }
+                wrote++
+            } catch (e: Exception) {
+                Log.e(TAG, "plugin extract $n: $e")
+            }
+        }
+        val modules = names.count { it.endsWith(".wasm") }
+        Log.i(TAG, "plugins: $modules module(s) in $dir ($wrote file(s) written this launch)")
+        return dir.absolutePath
+    }
+
     private companion object {
         const val TAG = "lookout"
         const val CHART_ASSET = "charts/US5MD1MC.pmtiles"
         const val CHART_NAME = "US5MD1MC.pmtiles"
+        const val PLUGIN_ASSET_DIR = "plugins"
+        const val PLUGIN_DIR_NAME = "plugins"
         const val REQ_READ = 1
     }
 }
