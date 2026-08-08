@@ -3,6 +3,7 @@
 
 #include "lk_controller.h"
 #include "lk_pick.h"
+#include "lk_plugin_model.h"
 
 #include <atomic>
 #include <string>
@@ -28,8 +29,39 @@ namespace winrt::LookoutMarine::implementation
         void WireChrome();
         void ToggleSettings();
         void LoadSettings();      // reads the live mariner state, shows the current tab
+        void BuildSettingsTabs(); // the tab strip; plugin sections come and go
         void BuildSettingsPage(); // rebuilds the rows for the selected tab
         void ScheduleApply();     // 60 ms debounce, then set + save
+        // wasm plugin settings (MainWindow.Plugins.cpp)
+        bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
+        void ReloadPlugins();
+        bool RefreshPluginStatus();
+        void StartPluginStatusPoll();
+        void StopPluginStatusPoll();
+        bool PluginTabPopulated(std::string const &tab);
+        void BuildPluginSections(std::string const &tab);
+        void BuildPluginsPage();
+        void BuildPluginRow(Microsoft::UI::Xaml::Controls::StackPanel const &stack,
+                            lkw::PluginInfo &p, lkw::PluginList const &list,
+                            std::string const &row_id);
+        std::string PluginConfigJson(lkw::PluginInfo const &p);
+        void SchedulePluginApply();
+        lkw::PluginInfo *FindPlugin(std::string const &id);
+        lkw::PluginCell *FindCell(std::string const &plugin_id, std::string const &list_key,
+                                  std::string const &row_id, std::string const &key);
+        void SetPluginValue(std::string const &plugin_id, std::string const &key, double v);
+        void ResetPluginGroup(std::string const &plugin_id, std::vector<std::string> const &keys,
+                              std::vector<double> const &defaults);
+        void SetPluginCellText(std::string const &plugin_id, std::string const &list_key,
+                               std::string const &row_id, std::string const &key,
+                               std::string const &text);
+        void SetPluginCellNumber(std::string const &plugin_id, std::string const &list_key,
+                                 std::string const &row_id, std::string const &key, double value);
+        void SetPluginCellToggle(std::string const &plugin_id, std::string const &list_key,
+                                 std::string const &row_id, std::string const &key, bool on);
+        void AddPluginRow(std::string const &plugin_id, std::string const &list_key);
+        void RemovePluginRow(std::string const &plugin_id, std::string const &list_key,
+                             std::string const &row_id);
         void TryOpen();
         bool OpenChart(std::vector<std::string> const &paths);
         void SyncChartBounds();
@@ -116,8 +148,23 @@ namespace winrt::LookoutMarine::implementation
         // settings form
         tile57_mariner pending{};
         bool settings_loading{ false };
+        // The tab strip is a slot list, not a fixed menu: the app's own sections
+        // are always there, and Vessels, Alarms and Connections appear only
+        // while a plugin puts something in them. `settings_tab` indexes it.
+        struct SettingsTab
+        {
+            std::string id;      // the core's section name, so a plugin and this agree
+            std::wstring label;
+        };
+        std::vector<SettingsTab> settings_tabs;
         int settings_tab{ 0 };
         Microsoft::UI::Xaml::DispatcherTimer apply_timer{ nullptr };
+
+        // wasm plugin settings. The schemas are read when the pane opens; only
+        // the status lines are polled after that.
+        std::vector<lkw::PluginInfo> plugins;
+        Microsoft::UI::Xaml::DispatcherTimer plugin_apply_timer{ nullptr };
+        Microsoft::UI::Xaml::DispatcherTimer plugin_poll_timer{ nullptr };
 
         // gesture state (logical points)
         bool dragging{ false }, rotating{ false };

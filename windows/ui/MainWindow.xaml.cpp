@@ -108,28 +108,7 @@ namespace winrt::LookoutMarine::implementation
         WirePick();
         WireScale();
 
-        static constexpr wchar_t const *tab_names[] = { L"Display", L"Depths", L"Text", L"Charts", L"Advanced" };
-        for (int i = 0; i < 5; ++i)
-        {
-            Controls::Button tb;
-            tb.Content(winrt::box_value(winrt::hstring{ tab_names[i] }));
-            tb.Padding({ 10, 4, 10, 6 });
-            tb.CornerRadius({ 14, 14, 14, 14 });
-            tb.BorderThickness({ 0, 0, 0, 0 });
-            tb.Background(Media::SolidColorBrush{ i == 0 ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
-                                                         : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-            tb.Click([this, i](auto &&, auto &&) {
-                settings_tab = i;
-                for (uint32_t j = 0; j < SettingsTabs().Children().Size(); ++j)
-                {
-                    auto b = SettingsTabs().Children().GetAt(j).as<Controls::Button>();
-                    b.Background(Media::SolidColorBrush{ (int)j == i ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
-                                                                     : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-                }
-                BuildSettingsPage();
-            });
-            SettingsTabs().Children().Append(tb);
-        }
+        BuildSettingsTabs();
 
         SearchBox().KeyDown([this](auto &&, Input::KeyRoutedEventArgs const &e) {
             if (e.Key() == Windows::System::VirtualKey::Enter)

@@ -40,6 +40,28 @@ build directory. The core is `ReleaseFast` in every configuration
 (`-Dcore-optimize=Debug` to develop on it) — the app chases 60 fps and a Debug core
 visibly drops frames.
 
+### Plugins
+
+Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, so the build
+turns the plugin host on by default: `build-core.sh` passes `-Dplugins=true` and
+the executable links `libvmlib.a` (the WAMR interpreter) beside the core. That
+needs the archive for this architecture, which `scripts/build-wamr.sh linux-x64`
+or `linux-arm64` builds into `vendor/`. On an architecture the script has no
+archive for, configure with `-Dplugins=false`: the chart still draws, with no
+own ship, no traffic and no instrument input.
+
+`meson install` places the shipped modules under
+`$prefix/share/lookout-marine/plugins`, and the app loads them at every chart
+open — from `../share/lookout-marine/plugins` relative to `/proc/self/exe` when
+that exists (so a relocated bundle finds its own copy), else from the prefix
+path baked in at configure time. The set a mariner installed
+(`$XDG_DATA_HOME/lookout-marine/plugins`) loads after it. `LOOKOUT_PLUGINS=<dir>`
+overrides both.
+
+Plugin settings are filed with the chart settings they belong to: an AIS alarm
+lands under **Alarms**, connections under **Connections**. Those sections exist
+only while a plugin puts something in them.
+
 You need a baked `.pmtiles` chart to see anything. **Ctrl+O**, or **Charts** in the
 mariner settings, picks a folder of cells; on first launch the app probes
 `$LOOKOUT_OPEN`, then the last recent, then
@@ -81,9 +103,10 @@ the first frame, because the engine draws a set as it opens it.
 | `src/lk-pick-report.c` | The cursor pick report: the decode, the card, the callout placement |
 | `src/lk-raster.c` | The installed raster charts, their on/off, and the set names |
 | `src/lk-json.c` | A small JSON reader for the engine's pick payload |
+| `src/lk-plugins.c` | The wasm plugin registry: schemas, values, list rows, apply and save |
 | `src/lk-search.c` | Coordinate go-to (feature search stubbed) |
 | `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The mariner panel (Display / Depths / Text / Charts / Advanced) |
+| `src/lk-settings-window.c` | The mariner panel (Display / Depths / Text / Charts / Advanced), and the plugin-declared sections |
 | `src/lk-store.c` | Camera pose, recents and settings in one XDG keyfile |
 | `build-core.sh` | Builds the Zig core where meson expects its outputs |
 | `screenshots.sh` | The documentation screenshots, headless |

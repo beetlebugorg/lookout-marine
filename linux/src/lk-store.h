@@ -44,6 +44,19 @@ void     lk_store_save_chart_hidden (gboolean hidden);
 void lk_store_save_mariner (const tile57_mariner *mariner);
 void lk_store_apply_saved_mariner (tile57_mariner *mariner);
 
+/* Plugin settings, kept as the config object each plugin was last handed —
+ * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per
+ * plugin id.
+ *
+ * The whole object rather than field by field, because a LIST is in it: the
+ * rows of a mariner's NMEA connections are the shell's to keep, and there is
+ * nothing to get them back from once they are gone. Replaying the object the
+ * plugin last accepted needs no schema on this side, and the core already
+ * ignores a key the manifest no longer declares. */
+char **lk_store_load_plugin_ids (void);
+char  *lk_store_load_plugin_config (const char *plugin_id);
+void   lk_store_save_plugin_config (const char *plugin_id, const char *json);
+
 /* HUD coordinate format. */
 
 G_END_DECLS

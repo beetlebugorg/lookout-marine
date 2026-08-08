@@ -148,8 +148,12 @@ print_msvc_recipe() {
     local f
     echo >&2
     echo "The MSVC-ABI archive is built on the Windows machine itself: the Windows SDK" >&2
-    echo "is not on this host. In a Visual Studio x64 Native Tools Command Prompt" >&2
-    echo "(the ARM64 prompt, -A ARM64 and -DWAMR_BUILD_TARGET=AARCH64 on an arm64 box):" >&2
+    echo "is not on this host. In a Visual Studio x64 Native Tools Command Prompt:" >&2
+    echo >&2
+    echo "x64 ONLY. There is no ARM64 Windows dist directory — build.zig's wamrDist" >&2
+    echo "maps only x86_64 on Windows — so an ARM64 archive built with -A ARM64 has" >&2
+    echo "nowhere to go and -Dplugins=true on aarch64-windows-msvc refuses whatever" >&2
+    echo "is on disk. Build the Windows shell for x64 to get the plugin host." >&2
     echo >&2
     echo "    git clone --depth 1 --branch $WAMR_TAG $WAMR_URL wamr" >&2
     echo "    cd wamr" >&2

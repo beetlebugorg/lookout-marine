@@ -41,6 +41,21 @@ void   lk_store_forget_raster(const char *path);
 void   lk_store_set_raster_enabled(const char *path, int enabled);
 void   lk_store_free_rasters(char **paths, int *enabled);
 
+/* Plugin settings, kept as the config object each plugin was last handed —
+ * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per
+ * plugin id.
+ *
+ * The whole object rather than field by field, because a LIST is in it: the
+ * rows of a mariner's NMEA connections are the shell's to keep, and there is
+ * nothing to get them back from once they are gone. Replaying the object the
+ * plugin last accepted needs no schema on this side, and the core ignores a key
+ * the manifest no longer declares.
+ *
+ * apply_saved pushes every stored object into the plugins of a freshly opened
+ * chart, which is where a mariner's connections come back from. */
+void lk_store_save_plugin_config(const char *plugin_id, const char *json);
+void lk_store_apply_saved_plugins(lookout *h);
+
 #ifdef __cplusplus
 }
 #endif

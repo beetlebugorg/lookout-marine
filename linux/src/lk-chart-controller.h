@@ -146,6 +146,26 @@ void     lk_chart_controller_toggle_chart (LkChartController *self);
 void     lk_chart_controller_set_chart_hidden (LkChartController *self, gboolean hidden);
 gboolean lk_chart_controller_chart_hidden (LkChartController *self);
 
+/* ---- wasm plugins -------------------------------------------------------- */
+
+/* TRUE while a plugin layer is running. Own ship, AIS, NMEA 0183, Signal K and
+ * laylines all come from plugins, so without one the chart has no boat and no
+ * traffic. */
+gboolean lk_chart_controller_plugins_active (LkChartController *self);
+
+/* Every loaded plugin with its settings schema and the values in force, as the
+ * JSON lookout_plugins_json documents. NULL when no plugin layer is up, which
+ * is NOT the same as a layer holding no plugins (that answers
+ * {"plugins":[]}) — a caller with a registry already on screen must keep it
+ * rather than empty the window. Transfer full. */
+char *lk_chart_controller_plugins_json (LkChartController *self);
+
+/* Push one plugin's settings, applied live. `json` is an object of the keys its
+ * schema declares. TRUE when the plugin took them. */
+gboolean lk_chart_controller_set_plugin_config (LkChartController *self,
+                                                const char        *id,
+                                                const char        *json);
+
 /* ---- pick --------------------------------------------------------------- */
 
 /* The features a chartplotter should SHOW under a geo point, best first — the

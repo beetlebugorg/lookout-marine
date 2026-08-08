@@ -7,6 +7,12 @@
        package cache. Without it the markup stubs/impls never compile. -->
   <Import Project="$(UserProfile)\.nuget\packages\microsoft.windows.cppwinrt\3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('$(UserProfile)\.nuget\packages\microsoft.windows.cppwinrt\3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.props')" />
 
+  <!-- x64 as well as ARM64. The README has told people to pass /p:Platform=x64
+       on an x64 machine since this project was written, and without the pair
+       below msbuild refuses the switch. It is also the only Windows platform
+       the wasm plugin host can be built for: scripts/build-wamr.sh fills
+       vendor/wamr-dist-windows-x64 and has no ARM64 Windows slot at all, so an
+       ARM64 build is a chartplotter with no own ship and no AIS. -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|ARM64">
       <Configuration>Debug</Configuration>
@@ -15,6 +21,14 @@
     <ProjectConfiguration Include="Release|ARM64">
       <Configuration>Release</Configuration>
       <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
 
@@ -91,6 +105,13 @@
            (MinimalCoreWin trims the default link libraries, so the Win32 ones
            this shell uses are all named explicitly). -->
       <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- The WAMR interpreter, when build-core.ps1 built a core with the plugin
+           host in it. The static core does not embed the archive off Apple (a
+           COFF linker rejects an archive nested inside an archive), so the exe
+           links the pair; it is named AFTER lookout_marine.lib above, which is
+           what resolves the wasm symbols the core calls. Conditioned on the
+           file so an ARM64 build, which has no archive to link, still links. -->
+      <AdditionalDependencies Condition="Exists('$(LookoutCoreLibDir)\vmlib.lib')">vmlib.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -123,6 +144,7 @@
     <ClCompile Include="ui\MainWindow.Raster.cpp" />
     <ClCompile Include="ui\MainWindow.Scale.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
+    <ClCompile Include="ui\MainWindow.Plugins.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_pick.cpp" />

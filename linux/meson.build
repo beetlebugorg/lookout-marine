@@ -51,6 +51,16 @@ datadir = get_option('prefix') / get_option('datadir')
 plugin_dir = datadir / 'lookout-marine' / 'plugins'
 c_args += '-DLK_PLUGIN_DIR="' + plugin_dir + '"'
 
+# The host that RUNS them. Separate from the directory above: the modules ship
+# either way, and -Dplugins=false leaves a core that ignores them, which is the
+# only thing an architecture with no WAMR archive can build.
+#
+# No compile-time flag rides on this. lookout.h declares the plugin calls in
+# every build and a core built without the host answers -1 to all of them, so
+# the shell reads "no plugins loaded" and shows no plugin settings, which is
+# also what a core WITH the host and an empty plugin directory looks like.
+plugins = get_option('plugins')
+
 if x11_dep.found()
   c_args += '-DLK_HAVE_X11'
   deps += x11_dep
@@ -74,14 +84,26 @@ core_root = meson.current_source_dir() / '..'
 # The headers ride along as outputs so meson orders this target before the C
 # sources compile — an archive-only output is just a link input to meson, and
 # lookout.h would not exist yet.
+#
+# libvmlib.a is the WAMR interpreter, and it is an output only when the host is
+# on. Off Apple the static core leaves it unembedded (an ELF linker rejects an
+# archive nested inside an archive), so the executable links the pair; naming it
+# AFTER liblookout_marine.a is what resolves the wasm symbols the core calls.
+core_outputs = ['liblookout_marine.a', 'libtile57.a', 'lookout.h', 'tile57.h']
+core_command = [
+  build_core, core_root, get_option('core-optimize'),
+  '@OUTPUT0@', '@OUTPUT1@', '@OUTPUT2@', '@OUTPUT3@',
+]
+if plugins
+  core_outputs += 'libvmlib.a'
+  core_command += '@OUTPUT4@'
+endif
+
 core = custom_target('lookout-core',
-  output: ['liblookout_marine.a', 'libtile57.a', 'lookout.h', 'tile57.h'],
+  output: core_outputs,
   console: true,
   build_always_stale: true,
-  command: [
-    build_core, core_root, get_option('core-optimize'),
-    '@OUTPUT0@', '@OUTPUT1@', '@OUTPUT2@', '@OUTPUT3@',
-  ],
+  command: core_command,
 )
 
 sources = files(
@@ -94,6 +116,7 @@ sources = files(
   'src/lk-mariner.c',
   'src/lk-native-surface.c',
   'src/lk-pick-report.c',
+  'src/lk-plugins.c',
   'src/lk-raster.c',
   'src/lk-search.c',
   'src/lk-settings-window.c',

@@ -37,6 +37,30 @@ msbuild LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=ARM64
 Use `/p:Platform=x64` on an x64 machine. The app is unpackaged and
 self-contained: the build copies the Windows App SDK runtime next to the exe.
 
+### Plugins
+
+Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, and the host
+that runs them is **x64 only** today. `scripts/build-wamr.sh` fills
+`vendor/wamr-dist-windows-x64` and has no ARM64 Windows slot, so
+`-Dplugins=true` on `aarch64-windows-msvc` refuses by design and an ARM64 build
+is a chartplotter with no own ship and no traffic. The archive also has to be
+the **MSVC-ABI** one: the script cross-builds the mingw ABI, and the two do not
+meet. `bash scripts/build-wamr.sh windows-x64 --print-msvc` prints the cmake
+command that builds the right one here.
+
+With that archive in place, `build-core.ps1 -Platform x64` passes
+`-Dplugins=true` and normalizes `libvmlib.a` to `vmlib.lib`, which the vcxproj
+links after `lookout_marine.lib`. Without it the script builds a core with no
+host, warns, and removes any stale `vmlib.lib`.
+
+The modules travel beside the exe in `$(OutDir)plugins`, and the app loads them
+at every chart open, then the set a mariner installed under
+`%APPDATA%\Lookout Marine\Plugins`. `LOOKOUT_PLUGINS=<dir>` overrides both.
+
+Plugin settings are filed with the chart settings they belong to: an AIS alarm
+lands under **Alarms**, connections under **Connections**. Those tabs appear
+only while a plugin puts something in them.
+
 You need a baked `.pmtiles` chart to see anything. Open one from the empty
 state's **Open Charts…**, with **Ctrl+O**, or from **Settings ▸ Charts** (the
 recents live there too). On first launch the app probes `$LOOKOUT_OPEN`, then
@@ -67,7 +91,9 @@ picture covers it. The pill at the right of the readouts opens the same list.
 | `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
 | `ui/MainWindow.Raster.cpp` | The raster pill and its menu, the add flow, the re-install at every open |
 | `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
-| `ui/MainWindow.Settings.cpp` | The mariner pane: tabbed pages, debounced apply |
+| `ui/MainWindow.Settings.cpp` | The mariner pane: the tab strip, tabbed pages, debounced apply |
+| `ui/MainWindow.Plugins.cpp` | The plugin-declared settings sections, the connection list, apply and save |
+| `src/lk_plugin_model.h` | The shape the plugin registry takes on this side |
 | `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
 | `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |
 | `src/lk_store.*` | Camera pose, recents, mariner settings and the raster chart list in `%APPDATA%\lookout-marine\settings.ini` |
