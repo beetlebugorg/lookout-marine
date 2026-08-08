@@ -63,6 +63,10 @@
     <!-- The chart core + tile57, built by windows\build-core.ps1 into ..\zig-out. -->
     <LookoutCoreLibDir>$(MSBuildThisFileDirectory)..\zig-out\lib</LookoutCoreLibDir>
     <LookoutCoreIncDir>$(MSBuildThisFileDirectory)..\zig-out\include</LookoutCoreIncDir>
+    <!-- The shipped wasm plugin set, written by `zig build plugins` (which
+         build-core.ps1 runs). It holds the org.beetlebug pairs and nothing
+         else, so the whole directory is what travels with the exe. -->
+    <LookoutBundledPluginDir>$(MSBuildThisFileDirectory)..\zig-out\plugins-bundled</LookoutBundledPluginDir>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -182,4 +186,24 @@
           BeforeTargets="ClCompile"
           DependsOnTargets="MarkupCompilePass1;MarkupCompilePass2"
           Condition="'@(Page)@(ApplicationDefinition)' != ''" />
+
+  <!-- The core plugins travel beside the exe, in $(OutDir)plugins. Own ship,
+       AIS, NMEA 0183, Signal K and laylines are all wasm plugins, so a build
+       that ships none is a chartplotter with no boat and no traffic.
+
+       Skipped when the directory is absent (a tree where build-core.ps1 has
+       not run) rather than failing the build: the shell starts without
+       plugins, it does not fail to link. -->
+  <Target Name="LkCopyBundledPlugins"
+          AfterTargets="Build"
+          Condition="Exists('$(LookoutBundledPluginDir)')">
+    <ItemGroup>
+      <LkBundledPlugin Include="$(LookoutBundledPluginDir)\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LkBundledPlugin)"
+          DestinationFolder="$(OutDir)plugins"
+          SkipUnchangedFiles="true" />
+    <Message Importance="high"
+             Text="bundled plugins: @(LkBundledPlugin->Count()) file(s) -> $(OutDir)plugins" />
+  </Target>
 </Project>

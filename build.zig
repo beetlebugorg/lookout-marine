@@ -524,7 +524,11 @@ pub fn build(b: *std.Build) void {
         .target = wasm_target,
         .optimize = .ReleaseSmall,
     });
-    const plugins_step = b.step("plugins", "Build the wasm plugin modules into zig-out/plugins");
+    const plugins_step = b.step("plugins", "Build the wasm plugin modules into zig-out/plugins (and the shipped set into zig-out/plugins-bundled)");
+    // The shipped set: the plugins the app carries inside itself, which are
+    // ours by id. Everything under org.example.* is a demo or a documentation
+    // example and is never bundled.
+    const shipped_prefix = "org.beetlebug.";
     // `echo` is BUILT but not installed: it is the host tests' fixture, not a
     // plugin anybody runs. Installed beside the four real ones it would be
     // loaded by the harness and draw its own symbol over own ship. The other
@@ -588,17 +592,32 @@ pub fn build(b: *std.Build) void {
         if (std.mem.eql(u8, name, "signalk")) signalk_wasm = wasm_exe.getEmittedBin();
 
         const id = manifestId(b, name);
-        plugins_step.dependOn(&b.addInstallFileWithDir(
-            wasm_exe.getEmittedBin(),
-            .{ .custom = "plugins" },
-            b.fmt("{s}.wasm", .{id}),
-        ).step);
         const manifest_rel = b.fmt("plugins/{s}/manifest.json", .{name});
-        if (haveFile(b, manifest_rel)) plugins_step.dependOn(&b.addInstallFileWithDir(
-            b.path(manifest_rel),
-            .{ .custom = "plugins" },
-            b.fmt("{s}.manifest.json", .{id}),
-        ).step);
+        // Two destinations out of one build.
+        //
+        //   zig-out/plugins is the WORKING set: what LOOKOUT_PLUGINS points at
+        //   for the harness and the dev runs, and where a developer drops
+        //   extra pairs beside these.
+        //
+        //   zig-out/plugins-bundled holds the shipped set and nothing else, so
+        //   a shell's copy step takes a whole directory and gets exactly what
+        //   the product ships, whatever else is lying in the working set.
+        const dests: []const []const u8 = if (std.mem.startsWith(u8, id, shipped_prefix))
+            &.{ "plugins", "plugins-bundled" }
+        else
+            &.{"plugins"};
+        for (dests) |dest| {
+            plugins_step.dependOn(&b.addInstallFileWithDir(
+                wasm_exe.getEmittedBin(),
+                .{ .custom = dest },
+                b.fmt("{s}.wasm", .{id}),
+            ).step);
+            if (haveFile(b, manifest_rel)) plugins_step.dependOn(&b.addInstallFileWithDir(
+                b.path(manifest_rel),
+                .{ .custom = dest },
+                b.fmt("{s}.manifest.json", .{id}),
+            ).step);
+        }
     }
 
     // ---- wasm plugin host smoke tests ----

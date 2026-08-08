@@ -14,7 +14,11 @@
 //!   - grants.json round-trips through a reload;
 //!   - a reinstall's consent sheet carries the grant delta and the downgrade;
 //!   - uninstall removes the directory, the storage file and every overlay
-//!     object the plugin owned.
+//!     object the plugin owned;
+//!   - the two precedence rules around the BUNDLED set the app ships with: a
+//!     package claiming a bundled id is refused by name and writes nothing,
+//!     and a developer copy from LOOKOUT_PLUGINS overrides the bundled plugin
+//!     of the same id.
 //!
 //! The .wasm arrives as an anonymous import, like plugins/echo does for
 //! host_smoke: importing host.zig must never drag a plugin binary into the
@@ -45,6 +49,22 @@ const manifest_v09 =
     \\{"id":"org.example.downwind","name":"Downwind line","api":1,"version":"0.9",
     \\ "capabilities":["vessel.read","overlay.draw"]}
 ;
+
+/// A plugin of the kind the app ships with: an org.beetlebug id, which is
+/// ours. The two manifests differ in version and name so the registry says
+/// which copy is running.
+const bundled_id = "org.beetlebug.testcore";
+const bundled_manifest =
+    \\{"id":"org.beetlebug.testcore","name":"Core example","api":1,"version":"1.0",
+    \\ "capabilities":["vessel.read","overlay.draw"]}
+;
+const developer_manifest =
+    \\{"id":"org.beetlebug.testcore","name":"Core example","api":1,"version":"9.9",
+    \\ "capabilities":["vessel.read","overlay.draw"]}
+;
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 /// Both inputs the downwind plugin subscribes to, fresh, in the shape the
 /// fanout tick builds. `lat` varies so two events never carry the same fix.
@@ -226,6 +246,28 @@ fn writePackage(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir, name: []cons
     defer alloc.free(zip);
     try tmp.dir.writeFile(io, .{ .sub_path = name, .data = zip });
     return tmpPath(alloc, tmp, name);
+}
+
+/// A flat `<id>.manifest.json` + `<id>.wasm` pair in `sub`: the layout `zig
+/// build plugins` emits, which is what both the bundled set and the
+/// LOOKOUT_PLUGINS override are handed to `loadDir` as. Answers the directory
+/// path, which is also the string LOOKOUT_PLUGINS has to carry for the host to
+/// call that directory a developer copy.
+fn writeFlatPlugin(
+    alloc: std.mem.Allocator,
+    tmp: *std.testing.TmpDir,
+    sub: []const u8,
+    id: []const u8,
+    manifest: []const u8,
+) ![]u8 {
+    try tmp.dir.createDirPath(io, sub);
+    var name_buf: [160]u8 = undefined;
+    const mname = try std.fmt.bufPrint(&name_buf, "{s}/{s}.manifest.json", .{ sub, id });
+    try tmp.dir.writeFile(io, .{ .sub_path = mname, .data = manifest });
+    var wasm_buf: [160]u8 = undefined;
+    const wname = try std.fmt.bufPrint(&wasm_buf, "{s}/{s}.wasm", .{ sub, id });
+    try tmp.dir.writeFile(io, .{ .sub_path = wname, .data = windline_wasm });
+    return tmpPath(alloc, tmp, sub);
 }
 
 fn exists(path: []const u8) bool {
@@ -523,4 +565,105 @@ test "a reinstall's sheet carries the grant delta, and installing resets consent
     try must(std.mem.indexOf(u8, reg.items, "\"version\":\"2.0\"") != null, "the registry shows v2");
     try must(std.mem.indexOf(u8, reg.items, "\"cap\":\"ais.read\",\"sentence\":\"Read AIS traffic.\",\"granted\":true") != null, "the new grant is on");
     try must(std.mem.count(u8, reg.items, downwind_id) >= 1, "one row, not two");
+}
+
+// ---------------------------------------------------------------------------
+// the bundled set: who may claim a core id, and who wins one
+// ---------------------------------------------------------------------------
+
+test "a package may not claim the id of a bundled plugin" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmpPath(alloc, &tmp, "plugins");
+    defer alloc.free(root);
+
+    // No override in force, so any flat directory is the bundled set.
+    _ = unsetenv("LOOKOUT_PLUGINS");
+    const bundled_dir = try writeFlatPlugin(alloc, &tmp, "bundled", bundled_id, bundled_manifest);
+    defer alloc.free(bundled_dir);
+
+    var rig = try Rig.init(alloc, root);
+    defer rig.deinit();
+    const h = rig.h;
+
+    try h.loadDir(bundled_dir);
+    try std.testing.expectEqual(@as(usize, 1), h.count());
+    var reg: std.ArrayList(u8) = .empty;
+    defer reg.deinit(alloc);
+    try h.registryJson(&reg);
+    try must(std.mem.indexOf(u8, reg.items, "\"origin\":\"bundled\"") != null, "the shipped copy loads as bundled");
+
+    // A package under the same id. Refused, and the sentence carries both the
+    // id and the plugin it collided with, so the mariner can see what they
+    // were about to overwrite.
+    const pkg = try writePackage(alloc, &tmp, bundled_id ++ ".lkplug", &.{
+        .{ .name = "manifest.json", .data = bundled_manifest },
+        .{ .name = bundled_id ++ ".wasm", .data = windline_wasm },
+    });
+    defer alloc.free(pkg);
+    try std.testing.expectError(host.Error.PackageRefused, h.installPackage(pkg));
+    const msg = h.installMessage();
+    try must(std.mem.indexOf(u8, msg, bundled_id) != null, "the refusal names the id");
+    try must(std.mem.indexOf(u8, msg, "Core example") != null, "the refusal names the plugin it collided with");
+    try must(std.mem.indexOf(u8, msg, "comes with Lookout") != null, "the refusal says why the id is taken");
+
+    // Nothing landed: the bundled copy still runs, and no directory was
+    // written that the next launch would pick up.
+    try std.testing.expectEqual(@as(usize, 1), h.count());
+    reg.clearRetainingCapacity();
+    try h.registryJson(&reg);
+    try must(std.mem.indexOf(u8, reg.items, "\"origin\":\"bundled\"") != null, "the bundled copy is untouched");
+    const placed = try tmpPath(alloc, &tmp, "plugins/" ++ bundled_id);
+    defer alloc.free(placed);
+    try must(!exists(placed), "nothing was written under the install root");
+
+    // The consent sheet refuses it the same way, so the mariner is never
+    // offered an Install button for an id that is not on offer.
+    var sheet: std.ArrayList(u8) = .empty;
+    defer sheet.deinit(alloc);
+    try h.inspectPackage(pkg, &sheet);
+    try must(std.mem.indexOf(u8, sheet.items, "\"error\":") != null, "the sheet carries the refusal");
+    try must(std.mem.indexOf(u8, sheet.items, bundled_id) != null, "the sheet's refusal names the id");
+
+    // And the other half of the rule, which has never had a real bundled
+    // plugin to try it on: uninstall will not take one off.
+    try std.testing.expectError(host.Error.NotInstalled, h.uninstall(bundled_id));
+    try std.testing.expectEqual(@as(usize, 1), h.count());
+}
+
+test "a developer copy from LOOKOUT_PLUGINS overrides the bundled plugin of the same id" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmpPath(alloc, &tmp, "plugins");
+    defer alloc.free(root);
+
+    const dev_dir = try writeFlatPlugin(alloc, &tmp, "developer", bundled_id, developer_manifest);
+    defer alloc.free(dev_dir);
+    const bundled_dir = try writeFlatPlugin(alloc, &tmp, "bundled", bundled_id, bundled_manifest);
+    defer alloc.free(bundled_dir);
+
+    // The one thing that separates a developer copy from a bundled one is
+    // that LOOKOUT_PLUGINS names its directory.
+    const dev_z = try alloc.dupeZ(u8, dev_dir);
+    defer alloc.free(dev_z);
+    _ = setenv("LOOKOUT_PLUGINS", dev_z.ptr, 1);
+    defer _ = unsetenv("LOOKOUT_PLUGINS");
+
+    var rig = try Rig.init(alloc, root);
+    defer rig.deinit();
+    const h = rig.h;
+
+    // The shell's order: the override first, then the set inside the app.
+    try h.loadDir(dev_dir);
+    try h.loadDir(bundled_dir);
+
+    try std.testing.expectEqual(@as(usize, 1), h.count());
+    var reg: std.ArrayList(u8) = .empty;
+    defer reg.deinit(alloc);
+    try h.registryJson(&reg);
+    try must(std.mem.indexOf(u8, reg.items, "\"origin\":\"developer\"") != null, "the developer copy holds the id");
+    try must(std.mem.indexOf(u8, reg.items, "\"version\":\"9.9\"") != null, "and it is the one running");
+    try must(rig.log.has("already loaded (developer copy wins); bundled copy skipped"), "the log says which copy won");
 }

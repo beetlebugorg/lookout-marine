@@ -246,6 +246,7 @@
 				71524DC6FB6E9C34F9DB5322 /* Sources */,
 				EECEEC5E294F330C56C3B684 /* Resources */,
 				0CBF278F6CFCF0D8A5C98A7B /* Frameworks */,
+				22013F4BAE00C650342E4EEB /* Bundle the core plugins into Resources/Plugins */,
 			);
 			buildRules = (
 			);
@@ -266,6 +267,7 @@
 				95BC3126A20103FF3F84572E /* Sources */,
 				399642D64F4512B029E5E115 /* Resources */,
 				DE9DB18C055E956FBC2E37C4 /* Frameworks */,
+				A8E767BAB8808948D8A85425 /* Bundle the core plugins into Resources/Plugins */,
 			);
 			buildRules = (
 			);
@@ -340,6 +342,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		22013F4BAE00C650342E4EEB /* Bundle the core plugins into Resources/Plugins */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle the core plugins into Resources/Plugins";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/..\"\n# zig-out/plugins-bundled holds the shipped set and nothing else;\n# zig-out/plugins is the dev working set and may carry examples and\n# a developer's own modules beside it. The wasm is target-neutral,\n# so this needs no -Dtarget and builds nothing native.\nzig build plugins\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins\"\nmkdir -p \"$DEST\"\n# --delete so a plugin dropped from the shipped set leaves the app\n# instead of lingering in an incremental build.\nrsync -a --delete zig-out/plugins-bundled/ \"$DEST/\"\necho \"bundled plugins: $(ls \"$DEST\" | grep -c '\\.wasm$') module(s) in $DEST\"\n";
+		};
 		2F202FBCF2E8CB63456827BF /* Build Zig cores (lookout + tile57 dependency) */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -358,6 +379,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n# Provenance: the build log states exactly which sources these cores\n# came from — never infer it again. tile57 is a zig package\n# dependency: a sibling checkout when present, else the zon pin.\nT57=\"$SRCROOT/../../tile57\"\necho \"zig cores: lookout=$(git -C \"$SRCROOT/..\" rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f \"$T57/build.zig\" ] && git -C \"$T57\" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')\"\n# Version the target at the DEPLOYMENT minimum: an unversioned native\n# build stamps objects with the build machine's OS and ld warns\n# \"built for newer macOS version than being linked\" on every object.\nZIG_MAC_TARGET=\"$(uname -m | sed s/arm64/aarch64/)-macos.${MACOSX_DEPLOYMENT_TARGET:-26.0}\"\n# An explicit -Dtarget makes zig a CROSS build: no automatic SDK\n# discovery, so hand it the sysroot like the iOS script does.\nMAC_SYSROOT=\"${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}\"\ncd \"$SRCROOT/..\"\n# One build: the tile57 engine (zig package dependency) + the lookout\n# core, installing liblookout_marine.a, libtile57.a, and both headers\n# into zig-out/. ReleaseFast is the build.zig default; explicit here\n# so the app build states its intent.\nzig build -Doptimize=ReleaseFast -Dtarget=\"$ZIG_MAC_TARGET\" --sysroot \"$MAC_SYSROOT\"\n# Zig's outputs are deterministic, so an unchanged core hashes\n# identically — used twice below: to skip the repack, and to force\n# Xcode to relink when the core DID change.\nCORE_HASH=$(cat \"zig-out/lib/liblookout_marine.a\" \"zig-out/lib/libtile57.a\" | /usr/bin/shasum | cut -d' ' -f1)\n\n# ld64 AND libtool both drop/reject zig-emitted archive members\n# (\"64-bit mach-o not 8-byte aligned\"), so the raw archives are never\n# linked directly: extract to loose objects (no offset-alignment\n# problem; zig also records mode-0 permissions, hence the chmod) and\n# repack, exactly like the iOS target. Skipped when unchanged.\nREPACK_STAMP=\"zig-out/lib/.liblookoutall.stamp\"\nif [ \"$(cat \"$REPACK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ] \\\n   || [ ! -f \"zig-out/lib/liblookoutall.a\" ]; then\n  REPACK=\"zig-out/repack\"\n  rm -rf \"$REPACK\"; mkdir -p \"$REPACK/lookout\" \"$REPACK/tile57\"\n  (cd \"$REPACK/lookout\" && ar x ../../lib/liblookout_marine.a)\n  (cd \"$REPACK/tile57\"  && ar x ../../lib/libtile57.a)\n  chmod 644 \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o\n  xcrun -sdk macosx libtool -static \\\n    -o \"zig-out/lib/liblookoutall.a\" \\\n    \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o 2>/dev/null\n  echo \"$CORE_HASH\" > \"$REPACK_STAMP\"\nfi\n\n# Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so\n# a rebuilt Zig core would never RELINK the app (stale core in the\n# bundle). Force the link when the core changed by removing the\n# previous executable (link-only cost). The stamp lives in\n# TARGET_BUILD_DIR: per configuration, like the executable it guards.\nLINK_STAMP=\"$TARGET_BUILD_DIR/.zigcore.stamp\"\nif [ \"$(cat \"$LINK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ]; then\n  mkdir -p \"$TARGET_BUILD_DIR\"\n  echo \"$CORE_HASH\" > \"$LINK_STAMP\"\n  rm -f \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\nfi\n";
+		};
+		A8E767BAB8808948D8A85425 /* Bundle the core plugins into Resources/Plugins */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle the core plugins into Resources/Plugins";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/..\"\nzig build plugins\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins\"\nmkdir -p \"$DEST\"\nrsync -a --delete zig-out/plugins-bundled/ \"$DEST/\"\n";
 		};
 		F3C4878024157D990E02A19B /* Build Zig cores for iOS (lookout + tile57 dependency) */ = {
 			isa = PBXShellScriptBuildPhase;

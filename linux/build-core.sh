@@ -29,3 +29,17 @@ cp -f "$prefix/lib/liblookout_marine.a" "$out_lookout_a"
 cp -f "$prefix/lib/libtile57.a" "$out_tile57_a"
 cp -f "$prefix/include/lookout.h" "$out_lookout_h"
 cp -f "$prefix/include/tile57.h" "$out_tile57_h"
+
+# The shipped plugin set, staged beside the archives for meson's install
+# script to place under datadir. `zig build plugins` writes the org.beetlebug
+# pairs (own ship, AIS, NMEA 0183, Signal K, laylines) into
+# <prefix>/plugins-bundled, which holds the shipped set and nothing else. The
+# modules are wasm, so this needs no target and no optimize mode.
+zig build plugins \
+  --build-file "$core_root/build.zig" \
+  --prefix "$prefix"
+
+plugins_stage=$(dirname "$out_lookout_a")/plugins
+rm -rf "$plugins_stage"
+mkdir -p "$plugins_stage"
+cp -f "$prefix"/plugins-bundled/* "$plugins_stage/"

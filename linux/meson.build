@@ -35,6 +35,22 @@ endif
 c_args = []
 deps = [gtk_dep, vulkan_dep, m_dep]
 
+# Where installed data lands. Named here rather than in the desktop-integration
+# section below because the plugin directory is BAKED INTO the binary, so the
+# compile line needs it.
+datadir = get_option('prefix') / get_option('datadir')
+
+# The core plugins travel with the install. Own ship, AIS, NMEA 0183, Signal K
+# and laylines are all wasm plugins, so a build that ships none is a
+# chartplotter with no boat and no traffic. build-core.sh stages the shipped
+# set in the build dir and the install script below places it here.
+#
+# An absolute prefix path is what a distro package wants and what a relocatable
+# bundle (AppImage) does not: a shell that has to relocate should prefer a
+# /proc/self/exe-relative ../share/lookout-marine/plugins and fall back to this.
+plugin_dir = datadir / 'lookout-marine' / 'plugins'
+c_args += '-DLK_PLUGIN_DIR="' + plugin_dir + '"'
+
 if x11_dep.found()
   c_args += '-DLK_HAVE_X11'
   deps += x11_dep
@@ -103,7 +119,6 @@ executable('lookout-marine',
 # theme the desktop is using.
 
 app_id = 'org.beetlebug.LookoutMarine'
-datadir = get_option('prefix') / get_option('datadir')
 
 # The sizes the brand pack rasterizes. No cache is generated: GTK falls back to
 # scanning the theme directories when index.theme has no cache, so the icon
@@ -126,4 +141,15 @@ install_data(
 install_data(
   'data' / (app_id + '.desktop'),
   install_dir: datadir / 'applications',
+)
+
+# ---- the shipped plugin set --------------------------------------------------
+#
+# An install script rather than install_data: the pairs are build output, so
+# their names are not known when this file is read. The argument is
+# prefix-relative and the script joins it to MESON_INSTALL_DESTDIR_PREFIX, so
+# a staged package install (DESTDIR=) lands in the right place.
+meson.add_install_script(
+  'install-plugins.sh',
+  get_option('datadir') / 'lookout-marine' / 'plugins',
 )

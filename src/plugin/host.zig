@@ -797,10 +797,20 @@ fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
     if (lists.len > 0) alloc.free(lists);
 }
 
-/// Where a plugin came from. It decides two things: whether Settings offers
-/// Uninstall (only `installed`), and who wins an id collision — the first
-/// origin loaded keeps the id, and the app loads the developer directory
-/// before the installed set.
+/// Where a plugin came from:
+///
+///   - `bundled`: the set that travels inside the application, loaded from a
+///     directory the shell owns (Resources/Plugins in the macOS app). These
+///     are the core plugins (own ship, AIS, NMEA 0183, Signal K, laylines),
+///     and their ids are the product's, not a third party's.
+///   - `installed`: what the mariner installed from a .lkplug.
+///   - `developer`: the LOOKOUT_PLUGINS override.
+///
+/// It decides three things. Whether Settings offers Uninstall (only
+/// `installed`). Who wins an id collision: the first origin loaded keeps the
+/// id, and the shell loads the developer directory, then the bundled set, then
+/// the installed set. And whether an id may be installed at all, since
+/// `unpackToTemp` refuses a package that claims a bundled id.
 pub const Origin = enum { bundled, installed, developer };
 
 /// One loaded plugin, and the thread that runs it.
@@ -1041,9 +1051,11 @@ pub const Host = struct {
     ///
     /// A plugin that fails to load is logged and skipped — one bad module must
     /// not take the others down with it. An id already in the registry is
-    /// skipped too, so whoever loads first keeps the id; the app loads the
-    /// developer directory before the installed set, which is what makes the
-    /// developer copy win.
+    /// skipped too, so whoever loads first keeps the id. The shell loads the
+    /// developer directory (LOOKOUT_PLUGINS), then the bundled set inside the
+    /// application, then the installed set, which is what makes a developer
+    /// copy override a bundled plugin and a bundled plugin override a stale
+    /// installed one of the same id.
     ///
     /// Load order is the sorted file order, and load order IS source priority
     /// in the vessel store, so it is deterministic across machines. Loading
@@ -1731,6 +1743,18 @@ pub const Host = struct {
         if (!std.mem.eql(u8, wasm_name, want))
             return self.refuse("The module is named {s} but the manifest's id wants {s}.", .{ wasm_name, want });
 
+        // The ids of the plugins that ship inside the app are the product's.
+        // A package claiming one is refused here, before any consent is asked
+        // for, so the sheet shows the reason instead of an Install button and
+        // nothing lands on disk to be picked up at the next launch.
+        if (self.entryFor(manifest.id)) |have| {
+            if (have.origin == .bundled)
+                return self.refuse(
+                    "{s} is the id of {s}, which comes with Lookout, and an installed plugin may not take it over.",
+                    .{ manifest.id, have.manifest.name },
+                );
+        }
+
         return .{ .manifest = manifest, .tmp_path = tmp_path };
     }
 
@@ -1783,7 +1807,8 @@ pub const Host = struct {
     /// An id already running is replaced — its instance unloaded, its
     /// directory and grants file overwritten — except a developer copy, which
     /// keeps the id for this run per install.md; the files still land so the
-    /// next launch without the override has them.
+    /// next launch without the override has them. A bundled id is refused
+    /// outright by `unpackToTemp`, so nothing here has to defend it.
     pub fn installPackage(self: *Host, path: []const u8) !void {
         var up = try self.unpackToTemp(path);
         var placed = false;

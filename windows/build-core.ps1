@@ -21,6 +21,13 @@ try {
     Write-Host "zig build lib -Dbackend=d3d12 -Dtarget=aarch64-windows-msvc -Doptimize=$opt"
     & zig build lib -Dbackend=d3d12 -Dtarget=aarch64-windows-msvc "-Doptimize=$opt"
     if ($LASTEXITCODE -ne 0) { throw "zig build failed ($LASTEXITCODE)" }
+
+    # The shipped plugin set into zig-out\plugins-bundled, which the vcxproj's
+    # LkCopyBundledPlugins target copies beside the exe. The modules are wasm,
+    # so this takes no -Dtarget and builds nothing native.
+    Write-Host "zig build plugins"
+    & zig build plugins
+    if ($LASTEXITCODE -ne 0) { throw "zig build plugins failed ($LASTEXITCODE)" }
 }
 finally {
     Pop-Location

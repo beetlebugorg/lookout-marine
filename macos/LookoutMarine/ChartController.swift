@@ -206,10 +206,13 @@ final class ChartController: NSObject {
         MarinerSettings.applySavedOverlay(&mm)
         setMariner(mm)
 
-        // The INSTALLED plugin set loads beside whatever LOOKOUT_PLUGINS
-        // brought up inside lookout_open. The override loaded first, so a
-        // developer copy keeps its id; this also creates the plugin layer on a
-        // machine with no override at all.
+        // The plugin sets, in the order that decides an id collision: whatever
+        // LOOKOUT_PLUGINS brought up inside lookout_open loaded first, so a
+        // developer copy keeps its id; then the set that ships inside the app,
+        // so a mariner who has installed nothing still gets own ship, AIS,
+        // NMEA 0183, Signal K and laylines; then the installed set. Either of
+        // the two calls creates the plugin layer when nothing has yet.
+        loadBundledPlugins()
         loadInstalledPlugins()
 
         // The plugins are up, so their saved settings can go in now. A plugin
@@ -611,6 +614,27 @@ final class ChartController: NSObject {
     }
 
     // MARK: - Plugin install and consent
+
+    /// The plugin set that travels inside the app: Contents/Resources/Plugins,
+    /// filled by the "Bundle the core plugins" build phase out of
+    /// zig-out/plugins-bundled. Loaded through the ordinary directory call, so
+    /// the host gives it origin `bundled`: anything that is not the directory
+    /// LOOKOUT_PLUGINS names is bundled by definition.
+    ///
+    /// False when the app carries no such directory, which is a build without
+    /// the phase, not a mariner's problem: the log says so and the installed
+    /// set still loads.
+    @discardableResult
+    func loadBundledPlugins() -> Bool {
+        guard let h = handle,
+              let dir = Bundle.main.resourceURL?.appendingPathComponent("Plugins", isDirectory: true),
+              FileManager.default.fileExists(atPath: dir.path)
+        else {
+            lkLog("no bundled plugins in this build (Resources/Plugins is absent)")
+            return false
+        }
+        return lookout_plugins_load(h, dir.path) == 0
+    }
 
     /// Load the installed plugin set — what Install put under Application
     /// Support — creating the plugin layer when the environment brought none.

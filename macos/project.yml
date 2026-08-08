@@ -127,6 +127,32 @@ targets:
             echo "$CORE_HASH" > "$LINK_STAMP"
             rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
           fi
+    postBuildScripts:
+      # The core plugins travel inside the app. Without this the download is a
+      # chartplotter with no own ship and no traffic: own ship, AIS, NMEA 0183,
+      # Signal K and laylines are all plugins, and until now they only ran when
+      # LOOKOUT_PLUGINS pointed at a dev build.
+      #
+      # It runs AFTER the bundle exists so the copy lands in a real Resources
+      # directory, and before code signing, which Xcode does once every phase
+      # has run. ChartController.loadBundledPlugins reads the result.
+      - name: Bundle the core plugins into Resources/Plugins
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          # zig-out/plugins-bundled holds the shipped set and nothing else;
+          # zig-out/plugins is the dev working set and may carry examples and
+          # a developer's own modules beside it. The wasm is target-neutral,
+          # so this needs no -Dtarget and builds nothing native.
+          zig build plugins
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins"
+          mkdir -p "$DEST"
+          # --delete so a plugin dropped from the shipped set leaves the app
+          # instead of lingering in an incremental build.
+          rsync -a --delete zig-out/plugins-bundled/ "$DEST/"
+          echo "bundled plugins: $(ls "$DEST" | grep -c '\.wasm$') module(s) in $DEST"
 
   # ---- iOS / iPadOS ----------------------------------------------------------
   # Same Swift sources; the chart renders via Metal into ChartUIView's own
@@ -251,6 +277,20 @@ targets:
             echo "$CORE_HASH" > "$LINK_STAMP"
             rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
           fi
+    postBuildScripts:
+      # The same shipped set as the macOS target, into this bundle's Resources.
+      # The modules are wasm, so one build serves every platform and this needs
+      # no -Dtarget and no per-platform prefix.
+      - name: Bundle the core plugins into Resources/Plugins
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          zig build plugins
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins"
+          mkdir -p "$DEST"
+          rsync -a --delete zig-out/plugins-bundled/ "$DEST/"
 
   # Touch-delivery smoke test (XCUITest): pinch must move the zoom readout.
   # Run: xcodebuild test -scheme LookoutMarine-iOS -destination 'platform=iOS Simulator,...'

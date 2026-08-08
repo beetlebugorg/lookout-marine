@@ -95,6 +95,13 @@ void lookout_close(lookout *h);
  * build has no plugin host (macOS only in the prototype). A plugin that fails
  * to load is logged and skipped, so 0 does not mean every module started.
  *
+ * This is also how a shell loads the BUNDLED set: the core plugins that
+ * travel inside the application (macOS: LookoutMarine.app/Contents/Resources/
+ * Plugins). Any directory that is not the one LOOKOUT_PLUGINS names loads with
+ * origin "bundled", so call it with the shell's own directory before
+ * lookout_plugins_load_installed() and the precedence comes out right:
+ * developer override, then bundled, then installed.
+ *
  * Setting LOOKOUT_PLUGINS=<dir> before opening does the same thing with no
  * call at all; LOOKOUT_NMEA=host:port configures the NMEA 0183 plugin. */
 int lookout_plugins_load(lookout *h, const char *dir);
@@ -137,9 +144,9 @@ const char *lookout_plugins_json(lookout *h, size_t *out_len);
 /* Load the INSTALLED plugin set — what lookout_plugin_install() put under the
  * per-user plugin directory (macOS: ~/Library/Application Support/Lookout
  * Marine/Plugins/<id>/) — creating the plugin layer if nothing has yet. Call
- * once after open; LOOKOUT_PLUGINS keeps working as the developer override
- * beside it, and on an id collision the first copy loaded wins, so the
- * override should load first (it does when it loads at open). Idempotent.
+ * once after open, and after the bundled set: on an id collision the first
+ * copy loaded wins, and the order that gives the documented precedence is
+ * LOOKOUT_PLUGINS (loads at open), then bundled, then installed. Idempotent.
  * Returns 0 while the layer is up afterwards, -1 otherwise. */
 int lookout_plugins_load_installed(lookout *h);
 
@@ -162,7 +169,11 @@ const char *lookout_plugin_inspect(lookout *h, const char *path, size_t *out_len
  * by name), place under the per-user plugin directory, and load hot — the
  * plugin draws without a restart. Reinstalling an id replaces the running
  * copy and resets its grants to the consented set; while LOOKOUT_PLUGINS
- * carries the same id, the files land but the developer copy keeps running.
+ * carries the same id, the files land but the developer copy keeps running. A
+ * package claiming the id of a BUNDLED plugin is refused outright, because
+ * those ids belong to the application, and the sentence names the plugin it
+ * collided with. lookout_plugin_inspect() refuses it the same way, so the
+ * sheet shows the reason instead of offering Install.
  *
  * Returns NULL on success, else one borrowed sentence saying why, ready for
  * the shell to show. Valid until the next install or inspect. */
