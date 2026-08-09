@@ -157,6 +157,11 @@ moment, nothing is armed, and a plugin on a boat with the instruments off costs
 nothing until a reading arrives. That arrival runs the cycle and sets the next
 wakeup.
 
+The inputs you declare decide this, not the hooks beside them. A plugin that
+only draws is woken the same way, because a picture held up by a reading that
+stopped counting is a confident drawing of a guess and has to come off the
+chart.
+
 A plugin that declares no inputs has nothing that can expire, so it hears about
 arrivals alone. A plugin that watches its own connection for silence keeps its
 own clock.

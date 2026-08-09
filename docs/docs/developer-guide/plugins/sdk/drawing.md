@@ -30,6 +30,11 @@ that scene with the last one: an object with the same id and the same content
 is left alone, a changed one is replaced, and one you did not draw is taken
 off the chart. There is no delete call, no batch and no buffer.
 
+Advance state your plugin keeps across calls, a track, a filter, a latch, in
+the update hook, where the data lands. `draw` reads that state and renders it.
+The draw rate is one you chose for the picture, so state advanced inside `draw`
+moves at that rate and stops moving when the mariner switches your drawing off.
+
 ```zig
 pub fn draw(c: *lk.Chart) void {
     const boat = inputs.boat.get();

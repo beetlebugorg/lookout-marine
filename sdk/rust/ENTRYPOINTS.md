@@ -416,6 +416,10 @@ depended on it goes. Each input expires on its own wakeup, and once every one
 has expired nothing is armed. A plugin that declares no input has nothing that
 can expire.
 
+The declared inputs decide that, not the methods beside them. A plugin that only
+draws is woken the same way, because a picture held up by a reading that stopped
+counting has to come off the chart.
+
 A table is a dialog the shell builds from a `TableSpec`. List it in
 `Plugin::tables` and the library declares it at start, tells you when the
 mariner opens it, and sends what changed once a cycle.

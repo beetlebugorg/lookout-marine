@@ -85,6 +85,11 @@
 //! arrives. A plugin with no declared inputs has nothing that can expire and
 //! hears only about arrivals.
 //!
+//! The declared inputs decide that, not the methods beside them. A plugin that
+//! only draws is woken the same way, because a picture held up by a reading
+//! that stopped counting is a confident drawing of a guess and has to come off
+//! the chart.
+//!
 //! A TABLE IS FILLED FROM `on_update`. Rows are data. The library opens a table
 //! cycle before that call and closes it after, so a plugin upserts its rows
 //! there and nowhere else. A table costs no capability, so its rows keep

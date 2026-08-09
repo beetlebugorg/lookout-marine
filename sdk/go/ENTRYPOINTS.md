@@ -379,6 +379,10 @@ call, and the rows that depended on it leave. Each input expires on its own
 wakeup, and once every one has expired nothing is armed. A plugin that declares
 no input has nothing that can expire.
 
+The declared inputs decide that, not the methods beside them. A plugin that only
+draws is woken the same way, because a picture held up by a reading that stopped
+counting has to come off the chart.
+
 `Cell` takes any value and reads the declared column type to decide how to
 write it. A `nil`, or a nil `*float64`, `*string` or `*bool`, is a dash. A value
 the column cannot hold is a dash too, and one log line.

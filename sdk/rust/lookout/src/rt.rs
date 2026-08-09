@@ -162,6 +162,10 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
     /// nothing is armed. The next arrival runs a cycle, and the cycle makes
     /// the next appointment.
     ///
+    /// The inputs decide whether there is an appointment and the methods do
+    /// not: an expiry changes what the plugin should show whether or not it
+    /// overrode `on_update`.
+    ///
     /// The chart grant does not reach here. A plugin that may not draw still
     /// has a dialog to fill and a condition to watch.
     fn arm_update(&mut self, mono: i64) {

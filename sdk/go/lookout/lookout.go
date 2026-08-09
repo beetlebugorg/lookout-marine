@@ -89,6 +89,11 @@
 // arrives. A plugin with no declared inputs has nothing that can expire and
 // hears only about arrivals.
 //
+// The declared inputs decide that, not the methods beside them. A plugin that
+// only draws is woken the same way, because a picture held up by a reading that
+// stopped counting is a confident drawing of a guess and has to come off the
+// chart.
+//
 // A table is filled from OnUpdate. Rows are data. The library opens a table
 // cycle before that call and closes it after, so a plugin upserts its rows
 // there and nowhere else. A table costs no capability, so its rows keep
@@ -592,21 +597,20 @@ const noDrawLine = "not drawing: permission to draw on the chart is off"
 // costs no capability, and a dialog on screen fills whether or not the plugin
 // may draw.
 // The cycle runs when a reading arrives and when one expires. A plugin that
-// only heard about arrivals could never notice an absence.
+// only heard about arrivals could never notice an absence. A plugin with no
+// hook and no table runs it for the appointment alone.
 func runUpdate(mono int64) {
 	u, updates := reg.plugin.(Updater)
-	if !updates && len(reg.tables) == 0 {
-		// Nothing to run and no rows to hold, so not even a clock is read.
-		return
-	}
-	for _, t := range reg.tables {
-		t.begin(mono)
-	}
-	if updates {
-		u.OnUpdate()
-	}
-	for _, t := range reg.tables {
-		t.flush()
+	if updates || len(reg.tables) > 0 {
+		for _, t := range reg.tables {
+			t.begin(mono)
+		}
+		if updates {
+			u.OnUpdate()
+		}
+		for _, t := range reg.tables {
+			t.flush()
+		}
 	}
 	if wantsUpdateTimer() {
 		armUpdate(mono)
@@ -614,11 +618,9 @@ func runUpdate(mono int64) {
 }
 
 // wantsUpdateTimer is true when an input can go stale, so an expiry is worth
-// waiting for. A plugin with no declared inputs hears only about arrivals.
+// waiting for. The inputs decide this and the methods do not: an expiry changes
+// what the plugin should show whether or not it wrote an OnUpdate.
 func wantsUpdateTimer() bool {
-	if _, ok := reg.plugin.(Updater); !ok {
-		return false
-	}
 	return len(reg.inputs) > 0 || reg.ais != nil
 }
 

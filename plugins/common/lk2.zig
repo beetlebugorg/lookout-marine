@@ -60,6 +60,11 @@
 //! next reading arrives. A plugin with no declared inputs has nothing that can
 //! expire and hears only about arrivals.
 //!
+//! The declared inputs decide that, not the declarations beside them. A plugin
+//! that only draws is woken the same way, because a picture held up by a
+//! reading that stopped counting is a confident drawing of a guess and has to
+//! come off the chart.
+//!
 //! A TABLE IS FILLED FROM `onUpdate`. Rows are data. The library opens a table
 //! cycle before `onUpdate` and closes it after, so a plugin upserts its rows
 //! there and nowhere else. A table costs no capability, so its rows keep
@@ -2214,8 +2219,9 @@ fn Wiring(comptime P: type) type {
         var update_due_ms: i64 = 0;
 
         /// True when an input can go stale, so an expiry is worth waiting for.
-        /// A plugin with no declared inputs hears only about arrivals.
-        const wants_update_timer = D.has_update and (D.inputs.len > 0 or D.has_ais);
+        /// The inputs decide this and the hooks do not: an expiry changes what
+        /// the plugin should show whether or not it wrote an `onUpdate`.
+        const wants_update_timer = D.inputs.len > 0 or D.has_ais;
 
         pub fn start(s: raw_lk.Start) !void {
             readSettings(P, s.config);
@@ -2344,7 +2350,8 @@ fn Wiring(comptime P: type) type {
         ///
         /// The cycle runs when a reading arrives and when one expires. A
         /// plugin that only heard about arrivals could never notice an
-        /// absence.
+        /// absence. A plugin with no hook and no table runs it for the
+        /// appointment alone.
         fn runUpdate(mono: i64) void {
             inline for (D.tables) |T| T.lkBegin();
             if (comptime D.has_update) P.onUpdate();
@@ -3192,6 +3199,69 @@ test "the appointment is kept while the chart grant is off" {
     try expect.expectEqual(@as(usize, 2), raw_lk.test_hooks.count(.timer_set));
 }
 
+/// A plugin that draws a reading and declares no hook at all. The reading can
+/// still stop counting, and what was drawn from it has to come off the chart.
+const DrawOnly = struct {
+    pub const inputs = struct {
+        pub const twd = subscribeNumber("environment.wind.directionTrue", .{});
+    };
+
+    pub fn draw(c: *Chart) void {
+        c.status("drawing", .{});
+    }
+};
+
+test "a plugin that only draws is woken when its reading expires" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(DrawOnly);
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    const draw_timer = raw_lk.test_hooks.last(.timer_set).?.id;
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
+
+    // The wind lands, and the appointment comes with it. The declared inputs
+    // decide that. Which hooks the author wrote says nothing about when a
+    // reading stops counting.
+    try W.onEvent(.{ .store_changed = storeJson("environment.wind.directionTrue", "215") });
+    try expect.expect(DrawOnly.inputs.twd.fresh() != null);
+    const appt = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expect(appt.id != draw_timer);
+    try expect.expect(!appt.flag); // one-shot: an appointment, not a poll
+    try expect.expectEqual(default_max_age_ms + 1, appt.num);
+
+    // It comes round on a reading that no longer counts, and there is no later
+    // moment to wait for.
+    raw_lk.test_hooks.advance(appt.num);
+    try W.onEvent(.{ .timer = appt.id });
+    try expect.expect(DrawOnly.inputs.twd.fresh() == null);
+    try expect.expectEqual(@as(usize, 2), raw_lk.test_hooks.count(.timer_set));
+}
+
+/// A plugin that draws from nothing off the boat: a scale bar, a grid.
+const NoInputs = struct {
+    pub fn draw(c: *Chart) void {
+        c.status("drawing", .{});
+    }
+};
+
+test "a plugin with no declared input holds no appointment" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(NoInputs);
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    const draw_timer = raw_lk.test_hooks.last(.timer_set).?.id;
+
+    // Readings land for the plugins that asked for them. This one asked for
+    // none, so it holds nothing that can go stale and waits on no clock.
+    try W.onEvent(.{ .store_changed = storeJson("environment.wind.directionTrue", "215") });
+    try W.onEvent(.{ .timer = draw_timer });
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
+}
+
 /// A plugin watching the traffic and nothing else.
 const WatchTraffic = struct {
     pub const vessel_ms: i64 = 180_000;
@@ -3247,6 +3317,54 @@ test "a target ages out on its own wakeup, without another target reporting" {
 
     // An empty sea can change no further on its own.
     try expect.expectEqual(set_before, raw_lk.test_hooks.count(.timer_set));
+}
+
+// -- retained state rides the data path ----------------------------------------
+
+/// A plugin that keeps something across calls: a track, a filter, a count of
+/// legs. The state is advanced where the fixes land, and `draw` reads it.
+const Keeper = struct {
+    pub const inputs = struct {
+        pub const fix = subscribePosition("navigation.position", .{});
+    };
+
+    var kept: usize = 0;
+    var frames: usize = 0;
+
+    pub fn onUpdate() void {
+        if (inputs.fix.fresh() == null) return;
+        kept += 1;
+    }
+
+    pub fn draw(c: *Chart) void {
+        frames += 1;
+        c.status("{d} kept", .{kept});
+    }
+};
+
+test "retained state follows the fixes, and a frame leaves it alone" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(Keeper);
+    Keeper.kept = 0;
+    Keeper.frames = 0;
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    const draw_timer = raw_lk.test_hooks.last(.timer_set).?.id;
+
+    // Two fixes, both taken, and nothing drawn yet.
+    try W.onEvent(.{ .store_changed = storeJson("navigation.position", "{\"lat\":38.97,\"lon\":-76.46}") });
+    raw_lk.test_hooks.advance(1_000);
+    try W.onEvent(.{ .store_changed = storeJson("navigation.position", "{\"lat\":38.98,\"lon\":-76.46}") });
+    try expect.expectEqual(@as(usize, 2), Keeper.kept);
+    try expect.expectEqual(@as(usize, 0), Keeper.frames);
+
+    // The frame rate belongs to the picture. Only data reaching `onUpdate`
+    // keeps a point, so three more frames leave the count at two.
+    for (0..3) |_| try W.onEvent(.{ .timer = draw_timer });
+    try expect.expectEqual(@as(usize, 3), Keeper.frames);
+    try expect.expectEqual(@as(usize, 2), Keeper.kept);
 }
 
 // -- mixing declared inputs with raw subscriptions -----------------------------
