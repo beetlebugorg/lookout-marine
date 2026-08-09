@@ -426,6 +426,10 @@ final class PluginTableWindowController: NSObject, NSWindowDelegate,
         model?.revealOnChart(lon: lon, lat: lat)
     }
 
+    /// Shut the dialog. Used where it was opened only to make the plugin build
+    /// its rows, and the rows rather than the dialog were what was wanted.
+    func dismiss() { window.close() }
+
     /// Open the top row, for the screenshot protocol's dev hook. It is the
     /// same path a double-click or a Return takes.
     func activateTopRow() {

@@ -310,6 +310,12 @@ struct ContentView: View {
                         #if os(macOS)
                         case "table":
                             model.openPluginTable(part.count > 1 ? part[1] : "")
+                        // target[:id] pins one declared row on the chart, the
+                        // way a double-click in the dialog does, without the
+                        // dialog. No id takes the first row of the declared
+                        // sort.
+                        case "target":
+                            model.revealTableRow(part.count > 1 ? part[1] : "")
                         #endif
                         // scheme:1 dusk, scheme:2 night — the chrome must
                         // follow the chart's hours, and a screenshot proves it.

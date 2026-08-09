@@ -7,14 +7,18 @@
 # docs/docs/developer-guide/screenshots.md for the chart / camera / format the
 # hosts share, and linux/screenshots.sh for the same job on the Linux host.
 #
-#   usage: screenshots.sh [SECTION|all] [-o DIR]
+#   usage: screenshots.sh [SECTION|WINDOW|all] [-o DIR]
 #
 #     SECTION  display | depths | text | charts | vessels | alarms |
-#              connections | advanced        (default: all)
+#              connections | plugins | advanced
+#     WINDOW   ais-targets | ais-target | ais-aids
+#                                             (frames that are not sections)
 #     -o DIR   write there instead of docs/docs/img
+#                                             (default: all of both)
 #
 #   env overrides: LOOKOUT_APP LOOKOUT_CHART LOOKOUT_VIEW LOOKOUT_PLUGINS
-#                  LOOKOUT_NMEA LOOKOUT_SETTLE LOOKOUT_CAP LOOKOUT_EXPECT
+#                  LOOKOUT_LOG LOOKOUT_NMEA LOOKOUT_SETTLE LOOKOUT_CAP
+#                  LOOKOUT_EXPECT
 #                  LOOKOUT_KEEP=1 keeps the temp dir and the app logs
 #
 # A caution the Linux host does not have. There, a throwaway XDG_CONFIG_HOME
@@ -46,7 +50,8 @@ APP=${LOOKOUT_APP:-$here/build-mac/Build/Products/Debug/LookoutMarine.app}
 CHART=${LOOKOUT_CHART:-$HOME/Charts/ENC_ROOT}
 VIEW=${LOOKOUT_VIEW:--76.4638,38.9745,14.5}   # Annapolis, the demo camera
 PLUGINS=${LOOKOUT_PLUGINS:-$repo/zig-out/plugins}
-NMEA=${LOOKOUT_NMEA:-127.0.0.1:10110}         # the replay server
+LOG=${LOOKOUT_LOG:-$repo/test/annapolis.nmea}  # the fixture the feed serves
+NMEA=${LOOKOUT_NMEA:-}                        # set by serve_fixture unless given
 SETTLE=${LOOKOUT_SETTLE:-9}                   # seconds after the window is up
 CAP=${LOOKOUT_CAP:-1600}                      # served width; never UPscaled
 
@@ -56,6 +61,42 @@ CAP=${LOOKOUT_CAP:-1600}                      # served width; never UPscaled
 EXPECT=${LOOKOUT_EXPECT:-720x592}
 
 SECTIONS="display depths text charts vessels alarms connections plugins advanced"
+
+# Frames that are not a settings section: the LOOKOUT_SHOW the app reads, the
+# window to wait for, the file to write, an optional crop and an optional
+# camera. An empty title takes the chart window, whose own title is the
+# chart's name. A crop is LEFTxTOPxWIDTHxHEIGHT as fractions of the frame.
+#
+# Every one of these is served the same replay log as the settings frames, so
+# a frame can only ever carry fixture identities. A capture taken by hand from
+# a live feed would publish real vessels, and so would one that let the app
+# read this machine's saved connection list, which is why every instance is
+# started with LOOKOUT_CLEAN.
+WINDOWS="ais-targets ais-target ais-aids"
+shot_show ()  { case $1 in
+                  ais-targets) echo "table:targets:cpa" ;;
+                  ais-target)  echo "target" ;;
+                  ais-aids)    echo "" ;;
+                esac; }
+shot_title () { case $1 in ais-targets) echo "AIS Targets" ;; *) echo "" ;; esac; }
+shot_out ()   { case $1 in
+                  ais-targets) echo "ais-targets.webp" ;;
+                  ais-target)  echo "detail/ais-target.webp" ;;
+                  ais-aids)    echo "detail/ais-aids.webp" ;;
+                esac; }
+shot_crop ()  { case $1 in
+                  ais-target)  echo "0.425x0.415x0.315x0.395" ;;
+                  ais-aids)    echo "0.361x0.375x0.273x0.281" ;;
+                esac; }
+# How long to let the replay run before the frame is taken, when the default
+# is not enough. The collision alarm needs the target inside the 600 s gate,
+# which the log reaches about 45 s in.
+shot_settle () { case $1 in ais-target) echo 75 ;; esac; }
+# The chart camera a detail frame is taken from, when it is not the demo one.
+shot_view ()  { case $1 in
+                  ais-target)  echo "-76.4638,38.9745,14.5" ;;
+                  ais-aids)    echo "-76.4648,38.9722,16.5" ;;
+                esac; }
 
 # ---- preflight -------------------------------------------------------------
 bin=$APP/Contents/MacOS/LookoutMarine
@@ -86,7 +127,10 @@ fi
 tmp=$(mktemp -d /tmp/lk-shot-macos-XXXXXX)
 # LOOKOUT_KEEP=1 leaves the app logs behind: when a frame does not come out,
 # the reason is in them and nowhere else.
-cleanup () { [ "${LOOKOUT_KEEP:-0}" = 1 ] && echo "kept $tmp" || rm -rf "$tmp"; }
+cleanup () {
+  [ -n "${feed_pid:-}" ] && kill "$feed_pid" 2>/dev/null
+  [ "${LOOKOUT_KEEP:-0}" = 1 ] && echo "kept $tmp" || rm -rf "$tmp"
+}
 trap cleanup EXIT INT TERM
 
 # ---- the window picker -----------------------------------------------------
@@ -148,8 +192,67 @@ cp "$PLUGINS"/org.beetlebug.* "$tmp/plugins/" 2>/dev/null ||
 echo "plugins staged: $(ls "$tmp"/plugins/*.wasm | wc -l | tr -d ' ') from $PLUGINS"
 
 # ---- is the instrument feed free? ------------------------------------------
+# ---- the feed the frames see -----------------------------------------------
+# The frames are served the recorded fixture, started here, and never whatever
+# happens to be listening on the gateway port. A developer's machine usually
+# has a real instrument feed on 10110, and a frame taken from one publishes
+# other people's vessel names, MMSIs and positions.
+#
+# Sentences are grouped the way the log is written, from one RMC to the next,
+# and a group goes out every second. The log restarts when it runs out, and
+# each client gets it from the top, so a frame does not depend on how long the
+# run before it took.
+serve_fixture () {
+  cat > "$tmp/feed.py" <<'PY'
+import socket, sys, threading, time
+
+lines = open(sys.argv[1], "rb").read().splitlines()
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", 0))
+srv.listen(4)
+open(sys.argv[2], "w").write(str(srv.getsockname()[1]))
+
+def feed(c):
+    try:
+        while True:
+            first = True
+            for ln in lines:
+                if ln.startswith(b"$") and b"RMC" in ln[:9]:
+                    if not first:
+                        time.sleep(1)
+                    first = False
+                c.sendall(ln + b"\r\n")
+    except Exception:
+        pass
+    finally:
+        c.close()
+
+while True:
+    c, _ = srv.accept()
+    threading.Thread(target=feed, args=(c,), daemon=True).start()
+PY
+  python3 "$tmp/feed.py" "$LOG" "$tmp/feed.port" >"$tmp/feed.log" 2>&1 &
+  feed_pid=$!
+  i=0
+  while [ $i -lt 40 ] && [ ! -s "$tmp/feed.port" ]; do sleep 0.25; i=$((i + 1)); done
+  [ -s "$tmp/feed.port" ] || { echo "the fixture feed never came up:" >&2
+                               cat "$tmp/feed.log" >&2; exit 1; }
+  NMEA=127.0.0.1:$(cat "$tmp/feed.port")
+  echo "feed: $LOG on $NMEA"
+}
+
+# ---- the feed --------------------------------------------------------------
+feed_pid=""
+if [ -n "$NMEA" ]; then
+  echo "feed: $NMEA (LOOKOUT_NMEA given; the fixture feed is not started)"
+else
+  [ -f "$LOG" ] || { echo "no fixture log at $LOG (zig run tools/nmea_gen.zig -- $LOG)" >&2
+                     exit 1; }
+  serve_fixture
+fi
+
 # The Connections frame is only worth taking when the seeded row goes green.
-# The replay server serves ONE client, so an app already running holds it.
 feed_ok () {
   python3 - "$NMEA" <<'PY'
 import socket, sys
@@ -167,12 +270,22 @@ PY
 # The served frame: webp at quality 88, capped at CAP px wide. A window frame
 # is never UPscaled to the cap — the protocol asks for sharp glyphs at 100%,
 # and the settings window is narrower than the cap to begin with.
+# A crop, when given, is four fractions of the captured frame: LEFTxTOPxWIDTHxHEIGHT.
+# Fractions rather than pixels because the capture is in device pixels and the
+# window is in points, and the ratio differs between a Retina display and the
+# one plugged into it.
 towebp () {
-  python3 - "$1" "$2" "$CAP" <<'PY'
+  python3 - "$1" "$2" "$CAP" "${3:-}" <<'PY'
 import sys
 from PIL import Image
 src, dst, cap = sys.argv[1], sys.argv[2], int(sys.argv[3])
+crop = sys.argv[4] if len(sys.argv) > 4 else ""
 im = Image.open(src).convert("RGBA")
+if crop:
+    l, t, w, h = (float(v) for v in crop.split("x"))
+    box = (round(l * im.width), round(t * im.height),
+           round((l + w) * im.width), round((t + h) * im.height))
+    im = im.crop(box)
 if im.width > cap:
     im = im.resize((cap, round(im.height * cap / im.width)), Image.LANCZOS)
 im.save(dst, "WEBP", quality=88, method=6)
@@ -186,9 +299,21 @@ PY
 # set is also the guarantee that nothing else is ever signalled.
 instances () { pgrep -f "^$bin$" | sort | tr '\n' ' '; }
 
+# capture SECTION
+#   the settings frames: one per section of the mariner settings window.
+# capture NAME SHOW TITLE OUT [EXPECT]
+#   any other frame: SHOW is the LOOKOUT_SHOW the app reads, TITLE the window
+#   to wait for, OUT a path under the image directory. EXPECT is a WxH the
+#   window must come up at, or empty to accept whatever it autosaved.
 capture () {
   section=$1
-  out=$outdir/settings-$section.webp
+  show=${2-settings:$section}
+  title=${3-Mariner Settings}
+  out=$outdir/${4:-settings-$section.webp}
+  expect=${5-$EXPECT}
+  crop=${6:-}
+  view=${7:-$VIEW}
+  settle=${8:-$SETTLE}
   raw=$tmp/$section.png
   log=$tmp/$section.log
 
@@ -198,10 +323,11 @@ capture () {
   # process idling in its event loop for as long as you leave it.
   before=$(instances)
   open -n --env LOOKOUT_OPEN="$CHART" \
-          --env LOOKOUT_VIEW="$VIEW" \
+          --env LOOKOUT_VIEW="$view" \
           --env LOOKOUT_PLUGINS="$tmp/plugins" \
           --env LOOKOUT_NMEA="$NMEA" \
-          --env LOOKOUT_SHOW="settings:$section" \
+          --env LOOKOUT_CLEAN=1 \
+          --env LOOKOUT_SHOW="$show" \
           --stdout "$log" --stderr "$log" \
           "$APP" || { echo "$section: open failed" >&2; return 1; }
 
@@ -230,20 +356,20 @@ capture () {
   geom=""
   i=0
   while [ $i -lt 120 ]; do                      # up to 60s to map 7,000 cells
-    geom=$("$tmp/lkwin" "$pid" "Mariner Settings" 2>/dev/null | head -1)
+    geom=$("$tmp/lkwin" "$pid" "$title" 2>/dev/null | head -1)
     [ -n "$geom" ] && break
     kill -0 "$pid" 2>/dev/null || { echo "$section: app exited early, log:" >&2
                                     tail -5 "$log" >&2; return 1; }
     sleep 0.5
     i=$((i + 1))
   done
-  [ -n "$geom" ] || { echo "$section: no settings window after 60s" >&2; quit; return 1; }
+  [ -n "$geom" ] || { echo "$section: no \"$title\" window after 60s" >&2; quit; return 1; }
 
   wid=${geom%% *}
   size=${geom#* }
   # The rows settle after the window maps: a connection goes green, a status
   # line arrives, the chart behind finishes its first draw.
-  sleep "$SETTLE"
+  sleep "$settle"
 
   i=0
   while [ $i -lt 3 ]; do
@@ -260,10 +386,11 @@ capture () {
   while kill -0 "$pid" 2>/dev/null && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
 
   [ -f "$raw" ] || { echo "$section: screencapture wrote nothing" >&2; return 1; }
-  towebp "$raw" "$out"
-  [ "$size" = "$EXPECT" ] ||
-    echo "  warning: window was ${size}px, expected $EXPECT (someone resized it;" \
-         "the frame autosaves as 'mariner-settings')" >&2
+  mkdir -p "$(dirname "$out")"
+  towebp "$raw" "$out" "$crop"
+  [ -z "$expect" ] || [ "$size" = "$expect" ] ||
+    echo "  warning: window was ${size}px, expected $expect (someone resized it;" \
+         "the frame is autosaved per window)" >&2
   if grep -q "not loaded" "$log"; then
     echo "  warning: a plugin did not load —"
     grep "not loaded" "$log" | sed 's/^/            /'
@@ -272,14 +399,14 @@ capture () {
 
 # ---- go --------------------------------------------------------------------
 mkdir -p "$outdir"
-case " $SECTIONS all " in
+case " $SECTIONS $WINDOWS all " in
   *" $shot "*) : ;;
-  *) echo "usage: screenshots.sh [$(echo "$SECTIONS" | tr ' ' '|')|all] [-o DIR]" >&2
+  *) echo "usage: screenshots.sh [$(echo "$SECTIONS $WINDOWS" | tr ' ' '|')|all] [-o DIR]" >&2
      exit 1 ;;
 esac
 
 want=$shot
-[ "$shot" = all ] && want=$SECTIONS
+[ "$shot" = all ] && want="$SECTIONS $WINDOWS"
 
 case " $want " in
   *" connections "*)
@@ -292,9 +419,14 @@ esac
 fail=0
 for s in $want; do
   echo "== $s"
+  case " $WINDOWS " in
+    *" $s "*) set -- "$s" "$(shot_show "$s")" "$(shot_title "$s")" "$(shot_out "$s")" "" \
+                     "$(shot_crop "$s")" "$(shot_view "$s")" "$(shot_settle "$s")" ;;
+    *)        set -- "$s" ;;
+  esac
   # A launch does occasionally die before its window maps. One retry, then
   # say so: eight frames should not need a babysitter.
-  capture "$s" || { echo "   retrying $s" >&2
-                    capture "$s" || { echo "FAILED: $s" >&2; fail=1; } }
+  capture "$@" || { echo "   retrying $s" >&2
+                    capture "$@" || { echo "FAILED: $s" >&2; fail=1; } }
 done
 exit $fail

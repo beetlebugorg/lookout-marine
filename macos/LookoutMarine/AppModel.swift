@@ -590,6 +590,30 @@ final class AppModel: ObservableObject {
         _ = PluginTableWindowController.show(spec, model: self)
     }
 
+    /// Pin one declared table row on the chart by its id, for the screenshot
+    /// protocol's LOOKOUT_SHOW=target:<id>. The empty id takes the first row
+    /// of the declared sort, which for the AIS targets is the nearest
+    /// approach. This is the locate-on-chart path a double-click takes, minus
+    /// the dialog, so the frame holds the chart and the bubble alone.
+    func revealTableRow(_ id: String) {
+        guard let c = controller, let spec = c.tableSpecs().first(where: { $0.locatable })
+        else { return }
+        // A plugin builds no rows until it is told the dialog is open, so the
+        // dialog is opened to make them, read, and shut again. What is wanted
+        // is the bubble on the chart, not the dialog over it.
+        let window = PluginTableWindowController.show(spec, model: self)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            defer { window.dismiss() }
+            guard let self,
+                  let got = c.tableRows(plugin: spec.plugin, key: spec.key,
+                                        sortKey: spec.sortKey, ascending: spec.sortAscending,
+                                        columns: spec.columns.count) else { return }
+            let row = id.isEmpty ? got.rows.first : got.rows.first { $0.id == id }
+            guard let row, let lat = row.lat, let lon = row.lon else { return }
+            self.revealOnChart(lon: lon, lat: lat)
+        }
+    }
+
     /// Show a place a plugin table row named: centre the chart on it and pin
     /// the bubble of whatever the plugin draws there. A row with no position
     /// never gets here.

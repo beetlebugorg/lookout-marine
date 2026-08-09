@@ -605,6 +605,12 @@ final class PluginSettings: ObservableObject {
     /// per chart open, after the plugin layer exists. A saved key the schema no
     /// longer declares is ignored by the core.
     static func applySaved(to controller: ChartController) {
+        // LOOKOUT_CLEAN leaves every plugin on its manifest defaults and on the
+        // connection the host seeded, ignoring what this machine has saved.
+        // The screenshot protocol needs it: a saved connection list points at
+        // the developer's own instruments, and a frame taken through one
+        // publishes other people's vessel names, MMSIs and positions.
+        if ProcessInfo.processInfo.environment["LOOKOUT_CLEAN"] != nil { return }
         let saved = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
         let savedRows = UserDefaults.standard.dictionary(forKey: listsKey) ?? [:]
         if saved.isEmpty && savedRows.isEmpty { return }
