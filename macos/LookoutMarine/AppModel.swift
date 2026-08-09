@@ -585,7 +585,13 @@ final class AppModel: ObservableObject {
         pluginTables = c.tableSpecs()
     }
 
+    #endif
+
     // MARK: Plugin alerts
+    //
+    // Cross-platform: the banner, the poll and the siren all run on iOS too,
+    // so the plugins reach an iPad mariner. Only the declared-table windows
+    // above (NSWindow) and the reveal-on-chart paths stay macOS-only.
 
     /// Every alert the plugins have raised, most urgent first. The banner over
     /// the chart is built from this.
@@ -648,6 +654,7 @@ final class AppModel: ObservableObject {
         refreshAlerts()
     }
 
+    #if os(macOS)
     /// Open one declared table's window, or bring it forward.
     func showPluginTable(_ spec: PluginTableSpec) {
         _ = PluginTableWindowController.show(spec, model: self)
