@@ -450,7 +450,8 @@ for you once it owns the row.
 ```zig
 if (crossing and !alarmed) {
     alarmed = true;
-    _ = lk.alert(.alarm, "AIS CPA alarm", "899000101: CPA 149 m in 591 s");
+    _ = lk.alertKeyed("cpa:899000101", .alarm, "AIS CPA alarm",
+        "GALLEON is closing inside your CPA limit");
 }
 ```
 
@@ -474,10 +475,14 @@ it did on the draw timer, because `onUpdate` runs an order of magnitude more
 often. Give the gate a dead band if the quantity can sit on the limit: a
 target parked at exactly the alarm distance must not alarm once a second.
 
-**Put the target in the body.** The host tells one alert from another by your
-plugin, the title and the body, so a title naming the condition and a body
-naming the vessel gives one alarm per vessel. A title alone would collapse two
-close passes into one.
+**Key it on the target.** The host holds one alert for each plugin and key, so
+a key built from the MMSI gives one alarm per vessel. Restating that alarm
+updates the words on screen and leaves the mariner's acknowledgement alone.
+
+**Keep a moving figure out of the body.** Without a key the host tells two
+alerts apart by the title and the body. A CPA that ticks is then a new alert
+every second, and the mariner cannot silence it. Draw the figure on the chart,
+where a value that changes belongs.
 
 Reference: [alert](wire.md#alert).
 

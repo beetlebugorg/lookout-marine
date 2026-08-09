@@ -122,7 +122,7 @@ pub use input::{
     Position, Required, Target, Value, DEFAULT_MAX_AGE_MS,
 };
 pub use json::Json;
-pub use post::{alert, say, Publish, Upsert};
+pub use post::{alert, alert_keyed, say, Publish, Upsert};
 pub use raw::{log, mono_ms, now_ms, Level, Severity, API_VERSION};
 pub use settings::{
     expect_manifest, settings_json, Field, FieldSpec, Fields, Flag, Group, ListInfo, Num,

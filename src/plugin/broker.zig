@@ -691,12 +691,17 @@ pub const Broker = struct {
 
     /// Take one alert from a plugin, deduplicated.
     ///
-    /// ONE CONDITION IS ONE ALERT. What tells two apart is the plugin, the
-    /// title and the body: the title names the condition and the body names
-    /// the instance of it, so two vessels closing are two alarms and one
-    /// vessel restated is one. A restatement updates the alert in place. A
-    /// LOUDER restatement also takes back the acknowledgement, because a
-    /// warning that has become an alarm is news.
+    /// ONE CONDITION IS ONE ALERT, and what tells two apart is the plugin and
+    /// the identity of the alert. A payload carrying a `key` says that
+    /// identity outright, so two vessels closing are two alarms and one vessel
+    /// restated is one however the words come out. A payload with no key falls
+    /// back to its title and body. `Alert.restatedBy` holds the rule.
+    ///
+    /// A restatement updates the alert in place, words and all, and leaves the
+    /// acknowledgement where it is: silence is the mariner's decision and a
+    /// plugin saying the same thing again does not take it back. A LOUDER
+    /// restatement does take it back, because a warning that has become an
+    /// alarm is news.
     ///
     /// The caller has already checked the capability and logged the line.
     pub fn raiseAlert(self: *Broker, p: *Plugin, json: []const u8) void {
@@ -708,22 +713,28 @@ pub const Broker = struct {
 
         for (self.alerts.items) |*a| {
             if (a.plugin != p.index) continue;
-            if (!std.mem.eql(u8, a.title, raised.title)) continue;
-            if (!std.mem.eql(u8, a.body, raised.body)) continue;
+            if (!a.restatedBy(raised)) continue;
             a.last_ms = now;
+            var news = self.setAlertWordsLocked(a, raised);
             if (raised.severity.louderThan(a.severity)) {
                 a.severity = raised.severity;
                 a.acknowledged = false;
-                self.alerts_seq += 1;
+                news = true;
             }
+            if (news) self.alerts_seq += 1;
             return;
         }
         if (!self.makeAlertRoomLocked(p.index)) {
             self.say(level_warn, p.id, "alert refused: {d} unacknowledged alert(s) already raised", .{max_alerts_per_plugin});
             return;
         }
-        const title = self.alloc.dupe(u8, raised.title) catch return;
+        const key = self.alloc.dupe(u8, raised.key) catch return;
+        const title = self.alloc.dupe(u8, raised.title) catch {
+            self.alloc.free(key);
+            return;
+        };
         const body = self.alloc.dupe(u8, raised.body) catch {
+            self.alloc.free(key);
             self.alloc.free(title);
             return;
         };
@@ -732,11 +743,13 @@ pub const Broker = struct {
             .plugin_id = p.id,
             .id = self.next_alert_id,
             .severity = raised.severity,
+            .key = key,
             .title = title,
             .body = body,
             .raised_ms = wallMs(),
             .last_ms = now,
         }) catch {
+            self.alloc.free(key);
             self.alloc.free(title);
             self.alloc.free(body);
             return;
@@ -745,10 +758,28 @@ pub const Broker = struct {
         self.alerts_seq += 1;
     }
 
-    /// Silence one alert. The key is the alert and not the condition class: a
-    /// mariner who has seen the vessel crossing ahead has not seen the one
-    /// coming up astern, and one control for both would hide the second.
-    /// True when an alert holds that id.
+    /// Put the restated words on an alert already up. True when they are not
+    /// what it was already saying, so the caller moves the sequence and the
+    /// shell re-reads. An allocation that fails leaves the older words in
+    /// place: words a few seconds out of date still name the danger.
+    fn setAlertWordsLocked(self: *Broker, a: *Alert, raised: alerts.Raised) bool {
+        if (std.mem.eql(u8, a.title, raised.title) and std.mem.eql(u8, a.body, raised.body)) return false;
+        const title = self.alloc.dupe(u8, raised.title) catch return false;
+        const body = self.alloc.dupe(u8, raised.body) catch {
+            self.alloc.free(title);
+            return false;
+        };
+        self.alloc.free(a.title);
+        self.alloc.free(a.body);
+        a.title = title;
+        a.body = body;
+        return true;
+    }
+
+    /// Silence one alert. What an acknowledgement names is one alert and not a
+    /// class of condition: a mariner who has seen the vessel crossing ahead has
+    /// not seen the one coming up astern, and one control for both would hide
+    /// the second. True when an alert holds that id.
     pub fn ackAlert(self: *Broker, id: u64) bool {
         self.mu.lock();
         defer self.mu.unlock();

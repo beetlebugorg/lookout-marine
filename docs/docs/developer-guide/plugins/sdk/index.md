@@ -250,6 +250,7 @@ The windline example is available in each language: `plugins/windline/`,
 | The data hook | `pub fn onData(conn, b)` | `OnData(*lk.Conn, []byte)` | `fn on_data(&mut self, …)` |
 | Publish values | `lk.Publish.begin()` | `lk.NewPublish()` | `lk::Publish::begin()` |
 | Raise an alarm | `lk.alert(sev, t, b)` | `lk.Alert(sev, t, b)` | `lk::alert(sev, t, b)` |
+| Raise an alarm about one vessel | `lk.alertKeyed(key, sev, t, b)` | `lk.AlertKeyed(key, sev, t, b)` | `lk::alert_keyed(key, sev, t, b)` |
 
 Four differences between the languages are not cosmetic.
 

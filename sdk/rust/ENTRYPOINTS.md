@@ -350,11 +350,26 @@ is metres per second: everything crossing the API is SI.
 ## Alarms
 
 ```rust
-lk::alert(lk::Severity::Alarm, "Collision risk", &format!("{} at {:.1} nm", name, cpa_nm));
+lk::alert_keyed(
+    &format!("cpa:{mmsi}"),
+    lk::Severity::Alarm,
+    "Collision risk",
+    &format!("{name} is closing inside your CPA limit"),
+);
+lk::alert(lk::Severity::Alarm, "Steering gear failure", "the helm has stopped answering");
 ```
 
 Needs `alerts.raise`. Raise one when the mariner must act now and would not
 otherwise know. Everything else is a status line.
+
+The key is the identity of the thing in danger. The host holds one alert for
+each plugin and key, so raising again under the same key updates the alert on
+screen and leaves the mariner's acknowledgement alone. `alert` is the same call
+with no key, for a condition that can only happen once at a time.
+
+Keep a figure that moves out of the body. Without a key the host tells two
+alerts apart by the title and the body, so a CPA that ticks is a new alert
+every second and the mariner cannot silence it.
 
 ## Tier 3 — the raw events
 

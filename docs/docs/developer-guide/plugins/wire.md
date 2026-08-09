@@ -439,7 +439,8 @@ progress. An alarm belongs in [alert](#alert), not here.
 ### alert
 
 ```json
-{"severity":"alarm","title":"AIS CPA alarm","body":"899000101: CPA 149 m in 591 s"}
+{"severity":"alarm","key":"cpa:899000101","title":"AIS CPA alarm",
+ "body":"GALLEON is closing inside your CPA limit"}
 ```
 
 The host holds the alert for the shell and logs it. **Set the severity
@@ -456,11 +457,19 @@ the log level.
 
 An unreadable severity is an alarm rather than a dropped alert.
 
-One condition is one alert. The host keys them on your plugin, the title and the
-body, so restating the same danger updates the alert you already raised and two
-vessels closing stay two alarms. The title is cut at 96 bytes and the body at
-240. An alert whose plugin unloads, or loses `alerts.raise`, is withdrawn with
-it.
+One condition is one alert. `key` is the identity you give it. The host holds
+one alert for each plugin and key, so a raise under a key it already holds
+updates that alert instead of adding one, and two vessels closing stay two
+alarms. The mariner's acknowledgement survives the update, so an alarm they
+silenced stays silent.
+
+Without a `key` the host has only your words, so it keys the alert on your
+plugin, the title and the body. A body carrying a figure that moves is then a
+new alert every time it moves, and the mariner cannot silence it. Key the
+alert, and draw the moving figure on the chart instead.
+
+The key is cut at 64 bytes, the title at 96 and the body at 240. An alert whose
+plugin unloads, or loses `alerts.raise`, is withdrawn with it.
 
 ### http_fetch
 

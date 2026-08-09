@@ -256,13 +256,32 @@ const (
 // Everything else is a status line: an alarm that cries wolf is switched off,
 // and then the real one is not heard.
 func Alert(sev Severity, title, body string) int32 {
-	b := append(make([]byte, 0, 128), `{"severity":`...)
+	return hostAlert(alertPayload("", sev, title, body))
+}
+
+// AlertKeyed raises an alert under a key of your own. The host holds one alert
+// per plugin per key, so a raise under a key it already holds updates that
+// alert instead of adding one, and the mariner's acknowledgement survives it.
+//
+// Key on the identity of the thing in danger, such as a vessel's MMSI, and not
+// on the words. An empty key is no key, and the host then tells the alert from
+// another by the title and the body alone. The key is cut at 64 bytes.
+func AlertKeyed(key string, sev Severity, title, body string) int32 {
+	return hostAlert(alertPayload(key, sev, title, body))
+}
+
+func alertPayload(key string, sev Severity, title, body string) []byte {
+	b := append(make([]byte, 0, 192), `{"severity":`...)
 	b = appendString(b, string(sev))
+	if key != "" {
+		b = append(b, `,"key":`...)
+		b = appendString(b, key)
+	}
 	b = append(b, `,"title":`...)
 	b = appendString(b, title)
 	b = append(b, `,"body":`...)
 	b = appendString(b, body)
-	return hostAlert(append(b, '}'))
+	return append(b, '}')
 }
 
 // ---------------------------------------------------------------------------

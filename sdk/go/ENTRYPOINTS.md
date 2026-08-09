@@ -387,6 +387,26 @@ counting has to come off the chart.
 write it. A `nil`, or a nil `*float64`, `*string` or `*bool`, is a dash. A value
 the column cannot hold is a dash too, and one log line.
 
+## Alarms
+
+```go
+lk.AlertKeyed(fmt.Sprintf("cpa:%d", mmsi), lk.Alarm, "Collision risk",
+	name+" is closing inside your CPA limit")
+lk.Alert(lk.Alarm, "Steering gear failure", "the helm has stopped answering")
+```
+
+Needs `alerts.raise`. Raise one when the mariner must act now and would not
+otherwise know. Everything else is a status line.
+
+The key is the identity of the thing in danger. The host holds one alert for
+each plugin and key, so raising again under the same key updates the alert on
+screen and leaves the mariner's acknowledgement alone. `Alert` is the same call
+with no key, for a condition that can only happen once at a time.
+
+Keep a figure that moves out of the body. Without a key the host tells two
+alerts apart by the title and the body, so a CPA that ticks is a new alert
+every second and the mariner cannot silence it.
+
 ## The chart grant
 
 The library reads `GRANTS_CHANGED` and follows `overlay.draw`. When the grant
@@ -406,7 +426,7 @@ the rest. `e.Kind` is the kind, `e.Handle` correlates, `e.Payload` belongs to th
 host until the call returns. The parsers hang off the event —`e.PathValues()`,
 `e.Targets()`, `e.Response()`, `e.File()` — and the host calls are package
 functions: `lk.TCPConnect`, `lk.TimerSet`, `lk.HTTPFetch`, `lk.StorageGet`,
-`lk.SubscribePaths`, `lk.Alert`.
+`lk.SubscribePaths`, `lk.Alert`, `lk.AlertKeyed`.
 
 A raw plugin that draws calls `lk.Scene(func(c *lk.Chart) { … })`, which
 gives it the same retained scene and the same deletes as `Draw`.
