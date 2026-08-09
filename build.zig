@@ -41,12 +41,13 @@ fn wamrDist(target: std.Build.ResolvedTarget) ?WamrDist {
             .aarch64 => WamrDist{ .dir = "vendor/wamr-dist-linux-arm64", .mode = "linux-arm64" },
             else => null,
         },
-        // x86_64 only. windows/build-core.ps1 ships aarch64-windows-msvc, and
-        // the script builds no archive for it: a mingw archive does not meet
-        // an MSVC one. `scripts/build-wamr.sh windows-x64 --print-msvc` has the
-        // native recipe.
+        // The x64 dist holds whichever ABI was written last (mingw cross or
+        // the --print-msvc native recipe); the arm64 one is always MSVC ABI,
+        // built on the ARM64 Windows machine itself (`bash
+        // scripts/build-wamr.sh windows-arm64` under Git Bash).
         .windows => switch (t.cpu.arch) {
             .x86_64 => WamrDist{ .dir = "vendor/wamr-dist-windows-x64", .mode = "windows-x64" },
+            .aarch64 => WamrDist{ .dir = "vendor/wamr-dist-windows-arm64", .mode = "windows-arm64" },
             else => null,
         },
         else => null,

@@ -11,10 +11,13 @@
 #   linux-x64      vendor/wamr-dist-linux-x64/
 #   linux-arm64    vendor/wamr-dist-linux-arm64/
 #   windows-x64    vendor/wamr-dist-windows-x64/    mingw ABI — see WINDOWS below
+#   windows-arm64  vendor/wamr-dist-windows-arm64/  MSVC ABI — see WINDOWS below
 #   android-arm64  vendor/wamr-dist-android-arm64/  arm64-v8a, NDK API 24
 #
 #   apple          macos ios iossim
-#   all            every target above
+#   all            every target above except windows-arm64, which only builds
+#                  on an ARM64 Windows machine (it needs the installed MSVC
+#                  headers and Windows SDK)
 #
 # And one target that is not a runtime archive at all:
 #
@@ -34,12 +37,20 @@
 # need zig and cmake and nothing else: WAMR is plain C, so `zig cc -target ...`
 # is the cross compiler and `zig ar` writes the archive. See cross_toolchain.
 #
-# WINDOWS. This builds the mingw ABI (x86_64-windows-gnu). The shipping Windows
-# app is MSVC — windows/build-core.ps1 selects aarch64-windows-msvc — and the
-# two ABIs do not meet. `scripts/build-wamr.sh windows-x64 --print-msvc` prints
-# the cmake command that builds the MSVC archive on a Windows machine. A dist
-# directory is per platform and architecture, not per ABI, so the two Windows
-# x64 archives share one and the last one written wins.
+# WINDOWS. windows-x64 builds the mingw ABI (x86_64-windows-gnu). The shipping
+# Windows app is MSVC — windows/build-core.ps1 selects aarch64-windows-msvc —
+# and the two ABIs do not meet. `scripts/build-wamr.sh windows-x64 --print-msvc`
+# prints the cmake command that builds the MSVC x64 archive on a Windows
+# machine. A dist directory is per platform and architecture, not per ABI, so
+# the two Windows x64 archives share one and the last one written wins.
+#
+# windows-arm64 is different: it runs ON the ARM64 Windows machine itself,
+# under Git Bash, where `zig cc -target aarch64-windows-msvc` finds the
+# installed MSVC headers and Windows SDK — the same way the core itself is
+# built there — so the archive it writes IS the MSVC ABI and meets the core.
+# On that host cmake is the native Windows build, which cannot exec the shell
+# wrappers cross_toolchain writes elsewhere and defaults to the Visual Studio
+# generator; see cross_toolchain and build_one for the .bat/Ninja variant.
 #
 # Idempotent per target: returns at once when that archive, its headers and its
 # WAMR_VERSION stamp all match what this script builds now. A dist from an older
@@ -72,13 +83,14 @@ ANDROID_API="24"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 src="$root/vendor/wamr"
 
-usage="usage: ${BASH_SOURCE[0]##*/} [macos|ios|iossim|linux-x64|linux-arm64|windows-x64|android-arm64|apple|all|wamrc] [--print-msvc]"
+usage="usage: ${BASH_SOURCE[0]##*/} [macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64|apple|all|wamrc] [--print-msvc]"
 target="${1:-macos}"
 case "$target" in
-    macos|ios|iossim|linux-x64|linux-arm64|windows-x64|android-arm64) targets=("$target") ;;
+    macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64) targets=("$target") ;;
     apple) targets=(macos ios iossim) ;;
     # wamrc is NOT in `all`: it is a build-machine tool, it needs LLVM, and
-    # nothing that ships contains it.
+    # nothing that ships contains it. windows-arm64 is not in `all` either:
+    # it builds only on the ARM64 Windows machine (see WINDOWS above).
     all)   targets=(macos ios iossim linux-x64 linux-arm64 windows-x64 android-arm64) ;;
     wamrc) targets=(wamrc) ;;
     *) echo "$usage" >&2; exit 2 ;;
@@ -179,10 +191,10 @@ print_msvc_recipe() {
     echo "The MSVC-ABI archive is built on the Windows machine itself: the Windows SDK" >&2
     echo "is not on this host. In a Visual Studio x64 Native Tools Command Prompt:" >&2
     echo >&2
-    echo "x64 ONLY. There is no ARM64 Windows dist directory — build.zig's wamrDist" >&2
-    echo "maps only x86_64 on Windows — so an ARM64 archive built with -A ARM64 has" >&2
-    echo "nowhere to go and -Dplugins=true on aarch64-windows-msvc refuses whatever" >&2
-    echo "is on disk. Build the Windows shell for x64 to get the plugin host." >&2
+    echo "x64 ONLY. The ARM64 Windows archive is not built this way: run" >&2
+    echo "\`bash scripts/build-wamr.sh windows-arm64\` on the ARM64 Windows machine" >&2
+    echo "itself, where zig cc targets the MSVC ABI directly and the archive lands" >&2
+    echo "in vendor/wamr-dist-windows-arm64." >&2
     echo >&2
     echo "    git clone --depth 1 --branch $WAMR_TAG $WAMR_URL wamr" >&2
     echo "    cd wamr" >&2
@@ -197,8 +209,19 @@ print_msvc_recipe() {
             *) echo "        $f ^" >&2 ;;
         esac
     done
-    echo "        -DWAMR_BUILD_TARGET=X86_64 -DWAMR_ROOT_DIR=." >&2
+    echo "        -DWAMR_BUILD_TARGET=X86_64 -DWAMR_ROOT_DIR=. ^" >&2
+    echo "        -DCMAKE_C_FLAGS=\"/DWASM_API_EXTERN= /DWASM_RUNTIME_API_EXTERN=\"" >&2
     echo "    cmake --build build --config Release" >&2
+    echo >&2
+    echo "The two empty macros are required, not tidiness: under MSVC the WAMR" >&2
+    echo "headers declare their API __declspec(dllimport), WAMR's own TUs then" >&2
+    echo "reference __imp_wasm_runtime_begin_blocking_op, __imp_wasm_trap_delete" >&2
+    echo "and __imp_wasm_runtime_end_blocking_op, and a static archive has no" >&2
+    echo "import library to resolve them — the app's link ends in LNK2019. The" >&2
+    echo "same holds for __imp_wasm_runtime_malloc and __imp_wasm_runtime_free," >&2
+    echo "declared in core/shared/platform/include/platform_common.h behind no" >&2
+    echo "overridable macro at all: see fix_msvc_dll_attrs in this script, which" >&2
+    echo "adds the WASM_RUNTIME_STATIC_API escape the windows-arm64 target uses." >&2
     echo >&2
     echo "Copy build\\Release\\vmlib.lib to vendor/wamr-dist-windows-x64/lib/libvmlib.a" >&2
     echo "and core/iwasm/include/*.h to vendor/wamr-dist-windows-x64/include/. A dist" >&2
@@ -306,6 +329,105 @@ fix_win_file_comments() {
     sed -E 's,(//.*\\)[[:space:]]+$,\1.,' "$f" >"$f.lookout-tmp" && mv "$f.lookout-tmp" "$f"
 }
 
+# A second defect in the pinned tree, hit only by the windows-arm64 target.
+# invokeNative_aarch64.s marks its symbol with the ELF `.type` directive, which
+# LLVM's COFF assembler rejects ("expected absolute expression"). The file's
+# own #ifndef lines are comments to an unpreprocessed GAS parse — `#` opens a
+# line comment on aarch64 — so on ELF targets nothing changes when the
+# directive gains a preprocessor guard. The windows-arm64 target assembles the
+# file WITH the preprocessor (-x assembler-with-cpp in its as.bat wrapper, see
+# cross_toolchain), where BH_PLATFORM_WINDOWS is on the command line and the
+# guard excludes the directive. Idempotent, re-applied after every clone.
+fix_invoke_native_type() {
+    local f="$src/core/iwasm/common/arch/invokeNative_aarch64.s"
+    [ -f "$f" ] || return 0
+    grep -q 'BH_PLATFORM_WINDOWS' "$f" && return 0
+    echo "wamr: guarding the ELF .type directive in ${f#$src/} (see fix_invoke_native_type)"
+    sed -e 's|^\([[:space:]]*\)\(\.type[[:space:]][[:space:]]*invokeNative.*\)$|#ifndef BH_PLATFORM_WINDOWS\n\1\2\n#endif|' \
+        "$f" >"$f.lookout-tmp" && mv "$f.lookout-tmp" "$f"
+}
+
+# The third defect, and the same disease as the two empty EXTERN macros the
+# windows-arm64 target passes (see its cc_flags). platform_common.h declares
+# BH_MALLOC and BH_FREE — which are wasm_runtime_malloc and wasm_runtime_free —
+# __declspec(dllimport) under _MSC_BUILD, and that declaration is behind NO
+# macro a command line can override: the only escape upstream offers is
+# COMPILING_WASM_RUNTIME_API, whose other branch is dllexport, which would
+# export runtime symbols from whatever binary links the archive. Eleven members
+# of the archive (bh_common, win_thread, str, ...) reference
+# __imp_wasm_runtime_malloc without it, and a static archive has no import
+# library, so the app's link fails.
+#
+# The patch gives that block the override it lacks. WASM_RUNTIME_STATIC_API is
+# this project's macro, defined only by the windows-arm64 cc_flags; with it the
+# declarations are the plain ones every non-MSVC target already uses.
+# Idempotent, re-applied after every clone.
+fix_msvc_dll_attrs() {
+    local f="$src/core/shared/platform/include/platform_common.h"
+    [ -f "$f" ] || return 0
+    grep -q 'WASM_RUNTIME_STATIC_API' "$f" && return 0
+    echo "wamr: adding the WASM_RUNTIME_STATIC_API escape to ${f#$src/} (see fix_msvc_dll_attrs)"
+    sed -e 's|^#if defined(_MSC_BUILD)$|#if defined(_MSC_BUILD) \&\& !defined(WASM_RUNTIME_STATIC_API)|' \
+        "$f" >"$f.lookout-tmp" && mv "$f.lookout-tmp" "$f"
+}
+
+# The fourth defect, and the one that decides whether the runtime WORKS.
+# wasm_runtime_invoke_native marshals a wasm call's arguments into the layout
+# the arch's invokeNative assembly reads, and it picks that layout from _WIN32
+# ALONE:
+#
+#     #if defined(_WIN32) || defined(_WIN32_)
+#     #define MAX_REG_FLOATS 4          <- the Win64 x86-64 convention
+#     #define MAX_REG_INTS 4
+#     ...
+#     #define n_fps n_ints              <- and its SHARED register index
+#
+# That is x86-64's calling convention, not the machine's. Windows on ARM64
+# follows AAPCS64 like every other aarch64 platform: eight integer registers
+# (x0-x7) and eight floating ones (d0-d7), indexed SEPARATELY — which is
+# exactly what core/iwasm/common/arch/invokeNative_aarch64.s reads, argv[0..7]
+# into d0-d7 and argv[8..15] into x0-x7. With the Windows numbers the
+# marshaller writes exec_env into argv[4] and the assembly reads x0 from
+# argv[8], so EVERY native receives zeros: the first one dereferences a NULL
+# exec_env and the process dies with an access violation inside the first
+# plugin's lk_start. Upstream never sees this because WAMR ships no Windows
+# ARM64 support at all.
+#
+# The patch excludes aarch64 from both Windows branches, which puts this target
+# on the AAPCS64 path the assembly already implements. It cannot reach any
+# other target: both edits are guarded by BUILD_TARGET_AARCH64, which only an
+# aarch64 build defines, and the Windows branches only a _WIN32 one takes.
+# Idempotent, re-applied after every clone.
+fix_win_arm64_native_abi() {
+    local f="$src/core/iwasm/common/wasm_runtime_common.c"
+    [ -f "$f" ] || return 0
+    grep -q '!defined(BUILD_TARGET_AARCH64)' "$f" && return 0
+    echo "wamr: giving Windows aarch64 the AAPCS64 native-call layout in ${f#$src/} (see fix_win_arm64_native_abi)"
+    awk '
+      # The MAX_REG_FLOATS/MAX_REG_INTS block: identified by the line after it,
+      # so the identical-looking #if above the SIMD v128 typedef is left alone.
+      /^#if defined\(_WIN32\) \|\| defined\(_WIN32_\)$/ {
+          keep = $0
+          if ((getline nxt) > 0) {
+              if (nxt == "#define MAX_REG_FLOATS 4")
+                  print "#if (defined(_WIN32) || defined(_WIN32_)) && !defined(BUILD_TARGET_AARCH64)"
+              else
+                  print keep
+              print nxt
+              next
+          }
+          print keep
+          next
+      }
+      # The n_fps/n_ints aliasing: one shared argument index is x86-64 too.
+      /^#if defined\(_WIN32\) \|\| defined\(_WIN32_\) \|\| defined\(BUILD_TARGET_RISCV64_LP64\)$/ {
+          print "#if ((defined(_WIN32) || defined(_WIN32_)) && !defined(BUILD_TARGET_AARCH64)) || defined(BUILD_TARGET_RISCV64_LP64)"
+          next
+      }
+      { print }
+    ' "$f" >"$f.lookout-tmp" && mv "$f.lookout-tmp" "$f"
+}
+
 ensure_src() {
     if [ ! -d "$src/.git" ]; then
         echo "wamr: cloning $WAMR_TAG into vendor/wamr"
@@ -321,6 +443,9 @@ ensure_src() {
     fi
 
     fix_win_file_comments
+    fix_invoke_native_type
+    fix_msvc_dll_attrs
+    fix_win_arm64_native_abi
 
     # The runtime archive is not a target WAMR ships: product-mini builds an iwasm
     # executable and links vmlib into it. This project file adds vmlib alone from
@@ -338,9 +463,69 @@ target_include_directories (vmlib PUBLIC ${WAMR_ROOT_DIR}/core/iwasm/include)
 CMAKE
 }
 
+# A Windows host (Git Bash driving the native Windows cmake) needs three
+# accommodations that a POSIX host does not: the wrapper tools must be .bat
+# files because the native cmake execs through CreateProcess, which runs a
+# batch file but not a shebang script; every path handed to cmake must be a
+# Windows one; and a generator must be named, because the Windows default is
+# Visual Studio, which ignores CMAKE_C_COMPILER entirely.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) host_windows=1 ;;
+    *) host_windows="" ;;
+esac
+tool_ext=""; [ -n "$host_windows" ] && tool_ext=".bat"
+
+# A path as the native cmake wants it: C:/... with forward slashes on the
+# Windows host, unchanged elsewhere.
+cmpath() {
+    if [ -n "$host_windows" ]; then cygpath -m "$1"; else echo "$1"; fi
+}
+
+# The Windows SDK's rc.exe, for the Windows host. cmake's Windows-Clang
+# platform file insists on an RC compiler even for a static library that
+# compiles no .rc file, so the tool is named but never runs. Newest SDK,
+# host-arch flavour first.
+find_rc() {
+    local arch d
+    for arch in arm64 x64 x86; do
+        for d in "/c/Program Files (x86)/Windows Kits/10/bin"/10.*; do
+            [ -x "$d/$arch/rc.exe" ] && echo "$d/$arch/rc.exe"
+        done | sort -V | tail -1 | grep . && return 0
+    done
+    return 1
+}
+
+# MSVC's MASM, for the Windows host. runtime_lib.cmake enables ASM_MASM
+# whenever the platform is windows; the AARCH64 build compiles no .asm file
+# through it (invokeNative is the GAS-syntax .s, via zig cc), but the language
+# still has to enable, and left to itself cmake goes looking for a bare `ml`
+# that is not on PATH. Any real MASM binary satisfies it.
+find_masm() {
+    local d a
+    for d in "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostarm64/arm64 \
+             "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64; do
+        for a in ml64.exe armasm64.exe; do
+            [ -x "$d/$a" ] && { echo "$d/$a"; return 0; }
+        done
+    done
+    return 1
+}
+
+# ninja for the Windows host. PATH first; Visual Studio ships one with its
+# cmake component, and this machine builds the shell with VS anyway.
+find_ninja() {
+    command -v ninja >/dev/null 2>&1 && { echo ninja; return 0; }
+    local n
+    for n in "/c/Program Files/Microsoft Visual Studio"/*/*/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe; do
+        [ -x "$n" ] && { cygpath -m "$n"; return 0; }
+    done
+    return 1
+}
+
 # One zig cross target, written as four one-line wrappers. cmake wants tools it
 # can exec, not command lines with arguments in them. `zig ar` (llvm-ar) writes
 # the archive: the host's ar cannot write an ELF or a COFF symbol index.
+# On the Windows host the wrappers are .bat files (see above).
 #   cross_toolchain <dir> <zig triple> [extra cc flags...]
 cross_toolchain() {
     local dir="$1" triple="$2"
@@ -348,6 +533,21 @@ cross_toolchain() {
     mkdir -p "$dir"
     local extra=""
     local f
+    if [ -n "$host_windows" ]; then
+        local zigexe
+        zigexe="$(cygpath -w "$(command -v zig)")"
+        for f in "$@"; do extra="$extra $f"; done
+        printf '@"%s" cc -target %s%s %%*\r\n'  "$zigexe" "$triple" "$extra" >"$dir/cc.bat"
+        printf '@"%s" c++ -target %s%s %%*\r\n' "$zigexe" "$triple" "$extra" >"$dir/cxx.bat"
+        # The assembler runs the preprocessor, so the #if guards inside WAMR's
+        # .s files (invokeNative_aarch64.s) are real here — that is what keeps
+        # the ELF-only .type directive away from the COFF assembler (see
+        # fix_invoke_native_type).
+        printf '@"%s" cc -target %s%s -x assembler-with-cpp %%*\r\n' "$zigexe" "$triple" "$extra" >"$dir/as.bat"
+        printf '@"%s" ar %%*\r\n'     "$zigexe" >"$dir/ar.bat"
+        printf '@"%s" ranlib %%*\r\n' "$zigexe" >"$dir/ranlib.bat"
+        return 0
+    fi
     for f in "$@"; do extra="$extra $(printf '%q' "$f")"; done
     printf '#!/bin/sh\nexec zig cc -target %s%s "$@"\n'  "$triple" "$extra" >"$dir/cc"
     printf '#!/bin/sh\nexec zig c++ -target %s%s "$@"\n' "$triple" "$extra" >"$dir/cxx"
@@ -373,6 +573,10 @@ verify_arch() {
 build_one() {
     local t="$1"
     local dist build label sdk osx_arch wamr_target wamr_platform
+    # What cmake names the archive it builds. Every dist stores it as
+    # lib/libvmlib.a whatever it was called; on the MSVC-ABI target cmake's
+    # Windows naming produces vmlib.lib.
+    local built="libvmlib.a"
     local triple="" check_arch="" ndk sysroot
     local -a platform_flags cc_flags
     platform_flags=()
@@ -436,6 +640,44 @@ build_one() {
             check_arch="amd64 COFF"
             label="$triple (mingw ABI)"
             ;;
+        windows-arm64)
+            # MSVC ABI, and only on the ARM64 Windows machine itself: zig cc
+            # resolves -target aarch64-windows-msvc against the installed MSVC
+            # headers and Windows SDK, which is exactly how the core is built
+            # there (windows/build-core.ps1). On any other host the compiler
+            # probe fails for want of those headers, and that is correct.
+            [ -n "$host_windows" ] || {
+                echo "build-wamr.sh: windows-arm64 builds the MSVC ABI against the installed" >&2
+                echo "               MSVC headers and Windows SDK, so it runs only on the" >&2
+                echo "               Windows machine itself (under Git Bash)." >&2
+                exit 1
+            }
+            dist="$root/vendor/wamr-dist-windows-arm64"
+            triple="aarch64-windows-msvc"; wamr_platform=windows; wamr_target=AARCH64
+            platform_flags=(-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64)
+            check_arch="ARM64 COFF"
+            built="vmlib.lib"
+            # THE DLL MACROS, AND THEY ARE NOT COSMETIC. wasm_export.h and
+            # wasm_c_api.h expand their EXTERN macro to __declspec(dllimport)
+            # whenever _MSC_BUILD is defined and WAMR's own "I am building the
+            # runtime" macro is not — and clang defines _MSC_BUILD for
+            # aarch64-windows-msvc. WAMR's own TUs then call three of its
+            # functions through __imp_*, and a STATIC archive has no import
+            # library behind those symbols, so the shell's link ends in
+            #   LNK2019 unresolved __imp_wasm_runtime_begin_blocking_op
+            #   LNK2019 unresolved __imp_wasm_runtime_end_blocking_op
+            #   LNK2019 unresolved __imp_wasm_trap_delete
+            # Both headers guard the macro with #ifndef, so defining each one
+            # empty on the command line makes every declaration a plain
+            # extern — which is what a static library wants. dllexport would
+            # also resolve them, but it would additionally export the whole
+            # runtime API from any DLL that links this archive.
+            # WASM_RUNTIME_STATIC_API belongs to fix_msvc_dll_attrs above and
+            # closes the same hole in platform_common.h, which no upstream
+            # macro can reach.
+            cc_flags=(-DWASM_API_EXTERN= -DWASM_RUNTIME_API_EXTERN= -DWASM_RUNTIME_STATIC_API)
+            label="$triple (MSVC ABI)"
+            ;;
         android-arm64)
             dist="$root/vendor/wamr-dist-android-arm64"
             triple="aarch64-linux-android.$ANDROID_API"; wamr_platform=android; wamr_target=AARCH64
@@ -484,20 +726,46 @@ build_one() {
         # libraries, and it keeps every probe off whatever libc zig would pick
         # for an executable.
         platform_flags+=(
-            -DCMAKE_C_COMPILER="$build/toolchain/cc"
-            -DCMAKE_CXX_COMPILER="$build/toolchain/cxx"
-            -DCMAKE_AR="$build/toolchain/ar"
-            -DCMAKE_RANLIB="$build/toolchain/ranlib"
+            -DCMAKE_C_COMPILER="$(cmpath "$build/toolchain/cc$tool_ext")"
+            -DCMAKE_CXX_COMPILER="$(cmpath "$build/toolchain/cxx$tool_ext")"
+            -DCMAKE_AR="$(cmpath "$build/toolchain/ar$tool_ext")"
+            -DCMAKE_RANLIB="$(cmpath "$build/toolchain/ranlib$tool_ext")"
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
             -DWAMR_BUILD_PLATFORM="$wamr_platform"
             -DWAMR_BUILD_TARGET="$wamr_target"
         )
+        if [ -n "$host_windows" ]; then
+            # The Windows default generator is Visual Studio, which picks its
+            # own compiler; Ninja obeys the one set above. The .s files go
+            # through the as.bat zig cc wrapper (cc plus the preprocessor) —
+            # left unset, cmake would go hunting for an assembler of its own.
+            local ninja_exe rc_exe masm_exe
+            ninja_exe="$(find_ninja)" || {
+                echo "build-wamr.sh: no ninja found (PATH or a Visual Studio cmake component)" >&2
+                exit 1
+            }
+            rc_exe="$(find_rc)" || {
+                echo "build-wamr.sh: no Windows SDK rc.exe found under 'Windows Kits/10/bin'" >&2
+                exit 1
+            }
+            masm_exe="$(find_masm)" || {
+                echo "build-wamr.sh: no MASM (ml64.exe/armasm64.exe) found under the VS MSVC tools" >&2
+                exit 1
+            }
+            platform_flags+=(
+                -G Ninja
+                -DCMAKE_MAKE_PROGRAM="$ninja_exe"
+                -DCMAKE_ASM_COMPILER="$(cmpath "$build/toolchain/as$tool_ext")"
+                -DCMAKE_RC_COMPILER="$(cmpath "$rc_exe")"
+                -DCMAKE_ASM_MASM_COMPILER="$(cmpath "$masm_exe")"
+            )
+        fi
     fi
 
     echo "wamr: configuring $t ($WAMR_TAG, $label, fast interpreter)"
-    if ! cmake -S "$src/lookout-embed" -B "$build" \
+    if ! cmake -S "$(cmpath "$src/lookout-embed")" -B "$(cmpath "$build")" \
         "${wamr_flags[@]}" "${platform_flags[@]}" \
-        -DWAMR_ROOT_DIR="$src" \
+        -DWAMR_ROOT_DIR="$(cmpath "$src")" \
         >"$build.log" 2>&1
     then
         cat "$build.log" >&2
@@ -506,17 +774,17 @@ build_one() {
     fi
 
     echo "wamr: building $t"
-    if ! cmake --build "$build" --parallel "$(ncpu)" >>"$build.log" 2>&1; then
+    if ! cmake --build "$(cmpath "$build")" --parallel "$(ncpu)" >>"$build.log" 2>&1; then
         tail -40 "$build.log" >&2
         if [ "$t" = windows-x64 ]; then print_msvc_recipe; fi
         exit 1
     fi
 
-    if [ -n "$check_arch" ]; then verify_arch "$build/libvmlib.a" "$check_arch"; fi
+    if [ -n "$check_arch" ]; then verify_arch "$build/$built" "$check_arch"; fi
 
     rm -rf "$dist"
     mkdir -p "$dist/lib" "$dist/include"
-    cp "$build/libvmlib.a" "$dist/lib/libvmlib.a"
+    cp "$build/$built" "$dist/lib/libvmlib.a"
     cp "$src"/core/iwasm/include/*.h "$dist/include/"
     echo "$stamp" >"$dist/WAMR_VERSION"
 
