@@ -88,6 +88,26 @@ const Fixture = testing.Fixture;
 const nextEvent = testing.nextEvent;
 const silentLog = testing.silentLog;
 
+test "a plugin socket is dialled with keepalive on" {
+    var addrs: [net.max_addrs]net.Addr = undefined;
+    var srv = try Listener.open();
+    defer srv.close();
+    const n = try net.resolve("127.0.0.1", srv.port, &addrs);
+    try t.expect(n > 0);
+
+    // dial() is what the I/O thread uses for every plugin connection.
+    const s = try net.dial("127.0.0.1", srv.port);
+    defer net.close(s);
+
+    // The kernel reports the flag back, so this is the option as set rather
+    // than the call as made. The three timings have no portable getter.
+    if (@import("builtin").os.tag == .windows) return;
+    var on: c_int = 0;
+    var len: std.c.socklen_t = @sizeOf(c_int);
+    try t.expectEqual(@as(c_int, 0), std.c.getsockopt(s, std.c.SOL.SOCKET, std.c.SO.KEEPALIVE, &on, &len));
+    try t.expect(on != 0);
+}
+
 test "a plugin socket connects, carries bytes both ways, and reports the close" {
     var vessels = try vstore.Store.init(t.allocator);
     defer vessels.deinit();

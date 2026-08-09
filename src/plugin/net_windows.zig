@@ -25,6 +25,11 @@ const SO_REUSEADDR: i32 = 0x0004;
 const SO_BROADCAST: i32 = 0x0020;
 const SO_RCVTIMEO: i32 = 0x1006;
 const SO_SNDTIMEO: i32 = 0x1005;
+const SO_KEEPALIVE: i32 = 0x0008;
+/// Winsock carries the keepalive timing in one ioctl rather than three socket
+/// options, and it has no probe count: the count is a system-wide setting.
+const SIO_KEEPALIVE_VALS: u32 = 0x98000004;
+const tcp_keepalive = extern struct { onoff: u32, time_ms: u32, interval_ms: u32 };
 const IPPROTO_TCP: i32 = 6;
 const TCP_NODELAY: i32 = 0x0001;
 const SD_SEND: i32 = 1;
@@ -83,6 +88,7 @@ const ws = struct {
     extern "ws2_32" fn getsockname(s: SOCKET, addr: *sockaddr, len: *socklen) callconv(.winapi) i32;
     extern "ws2_32" fn getsockopt(s: SOCKET, lvl: i32, opt: i32, val: [*]u8, len: *socklen) callconv(.winapi) i32;
     extern "ws2_32" fn setsockopt(s: SOCKET, lvl: i32, opt: i32, val: [*]const u8, len: socklen) callconv(.winapi) i32;
+    extern "ws2_32" fn WSAIoctl(s: SOCKET, code: u32, in: ?*const anyopaque, in_len: u32, out: ?*anyopaque, out_len: u32, returned: *u32, overlapped: ?*anyopaque, routine: ?*anyopaque) callconv(.winapi) i32;
     extern "ws2_32" fn shutdown(s: SOCKET, how: i32) callconv(.winapi) i32;
     extern "ws2_32" fn getaddrinfo(node: [*:0]const u8, service: [*:0]const u8, hints: *const addrinfo, res: *?*addrinfo) callconv(.winapi) i32;
     extern "ws2_32" fn freeaddrinfo(ai: *addrinfo) callconv(.winapi) void;
@@ -152,6 +158,20 @@ pub fn setBlocking(s: Socket) void {
 }
 
 /// Winsock takes a millisecond DWORD where POSIX takes a timeval.
+/// Ask the stack to probe an idle connection, so a peer that vanished without
+/// closing is eventually noticed. `net.keepalive_*` set the timing.
+pub fn setKeepAlive(s: Socket) void {
+    const on: i32 = 1;
+    _ = ws.setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, @ptrCast(&on), @sizeOf(i32));
+    var vals = tcp_keepalive{
+        .onoff = 1,
+        .time_ms = net.keepalive_idle_s * 1000,
+        .interval_ms = net.keepalive_interval_s * 1000,
+    };
+    var returned: u32 = 0;
+    _ = ws.WSAIoctl(s, SIO_KEEPALIVE_VALS, &vals, @sizeOf(tcp_keepalive), null, 0, &returned, null, null);
+}
+
 pub fn setTimeouts(s: Socket, timeout_ms: u32) void {
     var ms: u32 = timeout_ms;
     _ = ws.setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&ms), @sizeOf(u32));

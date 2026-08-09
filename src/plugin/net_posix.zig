@@ -42,6 +42,21 @@ pub fn setBlocking(s: Socket) void {
     _ = std.c.fcntl(s, std.c.F.SETFL, flags & ~nonblock);
 }
 
+/// Ask the kernel to probe an idle connection, so a peer that vanished
+/// without closing is eventually noticed. `net.keepalive_*` set the timing.
+pub fn setKeepAlive(s: Socket) void {
+    const on: c_int = 1;
+    _ = std.c.setsockopt(s, std.c.SOL.SOCKET, std.c.SO.KEEPALIVE, &on, @sizeOf(c_int));
+    // Darwin calls the idle time TCP_KEEPALIVE; Linux calls it TCP_KEEPIDLE.
+    const idle_opt = if (@hasDecl(std.c.TCP, "KEEPIDLE")) std.c.TCP.KEEPIDLE else std.c.TCP.KEEPALIVE;
+    const idle: c_int = net.keepalive_idle_s;
+    const intvl: c_int = net.keepalive_interval_s;
+    const cnt: c_int = net.keepalive_count;
+    _ = std.c.setsockopt(s, std.c.IPPROTO.TCP, idle_opt, &idle, @sizeOf(c_int));
+    _ = std.c.setsockopt(s, std.c.IPPROTO.TCP, std.c.TCP.KEEPINTVL, &intvl, @sizeOf(c_int));
+    _ = std.c.setsockopt(s, std.c.IPPROTO.TCP, std.c.TCP.KEEPCNT, &cnt, @sizeOf(c_int));
+}
+
 /// A read and a write deadline, so a thread that owns one socket cannot be
 /// held by a peer that stops talking.
 pub fn setTimeouts(s: Socket, timeout_ms: u32) void {

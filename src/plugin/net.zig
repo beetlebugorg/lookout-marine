@@ -18,6 +18,22 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// When the kernel starts probing an idle connection, how often it repeats,
+/// and how many unanswered probes end it. Roughly a minute from the last byte
+/// to a dead socket.
+///
+/// A source that loses power sends neither FIN nor RST, and a reader that
+/// never writes provokes nothing, so without this the connection stays
+/// ESTABLISHED for as long as the process runs. The platform defaults are no
+/// use here: Darwin waits two hours before the first probe.
+///
+/// This is the backstop, not the detector. A plugin's own silence timer sees
+/// a feed that stopped while its peer is still answering, which no keepalive
+/// can, and it fires first.
+pub const keepalive_idle_s = 30;
+pub const keepalive_interval_s = 10;
+pub const keepalive_count = 3;
+
 /// One resolved candidate address, copied out of the resolver's own list so
 /// that list is freed before the connect. 128 bytes is a sockaddr_storage.
 pub const Addr = struct {
@@ -47,6 +63,7 @@ pub const close = impl.close;
 pub const setNonBlocking = impl.setNonBlocking;
 pub const setBlocking = impl.setBlocking;
 pub const setTimeouts = impl.setTimeouts;
+pub const setKeepAlive = impl.setKeepAlive;
 pub const recv = impl.recv;
 pub const send = impl.send;
 pub const retryable = impl.retryable;
@@ -75,6 +92,7 @@ pub fn dial(host: []const u8, port: u16) !Socket {
         const s = socket(a);
         if (!valid(s)) continue;
         setNonBlocking(s);
+        setKeepAlive(s);
         if (connect(s, a)) return s;
         close(s);
     }
@@ -95,6 +113,7 @@ pub fn dialBlocking(host: []const u8, port: u16, timeout_ms: u32) !Socket {
         const s = socket(a);
         if (!valid(s)) continue;
         setNonBlocking(s);
+        setKeepAlive(s);
         if (!connect(s, a)) {
             close(s);
             continue;
