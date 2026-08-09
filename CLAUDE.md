@@ -98,6 +98,28 @@ macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
 - **Check disk before a big build**: `df -h /System/Volumes/Data`. The caches
   here fill 100 GB fast.
 - **Licensed imagery must never reach docs.** No C-MAP chart, drawn or named.
+- **`grep` in this shell is a gitignore-aware wrapper**, not `/usr/bin/grep`. A
+  recursive sweep from the repo root silently skips ignored paths and reports
+  clean when the string is still on disk. Verify with `git grep -n --untracked`
+  for what ships, and `command grep -rn <dir>` for one ignored directory.
+  `command grep -rn .` from the root walks `.zig-cache` and takes minutes.
+- **A screenshot instance loads this machine's saved plugin settings**, so it
+  dials the developer's own instruments and publishes other people's vessel
+  names and positions. `LOOKOUT_CLEAN=1` leaves every plugin on its manifest
+  defaults; `macos/screenshots.sh` sets it and serves the recorded fixture on
+  a port of its own. Never point a capture at whatever is on 10110.
+- **Only one copy of the app runs per machine.** A second hands over to the
+  first and exits, because two copies share one preferences domain and one
+  plugin storage directory. `LOOKOUT_MULTI=1` lifts it, which the screenshot
+  protocol needs since every frame is its own instance.
+- **An identity a fixture invents uses MID 899**, which is unallocated, so no
+  real vessel can hold it; an aid uses 99 then 899 then four digits. An
+  identity quoted from a published reference keeps its real value and carries
+  a comment naming the source. See `plugins/nmea0183/fixtures.zig`.
+- **Xcode here is a partial install**: no `Contents/Developer/Applications`, so
+  no Simulator.app and no window for a booted device. Drive simulators
+  headless with `simctl boot`, `simctl launch` (env via `SIMCTL_CHILD_*`) and
+  `simctl io <id> screenshot`. Shut them down after; a booted device burns CPU.
 
 ## House style
 
