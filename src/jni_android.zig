@@ -815,6 +815,44 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigGet(env: [*c]j.JNIEnv,
     return jstringFromSlice(env, lookout_plugin_config_get(h.l, @ptrCast(cid), &len), len);
 }
 
+// ---- plugin alerts ---------------------------------------------------------
+//
+// A plugin raises an alert with a severity, a title and a body. The core holds
+// the set, orders it (what nobody has answered first, then the loudest, then
+// the oldest) and hands it over as JSON; the shell shows it, sounds the alarms
+// and acknowledges one when the mariner silences it. include/lookout.h carries
+// the JSON shape, PluginAlerts.kt what severity means on screen.
+//
+// The whole set crosses in one string rather than a call per field. It is
+// small, and the shell samples it on a schedule of its own with nothing else to
+// batch it with.
+
+extern fn lookout_plugin_alerts_json(h: ?*anyopaque, out_len: ?*usize) ?[*]const u8;
+extern fn lookout_plugin_alert_ack(h: ?*anyopaque, id: u64) c_int;
+
+/// String nPluginAlertsJson(long h) -- every live alert with its severity,
+/// title, body and acknowledged flag, under the `seq` that moves whenever the
+/// set does. null when no plugin layer is up.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginAlertsJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var len: usize = 0;
+    return jstringFromSlice(env, lookout_plugin_alerts_json(h.l, &len), len);
+}
+
+/// boolean nPluginAlertAck(long h, long id) -- silence ONE alert.
+///
+/// The core keys an alert on a u64 and Java has no unsigned long, so the id
+/// crosses as a BIT PATTERN, the same round-trip the handle takes above. Ids
+/// count up from 1, so the sign bit is out of reach in practice; a value cast
+/// would panic on the day it were not.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginAlertAck(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_plugin_alert_ack(h.l, @bitCast(id)) == 0) 1 else 0;
+}
+
 // ---- overlay pick (tap an AIS target) --------------------------------------
 //
 // A plugin's symbol can carry a pick payload, and a tap on one pins a bubble to

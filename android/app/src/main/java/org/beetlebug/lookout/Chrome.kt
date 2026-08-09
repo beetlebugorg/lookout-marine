@@ -56,6 +56,14 @@ object Chrome {
      */
     val nodata = Color(0xFF93AEBB)
 
+    /**
+     * The chrome's caution colour: what is worth a look rather than a course
+     * change, which is what a plugin's warning is. Fixed rather than derived
+     * from the scheme, because amber has to stay amber at night to mean
+     * anything. Matches Chrome.amber in the reference shell.
+     */
+    val amber = Color(0xFFF59E0B)
+
     /** Ground metres per dp at a 1:1 display scale, from the 0.28 mm pixel. */
     const val METRES_PER_DP_AT_1_TO_1 = 0.00028
 }

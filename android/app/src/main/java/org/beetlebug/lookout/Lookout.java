@@ -295,6 +295,27 @@ public final class Lookout implements AutoCloseable {
         return h != 0 && nPluginConfigSet(h, id, json);
     }
 
+    // ---- plugin alerts -----------------------------------------------------
+    //
+    // A plugin raises an alert with a severity, a title and a body; the core
+    // orders the set and hands it over here. An alarm is audible and repeats
+    // until it is acknowledged, a warning and a notice are visible only. See
+    // PluginAlerts.kt.
+
+    /**
+     * Every live alert as {@code {"seq":N,"alerts":[…]}}, already ordered: what
+     * nobody has answered first, then the loudest, then the oldest. {@code seq}
+     * moves whenever the set changes, so a caller can leave the list alone
+     * while it has not. Null when no plugin layer is up.
+     */
+    public String pluginAlertsJson()             { return h == 0 ? null : nPluginAlertsJson(h); }
+
+    /**
+     * Silence ONE alert: it stops sounding and stays listed as acknowledged
+     * until the condition clears. False when no alert holds {@code id}.
+     */
+    public boolean pluginAlertAck(long id)       { return h != 0 && nPluginAlertAck(h, id); }
+
     // ---- overlay pick (tap an AIS target) ----------------------------------
     //
     // A plugin's symbol can carry a pick payload. A tap on one pins a bubble to
@@ -332,4 +353,6 @@ public final class Lookout implements AutoCloseable {
     private static native String nPluginsJson(long h);
     private static native String nPluginConfigGet(long h, String id);
     private static native boolean nPluginConfigSet(long h, String id, String json);
+    private static native String nPluginAlertsJson(long h);
+    private static native boolean nPluginAlertAck(long h, long id);
 }

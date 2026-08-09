@@ -1,6 +1,7 @@
 package org.beetlebug.lookout
 
 import android.content.Intent
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -40,6 +41,13 @@ class LookoutActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Chart under the system bars; the Compose chrome insets itself.
         enableEdgeToEdge()
+
+        // The hardware volume keys set the ALARM level while this app is in
+        // front, because the one sound it makes is a plugin alarm and that
+        // plays on the alarm stream. Left alone the keys follow whatever stream
+        // is active, which between soundings is none, so a mariner could hear a
+        // collision alarm and have no way to set how loud the next one is.
+        volumeControlStream = AudioManager.STREAM_ALARM
 
         // Before any open: without a root the engine re-bakes both atlases on
         // every launch (~1s), having no cache path in the environment.
