@@ -50,6 +50,9 @@ namespace winrt::LookoutMarine::implementation
                                                                 : Visibility::Collapsed);
         NorthRotate().Angle(-r.rotation_deg);
         UpdateRasterPill(r);
+        UpdateGpsPill();
+        UpdateFollowLock();
+        UpdateOverlayBubble();
         UpdateScaleBar(r.scale_denom);
     }
 

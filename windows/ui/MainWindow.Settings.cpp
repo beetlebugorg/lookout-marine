@@ -41,19 +41,20 @@ namespace winrt::LookoutMarine::implementation
                                    : "display";
 
         settings_tabs.clear();
-        settings_tabs.push_back({ "display", L"Display" });
-        settings_tabs.push_back({ "depths", L"Depths" });
-        settings_tabs.push_back({ "text", L"Text" });
-        settings_tabs.push_back({ "charts", L"Charts" });
+        settings_tabs.push_back({ "display", L"Display", L"\uE790" });
+        settings_tabs.push_back({ "depths", L"Depths", L"\uEC48" });
+        settings_tabs.push_back({ "text", L"Text", L"\uE8D2" });
+        settings_tabs.push_back({ "charts", L"Charts", L"\uE774" });
         if (PluginTabPopulated("vessels"))
-            settings_tabs.push_back({ "vessels", L"Vessels" });
+            settings_tabs.push_back({ "vessels", L"Vessels", L"\uE7C0" });
         if (PluginTabPopulated("alarms"))
-            settings_tabs.push_back({ "alarms", L"Alarms" });
+            settings_tabs.push_back({ "alarms", L"Alarms", L"\uEA8F" });
         if (PluginTabPopulated("connections"))
-            settings_tabs.push_back({ "connections", L"Connections" });
-        if (!plugins.empty())
-            settings_tabs.push_back({ "plugins", L"Plugins" });
-        settings_tabs.push_back({ "advanced", L"Advanced" });
+            settings_tabs.push_back({ "connections", L"Connections", L"\uE701" });
+        // Plugins is the one section that talks ABOUT plugins: install,
+        // grants, uninstall. It is the app's own, not a slot a schema fills.
+        settings_tabs.push_back({ "plugins", L"Plugins", L"\uE71D" });
+        settings_tabs.push_back({ "advanced", L"Advanced", L"\uE713" });
 
         // A section can go away — a plugin that never came up takes its section
         // with it — so a stale selection falls back rather than indexing off the
@@ -65,19 +66,39 @@ namespace winrt::LookoutMarine::implementation
                 settings_tab = i;
         }
 
-        auto strip = SettingsTabs();
-        strip.Children().Clear();
+        // One row per section, down the left: its mark, its name, and the
+        // selection behind whichever one is on screen. The list IS the
+        // navigation, so there is no way to collapse it away.
+        auto list = SettingsTabs();
+        list.Children().Clear();
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
         {
-            Controls::Button tb;
-            tb.Content(winrt::box_value(winrt::hstring{ settings_tabs[i].label }));
-            tb.Padding({ 10, 4, 10, 6 });
-            tb.CornerRadius({ 14, 14, 14, 14 });
-            tb.BorderThickness({ 0, 0, 0, 0 });
-            tb.Background(Media::SolidColorBrush{ i == settings_tab
+            Controls::Button row;
+            row.HorizontalAlignment(HorizontalAlignment::Stretch);
+            row.HorizontalContentAlignment(HorizontalAlignment::Left);
+            row.Padding({ 10, 7, 10, 7 });
+            row.CornerRadius({ 6, 6, 6, 6 });
+            row.BorderThickness({ 0, 0, 0, 0 });
+            row.Background(Media::SolidColorBrush{ i == settings_tab
                                                       ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
                                                       : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-            tb.Click([this, i](auto &&, auto &&) {
+
+            Controls::StackPanel content;
+            content.Orientation(Controls::Orientation::Horizontal);
+            content.Spacing(10);
+            Controls::FontIcon icon;
+            icon.Glyph(winrt::hstring{ settings_tabs[i].glyph });
+            icon.FontSize(14);
+            icon.Opacity(0.85);
+            content.Children().Append(icon);
+            Controls::TextBlock label;
+            label.Text(winrt::hstring{ settings_tabs[i].label });
+            label.FontSize(13);
+            label.VerticalAlignment(VerticalAlignment::Center);
+            content.Children().Append(label);
+            row.Content(content);
+
+            row.Click([this, i](auto &&, auto &&) {
                 settings_tab = i;
                 for (uint32_t j = 0; j < SettingsTabs().Children().Size(); ++j)
                 {
@@ -87,8 +108,22 @@ namespace winrt::LookoutMarine::implementation
                 }
                 BuildSettingsPage();
             });
-            strip.Children().Append(tb);
+            list.Children().Append(row);
         }
+    }
+
+    // Open the pane on one section by its id ("connections" from the GPS
+    // pill). A section a plugin never populated falls back to the first tab.
+    void MainWindow::OpenSettingsTab(std::string const &id)
+    {
+        LoadSettings();
+        for (int i = 0; i < (int)settings_tabs.size(); ++i)
+            if (settings_tabs[i].id == id)
+                settings_tab = i;
+        BuildSettingsTabs();
+        BuildSettingsPage();
+        SettingsPane().Visibility(Visibility::Visible);
+        StartPluginStatusPoll();
     }
 
     void MainWindow::ScheduleApply()
@@ -113,6 +148,14 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::LoadSettings()
     {
         lk_controller_get_mariner(controller, &pending);
+        // The pane wears the chart's scheme: dusk and night take the dark
+        // palette whatever the OS says — a bright panel has no place on a
+        // night passage. Day follows the app default.
+        bool dark = pending.scheme != 0;
+        SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
+        SettingsPane().Background(Media::SolidColorBrush{
+            dark ? winrt::Windows::UI::Color{ 0xF5, 0x20, 0x24, 0x28 }
+                 : winrt::Windows::UI::Color{ 0xF5, 0xF8, 0xF8, 0xF8 } });
         // The plugin schemas are read here, not at construction: there is no
         // plugin layer until a chart opens. What a plugin DECLARES does not
         // change while the pane is up, so this is the only whole read.

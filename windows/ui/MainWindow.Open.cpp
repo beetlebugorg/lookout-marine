@@ -66,6 +66,8 @@ namespace winrt::LookoutMarine::implementation
         // chose, else the first cell (a startup open).
         open_chart_label = !recent.empty() ? recent : paths.front();
 
+        StopAlertWatch();     // the alerts belong to the handle this close destroys
+        CloseVesselWindows(); // so do the tables
         StopRenderThread();
         lk_controller_close(controller);
         if (chart_panel != nullptr)
@@ -79,13 +81,26 @@ namespace winrt::LookoutMarine::implementation
         if (OpenChart(paths))
         {
             InstallStoredRasters(); // the open destroyed the handle they rode on
+            StartAlertWatch();      // a collision alarm must not need a pane open
+            RefreshPluginTables();  // the vessels bubble follows the declarations
             EmptyState().Visibility(Visibility::Collapsed);
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);
             StartRenderThread();
             UpdateReadouts(true);
-            if (GetEnvironmentVariableA("LOOKOUT_OPEN_SETTINGS", nullptr, 0) > 0)
-                ToggleSettings(); // screenshot/dev hook
+            // Screenshot/dev hooks: the pane, and the section it opens on.
+            // LOOKOUT_OPEN_SETTINGS=1 opens Display; LOOKOUT_OPEN_SETTINGS=
+            // connections opens the section a plugin filled, which is where
+            // a gateway is added.
+            char pane[32];
+            if (GetEnvironmentVariableA("LOOKOUT_OPEN_SETTINGS", pane, sizeof pane) > 0)
+            {
+                std::string tab = pane;
+                if (tab.empty() || tab == "1")
+                    ToggleSettings();
+                else
+                    OpenSettingsTab(tab);
+            }
 
             // The cross-host screenshot protocol's LOOKOUT_SHOW: "pick" or
             // "pick:0.5x0.85" (a view fraction; 'x' because commas split the

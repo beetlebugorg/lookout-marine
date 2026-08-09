@@ -104,7 +104,7 @@
       <!-- user32: LoadImageW/SendMessageW/GetSystemMetrics, for the window icon
            (MinimalCoreWin trims the default link libraries, so the Win32 ones
            this shell uses are all named explicitly). -->
-      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;winmm.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- The WAMR interpreter, when build-core.ps1 built a core with the plugin
            host in it. The static core does not embed the archive off Apple (a
            COFF linker rejects an archive nested inside an archive), so the exe
@@ -141,6 +141,10 @@
     <ClCompile Include="ui\MainWindow.Loader.cpp" />
     <ClCompile Include="ui\MainWindow.Pick.cpp" />
     <ClCompile Include="ui\MainWindow.PickAux.cpp" />
+    <ClCompile Include="ui\MainWindow.Alerts.cpp" />
+    <ClCompile Include="ui\MainWindow.Vessels.cpp" />
+    <ClCompile Include="ui\MainWindow.PluginInstall.cpp" />
+    <ClCompile Include="ui\MainWindow.Overlay.cpp" />
     <ClCompile Include="ui\MainWindow.Raster.cpp" />
     <ClCompile Include="ui\MainWindow.Scale.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />

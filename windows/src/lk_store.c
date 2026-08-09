@@ -506,6 +506,13 @@ lk_store_apply_saved_plugins(lookout *h)
     if (h == NULL)
         return;
 
+    /* The screenshot protocol's clean slate: every plugin stays on its
+     * manifest defaults. Without this a capture instance dials the
+     * developer's own instruments and publishes real vessel names and
+     * MMSIs (see macos PluginSettings.applySaved). */
+    if (GetEnvironmentVariableA("LOOKOUT_CLEAN", NULL, 0) > 0)
+        return;
+
     /* A NULL key name asks the profile API for the section's key names, packed
      * as a run of NUL-terminated strings ended by an empty one. */
     char names[8192];
@@ -514,10 +521,12 @@ lk_store_apply_saved_plugins(lookout *h)
     if (n == 0)
         return;
 
-    /* One plugin's object. Long enough for a full list of connections; a value
-     * past this is truncated by the profile API and would not parse, so it is
-     * skipped rather than pushed as half an object. */
-    static const size_t VALUE_MAX = 8192;
+    /* One plugin's object. Far past any real list of connections (8 rows is
+     * the cap); a value at the buffer edge was truncated by the profile API
+     * and would not parse, so it is skipped rather than pushed as half an
+     * object — and it is SAID, because a silently dropped list is a mariner's
+     * lost connections. */
+    static const size_t VALUE_MAX = 65536;
     char *value = (char *)malloc(VALUE_MAX);
     if (value == NULL)
         return;
@@ -525,8 +534,12 @@ lk_store_apply_saved_plugins(lookout *h)
     for (const char *id = names; *id != '\0'; id += strlen(id) + 1) {
         DWORD len = GetPrivateProfileStringA(LK_GROUP_PLUGINS, id, "", value,
                                              (DWORD)VALUE_MAX, store_path());
-        if (len == 0 || len >= VALUE_MAX - 1)
+        if (len == 0)
             continue;
+        if (len >= VALUE_MAX - 2) {
+            fprintf(stderr, "store: %s: saved plugin settings truncated; not applied\n", id);
+            continue;
+        }
         lookout_plugin_config_set(h, id, value);
     }
     free(value);

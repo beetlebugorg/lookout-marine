@@ -24,6 +24,7 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -255,6 +256,23 @@ namespace winrt::LookoutMarine::implementation
             info.origin = Str(p, L"origin", "bundled");
             info.live = Bool(p, L"live", false);
             info.status = Str(p, L"status");
+
+            for (auto const &ce : Arr(p, L"capabilities"))
+            {
+                if (ce.ValueType() != JsonValueType::Object)
+                    continue;
+                JsonObject co = ce.GetObject();
+                lkw::PluginCapability cap;
+                cap.cap = Str(co, L"cap");
+                cap.sentence = Str(co, L"sentence");
+                cap.granted = Bool(co, L"granted", true);
+                if (!cap.cap.empty())
+                    info.capabilities.push_back(std::move(cap));
+            }
+
+            for (auto const &fe : Arr(p, L"file_types"))
+                if (fe.ValueType() == JsonValueType::String)
+                    info.file_types.push_back(Utf8(fe.GetString()));
 
             for (auto const &fe : Arr(p, L"settings"))
             {
@@ -887,60 +905,208 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    // The one section that talks ABOUT plugins rather than about the chart.
+    // The plugin's own status line and the brush it reads in — "Stopped" for
+    // a dead one whatever its last words were.
+    std::string MainWindow::PluginStatusLine(lkw::PluginInfo const &p, std::string *state_out)
+    {
+        std::string state = "stopped";
+        std::string line = "Stopped";
+        if (p.live)
+        {
+            JsonValue st{ nullptr };
+            if (!p.status.empty() && JsonValue::TryParse(Wide(p.status), st) &&
+                st.ValueType() == JsonValueType::Object)
+                line = Line(st.GetObject(), &state);
+            else
+            {
+                line = "Running";
+                state = "running";
+            }
+        }
+        if (state_out != nullptr)
+            *state_out = state;
+        return line;
+    }
+
+    // The one section that talks ABOUT plugins rather than about the chart:
+    // what is installed, what each copy may do, and the way to add or remove
+    // one. The plugins that ship with the app are not here — their settings
+    // are filed under the mariner sections, where they read as chart
+    // settings, and there is nothing to install or remove about them.
+    //
+    // A row wears the disclosure grammar the connection rows wear. Collapsed
+    // it is a dot, a name and the live status. Open it adds the grant
+    // switches in the core's own consent wording, one quiet line saying where
+    // the copy came from, and Uninstall for what install wrote.
     void MainWindow::BuildPluginsPage()
     {
         auto stack = SettingsContent();
 
+        std::vector<lkw::PluginInfo const *> managed;
         for (auto const &p : plugins)
+            if (p.origin != "bundled")
+                managed.push_back(&p);
+
+        if (managed.empty())
         {
-            Controls::TextBlock name;
-            name.Text(Wide(p.name));
-            name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            name.Margin({ 0, 10, 0, 0 });
-            stack.Children().Append(name);
-
-            Controls::TextBlock status;
-            status.FontSize(11);
-            if (!p.live)
-            {
-                // A dead plugin says so whatever its last words were.
-                status.Text(L"Stopped");
-                status.Foreground(Media::SolidColorBrush{ StateColor("stopped") });
-            }
-            else
-            {
-                JsonValue st{ nullptr };
-                if (!p.status.empty() && JsonValue::TryParse(Wide(p.status), st) &&
-                    st.ValueType() == JsonValueType::Object)
-                {
-                    std::string state;
-                    status.Text(Wide(Line(st.GetObject(), &state)));
-                    status.Foreground(Media::SolidColorBrush{ StateColor(state) });
-                }
-                else
-                {
-                    status.Text(L"Running");
-                    status.Foreground(Media::SolidColorBrush{ StateColor("running") });
-                }
-            }
-            stack.Children().Append(status);
-
-            Controls::TextBlock where;
-            where.Text(Wide(p.origin + (p.version.empty() ? "" : " · " + p.version)));
-            where.FontSize(11);
-            where.Opacity(0.7);
-            stack.Children().Append(where);
+            Controls::TextBlock none;
+            none.Text(L"No plugins installed.");
+            none.FontSize(12);
+            none.Opacity(0.7);
+            stack.Children().Append(none);
         }
 
+        for (auto const *p : managed)
+        {
+            std::string state;
+            std::string status_line = PluginStatusLine(*p, &state);
+            // The one provenance a mariner must see at rest sits where the
+            // status is, not in the name.
+            if (p->origin == "developer")
+                status_line += " · developer copy";
+
+            Controls::StackPanel header;
+            Controls::StackPanel top;
+            top.Orientation(Controls::Orientation::Horizontal);
+            top.Spacing(8);
+            Shapes::Ellipse dot;
+            dot.Width(8);
+            dot.Height(8);
+            dot.Fill(Media::SolidColorBrush{ StateColor(state) });
+            dot.VerticalAlignment(VerticalAlignment::Center);
+            top.Children().Append(dot);
+            Controls::TextBlock name;
+            name.Text(Wide(p->name));
+            name.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
+            name.TextTrimming(TextTrimming::CharacterEllipsis);
+            top.Children().Append(name);
+            header.Children().Append(top);
+
+            Controls::TextBlock status;
+            status.Text(Wide(status_line));
+            status.FontSize(11);
+            status.Foreground(Media::SolidColorBrush{ StateColor(state) });
+            status.Margin({ 16, 0, 0, 0 });
+            header.Children().Append(status);
+
+            Controls::StackPanel body;
+            body.Spacing(8);
+
+            // One toggle per capability, worded by the core so every shell
+            // shows the same sentence. Flips are live: the plugin keeps
+            // running and the lost call answers it -1.
+            if (p->capabilities.empty())
+            {
+                Controls::TextBlock none;
+                none.Text(L"This plugin only draws its own settings pages.");
+                none.FontSize(11);
+                none.Opacity(0.7);
+                none.TextWrapping(TextWrapping::Wrap);
+                body.Children().Append(none);
+            }
+            for (auto const &cap : p->capabilities)
+            {
+                Controls::ToggleSwitch ts;
+                ts.Header(winrt::box_value(Wide(cap.sentence)));
+                ts.IsOn(cap.granted);
+                ts.MinWidth(0);
+                std::string id = p->id, cname = cap.cap;
+                ts.Toggled([this, id, cname](auto &&s, auto &&) {
+                    if (settings_loading)
+                        return;
+                    bool on = s.template as<Controls::ToggleSwitch>().IsOn();
+                    lk_controller_plugin_grant_set(controller, id.c_str(), cname.c_str(), on ? 1 : 0);
+                });
+                body.Children().Append(ts);
+            }
+
+            // One quiet line about the copy itself: version, where it came
+            // from, and the files it reads. Everything that is not a control,
+            // in one breath.
+            {
+                std::string about;
+                auto add = [&about](std::string const &part) {
+                    if (!part.empty())
+                        about += (about.empty() ? "" : " · ") + part;
+                };
+                if (!p->version.empty())
+                    add("Version " + p->version);
+                add(p->origin == "developer" ? "developer copy from LOOKOUT_PLUGINS"
+                                             : "installed from a plugin file");
+                if (!p->file_types.empty())
+                {
+                    std::string types;
+                    for (auto const &t : p->file_types)
+                        types += (types.empty() ? "" : ", ") + t;
+                    add("reads " + types + " files you open");
+                }
+                if (!about.empty())
+                    about[0] = (char)std::toupper((unsigned char)about[0]);
+
+                Controls::TextBlock line;
+                line.Text(Wide(about));
+                line.FontSize(11);
+                line.Opacity(0.7);
+                line.TextWrapping(TextWrapping::Wrap);
+                body.Children().Append(line);
+            }
+
+            if (p->origin == "installed")
+            {
+                Controls::Button rm;
+                rm.Content(winrt::box_value(L"Uninstall…"));
+                rm.FontSize(12);
+                rm.HorizontalAlignment(HorizontalAlignment::Left);
+                std::string id = p->id, pname = p->name;
+                rm.Click([this, id, pname](auto &&, auto &&) {
+                    ConfirmUninstallPlugin(id, pname);
+                });
+                body.Children().Append(rm);
+            }
+
+            Controls::Expander ex;
+            ex.Header(header);
+            ex.Content(body);
+            ex.HorizontalAlignment(HorizontalAlignment::Stretch);
+            ex.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            Automation::AutomationProperties::SetName(ex, Wide(p->name));
+            stack.Children().Append(ex);
+        }
+
+        Controls::Button install;
+        install.Content(winrt::box_value(L"Install Plugin…"));
+        install.HorizontalAlignment(HorizontalAlignment::Stretch);
+        install.Margin({ 0, 10, 0, 0 });
+        install.Click([this](auto &&, auto &&) { PickPluginFile(); });
+        stack.Children().Append(install);
+
         Controls::TextBlock foot;
-        foot.Text(L"Own ship, AIS, NMEA 0183, Signal K and laylines are plugins. Their "
-                  L"settings are filed with the chart settings they belong to, not here.");
+        foot.Text(L"A plugin file (.lkplug) can also be dropped on the chart. Nothing is "
+                  L"installed before its permissions are shown. Own ship, AIS, NMEA 0183 "
+                  L"and Signal K ship with the app: their settings are filed with the "
+                  L"chart settings they belong to, not here.");
         foot.FontSize(11);
         foot.Opacity(0.7);
         foot.TextWrapping(TextWrapping::Wrap);
         foot.Margin({ 0, 10, 0, 0 });
         stack.Children().Append(foot);
+    }
+
+    fire_and_forget MainWindow::ConfirmUninstallPlugin(std::string id, std::string name)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(Root().XamlRoot());
+        dialog.Title(winrt::box_value(Wide("Uninstall " + name + "?")));
+        dialog.Content(winrt::box_value(L"Removes the plugin and everything it drew."));
+        dialog.PrimaryButtonText(L"Uninstall");
+        dialog.CloseButtonText(L"Cancel");
+        auto result = co_await dialog.ShowAsync();
+        if (result != Controls::ContentDialogResult::Primary)
+            co_return;
+        lk_controller_plugin_uninstall(controller, id.c_str());
+        RefreshPluginTables();
+        LoadSettings();
     }
 
     // ---- edits --------------------------------------------------------------

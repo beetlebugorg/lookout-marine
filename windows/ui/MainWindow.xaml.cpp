@@ -74,6 +74,10 @@ namespace winrt::LookoutMarine::implementation
                 Media::CompositionTarget::Rendering(rendering_token);
                 rendering_token = {};
             }
+            StopAlertWatch();
+            // The table windows hold this controller and this window: they
+            // cannot outlive either.
+            CloseVesselWindows();
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
@@ -98,12 +102,19 @@ namespace winrt::LookoutMarine::implementation
         EmptyOpenBtn().Click([this](auto &&, auto &&) { PickChartFolder(); });
         ZoomInBtn().Click([this](auto &&, auto &&) { Command('+'); });
         ZoomOutBtn().Click([this](auto &&, auto &&) { Command('-'); });
-        NorthBtn().Click([this](auto &&, auto &&) { Command('u'); });
+        // The north bubble is the follow lock; Ctrl+U stays the plain
+        // north-up reset.
+        NorthBtn().Click([this](auto &&, auto &&) { CycleFollowLock(); });
+        GpsPill().Click([this](auto &&, auto &&) { OpenSettingsTab("connections"); });
         SettingsBtn().Click([this](auto &&, auto &&) { Command(','); });
         SearchBtn().Click([this](auto &&, auto &&) { Command('f'); });
         RasterPill().Click([this](auto &&, auto &&) { ShowRasterMenu(); });
+        VesselsBtn().Click([this](auto &&, auto &&) { ShowVesselsMenu(); });
         SettingsClose().Click([this](auto &&, auto &&) {
+            // The X and Ctrl+, are the same close: the status poll must stop
+            // with the pane or it rebuilds a hidden page every second forever.
             SettingsPane().Visibility(Visibility::Collapsed);
+            StopPluginStatusPoll();
         });
         WirePick();
         WireScale();
@@ -133,10 +144,16 @@ namespace winrt::LookoutMarine::implementation
             GesturePress(p.X, p.Y, rot);
             Root().CapturePointer(e.Pointer());
         });
-        Root().PointerMoved([this](auto &&, Input::PointerRoutedEventArgs const &e) {
-            if (!dragging && !rotating)
-                return;
+        Root().PointerMoved([this, on_chart](auto &&, Input::PointerRoutedEventArgs const &e) {
             auto p = e.GetCurrentPoint(Root()).Position();
+            if (!dragging && !rotating)
+            {
+                // Hover over the chart asks the overlay what is under the
+                // pointer (an AIS target's payload).
+                if (on_chart(e.OriginalSource()))
+                    HoverProbe(p.X, p.Y);
+                return;
+            }
             GestureMove(p.X, p.Y);
         });
         Root().PointerReleased([this](auto &&, Input::PointerRoutedEventArgs const &e) {
@@ -158,6 +175,14 @@ namespace winrt::LookoutMarine::implementation
             auto p = e.GetPosition(Root());
             GestureDoubleTap(p.X, p.Y);
         });
+
+        // Files dropped on the chart take the same path as the pickers:
+        // consent for a .lkplug, the plugins' file types, then a chart.
+        Root().AllowDrop(true);
+        Root().DragOver([](auto &&, DragEventArgs const &e) {
+            e.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
+        });
+        Root().Drop([this](auto &&, DragEventArgs const &e) { HandleDrop(e); });
 
         // The accelerators are chart commands, not menu items: without this
         // XAML surfaces its key-tip tooltip for them (a floating "ESC").

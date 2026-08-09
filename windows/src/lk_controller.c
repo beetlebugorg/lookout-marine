@@ -153,6 +153,237 @@ lk_controller_set_plugin_config(lk_controller *self, const char *id, const char 
     return 1;
 }
 
+/* Every const char* a plugin query returns is borrowed into ONE shared scratch
+ * buffer, invalidated by the next query — whichever query that is. So every
+ * wrapper copies out before it returns. */
+static char *
+copy_out(const char *s, size_t len)
+{
+    if (s == NULL)
+        return NULL;
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL)
+        return NULL;
+    memcpy(copy, s, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+char *
+lk_controller_alerts_json(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return NULL;
+    size_t len = 0;
+    const char *json = lookout_plugin_alerts_json(self->handle, &len);
+    if (json == NULL || len == 0)
+        return NULL;
+    return copy_out(json, len);
+}
+
+int
+lk_controller_alert_ack(lk_controller *self, unsigned long long id)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_plugin_alert_ack(self->handle, (uint64_t)id) == 0;
+}
+
+char *
+lk_controller_tables_json(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return NULL;
+    size_t len = 0;
+    const char *json = lookout_plugin_tables_json(self->handle, &len);
+    if (json == NULL || len == 0)
+        return NULL;
+    return copy_out(json, len);
+}
+
+char *
+lk_controller_table_rows(lk_controller *self, const char *plugin, const char *key,
+                         const char *sort_key, int ascending)
+{
+    if (!lk_controller_is_open(self) || plugin == NULL || key == NULL)
+        return NULL;
+    size_t len = 0;
+    const char *json = lookout_plugin_table_rows(self->handle, plugin, key,
+                                                 sort_key, ascending, &len);
+    if (json == NULL || len == 0)
+        return NULL;
+    return copy_out(json, len);
+}
+
+void
+lk_controller_table_open(lk_controller *self, const char *plugin, const char *key, int open)
+{
+    if (lk_controller_is_open(self) && plugin != NULL && key != NULL)
+        lookout_plugin_table_open(self->handle, plugin, key, open);
+}
+
+char *
+lk_controller_plugin_inspect(lk_controller *self, const char *path)
+{
+    if (!lk_controller_is_open(self) || path == NULL)
+        return NULL;
+    size_t len = 0;
+    const char *json = lookout_plugin_inspect(self->handle, path, &len);
+    if (json == NULL || len == 0)
+        return NULL;
+    return copy_out(json, len);
+}
+
+char *
+lk_controller_plugin_install(lk_controller *self, const char *path)
+{
+    if (!lk_controller_is_open(self) || path == NULL)
+        return _strdup("No chart is open.");
+    const char *err = lookout_plugin_install(self->handle, path);
+    if (err == NULL) {
+        /* The plugin starts drawing inside the call. */
+        lk_controller_invalidate(self);
+        return NULL;
+    }
+    return _strdup(err);
+}
+
+int
+lk_controller_plugin_uninstall(lk_controller *self, const char *id)
+{
+    if (!lk_controller_is_open(self) || id == NULL)
+        return 0;
+    if (lookout_plugin_uninstall(self->handle, id) != 0)
+        return 0;
+    lk_controller_invalidate(self); /* everything it drew is gone */
+    return 1;
+}
+
+int
+lk_controller_plugin_grant_set(lk_controller *self, const char *id, const char *cap, int on)
+{
+    if (!lk_controller_is_open(self) || id == NULL || cap == NULL)
+        return 0;
+    if (lookout_plugin_grant_set(self->handle, id, cap, on) != 0)
+        return 0;
+    lk_controller_invalidate(self);
+    return 1;
+}
+
+int
+lk_controller_open_file(lk_controller *self, const char *path)
+{
+    if (!lk_controller_is_open(self) || path == NULL)
+        return 0;
+    return lookout_open_file(self->handle, path);
+}
+
+int
+lk_controller_own_ship(lk_controller *self, double *lon, double *lat)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_own_ship(self->handle, lon, lat);
+}
+
+void
+lk_controller_follow_set(lk_controller *self, int on)
+{
+    if (lk_controller_is_open(self))
+        lookout_follow_set(self->handle, on);
+}
+
+int
+lk_controller_follow_active(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_follow_active(self->handle);
+}
+
+void
+lk_controller_course_up_set(lk_controller *self, int on)
+{
+    if (lk_controller_is_open(self))
+        lookout_course_up_set(self->handle, on);
+}
+
+int
+lk_controller_course_up_active(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_course_up_active(self->handle);
+}
+
+/* ---- overlay objects ----------------------------------------------------- */
+
+char *
+lk_controller_overlay_at(lk_controller *self, double x_pt, double y_pt)
+{
+    if (!lk_controller_is_open(self))
+        return NULL;
+    size_t len = 0;
+    const char *json = lookout_overlay_at(self->handle, (float)x_pt, (float)y_pt, &len);
+    if (json == NULL || len == 0)
+        return NULL;
+    return copy_out(json, len);
+}
+
+static int
+copy_overlay_obj(const lookout_overlay_obj *in, lk_overlay_obj *out)
+{
+    out->id = copy_out(in->id, in->id_len);
+    out->info = in->info != NULL ? copy_out(in->info, in->info_len) : NULL;
+    out->lon = in->lon;
+    out->lat = in->lat;
+    if (out->id == NULL) {
+        free(out->info);
+        out->info = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+int
+lk_controller_overlay_hit(lk_controller *self, double x_pt, double y_pt, lk_overlay_obj *out)
+{
+    if (out == NULL)
+        return 0;
+    memset(out, 0, sizeof *out);
+    if (!lk_controller_is_open(self))
+        return 0;
+    lookout_overlay_obj obj;
+    if (!lookout_overlay_hit(self->handle, (float)x_pt, (float)y_pt, &obj))
+        return 0;
+    return copy_overlay_obj(&obj, out);
+}
+
+int
+lk_controller_overlay_info(lk_controller *self, const char *id, lk_overlay_obj *out)
+{
+    if (out == NULL)
+        return 0;
+    memset(out, 0, sizeof *out);
+    if (!lk_controller_is_open(self) || id == NULL)
+        return 0;
+    lookout_overlay_obj obj;
+    if (!lookout_overlay_info(self->handle, id, &obj))
+        return 0;
+    return copy_overlay_obj(&obj, out);
+}
+
+void
+lk_controller_overlay_free(lk_overlay_obj *obj)
+{
+    if (obj == NULL)
+        return;
+    free(obj->id);
+    free(obj->info);
+    obj->id = NULL;
+    obj->info = NULL;
+}
+
 /* ---- lifecycle ---------------------------------------------------------- */
 
 int
@@ -350,6 +581,20 @@ lk_controller_geo_at(lk_controller *self, double x, double y, double *lon, doubl
     if (!lk_controller_is_open(self))
         return 0;
     lookout_screen_to_geo(self->handle, (float)x, (float)y, lon, lat);
+    return 1;
+}
+
+int
+lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y)
+{
+    if (!lk_controller_is_open(self) || x == NULL || y == NULL)
+        return 0;
+    /* Camera px are logical points in this shell (lookout_resize is given
+     * points; density scales only the swapchain) — same space geo_at reads. */
+    float fx = 0, fy = 0;
+    lookout_geo_to_screen(self->handle, lon, lat, &fx, &fy);
+    *x = fx;
+    *y = fy;
     return 1;
 }
 

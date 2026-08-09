@@ -24,6 +24,9 @@ namespace winrt::LookoutMarine::implementation
         void GestureWheel(double delta_notches, double x_pt, double y_pt);
         void GestureDoubleTap(double x_pt, double y_pt);
         void Command(char cmd); // keyboard commands (accelerators)
+        // Centre the chart on a vessel a table row named (follow comes off
+        // first). Public: the table windows live outside this class.
+        void RevealOnChart(double lon, double lat);
 
     private:
         void WireChrome();
@@ -38,6 +41,8 @@ namespace winrt::LookoutMarine::implementation
         bool RefreshPluginStatus();
         void StartPluginStatusPoll();
         void StopPluginStatusPoll();
+        // The plugin's own status line, and the state word behind its colour.
+        std::string PluginStatusLine(lkw::PluginInfo const &p, std::string *state_out);
         bool PluginTabPopulated(std::string const &tab);
         void BuildPluginSections(std::string const &tab);
         void BuildPluginsPage();
@@ -81,6 +86,39 @@ namespace winrt::LookoutMarine::implementation
         fire_and_forget PickChartFile();
         fire_and_forget PickChartFolder();
         void SubmitSearch();
+        // overlay bubbles, position source, follow lock (MainWindow.Overlay.cpp)
+        bool TryPinOverlayAt(double x, double y); // a tap; true = it took it
+        void UpdateOverlayBubble();               // per readout tick
+        void CloseOverlayBubble();
+        void HoverProbe(double x, double y);
+        void UpdateGpsPill();
+        void UpdateFollowLock();
+        void CycleFollowLock();
+        void OpenSettingsTab(std::string const &id); // MainWindow.Settings.cpp
+
+        // plugin install + file routing (MainWindow.PluginInstall.cpp)
+        fire_and_forget InstallPluginFromPath(std::string path); // consent first
+        fire_and_forget PickPluginFile();
+        fire_and_forget ShowPluginError(winrt::hstring msg);
+        void OpenDroppedPath(std::string const &path);
+        fire_and_forget HandleDrop(Microsoft::UI::Xaml::DragEventArgs e);
+        fire_and_forget ConfirmUninstallPlugin(std::string id, std::string name);
+
+        // plugin tables (MainWindow.Vessels.cpp)
+        void RefreshPluginTables(); // re-read the declarations at open
+        void ShowVesselsMenu();
+        void OpenPluginTable(lkw::TableSpec const &spec);
+        void CloseVesselWindows(); // the tables belong to the chart handle
+
+        // plugin alerts (MainWindow.Alerts.cpp)
+        void StartAlertWatch();     // 1 s poll, independent of any pane
+        void StopAlertWatch();
+        void RefreshAlerts();
+        void RebuildAlertStrip();
+        void AcknowledgeAlert(unsigned long long id);
+        void SirenSetSounding(bool on);
+        void SirenStrike();
+
         // raster underlay (MainWindow.Raster.cpp)
         void InstallStoredRasters();  // re-add the stored list after each open
         void AddRasterPaths(std::vector<std::string> const &paths);
@@ -133,6 +171,32 @@ namespace winrt::LookoutMarine::implementation
         bool open_attempted{ false };
         std::string open_chart_label; // what Settings ▸ Charts names as open
 
+        // the declared plugin tables, refreshed at every chart open
+        std::vector<lkw::TableSpec> tables;
+
+        // overlay bubble + hover + readout-pill change detection
+        std::string overlay_pin_id;   // "" = no bubble pinned
+        std::string overlay_pin_info; // last payload built, to skip rebuilds
+        std::string hover_payload;
+        long long hover_qpc{ 0 };
+        int fix_state_shown{ -2 };    // -2 = never drawn
+        int follow_state_shown{ -1 };
+
+        // plugin alert state. severity: 2 alarm, 1 warning, 0 notice — an
+        // unknown word reads as alarm, because silence is never the fallback.
+        struct AlertItem
+        {
+            unsigned long long id;
+            int severity;
+            std::wstring title, body;
+            bool acknowledged;
+        };
+        std::vector<AlertItem> alerts;
+        long long alert_seq{ -1 };  // -1 forces the next read to rebuild
+        Microsoft::UI::Xaml::DispatcherTimer alert_timer{ nullptr };
+        Microsoft::UI::Xaml::DispatcherTimer siren_timer{ nullptr };
+        bool siren_on{ false };
+
         // raster underlay state: the installed paths in the order added,
         // rebuilt from the store at every open (the sources are attached to
         // the lookout handle the open destroyed). UI thread only.
@@ -148,13 +212,15 @@ namespace winrt::LookoutMarine::implementation
         // settings form
         tile57_mariner pending{};
         bool settings_loading{ false };
-        // The tab strip is a slot list, not a fixed menu: the app's own sections
-        // are always there, and Vessels, Alarms and Connections appear only
-        // while a plugin puts something in them. `settings_tab` indexes it.
+        // The section list is a slot list, not a fixed menu: the app's own
+        // sections are always there, and Vessels, Alarms and Connections
+        // appear only while a plugin puts something in them. `settings_tab`
+        // indexes it.
         struct SettingsTab
         {
             std::string id;      // the core's section name, so a plugin and this agree
             std::wstring label;
+            std::wstring glyph;  // the section's mark in the list
         };
         std::vector<SettingsTab> settings_tabs;
         int settings_tab{ 0 };
