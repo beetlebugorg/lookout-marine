@@ -253,6 +253,20 @@ fun ChartScreen(
             )
         }
 
+        // ---- top centre: what the plugins are alarming about ------------------
+        // Placed after the building pill so an alarm is never underneath it.
+        // The banner is bounded to two rows of one line each, so the water it
+        // covers is a strip: during a collision alarm the target it names is on
+        // the chart below.
+        AlertBanner(
+            alerts = controller.alerts,
+            onAcknowledge = { controller.acknowledgeAlert(it) },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = ALERT_BANNER_INSET, vertical = Chrome.margin),
+        )
+
         ReadoutsCapsule(
             readouts = controller.readouts,
             compact = viewW < Chrome.compactWidth,
@@ -329,3 +343,11 @@ private const val APPLY_DEBOUNCE_MS = 80L
 
 /** The bottom band the readouts capsule owns. The report stops above it. */
 private val HUD_BAND = Chrome.capsule + Chrome.margin * 2
+
+/**
+ * What the alert banner keeps clear at each side: the search bubble sits in one
+ * top corner and north in the other, and the banner must not reach either. On a
+ * screen wide enough for its full width this costs nothing, because the banner
+ * is centred and narrower than the gap.
+ */
+private val ALERT_BANNER_INSET = Chrome.bubble + Chrome.margin * 2

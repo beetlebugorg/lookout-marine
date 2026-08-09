@@ -223,6 +223,23 @@ class ChartController(private val appContext: Context) {
     private var postedPin: OverlayPin? = null
     private var postedPoint: Offset? = null
 
+    /**
+     * Every alert the plugins have raised, most urgent first. The banner over
+     * the chart is built from this.
+     */
+    var alerts by mutableStateOf<List<PluginAlert>>(emptyList())
+        private set
+
+    private val siren = AlarmSiren(appContext)
+
+    /**
+     * The set the core last reported, as its `seq`. The list is rebuilt only
+     * when it moves. [ALERTS_UNREAD] is never a real seq, which is what lets it
+     * stand for "the core has not answered".
+     */
+    private var alertSeq = ALERTS_UNREAD
+    private var lastAlertNs = 0L
+
     /** Which object of the pick the report shows. */
     var identifyIndex by mutableStateOf(0)
 
@@ -271,6 +288,8 @@ class ChartController(private val appContext: Context) {
         MarinerState.applySavedOverlay(appContext, v)?.let { date = it }
         l.setMariner(v, date)
         lastPushed = null
+        alertSeq = ALERTS_UNREAD
+        lastAlertNs = 0L
         restoreView(l)
         // Replay the installed raster charts into the chart just opened. The
         // engine holds what is open now; the mariner's own material has to
@@ -414,6 +433,10 @@ class ChartController(private val appContext: Context) {
         lk = null
         rendering = false
         identify = emptyList()
+        // The chart is going away with the plugins that raised the alarms, so
+        // nothing is left to acknowledge and nothing may go on sounding.
+        alerts = emptyList()
+        siren.setSounding(false)
     }
 
     /** Persist the last sampled pose. No native call — [lastPushed] has it. */
@@ -438,6 +461,7 @@ class ChartController(private val appContext: Context) {
         // Before the HUD throttle: the bubble follows its target at frame rate,
         // the readouts at 10 Hz.
         followPin(l)
+        sampleAlerts(l, frameTimeNanos)
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
@@ -477,6 +501,72 @@ class ChartController(private val appContext: Context) {
             lastSaveNs = frameTimeNanos
             saveView()
         }
+    }
+
+    // ---- plugin alerts -----------------------------------------------------
+    //
+    // A plugin raises an alert from its own thread with no gesture behind it,
+    // so nothing the mariner does brings one to the screen. The core offers no
+    // way to be told: there is no callback for a raise, and the `seq` that says
+    // the set moved is only reachable by building the whole alerts JSON. So
+    // this SAMPLES, and says so.
+    //
+    // What it does not do is arm a clock of its own for it. The frame loop is
+    // already running and already calls onFrameRendered every frame, so an idle
+    // chart gains no wakeup it did not already have; this only decides how
+    // often that existing visit crosses into the core. A second matches the
+    // reference shell and is a fifth of the repeat, so an alarm is on screen
+    // well before it sounds twice.
+
+    /**
+     * Sample the core's alert list. RENDER THREAD, off the frame loop, like the
+     * readouts and the pinned bubble.
+     */
+    private fun sampleAlerts(l: Lookout, frameTimeNanos: Long) {
+        if (lastAlertNs != 0L && frameTimeNanos - lastAlertNs < ALERT_INTERVAL_NS) return
+        lastAlertNs = frameTimeNanos
+        publishAlerts(l)
+    }
+
+    /**
+     * Read the alerts and hand the list to the UI when it has moved. RENDER
+     * THREAD: [alertSeq] is its own, and the native call takes the api lock.
+     *
+     * Also called straight after an acknowledgement, so the row leaves the
+     * chart on the press rather than at the next sample.
+     */
+    private fun publishAlerts(l: Lookout) {
+        val got = PluginAlertSet.parse(l.pluginAlertsJson())
+        if (got == null) {
+            // Nothing came back. The sampling carries on: giving up here would
+            // leave the boat deaf for the rest of the session because the core
+            // once had nothing to say.
+            if (alertSeq == ALERTS_UNREAD) return
+            alertSeq = ALERTS_UNREAD
+            main.post { applyAlerts(emptyList()) }
+            return
+        }
+        if (got.seq == alertSeq) return
+        alertSeq = got.seq
+        main.post { applyAlerts(got.alerts) }
+    }
+
+    /** MAIN THREAD. The list and the siren move together. */
+    private fun applyAlerts(next: List<PluginAlert>) {
+        alerts = next
+        // An alarm nobody has answered keeps sounding. A warning is shown and
+        // never sounded, so it is not counted here.
+        siren.setSounding(next.any { it.severity.audible && !it.acknowledged })
+    }
+
+    /**
+     * Silence one alert and take it off the chart. ONE alert: a mariner who has
+     * seen the vessel crossing ahead has not seen the one coming up astern, and
+     * a control for both would hide the second.
+     */
+    fun acknowledgeAlert(alert: PluginAlert) = onEngine { l ->
+        if (!l.pluginAlertAck(alert.id)) Log.w(TAG, "alert ack refused: ${alert.id}")
+        publishAlerts(l)
     }
 
     // ---- raster charts -----------------------------------------------------
@@ -752,6 +842,15 @@ class ChartController(private val appContext: Context) {
          * skipped whenever nothing changed.
          */
         const val PLUGIN_POLL_MS = 1_000L
+
+        /**
+         * How often the frame loop crosses into the core for the alerts. See
+         * the plugin alerts section for why this is a sample and not a wake.
+         */
+        const val ALERT_INTERVAL_NS = 1_000_000_000L
+
+        /** No `seq` the core reports, so it can stand for "not answered yet". */
+        const val ALERTS_UNREAD = -1L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
         const val SAVE_INTERVAL_NS = 3_000_000_000L
