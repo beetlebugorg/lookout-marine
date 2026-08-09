@@ -403,6 +403,77 @@ lk::raw::http_fetch(&lk::raw::HttpRequest::get("https://tiles.example.org/x"));
 `Plugin::on_event` receives every event the library did not consume, so a
 drawing plugin can answer an HTTP response without giving anything up.
 
+## Acting on a reading, and filling a dialog
+
+`Plugin::on_update` runs the moment a batch of readings lands, with every input
+already holding its new value. Decide there rather than in `draw`, whose rate is
+one you chose for the picture.
+
+A table is a dialog the shell builds from a `TableSpec`. List it in
+`Plugin::tables` and the library declares it at start, tells you when the
+mariner opens it, and sends what changed once a cycle.
+
+```rust
+const TARGETS: lk::TableSpec = lk::TableSpec {
+    key: "targets",
+    title: "AIS Targets",
+    menu: "Vessels",
+    columns: &[
+        lk::Column::text("name", "Vessel"),
+        lk::Column::new("cpa", "CPA", lk::ColumnType::Distance),
+        lk::Column::flag("state"),
+    ],
+    sort: Some(lk::TableSort::by("cpa")),
+    at: Some(lk::TableAt { lat: "lat", lon: "lon" }),
+};
+
+struct Ais {
+    targets: lk::Table,
+}
+
+impl Default for Ais {
+    fn default() -> Self {
+        Ais { targets: lk::Table::new(TARGETS) }
+    }
+}
+
+impl lk::Plugin for Ais {
+    fn tables(&mut self) -> Vec<&mut lk::Table> {
+        vec![&mut self.targets]
+    }
+
+    fn on_update(&mut self) {
+        if !self.targets.is_open() {
+            return;
+        }
+        self.targets
+            .row("899000101")
+            .band(0)
+            .text("name", Some("ANNE"))
+            .num("cpa", Some(124.0))
+            .at(lk::Point::new(38.97, -76.46))
+            .done();
+    }
+}
+```
+
+The rows are written from `on_update` and nowhere else: the library opens a
+cycle before that call and sends what changed after it. A row the cycle does
+not describe leaves the table. `text` and `num` take an `Option`, and `None` is
+a dash on screen. `lk::tables_json(&[&self.targets])` renders the `"tables"`
+array the manifest must carry, for a `cargo test` to compare.
+
+## The chart grant
+
+The library reads `GRANTS_CHANGED` and follows `overlay.draw`. When the grant
+goes it cancels the draw timer, forgets the scene diff and posts one status line
+saying why the chart is empty; when it comes back it arms the timer and sends
+the whole scene again. `on_update` and the tables carry on throughout: a table
+costs no capability.
+
+`lk::raw::granted(payload, "overlay.draw")` reads the payload, for a tier-3
+plugin that handles the event itself.
+
 ## What it costs
 
 | | Zig | Rust |

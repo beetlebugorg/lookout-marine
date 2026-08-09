@@ -28,7 +28,7 @@
 //!     every store change: the store fans out at up to 10 Hz. It runs only
 //!     while there is somewhere for a scene to land, so a plugin whose
 //!     `overlay.draw` grant the mariner has switched off stops drawing until
-//!     it comes back, or until a table of its own is opened;
+//!     it comes back;
 //!   * the freshness gate. `draw` runs only when every required input is
 //!     inside its window. Otherwise the scene is cleared and the status names
 //!     every missing input at once;
@@ -49,6 +49,11 @@
 //! coalesces, so `onUpdate` runs at most once per batch: 10 Hz for store
 //! readings, 2 Hz for the AIS set, and slower when the instruments are slower.
 //!
+//! A TABLE IS FILLED FROM `onUpdate`. Rows are data. The library opens a table
+//! cycle before `onUpdate` and closes it after, so a plugin upserts its rows
+//! there and nowhere else. A table costs no capability, so its rows keep
+//! arriving while the chart grant is off and the draw timer is down.
+//!
 //! WHAT A PLUGIN MAY DECLARE at its root. All of it is optional; `plugin`
 //! reads what is there and wires only that.
 //!
@@ -56,7 +61,8 @@
 //!                         `lk.subscribePosition` / `lk.subscribeAis`
 //!   draw(c)               the scene, on the library's timer
 //!   draw_rate_ms          how often, default 1000
-//!   onUpdate()            after an input changed, before anything is drawn
+//!   onUpdate()            after an input changed: the decision, and the rows
+//!   an `lk.table(.{…})`   a dialog the mariner opens, filled from `onUpdate`
 //!   Settings              one settings group, or a tuple of them
 //!   onSettings()          after a settings change, before the redraw
 //!   Connections           a connection list
@@ -1482,6 +1488,11 @@ pub const table_min_interval_ms: i64 = 950;
 ///       .sort = .{ .key = "cpa", .ascending = true },
 ///   });
 ///
+/// FILL IT FROM `onUpdate`. The library opens a cycle before that call and
+/// sends what changed after it, so `upsert` belongs there and nowhere else.
+/// A table costs no capability and is not drawing, so the rows keep coming
+/// while the chart grant is off.
+///
 /// The library declares it at start, tells you when the mariner opens it
 /// (`isOpen`), and sends what changed once a cycle. DESCRIBE THE WHOLE SET
 /// EVERY CYCLE, the way `draw` describes the whole picture: a row you do not
@@ -1537,15 +1548,14 @@ pub fn table(comptime opts: TableOpts) type {
             t.forgetRow(id);
         }
 
-        /// Start a cycle. The library calls this before `draw`; a plugin with
-        /// no `draw` calls it itself.
-        pub fn begin() void {
+        /// Start a cycle. The library calls this before `onUpdate`.
+        pub fn lkBegin() void {
             t.begin(opts.key);
         }
 
         /// Send what changed and take off what this cycle did not describe.
-        /// The library calls this after `draw`.
-        pub fn flush() void {
+        /// The library calls this after `onUpdate`.
+        pub fn lkFlush() void {
             t.commit();
         }
 
@@ -1786,21 +1796,22 @@ const TableWriter = struct {
     }
 };
 
-/// The host calls and the clock, absent on a native build so the library's own
-/// tests reach every path here without linking the wasm imports. With no clock
-/// the cadence gate stands open, which is what a test wants.
+/// The clock behind the cadence gate. Under a test build this is the test
+/// host's clock, which moves only when a test moves it, so a test that leaves
+/// it alone finds the gate standing open. A native build that is not a test
+/// has no clock at all.
 fn tableNow() i64 {
-    if (comptime builtin.target.cpu.arch != .wasm32) return 0;
+    if (comptime builtin.target.cpu.arch != .wasm32 and !builtin.is_test) return 0;
     return monoMs();
 }
 
 fn tableDeclare(json: []const u8) i32 {
-    if (comptime builtin.target.cpu.arch != .wasm32) return 0;
+    if (comptime builtin.target.cpu.arch != .wasm32 and !builtin.is_test) return 0;
     return raw_lk.tableDeclareJson(json);
 }
 
 fn tableUpdate(json: []const u8) i32 {
-    if (comptime builtin.target.cpu.arch != .wasm32) return 0;
+    if (comptime builtin.target.cpu.arch != .wasm32 and !builtin.is_test) return 0;
     return raw_lk.tableUpdateJson(json);
 }
 
@@ -2116,8 +2127,23 @@ fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, sr
 /// Everything is optional. A plugin that declares only `draw` gets a timer and
 /// a scene; one that declares only `onEvent` is a raw plugin.
 pub fn plugin(comptime P: type) void {
+    raw_lk.registerPlugin(Wiring(P));
+}
+
+/// What `plugin` installs: `start` and `onEvent`, wired to the declarations.
+/// Kept apart from the export so the library's own tests drive a plugin
+/// without a host. A plugin calls `plugin`, never this.
+fn Wiring(comptime P: type) type {
     const D = Declared(P);
-    const Impl = struct {
+    return struct {
+        comptime {
+            // A dialog nothing fills opens empty and stays empty, which reads
+            // as a broken shell rather than a plugin that wrote no row.
+            if (D.tables.len > 0 and !D.has_update) @compileError(
+                "a table is filled from onUpdate, and this plugin declares a table and no onUpdate",
+            );
+        }
+
         /// What the status says while the chart grant is off.
         const no_draw_line = "not drawing: permission to draw on the chart is off";
 
@@ -2162,14 +2188,12 @@ pub fn plugin(comptime P: type) void {
                     if (comptime @hasDecl(P, "onEvent")) {
                         if (routed.rest) |json| try P.onEvent(.{ .store_changed = json });
                     }
-                    if (comptime D.has_update) {
-                        if (routed.claimed > 0) P.onUpdate();
-                    }
+                    if (routed.claimed > 0) runUpdate();
                     return;
                 },
                 .ais_changed => |payload| if (comptime D.has_ais) {
                     D.Ais.lkRecord(payload, monoMs());
-                    if (comptime D.has_update) P.onUpdate();
+                    runUpdate();
                     return;
                 },
                 .config_changed => |payload| {
@@ -2197,17 +2221,14 @@ pub fn plugin(comptime P: type) void {
                     }
                 },
                 // A table the mariner just opened is filled at once: the
-                // dialog must not sit empty until the next tick.
+                // dialog must not sit empty until the next batch of readings.
                 .table_open => |key| {
                     var mine = false;
                     inline for (D.tables) |T| {
                         if (T.lkOpen(key, true)) mine = true;
                     }
                     if (mine) {
-                        if (comptime D.has_draw) {
-                            armTimer();
-                            runDraw();
-                        }
+                        runUpdate();
                         return;
                     }
                 },
@@ -2216,10 +2237,7 @@ pub fn plugin(comptime P: type) void {
                     inline for (D.tables) |T| {
                         if (T.lkOpen(key, false)) mine = true;
                     }
-                    if (mine) {
-                        if (comptime D.has_draw) armTimer();
-                        return;
-                    }
+                    if (mine) return;
                 },
                 .shutdown => {
                     if (comptime D.has_draw) {
@@ -2241,20 +2259,21 @@ pub fn plugin(comptime P: type) void {
             if (comptime @hasDecl(P, "onEvent")) try P.onEvent(e);
         }
 
-        /// True while a draw has somewhere to land: the chart, or a table the
-        /// mariner has open. A table costs no capability, so a dialog on
-        /// screen keeps filling whatever the chart grant says.
-        fn drawWanted() bool {
-            if (may_draw) return true;
-            inline for (D.tables) |T| {
-                if (T.isOpen()) return true;
-            }
-            return false;
+        /// One pass on the data path: the plugin's decision, and the rows it
+        /// upserts around it. The chart grant does not reach here. A table is
+        /// data, it costs no capability, and a dialog on screen fills whether
+        /// or not the plugin may draw.
+        fn runUpdate() void {
+            inline for (D.tables) |T| T.lkBegin();
+            if (comptime D.has_update) P.onUpdate();
+            inline for (D.tables) |T| T.lkFlush();
         }
 
-        /// Run the draw timer exactly while a draw has somewhere to land.
+        /// Run the draw timer exactly while the chart grant is on. Without it
+        /// every overlay call is refused, so a scene described then is work
+        /// thrown away.
         fn armTimer() void {
-            const want = drawWanted();
+            const want = may_draw;
             if (want == (draw_timer >= 0)) return;
             if (want) {
                 draw_timer = raw_lk.timerSet(D.draw_rate_ms, true);
@@ -2311,20 +2330,14 @@ pub fn plugin(comptime P: type) void {
                 }
                 scene.begin();
                 sendScene(); // draws nothing, so everything drawn is deleted
-                inline for (D.tables) |T| {
-                    T.begin();
-                    T.flush(); // and describes no rows, so the table empties
-                }
                 sayStatus("degraded", w.buffered());
                 return;
             }
 
             var c = Chart{};
             scene.begin();
-            inline for (D.tables) |T| T.begin();
             P.draw(&c);
             sendScene();
-            inline for (D.tables) |T| T.flush();
             if (c.said) sayStatus(@tagName(c.state), c.detail.text()) else sayStatus("running", "");
         }
 
@@ -2335,10 +2348,12 @@ pub fn plugin(comptime P: type) void {
             if (may_draw) scene.commit() else scene.forget();
         }
 
-        /// The status, with the reason nothing is on the chart in front of the
-        /// plugin's own line. A draw still runs while a table is open, and its
-        /// "running" would otherwise cover the one thing the mariner needs to
-        /// read.
+        /// The status a frame produced, or the reason there is no frame.
+        ///
+        /// A frame runs on a settings change whatever the chart grant says, so
+        /// the line it wrote has to give way to the one thing the mariner
+        /// needs to read. While the grant is off nothing else calls this, so a
+        /// plugin is free to post its own line from `onUpdate`.
         fn sayStatus(state: []const u8, detail: []const u8) void {
             if (may_draw) {
                 sayText(state, detail);
@@ -2347,7 +2362,6 @@ pub fn plugin(comptime P: type) void {
             sayText("degraded", no_draw_line);
         }
     };
-    raw_lk.registerPlugin(Impl);
 }
 
 fn readSettings(comptime P: type, config: std.json.Value) void {
@@ -2639,21 +2653,25 @@ test "a declaration renders the entry the manifest has to carry" {
 }
 
 test "no rows are built while the dialog is shut" {
+    raw_lk.test_hooks.reset();
     _ = TestTable.lkOpen("targets", false);
-    TestTable.begin();
+    TestTable.lkBegin();
     try expect.expect(!TestTable.isOpen());
     TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
-    TestTable.flush();
+    TestTable.lkFlush();
     try expect.expectEqual(@as(usize, 0), TestTable.lkBatch().len);
 }
 
 test "a cycle sends the rows that changed and removes the ones it did not describe" {
+    // The clock stands still, so the cadence gate stays open and every cycle
+    // here builds.
+    raw_lk.test_hooks.reset();
     try expect.expect(TestTable.lkOpen("targets", true));
     defer _ = TestTable.lkOpen("targets", false);
 
     // Everything is new, so everything goes out. A cell the plugin has no
     // reading for is left off, and the host reads that as a dash.
-    TestTable.begin();
+    TestTable.lkBegin();
     TestTable.upsert(.{
         .id = "899000101",
         .band = @as(i32, 0),
@@ -2664,7 +2682,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
         .lon = -76.46,
     });
     TestTable.upsert(.{ .id = "899000707", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
-    TestTable.flush();
+    TestTable.lkFlush();
     try expect.expectEqualStrings(
         "{\"key\":\"targets\",\"upsert\":[" ++
             "{\"id\":\"899000101\",\"band\":0,\"name\":\"ANNE\",\"cpa\":124,\"state\":\"alarm\"," ++
@@ -2675,7 +2693,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     );
 
     // The same picture again: nothing changed, so nothing is sent.
-    TestTable.begin();
+    TestTable.lkBegin();
     TestTable.upsert(.{
         .id = "899000101",
         .band = @as(i32, 0),
@@ -2686,14 +2704,14 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
         .lon = -76.46,
     });
     TestTable.upsert(.{ .id = "899000707", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
-    TestTable.flush();
+    TestTable.lkFlush();
     // Not even an empty batch: the commit sees nothing to say and returns,
     // leaving the envelope it opened unfinished.
     try expect.expectEqualStrings("{\"key\":\"targets\",\"upsert\":[", TestTable.lkBatch());
 
     // One row moves and the other is not described at all: one upsert, one
     // removal, and the mariner's table follows the sea.
-    TestTable.begin();
+    TestTable.lkBegin();
     TestTable.upsert(.{
         .id = "899000101",
         .band = @as(i32, 0),
@@ -2703,23 +2721,24 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
         .lat = 38.97,
         .lon = -76.46,
     });
-    TestTable.flush();
+    TestTable.lkFlush();
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"cpa\":96") != null);
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"899000707\"]") != null);
 
     // And a row taken out by hand leaves at the next commit.
-    TestTable.begin();
+    TestTable.lkBegin();
     TestTable.upsert(.{ .id = "899000101", .band = @as(i32, 0), .name = "ANNE", .cpa = 96.0, .state = @as(?[]const u8, "alarm"), .lat = 38.97, .lon = -76.46 });
     TestTable.remove("899000101");
-    TestTable.flush();
+    TestTable.lkFlush();
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"899000101\"]") != null);
 }
 
 test "closing the dialog forgets what was on it" {
+    raw_lk.test_hooks.reset();
     try expect.expect(TestTable.lkOpen("targets", true));
-    TestTable.begin();
+    TestTable.lkBegin();
     TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
-    TestTable.flush();
+    TestTable.lkFlush();
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"ANNE\"") != null);
 
     // The host drops the rows when the dialog closes, so the library must too:
@@ -2727,10 +2746,134 @@ test "closing the dialog forgets what was on it" {
     _ = TestTable.lkOpen("targets", false);
     try expect.expect(TestTable.lkOpen("targets", true));
     defer _ = TestTable.lkOpen("targets", false);
-    TestTable.begin();
+    TestTable.lkBegin();
     TestTable.upsert(.{ .id = "1", .name = "ANNE", .cpa = 124.0 });
-    TestTable.flush();
+    TestTable.lkFlush();
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"ANNE\"") != null);
+}
+
+test "the cadence gate holds a rebuild to one a second whatever the data rate" {
+    // The gate is what lets the cycle ride the data path. Readings land at up
+    // to 10 Hz and the AIS set at 2 Hz; the batch that reaches the host is
+    // still one a second.
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    raw_lk.test_hooks.advance(1);
+    try expect.expect(TestTable.lkOpen("targets", true));
+    defer _ = TestTable.lkOpen("targets", false);
+
+    fillOneRow(0);
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.table_update));
+
+    // Eleven cycles across the next 990 ms, each describing a row the last one
+    // did not. Exactly one of them clears the 950 ms gate.
+    for (1..12) |i| {
+        raw_lk.test_hooks.advance(90);
+        fillOneRow(@floatFromInt(i));
+    }
+    try expect.expectEqual(@as(usize, 2), raw_lk.test_hooks.count(.table_update));
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"cpa\":11") != null);
+}
+
+fn fillOneRow(cpa: f64) void {
+    TestTable.lkBegin();
+    TestTable.upsert(.{ .id = "899000101", .name = "ANNE", .cpa = cpa });
+    TestTable.lkFlush();
+}
+
+// -- the table cycle rides the data path ---------------------------------------
+
+/// A plugin that draws and keeps a dialog. `draw` upserts nothing: the rows
+/// are `onUpdate`'s work.
+const BothPaths = struct {
+    pub const Rows = table(.{
+        .key = "both",
+        .title = "Both",
+        .menu = "Test",
+        .columns = &.{.{ .key = "cpa", .label = "CPA", .type = .distance }},
+    });
+
+    // Not pub: `Declared` reads the plugin's public declarations, and a
+    // counter is not one of them.
+    var updates: usize = 0;
+    var draws: usize = 0;
+
+    pub fn onUpdate() void {
+        updates += 1;
+        Rows.upsert(.{ .id = "899000101", .cpa = @as(f64, @floatFromInt(updates)) });
+    }
+
+    pub fn draw(c: *Chart) void {
+        draws += 1;
+        c.status("{d} drawn", .{draws});
+    }
+};
+
+/// A plugin with a dialog and no chart at all. It has no draw timer, so under
+/// a cycle that rode `draw` its table could never fill.
+const TableOnly = struct {
+    pub const Rows = table(.{
+        .key = "only",
+        .title = "Only",
+        .menu = "Test",
+        .columns = &.{.{ .key = "cpa", .label = "CPA", .type = .distance }},
+    });
+
+    pub fn onUpdate() void {
+        Rows.upsert(.{ .id = "899000101", .cpa = 124.0 });
+    }
+};
+
+test "opening a dialog fills it without drawing, and a frame leaves it alone" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(BothPaths);
+    BothPaths.updates = 0;
+    BothPaths.draws = 0;
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    const draw_timer = raw_lk.test_hooks.last(.timer_set).?.id;
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
+
+    // The dialog opens. The rows go out, and nothing was drawn to produce
+    // them: no second timer, no overlay batch.
+    try W.onEvent(.{ .table_open = "both" });
+    defer _ = BothPaths.Rows.lkOpen("both", false);
+    try expect.expectEqual(@as(usize, 1), BothPaths.updates);
+    try expect.expectEqual(@as(usize, 0), BothPaths.draws);
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.table_update));
+    try expect.expect(std.mem.indexOf(u8, raw_lk.test_hooks.last(.table_update).?.payload(), "\"cpa\":1") != null);
+
+    // A frame draws and says its line. It runs no decision and sends no rows.
+    try W.onEvent(.{ .timer = draw_timer });
+    try expect.expectEqual(@as(usize, 1), BothPaths.draws);
+    try expect.expectEqual(@as(usize, 1), BothPaths.updates);
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.table_update));
+}
+
+test "a plugin with no draw fills the dialog it declared" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(TableOnly);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    // No draw, so no timer was ever asked for.
+    try expect.expectEqual(@as(usize, 0), raw_lk.test_hooks.count(.timer_set));
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.table_declare));
+
+    try W.onEvent(.{ .table_open = "only" });
+    defer _ = TableOnly.Rows.lkOpen("only", false);
+    try expect.expectEqualStrings(
+        "{\"key\":\"only\",\"upsert\":[{\"id\":\"899000101\",\"cpa\":124}],\"remove\":[]}",
+        raw_lk.test_hooks.last(.table_update).?.payload(),
+    );
+
+    // Shut again, and the cycle stops: nobody is looking.
+    try W.onEvent(.{ .table_closed = "only" });
+    const before = raw_lk.test_hooks.count(.table_update);
+    try W.onEvent(.{ .table_open = "other plugin's key" });
+    try expect.expectEqual(before, raw_lk.test_hooks.count(.table_update));
 }
 
 // -- mixing declared inputs with raw subscriptions -----------------------------

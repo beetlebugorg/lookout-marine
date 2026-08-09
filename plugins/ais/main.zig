@@ -17,6 +17,11 @@
 //! decision taken in `draw` would run at whatever rate suits the picture, and
 //! the picture is not what a collision alarm answers to.
 //!
+//! The targets dialog is on the deciding path too. A row is the ruling in
+//! `gates` written out, so `evaluate` fills it and the mariner reads the same
+//! set the chart is coloured from. The rows keep coming while the chart grant
+//! is off, because a table is data and costs no capability.
+//!
 //! AIDS TO NAVIGATION share the store and nothing else. A buoy is not going
 //! anywhere, so it gets one object — a diamond, broken open when the aid is
 //! virtual — with no CPA, no vector and no heading line, and it ages on its own
@@ -56,6 +61,7 @@ pub const Settings = cfg.groups;
 /// The targets dialog: the same set this file draws, in a sortable table, with
 /// the alarmed vessels held at the top by their band. Declared in targets.zig;
 /// named here because the library reads the plugin's root for what it declares.
+/// `evaluate` fills it.
 pub const Targets = targets.Targets;
 
 // ---- the numbers, all in one place -----------------------------------------
@@ -186,6 +192,7 @@ fn evaluate() void {
         }
         if (t.aton) {
             checkAid(t, g);
+            if (Targets.isOpen()) targets.aid(t, t.at.?, own);
             continue;
         }
         const at = t.at.?;
@@ -206,6 +213,10 @@ fn evaluate() void {
             false;
         if (in_gate and !g.in_gate) alarm(t, sol.?);
         g.in_gate = in_gate;
+
+        // The row carries the solution the triangle is coloured by, so the
+        // table and the chart cannot disagree about which vessel is dangerous.
+        if (Targets.isOpen()) targets.vessel(t, at, own, sol, in_gate);
     }
     prune();
 }
@@ -245,9 +256,8 @@ pub fn draw(c: *lk.Chart) void {
 
         if (t.aton) {
             drawAid(c, t, at);
-            if (Targets.isOpen()) targets.aid(t, at, own);
         } else {
-            drawVessel(c, t, at, g, own, set);
+            drawVessel(c, t, at, g, set);
             if (g.in_gate) danger += 1;
         }
         drawn += 1;
@@ -271,15 +281,10 @@ fn drawVessel(
     t: *const lk.Target,
     at: lk.Point,
     g: *const Gate,
-    own: ?cpa.State,
     set: cfg.Tuned,
 ) void {
     const sol = g.sol;
     const in_gate = g.in_gate;
-    // The row carries the same solution the triangle is coloured by, so the
-    // table and the chart can never disagree about which vessel is dangerous.
-    if (Targets.isOpen()) targets.vessel(t, at, own, sol, in_gate);
-
     const color: lk.Color = if (in_gate) .target_danger else .target;
     var idb: [id_len]u8 = undefined;
     var pick: Pick = .{};

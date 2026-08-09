@@ -81,6 +81,10 @@ extern "C" {
     fn host_overlay(ptr: *const u8, len: u32) -> i32;
     #[link_name = "chrome_status"]
     fn host_chrome_status(ptr: *const u8, len: u32);
+    #[link_name = "table_declare"]
+    fn host_table_declare(ptr: *const u8, len: u32) -> i32;
+    #[link_name = "table_update"]
+    fn host_table_update(ptr: *const u8, len: u32) -> i32;
     #[link_name = "alert"]
     fn host_alert(ptr: *const u8, len: u32) -> i32;
     #[link_name = "tcp_connect"]
@@ -153,6 +157,12 @@ mod off_host {
         -1
     }
     pub unsafe fn host_chrome_status(ptr: *const u8, len: u32) {}
+    pub unsafe fn host_table_declare(ptr: *const u8, len: u32) -> i32 {
+        -1
+    }
+    pub unsafe fn host_table_update(ptr: *const u8, len: u32) -> i32 {
+        -1
+    }
     pub unsafe fn host_alert(ptr: *const u8, len: u32) -> i32 {
         -1
     }
@@ -272,6 +282,19 @@ pub fn overlay_json(s: &str) -> i32 {
 /// host keeps the latest per plugin and logs every text it has not seen.
 pub fn status_json(s: &str) {
     unsafe { host_chrome_status(s.as_ptr(), s.len() as u32) }
+}
+
+/// Tell the host about one dialog, which is what puts it in the shell's menu.
+/// A tier-1 plugin never calls this: [`crate::Table`] declares itself at start.
+pub fn table_declare_json(s: &str) -> i32 {
+    unsafe { host_table_declare(s.as_ptr(), s.len() as u32) }
+}
+
+/// Post one batch of rows, `{"key":…,"upsert":[…],"remove":[…]}`. The host
+/// takes at most one batch per table per 900 ms. [`crate::Table`] owns the
+/// batch and the diff behind it.
+pub fn table_update_json(s: &str) -> i32 {
+    unsafe { host_table_update(s.as_ptr(), s.len() as u32) }
 }
 
 /// Raise an alert. Needs `alerts.raise`; without it this returns -1 and the
@@ -658,6 +681,18 @@ pub enum Event<'a> {
     WsOpen(WsOpen),
     WsData(WsData<'a>),
     WsClosed(WsClosed),
+    /// A shell has put one of the plugin's declared tables on screen, named by
+    /// its key. [`crate::Table`] tracks its own dialog, so a tier-1 plugin
+    /// never sees this.
+    TableOpen(String),
+    /// The shell closed the dialog, and the host has already dropped its rows.
+    TableClosed(String),
+    /// `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities the
+    /// plugin holds right now. [`granted`] reads it.
+    ///
+    /// THIS IS THE ONLY WAY TO KNOW WHAT YOU HOLD. The manifest is what the
+    /// plugin asked for; this is what the mariner left switched on.
+    GrantsChanged(&'a str),
     /// The last thing a plugin is handed. Close sockets, post a final status.
     Shutdown,
 }
@@ -717,6 +752,24 @@ impl Reading<'_> {
             self.value.get("lon")?.as_f64()?,
         ))
     }
+}
+
+/// True when a `GrantsChanged` payload lists this capability, by its manifest
+/// name: `"overlay.draw"`, `"alerts.raise"`. False for a payload that will not
+/// parse, which is the safe answer for a permissions list.
+pub fn granted(payload: &str, capability: &str) -> bool {
+    let Some(root) = Json::parse(payload) else {
+        return false;
+    };
+    let Some(list) = root.get("granted").and_then(Json::as_array) else {
+        return false;
+    };
+    list.iter().any(|item| item.as_str() == Some(capability))
+}
+
+/// The table key a `TableOpen` or `TableClosed` payload names.
+pub fn table_key(payload: &str) -> Option<String> {
+    Some(Json::parse(payload)?.str_or("key", "").to_owned())
 }
 
 /// Parse a `StoreChanged` payload. The readings borrow the payload.
@@ -1224,6 +1277,9 @@ pub(crate) const KIND_AIS_CHANGED: u32 = 11;
 pub(crate) const KIND_WS_OPEN: u32 = 12;
 pub(crate) const KIND_WS_DATA: u32 = 13;
 pub(crate) const KIND_WS_CLOSED: u32 = 14;
+pub(crate) const KIND_TABLE_OPEN: u32 = 15;
+pub(crate) const KIND_TABLE_CLOSED: u32 = 16;
+pub(crate) const KIND_GRANTS_CHANGED: u32 = 17;
 pub(crate) const KIND_SHUTDOWN: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
@@ -1261,6 +1317,27 @@ pub(crate) fn http_response(request: i64, payload: &[u8]) -> HttpResponse<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn granted_reads_the_capability_list() {
+        let payload = r#"{"v":1,"granted":["ais.read","overlay.draw"]}"#;
+        assert!(granted(payload, "overlay.draw"));
+        assert!(granted(payload, "ais.read"));
+        assert!(!granted(payload, "alerts.raise"));
+        // The safe answer for a list that will not parse is that nothing is
+        // held.
+        assert!(!granted("{", "overlay.draw"));
+        assert!(!granted(r#"{"v":1}"#, "overlay.draw"));
+    }
+
+    #[test]
+    fn a_table_event_names_its_key() {
+        assert_eq!(
+            table_key(r#"{"key":"targets"}"#).as_deref(),
+            Some("targets")
+        );
+        assert_eq!(table_key("{").as_deref(), None);
+    }
 
     // The builders write JSON without touching the host, so they are testable
     // on any target. `cargo test` runs these on the development machine.

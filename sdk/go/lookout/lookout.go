@@ -33,7 +33,9 @@
 //   - the subscription, and one recorded value per declared input, aged against
 //     the monotonic clock rather than the wall clock;
 //   - the draw timer. Draw runs at [DefaultDrawRate], not on every store change:
-//     the store fans out at up to 10 Hz;
+//     the store fans out at up to 10 Hz. It runs only while there is somewhere
+//     for a scene to land, so a plugin whose overlay.draw grant the mariner has
+//     switched off stops drawing until it comes back;
 //   - the freshness gate. Draw runs only when every required input is inside its
 //     window. Otherwise the scene is cleared and the status names every missing
 //     input at once;
@@ -52,6 +54,7 @@
 //
 //	Draw(*Chart)                the scene, on the library's timer
 //	DrawRate() time.Duration    how often, default 1 s
+//	OnUpdate()                  after an input changed: the decision, and the rows
 //	OnSettings()                after a settings change, before the redraw
 //	OnData(*Conn, []byte)       bytes from one connection's socket    (tier 2)
 //	OnOpen(*Conn)               a stream came up; send a subscription (tier 2)
@@ -63,8 +66,22 @@
 //	OnShutdown()                the last word
 //
 // A settings struct is a field named Settings on the registered value; see
-// [SettingsJSON]. Inputs and connection lists are package-level variables; see
-// [Number] and [Connections].
+// [SettingsJSON]. Inputs, connection lists and tables are package-level
+// variables; see [SubscribeNumber], [Connections] and [NewTable].
+//
+// # Where a decision belongs
+//
+// OnUpdate runs the moment a declared input has a new value, with every input
+// already current. It is the clock for work that is not drawing: a plugin that
+// only watches a condition implements OnUpdate and no Draw, and a plugin that
+// does both keeps the decision there and renders it here. DrawRate is a
+// graphics rate you chose, so a decision taken in Draw runs at whatever rate
+// suits the picture.
+//
+// A table is filled from OnUpdate. Rows are data. The library opens a table
+// cycle before that call and closes it after, so a plugin upserts its rows
+// there and nowhere else. A table costs no capability, so its rows keep
+// arriving while the chart grant is off and the draw timer is down.
 //
 // # Register in init, not in main
 //
@@ -111,6 +128,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -123,6 +141,10 @@ type Drawer interface{ Draw(c *Chart) }
 
 // DrawRater sets how often Draw runs.
 type DrawRater interface{ DrawRate() time.Duration }
+
+// Updater is the data path: a batch of readings has landed and every declared
+// input holds its new value. Decide here, and fill any table here.
+type Updater interface{ OnUpdate() }
 
 // SettingsWatcher hears about a settings change, after the library has filled
 // the Settings struct in and before it redraws.
@@ -175,11 +197,18 @@ type registry struct {
 	inputs []*input
 	ais    *AISInput
 	conns  *Conns
+	tables []*Table
 	groups []specGroup
 
 	drawTimer int64
 	drawEvery int64
 	missing   []string
+
+	// mayDraw is true while the mariner leaves overlay.draw on. The host
+	// refuses every overlay call without it, so a scene described then is work
+	// thrown away. Assumed on until the host says otherwise, which it does once
+	// the module has started.
+	mayDraw bool
 
 	// Complaints found while wiring, held until the host is listening: the
 	// module is instantiated before lk_start and a log line written during
@@ -189,7 +218,9 @@ type registry struct {
 	fatal error
 }
 
-var reg = registry{drawTimer: -1}
+var reg = newRegistry()
+
+func newRegistry() registry { return registry{drawTimer: -1, mayDraw: true} }
 
 // Register wires the exports to p. Call it once, from an init function or a
 // package-level variable — NOT from main, which a reactor module never runs.
@@ -234,6 +265,16 @@ func registerConns(c *Conns) {
 	reg.conns = c
 }
 
+func registerTable(t *Table) {
+	for _, other := range reg.tables {
+		if other.opts.Key == t.opts.Key {
+			noteWiring("two tables called " + strconv.Quote(t.opts.Key) + "; the first is used")
+			return
+		}
+	}
+	reg.tables = append(reg.tables, t)
+}
+
 func noteWiring(msg string) { reg.wiring = append(reg.wiring, msg) }
 
 // checkMethod catches the method that is there under a name Go will not match:
@@ -263,7 +304,7 @@ func checkMethod(p any, name, want string) {
 // resetRegistry puts the package back to how it starts. The library's own tests
 // register a plugin per test; a plugin calls Register once and never this.
 func resetRegistry() {
-	reg = registry{drawTimer: -1}
+	reg = newRegistry()
 	scene = sceneState{}
 	lastState, lastDetail, saidOnce = "", "", false
 }
@@ -350,6 +391,9 @@ func dispatchStart(raw []byte) int32 {
 	if reg.conns != nil {
 		reg.conns.start(cfg)
 	}
+	for _, t := range reg.tables {
+		t.declare()
+	}
 	if _, ok := reg.plugin.(Drawer); ok {
 		reg.drawEvery = DefaultDrawRate.Milliseconds()
 		if r, ok := reg.plugin.(DrawRater); ok && r.DrawRate() > 0 {
@@ -385,11 +429,18 @@ func wiringComplaint() error {
 	_, handles := reg.plugin.(DataHandler)
 	_, raws := reg.plugin.(EventHandler)
 	_, starts := reg.plugin.(Starter)
-	if !draws && !handles && !raws && !starts {
-		return errors.New("the registered plugin has none of Draw, OnData, OnEvent or OnStart")
+	_, updates := reg.plugin.(Updater)
+	if !draws && !handles && !raws && !starts && !updates {
+		return errors.New("the registered plugin has none of Draw, OnUpdate, OnData, OnEvent or OnStart")
 	}
 	if reg.conns != nil && !handles {
 		return errors.New("a connection list is declared and the plugin has no OnData method")
+	}
+	if len(reg.tables) > 0 && !updates {
+		// A table is filled from OnUpdate. Without it the dialog opens empty
+		// and stays empty, which looks like a broken shell rather than a
+		// plugin that never wrote a row.
+		return errors.New("a table is declared and the plugin has no OnUpdate method to fill it")
 	}
 	return nil
 }
@@ -411,18 +462,26 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 	case StoreChanged:
 		if len(reg.inputs) > 0 {
 			mono := MonoMs()
+			claimed := 0
 			for _, r := range e.Readings() {
 				for _, in := range reg.inputs {
 					if in.path == r.Path {
 						in.record(r, mono)
+						claimed++
 					}
 				}
+			}
+			// A batch that touched none of the declared inputs is not an
+			// update: nothing this plugin reads has changed.
+			if claimed > 0 {
+				runUpdate()
 			}
 			return 0
 		}
 	case AISChanged:
 		if reg.ais != nil {
 			reg.ais.record(e, MonoMs())
+			runUpdate()
 			return 0
 		}
 	case ConfigChanged:
@@ -439,6 +498,25 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 			runDraw()
 		}
 		return 0
+	case GrantsChanged:
+		if _, ok := reg.plugin.(Drawer); ok {
+			setMayDraw(e.Granted("overlay.draw"))
+		}
+	case TableOpen, TableClosed:
+		// A table the mariner just opened is filled at once: the dialog must
+		// not sit empty until the next batch of readings.
+		mine := false
+		for _, t := range reg.tables {
+			if t.setOpen(e.TableKey(), kind == TableOpen) {
+				mine = true
+			}
+		}
+		if mine {
+			if kind == TableOpen {
+				runUpdate()
+			}
+			return 0
+		}
 	case Timer:
 		if reg.drawTimer >= 0 && handle == reg.drawTimer {
 			runDraw()
@@ -477,6 +555,71 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 	return 0
 }
 
+// noDrawLine is what the status says while the chart grant is off.
+const noDrawLine = "not drawing: permission to draw on the chart is off"
+
+// runUpdate is one pass on the data path: the plugin's decision, and the rows it
+// fills around it. The chart grant does not reach here. A table is data, it
+// costs no capability, and a dialog on screen fills whether or not the plugin
+// may draw.
+func runUpdate() {
+	u, updates := reg.plugin.(Updater)
+	if !updates && len(reg.tables) == 0 {
+		// Nothing to run and no rows to hold, so not even a clock is read.
+		return
+	}
+	if len(reg.tables) > 0 {
+		mono := MonoMs()
+		for _, t := range reg.tables {
+			t.begin(mono)
+		}
+	}
+	if updates {
+		u.OnUpdate()
+	}
+	for _, t := range reg.tables {
+		t.flush()
+	}
+}
+
+// setMayDraw takes the chart grant on or off.
+//
+// The host has already removed what this plugin drew, so the diff held here
+// describes objects that are gone. Forget it: the next draw sends the whole
+// scene rather than a difference against nothing.
+func setMayDraw(on bool) {
+	if on == reg.mayDraw {
+		return
+	}
+	reg.mayDraw = on
+	scene.forget()
+	armTimer()
+	if on {
+		runDraw()
+		return
+	}
+	// The chart is empty and the mariner is the reason. Say so, or the plugin
+	// looks broken.
+	sayText(string(StateDegraded), noDrawLine)
+}
+
+// armTimer runs the draw timer exactly while the chart grant is on. Without it
+// every overlay call is refused, so a scene described then is work thrown away.
+func armTimer() {
+	if reg.mayDraw == (reg.drawTimer >= 0) {
+		return
+	}
+	if reg.mayDraw {
+		reg.drawTimer = TimerSet(reg.drawEvery, true)
+		if reg.drawTimer < 0 {
+			Log(Error, "draw timer refused; nothing will be drawn")
+		}
+		return
+	}
+	TimerCancel(reg.drawTimer)
+	reg.drawTimer = -1
+}
+
 // runDraw is one frame: gate on freshness, let the plugin describe the scene,
 // send the difference, and post the status.
 func runDraw() {
@@ -495,20 +638,45 @@ func runDraw() {
 		// Every missing input is named: a line that says "no wind" while the
 		// GPS is also out sends the mariner to the wrong instrument.
 		scene.begin()
-		scene.commit() // draws nothing, so everything drawn is deleted
-		sayText(string(StateDegraded), "no "+strings.Join(reg.missing, ", no "))
+		sendScene() // draws nothing, so everything drawn is deleted
+		sayStatus(string(StateDegraded), "no "+strings.Join(reg.missing, ", no "))
 		return
 	}
 
 	var c Chart
 	scene.begin()
 	d.Draw(&c)
-	scene.commit()
+	sendScene()
 	if c.said {
-		sayText(string(c.state), c.detail)
+		sayStatus(string(c.state), c.detail)
 		return
 	}
-	sayText(string(StateRunning), "")
+	sayStatus(string(StateRunning), "")
+}
+
+// sendScene posts the scene when the chart will take it. Without the grant the
+// batch is dropped in the module: every call in it would be refused, and a
+// refusal costs a crossing into the host and a denied count.
+func sendScene() {
+	if reg.mayDraw {
+		scene.commit()
+		return
+	}
+	scene.forget()
+}
+
+// sayStatus posts the status a frame produced, or the reason there is no frame.
+//
+// A frame runs on a settings change whatever the chart grant says, so the line
+// it wrote has to give way to the one thing the mariner needs to read. While
+// the grant is off nothing else calls this, so a plugin is free to post its own
+// line from OnUpdate.
+func sayStatus(state, detail string) {
+	if reg.mayDraw {
+		sayText(state, detail)
+		return
+	}
+	sayText(string(StateDegraded), noDrawLine)
 }
 
 func requiredLabels() []string {

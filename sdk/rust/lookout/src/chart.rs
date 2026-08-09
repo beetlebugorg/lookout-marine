@@ -342,7 +342,7 @@ impl Scene {
 
     /// Drop every memory of what is drawn. The next call sends the whole scene
     /// again.
-    fn forget(&mut self) {
+    pub(crate) fn forget(&mut self) {
         self.entries.clear();
         self.buf.clear();
         self.sets = 0;

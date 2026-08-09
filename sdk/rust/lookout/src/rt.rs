@@ -86,11 +86,19 @@ fn parse_start(ptr: u32, len: u32) -> Option<Json<'static>> {
 }
 
 /// Everything the library keeps for one plugin.
+/// What the status says while the chart grant is off.
+const NO_DRAW_LINE: &str = "not drawing: permission to draw on the chart is off";
+
 struct Driver<P: Plugin, L: ConnSpec> {
     plugin: P,
     scene: Scene,
     conns: Conns<L>,
     draw_timer: i64,
+    /// True while the mariner leaves `overlay.draw` on. The host refuses every
+    /// overlay call without it, so a scene described then is work thrown away.
+    /// Assumed on until the host says otherwise, which it does once the module
+    /// has started.
+    may_draw: bool,
 }
 
 impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
@@ -100,6 +108,7 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
             scene: Scene::new(),
             conns: Conns::new(),
             draw_timer: -1,
+            may_draw: true,
         }
     }
 
@@ -114,6 +123,108 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
         for hook in P::SETTINGS {
             (hook.apply)(cfg);
         }
+    }
+
+    /// One pass on the data path: the plugin's decision, and the rows it fills
+    /// around it. The chart grant does not reach here. A table is data, it
+    /// costs no capability, and a dialog on screen fills whether or not the
+    /// plugin may draw.
+    fn run_update(&mut self) {
+        {
+            let mut tables = self.plugin.tables();
+            if !tables.is_empty() {
+                // A plugin with no dialog reads no clock: the cadence gate is
+                // the only thing that wants one here.
+                let mono = raw::mono_ms();
+                for table in &mut tables {
+                    table.begin(mono);
+                }
+            }
+        }
+        self.plugin.on_update();
+        for table in self.plugin.tables() {
+            table.flush();
+        }
+    }
+
+    /// Route one table_open or table_closed event. True when the key was one of
+    /// this plugin's.
+    fn set_table_open(&mut self, key: &str, open: bool) -> bool {
+        let mut mine = false;
+        for table in self.plugin.tables() {
+            if table.set_open(key, open) {
+                mine = true;
+            }
+        }
+        mine
+    }
+
+    /// Take the chart grant on or off.
+    ///
+    /// The host has already removed what this plugin drew, so the diff held
+    /// here describes objects that are gone. Forget it: the next draw sends the
+    /// whole scene rather than a difference against nothing.
+    fn set_may_draw(&mut self, on: bool) {
+        if on == self.may_draw {
+            return;
+        }
+        self.may_draw = on;
+        self.scene.forget();
+        self.arm_timer();
+        if on {
+            self.run_draw();
+            return;
+        }
+        // The chart is empty and the mariner is the reason. Say so, or the
+        // plugin looks broken.
+        if self.owns_status() {
+            say_text(State::Degraded.text(), NO_DRAW_LINE);
+        }
+    }
+
+    /// Run the draw timer exactly while the chart grant is on. Without it every
+    /// overlay call is refused, so a scene described then is work thrown away.
+    fn arm_timer(&mut self) {
+        if P::DRAW_RATE_MS <= 0 || self.may_draw == (self.draw_timer >= 0) {
+            return;
+        }
+        if self.may_draw {
+            self.draw_timer = raw::timer_set(P::DRAW_RATE_MS, true);
+            if self.draw_timer < 0 {
+                raw::log(
+                    raw::Level::Error,
+                    "draw timer refused; nothing will be drawn",
+                );
+            }
+            return;
+        }
+        raw::timer_cancel(self.draw_timer);
+        self.draw_timer = -1;
+    }
+
+    /// The scene, when the chart will take it. Without the grant the batch is
+    /// dropped in the module: every call in it would be refused, and a refusal
+    /// costs a crossing into the host and a denied count.
+    fn send_scene(&mut self) {
+        if self.may_draw {
+            self.scene.commit();
+        } else {
+            self.scene.forget();
+        }
+    }
+
+    /// The status a frame produced, or the reason there is no frame.
+    ///
+    /// A frame runs on a settings change whatever the chart grant says, so the
+    /// line it wrote has to give way to the one thing the mariner needs to
+    /// read. While the grant is off nothing else calls this, so a plugin is
+    /// free to post its own line from `on_update`.
+    fn say_status(&self, state: &str, detail: &str) {
+        if self.may_draw {
+            say_text(state, detail);
+            return;
+        }
+        say_text(State::Degraded.text(), NO_DRAW_LINE);
     }
 
     /// One frame: gate on freshness, let the plugin describe the scene, send
@@ -136,9 +247,9 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
         if !missing.is_empty() {
             // Draws nothing, so everything drawn is deleted.
             Chart::new(&mut self.scene);
-            self.scene.commit();
+            self.send_scene();
             if self.owns_status() {
-                say_text(State::Degraded.text(), &missing);
+                self.say_status(State::Degraded.text(), &missing);
             }
             return;
         }
@@ -146,11 +257,11 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
         let mut chart = Chart::new(&mut self.scene);
         self.plugin.draw(&mut chart);
         let (state, detail, said) = chart.take_status();
-        self.scene.commit();
+        self.send_scene();
         if said {
-            say_text(state.text(), &detail);
+            self.say_status(state.text(), &detail);
         } else if self.owns_status() {
-            say_text(State::Running.text(), "");
+            self.say_status(State::Running.text(), "");
         }
     }
 }
@@ -205,6 +316,9 @@ pub fn start<P: Source<L>, L: ConnSpec>(ptr: u32, len: u32) -> i32 {
         let Driver { plugin, conns, .. } = d;
         conns.start(plugin, &config);
     }
+    for table in d.plugin.tables() {
+        table.declare();
+    }
     if P::DRAW_RATE_MS > 0 {
         d.draw_timer = raw::timer_set(P::DRAW_RATE_MS, true);
         if d.draw_timer < 0 {
@@ -248,35 +362,69 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
         // The library consumes a payload it has an input for, and hands on one
         // it has not: a plugin that declares no input still sees the raw event.
         raw::KIND_STORE_CHANGED => {
-            let mut inputs = d.plugin.inputs();
-            if !inputs.is_empty() {
-                let readings = raw::readings(text);
-                let mono = raw::mono_ms();
-                for input in &mut inputs {
-                    let path = match input.path() {
-                        Some(p) => p,
-                        None => continue,
-                    };
-                    for r in &readings {
-                        if &*r.path == path {
-                            input.take_reading(r, mono);
+            let mut claimed = 0;
+            let declares_inputs = {
+                let mut inputs = d.plugin.inputs();
+                let any = !inputs.is_empty();
+                if any {
+                    let readings = raw::readings(text);
+                    let mono = raw::mono_ms();
+                    for input in &mut inputs {
+                        let path = match input.path() {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        for r in &readings {
+                            if &*r.path == path {
+                                input.take_reading(r, mono);
+                                claimed += 1;
+                            }
                         }
                     }
+                }
+                any
+            };
+            if declares_inputs {
+                // A batch that touched none of the declared inputs is not an
+                // update: nothing this plugin reads has changed.
+                if claimed > 0 {
+                    d.run_update();
                 }
                 return 0;
             }
         }
         raw::KIND_AIS_CHANGED => {
-            let mut inputs = d.plugin.inputs();
-            let mono = raw::mono_ms();
-            let mut taken = false;
-            for input in &mut inputs {
-                if input.wants_ais() {
-                    input.take_ais(text, mono);
-                    taken = true;
+            let taken = {
+                let mut inputs = d.plugin.inputs();
+                let mono = raw::mono_ms();
+                let mut taken = false;
+                for input in &mut inputs {
+                    if input.wants_ais() {
+                        input.take_ais(text, mono);
+                        taken = true;
+                    }
                 }
-            }
+                taken
+            };
             if taken {
+                d.run_update();
+                return 0;
+            }
+        }
+        raw::KIND_GRANTS_CHANGED => {
+            if P::DRAW_RATE_MS > 0 {
+                d.set_may_draw(raw::granted(text, "overlay.draw"));
+            }
+        }
+        // A table the mariner just opened is filled at once: the dialog must
+        // not sit empty until the next batch of readings.
+        raw::KIND_TABLE_OPEN | raw::KIND_TABLE_CLOSED => {
+            let open = kind == raw::KIND_TABLE_OPEN;
+            let key = raw::table_key(text).unwrap_or_default();
+            if d.set_table_open(&key, open) {
+                if open {
+                    d.run_update();
+                }
                 return 0;
             }
         }
@@ -382,6 +530,9 @@ fn decode<'a>(kind: u32, handle: i64, bytes: &'a [u8], text: &'a str) -> Option<
             })
         }
         raw::KIND_WS_DATA => raw::Event::WsData(raw::WsData { conn: handle, text }),
+        raw::KIND_TABLE_OPEN => raw::Event::TableOpen(raw::table_key(text)?),
+        raw::KIND_TABLE_CLOSED => raw::Event::TableClosed(raw::table_key(text)?),
+        raw::KIND_GRANTS_CHANGED => raw::Event::GrantsChanged(text),
         raw::KIND_WS_CLOSED => {
             let head = Json::parse(text)?;
             raw::Event::WsClosed(raw::WsClosed {
@@ -447,5 +598,39 @@ pub fn raw_event<P: raw::RawPlugin + Default + 'static>(
             crate::log!(raw::Level::Error, "event {} failed: {}", kind, err);
             -1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `decode` touches no host, so what a tier-3 plugin is handed is testable
+    // on the development machine.
+    fn decoded(kind: u32, text: &str) -> Option<raw::Event<'_>> {
+        decode(kind, 0, text.as_bytes(), text)
+    }
+
+    #[test]
+    fn every_kind_the_api_defines_reaches_a_plugin() {
+        assert!(matches!(
+            decoded(raw::KIND_TABLE_OPEN, r#"{"key":"targets"}"#),
+            Some(raw::Event::TableOpen(k)) if k == "targets"
+        ));
+        assert!(matches!(
+            decoded(raw::KIND_TABLE_CLOSED, r#"{"key":"targets"}"#),
+            Some(raw::Event::TableClosed(k)) if k == "targets"
+        ));
+        assert!(matches!(
+            decoded(raw::KIND_GRANTS_CHANGED, r#"{"v":1,"granted":[]}"#),
+            Some(raw::Event::GrantsChanged(_))
+        ));
+    }
+
+    #[test]
+    fn an_unknown_kind_is_ignored() {
+        // The API says an unknown kind is ignored and answered 0, so a future
+        // host can add events without breaking a plugin built today.
+        assert!(decoded(42, "").is_none());
     }
 }

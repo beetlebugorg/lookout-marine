@@ -52,7 +52,7 @@ what lets the host add an event without breaking a module built today.
 | 12 | `WS_OPEN` | The connection id | `{"protocol":"v1.signalk"}`. The subprotocol the server chose, empty when it chose none. |
 | 13 | `WS_DATA` | The connection id | One whole text message. The host joins the fragments, so this is never half of one. |
 | 14 | `WS_CLOSED` | The connection id | `{"code":1000,"reason":"…"}`. The last event on that connection, whoever ended it. |
-| 15 | `TABLE_OPEN` | 0 | `{"key":"targets"}`. A shell has put one of your declared tables on screen. Build its rows from here on; before this nobody was looking. |
+| 15 | `TABLE_OPEN` | 0 | `{"key":"targets"}`. A shell has put one of your declared tables on screen. Build its rows from here on; before this nobody was looking. Send the first batch from inside this call, or the dialog sits empty. |
 | 16 | `TABLE_CLOSED` | 0 | `{"key":"targets"}`. The shell closed it and the host has already dropped the rows. |
 | 17 | `GRANTS_CHANGED` | 0 | `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities you hold right now. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
@@ -66,6 +66,13 @@ started, and again on every change. Use it to stop producing what the host would
 only refuse: a grant that has gone means the calls it covered will answer -1, and
 whatever earlier calls produced has already been taken back. It is not the
 permission. Every call is still checked on its own, whether or not you read this.
+
+Losing `overlay.draw` is the case worth writing for. Cancel the timer that
+drives your scene, forget the diff you were keeping, because the host has
+already removed what it described, and post one status line saying why the
+chart is empty. Arm the timer again and send the whole scene when the grant
+comes back. `TABLE_UPDATE` needs no grant, so a dialog on screen keeps filling
+throughout. Each SDK does all of this for you.
 
 **One datagram is one event.** The host never joins two `UDP_DATA` payloads and
 never splits one, so a plugin parsing NMEA over UDP does not reassemble anything.

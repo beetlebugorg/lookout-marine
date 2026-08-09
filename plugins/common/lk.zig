@@ -475,7 +475,13 @@ const Arena = struct {
     /// changes. Otherwise (the static buffer, or another allocator having
     /// grown memory in between) the arena moves into a fresh run of pages and
     /// counts a new region.
+    ///
+    /// A build that is not wasm has no linear memory to grow, and the two
+    /// builtins below will not compile for one. The static buffer is the whole
+    /// arena there, which is more than any test asks of it. Guarding here is
+    /// what lets a test drive the whole event dispatch natively.
     fn grow(need: usize) bool {
+        if (comptime builtin.target.cpu.arch != .wasm32) return false;
         const pages = (need + wasm_page - 1) / wasm_page;
         if (@as(usize, @intCast(@wasmMemorySize(0))) * wasm_page == end) {
             const prev = @wasmMemoryGrow(0, pages);

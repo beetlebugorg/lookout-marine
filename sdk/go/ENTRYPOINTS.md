@@ -319,6 +319,7 @@ and one that is absent is not wired.
 |---|---|
 | `Draw(*lk.Chart)` | the scene, on the library's timer |
 | `DrawRate() time.Duration` | how often, default 1 s |
+| `OnUpdate()` | after an input changed: the decision, and the rows |
 | `OnSettings()` | after a settings change, before the redraw |
 | `OnData(*lk.Conn, []byte)` | bytes from one connection's socket |
 | `OnOpen(*lk.Conn)` | a stream came up; send a subscription |
@@ -331,8 +332,60 @@ and one that is absent is not wired.
 
 A method with the wrong signature does not satisfy the interface, so the library
 looks for `Draw` and `OnData` by name at registration and logs the mismatch. A
-plugin with none of `Draw`, `OnData`, `OnEvent` and `OnStart` is refused at
-`lk_start` rather than started to do nothing.
+plugin with none of `Draw`, `OnUpdate`, `OnData`, `OnEvent` and `OnStart` is
+refused at `lk_start` rather than started to do nothing, and so is one that
+declares a table with no `OnUpdate` to fill it.
+
+## Tables
+
+A table is a dialog the shell builds from the declaration. Declare one as a
+package-level variable, the way an input is declared, and the library tells the
+host about it at `lk_start`.
+
+```go
+var targets = lk.NewTable(lk.TableOpts{
+	Key: "targets", Title: "AIS Targets", Menu: "Vessels",
+	Columns: []lk.Column{
+		{Key: "name", Label: "Vessel", Type: lk.ColText},
+		{Key: "cpa", Label: "CPA", Type: lk.ColDistance},
+		{Key: "state", Type: lk.ColFlag},
+	},
+	Sort: &lk.TableSort{Key: "cpa", Ascending: true},
+	At:   &lk.TableAt{Lat: "lat", Lon: "lon"},
+})
+
+func (p *ais) OnUpdate() {
+	if !targets.IsOpen() {
+		return
+	}
+	r := targets.Row("899000101")
+	r.Band(0)
+	r.Cell("name", "ANNE")
+	r.Cell("cpa", 124.0)
+	r.At(lk.Point{Lat: 38.97, Lon: -76.46})
+	r.Done()
+}
+```
+
+The rows are written from `OnUpdate` and nowhere else: the library opens a
+cycle before that call and sends what changed after it. A row the cycle does
+not describe leaves the table. `lk.TablesJSON(targets)` renders the `"tables"`
+array the manifest must carry, for a `go test` to compare.
+
+`Cell` takes any value and reads the declared column type to decide how to
+write it. A `nil`, or a nil `*float64`, `*string` or `*bool`, is a dash. A value
+the column cannot hold is a dash too, and one log line.
+
+## The chart grant
+
+The library reads `GRANTS_CHANGED` and follows `overlay.draw`. When the grant
+goes it cancels the draw timer, forgets the scene diff and posts one status line
+saying why the chart is empty; when it comes back it arms the timer and sends
+the whole scene again. `OnUpdate` and the tables carry on throughout: a table
+costs no capability.
+
+`e.Granted("overlay.draw")` reads the payload, for a tier-3 plugin that handles
+the event itself.
 
 ## Tier 3 — the raw layer
 

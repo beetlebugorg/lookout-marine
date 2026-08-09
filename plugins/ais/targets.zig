@@ -12,7 +12,9 @@
 //! belongs.
 //!
 //! Rows are built only while the dialog is open (`Targets.isOpen`), so a boat
-//! whose mariner never opens it pays nothing for it.
+//! whose mariner never opens it pays nothing for it. `evaluate` in main.zig is
+//! what calls in here: a row is data, and it is written on the deciding path
+//! beside the ruling it reports.
 
 const std = @import("std");
 const lk = @import("lk2");

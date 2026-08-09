@@ -12,14 +12,18 @@ Lookout calls your `draw` function once a second. Declare
 nothing does not declare `draw`, and gets no timer.
 
 The timer runs while there is somewhere for a scene to land. Switch
-`overlay.draw` off and Lookout takes what the plugin drew off the chart,
-stops calling `draw`, and posts the reason on the plugin's status line;
-switch it back on and the timer returns with the whole scene described
-again. A dialog the plugin declared is not drawing and costs no capability,
-so `draw` keeps running while one is open, and builds rows without
-describing a scene. Nothing about enforcement moves: every host call is
-still checked on its own, and one made without the grant still answers -1
-and counts as denied. There is simply no call left to make.
+`overlay.draw` off and Lookout takes what your plugin drew off the chart,
+stops calling your `draw` function, and posts the reason on the plugin's
+status line; switch it back on and the timer returns with the whole scene
+described again. Nothing about enforcement moves: every host call is still
+checked on its own, and one made without the grant still answers -1 and counts
+as denied. There is simply no call left to make.
+
+While the timer is down, Lookout leaves the status line alone, so a plugin that
+posts its own line from the update hook is still heard. The rest of the plugin
+runs as it always did: readings arrive, the update hook runs, and a dialog the
+plugin declared keeps filling. A table is data and costs no capability. See
+[Subscribing to data](subscribing.md#filling-a-dialog).
 
 Your plugin should draw its entire view on each `draw` call. Lookout compares
 that scene with the last one: an object with the same id and the same content
@@ -128,3 +132,9 @@ produces the degraded line, so `c.degraded` is for what Lookout cannot see.
 Outside `draw`, `lk.say(.running, fmt, args)` posts the same line; the states
 are `starting`, `running`, `degraded` and `stopped`. The text is cut at 160
 bytes.
+
+The status line belongs to your `draw` function while the chart grant is on:
+the text comes off the chart your plugin was handed, and Lookout posts it after
+each frame. With the grant off there is no frame, so Lookout posts one line
+naming the reason and then writes nothing more. Say what you like from the
+update hook after that.

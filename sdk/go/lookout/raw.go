@@ -74,6 +74,16 @@ func StatusJSON(b []byte) { hostStatus(b) }
 // this returns -1 and the host logs the refusal.
 func AlertJSON(b []byte) int32 { return hostAlert(b) }
 
+// TableDeclareJSON tells the host about one dialog, which is what makes it
+// appear in the shell's menu. A tier-1 plugin never calls this: [NewTable]
+// declares itself at start.
+func TableDeclareJSON(b []byte) int32 { return hostTableDeclare(b) }
+
+// TableUpdateJSON posts one batch of rows, {"key":…,"upsert":[…],"remove":[…]}.
+// The host takes at most one batch per table per 900 ms. [Table] owns the batch
+// and the diff behind it.
+func TableUpdateJSON(b []byte) int32 { return hostTableUpdate(b) }
+
 // TCPConnect opens a connection and returns a connection id at once — the
 // connect completes on the host's I/O thread and arrives as [TCPConnected], or
 // as [TCPClosed] if it failed. RECONNECTING IS YOURS: the host never retries.
@@ -276,6 +286,9 @@ const (
 	WSOpen        Kind = 12
 	WSData        Kind = 13
 	WSClosed      Kind = 14
+	TableOpen     Kind = 15
+	TableClosed   Kind = 16
+	GrantsChanged Kind = 17
 	Shutdown      Kind = 99
 )
 
@@ -286,7 +299,7 @@ func (k Kind) known() bool {
 	switch k {
 	case ConfigChanged, Timer, TCPConnected, TCPData, TCPClosed, UDPData,
 		HTTPResponded, FileOpened, StoreChanged, AISChanged, WSOpen, WSData,
-		WSClosed, Shutdown:
+		WSClosed, TableOpen, TableClosed, GrantsChanged, Shutdown:
 		return true
 	}
 	return false
@@ -320,6 +333,37 @@ func (e Event) Protocol() string {
 	}
 	_ = json.Unmarshal(e.Payload, &doc)
 	return doc.Protocol
+}
+
+// TableKey is the table a TableOpen or TableClosed event is about. A tier-1
+// plugin never reads this: [Table] tracks its own dialog.
+func (e Event) TableKey() string {
+	var doc struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(e.Payload, &doc)
+	return doc.Key
+}
+
+// Granted is true when a GrantsChanged event lists this capability, by its
+// manifest name: "overlay.draw", "alerts.raise". It is false for a payload that
+// will not parse, which is the safe answer for a permissions list.
+//
+// GRANTS_CHANGED IS THE ONLY WAY TO KNOW WHAT YOU HOLD. The manifest is what
+// the plugin asked for; this is what the mariner left switched on.
+func (e Event) Granted(capability string) bool {
+	var doc struct {
+		Granted []string `json:"granted"`
+	}
+	if json.Unmarshal(e.Payload, &doc) != nil {
+		return false
+	}
+	for _, c := range doc.Granted {
+		if c == capability {
+			return true
+		}
+	}
+	return false
 }
 
 // Close reads a WSClosed event: the RFC 6455 code, or 0 when the connection
