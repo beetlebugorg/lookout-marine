@@ -21,6 +21,11 @@
 //! CONNECTIONS ARE MATCHED BY ID. Editing one connection never disturbs
 //! another: only an address change, a pause or a delete closes a socket.
 //!
+//! EACH CONNECTION IS ITS OWN SOURCE. `conn.place()` is the row's place in the
+//! mariner's list, and `lk.Publish.from(conn)` sends it, so two gateways
+//! carrying the same path are arbitrated by the store's election in list order
+//! rather than overwriting each other in publish order.
+//!
 //! The plugin may declare, on its root:
 //!
 //!   onData(conn, bytes)     required: the bytes off the wire
@@ -228,6 +233,23 @@ pub fn Connections(comptime opts: Opts) type {
             /// address.
             pub fn label(self: *const Connection) []const u8 {
                 return if (self.name.len > 0) self.name.text() else self.host.text();
+            }
+
+            /// This connection's place in the mariner's list, counting from
+            /// one. `lk.Publish.from` and `lk.Upsert.from` send it, and the
+            /// host keeps one store source per place: the row at the top of
+            /// the list holds a path while its values are fresh, and the row
+            /// below it takes over when they go stale.
+            ///
+            /// Counted rather than read off `order`, so a place is always
+            /// dense even when the list arrives with a row the library could
+            /// not take.
+            pub fn place(self: *const Connection) u32 {
+                var n: u32 = 1;
+                for (&conns) |*r| {
+                    if (r.used and r.order < self.order) n += 1;
+                }
+                return n;
             }
 
             /// True while the stream is up.

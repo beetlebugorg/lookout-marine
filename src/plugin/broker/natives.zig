@@ -83,9 +83,26 @@ fn hostPublish(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callcon
     return applyPublish(p, bytes(ptr, len));
 }
 
-/// `{"updates":[{"path":..,"value":..,"ts":..}]}`. A bad update is skipped and
-/// counted; a batch that is not an object at all fails. The return is the
-/// number of updates applied, so a plugin can see its own typos.
+/// Which of the plugin's sources a batch was published under. `"source"`
+/// carries a connection's place in the mariner's list, counting from one; a
+/// batch without it is the plugin publishing as itself.
+///
+/// A place the plugin does not own is a fault in the module, not a grant
+/// violation, so it is said once per batch and the values still land.
+fn batchSource(p: *Plugin, o: std.json.ObjectMap, call: []const u8) broker.SourceId {
+    const place = jsonInt(o.get("source")) orelse return p.source;
+    if (place <= 0) return p.source;
+    if (place >= p.source_span) {
+        p.broker.say(level_warn, p.id, "{s}: no connection {d}; published as the plugin", .{ call, place });
+        return p.source;
+    }
+    return p.sourceAt(@intCast(place));
+}
+
+/// `{"updates":[{"path":..,"value":..,"ts":..}]}`, with an optional `"source"`
+/// naming the connection it came from. A bad update is skipped and counted; a
+/// batch that is not an object at all fails. The return is the number of
+/// updates applied, so a plugin can see its own typos.
 fn applyPublish(p: *Plugin, json: []const u8) i32 {
     const alloc = p.broker.alloc;
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, json, .{}) catch {
@@ -96,6 +113,7 @@ fn applyPublish(p: *Plugin, json: []const u8) i32 {
     if (parsed.value != .object) return -1;
     const updates = parsed.value.object.get("updates") orelse return -1;
     if (updates != .array) return -1;
+    const source = batchSource(p, parsed.value.object, "publish");
 
     var applied: i32 = 0;
     for (updates.array.items) |u| {
@@ -110,7 +128,7 @@ fn applyPublish(p: *Plugin, json: []const u8) i32 {
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(alloc);
         writeJsonValue(&text, alloc, o.get("value") orelse std.json.Value{ .null = {} }) catch continue;
-        p.broker.vessels.set(path, text.items, ts, p.source) catch |e| {
+        p.broker.vessels.set(path, text.items, ts, source) catch |e| {
             p.broker.say(level_warn, p.id, "publish {s}: {s}", .{ path, @errorName(e) });
             continue;
         };
@@ -122,8 +140,14 @@ fn applyPublish(p: *Plugin, json: []const u8) i32 {
 fn hostAisUpsert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
     const p = caller(env) orelse return -1;
     if (!allow(p, .ais_publish, "ais_upsert")) return -1;
+    return applyAisUpsert(p, bytes(ptr, len));
+}
+
+/// `{"targets":[...]}`, with an optional `"source"` naming the connection that
+/// heard them. A bad target is skipped; the return is the number applied.
+fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
     const alloc = p.broker.alloc;
-    var parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes(ptr, len), .{}) catch {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, json, .{}) catch {
         p.broker.say(level_warn, p.id, "ais_upsert: malformed JSON", .{});
         return -1;
     };
@@ -131,6 +155,7 @@ fn hostAisUpsert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callc
     if (parsed.value != .object) return -1;
     const targets = parsed.value.object.get("targets") orelse return -1;
     if (targets != .array) return -1;
+    const source = batchSource(p, parsed.value.object, "ais_upsert");
 
     var applied: i32 = 0;
     for (targets.array.items) |tv| {
@@ -159,7 +184,7 @@ fn hostAisUpsert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callc
             .off_position = jsonBool(o.get("off_position")),
             .ts_ms = jsonInt(o.get("ts")) orelse wallMs(),
         };
-        p.broker.ais.upsert(upd, p.source) catch |e| {
+        p.broker.ais.upsert(upd, source) catch |e| {
             p.broker.say(level_warn, p.id, "ais_upsert {d}: {s}", .{ mmsi, @errorName(e) });
             continue;
         };
@@ -775,6 +800,116 @@ pub const max_memory_pages: u32 = @intCast(@divTrunc(max_memory_bytes, wasm_page
 
 const t = std.testing;
 const Fixture = testing.Fixture;
+
+// -- publishing ------------------------------------------------------------------------
+
+/// A plugin with a connection list, as the host builds one: its own source id
+/// and one for each of the eight rows a list holds, registered in ascending
+/// order so a row's place is its rank. The eight is the host's cap, which this
+/// layer sits below and cannot import.
+fn withConnections(fx: *Fixture, id: []const u8, base: broker.SourceId) !Plugin {
+    const p = Plugin{
+        .broker = &fx.br,
+        .index = 0,
+        .id = id,
+        .source = base,
+        .source_span = 1 + 8,
+        .caps = Caps.initEmpty(),
+    };
+    for (0..p.source_span) |k| {
+        try fx.vessels.registerSource(base + @as(broker.SourceId, @intCast(k)));
+    }
+    return p;
+}
+
+/// `{"source":n,"updates":[{"path":..,"value":{lat,lon},"ts":..}]}`.
+fn positionBatch(buf: []u8, place: u32, lat: f64, ts_ms: i64) ![]const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "{{\"source\":{d},\"updates\":[{{\"path\":\"navigation.position\"," ++
+            "\"value\":{{\"lat\":{d},\"lon\":-76.48}},\"ts\":{d}}}]}}",
+        .{ place, lat, ts_ms },
+    );
+}
+
+test "two connections of one plugin publish as two sources" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    // Two gateways on one plugin, both carrying position, both fresh, writing
+    // in turn the way two sockets do. The first row is off Annapolis; the
+    // second reads thirty miles north of it.
+    var buf: [192]u8 = undefined;
+    var ts: i64 = 1_000;
+    while (ts <= 4_000) : (ts += 1_000) {
+        try t.expectEqual(@as(i32, 1), applyPublish(&p, try positionBatch(&buf, 1, 38.98, ts)));
+        try t.expectEqual(@as(i32, 1), applyPublish(&p, try positionBatch(&buf, 2, 39.5, ts)));
+
+        // The election holds the first row for as long as its fixes are fresh,
+        // so own ship stays where the first gateway puts it instead of walking
+        // north and back with every sentence.
+        const r = fx.vessels.readElected("navigation.position", ts).?;
+        try t.expectEqual(p.sourceAt(1), r.source);
+        try t.expectApproxEqAbs(@as(f64, 38.98), r.value.position.lat, 1e-9);
+    }
+
+    // The first gateway goes quiet. Past its staleness window the second row
+    // holds own ship on its own, and it is not flagged stale: it never stopped.
+    _ = applyPublish(&p, try positionBatch(&buf, 2, 39.5, 10_000));
+    const over = fx.vessels.readElected("navigation.position", 10_000).?;
+    try t.expectEqual(p.sourceAt(2), over.source);
+    try t.expect(!over.stale);
+    try t.expectApproxEqAbs(@as(f64, 39.5), over.value.position.lat, 1e-9);
+
+    // The first gateway speaks again and takes own ship back.
+    _ = applyPublish(&p, try positionBatch(&buf, 1, 38.98, 10_100));
+    try t.expectEqual(p.sourceAt(1), fx.vessels.readElected("navigation.position", 10_100).?.source);
+}
+
+test "a batch names its connection, and a place the plugin does not own is said out loud" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    // No `source` is the plugin publishing as itself, which is what a plugin
+    // with no connection list does and what every older module sends.
+    _ = applyPublish(&p, "{\"updates\":[{\"path\":\"navigation.headingTrue\",\"value\":271,\"ts\":0}]}");
+    try t.expectEqual(p.source, fx.vessels.readElected("navigation.headingTrue", 0).?.source);
+
+    // A place past the block is a fault in the module. The value still lands,
+    // under the plugin, because losing a fix to a numbering bug is worse than
+    // losing the provenance of one.
+    _ = applyPublish(&p, "{\"source\":99,\"updates\":[{\"path\":\"navigation.magneticVariation\",\"value\":-11,\"ts\":0}]}");
+    try t.expectEqual(p.source, fx.vessels.readElected("navigation.magneticVariation", 0).?.source);
+    try t.expect(fx.sink.has("no connection 99"));
+}
+
+test "AIS targets carry the connection that heard them" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    const first = "{\"source\":1,\"targets\":[{\"mmsi\":899000111,\"lat\":38.98,\"lon\":-76.48,\"ts\":0}]}";
+    const second = "{\"source\":2,\"targets\":[{\"mmsi\":899000222,\"lat\":39.5,\"lon\":-76.48,\"ts\":0}]}";
+    try t.expectEqual(@as(i32, 1), applyAisUpsert(&p, first));
+    try t.expectEqual(@as(i32, 1), applyAisUpsert(&p, second));
+    try t.expectEqual(p.sourceAt(1), fx.ais.get(899000111).?.source);
+    try t.expectEqual(p.sourceAt(2), fx.ais.get(899000222).?.source);
+
+    // One receiver switched off takes its own targets and leaves the other's.
+    try t.expectEqual(@as(usize, 1), try fx.ais.clearSource(p.sourceAt(1)));
+    try t.expectEqual(@as(usize, 1), fx.ais.count());
+}
 
 test "an alert's severity picks the log level it goes out at" {
     try t.expectEqual(level_err, alertLevel("{\"severity\":\"alarm\",\"title\":\"CPA\"}"));

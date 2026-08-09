@@ -295,7 +295,7 @@ Your plugin's lines in that run:
 
 ```
 plugin org.example.downwind [info] status {"state":"starting","detail":"waiting for position, wind"}
-plugin org.example.downwind [info] started (Downwind line, source 6)
+plugin org.example.downwind [info] started (Downwind line, source 22)
 t=   19.0s [info] org.example.downwind: status {"state":"running","detail":""}
 ...
 overlay: 17 object(s)

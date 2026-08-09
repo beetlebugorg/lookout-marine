@@ -122,8 +122,14 @@ pub const Plugin = struct {
     /// Manifest id, e.g. "org.beetlebug.nmea0183". Borrowed from the host and
     /// used as the overlay namespace.
     id: []const u8,
-    /// This plugin's provenance in the vessel and AIS stores.
+    /// This plugin's provenance in the vessel and AIS stores, and the first id
+    /// of the block the host reserved for it.
     source: SourceId,
+    /// Ids in that block, `source` included. A plugin that declares a
+    /// connection list gets one more for every row the list holds, so two
+    /// gateways on one plugin are two sources the store arbitrates between
+    /// instead of one slot they overwrite in turn.
+    source_span: u32 = 1,
     caps: Caps,
     /// The hostnames `http_fetch` may reach, from the manifest's `net.http`
     /// grant. Borrowed from the host's manifest, like `id`. Empty means the
@@ -188,6 +194,20 @@ pub const Plugin = struct {
 
     pub fn status(self: *const Plugin) []const u8 {
         return self.line_buf[0..self.line_len];
+    }
+
+    /// The store source one published batch belongs to. `place` is a
+    /// connection's place in the mariner's list, counting from one; zero is
+    /// the plugin publishing as itself.
+    ///
+    /// The block is consecutive and the store elects in registration order, so
+    /// a lower place outranks a higher one: the gateway at the top of the
+    /// Connections list holds a path while its values are fresh, and the next
+    /// one down takes over when they go stale. A place past the block is out
+    /// of range and answers with the plugin's own id, so a numbering fault
+    /// loses the provenance while the value still lands.
+    pub fn sourceAt(self: *const Plugin, place: u32) SourceId {
+        return if (place == 0 or place >= self.source_span) self.source else self.source + place;
     }
 
     /// Replace the chrome status. Normally the plugin's own words, through

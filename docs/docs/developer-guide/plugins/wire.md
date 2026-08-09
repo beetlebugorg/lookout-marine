@@ -289,6 +289,22 @@ first-registered source wins while its value is inside the staleness window, and
 load order is sorted file order. If no source is fresh, the most recent stale
 value is elected and flagged stale.
 
+A batch may add `"source"`, and then it is one of your connections publishing
+rather than your plugin at large:
+
+```json
+{"source":2,"updates":[
+  {"path":"navigation.position","value":{"lat":38.9763,"lon":-76.4767},"ts":1754400000123}]}
+```
+
+The number is the connection's place in the mariner's list, counting from one.
+The host reserves one store source per row your connection list can hold, so
+two gateways carrying the same path go to the election instead of overwriting
+each other, and the row at the top of the list wins while its values are fresh.
+Leave the key out and the batch is your plugin publishing as itself, which is
+what a plugin with no connection list does. A place you do not own is logged and
+the values land under your plugin.
+
 ### ais_upsert
 
 ```json
@@ -301,6 +317,11 @@ it names. `sog` is **metres per second**, not knots. The AIS wire format reports
 knots, and converting is the parsing plugin's job. An aid to navigation adds
 `"aton":true` and may add `"aton_type"` (0..31), `"virtual":true` and
 `"off_position"`. A target that has once reported as an aid stays one.
+
+`"source"` works here too, and means the same thing: the place in the mariner's
+list of the connection that heard these targets. A target belongs to whichever
+source last updated it, so naming the receiver is what lets one of them be
+switched off without taking the other's targets with it.
 
 ### STORE_CHANGED
 

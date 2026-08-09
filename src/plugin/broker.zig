@@ -574,6 +574,7 @@ pub const Broker = struct {
     pub fn dropPlugin(self: *Broker, index: u32, now_ms: i64) void {
         var id: []const u8 = "";
         var source: SourceId = 0;
+        var span: u32 = 1;
         {
             self.mu.lock();
             defer self.mu.unlock();
@@ -583,6 +584,7 @@ pub const Broker = struct {
                 p.enabled = false;
                 id = p.id;
                 source = p.source;
+                span = p.source_span;
                 if (p.sub) |s| {
                     self.vessels.unsubscribe(s);
                     p.sub = null;
@@ -657,8 +659,8 @@ pub const Broker = struct {
             self.dropAlertsLocked(index);
         }
         if (id.len > 0) self.overlay.remove(id);
-        self.vessels.clearSource(source, now_ms);
-        _ = self.ais.clearSource(source) catch {};
+        self.clearVesselSources(source, span, now_ms);
+        self.clearAisSources(source, span);
     }
 
     /// Take back what a capability produced, for a plugin that still runs.
@@ -668,6 +670,7 @@ pub const Broker = struct {
     pub fn withdraw(self: *Broker, index: u32, cap: Cap, now_ms: i64) void {
         var id: []const u8 = "";
         var source: SourceId = 0;
+        var span: u32 = 1;
         {
             self.mu.lock();
             defer self.mu.unlock();
@@ -675,16 +678,30 @@ pub const Broker = struct {
                 if (p.index != index) continue;
                 id = p.id;
                 source = p.source;
+                span = p.source_span;
                 break;
             }
         }
         switch (cap) {
             .overlay_draw => if (id.len > 0) self.overlay.remove(id),
-            .vessel_publish => self.vessels.clearSource(source, now_ms),
-            .ais_publish => _ = self.ais.clearSource(source) catch {},
+            .vessel_publish => self.clearVesselSources(source, span, now_ms),
+            .ais_publish => self.clearAisSources(source, span),
             .alerts_raise => self.dropAlerts(index),
             else => {},
         }
+    }
+
+    /// Drop the values every id in a plugin's block published. The whole block
+    /// goes, not the first id alone: a plugin holds one source per connection,
+    /// so clearing only its own would leave each gateway's last value on the
+    /// chart looking live.
+    fn clearVesselSources(self: *Broker, base: SourceId, span: u32, now_ms: i64) void {
+        for (0..span) |k| self.vessels.clearSource(base + @as(SourceId, @intCast(k)), now_ms);
+    }
+
+    /// The same for the AIS targets each id in the block last updated.
+    fn clearAisSources(self: *Broker, base: SourceId, span: u32) void {
+        for (0..span) |k| _ = self.ais.clearSource(base + @as(SourceId, @intCast(k))) catch {};
     }
 
     // -- alerts ---------------------------------------------------------------
@@ -2447,10 +2464,22 @@ test "dropping a plugin takes its queued events and its store contributions" {
     var b = Broker.init(t.allocator, &vessels, &ais, .{});
     defer b.deinit();
 
-    var p = Plugin{ .broker = &b, .index = 1, .id = "org.beetlebug.gone", .source = 1, .caps = Caps.initEmpty() };
+    // Three ids: the plugin's own and one for each of two connections. What it
+    // published under any of them is its contribution, so all three go.
+    var p = Plugin{
+        .broker = &b,
+        .index = 1,
+        .id = "org.beetlebug.gone",
+        .source = 1,
+        .source_span = 3,
+        .caps = Caps.initEmpty(),
+    };
     try b.registerPlugin(&p);
-    try vessels.set("navigation.position", "{\"lat\":1,\"lon\":2}", 0, 1);
-    try ais.upsert(.{ .mmsi = 5, .lat = 1, .lon = 2, .ts_ms = 0 }, 1);
+    for ([_]SourceId{ 1, 2, 3 }) |sid| {
+        try vessels.registerSource(sid);
+        try vessels.set("navigation.position", "{\"lat\":1,\"lon\":2}", 0, sid);
+        try ais.upsert(.{ .mmsi = 5 + sid, .lat = 1, .lon = 2, .ts_ms = 0 }, sid);
+    }
 
     b.push(0, Kind.timer, 1, "");
     b.push(1, Kind.timer, 2, "");
@@ -2468,6 +2497,46 @@ test "dropping a plugin takes its queued events and its store contributions" {
     try t.expectEqual(@as(u64, 3), c.handle);
     try t.expect(vessels.readElected("navigation.position", 100) == null);
     try t.expectEqual(@as(usize, 0), ais.count());
+}
+
+test "withdrawing a grant takes back every source the plugin owns" {
+    var vessels = try vstore.Store.init(t.allocator);
+    defer vessels.deinit();
+    var ais = ais_store.AisStore.init(t.allocator);
+    defer ais.deinit();
+    var b = Broker.init(t.allocator, &vessels, &ais, .{});
+    defer b.deinit();
+
+    // One plugin with two connections, and a second plugin beside it whose
+    // values are nobody else's to take back.
+    var p = Plugin{
+        .broker = &b,
+        .index = 0,
+        .id = "org.beetlebug.nmea0183",
+        .source = 1,
+        .source_span = 3,
+        .caps = Caps.initEmpty(),
+    };
+    try b.registerPlugin(&p);
+    var other = Plugin{ .broker = &b, .index = 1, .id = "org.beetlebug.signalk", .source = 4, .caps = Caps.initEmpty() };
+    try b.registerPlugin(&other);
+    for ([_]SourceId{ 1, 2, 3, 4 }) |sid| {
+        try vessels.registerSource(sid);
+        try vessels.set("navigation.position", "{\"lat\":1,\"lon\":2}", 0, sid);
+        try ais.upsert(.{ .mmsi = 899000100 + sid, .lat = 1, .lon = 2, .ts_ms = 0 }, sid);
+    }
+
+    // The mariner switches the plugin's publishing grant off. Every id it
+    // owns clears, or a revoked plugin leaves a connection's last fix on the
+    // chart reading as live.
+    b.withdraw(0, .vessel_publish, 100);
+    try t.expectEqual(@as(SourceId, 4), vessels.readElected("navigation.position", 100).?.source);
+    // The AIS grant was not the one revoked, so nothing there moved.
+    try t.expectEqual(@as(usize, 4), ais.count());
+
+    b.withdraw(0, .ais_publish, 100);
+    try t.expectEqual(@as(usize, 1), ais.count());
+    try t.expect(ais.get(899000104) != null);
 }
 
 test "dropping a plugin closes its UDP ports and its files" {

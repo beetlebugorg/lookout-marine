@@ -5,7 +5,9 @@
 //!   - one plugin holds several connections, and both feed the same chart;
 //!   - switching a row off closes THAT socket and leaves the other alone;
 //!   - the status carries one item per row, keyed by the row id the shell
-//!     assigned, so the settings window can put each line beside its row.
+//!     assigned, so the settings window can put each line beside its row;
+//!   - two gateways carrying position are two sources, arbitrated in the
+//!     mariner's list order, so own ship does not jump between them.
 //!
 //! The name test carries an AIS VESSEL NAME the whole way: armored sentences
 //! on a socket, the nmea0183 module's reassembly and decode, the AIS store's
@@ -370,6 +372,134 @@ test "two connections feed one chart, and pausing one leaves the other running" 
     try must(!log.has("trapped"), "nothing trapped");
     try must(!log.has("denied"), "no grant was refused");
     try std.testing.expectEqual(@as(u32, 0), plugin.denied);
+}
+
+// ---------------------------------------------------------------------------
+// two gateways, both carrying position
+// ---------------------------------------------------------------------------
+
+/// One sentence and its checksum, computed where it is written. The `lines`
+/// feed sends what it is given verbatim, so a checksum typed by hand is a
+/// sentence the parser silently drops.
+fn nmea(comptime body: []const u8) []const u8 {
+    comptime {
+        var sum: u8 = 0;
+        for (body) |c| sum ^= c;
+        return std.fmt.comptimePrint("${s}*{X:0>2}", .{ body, sum });
+    }
+}
+
+/// The bow GPS: a fix off Annapolis, and nothing else.
+const bow_lines = [_][]const u8{
+    nmea("GPGGA,123519,3858.000,N,07628.000,W,1,08,0.9,10.0,M,,M,,"),
+};
+
+/// The masthead unit: a fix thirty miles north, and a heading no other gateway
+/// sends. The heading is how the test sees this row arriving while its position
+/// is outranked and therefore invisible.
+const mast_lines = [_][]const u8{
+    nmea("GPGGA,123519,3930.000,N,07628.000,W,1,08,0.9,10.0,M,,M,,"),
+    nmea("HEHDT,271.0,T"),
+};
+
+const position_path = "navigation.position";
+const bow_lat: f64 = 38.0 + 58.0 / 60.0;
+const mast_lat: f64 = 39.0 + 30.0 / 60.0;
+
+fn latitude(v: *vstore.Store) ?f64 {
+    const r = pathValue(v, position_path) orelse return null;
+    return switch (r.value) {
+        .position => |p| p.lat,
+        else => null,
+    };
+}
+
+/// The bow gateway holds own ship and the masthead is delivering. The heading
+/// is the masthead's alone, so it says that row arrived without the test having
+/// to see a position the election is busy outranking.
+fn haveBothGateways(v: *vstore.Store) bool {
+    const lat = latitude(v) orelse return false;
+    return @abs(lat - bow_lat) < 1e-6 and number(v, heading_path) != null;
+}
+
+fn onMastFix(v: *vstore.Store) bool {
+    const lat = latitude(v) orelse return false;
+    return @abs(lat - mast_lat) < 1e-6;
+}
+
+test "two gateways carrying position do not make own ship jump between them" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = nmea_id ++ ".wasm", .data = nmea_wasm });
+    try tmp.dir.writeFile(io, .{ .sub_path = nmea_id ++ ".manifest.json", .data = nmea_manifest });
+    const dir_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer alloc.free(dir_path);
+
+    var bow = Feed{ .lines = &bow_lines };
+    try bow.open();
+    defer bow.close();
+    var mast = Feed{ .lines = &mast_lines };
+    try mast.open();
+    defer mast.close();
+
+    var vessels = try vstore.Store.init(alloc);
+    defer vessels.deinit();
+    var ais = aisstore.AisStore.init(alloc);
+    defer ais.deinit();
+    var br = broker.Broker.init(alloc, &vessels, &ais, .{});
+    defer br.deinit();
+    var log = LogSink{ .alloc = alloc };
+    defer log.text.deinit(alloc);
+    br.setLog(&log, LogSink.write);
+
+    var h = host.Host.init(alloc, &br, .{ .nmea_host = "" });
+    defer h.deinit();
+    try h.loadDir(dir_path);
+    try h.start();
+    defer h.stop();
+
+    // The bow GPS is the first row the mariner filled in, so it is the one
+    // that holds own ship.
+    var cfg: std.ArrayList(u8) = .empty;
+    defer cfg.deinit(alloc);
+    try cfg.print(
+        alloc,
+        "{{\"connections\":[" ++
+            "{{\"id\":\"c-bow\",\"name\":\"Bow GPS\",\"host\":\"127.0.0.1\",\"port\":{d},\"enabled\":true}}," ++
+            "{{\"id\":\"c-mast\",\"name\":\"Masthead\",\"host\":\"127.0.0.1\",\"port\":{d},\"enabled\":true}}]}}",
+        .{ bow.port, mast.port },
+    );
+    try h.configSet(nmea_id, cfg.items);
+
+    // Both are up: the bow's position, and a heading only the masthead sends.
+    // The masthead's own position is outranked, so the store never shows it.
+    try waitFor(&vessels, haveBothGateways);
+
+    // Own ship holds the bow fix for as long as it keeps arriving, and holds
+    // it under ONE source. Two gateways sharing a slot is what makes own ship
+    // walk thirty miles north and back several times a second.
+    const until = broker.monoMs() + 1_200;
+    var elected: ?vstore.SourceId = null;
+    while (broker.monoMs() < until) {
+        const r = pathValue(&vessels, position_path).?;
+        try must(@abs(r.value.position.lat - bow_lat) < 1e-6, "own ship is on the bow gateway's fix");
+        if (elected) |s| try must(r.source == s, "the elected source never changed");
+        elected = r.source;
+        broker.sleepMs(20);
+    }
+
+    // The bow GPS stops. Its fix ages out and the masthead takes over: the two
+    // rows are ranked, not merged, so there is a handover to see.
+    bow.close();
+    try waitFor(&vessels, onMastFix);
+    const after = pathValue(&vessels, position_path).?;
+    try must(after.source != elected.?, "the masthead is a different source");
+    try must(!after.stale, "the masthead's fix is live");
+
+    try must(!log.has("trapped"), "nothing trapped");
+    try must(!log.has("denied"), "no grant was refused");
 }
 
 // ---------------------------------------------------------------------------
