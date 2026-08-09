@@ -42,6 +42,14 @@ final class AppModel: ObservableObject {
     /// these are half-gigabyte downloads, and carrying four providers for one
     /// coast means wanting three of them quiet, not deleted.
     @Published var rasterOff: Set<String> = []
+    /// The sets the mariner has turned off at the pill, by set name. Read at
+    /// launch and applied before the first frame; written whenever the drawn set
+    /// changes. Without it the engine's own rule wins every launch — adding a
+    /// source draws it — and a chart switched off comes back.
+    private(set) var rasterHidden: Set<String> = []
+    /// Was the ENC hidden over the picture when the app last quit? Applied at
+    /// open; `chartHidden` is the live state.
+    private(set) var chartHiddenSaved = false
     /// Every set, with whether it is in view. The pill's menu is built from it.
     @Published var rasterSets: [ChartController.RasterSet] = []
     /// The drawn set's index, or -1.
@@ -51,6 +59,54 @@ final class AppModel: ObservableObject {
     @Published var openRequest: OpenRequest?
     @Published var openError: String?
     private var openSeq = 0
+
+    // MARK: Plugin install
+    /// The package on the consent sheet: set by beginPluginInstall, cleared by
+    /// Install or Cancel. The sheet presents while this is non-nil.
+    @Published var pendingInstall: PluginPackage?
+    /// The sentence of the last refused install, for its own alert — an
+    /// install refusal is not a chart error.
+    @Published var installError: String?
+    /// A .lkplug opened before any chart was: kept until the chart (and with
+    /// it the plugin layer) is up, then inspected.
+    var pendingInstallPath: String?
+
+    /// Start the install flow: read the package, and put what it asks for in
+    /// front of the mariner. Every entry point lands here — Finder, a drop on
+    /// the window, and Settings > Plugins > Install Plugin….
+    func beginPluginInstall(_ path: String) {
+        guard hasChart, let controller else {
+            pendingInstallPath = path
+            return
+        }
+        guard let json = controller.inspectPlugin(path) else {
+            installError = "The plugin layer could not start."
+            return
+        }
+        let pkg = PluginPackage.parse(json, path: path)
+        if let err = pkg.error {
+            installError = err
+            return
+        }
+        pendingInstall = pkg
+    }
+
+    /// The Install button: the consent happened, so the package goes in and
+    /// starts drawing. A refusal lands in its own alert.
+    func confirmPluginInstall() {
+        guard let pkg = pendingInstall else { return }
+        pendingInstall = nil
+        if let err = controller?.installPlugin(pkg.path) {
+            installError = err
+        }
+    }
+
+    /// A .lkplug that arrived before the chart did, now that the chart is up.
+    func drainPendingInstall() {
+        guard hasChart, let path = pendingInstallPath else { return }
+        pendingInstallPath = nil
+        beginPluginInstall(path)
+    }
 
     // MARK: Startup loader state
     /// True from the moment an open is scheduled until lookout_open returns —
@@ -100,8 +156,6 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Live HUD readouts (pushed by ChartController / the chart view)
-    @Published var cursorLon: Double?
-    @Published var cursorLat: Double?
     @Published var scaleDenominator: Double = 0
     @Published var zoomLevel: Double = 0      // fractional web-mercator zoom
     @Published var scheme: Int = 0            // 0 day, 1 dusk, 2 night
@@ -109,11 +163,57 @@ final class AppModel: ObservableObject {
     @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
     @Published var centerLat: Double = 0
     @Published var centerLon: Double = 0
+    /// Follow mode as the core reports it: 0 off, 1 following own ship, 2 on
+    /// and waiting for a fix. Polled on the render tick, never remembered from
+    /// a tap: the core turns follow off itself when the mariner pans.
+    @Published var followState: Int = 0
+    /// Course up as the core reports it: 0 off, 1 turning with own ship, 2 on
+    /// and waiting for a heading. Polled like followState.
+    @Published var courseUpState: Int = 0
+    /// True while the plugin layer is up. Own ship comes from a plugin, so the
+    /// follow control is only shown when one can supply a position.
+    @Published var pluginsActive = false
+    /// What the position readout may say, as the core reports it. Polled on
+    /// the render tick beside the position itself, so the two can never
+    /// disagree: a readout holding the last numbers through a lost fix would
+    /// be presenting a stale one as live.
+    @Published var fixState: ChartController.FixState = .none
+    /// Own ship's reported position. Both nil unless `fixState` is `.live`;
+    /// the readout NEVER falls back to the map centre or the cursor.
+    @Published var shipLat: Double?
+    @Published var shipLon: Double?
+    /// The chart menu, while it is up, and the marker rename field, while the
+    /// mariner is typing in it. See the actions further down.
+    @Published var chartMenu: ChartMenu?
+    @Published var renaming: MarkerRename?
+    @Published var renamingText = ""
+    /// Where the rename field stands, re-projected every frame: it is anchored
+    /// to its marker, not to the screen.
+    @Published var renamingPoint: CGPoint?
+    /// The overlay object the mariner pinned, and where it draws in the
+    /// chrome's coordinate space. One at a time.
+    @Published var pinned: OverlayPin?
+    @Published var pinnedPoint: CGPoint?
+    /// What the plugin overlay says about the symbol under the pointer, and
+    /// where the pointer is in the chrome's coordinate space. Both nil when the
+    /// pointer is over nothing. Set by the chart view after a hover settles.
+    @Published var hover: OverlayHover?
+    @Published var hoverPoint: CGPoint?
+
     /// The cursor pick: the features under the last tap, where it happened (in
     /// the chrome's coordinate space), and which one the report is showing.
     @Published var pickResults: [PickFeature] = []
     @Published var pickPoint: CGPoint?
     @Published var pickIndex = 0
+    /// Where on the CHART the pick was taken. The mark belongs to the object,
+    /// not to the screen: follow moves the chart with no gesture behind it, so
+    /// the mark is re-projected from this every frame.
+    var pickGeo: (lon: Double, lat: Double)?
+    /// Where the REPORT is docked: the mark's position when the pick was
+    /// taken, and fixed for as long as the report is open. The panel's frame
+    /// must not depend on anything the camera touches, or a chart sliding
+    /// under follow re-lays it out every frame.
+    @Published var pickAnchor: CGPoint?
     /// Where a hook-driven pick should anchor its report. The chart view sets it
     /// to the centre of its bounds.
     var pickCentreHint: CGPoint?
@@ -133,10 +233,20 @@ final class AppModel: ObservableObject {
     /// two import different things to different places: an ENC is copied into
     /// the container and opened, a raster chart is added to the underlay.
     @Published var showRasterImporter = false
+    /// The same two pickers again, for the SETTINGS sheet. A presented sheet
+    /// cannot present another one from the view it came up over — the pair
+    /// above hang on the chart view — so the form attaches its own and these
+    /// are the flags that raise them. Add Charts used to dismiss the form and
+    /// re-present the picker 0.45s later to get around it; Add Raster Charts
+    /// never got that treatment and simply did nothing.
+    @Published var showSettingsImporter = false
+    @Published var showSettingsRasterImporter = false
     @Published var showSettings = false
-    /// Which settings tab shows: 0 Display, 1 Depths, 2 Text, 3 Charts,
-    /// 4 Advanced. The screenshot hook sets it.
-    @Published var settingsTab = 0
+    /// Which settings section shows, by its core name — "display", "depths",
+    /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
+    /// name no section answers to falls back to Display. The screenshot hook
+    /// sets it.
+    @Published var settingsTab = "display"
 
     // MARK: Search
     @Published var searchOpen = false
@@ -162,6 +272,16 @@ final class AppModel: ObservableObject {
     /// launch would be its own bug.
     private let rasterKey = "lookout.rastercharts"
     private let rasterOffKey = "lookout.rastercharts.off"
+    /// Which SETS are not drawn, by set name. Beside the installed list and the
+    /// switched-off list, because all three describe the same charts and any one
+    /// of them living somewhere else is a way for them to drift apart.
+    ///
+    /// Not the same thing as rasterOff. Off means "installed and quiet" and
+    /// takes a set out of the pill's list entirely; this is the pill's own
+    /// choice of which picture covers this water, and a set that is not drawn is
+    /// still offered.
+    private let rasterHiddenKey = "lookout.rastercharts.hidden"
+    private let chartHiddenKey = "lookout.chart.hidden"
 
     init() {
         recents = UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
@@ -171,6 +291,8 @@ final class AppModel: ObservableObject {
         rasterPaths = (UserDefaults.standard.stringArray(forKey: rasterKey) ?? [])
             .filter { FileManager.default.fileExists(atPath: $0) }
         rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
+        rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
+        chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
     }
 
     // MARK: - Opening charts
@@ -290,12 +412,13 @@ final class AppModel: ObservableObject {
         #endif
     }
 
-    /// "Add charts" from the SETTINGS sheet (iOS): the importer and the sheet
-    /// share one presenting host, so dismiss the sheet first.
+    /// "Add charts" from the SETTINGS sheet (iOS): the form's own importer,
+    /// which comes up over the sheet and leaves it where it was. It used to
+    /// dismiss the sheet and re-present the chart view's importer 0.45s later,
+    /// because that one cannot appear while the sheet is over it.
     func addChartsFromSettings() {
         #if os(iOS)
-        showSettings = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { self.showImporter = true }
+        showSettingsImporter = true
         #else
         presentOpenPanel()
         #endif
@@ -307,6 +430,283 @@ final class AppModel: ObservableObject {
     func zoomOut()  { controller?.zoomCentered(-1.0) }
     func zoomToFit(){ controller?.fitChart() }
     func northUp()  { controller?.resetRotation() }
+
+    /// What the compass bubble shows. The core owns both parts: it drops
+    /// follow on a pan and course up on a hand rotation, so this is read, not
+    /// remembered.
+    var orientation: Orientation {
+        if followState == 0 { return .unlocked }
+        if followState == 2 { return .armed }   // on, no fix to follow yet
+        return courseUpState == 0 ? .northUp : .courseUp
+    }
+
+    /// The compass bubble's tap. It always locks the chart to own ship, and
+    /// once locked it cycles north up and course up.
+    func cycleOrientation() {
+        guard let c = controller else { return }
+        if followState == 0 {
+            c.setFollow(true)          // lock, leaving the chart as it lies
+        } else if courseUpState == 0 {
+            c.setCourseUp(true)        // turn with own ship
+        } else {
+            c.resetRotation()          // back to north up, still locked
+        }
+    }
+
+    // MARK: - The chart menu, and markers
+
+    /// The menu raised at a point on the water. Every item acts on THIS point:
+    /// not the map centre, and not where the cursor drifts to afterwards, so
+    /// the coordinates are taken once, when the menu opens, and carried here.
+    struct ChartMenu: Equatable {
+        /// Where the menu stands, in the chrome's coordinate space.
+        let at: CGPoint
+        let lon: Double
+        let lat: Double
+        /// The mark under the press, when there is one. Over a marker the menu
+        /// offers Rename and Remove in place of Drop.
+        let marker: ChartController.Marker?
+    }
+
+    /// Which marker is being renamed, and where it is. The name being typed is
+    /// `renamingText`.
+    struct MarkerRename: Equatable {
+        let id: UInt64
+        let lon: Double
+        let lat: Double
+    }
+
+    /// Raise the menu at a point on the chart, in the chrome's coordinate
+    /// space. A pinned bubble goes: one thing at a time over the chart.
+    func openChartMenu(at p: CGPoint) {
+        guard let c = controller, let g = c.geo(atPoint: p) else { return }
+        closePin()
+        cancelRename()
+        chartMenu = ChartMenu(at: p, lon: g.lon, lat: g.lat, marker: c.marker(atPoint: p))
+    }
+
+    func closeChartMenu() {
+        if chartMenu != nil { chartMenu = nil }
+    }
+
+    /// "What is here": the pick report for the point the menu was raised at.
+    /// The report itself is unchanged; only how it is raised has.
+    func chartMenuPick() {
+        guard let m = chartMenu, let c = controller else { return }
+        chartMenu = nil
+        showPick(c.pick(lon: m.lon, lat: m.lat), at: m.at)
+    }
+
+    /// "Drop marker": placed at once, named by the core, and the menu closes.
+    /// The drop never waits for typing: a mariner drops a mark one-handed on a
+    /// moving boat, often to record something they have just seen.
+    func chartMenuDropMarker() {
+        guard let m = chartMenu, let c = controller else { return }
+        chartMenu = nil
+        c.dropMarker(lon: m.lon, lat: m.lat)
+    }
+
+    /// "Copy position": the point's coordinates in the mariner's own format,
+    /// the one the readout, the deck log and the radio all use.
+    func chartMenuCopyPosition() {
+        guard let m = chartMenu else { return }
+        chartMenu = nil
+        Pasteboard.copy(CoordFormat.position(lat: m.lat, lon: m.lon))
+    }
+
+    func chartMenuRenameMarker() {
+        guard let mark = chartMenu?.marker else { return }
+        chartMenu = nil
+        beginRename(mark)
+    }
+
+    func chartMenuRemoveMarker() {
+        guard let mark = chartMenu?.marker, let c = controller else { return }
+        chartMenu = nil
+        _ = c.removeMarker(mark.id)
+    }
+
+    /// Open the rename field on a marker, with its current name in it.
+    func beginRename(_ mark: ChartController.Marker) {
+        renaming = MarkerRename(id: mark.id, lon: mark.lon, lat: mark.lat)
+        renamingText = mark.name
+        renamingPoint = controller?.screenPoint(forGeoLon: mark.lon, lat: mark.lat)
+    }
+
+    /// Return commits. An empty field keeps the old name, which the core
+    /// decides, so every shell agrees on what an emptied field means.
+    func commitRename() {
+        guard let r = renaming else { return }
+        controller?.renameMarker(r.id, to: renamingText)
+        cancelRename()
+    }
+
+    /// Escape abandons.
+    func cancelRename() {
+        if renaming != nil { renaming = nil }
+        if !renamingText.isEmpty { renamingText = "" }
+        if renamingPoint != nil { renamingPoint = nil }
+    }
+
+    /// The Configure GPS button. This is the one place in the app where a
+    /// mariner is told they have no position, so it carries the fix: Settings,
+    /// Connections, where a gateway or a Signal K server is added. (A phone
+    /// has a receiver of its own and will ask for permission here instead;
+    /// that is a later pass.)
+    func configurePosition() {
+        openSettings()
+        settingsTab = "connections"
+    }
+
+    /// Pin an overlay object's bubble. It replaces any bubble already up, and
+    /// a hover tooltip never shares the screen with one.
+    func pin(_ p: OverlayPin) {
+        hover = nil
+        hoverPoint = nil
+        pinned = p
+        pinnedPoint = controller?.screenPoint(forGeoLon: p.lon, lat: p.lat)
+    }
+
+    func closePin() {
+        if pinned != nil { pinned = nil }
+        if pinnedPoint != nil { pinnedPoint = nil }
+    }
+
+    #if os(macOS)
+    /// Every table the loaded plugins declare, in declaration order. The
+    /// Vessels menu is built from this, so the items follow the plugins that
+    /// are up: a plugin that unloads takes its item with it.
+    @Published var pluginTables: [PluginTableSpec] = []
+
+    /// The tables the loaded plugins declare. The menu is built from this, so
+    /// setting it is all it takes to make the items appear.
+    func refreshPluginTables() {
+        guard let c = controller else { return }
+        pluginTables = c.tableSpecs()
+    }
+
+    // MARK: Plugin alerts
+
+    /// Every alert the plugins have raised, most urgent first. The banner over
+    /// the chart is built from this.
+    @Published var alerts: [PluginAlert] = []
+
+    /// How often the core is asked for its alerts. The plugins raise them from
+    /// their own threads with no gesture behind them, so nothing else would
+    /// bring one to the screen.
+    private static let alertPollInterval: TimeInterval = 1.0
+
+    private var alertTimer: Timer?
+    private let siren = AlarmSiren()
+    /// The last set the core reported. The list is rebuilt only when it moves.
+    private var alertSeq = -1
+
+    /// Start watching for alerts. Called once the plugin layer is up.
+    func startAlertWatch() {
+        guard alertTimer == nil else { return }
+        refreshAlerts()
+        alertTimer = Timer.scheduledTimer(withTimeInterval: Self.alertPollInterval,
+                                          repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshAlerts() }
+        }
+    }
+
+    /// Stop watching, and stop sounding. The chart is going away with the
+    /// plugins that raised the alarms.
+    func stopAlertWatch() {
+        alertTimer?.invalidate()
+        alertTimer = nil
+        alertSeq = -1
+        siren.setSounding(false)
+        if !alerts.isEmpty { alerts = [] }
+    }
+
+    private func refreshAlerts() {
+        guard let got = controller?.pluginAlerts() else {
+            // Nothing readable from the core. The polling continues, because
+            // stopping it would leave the boat deaf for the rest of the
+            // session over one unanswered read.
+            alertSeq = -1
+            if !alerts.isEmpty { alerts = [] }
+            siren.setSounding(false)
+            return
+        }
+        if got.seq != alertSeq {
+            alertSeq = got.seq
+            alerts = got.alerts
+        }
+        // An alarm nobody has answered keeps sounding. A warning is shown and
+        // never sounded, so it is not counted here.
+        siren.setSounding(alerts.contains { $0.severity.audible && !$0.acknowledged })
+    }
+
+    /// Silence one alert, and show the change without waiting for the next
+    /// poll: the mariner pressed a control and must see it answer.
+    func acknowledgeAlert(_ alert: PluginAlert) {
+        guard controller?.acknowledgeAlert(alert.id) == true else { return }
+        alertSeq = -1
+        refreshAlerts()
+    }
+
+    /// Open one declared table's window, or bring it forward.
+    func showPluginTable(_ spec: PluginTableSpec) {
+        _ = PluginTableWindowController.show(spec, model: self)
+    }
+
+    /// Pin one declared table row on the chart by its id, for the screenshot
+    /// protocol's LOOKOUT_SHOW=target:<id>. The empty id takes the first row
+    /// of the declared sort, which for the AIS targets is the nearest
+    /// approach. This is the locate-on-chart path a double-click takes, minus
+    /// the dialog, so the frame holds the chart and the bubble alone.
+    func revealTableRow(_ id: String) {
+        guard let c = controller, let spec = c.tableSpecs().first(where: { $0.locatable })
+        else { return }
+        // A plugin builds no rows until it is told the dialog is open, so the
+        // dialog is opened to make them, read, and shut again. What is wanted
+        // is the bubble on the chart, not the dialog over it.
+        let window = PluginTableWindowController.show(spec, model: self)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            defer { window.dismiss() }
+            guard let self,
+                  let got = c.tableRows(plugin: spec.plugin, key: spec.key,
+                                        sortKey: spec.sortKey, ascending: spec.sortAscending,
+                                        columns: spec.columns.count) else { return }
+            let row = id.isEmpty ? got.rows.first : got.rows.first { $0.id == id }
+            guard let row, let lat = row.lat, let lon = row.lon else { return }
+            self.revealOnChart(lon: lon, lat: lat)
+        }
+    }
+
+    /// Show a place a plugin table row named: centre the chart on it and pin
+    /// the bubble of whatever the plugin draws there. A row with no position
+    /// never gets here.
+    func revealOnChart(lon: Double, lat: Double) {
+        guard let c = controller else { return }
+        if let hit = c.reveal(lon: lon, lat: lat) { pin(hit) } else { closePin() }
+    }
+
+    /// Open one declared table, for the screenshot protocol's
+    /// LOOKOUT_SHOW=table[:key[:sort[:asc|desc[:activate]]]]. The first
+    /// declaration when no key is named, and the declared sort unless one is
+    /// asked for — which is the same choice a mariner makes by clicking a
+    /// column heading. `activate` opens the top row the way a double-click
+    /// does, so the locate-on-chart path can be photographed.
+    func openPluginTable(_ spec: String) {
+        guard let c = controller else { return }
+        let parts = spec.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        let key = parts.first ?? ""
+        let specs = c.tableSpecs()
+        let want = key.isEmpty ? specs.first : specs.first { $0.key == key }
+        guard let want else { return }
+        let window = PluginTableWindowController.show(want, model: self,
+                                                      sortKey: parts.count > 1 ? parts[1] : nil,
+                                                      ascending: parts.count < 3 || parts[2] != "desc")
+        guard parts.count > 3, parts[3] == "activate" else { return }
+        // A moment for the plugin's first batch: it builds no rows until it is
+        // told the dialog is open.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { window.activateTopRow() }
+    }
+    #endif
     /// Scheme changes from the MENU must persist like ones from the settings
     /// form (the form saves in its own apply path).
     func cycleScheme() {
@@ -319,6 +719,8 @@ final class AppModel: ObservableObject {
         guard let c = controller else { return }
         c.toggleChart()
         chartHidden = c.chartHidden()
+        chartHiddenSaved = chartHidden
+        UserDefaults.standard.set(chartHidden, forKey: chartHiddenKey)
     }
 
     /// Install the raster charts the mariner chose. Files that will not open are reported
@@ -370,6 +772,29 @@ final class AppModel: ObservableObject {
         rasterSets = c.rasterSets()
         rasterAvailable = c.rasterAvailableName()
         chartHidden = c.chartHidden()
+        saveRasterShown()
+    }
+
+    /// Write down which sets are drawn. Everything that can move the selection
+    /// comes through refreshRasterState, so this is the one place it is saved:
+    /// the pill's menu, the Chart menu, the cycle key, and switching a chart off
+    /// in Settings, which can move the selection on its own.
+    ///
+    /// Read back from the engine rather than tracked here. The engine owns the
+    /// election — showing one set turns off the sets covering the same water —
+    /// so what it says after the change is the only account that can be right.
+    ///
+    /// Sets that are not installed this launch keep their entry: a mariner who
+    /// unplugs the drive holding one has not changed their mind about it.
+    private func saveRasterShown() {
+        guard let sets = controller?.rasterSets(), !sets.isEmpty else { return }
+        var hidden = rasterHidden
+        for s in sets {
+            if s.shown { hidden.remove(s.name) } else { hidden.insert(s.name) }
+        }
+        guard hidden != rasterHidden else { return }
+        rasterHidden = hidden
+        UserDefaults.standard.set(Array(hidden), forKey: rasterHiddenKey)
     }
 
     /// Draw one set, or none for -1.
@@ -450,9 +875,17 @@ final class AppModel: ObservableObject {
 
     /// Forget every installed source. The engine has no remove yet, so this
     /// takes effect on the next chart open — say so where it is offered.
+    ///
+    /// The switched-off and not-drawn lists go with it. They are keyed by path
+    /// and set name, so leaving them behind means the same file added again
+    /// months later comes back switched off with nothing on screen to say why.
     func clearRasterCharts() {
         rasterPaths.removeAll()
+        rasterOff.removeAll()
+        rasterHidden.removeAll()
         UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
+        UserDefaults.standard.set(Array(rasterHidden), forKey: rasterHiddenKey)
     }
 
     /// Step to the next raster chart set, with "no picture" as one position — so the
@@ -468,7 +901,10 @@ final class AppModel: ObservableObject {
             return
         }
         c.cycleRaster()
-        rasterName = c.rasterName()
+        // The whole state, not just the name: the cycle moves which set is drawn,
+        // and that has to reach the pill's mark and the saved selection at once
+        // rather than waiting on the next frame's readouts.
+        refreshRasterState()
     }
     /// Set the color scheme directly (0 day / 1 dusk / 2 night).
     func setScheme(_ s: Int) {
@@ -507,6 +943,8 @@ final class AppModel: ObservableObject {
         pickResults = results
         pickPoint = results.isEmpty ? nil : point
         pickIndex = 0
+        pickGeo = results.isEmpty ? nil : controller?.geo(atPoint: point)
+        pickAnchor = pickPoint
         // A sheet covers part of the chart, so the object can fall under it.
         // Lift the chart until the mark clears the sheet, and move the mark
         // with it. Only a sheet needs this. A callout stands over its object
@@ -515,6 +953,8 @@ final class AppModel: ObservableObject {
         if let p = pickPoint, let lift = sheetLift(for: p), lift > 0 {
             controller?.panRevealingPick(dxPt: 0, dyPt: -lift)
             pickPoint = CGPoint(x: p.x, y: p.y - lift)
+            pickGeo = controller?.geo(atPoint: pickPoint!)
+            pickAnchor = pickPoint
             pickLift = lift
         }
         // The screenshot protocol's view of a pick: where, and what came
@@ -534,6 +974,8 @@ final class AppModel: ObservableObject {
         }
         pickResults = []
         pickPoint = nil
+        pickGeo = nil
+        pickAnchor = nil
         pickIndex = 0
     }
 
@@ -553,14 +995,39 @@ final class AppModel: ObservableObject {
         return max(0, (point.y + clear) - sheetTop)
     }
 
-    /// A hook-driven pick at a fraction of the view — the screenshot
-    /// protocol's way of picking away from the centre:
-    /// LOOKOUT_SHOW=pick:0.5,0.85.
+    /// A point at a fraction of the view. The hooks below have no pointer to
+    /// press with, so they name a fraction instead.
+    private func viewPoint(fx: Double, fy: Double) -> CGPoint? {
+        guard let centre = pickCentreHint else { return nil }
+        return CGPoint(x: centre.x * 2 * fx, y: centre.y * 2 * fy)
+    }
+
+    /// A hook-driven pick at a fraction of the view: the screenshot protocol's
+    /// way of picking away from the centre, LOOKOUT_SHOW=pick:0.5x0.85.
     func pickAt(fx: Double, fy: Double) {
-        guard let controller, let centre = pickCentreHint else { return }
-        let p = CGPoint(x: centre.x * 2 * fx, y: centre.y * 2 * fy)
-        guard let g = controller.geo(atPoint: p) else { return }
+        guard let controller, let p = viewPoint(fx: fx, fy: fy),
+              let g = controller.geo(atPoint: p) else { return }
         showPick(controller.pick(lon: g.lon, lat: g.lat), at: p)
+    }
+
+    /// Raise the chart menu at a fraction of the view, as a right-click there
+    /// would: LOOKOUT_SHOW=menu:0.5x0.5.
+    func showChartMenu(fx: Double, fy: Double) {
+        guard let p = viewPoint(fx: fx, fy: fy) else { return }
+        openChartMenu(at: p)
+    }
+
+    /// Drop a marker at a fraction of the view: LOOKOUT_SHOW=marker:0.45x0.5.
+    func showDropMarker(fx: Double, fy: Double) {
+        guard let c = controller, let p = viewPoint(fx: fx, fy: fy),
+              let g = c.geo(atPoint: p) else { return }
+        c.dropMarker(lon: g.lon, lat: g.lat)
+    }
+
+    /// Open the rename field on the newest mark: LOOKOUT_SHOW=rename.
+    func showRenameNewestMarker() {
+        guard let mark = controller?.markers().last else { return }
+        beginRename(mark)
     }
 
     /// Run a cursor pick at the view centre. A tap on the chart runs the same

@@ -1,8 +1,8 @@
 /* metal_shim.h — the C face of the Metal transport (metal_shim.m).
  *
  * gpu.zig drives rendering exclusively through these calls; all ObjC/Metal
- * lives behind them. One context owns the device, queue, runtime-compiled
- * shader library, the four pipelines and the sampler. Frames encode one render
+ * lives behind them. One context owns the device, queue, the runtime-compiled
+ * shader libraries, the pipelines and the sampler. Frames encode one render
  * pass each — either into a CAMetalLayer drawable (window path) or into an
  * offscreen texture that can be read back (snapshot path).
  *
@@ -28,6 +28,11 @@ enum {
     LKM_PIPE_SPRITE = 1,
     LKM_PIPE_SDF = 2,
     LKM_PIPE_PATTERN = 3,
+    /* Chart overlays (src/overlay.zig): world-space triangles with a per-vertex
+     * colour, no texture. Its shader is NOT part of the engine's library — the
+     * source lives in metal_shim.m and compiles alongside it at create. */
+    LKM_PIPE_OVERLAY = 4,
+    LKM_PIPE_COUNT = 5,
 };
 
 #define LKM_ERR_LEN 256

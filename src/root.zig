@@ -16,9 +16,18 @@ const camera = @import("camera.zig");
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 const atlas = @import("atlas.zig");
 const png = @import("png.zig");
+const ov = @import("overlay.zig");
+const marks = @import("markers.zig"); // the mariner's own marks on the water
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
+
+/// The wasm plugin host. Off unless build.zig turned it on (macOS with the
+/// WAMR archive present), and the import itself is behind the flag: without
+/// `-Dplugins` there are no WAMR headers for src/plugin/wasm.zig's @cImport to
+/// find, so the file must not be analysed at all.
+const plugins_on = @import("build_options").plugins;
+const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 
 // The async build's WORKER runs tessellation (runJob — pure engine, no GPU) on
 // every backend: a rebuild takes ~1s on a phone and must never sit inside
@@ -35,6 +44,10 @@ const MAX_SCHEMES = 3; // day / dusk / night
 
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
+
+/// What an overlay hit test answers with: the object's id, its pick payload
+/// and the point it draws at. Borrowed until the next overlay query.
+pub const OverlayHit = ov.Store.Hit;
 
 /// Base mariner for a build: the user's state, but with the live-gated axes
 /// forced permissive so EVERY feature reaches the surface tagged, then gated
@@ -149,6 +162,387 @@ pub const NativeKind = gpu.NativeKind;
 
 const Lock = @import("lock.zig").Lock;
 
+/// Everything the plugin layer needs from the core, in one heap allocation:
+/// the vessel store, the AIS store, the broker that implements the ABI over
+/// them, and the registry that runs the modules.
+///
+/// The OVERLAY store is not in here. The core draws into it too: the
+/// mariner's markers are core-owned and outlive any plugin, so it belongs to
+/// the handle and this layer only borrows it.
+///
+/// Heap-allocated and built in place because the broker holds pointers to the
+/// stores beside it — moving this struct would dangle them.
+const PluginSystem = if (plugins_on) struct {
+    alloc: std.mem.Allocator,
+    vessels: phost.store.Store,
+    ais: phost.aisstore.AisStore,
+    br: phost.broker.Broker,
+    host: phost.Host,
+    /// Scratch for the registry and config JSON the C ABI hands out. Borrowed
+    /// by the caller until the next such call, like every other query here.
+    json: std.ArrayList(u8) = .empty,
+
+    fn create(alloc: std.mem.Allocator, overlay: *ov.Store) !*@This() {
+        const self = try alloc.create(@This());
+        errdefer alloc.destroy(self);
+        self.* = .{
+            .alloc = alloc,
+            .vessels = try phost.store.Store.init(alloc),
+            .ais = phost.aisstore.AisStore.init(alloc),
+            .br = undefined,
+            .host = undefined,
+        };
+        self.br = phost.broker.Broker.init(alloc, &self.vessels, &self.ais, .{
+            .ctx = overlay,
+            .applyFn = applyOverlay,
+            .removeFn = removeOverlay,
+        });
+        self.host = phost.Host.init(alloc, &self.br, optionsFromEnv());
+        return self;
+    }
+
+    /// Order matters: the registry stops the dispatch thread (delivering
+    /// SHUTDOWN, which can still draw and publish) before the broker stops the
+    /// I/O thread, and both are down before the stores they write to go. The
+    /// overlay store is the handle's and outlives this.
+    fn destroy(self: *@This()) void {
+        const gpa = self.alloc;
+        self.host.deinit();
+        self.br.deinit();
+        self.ais.deinit();
+        self.vessels.deinit();
+        self.json.deinit(gpa);
+        gpa.destroy(self);
+    }
+
+    /// `LOOKOUT_NMEA=host:port` is the one piece of plugin configuration the
+    /// prototype carries; it reaches nmea0183 through its lk_start payload.
+    fn optionsFromEnv() phost.Options {
+        var opts = phost.Options{};
+        const raw = std.c.getenv("LOOKOUT_NMEA") orelse return opts;
+        const text = std.mem.span(raw);
+        const colon = std.mem.lastIndexOfScalar(u8, text, ':') orelse return opts;
+        if (colon == 0 or colon + 1 >= text.len) return opts;
+        opts.nmea_host = text[0..colon];
+        opts.nmea_port = std.fmt.parseInt(u16, text[colon + 1 ..], 10) catch return .{};
+        return opts;
+    }
+
+    fn applyOverlay(ctx: ?*anyopaque, source: []const u8, json: []const u8) anyerror!void {
+        const s: *ov.Store = @ptrCast(@alignCast(ctx.?));
+        return s.applyBatch(source, json);
+    }
+
+    fn removeOverlay(ctx: ?*anyopaque, source: []const u8) void {
+        const s: *ov.Store = @ptrCast(@alignCast(ctx.?));
+        s.removeSource(source);
+    }
+
+    /// Everything own ship's display position and course-up need, elected and
+    /// checked for staleness in one pass.
+    fn readShip(vessels: *phost.store.Store, now_ms: i64) ShipRead {
+        var out = ShipRead{};
+        if (vessels.readElected("navigation.position", now_ms)) |r| {
+            if (!r.stale and r.value == .position)
+                out.fix = .{ .lon = r.value.position.lon, .lat = r.value.position.lat, .ts_ms = r.ts_ms };
+        }
+        out.cog_deg = number(vessels, "navigation.courseOverGroundTrue", now_ms);
+        out.sog_ms = number(vessels, "navigation.speedOverGround", now_ms);
+        out.heading_deg = number(vessels, "navigation.headingTrue", now_ms);
+        return out;
+    }
+
+    /// A fresh elected number, or null when the path is empty or stale.
+    fn number(vessels: *phost.store.Store, path: []const u8, now_ms: i64) ?f64 {
+        const r = vessels.readElected(path, now_ms) orelse return null;
+        if (r.stale or r.value != .number) return null;
+        return r.value.number;
+    }
+} else struct {};
+
+/// One position from the store, with the time it was published.
+const ShipFix = struct { lon: f64, lat: f64, ts_ms: i64 };
+
+/// The own-ship values a frame needs. A null field is missing or stale.
+const ShipRead = struct {
+    fix: ?ShipFix = null,
+    cog_deg: ?f64 = null,
+    sog_ms: ?f64 = null,
+    heading_deg: ?f64 = null,
+};
+
+/// Metres per degree of latitude. The display position moves metres between
+/// fixes, so a spherical step is exact enough and costs one multiply.
+const M_PER_DEG: f64 = 40075016.685578488 / 360.0;
+
+/// Own ship as the screen shows it. Fixes land about once a second and a chart
+/// that only moved then would step, so the newest fix is carried forward along
+/// COG at SOG. The carry stops at the staleness window: a lost GPS must not
+/// keep the boat sailing.
+const ShipDisplay = struct {
+    /// The store's staleness window. Past it there is no display position.
+    const CARRY_MS: i64 = 5_000;
+    /// Below this the course a GPS reports is noise, not a heading: 0.4 kn in
+    /// metres per second. Course up freezes on the last good course there.
+    const COURSE_FLOOR_MS: f64 = 0.4 * 1852.0 / 3600.0;
+    /// Weight of a new course in the smoothed one. About a three second lag at
+    /// the 1 Hz fixes this carries, which is what stops the chart hunting.
+    const COURSE_ALPHA: f64 = 0.25;
+
+    last: ?ShipFix = null,
+    prev: ?ShipFix = null,
+    cog_deg: ?f64 = null,
+    sog_ms: ?f64 = null,
+    heading_deg: ?f64 = null,
+    /// The course the display position is travelling, low-passed. Course up
+    /// turns the chart to this, not to the raw reading.
+    course_deg: ?f64 = null,
+
+    /// Take this frame's reading. A fix already held is not a new fix.
+    fn observe(self: *ShipDisplay, r: ShipRead) void {
+        var fresh = false;
+        if (r.fix) |f| {
+            const same = if (self.last) |l| l.ts_ms == f.ts_ms and l.lon == f.lon and l.lat == f.lat else false;
+            if (!same) {
+                self.prev = self.last;
+                self.last = f;
+                fresh = true;
+            }
+        } else {
+            self.last = null;
+            self.prev = null;
+        }
+        self.cog_deg = r.cog_deg;
+        self.sog_ms = r.sog_ms;
+        self.heading_deg = r.heading_deg;
+        // Once per fix, not once per frame: the smoothing constant below is in
+        // fixes, and this runs on every tick.
+        if (fresh) self.trackCourse();
+    }
+
+    /// Fold this reading's course into the smoothed one. A boat under the
+    /// speed floor keeps the course it had: a drifting GPS would otherwise
+    /// spin the chart while the boat sits still.
+    fn trackCourse(self: *ShipDisplay) void {
+        const v = self.velocity() orelse return;
+        const speed = @sqrt(v[0] * v[0] + v[1] * v[1]);
+        if (speed < COURSE_FLOOR_MS) return;
+        const raw = std.math.atan2(v[0], v[1]) * 180.0 / std.math.pi;
+        const prev = self.course_deg orelse {
+            self.course_deg = wrap360(raw);
+            return;
+        };
+        // Smooth the SHORT way round: 350 and 10 degrees are 20 apart.
+        var d = raw - prev;
+        d -= 360.0 * @round(d / 360.0);
+        self.course_deg = wrap360(prev + COURSE_ALPHA * d);
+    }
+
+    /// Where to draw own ship at `now_ms`: the newest fix carried forward.
+    /// Null with no fix, or when the carry has run past the window.
+    fn at(self: ShipDisplay, now_ms: i64) ?[2]f64 {
+        const l = self.last orelse return null;
+        const dt_ms = now_ms - l.ts_ms;
+        if (dt_ms > CARRY_MS) return null;
+        if (dt_ms <= 0) return .{ l.lon, l.lat };
+        const v = self.velocity() orelse return .{ l.lon, l.lat };
+        const dt = @as(f64, @floatFromInt(dt_ms)) / 1000.0;
+        const lat = l.lat + v[1] * dt / M_PER_DEG;
+        const coslat = @max(0.01, @cos(l.lat * std.math.pi / 180.0));
+        return .{ l.lon + v[0] * dt / (M_PER_DEG * coslat), lat };
+    }
+
+    /// Metres per second east and north: COG and SOG when the instruments
+    /// give them, else the run between the last two fixes.
+    fn velocity(self: ShipDisplay) ?[2]f64 {
+        if (self.cog_deg) |c| {
+            if (self.sog_ms) |sp| {
+                const th = c * std.math.pi / 180.0;
+                return .{ sp * @sin(th), sp * @cos(th) };
+            }
+        }
+        const l = self.last orelse return null;
+        const p = self.prev orelse return null;
+        const dt = @as(f64, @floatFromInt(l.ts_ms - p.ts_ms)) / 1000.0;
+        if (!(dt > 0.05)) return null;
+        const coslat = @max(0.01, @cos(l.lat * std.math.pi / 180.0));
+        return .{ (l.lon - p.lon) * M_PER_DEG * coslat / dt, (l.lat - p.lat) * M_PER_DEG / dt };
+    }
+
+    /// What course up turns the chart to: the smoothed display course. Null
+    /// before the boat has moved, and frozen while it is stopped.
+    fn upDeg(self: ShipDisplay) ?f64 {
+        if (self.last == null) return null; // no fix: nothing to turn to
+        return self.course_deg;
+    }
+};
+
+/// One overlay batch describing every mark. A free function so the tests can
+/// feed the same text to a bare overlay store: a canvas the store refuses
+/// draws nothing and says so only in a log line.
+fn markerBatch(a: std.mem.Allocator, json: *std.ArrayList(u8), list: []const marks.Marker, c: [4]f64) !void {
+    try json.appendSlice(a, "{\"set\":[");
+    for (list, 0..) |m, i| {
+        if (i > 0) try json.append(a, ',');
+        // `sa` first: the mark and its name hold their screen orientation
+        // while the chart turns under course up. A ring with a white halo
+        // under it, so the mark reads on a dark chart as well as a light
+        // one, and a dot at the position itself: the ring says "about
+        // here", the dot says where.
+        try json.print(a, "{{\"id\":\"{d}\",\"kind\":\"canvas\",\"space\":\"points\"," ++
+            "\"at\":[{d},{d}],\"cmds\":[[\"sa\"]," ++
+            "[\"ss\",[1,1,1,0.85]],[\"lw\",3.5],[\"P\"],[\"A\",0,0,6.5,0,360],[\"S\"]," ++
+            "[\"ss\",[{d},{d},{d},{d}]],[\"lw\",2],[\"P\"],[\"A\",0,0,6.5,0,360],[\"S\"]," ++
+            "[\"fs\",[{d},{d},{d},{d}]],[\"P\"],[\"A\",0,0,2.2,0,360],[\"F\"]," ++
+            "[\"font\",12,\"bold\"],[\"ta\",\"left\"],", .{
+            m.id, m.lon, m.lat, c[0], c[1], c[2], c[3], c[0], c[1], c[2], c[3],
+        });
+        // The name, in white four ways round and then in magenta over it.
+        // Canvas text has no outline of its own, and a chart is as likely
+        // to be dark under the label as light.
+        try json.appendSlice(a, "[\"fs\",[1,1,1,0.9]],");
+        for ([4][2]f64{ .{ 11, 3 }, .{ 13, 3 }, .{ 11, 5 }, .{ 13, 5 } }) |o| {
+            try json.print(a, "[\"T\",{d},{d},", .{ o[0], o[1] });
+            try marks.jsonString(a, json, m.name);
+            try json.appendSlice(a, "],");
+        }
+        try json.print(a, "[\"fs\",[{d},{d},{d},{d}]],[\"T\",12,4,", .{ c[0], c[1], c[2], c[3] });
+        try marks.jsonString(a, json, m.name);
+        try json.appendSlice(a, "]]}");
+    }
+    try json.appendSlice(a, "]}");
+}
+
+/// A bearing folded into [0, 360).
+fn wrap360(deg: f64) f64 {
+    const d = @mod(deg, 360.0);
+    return if (d < 0) d + 360.0 else d;
+}
+
+/// What follow mode is doing, for the shell's lock control. Anything but `off`
+/// means follow is on: `waiting` is armed with no usable fix.
+pub const FollowState = enum(c_int) { off = 0, following = 1, waiting = 2 };
+
+/// Follow mode: own ship held at a fixed point on screen while the chart
+/// slides under it. The core owns the behaviour; a shell only draws the button
+/// and calls setFollow. Camera moves go through here so every entry point
+/// (frame tick, pan, zoom) obeys the same rules.
+const Follow = struct {
+    /// The anchor, as a fraction of the view: horizontal centre, three quarters
+    /// down, so the water ahead fills the screen.
+    const anchor_x = 0.5;
+    const anchor_y = 0.75;
+
+    /// Below this the chart is not re-turned. Course-up follows a heading that
+    /// wanders a tenth of a degree at a time, and every turn is a repaint.
+    const ROT_DEADBAND = 0.2 * std.math.pi / 180.0;
+
+    on: bool = false,
+    /// Course-up: the chart turns so own ship's heading points up the screen.
+    /// Independent of follow — the mariner can have either alone.
+    course_up: bool = false,
+    /// The fix and the camera pose the last move produced. A tick that finds
+    /// both unchanged does nothing, so a placement the mercator clamp could not
+    /// finish does not re-fire every frame.
+    applied: ?Applied = null,
+
+    const Applied = struct {
+        fix: camera.Vec2,
+        center: camera.Vec2,
+        zoom: f64,
+        rotation: f64,
+        vw: f32,
+        vh: f32,
+    };
+
+    /// The anchor in the camera's own unit (logical px).
+    fn anchor(cam: camera.Camera) [2]f32 {
+        return .{ cam.vw * anchor_x, cam.vh * anchor_y };
+    }
+
+    fn clear(self: *Follow) void {
+        self.on = false;
+        self.applied = null;
+    }
+
+    /// The view rotation that puts a true bearing at the top of the screen.
+    /// A world bearing draws at screen bearing (bearing + rotation).
+    fn rotationFor(up_deg: f64) f64 {
+        const r = -up_deg * std.math.pi / 180.0;
+        return r - 2.0 * std.math.pi * @round(r / (2.0 * std.math.pi));
+    }
+
+    /// True when course-up would turn the chart: it is on, a heading is fresh,
+    /// and the chart is more than the deadband away from it.
+    fn rotatePending(self: Follow, cam: camera.Camera, up_deg: ?f64) bool {
+        if (!self.course_up) return false;
+        const want = rotationFor(up_deg orelse return false);
+        var d = want - cam.rotation;
+        d -= 2.0 * std.math.pi * @round(d / (2.0 * std.math.pi));
+        return @abs(d) > ROT_DEADBAND;
+    }
+
+    /// Turn the chart to the heading. True when it moved.
+    fn rotate(self: Follow, cam: *camera.Camera, up_deg: ?f64) bool {
+        if (!self.rotatePending(cam.*, up_deg)) return false;
+        cam.rotation = rotationFor(up_deg.?);
+        return true;
+    }
+
+    /// True when a tick would move the camera. needsRedraw asks, so a
+    /// render-on-demand shell wakes for a new fix.
+    fn pending(self: Follow, cam: camera.Camera, fix: ?camera.Vec2) bool {
+        if (!self.on) return false;
+        const w = fix orelse return false; // no fix, or stale: armed and waiting
+        const p = self.applied orelse return true;
+        return !(p.fix.x == w.x and p.fix.y == w.y and
+            p.center.x == cam.center.x and p.center.y == cam.center.y and
+            p.zoom == cam.zoom and p.rotation == cam.rotation and
+            p.vw == cam.vw and p.vh == cam.vh);
+    }
+
+    /// Put the fix back on the anchor. A null fix (none yet, or stale) leaves
+    /// the camera alone. True when the camera moved.
+    fn apply(self: *Follow, cam: *camera.Camera, fix: ?camera.Vec2) bool {
+        if (!self.pending(cam.*, fix)) return false;
+        const w = fix.?;
+        const a = anchor(cam.*);
+        cam.placeAt(w, a[0], a[1]);
+        self.applied = .{
+            .fix = w,
+            .center = cam.center,
+            .zoom = cam.zoom,
+            .rotation = cam.rotation,
+            .vw = cam.vw,
+            .vh = cam.vh,
+        };
+        return true;
+    }
+
+    /// A pan hands the chart back to the mariner: the pan happens and follow
+    /// goes off.
+    fn pan(self: *Follow, cam: *camera.Camera, dx: f32, dy: f32) void {
+        self.clear();
+        cam.panPx(dx, dy);
+    }
+
+    /// Where a zoom pivots: the anchor while following, whatever point the
+    /// caller passed, so own ship does not drift off it.
+    fn zoomFocus(self: Follow, cam: camera.Camera, x: f32, y: f32) [2]f32 {
+        return if (self.on) anchor(cam) else .{ x, y };
+    }
+
+    fn zoomAbout(self: Follow, cam: *camera.Camera, dz: f64, x: f32, y: f32) void {
+        const f = self.zoomFocus(cam.*, x, y);
+        cam.zoomAbout(dz, f[0], f[1]);
+    }
+
+    fn zoomToward(self: Follow, cam: *camera.Camera, dz: f64, x: f32, y: f32) void {
+        const f = self.zoomFocus(cam.*, x, y);
+        cam.zoomToward(dz, f[0], f[1]);
+    }
+};
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -251,6 +645,10 @@ pub const Lookout = struct {
     atlas_scale: f32 = 1.0,
     atlases_ready: bool = false, // see ensureAtlases: loaded at first use, not at open
     glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
+    /// The bold face's metrics, kept (pixels freed) so plugin canvas text can
+    /// lay out bold runs against the bold texture. The italic face stays
+    /// texture-only: the canvas API has no slant.
+    glyph_bold_atlas: ?atlas.GlyphAtlas = null,
     engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
     //                            it we overscale (build stays here, camera scales up)
     // Deepest zoom a build actually produced geometry for. A chart's declared
@@ -266,6 +664,28 @@ pub const Lookout = struct {
     /// mariner supplies, drawn beneath the vector chart. Its own cache, worker
     /// and memory ceiling — nothing here touches the scene (see raster.zig).
     raster: rasterlayer.Layer = undefined,
+
+    /// The wasm plugin layer, once something has asked for it (LOOKOUT_PLUGINS
+    /// at open, or lookout_plugins_load). Null costs nothing: no threads, no
+    /// stores, no runtime.
+    plugins: ?*PluginSystem = null,
+
+    /// The retained chart overlay: what plugins post and what the core draws
+    /// over the chart. The handle owns it, because the marks below go into it
+    /// and they exist with no plugin layer at all.
+    overlay: ov.Store = undefined,
+    /// The mariner's markers, read at open and written on every change.
+    markers: marks.Store = undefined,
+    /// The palette the marker geometry was posted for. The marks carry their
+    /// colour as RGBA rather than a plugin palette token, so a scheme change
+    /// has to re-post them; comparing here is what notices.
+    markers_scheme: ov.Scheme = .day,
+
+    /// Follow mode and course-up, off until a shell turns them on.
+    follow: Follow = .{},
+    /// Own ship between fixes, and where this frame draws it (lon, lat).
+    ship: ShipDisplay = .{},
+    ship_at: ?[2]f64 = null,
 
     /// Hide the chart WHERE A PICTURE COVERS IT, and keep it everywhere else.
     /// The underlay moves in front of the whole chart instead of only its area
@@ -338,6 +758,11 @@ pub const Lookout = struct {
             }),
             .cam = undefined,
             .raster = rasterlayer.Layer.init(alloc),
+            .overlay = ov.Store.init(alloc),
+            .markers = if (marks.defaultPathAlloc(alloc)) |p| blk: {
+                defer alloc.free(p);
+                break :blk marks.Store.open(alloc, p);
+            } else marks.Store.init(alloc),
         };
         if (dbg) {
             std.debug.print("  gpu.init (Metal device+shaders+pipelines) {d} ms\n", .{gpu.ticksMs() - t});
@@ -360,6 +785,11 @@ pub const Lookout = struct {
         // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
         // derives the live gates (cat_mask/sound_on/clear) from this before the
         // first render.
+        // The marks the mariner already had, on the chart before the first
+        // frame: they belong to the boat, not to the cell being opened. AFTER
+        // the mariner state above, because the marks are posted in the colours
+        // of the palette it names.
+        self.postMarkers();
         self.assets_root = atlasCacheDir(self.alloc);
         self.loadNodataColors();
         // NOT the atlases: they bake at the display density, and nothing has
@@ -479,11 +909,19 @@ pub const Lookout = struct {
 
     fn uploadGlyphFace(self: *Lookout, png_b: []const u8, json: []const u8, bold: bool) bool {
         var a = atlas.loadGlyph(self.alloc, png_b, json) catch return false;
-        defer a.deinit();
-        if (bold)
-            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch return false
-        else
+        if (bold) {
+            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch {
+                a.deinit();
+                return false;
+            };
+            // Keep the metrics for canvas text; the GPU has the pixels.
+            a.freePixels();
+            if (self.glyph_bold_atlas) |*old| old.deinit();
+            self.glyph_bold_atlas = a;
+        } else {
+            defer a.deinit();
             self.g.uploadGlyphAtlasItalic(a.rgba(), a.width, a.height) catch return false;
+        }
         return true;
     }
 
@@ -759,6 +1197,385 @@ pub const Lookout = struct {
             };
             self.pollCompose(self.compose_thread == null); // apply immediately if it ran sync
         }
+        // LOOKOUT_PLUGINS is the prototype's whole install story: point it at a
+        // directory of modules and they run. A shell that wants control calls
+        // lookout_plugins_load instead and leaves the variable unset.
+        if (plugins_on) {
+            if (std.c.getenv("LOOKOUT_PLUGINS")) |dir| {
+                const path = std.mem.span(dir);
+                self.loadPlugins(path) catch |e| {
+                    std.debug.print("plugins: LOOKOUT_PLUGINS={s} not loaded: {s}\n", .{ path, @errorName(e) });
+                };
+            }
+        }
+    }
+
+    // ---- plugins ------------------------------------------------------------
+
+    /// Load and start the wasm plugins in `dir` — every `<id>.manifest.json`
+    /// with an `<id>.wasm` beside it, which is what `zig build plugins`
+    /// installs. The plugin layer is created on the first call.
+    pub fn loadPlugins(self: *Lookout, dir: []const u8) !void {
+        if (plugins_on) {
+            const ps = self.plugins orelse blk: {
+                const created = try PluginSystem.create(self.alloc, &self.overlay);
+                self.plugins = created;
+                break :blk created;
+            };
+            try ps.host.loadDir(dir);
+            try ps.host.start();
+            self.markDirty();
+        } else return error.PluginsUnavailable;
+    }
+
+    /// The overlay store's view of a loaded glyph atlas: one metrics lookup,
+    /// no C types across the boundary.
+    fn overlayGlyphLookup(ctx: *const anyopaque, cp: u21) ?ov.Glyph {
+        const a: *const atlas.GlyphAtlas = @ptrCast(@alignCast(ctx));
+        const g = a.lookup(cp) orelse return null;
+        return .{
+            .u0 = g.u0,
+            .v0 = g.v0,
+            .u1 = g.u1,
+            .v1 = g.v1,
+            .off_x = g.off_x,
+            .off_y = g.off_y,
+            .w = g.w,
+            .h = g.h,
+            .advance = g.advance,
+        };
+    }
+
+    /// The overlay palette scheme that matches the chart's.
+    fn overlayScheme(self: *Lookout) ov.Scheme {
+        return switch (self.mariner.scheme) {
+            cc.TILE57_SCHEME_NIGHT => .night,
+            cc.TILE57_SCHEME_DUSK => .dusk,
+            else => .day,
+        };
+    }
+
+    /// Rebuild the chart overlay for this frame's zoom and scheme and hand it
+    /// to the GPU layer. Cheap when nothing changed: the store returns the same
+    /// generation and the backend skips the upload.
+    fn updateOverlay(self: *Lookout) void {
+        // Own ship's display position, the camera lock and the overlay all
+        // ride this tick: the stores are current here and the frame's MVP is
+        // built after it, so a move shows in this frame.
+        self.tickShip();
+        self.followTick();
+        // The marks carry RGBA, so a scheme change re-posts them. Comparing
+        // here rather than hooking every route into setMariner: there are
+        // several, and one that forgot would leave a day-bright magenta on a
+        // night chart.
+        if (self.markers_scheme != self.overlayScheme()) self.postMarkers();
+        // Hand the store whatever glyph faces are loaded, so canvas text lays
+        // out against the same atlases the labels draw with. Idempotent: only
+        // a change marks the store dirty.
+        self.overlay.setFonts(
+            if (self.glyph_atlas != null) .{ .ctx = @ptrCast(&self.glyph_atlas.?), .lookup = overlayGlyphLookup } else null,
+            if (self.glyph_bold_atlas != null) .{ .ctx = @ptrCast(&self.glyph_bold_atlas.?), .lookup = overlayGlyphLookup } else null,
+        );
+        // The view rotation goes in because a canvas may hold a readout level
+        // on screen; the store ignores it unless one does.
+        const frame = self.overlay.buildIfNeeded(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at) catch |e| {
+            std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
+            return;
+        };
+        // The overlay pass draws from the frame's OWN origin. Its vertices are
+        // relative to it, so the MVP and the antimeridian wrap must be too.
+        // The camera does not move between here and this frame's draw.
+        var u = self.uniforms();
+        u.mvp = self.cam.mvpOrigin(frame.origin);
+        u.wrap_x = @floatCast(self.cam.center.x - frame.origin.x);
+        self.g.setOverlay(frame, u) catch |e| {
+            std.debug.print("overlay upload failed: {s}\n", .{@errorName(e)});
+        };
+    }
+
+    /// True when something has posted geometry the current frame does not
+    /// show. The app renders ON DEMAND, so without this a symbol drawn while
+    /// the chart sat idle would not appear until the mariner touched the
+    /// screen. The same reason raster.wantsFrame exists.
+    fn overlayWantsFrame(self: *Lookout) bool {
+        if (self.markers_scheme != self.overlayScheme()) return true;
+        return self.overlay.needsRebuild(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at);
+    }
+
+    /// True once a plugin layer is up. A shell asks so it can keep polling
+    /// `needsRedraw` while it would otherwise sleep: plugin geometry arrives
+    /// with no gesture behind it, and a render-on-demand loop that only wakes
+    /// on input never shows it.
+    pub fn pluginsActive(self: *Lookout) bool {
+        if (!plugins_on) return false;
+        return self.plugins != null;
+    }
+
+    /// What the overlay symbol nearest `x_pt`,`y_pt` says about itself, or
+    /// null. Logical points, the same unit as every other pointer entry point.
+    /// Borrowed: valid until the next call.
+    pub fn overlayAt(self: *Lookout, x_pt: f32, y_pt: f32) ?[]const u8 {
+        return self.overlay.pickAt(self.cam, x_pt, y_pt, self.ship_at);
+    }
+
+    /// The overlay symbol nearest a logical point, with its id and the anchor
+    /// it draws at. A shell pins a bubble to the id and asks `overlayInfo` for
+    /// it every frame. Borrowed until the next overlay query.
+    pub fn overlayHit(self: *Lookout, x_pt: f32, y_pt: f32) ?ov.Store.Hit {
+        return self.overlay.hitAt(self.cam, x_pt, y_pt, self.ship_at);
+    }
+
+    /// What that object says now, or null once it is gone.
+    pub fn overlayInfo(self: *Lookout, id: []const u8) ?ov.Store.Hit {
+        return self.overlay.infoFor(id, self.ship_at);
+    }
+
+    /// Every loaded plugin with its settings schema and current values, as
+    /// JSON. This is what a shell renders a settings pane from. Borrowed until
+    /// the next call; null when no plugin layer is up.
+    pub fn pluginsJson(self: *Lookout) ?[]const u8 {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        ps.json.clearRetainingCapacity();
+        ps.host.registryJson(&ps.json) catch return null;
+        return ps.json.items;
+    }
+
+    /// One plugin's settings, as JSON. Borrowed until the next call.
+    pub fn pluginConfig(self: *Lookout, id: []const u8) ?[]const u8 {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        ps.json.clearRetainingCapacity();
+        ps.host.configJson(id, &ps.json) catch return null;
+        return ps.json.items;
+    }
+
+    /// Change one plugin's settings. Keys the schema does not declare are
+    /// ignored; the plugin hears the whole config at once and applies it.
+    pub fn setPluginConfig(self: *Lookout, id: []const u8, json: []const u8) !void {
+        if (!plugins_on) return error.PluginsUnavailable;
+        const ps = self.plugins orelse return error.PluginsUnavailable;
+        try ps.host.configSet(id, json);
+    }
+
+    /// Offer a file the mariner opened to the plugins. True when one claimed
+    /// the file type and now has read access to it.
+    ///
+    /// False means no plugin wants it, and the shell should do what it did
+    /// before there were plugins — which is also what a build with no plugin
+    /// layer answers, so a shell needs no second code path for one.
+    pub fn openFileForPlugins(self: *Lookout, path: []const u8) !bool {
+        if (!plugins_on) return false;
+        const ps = self.plugins orelse return false;
+        return ps.host.openFile(path);
+    }
+
+    // ---- markers ------------------------------------------------------------
+    //
+    // The core owns them so every shell shows the same marks and they survive
+    // a restart. They draw through the overlay store, as canvases: the store
+    // already carries geometry over the chart, keeps it across zoom and scheme
+    // changes, and holds a canvas level on the display when the mariner turns
+    // the chart. Nothing new reaches the GPU layer for this.
+    //
+    // The colour is S-52's mariner magenta, the colour reserved for the
+    // mariner's own additions and the one the pick mark already uses. Posted
+    // as RGBA rather than a palette token because the token list is the
+    // PLUGIN vocabulary; a core drawing has no business growing it.
+
+    /// The overlay source the marks are posted under. Namespaced like a plugin
+    /// id, in a namespace no plugin can claim.
+    const marker_source = "lookout.markers";
+
+    /// How near a logical point must be to a mark for `markerAt` to answer it.
+    /// The same reach the overlay gives a plugin symbol.
+    const marker_pick_radius_pt: f64 = 14.0;
+
+    /// Mariner magenta per palette. Day is the pick mark's own #DB198C; night
+    /// is held dim, like every other night colour, so a mark does not undo a
+    /// night-adapted eye.
+    fn markerRgba(scheme: ov.Scheme) [4]f64 {
+        return switch (scheme) {
+            .day => .{ 0.858, 0.098, 0.549, 1.0 },
+            .dusk => .{ 0.910, 0.435, 0.706, 1.0 },
+            .night => .{ 0.557, 0.102, 0.314, 1.0 },
+        };
+    }
+
+    /// Re-post every mark as an overlay canvas. Called on any change and on a
+    /// scheme change; a handful of objects, so the whole set goes at once
+    /// rather than tracking deltas.
+    fn postMarkers(self: *Lookout) void {
+        const scheme = self.overlayScheme();
+        self.markers_scheme = scheme;
+        self.overlay.removeSource(marker_source);
+        const list = self.markers.items();
+        if (list.len == 0) return;
+
+        const c = markerRgba(scheme);
+        var json = std.ArrayList(u8).empty;
+        defer json.deinit(self.alloc);
+        markerBatch(self.alloc, &json, list, c) catch |e| {
+            std.debug.print("markers: batch not built: {s}\n", .{@errorName(e)});
+            return;
+        };
+        self.overlay.applyBatch(marker_source, json.items) catch |e| {
+            std.debug.print("markers: batch refused: {s}\n", .{@errorName(e)});
+        };
+    }
+
+    /// Drop a marker at a geographic point and name it at once. Returns its
+    /// id, or 0 when nothing could be stored.
+    pub fn markerAdd(self: *Lookout, lon: f64, lat: f64) u64 {
+        const now: i64 = if (plugins_on) phost.broker.wallMs() else std.time.milliTimestamp();
+        const id = self.markers.add(lon, lat, now);
+        if (id != 0) self.postMarkers();
+        return id;
+    }
+
+    /// Rename one marker. An empty name keeps the old one.
+    pub fn markerRename(self: *Lookout, id: u64, name: []const u8) bool {
+        if (!self.markers.rename(id, name)) return false;
+        self.postMarkers();
+        return true;
+    }
+
+    pub fn markerRemove(self: *Lookout, id: u64) bool {
+        if (!self.markers.remove(id)) return false;
+        self.postMarkers();
+        return true;
+    }
+
+    pub fn markerCount(self: *const Lookout) usize {
+        return self.markers.items().len;
+    }
+
+    pub fn markerAtIndex(self: *const Lookout, i: usize) ?*const marks.Marker {
+        const list = self.markers.items();
+        if (i >= list.len) return null;
+        return &list[i];
+    }
+
+    pub fn markerById(self: *const Lookout, id: u64) ?*const marks.Marker {
+        return self.markers.find(id);
+    }
+
+    /// The marker nearest a LOGICAL point, or null when none is within reach.
+    /// Projected with the renderer's own camera, so rotation and the
+    /// antimeridian hold. The nearest wins, and a tie keeps the older mark.
+    pub fn markerAt(self: *Lookout, x_pt: f32, y_pt: f32) ?*const marks.Marker {
+        var best: ?*const marks.Marker = null;
+        var best_d2: f64 = marker_pick_radius_pt * marker_pick_radius_pt;
+        for (self.markers.items()) |*m| {
+            const s = self.cam.worldToScreen(camera.lonLatToWorld(m.lon, m.lat));
+            const dx = s.x - @as(f64, x_pt);
+            const dy = s.y - @as(f64, y_pt);
+            const d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best = m;
+            }
+        }
+        return best;
+    }
+
+    // ---- own ship's position ------------------------------------------------
+
+    /// What the position readout may say. A stale fix is never presented as a
+    /// live one, which is why `lost` exists: "the fix dropped" and "you never
+    /// set one up" are different problems and want different answers from the
+    /// mariner.
+    pub const FixState = enum(c_int) { none = 0, lost = 1, live = 2 };
+
+    /// Own ship's REPORTED position, and how much to believe it. `out` is
+    /// written only for `live`.
+    ///
+    /// The reported fix, not the display position: the display position is
+    /// carried forward along COG between fixes so the boat symbol moves
+    /// smoothly, and a dead-reckoned number must never be shown as a reading.
+    /// The vessel store's own staleness is what decides; nothing here keeps a
+    /// second clock.
+    pub fn ownShip(self: *Lookout, out: *[2]f64) FixState {
+        if (!plugins_on) return .none;
+        const ps = self.plugins orelse return .none;
+        const r = ps.vessels.readElected("navigation.position", phost.broker.wallMs()) orelse return .none;
+        if (r.stale or r.value != .position) return .lost;
+        out.* = .{ r.value.position.lon, r.value.position.lat };
+        return .live;
+    }
+
+    // ---- follow mode --------------------------------------------------------
+
+    /// Read the vessel store and recompute own ship's display position. Called
+    /// on the frame tick and by the queries a shell polls, so an answer between
+    /// frames is still current.
+    fn tickShip(self: *Lookout) void {
+        if (plugins_on) {
+            const ps = self.plugins orelse return;
+            const now = phost.broker.wallMs();
+            self.ship.observe(PluginSystem.readShip(&ps.vessels, now));
+            self.ship_at = self.ship.at(now);
+        }
+    }
+
+    /// The display position as a world point, for the camera.
+    fn shipWorld(self: *Lookout) ?camera.Vec2 {
+        const p = self.ship_at orelse return null;
+        return camera.lonLatToWorld(p[0], p[1]);
+    }
+
+    /// Turn follow mode on or off. Turning it on moves the chart at once when
+    /// a fresh fix exists; with none, follow waits armed and the camera holds.
+    pub fn setFollow(self: *Lookout, on: bool) void {
+        if (!on) return self.follow.clear();
+        self.follow.on = true;
+        self.follow.applied = null;
+        self.tickShip();
+        self.followTick();
+    }
+
+    /// Turn course-up on or off. On, the chart turns so own ship's heading
+    /// points up the screen and keeps turning with it.
+    pub fn setCourseUp(self: *Lookout, on: bool) void {
+        self.follow.course_up = on;
+        if (on) {
+            self.tickShip();
+            self.followTick();
+        }
+    }
+
+    /// What the shell's lock control shows: off, following a fresh fix, or on
+    /// and waiting for one.
+    pub fn followState(self: *Lookout) FollowState {
+        if (!self.follow.on) return .off;
+        self.tickShip();
+        return if (self.ship_at != null) .following else .waiting;
+    }
+
+    /// The same three states for the course-up control.
+    pub fn courseUpState(self: *Lookout) FollowState {
+        if (!self.follow.course_up) return .off;
+        self.tickShip();
+        return if (self.ship.upDeg() != null) .following else .waiting;
+    }
+
+    /// Hold own ship on the anchor and, with course-up on, the chart on its
+    /// heading. The display position moves every frame, so this runs every
+    /// frame; when nothing moved it costs one comparison.
+    fn followTick(self: *Lookout) void {
+        var moved = self.follow.rotate(&self.cam, self.ship.upDeg());
+        if (self.follow.apply(&self.cam, self.shipWorld())) moved = true;
+        if (moved) self.markDirty();
+    }
+
+    /// True when the camera has a move to make from the boat rather than from
+    /// a gesture: a display position that has walked on, or a new heading
+    /// under course-up.
+    fn followWantsFrame(self: *Lookout) bool {
+        if (!self.follow.on and !self.follow.course_up) return false;
+        self.tickShip();
+        if (self.follow.rotatePending(self.cam, self.ship.upDeg())) return true;
+        return self.follow.pending(self.cam, self.shipWorld());
     }
 
     fn composeWorker(self: *Lookout) void {
@@ -862,12 +1679,25 @@ pub const Lookout = struct {
     }
 
     pub fn close(self: *Lookout) void {
+        // FIRST: the plugin threads draw into the overlay store and read the
+        // GPU layer's frame through it, so they have to be stopped before
+        // anything below them is torn down.
+        if (plugins_on) {
+            if (self.plugins) |ps| {
+                ps.destroy();
+                self.plugins = null;
+            }
+        }
+        // Now that nothing else can post into them.
+        self.overlay.deinit();
+        self.markers.deinit();
         self.pollCompose(true); // finish any in-flight partition build first
         self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
         // Before g.deinit(): the layer hands its textures back to the GPU.
         self.raster.deinit(&self.g);
         if (self.sprite_atlas) |*sa| sa.deinit();
         if (self.glyph_atlas) |*ga| ga.deinit();
+        if (self.glyph_bold_atlas) |*gb| gb.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
         self.g.deinit();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
@@ -1017,12 +1847,14 @@ pub const Lookout = struct {
     }
 
     // ---- interaction --------------------------------------------------------
+    // Pan and zoom go through the follow controller: a pan turns follow off, a
+    // zoom keeps it on and pivots on own ship.
     pub fn panPixels(self: *Lookout, dx: f32, dy: f32) void {
-        self.cam.panPx(dx, dy);
+        self.follow.pan(&self.cam, dx, dy);
         self.markDirty();
     }
     pub fn zoomAt(self: *Lookout, dzoom: f64, x_px: f32, y_px: f32) void {
-        self.cam.zoomAbout(dzoom, x_px, y_px);
+        self.follow.zoomAbout(&self.cam, dzoom, x_px, y_px);
         self.markDirty();
     }
     pub fn screenToGeo(self: *Lookout, x_px: f32, y_px: f32) View {
@@ -1036,11 +1868,11 @@ pub const Lookout = struct {
     // Mouse coords from a HiDPI window arrive in logical points — which is the
     // camera's own unit now, so they pass straight through.
     pub fn panLogical(self: *Lookout, dx_pt: f32, dy_pt: f32) void {
-        self.cam.panPx(dx_pt, dy_pt);
+        self.follow.pan(&self.cam, dx_pt, dy_pt);
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        self.cam.zoomToward(dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
+        self.follow.zoomToward(&self.cam, dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
         self.markDirty();
     }
 
@@ -1048,18 +1880,22 @@ pub const Lookout = struct {
     /// (prev) to (cur), both logical points — a grab-and-spin (course-up)
     /// gesture. Rotation is a shader uniform, so this only redraws: markDirty
     /// sets view_dirty, and needsRebuild ignores rotation, so no scene rebuild.
+    /// The plugin overlay is the one exception, and only when a canvas holds
+    /// content level on screen: that geometry is turned back at build time.
     pub fn rotateDragLogical(self: *Lookout, prev_x: f32, prev_y: f32, cur_x: f32, cur_y: f32) void {
         const sz = self.logicalSize();
         const cx = sz[0] * 0.5;
         const cy = sz[1] * 0.5;
         const a0 = std.math.atan2(@as(f64, prev_y - cy), @as(f64, prev_x - cx));
         const a1 = std.math.atan2(@as(f64, cur_y - cy), @as(f64, cur_x - cx));
+        self.follow.course_up = false; // the mariner turned the chart by hand
         self.cam.rotation += a1 - a0;
         self.markDirty();
     }
 
     /// Snap the view back to north-up.
     pub fn resetRotation(self: *Lookout) void {
+        self.follow.course_up = false; // north-up is the opposite of course-up
         if (self.cam.rotation == 0) return;
         self.cam.rotation = 0;
         self.markDirty();
@@ -1577,6 +2413,7 @@ pub const Lookout = struct {
         self.syncRasterMode(); // before prepareFrame: it decides what gets built
         self.prepareFrame();
         self.raster.prepare(&self.g, self.cam);
+        self.updateOverlay();
         const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
         // A SKIPPED frame (swapchain saturated) must not clear the flag: the
         // pending content still needs a successful present.
@@ -1602,6 +2439,13 @@ pub const Lookout = struct {
         // frame that asked for them. Without this the mariner keeps whatever
         // strip of imagery had loaded when they stopped panning.
         if (self.raster.wantsFrame()) return true;
+        // A plugin can post geometry at any moment, from its own thread, with
+        // no gesture behind it.
+        // Own ship's display position walks between fixes: the symbol moves,
+        // and while following the chart slides under it. No gesture behind it.
+        self.tickShip();
+        if (self.overlayWantsFrame()) return true;
+        if (self.followWantsFrame()) return true;
         return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {
@@ -1616,6 +2460,7 @@ pub const Lookout = struct {
         // A snapshot cannot show a tile that lands next frame, so wait for the
         // underlay's worker rather than writing a half-filled picture.
         self.raster.prepareBlocking(&self.g, self.cam, 5000);
+        self.updateOverlay();
         const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.g.width, self.g.height);
@@ -1626,6 +2471,7 @@ pub const Lookout = struct {
         self.syncRasterMode();
         self.buildGpuScene();
         self.raster.prepareBlocking(&self.g, self.cam, 5000);
+        self.updateOverlay();
         const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;
@@ -1841,6 +2687,19 @@ pub const Lookout = struct {
         self.rasterChanged();
     }
 
+    /// Read and write one set's drawn state by index, with no camera in it. A
+    /// host that saves the mariner's selection needs both: `rasterActiveIndex`
+    /// only describes the view on screen, and `rasterSelect` can only turn off
+    /// what is drawn over it.
+    pub fn rasterShown(self: *Lookout, i: usize) bool {
+        return self.raster.isShown(i);
+    }
+
+    pub fn rasterSetShown(self: *Lookout, i: usize, on: bool) void {
+        self.raster.setShown(i, on);
+        self.rasterChanged();
+    }
+
     pub fn rasterSetCount(self: *Lookout) usize {
         return self.raster.setCount();
     }
@@ -1927,6 +2786,12 @@ test {
     // Collect the pick rules' own tests. Only pickRanked reaches pick.zig, and a
     // test build never analyzes it, so without this the file's tests never run.
     _ = pick_rules;
+    // Same for the raster underlay: a test build reaches the Layer type but not
+    // its body, so the set-name and election tests were never running.
+    _ = rasterlayer;
+    // The camera's own round trips. root.zig calls two of its functions, which
+    // is not enough to collect the file's tests.
+    _ = camera;
 }
 
 test "camera roundtrip" {
@@ -1934,4 +2799,241 @@ test "camera roundtrip" {
     const ll = camera.worldToLonLat(w);
     try std.testing.expectApproxEqAbs(@as(f64, -76.48), ll.x, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 38.98), ll.y, 1e-9);
+}
+
+// ---- follow mode ------------------------------------------------------------
+// The camera a follow test starts from: an Annapolis view the size of the Mac
+// window the mode was measured in.
+fn followTestCamera() camera.Camera {
+    const origin = camera.lonLatToWorld(-76.4767, 38.9763);
+    return .{
+        .origin = origin,
+        .center = origin,
+        .zoom = 15,
+        .target_zoom = 15,
+        .vw = 1264,
+        .vh = 730,
+        .min_zoom = 4,
+        .max_zoom = 22,
+    };
+}
+
+test "follow puts the fix at the centre, three quarters down" {
+    const t = std.testing;
+    var cam = followTestCamera();
+    var f = Follow{ .on = true };
+    const fix = camera.lonLatToWorld(-76.4720, 38.9800); // north-east of the centre
+    try t.expect(f.apply(&cam, fix));
+    const s = cam.worldToScreen(fix);
+    try t.expectApproxEqAbs(@as(f64, 1264.0 * 0.5), s.x, 1e-6);
+    try t.expectApproxEqAbs(@as(f64, 730.0 * 0.75), s.y, 1e-6);
+    // The same fix on the same pose is already anchored: no move, no frame.
+    try t.expect(!f.pending(cam, fix));
+    try t.expect(!f.apply(&cam, fix));
+}
+
+test "a pan turns follow off and still pans" {
+    const t = std.testing;
+    var cam = followTestCamera();
+    var f = Follow{ .on = true };
+    _ = f.apply(&cam, camera.lonLatToWorld(-76.4720, 38.9800));
+    const before = cam.center;
+    f.pan(&cam, 120, -40);
+    try t.expect(!f.on);
+    try t.expect(f.applied == null);
+    try t.expect(cam.center.x != before.x and cam.center.y != before.y);
+    // Own ship walks across the screen from here: a new fix moves nothing.
+    const held = cam.center;
+    try t.expect(!f.apply(&cam, camera.lonLatToWorld(-76.4700, 38.9820)));
+    try t.expectEqual(held.x, cam.center.x);
+    try t.expectEqual(held.y, cam.center.y);
+}
+
+test "a zoom while following pivots on the anchor" {
+    const t = std.testing;
+    const ax: f32 = 1264.0 * 0.5;
+    const ay: f32 = 730.0 * 0.75;
+    var cam = followTestCamera();
+    var f = Follow{ .on = true };
+    const fix = camera.lonLatToWorld(-76.4720, 38.9800);
+    _ = f.apply(&cam, fix);
+    // The caller passes a corner; own ship must stay where it is anyway.
+    f.zoomAbout(&cam, 2.0, 30, 30);
+    try t.expectApproxEqAbs(@as(f64, 17), cam.zoom, 1e-12);
+    const s = cam.worldToScreen(fix);
+    try t.expectApproxEqAbs(@as(f64, ax), s.x, 1e-6);
+    try t.expectApproxEqAbs(@as(f64, ay), s.y, 1e-6);
+    // With follow off the same call honours the point it was given.
+    var cam2 = followTestCamera();
+    const off = Follow{};
+    const under = cam2.screenToWorld(30, 30);
+    off.zoomAbout(&cam2, 2.0, 30, 30);
+    const after = cam2.screenToWorld(30, 30);
+    try t.expectApproxEqAbs(under.x, after.x, 1e-9);
+    try t.expectApproxEqAbs(under.y, after.y, 1e-9);
+}
+
+test "a fix older than the staleness window leaves the camera alone" {
+    if (plugins_on) {
+        const t = std.testing;
+        var vessels = try phost.store.Store.init(t.allocator);
+        defer vessels.deinit();
+        try vessels.set("navigation.position", "{\"lat\":38.98,\"lon\":-76.472}", 1_000, 1);
+
+        // 4 s after the fix: inside the 5 s window, so follow moves the chart.
+        var ship = ShipDisplay{};
+        ship.observe(PluginSystem.readShip(&vessels, 5_000));
+        const fresh = ship.at(5_000);
+        try t.expect(fresh != null);
+        var cam = followTestCamera();
+        var f = Follow{ .on = true };
+        try t.expect(f.apply(&cam, camera.lonLatToWorld(fresh.?[0], fresh.?[1])));
+
+        // 9 s after it: past the window. Follow stays on, armed and waiting.
+        var stale_cam = followTestCamera();
+        var g = Follow{ .on = true };
+        ship.observe(PluginSystem.readShip(&vessels, 10_000));
+        const stale = ship.at(10_000);
+        try t.expect(stale == null);
+        try t.expect(!g.pending(stale_cam, null));
+        try t.expect(!g.apply(&stale_cam, null));
+        try t.expect(g.on);
+        try t.expectEqual(followTestCamera().center.x, stale_cam.center.x);
+        try t.expectEqual(followTestCamera().center.y, stale_cam.center.y);
+    }
+}
+
+// Rule 8: the ship must not step once a second. The display position carries
+// the newest fix forward along COG at SOG, and stops at the window.
+test "the display position carries own ship between fixes" {
+    const t = std.testing;
+    var ship = ShipDisplay{};
+    ship.observe(.{
+        .fix = .{ .lon = -76.4767, .lat = 38.9763, .ts_ms = 1_000 },
+        .cog_deg = 90.0, // due east
+        .sog_ms = 10.0,
+        .heading_deg = 95.0,
+    });
+    const at0 = ship.at(1_000).?;
+    try t.expectApproxEqAbs(@as(f64, -76.4767), at0[0], 1e-12);
+    // Half a second east at 10 m/s is 5 m of longitude and no latitude.
+    const at1 = ship.at(1_500).?;
+    const east_m = (at1[0] - at0[0]) * M_PER_DEG * @cos(38.9763 * std.math.pi / 180.0);
+    try t.expectApproxEqAbs(@as(f64, 5.0), east_m, 0.01);
+    try t.expectApproxEqAbs(at0[1], at1[1], 1e-12);
+    // The carry is monotonic up to the window and gone after it.
+    try t.expect(ship.at(5_900) != null);
+    try t.expect(ship.at(6_100) == null);
+}
+
+// A fix with no instruments behind it still carries, on the run between the
+// last two fixes.
+test "the display position falls back to the run between fixes" {
+    const t = std.testing;
+    var ship = ShipDisplay{};
+    ship.observe(.{ .fix = .{ .lon = -76.5000, .lat = 38.9763, .ts_ms = 1_000 } });
+    ship.observe(.{ .fix = .{ .lon = -76.4990, .lat = 38.9763, .ts_ms = 2_000 } });
+    const at = ship.at(2_500).?;
+    // Half the last second's run again: 0.0005 degrees of longitude.
+    try t.expectApproxEqAbs(@as(f64, -76.4985), at[0], 1e-6);
+}
+
+// Rule 5: course up turns to the SMOOTHED display course, and a boat that is
+// stopped keeps the course it had rather than spinning the chart on GPS noise.
+test "the display course is smoothed and freezes when the boat stops" {
+    const t = std.testing;
+    var ship = ShipDisplay{};
+    var ts: i64 = 1_000;
+    while (ts <= 5_000) : (ts += 1_000) {
+        ship.observe(.{ .fix = .{ .lon = -76.5, .lat = 38.9, .ts_ms = ts }, .cog_deg = 90, .sog_ms = 5 });
+    }
+    try t.expectApproxEqAbs(@as(f64, 90.0), ship.upDeg().?, 1e-9);
+
+    // A turn to 120 moves the chart part of the way, not all at once.
+    ship.observe(.{ .fix = .{ .lon = -76.5, .lat = 38.9, .ts_ms = 6_000 }, .cog_deg = 120, .sog_ms = 5 });
+    const turning = ship.upDeg().?;
+    try t.expect(turning > 90.0 and turning < 120.0);
+
+    // Under the speed floor the course holds, whatever the GPS says.
+    ship.observe(.{ .fix = .{ .lon = -76.5, .lat = 38.9, .ts_ms = 7_000 }, .cog_deg = 300, .sog_ms = 0.1 });
+    try t.expectEqual(turning, ship.upDeg().?);
+
+    // A lost fix leaves nothing to turn to.
+    ship.observe(.{});
+    try t.expect(ship.upDeg() == null);
+}
+
+// Course-up turns the chart so the heading points up the screen, and holds
+// still inside the deadband.
+test "course up turns the chart to own ship's heading" {
+    const t = std.testing;
+    var cam = followTestCamera();
+    var f = Follow{ .course_up = true };
+    try t.expect(f.rotate(&cam, 75.0));
+    try t.expectApproxEqAbs(-75.0 * std.math.pi / 180.0, cam.rotation, 1e-12);
+    // A world bearing of 75 degrees now draws straight up the screen.
+    const c = camera.worldToLonLat(cam.center);
+    const north = camera.lonLatToWorld(c.x, c.y + 0.01);
+    const p0 = cam.worldToScreen(cam.center);
+    const pn = cam.worldToScreen(north);
+    const screen_bearing = std.math.atan2(pn.x - p0.x, p0.y - pn.y) * 180.0 / std.math.pi;
+    try t.expectApproxEqAbs(@as(f64, -75.0), screen_bearing, 0.05); // north is 75 to the left
+    // Inside the deadband nothing turns; outside it does.
+    try t.expect(!f.rotate(&cam, 75.1));
+    try t.expect(f.rotate(&cam, 78.0));
+    // No heading: the chart stays where it is.
+    try t.expect(!f.rotate(&cam, null));
+    // Off: nothing turns at all.
+    const off = Follow{};
+    try t.expect(!off.rotate(&cam, 10.0));
+}
+
+// Rule: a marker draws itself. The batch the core posts is the only thing
+// between a dropped mark and pixels, and a canvas the store refuses draws
+// nothing while saying so only in a log line, so assert the store takes it.
+test "a marker posts a canvas the overlay store draws" {
+    const t = std.testing;
+    const a = t.allocator;
+    var one = "Mark 1".*;
+    var two = "the \"rock\"".*;
+    const list = [_]marks.Marker{
+        .{ .id = 1, .lon = -76.4767, .lat = 38.9763, .name = &one, .dropped_ms = 1 },
+        .{ .id = 2, .lon = -76.4700, .lat = 38.9800, .name = &two, .dropped_ms = 2 },
+    };
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try markerBatch(a, &json, &list, Lookout.markerRgba(.day));
+
+    var store = ov.Store.init(a);
+    defer store.deinit();
+    try store.applyBatch("lookout.markers", json.items);
+    try t.expectEqual(@as(usize, 2), store.count());
+
+    // Geometry, in the magenta asked for, near where the mark was dropped.
+    const fr = try store.buildIfNeeded(15.0, 0, .day, null);
+    try t.expect(fr.verts.len > 0);
+    const c = Lookout.markerRgba(.day);
+    var magenta = false;
+    for (fr.verts) |v| {
+        if (@abs(v.r - @as(f32, @floatCast(c[0]))) < 1e-6 and
+            @abs(v.b - @as(f32, @floatCast(c[2]))) < 1e-6) magenta = true;
+    }
+    try t.expect(magenta);
+
+    // A name with a quote in it is escaped, not a broken batch.
+    try t.expect(std.mem.indexOf(u8, json.items, "\\\"rock\\\"") != null);
+}
+
+// The night palette rule the overlay's own tokens keep: a mark must not undo a
+// night-adapted eye.
+test "the marker magenta is dim at night and differs by scheme" {
+    const t = std.testing;
+    const day = Lookout.markerRgba(.day);
+    const night = Lookout.markerRgba(.night);
+    try t.expect(!std.mem.eql(u8, std.mem.asBytes(&day), std.mem.asBytes(&night)));
+    const lum = 0.2126 * night[0] + 0.7152 * night[1] + 0.0722 * night[2];
+    try t.expect(lum < 0.35);
+    for (day) |ch| try t.expect(ch >= 0 and ch <= 1);
+    for (night) |ch| try t.expect(ch >= 0 and ch <= 1);
 }

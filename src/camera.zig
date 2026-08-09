@@ -148,6 +148,16 @@ pub const Camera = struct {
         self.clampY();
     }
 
+    /// Move the centre so world point `w` sits at screen (px,py). Rotation-aware;
+    /// x takes the short way around the antimeridian. clampY still applies, so a
+    /// point cannot be placed past the mercator top or bottom.
+    pub fn placeAt(self: *Camera, w: Vec2, px: f32, py: f32) void {
+        const at = self.screenToWorld(px, py);
+        self.center.x = wrapX(self.center.x + wrapDx(w.x, at.x));
+        self.center.y += w.y - at.y;
+        self.clampY();
+    }
+
     // Animation time constants (seconds).
     const ZOOM_TAU = 0.085; // zoom ease — small enough to feel immediate, smooth
     const FLING_TAU = 0.32; // fling decay
@@ -267,6 +277,36 @@ test "zoomAbout keeps the point under the cursor fixed" {
         // Same world point under the same screen point, to sub-pixel world units.
         try std_testing.expectApproxEqAbs(w_before.x, w_after.x, 1e-9);
         try std_testing.expectApproxEqAbs(w_before.y, w_after.y, 1e-9);
+    }
+}
+
+// Follow mode's anchor math: the fix must land on the horizontal centre, three
+// quarters down the view, at any zoom and any view rotation.
+test "placeAt puts a fix on the follow anchor" {
+    const std_testing = std.testing;
+    const origin = lonLatToWorld(-76.4767, 38.9763);
+    const vw: f32 = 1264;
+    const vh: f32 = 730;
+    const ax = vw * 0.5;
+    const ay = vh * 0.75;
+    inline for (.{ .{ 15.0, 0.0 }, .{ 12.3, 37.0 }, .{ 18.0, 215.0 }, .{ 9.0, 90.0 } }) |cfg| {
+        var cam = Camera{
+            .origin = origin,
+            .center = origin,
+            .zoom = cfg[0],
+            .target_zoom = cfg[0],
+            .rotation = cfg[1] * std.math.pi / 180.0,
+            .vw = vw,
+            .vh = vh,
+            .min_zoom = 2,
+            .max_zoom = 22,
+        };
+        // A fix a little north-east of the opening centre.
+        const fix = lonLatToWorld(-76.4700, 38.9800);
+        cam.placeAt(fix, ax, ay);
+        const s = cam.worldToScreen(fix);
+        try std_testing.expectApproxEqAbs(@as(f64, ax), s.x, 1e-6);
+        try std_testing.expectApproxEqAbs(@as(f64, ay), s.y, 1e-6);
     }
 }
 

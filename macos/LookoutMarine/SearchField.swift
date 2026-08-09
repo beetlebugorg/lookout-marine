@@ -79,7 +79,7 @@ struct SearchField: View {
                     Text("Feature & place search")
                         .font(.system(size: 13))
                         .foregroundStyle(Chrome.ink)
-                    Text("Coming soon — needs a chart name index")
+                    Text("Coming soon. Needs a chart name index.")
                         .font(.system(size: 11))
                         .foregroundStyle(Chrome.muted)
                 }

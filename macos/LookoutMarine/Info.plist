@@ -16,6 +16,17 @@
     <string>Lookout Marine</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- The app icon, from Assets.xcassets/AppIcon.appiconset.
+         CFBundleIconName is the real one: it names the catalog entry, and
+         Assets.car carries all ten renditions 16 through 512@2x.
+         CFBundleIconFile names the AppIcon.icns actool also emits into
+         Resources. That icns is a reduced legacy fallback — actool thins it to
+         the 16 and 128 slots — so it is not the icon anything modern reads,
+         only what a caller that predates asset catalogs would find. -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
@@ -24,5 +35,45 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- The plugin package. Owning the type is what makes a double-clicked
+         .lkplug open here and land on the consent sheet; the exported UTI is
+         what lets the install picker filter to it. A .lkplug is a zip holding
+         exactly manifest.json and the plugin's wasm (specs/plugins/install.md). -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Lookout Marine Plugin</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.beetlebug.lookout-marine.lkplug</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.beetlebug.lookout-marine.lkplug</string>
+            <key>UTTypeDescription</key>
+            <string>Lookout Marine Plugin</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.pkware.zip-archive</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>lkplug</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>

@@ -412,3 +412,47 @@ lk_store_apply_saved_mariner(tile57_mariner *m)
 #undef APPLY_BOOL
 #undef APPLY_DBL
 #undef APPLY_SCALE
+
+/* ---- plugin settings ----------------------------------------------------- */
+
+#define LK_GROUP_PLUGINS "plugins.v1"
+
+void
+lk_store_save_plugin_config(const char *plugin_id, const char *json)
+{
+    if (plugin_id == NULL)
+        return;
+    set_str(LK_GROUP_PLUGINS, plugin_id, json);
+}
+
+void
+lk_store_apply_saved_plugins(lookout *h)
+{
+    if (h == NULL)
+        return;
+
+    /* A NULL key name asks the profile API for the section's key names, packed
+     * as a run of NUL-terminated strings ended by an empty one. */
+    char names[8192];
+    DWORD n = GetPrivateProfileStringA(LK_GROUP_PLUGINS, NULL, "", names,
+                                       (DWORD)sizeof names, store_path());
+    if (n == 0)
+        return;
+
+    /* One plugin's object. Long enough for a full list of connections; a value
+     * past this is truncated by the profile API and would not parse, so it is
+     * skipped rather than pushed as half an object. */
+    static const size_t VALUE_MAX = 8192;
+    char *value = (char *)malloc(VALUE_MAX);
+    if (value == NULL)
+        return;
+
+    for (const char *id = names; *id != '\0'; id += strlen(id) + 1) {
+        DWORD len = GetPrivateProfileStringA(LK_GROUP_PLUGINS, id, "", value,
+                                             (DWORD)VALUE_MAX, store_path());
+        if (len == 0 || len >= VALUE_MAX - 1)
+            continue;
+        lookout_plugin_config_set(h, id, value);
+    }
+    free(value);
+}

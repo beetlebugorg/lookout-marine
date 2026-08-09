@@ -1,0 +1,46 @@
+{
+  "id": "org.beetlebug.ais",
+  "name": "AIS targets",
+  "api": 1,
+  "capabilities": ["ais.read", "vessel.read", "overlay.draw", "alerts.raise"],
+  "tables": [
+    {
+      "key": "targets",
+      "title": "AIS Targets",
+      "menu": "Vessels",
+      "columns": [
+        {"key": "name", "label": "Vessel", "type": "text"},
+        {"key": "mmsi", "label": "MMSI", "type": "text"},
+        {"key": "range", "label": "Range", "type": "distance"},
+        {"key": "brg", "label": "Bearing", "type": "bearing"},
+        {"key": "sog", "label": "SOG", "type": "speed"},
+        {"key": "cpa", "label": "CPA", "type": "distance"},
+        {"key": "tcpa", "label": "TCPA", "type": "duration"},
+        {"key": "state", "label": "", "type": "flag"}
+      ],
+      "sort": {"key": "cpa", "ascending": true},
+      "at": {"lat": "lat", "lon": "lon"}
+    }
+  ],
+  "settings": {
+    "groups": [
+      {
+        "label": "Collision alarm",
+        "tab": "alarms",
+        "fields": [
+          {"key": "cpa_limit", "label": "Closest approach (CPA)", "desc": "Alarm when a vessel will pass closer than this.", "kind": "number", "unit": "m", "min": 93, "max": 9260, "default": 926},
+          {"key": "tcpa_limit", "label": "Time to closest approach (TCPA)", "desc": "Alarm only when that pass is this soon or sooner.", "kind": "number", "unit": "min", "min": 1, "max": 60, "default": 10},
+          {"key": "cpa_alarm", "label": "Collision alarm", "desc": "Sound the alarm and colour the vessel red. Off silences both.", "kind": "toggle", "default": true}
+        ]
+      },
+      {
+        "label": "AIS targets",
+        "tab": "vessels",
+        "fields": [
+          {"key": "vector_min", "label": "Course vectors", "desc": "How far ahead of each vessel its course line is drawn.", "kind": "number", "unit": "min", "min": 1, "max": 24, "default": 6},
+          {"key": "min_sog", "label": "Hide targets under", "desc": "Leave out vessels slower than this. Zero shows every one, moored ships included.", "kind": "number", "unit": "kn", "min": 0, "max": 5, "default": 0}
+        ]
+      }
+    ]
+  }
+}

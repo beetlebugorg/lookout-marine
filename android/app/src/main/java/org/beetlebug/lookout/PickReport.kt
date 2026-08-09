@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -445,6 +446,80 @@ fun calloutPlacement(
         CalloutPlace(x, pointY + clear, CalloutEdge.BELOW, maxOf(0.dp, under))
     }
 }
+
+/**
+ * The bubble pinned to a tapped overlay object — an AIS target's name, MMSI,
+ * speed and closest approach.
+ *
+ * It is deliberately not the pick report: a plugin's payload is a title and a
+ * list of key/value rows it chose itself, with no S-57 object behind it to
+ * decode, no source cell to name and nothing to copy as attributes. So this is
+ * the small end of the same callout family — the placement helper, the corner
+ * radius and the surface are shared, the content is not.
+ *
+ * The caller positions it against the target and re-positions it every frame;
+ * see ChartController.followPin.
+ */
+@Composable
+fun OverlayBubble(
+    info: OverlayInfo,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        // The bubble keeps its taps. Without this a tap on it reaches the chart
+        // underneath, which would treat it as a tap on open water and close the
+        // very bubble being read.
+        modifier = modifier
+            .widthIn(min = 150.dp, max = OVERLAY_BUBBLE_MAX_WIDTH)
+            .pointerInput(Unit) { detectTapGestures { } },
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp,
+    ) {
+        Column(Modifier.padding(start = 12.dp, top = 8.dp, end = 4.dp, bottom = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    info.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                // A tap elsewhere on the chart closes the bubble and so does a
+                // second tap on the target, but neither is discoverable and the
+                // target may be under the finger with no clear water beside it.
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Close",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            for ((k, v) in info.rows) {
+                Row(Modifier.padding(top = 3.dp, end = 8.dp)) {
+                    Text(
+                        k,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(OVERLAY_KEY_WIDTH),
+                    )
+                    Text(
+                        v,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Wide enough for "Closest approach" and a value, narrow enough to sit on a target. */
+val OVERLAY_BUBBLE_MAX_WIDTH = 260.dp
+private val OVERLAY_KEY_WIDTH = 116.dp
 
 /** The mark on the object of the pick. */
 @Composable

@@ -1,0 +1,43 @@
+/* Type. Lookout ships NO webfont: every shell asks its platform for the system
+   UI face — SF Pro on Apple, Segoe UI Variable on Windows, Roboto on Android,
+   the GNOME default on Linux — and the docs site uses the Docusaurus system
+   stack. The stacks below reproduce that on the web. There is no @font-face
+   rule in this design system because there is no font binary to ship.
+
+   NUMERALS ARE TABULAR. Every readout in the app is monospacedDigit(): the
+   position, the scale, the zoom, the size multipliers. A jittering coordinate
+   is the fastest way to make a chartplotter feel wrong. */
+
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
+    "Segoe UI", Roboto, Cantarell, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Cascadia Mono", "Liberation Mono", monospace;
+  --font-num: var(--font-ui);
+  --num-tabular: "tnum" 1, "lnum" 1; /* @kind other */
+
+  /* sizes — every one of these is a literal from the shells */
+  --text-9: 9px;    /* depth band legend caption */
+  --text-10: 10px;  /* preset chip sub-label */
+  --text-11: 11px;  /* pick footnote, list header, aux file text */
+  --text-12: 12px;  /* scale bar label, hints, secondary readouts, raster pill */
+  --text-13: 13px;  /* pick subtitle, panel body copy, building pill */
+  --text-14: 14px;  /* readout capsule, panel titles, north "N" */
+  --text-16: 16px;  /* settings pane title */
+  --text-17: 17px;  /* scale entry field */
+  --text-18: 18px;  /* bubble glyph, empty-state title */
+  --text-19: 19px;  /* pick report title */
+  --text-20: 20px;  /* loader wordmark */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.3;
+  --leading-body: 1.55;
+
+  /* the one tracked style in the product: the pick report's column header */
+  --tracking-caps: 0.08em;
+}

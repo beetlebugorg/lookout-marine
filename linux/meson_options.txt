@@ -2,6 +2,8 @@ option('x11', type: 'feature', value: 'auto',
        description: 'X11 chart surface (a child window of the GTK toplevel)')
 option('wayland', type: 'feature', value: 'auto',
        description: 'Wayland chart surface (a subsurface of the GTK toplevel)')
+option('plugins', type: 'boolean', value: true,
+       description: 'The wasm plugin host. Own ship, AIS, NMEA 0183, Signal K and laylines are plugins, so a build without it is a chartplotter with no boat and no traffic. Needs the WAMR archive scripts/build-wamr.sh builds for this architecture (x86_64 and aarch64 today)')
 option('core-optimize', type: 'combo',
        choices: ['ReleaseFast', 'ReleaseSafe', 'ReleaseSmall', 'Debug'],
        value: 'ReleaseFast',

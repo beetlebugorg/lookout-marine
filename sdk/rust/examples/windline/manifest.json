@@ -1,0 +1,6 @@
+{
+  "id": "org.example.windline.rs",
+  "name": "Downwind line (Rust)",
+  "api": 1,
+  "capabilities": ["vessel.read", "overlay.draw"]
+}

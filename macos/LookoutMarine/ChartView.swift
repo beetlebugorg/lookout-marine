@@ -97,6 +97,47 @@ struct OverlayLayer: View {
         return CalloutPlace(x: x, y: point.y + clear, edge: .below, room: max(0, under))
     }
 
+    /// Where the hover tooltip stands. The tip sits below and right of the
+    /// pointer, and flips to the other side of whichever edge it would cross.
+    /// The card is never measured: it holds two edges and SwiftUI sizes it.
+    struct HoverPlace {
+        let alignment: Alignment
+        let leading: CGFloat
+        let trailing: CGFloat
+        let top: CGFloat
+        let bottom: CGFloat
+    }
+
+    static func hoverLayout(point: CGPoint, in view: CGSize) -> HoverPlace {
+        let gap: CGFloat = 14
+        let flipX = point.x + gap + HoverTip.maxWidth > view.width - Chrome.margin
+        let flipY = point.y + gap + HoverTip.assumedHeight > view.height - Chrome.margin
+        return HoverPlace(
+            alignment: Alignment(horizontal: flipX ? .trailing : .leading,
+                                 vertical: flipY ? .bottom : .top),
+            leading: flipX ? 0 : point.x + gap,
+            trailing: flipX ? max(0, view.width - point.x + gap) : 0,
+            top: flipY ? 0 : point.y + gap,
+            bottom: flipY ? max(0, view.height - point.y + gap) : 0)
+    }
+
+    /// Where the chart menu stands: down and right of the press, flipped at
+    /// whichever edge it would cross. Like the hover tip, the panel is never
+    /// measured: it holds two edges and SwiftUI sizes it.
+    static func menuLayout(point: CGPoint, in view: CGSize, hasMarker: Bool) -> HoverPlace {
+        let gap: CGFloat = 2
+        let flipX = point.x + gap + ChartMenuPanel.width > view.width - Chrome.margin
+        let flipY = point.y + gap + ChartMenuPanel.assumedHeight(hasMarker: hasMarker)
+            > view.height - Chrome.margin
+        return HoverPlace(
+            alignment: Alignment(horizontal: flipX ? .trailing : .leading,
+                                 vertical: flipY ? .bottom : .top),
+            leading: flipX ? 0 : point.x + gap,
+            trailing: flipX ? max(0, view.width - point.x + gap) : 0,
+            top: flipY ? 0 : point.y + gap,
+            bottom: flipY ? max(0, view.height - point.y + gap) : 0)
+    }
+
     static func bottomSheetSize(in view: CGSize) -> CGSize {
         // The chart keeps the larger part of the view.
         CGSize(width: view.width, height: min(340, (view.height * 0.48).rounded(.down)))
@@ -115,7 +156,7 @@ struct OverlayLayer: View {
     var body: some View {
         GeometryReader { geo in
             let compact = geo.size.width < Self.compactWidth
-            let form: PickForm? = model.pickPoint == nil ? nil : Self.pickForm(for: geo.size)
+            let form: PickForm? = model.pickAnchor == nil ? nil : Self.pickForm(for: geo.size)
             // A side sheet owns the leading edge; the chrome there slides
             // inboard of it.
             let sideInset: CGFloat = form == .sideSheet ? Self.sideSheetWidth + Chrome.gap : 0
@@ -147,13 +188,14 @@ struct OverlayLayer: View {
                 // physical trailing edge, because in landscape the safe-area
                 // inset moves it toward the middle.
                 .overlay(alignment: .topTrailing) {
-                    NorthBubble(rotationDeg: model.rotationDeg) { model.northUp() }
+                    NorthBubble(rotationDeg: model.rotationDeg,
+                                orientation: model.orientation) { model.cycleOrientation() }
                         .chromeHitRegion("compass")
                         .padding(Chrome.margin)
                         .ignoresSafeArea(.container, edges: .trailing)
                 }
-                // Bottom right: zoom above settings. The charts live in the
-                // Charts tab of the settings.
+                // Bottom right: follow above zoom above settings. The charts
+                // live in the Charts tab of the settings.
                 .overlay(alignment: .bottomTrailing) {
                     VStack(alignment: .trailing, spacing: Chrome.gap) {
                         ZoomControls(model: model)
@@ -188,8 +230,10 @@ struct OverlayLayer: View {
                 // moves the drawing and not the layout, so the frame the
                 // chrome publishes would stay at the top left and every click
                 // on the report would reach the chart underneath.
+                // The report docks where the pick was taken and stays there.
+                // Only the mark above tracks the chart.
                 .overlay(alignment: .topLeading) {
-                    if let point = model.pickPoint, let form {
+                    if let point = model.pickAnchor, let form {
                         switch form {
                         case .callout:
                             let width = PickCallout.width(for: model.pickResults.count,
@@ -273,6 +317,17 @@ struct OverlayLayer: View {
                 .overlay(alignment: .top) {
                     if model.isBuilding { BuildingPill().padding(.top, 10) }
                 }
+                // Top centre: what the plugins are alarming about. It is drawn
+                // after the building pill, so an alarm is never under it, and
+                // it takes the pointer because the mariner has to be able to
+                // press Acknowledge.
+                .overlay(alignment: .top) {
+                    if !model.alerts.isEmpty {
+                        AlertBanner(alerts: model.alerts) { model.acknowledgeAlert($0) }
+                            .chromeHitRegion("plugin-alerts")
+                            .padding(.top, Chrome.margin)
+                    }
+                }
                 .overlay {
                     if let picture = model.picture {
                         PictureViewer(model: model, picture: picture)
@@ -285,6 +340,66 @@ struct OverlayLayer: View {
                             .transition(.opacity)
                     } else if !model.hasChart {
                         EmptyChartState(model: model).chromeHitRegion("empty-state")
+                    }
+                }
+                // The overlay hover tooltip, clear of the pointer. Padding,
+                // not an offset, for the reason above. No chrome hit region:
+                // a click over the tip must still pick the chart under it.
+                .overlay(alignment: .topLeading) {
+                    if let info = model.hover, let p = model.hoverPoint, model.pinned == nil {
+                        let place = Self.hoverLayout(point: p, in: geo.size)
+                        HoverTip(info: info)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: place.alignment)
+                            .padding(.leading, place.leading)
+                            .padding(.trailing, place.trailing)
+                            .padding(.top, place.top)
+                            .padding(.bottom, place.bottom)
+                            .allowsHitTesting(false)
+                    }
+                }
+                // The rename field, over its marker. Padding, not an offset:
+                // an offset moves the drawing and leaves the frame, and the
+                // chrome hit region with it, behind. It sits above and right
+                // of the mark, clear of the mark's own name.
+                .overlay(alignment: .topLeading) {
+                    if model.renaming != nil, let p = model.renamingPoint {
+                        MarkerRenameField(model: model)
+                            .chromeHitRegion("marker-rename")
+                            .padding(.leading, min(max(0, p.x + 10),
+                                                   max(0, geo.size.width - MarkerRenameField.width)))
+                            .padding(.top, max(0, p.y - 40))
+                    }
+                }
+                // The chart menu, at the point it was raised at.
+                .overlay(alignment: .topLeading) {
+                    if let menu = model.chartMenu {
+                        let place = Self.menuLayout(point: menu.at, in: geo.size,
+                                                    hasMarker: menu.marker != nil)
+                        ChartMenuPanel(model: model, menu: menu)
+                            .chromeHitRegion("chart-menu")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: place.alignment)
+                            .padding(.leading, place.leading)
+                            .padding(.trailing, place.trailing)
+                            .padding(.top, place.top)
+                            .padding(.bottom, place.bottom)
+                    }
+                }
+                // The pinned bubble. Same card as the tooltip, with a close
+                // control, and it takes the pointer: the mariner has to be
+                // able to press that control.
+                .overlay(alignment: .topLeading) {
+                    if let pin = model.pinned, let p = model.pinnedPoint {
+                        let place = Self.hoverLayout(point: p, in: geo.size)
+                        HoverTip(info: pin.info) { model.closePin() }
+                            .chromeHitRegion("pinned-bubble")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: place.alignment)
+                            .padding(.leading, place.leading)
+                            .padding(.trailing, place.trailing)
+                            .padding(.top, place.top)
+                            .padding(.bottom, place.bottom)
                     }
                 }
                 // No .animation keyed on pickResults: it animates every layout
@@ -437,6 +552,8 @@ final class ChartNSView: NSView {
     // True while a mouse series that began on the chrome runs. The whole
     // series is dropped, not only the down (see mouseDown).
     private var chromeClick = false
+    /// Debounce for the overlay hover; see scheduleHover.
+    private var hoverTimer: Timer?
     private var rotating = false
     private var downPoint = CGPoint.zero
     private var lastDrag = CGPoint.zero
@@ -580,6 +697,14 @@ final class ChartNSView: NSView {
     /// own exit and move commands never fire.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {   // 53 = Escape
+            if model?.chartMenu != nil {
+                model?.closeChartMenu()
+                return
+            }
+            if model?.renaming != nil {
+                model?.cancelRename()
+                return
+            }
             if model?.picture != nil {
                 model?.picture = nil
                 return
@@ -615,19 +740,46 @@ final class ChartNSView: NSView {
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         // The window forwards mouseMoved to the first responder (us) even when
-        // the pointer is outside — only track it while it is over the chart.
+        // the pointer is outside: only track it while it is over the chart.
         guard bounds.contains(p) else {
-            model?.cursorLon = nil
-            model?.cursorLat = nil
+            clearHover()
             return
         }
-        if let g = controller?.geo(atPoint: p) {
-            model?.cursorLon = g.lon
-            model?.cursorLat = g.lat
-        }
+        scheduleHover(at: p)
     }
     override func mouseExited(with event: NSEvent) {
-        model?.cursorLon = nil; model?.cursorLat = nil
+        clearHover()
+    }
+
+    // MARK: Hover over an overlay symbol
+
+    /// How long the pointer must settle before the overlay is asked what is
+    /// under it.
+    private static let hoverDelay: TimeInterval = 0.15
+
+    /// Ask once the pointer has been still for `hoverDelay`. An open tooltip
+    /// is dropped as soon as the pointer leaves its symbol, without waiting.
+    private func scheduleHover(at p: CGPoint) {
+        hoverTimer?.invalidate()
+        if model?.pinned != nil { return } // one bubble at a time
+        if model?.hover != nil, controller?.overlayInfo(atPoint: p) == nil { clearHover() }
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverDelay,
+                                          repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let m = self.model else { return }
+                let info = self.controller?.overlayInfo(atPoint: p)
+                if m.hover != info { m.hover = info }
+                m.hoverPoint = info == nil ? nil : p
+            }
+        }
+    }
+
+    private func clearHover() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        guard let m = model else { return }
+        if m.hover != nil { m.hover = nil }
+        if m.hoverPoint != nil { m.hoverPoint = nil }
     }
 
     // MARK: Drag = pan (with fling) / shift-drag = rotate
@@ -642,6 +794,10 @@ final class ChartNSView: NSView {
         // series; scrollWheel and magnify refuse the same way.
         chromeClick = overChrome(p)
         if chromeClick { return }
+        // A press on the chart puts an open menu away, and then behaves as an
+        // ordinary press: a click that only dismissed would cost the mariner
+        // a second one to start the pan they were already making.
+        model?.closeChartMenu()
         downPoint = p; lastDrag = p
         vx = 0; vy = 0; lastSampleTime = 0
         controller?.flingStart(vx: 0, vy: 0) // grabbing stops any coast
@@ -675,7 +831,7 @@ final class ChartNSView: NSView {
         if rotating { return }
         let moved = hypot(p.x - downPoint.x, p.y - downPoint.y)
         if moved <= 4 {
-            tapPick(at: p)          // a tap: cursor pick
+            tapChart(at: p)
         } else {
             controller?.flingStart(vx: vx, vy: vy) // a throw: momentum
         }
@@ -692,20 +848,46 @@ final class ChartNSView: NSView {
         lastSampleTime = ts
     }
 
-    private func tapPick(at p: CGPoint) {
+    /// A plain click on the chart. It pins an overlay symbol's card and does
+    /// nothing else.
+    ///
+    /// IT DOES NOT PICK. A stray click while panning used to throw a pick
+    /// report the mariner never asked for, and the plain click belongs to the
+    /// chart. What is at a point is asked for by name now, from the menu a
+    /// right-click raises there.
+    private func tapChart(at p: CGPoint) {
         // The last line of defense for §6.2. The pass-through host should
         // have swallowed a click on the chrome, but every routing path that
-        // assumption depends on has failed at least once. The pick itself
-        // now refuses a point inside a chrome frame: a click that slips
-        // through does nothing instead of picking under the report.
+        // assumption depends on has failed at least once. A click that slips
+        // through does nothing instead of acting on what is under the panel.
         if ChromeHitMap.shared.contains(p) {
             if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-                NSLog("[hitmap] tapPick refused (%.0f, %.0f): inside chrome", p.x, p.y)
+                NSLog("[hitmap] tapChart refused (%.0f, %.0f): inside chrome", p.x, p.y)
             }
             return
         }
-        guard let g = controller?.geo(atPoint: p) else { return }
-        model?.showPick(controller?.pick(lon: g.lon, lat: g.lat) ?? [], at: p)
+        // An overlay symbol answers first and takes the click: a tap on a
+        // target pins its bubble, because a mariner tapping a vessel is asking
+        // about the vessel rather than the water under it.
+        if let hit = controller?.overlayHit(atPoint: p) {
+            model?.pin(hit)
+            return
+        }
+        model?.closePin() // a click elsewhere on the chart closes the bubble
+    }
+
+    // MARK: The chart menu
+
+    /// A right-click raises the menu at that point. AppKit routes control-click
+    /// and a two-finger tap here too, so every way a Mac asks for a context
+    /// menu lands in one place.
+    override func rightMouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if overChrome(p) {
+            super.rightMouseDown(with: event)
+            return
+        }
+        model?.openChartMenu(at: p)
     }
 
     // MARK: Wheel / pinch zoom (cursor-anchored)
@@ -750,8 +932,11 @@ struct ChartView: View {
         // surface (ChartUIView) lives in the plain-UIKit input window between
         // them — SwiftUI never sees chart touches (see SceneDelegate).
         OverlayLayer(model: model)
+        // The form brings its OWN navigation: a stack on a phone, a sidebar
+        // and pane on an iPad. It cannot be given one from out here, because
+        // only the form knows how wide it came up.
         .sheet(isPresented: $model.showSettings) {
-            NavigationStack { settingsSheetContent }
+            SettingsView(model: model)
                 // The form follows the chart's scheme, like the rest of the
                 // chrome. The scheme is set here because OverlayLayer sets it
                 // inside its own body, and this sheet is attached outside
@@ -771,13 +956,6 @@ struct ChartView: View {
                       allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { model.importRasterCharts(urls) }
         }
-    }
-
-    private var settingsSheetContent: some View {
-        SettingsView(model: model)
-            .navigationTitle("Mariner Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { model.showSettings = false } }
     }
 }
 
@@ -806,9 +984,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     private var rotationEngaged = false // rotate stays inert until past a dead-zone
     private var rotationBaseDeg = 0.0   // chart rotation when the dead-zone was crossed
     private var rotationOffset = 0.0    // gesture rotation (rad) at that moment
-    /// Last pointer position from hover (nil on touch-only devices) — anchors
-    /// trackpad scroll-zoom at the pointer when known.
-    private var lastHoverPoint: CGPoint?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -924,16 +1099,18 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         twoFingerTap.numberOfTouchesRequired = 2
         let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
         tap.require(toFail: doubleTap)
-        // Hover feeds the cursor read-out on pointer devices; touches don't hover.
-        // (No scroll-to-zoom recognizer: `allowedScrollTypesMask` also fires on a
-        // pointer *drag*, which then zoomed instead of panned. Pinch is the zoom
-        // gesture; +/- and double-tap cover pointer users.)
-        let hover = UIHoverGestureRecognizer(target: self, action: #selector(onHover(_:)))
+        // No hover recognizer: it fed the cursor lat/lon readout, and the
+        // readout carries own ship now. It comes back with this shell's own
+        // press menu, which is what will need a pointer position again.
+        // (No scroll-to-zoom recognizer either: `allowedScrollTypesMask` also
+        // fires on a pointer *drag*, which then zoomed instead of panned.
+        // Pinch is the zoom gesture; +/- and double-tap cover pointer users.)
+        //
         // The pan needs a delegate too. UIKit asks both recognizers of a
         // pair whether they may run together, and a recognizer with no
         // delegate answers no.
         [pan, pinch, rotate].forEach { $0.delegate = self } // these compose (see below)
-        [pan, pinch, rotate, doubleTap, twoFingerTap, tap, hover].forEach(addGestureRecognizer)
+        [pan, pinch, rotate, doubleTap, twoFingerTap, tap].forEach(addGestureRecognizer)
         panRecognizer = pan
     }
 
@@ -1029,12 +1206,13 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    /// A plain tap on the chart. It does NOT pick: a stray tap while panning
+    /// used to throw a pick report nobody asked for. What is at a point is
+    /// asked for by name, from the menu a press raises there, which this shell
+    /// does not carry yet.
     @objc private func onTap(_ g: UITapGestureRecognizer) {
         notePointerInput("tap")
-        let p = g.location(in: self)
-        guard let geo = controller?.geo(atPoint: p) else { return }
-        model?.showPick(controller?.pick(lon: geo.lon, lat: geo.lat) ?? [],
-                        at: inChromeSpace(p))
+        model?.closePin()
     }
 
     /// A point in this view, moved into the chrome's coordinate space. The
@@ -1064,25 +1242,66 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             lkLog("input active: \(kind)")
         }
     }
-
-    /// Pointer hover → live cursor lat/lon in the HUD (parity with macOS
-    /// mouseMoved; touches don't hover, so this only fires for pointers).
-    @objc private func onHover(_ g: UIHoverGestureRecognizer) {
-        switch g.state {
-        case .began, .changed:
-            notePointerInput("hover")
-            let p = g.location(in: self)
-            lastHoverPoint = p
-            if let geo = controller?.geo(atPoint: p) {
-                model?.cursorLon = geo.lon
-                model?.cursorLat = geo.lat
-            }
-        default:
-            lastHoverPoint = nil
-            model?.cursorLon = nil
-            model?.cursorLat = nil
-        }
-    }
 }
 
 #endif
+
+/// What a plugin overlay symbol says, shown while the pointer rests on it.
+/// Panel surface and type sizes are the app's, the same as a pick report.
+/// Values are monospaced-digit so a live SOG does not reflow its column.
+struct HoverTip: View {
+    let info: OverlayHover
+    /// Set when the card is PINNED: it then carries a close control. A hover
+    /// tooltip has none — it goes when the pointer does.
+    var onClose: (() -> Void)?
+
+    /// `maxWidth` caps the card. `assumedHeight` only tells hoverLayout which
+    /// way to flip, so it is an over-estimate and never a frame.
+    static let maxWidth: CGFloat = 240
+    static let assumedHeight: CGFloat = 150
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(info.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Chrome.ink)
+                    .lineLimit(1)
+                if let onClose {
+                    Spacer(minLength: 0)
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Chrome.muted)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(ChromeFlatStyle(cornerRadius: 4))
+                    .help("Close")
+                    .accessibilityLabel("Close")
+                }
+            }
+            if !info.rows.isEmpty {
+                Divider().overlay(Chrome.rule)
+                Grid(alignment: .leadingFirstTextBaseline,
+                     horizontalSpacing: 12, verticalSpacing: 3) {
+                    ForEach(info.rows, id: \.0) { key, value in
+                        GridRow {
+                            Text(key)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Chrome.muted)
+                            Text(value)
+                                .font(.system(size: 12).monospacedDigit())
+                                .foregroundStyle(Chrome.ink)
+                                .gridColumnAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: Self.maxWidth, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .panelSurface(cornerRadius: 8, opaque: true)
+    }
+}

@@ -18,7 +18,7 @@ swapchain. The shell attaches that swapchain to a `SwapChainPanel` with
 chart. On a machine with no GPU driver the core selects **WARP**, the in-box
 software rasterizer, so the app still runs.
 
-## Prerequisites
+## Before you build
 
 - **Windows 11**, **Visual Studio 2022** or later with the C++ workload, and the
   **Windows SDK 10.0.22621** or later.
@@ -27,7 +27,7 @@ software rasterizer, so the app still runs.
 NuGet restores `Microsoft.WindowsAppSDK` and `Microsoft.Windows.CppWinRT` at the
 first build. tile57 is not a prerequisite.
 
-## Build and run
+## Building and running
 
 ```powershell
 pwsh windows/build-core.ps1     # zig build lib -Dbackend=d3d12 -> ../zig-out
@@ -41,18 +41,18 @@ Use `/p:Platform=x64` on an x64 machine. The app is unpackaged and
 self-contained: the build copies the Windows App SDK runtime next to the
 executable.
 
-## Dev hooks
+## Environment variables
 
 | Variable | Effect |
 |---|---|
 | `LOOKOUT_OPEN` | Open this chart or folder at start |
-| `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` — the opening camera |
+| `LOOKOUT_VIEW` | `lon,lat,zoom[,rotation]` sets the opening camera |
 | `LOOKOUT_WARP` | `1` forces the software rasterizer |
 | `LOOKOUT_OPEN_SETTINGS` | `1` opens the mariner pane at start, for a screenshot |
 
 ![The mariner pane above the chart](../img/windows-settings.webp)
 
-## Files
+## Where the code lives
 
 | File | Role |
 |---|---|
@@ -67,7 +67,7 @@ executable.
 | `src/lk_store.*` | Camera pose, recents and mariner settings in `%APPDATA%\lookout-marine\settings.ini` |
 | `src/lk_format.*` | The readout formats: scale, band and position |
 
-## Cautions
+## What to watch out for
 
 - **The chart is a child of the XAML tree.** Only a press that starts on the
   chart surface is a chart gesture. A press that starts on a control must stay

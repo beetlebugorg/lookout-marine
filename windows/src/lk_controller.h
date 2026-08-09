@@ -110,6 +110,32 @@ int  lk_controller_aux_file(lk_controller *self, const char *cell, const char *n
 
 void lk_controller_readout(lk_controller *self, lk_readout *out);
 
+/* ---- wasm plugins -------------------------------------------------------- */
+/* Own ship, AIS, NMEA 0183, Signal K and laylines are all plugins, so a chart
+ * with no plugin layer has no boat and no traffic on it. The set is loaded per
+ * open (the plugins belong to the handle): the directory beside the exe first,
+ * then the installed set under %APPDATA%. lk_controller_open does both. */
+
+/* 1 while a plugin layer is running.
+ *
+ * This shell needs no idle poll of its own for them, unlike the render-on-demand
+ * ones: RenderLoop already asks lookout_needs_redraw every few milliseconds on
+ * its own thread, so geometry a plugin posts with no gesture behind it is picked
+ * up by the next tick. */
+int lk_controller_plugins_active(lk_controller *self);
+
+/* Every loaded plugin with its settings schema and the values in force, as the
+ * JSON lookout_plugins_json documents. The caller frees it with free().
+ *
+ * NULL IS NOT AN EMPTY REGISTRY: the core answers NULL with no chart open and
+ * in a build with no plugin host, while a core holding no plugins answers
+ * {"plugins":[]}. A caller with a registry already on screen keeps it. */
+char *lk_controller_plugins_json(lk_controller *self);
+
+/* Push one plugin's settings, applied live. `json` is an object of the keys its
+ * schema declares. 1 when the plugin took them. */
+int lk_controller_set_plugin_config(lk_controller *self, const char *id, const char *json);
+
 /* Raster underlay (see lookout.h). add installs one .mbtiles and returns 1 on
  * success — persistence is the host's job (lk_store_note_raster). The set
  * names are copied into `out` (truncated, always NUL-terminated); in_view and

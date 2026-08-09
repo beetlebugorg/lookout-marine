@@ -7,6 +7,12 @@
        package cache. Without it the markup stubs/impls never compile. -->
   <Import Project="$(UserProfile)\.nuget\packages\microsoft.windows.cppwinrt\3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('$(UserProfile)\.nuget\packages\microsoft.windows.cppwinrt\3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.props')" />
 
+  <!-- x64 as well as ARM64. The README has told people to pass /p:Platform=x64
+       on an x64 machine since this project was written, and without the pair
+       below msbuild refuses the switch. It is also the only Windows platform
+       the wasm plugin host can be built for: scripts/build-wamr.sh fills
+       vendor/wamr-dist-windows-x64 and has no ARM64 Windows slot at all, so an
+       ARM64 build is a chartplotter with no own ship and no AIS. -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|ARM64">
       <Configuration>Debug</Configuration>
@@ -15,6 +21,14 @@
     <ProjectConfiguration Include="Release|ARM64">
       <Configuration>Release</Configuration>
       <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
 
@@ -63,6 +77,10 @@
     <!-- The chart core + tile57, built by windows\build-core.ps1 into ..\zig-out. -->
     <LookoutCoreLibDir>$(MSBuildThisFileDirectory)..\zig-out\lib</LookoutCoreLibDir>
     <LookoutCoreIncDir>$(MSBuildThisFileDirectory)..\zig-out\include</LookoutCoreIncDir>
+    <!-- The shipped wasm plugin set, written by `zig build plugins` (which
+         build-core.ps1 runs). It holds the org.beetlebug pairs and nothing
+         else, so the whole directory is what travels with the exe. -->
+    <LookoutBundledPluginDir>$(MSBuildThisFileDirectory)..\zig-out\plugins-bundled</LookoutBundledPluginDir>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -83,12 +101,23 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(LookoutCoreLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- user32: LoadImageW/SendMessageW/GetSystemMetrics, for the window icon
+           (MinimalCoreWin trims the default link libraries, so the Win32 ones
+           this shell uses are all named explicitly). -->
+      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- The WAMR interpreter, when build-core.ps1 built a core with the plugin
+           host in it. The static core does not embed the archive off Apple (a
+           COFF linker rejects an archive nested inside an archive), so the exe
+           links the pair; it is named AFTER lookout_marine.lib above, which is
+           what resolves the wasm symbols the core calls. Conditioned on the
+           file so an ARM64 build, which has no archive to link, still links. -->
+      <AdditionalDependencies Condition="Exists('$(LookoutCoreLibDir)\vmlib.lib')">vmlib.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClInclude Include="pch.h" />
+    <ClInclude Include="resource.h" />
     <!-- DependentUpon links the code-behind to its .xaml so the WinUI markup
          compiler emits the per-page <name>.xaml.g.h stub (InitializeComponent). -->
     <ClInclude Include="ui\App.xaml.h">
@@ -115,6 +144,7 @@
     <ClCompile Include="ui\MainWindow.Raster.cpp" />
     <ClCompile Include="ui\MainWindow.Scale.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
+    <ClCompile Include="ui\MainWindow.Plugins.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_pick.cpp" />
@@ -154,6 +184,14 @@
     <Manifest Include="app.manifest" />
   </ItemGroup>
 
+  <!-- The app icon. Unpackaged, so it is a linked-in ICON resource rather than
+       a Package.appxmanifest Logo; LookoutMarine.ico sits next to the .rc and
+       rc.exe resolves it relative to the script. -->
+  <ItemGroup>
+    <ResourceCompile Include="LookoutMarine.rc" />
+    <None Include="LookoutMarine.ico" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Windows.CppWinRT" Version="3.0.260715.1" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />
@@ -170,4 +208,24 @@
           BeforeTargets="ClCompile"
           DependsOnTargets="MarkupCompilePass1;MarkupCompilePass2"
           Condition="'@(Page)@(ApplicationDefinition)' != ''" />
+
+  <!-- The core plugins travel beside the exe, in $(OutDir)plugins. Own ship,
+       AIS, NMEA 0183, Signal K and laylines are all wasm plugins, so a build
+       that ships none is a chartplotter with no boat and no traffic.
+
+       Skipped when the directory is absent (a tree where build-core.ps1 has
+       not run) rather than failing the build: the shell starts without
+       plugins, it does not fail to link. -->
+  <Target Name="LkCopyBundledPlugins"
+          AfterTargets="Build"
+          Condition="Exists('$(LookoutBundledPluginDir)')">
+    <ItemGroup>
+      <LkBundledPlugin Include="$(LookoutBundledPluginDir)\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LkBundledPlugin)"
+          DestinationFolder="$(OutDir)plugins"
+          SkipUnchangedFiles="true" />
+    <Message Importance="high"
+             Text="bundled plugins: @(LkBundledPlugin->Count()) file(s) -> $(OutDir)plugins" />
+  </Target>
 </Project>

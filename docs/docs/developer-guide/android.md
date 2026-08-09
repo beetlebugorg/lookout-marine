@@ -6,8 +6,8 @@ sidebar_position: 5
 
 # Android
 
-A **Java shell** — a plain Activity, a `SurfaceView` and the platform gesture
-detectors — around the Zig core. The core cross-compiles to
+A **Java shell** sits around the Zig core: a plain Activity, a `SurfaceView` and
+the platform gesture detectors. The core cross-compiles to
 `aarch64-linux-android` and renders **raw Vulkan** (`src/gpu_vk.zig`) onto the
 view's `ANativeWindow`. The chrome above it is Compose.
 
@@ -19,13 +19,13 @@ Units at the JNI boundary are logical points. Java divides pixels by
 `DisplayMetrics.density`, and the core derives its pixel density from the
 surface pixels and the size in points that `resize()` states.
 
-## Prerequisites
+## Before you build
 
 - **JDK 17**, the **Android SDK** (platform 35, build-tools 35, NDK
   27.2.12479018, CMake 3.22.1) and **Zig 0.16**.
 - Set `sdk.dir` in `local.properties` and `ANDROID_NDK` in the environment.
 
-## Build and run
+## Building and running
 
 ```sh
 cd android
@@ -45,20 +45,20 @@ link, with the NDK that `ndkVersion` resolves. A debug APK compiles the core
 Only `arm64-v8a` is wired today, which covers Apple-silicon emulators and real
 arm64 devices. Add ABIs in `abiFilters` in `app/build.gradle`.
 
-## Gestures
+## What each gesture does
 
 One finger pans, a pinch zooms about the focal point, a twist rotates past an
 18 degree dead zone, a double tap zooms in, a tap identifies, and a long press
 steps through day, dusk and night.
 
-## Charts
+## Adding your own charts
 
 The app ships a baked cell (`assets/charts/US5MD1MC.pmtiles`, Annapolis) and
 copies it to internal storage at the first launch. Bake your own with
 `tile57 bake <cell.000> -o out/` and drop `out/tiles/<cell>.pmtiles` into
 `assets/charts/`, or add a folder in the Charts tab.
 
-## Files
+## Where the code lives
 
 | File | Role |
 |---|---|
@@ -72,7 +72,7 @@ copies it to internal storage at the first launch. Bake your own with
 | `app/jni/src/CMakeLists.txt` | `liblookout_jni.so`: the two Zig archives plus vulkan, log and android |
 | `build-libs.sh` | Cross-compiles the core into `app/jni/prebuilt/<abi>/` |
 
-## Caution
+## What to watch out for
 
 The emulator needs Hypervisor.framework, which means a real Mac and not a
 nested VM, and it needs a display. A headless box can build the APK but cannot

@@ -6,6 +6,7 @@
 #define LK_GROUP_RECENTS "recents"
 #define LK_GROUP_RASTER  "raster"
 #define LK_GROUP_MARINER "mariner.v1"
+#define LK_GROUP_PLUGINS "plugins.v1"
 
 #define LK_MAX_RECENTS 10
 
@@ -155,6 +156,37 @@ lk_store_save_raster_off (const char *const *paths)
   lk_store_save_list ("off", paths);
 }
 
+char **
+lk_store_load_raster_hidden (void)
+{
+  return lk_store_load_list ("hidden");
+}
+
+void
+lk_store_save_raster_hidden (const char *const *names)
+{
+  lk_store_save_list ("hidden", names);
+}
+
+gboolean
+lk_store_load_chart_hidden (void)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  g_autoptr (GError) error = NULL;
+  gboolean hidden = g_key_file_get_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", &error);
+
+  return error == NULL && hidden;
+}
+
+void
+lk_store_save_chart_hidden (gboolean hidden)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  g_key_file_set_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", hidden);
+  lk_store_flush (keyfile);
+}
+
 /* ---- mariner ------------------------------------------------------------ */
 
 void
@@ -287,4 +319,38 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
       memset (m->date_view, 0, sizeof m->date_view);
       g_strlcpy (m->date_view, date, sizeof m->date_view);
     }
+}
+
+/* ---- plugin settings ----------------------------------------------------- */
+
+char **
+lk_store_load_plugin_ids (void)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  char **ids = g_key_file_get_keys (keyfile, LK_GROUP_PLUGINS, NULL, NULL);
+
+  return ids != NULL ? ids : g_new0 (char *, 1);
+}
+
+char *
+lk_store_load_plugin_config (const char *plugin_id)
+{
+  g_return_val_if_fail (plugin_id != NULL, NULL);
+
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  return g_key_file_get_string (keyfile, LK_GROUP_PLUGINS, plugin_id, NULL);
+}
+
+void
+lk_store_save_plugin_config (const char *plugin_id, const char *json)
+{
+  g_return_if_fail (plugin_id != NULL);
+
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  if (json == NULL)
+    g_key_file_remove_key (keyfile, LK_GROUP_PLUGINS, plugin_id, NULL);
+  else
+    g_key_file_set_string (keyfile, LK_GROUP_PLUGINS, plugin_id, json);
+  lk_store_flush (keyfile);
 }

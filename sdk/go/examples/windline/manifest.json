@@ -1,0 +1,6 @@
+{
+  "id": "org.example.windline.go",
+  "name": "Downwind line (Go)",
+  "api": 1,
+  "capabilities": ["vessel.read", "overlay.draw"]
+}

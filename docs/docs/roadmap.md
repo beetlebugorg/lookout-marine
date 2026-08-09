@@ -12,13 +12,13 @@ dependency: each release needs the one above it.
 
 No release here has a date.
 
-## 0.1 — Chart
+## 0.1: Drawing the chart
 
 Shipped. Native S-101 datasets, S-57 cells converted into the same model, the
 official S-101 Portrayal Catalogue, a composed library, mariner settings, and a
 native shell on macOS, iPadOS, iOS, Windows, Linux and Android.
 
-## 0.2 — Reading the chart
+## 0.2: Reading the chart
 
 What the chart itself still owes a mariner. It comes before own ship, because
 the chart is the product.
@@ -41,7 +41,7 @@ the chart is the product.
   class, the attributes and the cell, so this is a change in the engine and in
   the C ABI before it is one in a shell.
 
-## 0.3 — Own ship
+## 0.3: Showing own ship
 
 The boat on the chart, and the numbers that come with it.
 
@@ -56,7 +56,7 @@ The boat on the chart, and the numbers that come with it.
   view beside the chart and as a strip on a phone. Each value states when it
   goes stale.
 
-## 0.4 — Traffic
+## 0.4: Watching other traffic
 
 Other vessels, and the warnings that matter.
 
@@ -67,7 +67,7 @@ Other vessels, and the warnings that matter.
 - **Target list**, sorted by range or by closest approach.
 - **Guard zone** with an alarm.
 
-## 0.5 — Voyage
+## 0.5: Planning and recording a voyage
 
 Where you have been, and where you are going.
 
@@ -79,7 +79,7 @@ Where you have been, and where you are going.
 - **Man overboard**: one control drops a mark and starts a bearing and range to
   it.
 
-## 0.6 — Working tools
+## 0.6: Working tools
 
 - **Electronic bearing line** and **variable range marker**.
 - **Tides and currents** from the harmonic stations in the cell.

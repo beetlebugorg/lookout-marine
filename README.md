@@ -42,7 +42,7 @@ and switch between day and night.
   shading only where the imagery covers, so you keep the chart and still see the
   water. Tap the pill in the readouts to step between providers — the same water
   from Google, Bing and ArcGIS shows a different day, tide and cloud, and one of
-  them shows the bottom. See [Imagery](docs/docs/user-guide/imagery.md).
+  them shows the bottom. See [Raster charts](docs/docs/user-guide/raster-charts.md).
 
 - **It opens a whole coastline.** Point it at a folder of cells. The app maps each
   cell instead of loading it, so even a 1,700-cell library opens in milliseconds and
@@ -112,7 +112,8 @@ everything the app links against, so you pre-build nothing. Use the Release
 configuration of Xcode for a non-debug app.
 
 If you have no Xcode, `macos/build-dev.sh --zig` builds the Mac app with the Command
-Line Tools into `macos/build/`.
+Line Tools. It writes the same bundle every other build writes,
+`macos/build-mac/Build/Products/Debug/LookoutMarine.app`.
 
 On Linux — refer to [linux/README.md](linux/README.md):
 

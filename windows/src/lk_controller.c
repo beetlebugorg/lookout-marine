@@ -64,6 +64,95 @@ lk_controller_atlas_ready(void)
     return lookout_atlas_cache_ready();
 }
 
+/* ---- wasm plugins -------------------------------------------------------- */
+
+/* The plugin set that travels with the app: the "plugins" folder beside the
+ * exe, which the vcxproj's LkCopyBundledPlugins target fills out of
+ * zig-out\plugins-bundled. Anything that is not the directory LOOKOUT_PLUGINS
+ * names loads with origin "bundled", which is what this is.
+ *
+ * 0 when the app carries no such folder, which is a build without the copy
+ * target rather than a mariner's problem. */
+static int
+load_bundled_plugins(lookout *h)
+{
+    char exe[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
+    if (n == 0 || n >= sizeof exe)
+        return 0;
+
+    char *slash = strrchr(exe, '\\');
+    if (slash == NULL)
+        return 0;
+    *slash = '\0';
+
+    char dir[MAX_PATH];
+    if (_snprintf_s(dir, sizeof dir, _TRUNCATE, "%s\\plugins", exe) < 0)
+        return 0;
+
+    DWORD attrs = GetFileAttributesA(dir);
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+        return 0;
+
+    return lookout_plugins_load(h, dir) == 0;
+}
+
+/* Bundled first, then installed. The order is the precedence the core
+ * documents: LOOKOUT_PLUGINS (which loads at open, before this runs), then
+ * bundled, then installed — on an id collision the first copy loaded wins. */
+static void
+load_plugins(lookout *h)
+{
+    if (!load_bundled_plugins(h))
+        OutputDebugStringA("lookout: no bundled plugins beside the exe\n");
+
+    lookout_plugins_load_installed(h);
+
+    if (!lookout_plugins_active(h))
+        OutputDebugStringA("lookout: no plugin layer; this chart has no own ship, "
+                           "no AIS and no instrument input\n");
+}
+
+int
+lk_controller_plugins_active(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_plugins_active(self->handle) != 0;
+}
+
+char *
+lk_controller_plugins_json(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return NULL;
+
+    size_t len = 0;
+    const char *json = lookout_plugins_json(self->handle, &len);
+    if (json == NULL || len == 0)
+        return NULL;
+
+    /* Borrowed until the next plugin query, so it is copied out here. */
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL)
+        return NULL;
+    memcpy(copy, json, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+int
+lk_controller_set_plugin_config(lk_controller *self, const char *id, const char *json)
+{
+    if (!lk_controller_is_open(self) || id == NULL || json == NULL)
+        return 0;
+    if (lookout_plugin_config_set(self->handle, id, json) != 0)
+        return 0;
+    /* The plugin redraws inside the call, so the view is marked for the next tick. */
+    lk_controller_invalidate(self);
+    return 1;
+}
+
 /* ---- lifecycle ---------------------------------------------------------- */
 
 int
@@ -105,6 +194,12 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     /* Saved settings overlay the defaults, so the chart reopens as left. */
     lk_store_apply_saved_mariner(&m);
     lookout_set_mariner(h, &m);
+
+    /* The plugins belong to the handle this open just made, so they are loaded
+     * per open, and the settings an earlier session saved are replayed into
+     * them. A saved key the schema no longer declares is ignored by the core. */
+    load_plugins(h);
+    lk_store_apply_saved_plugins(h);
 
     self->last_view_saved_ms = GetTickCount64();
     return 1;

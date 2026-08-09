@@ -1,0 +1,875 @@
+//! WAMR embedding: load a plugin module, instantiate it under a memory cap,
+//! call the five exports, and move bytes across the boundary.
+//!
+//! This file knows nothing about what a plugin does. It is the mechanical
+//! layer: the broker supplies the native functions, the host supplies the
+//! module bytes and the lifecycle. The runtime is the fast interpreter built
+//! by scripts/build-wamr.sh (no AOT, no JIT).
+//!
+//! WASI is compiled in and bounded here — see the WASI section below. It is a
+//! floor for language runtimes, not a way out of the sandbox.
+//!
+//! Nothing here is thread-safe, with ONE exception: `Instance.terminate` is
+//! meant to be called from another thread while a call is in flight, and is
+//! the only call that may be. The host contract is otherwise one event at a
+//! time per plugin, so an Instance belongs to whichever thread is currently
+//! inside it.
+//!
+//! Two rules the API depends on:
+//!   * Nothing crosses as a host pointer. A plugin sees only app addresses —
+//!     offsets into its own linear memory — and the host copies bytes in and
+//!     out through them.
+//!   * A native pointer obtained from an app address is invalidated by any
+//!     memory growth inside the module, so it may be used only for the copy
+//!     it was taken for, never stored.
+
+const std = @import("std");
+const builtin = @import("builtin");
+
+pub const c = @cImport({
+    @cInclude("wasm_export.h");
+});
+
+pub const Error = error{
+    RuntimeInit,
+    RegisterNatives,
+    LoadFailed,
+    InstantiateFailed,
+    ExecEnvFailed,
+    MissingExport,
+    /// The module trapped, or the call itself was rejected (wrong argument
+    /// count or types). Instance.exception() has WAMR's text.
+    Trap,
+    /// An (app address, length) pair that does not lie inside the module's
+    /// linear memory.
+    BadAppAddr,
+    /// The module's lk_alloc returned null.
+    PluginOutOfMemory,
+};
+
+/// WAMR reports load and instantiate failures by filling a caller buffer.
+/// 192 bytes is the size its own samples use; longer messages are truncated
+/// by the runtime, not here.
+pub const ErrBuf = struct {
+    bytes: [192]u8 = @splat(0),
+
+    pub fn msg(self: *const ErrBuf) []const u8 {
+        return std.mem.sliceTo(&self.bytes, 0);
+    }
+};
+
+// ---- process-global runtime ----
+
+/// Initialise the runtime. WAMR keeps one runtime per process: call this once
+/// before the first load, and deinitRuntime() after the last instance is gone.
+/// Natives are registered separately so the broker can build its table after
+/// the runtime exists.
+pub fn initRuntime() Error!void {
+    var args: c.RuntimeInitArgs = std.mem.zeroes(c.RuntimeInitArgs);
+    // System allocator rather than a fixed pool: the host has a real malloc
+    // and a pool would put a second, unrelated cap on top of the per-instance
+    // memory cap.
+    args.mem_alloc_type = c.Alloc_With_System_Allocator;
+    // The default mode for a BYTECODE module, and the only one this archive
+    // has: build-wamr.sh compiles the fast interpreter and no JIT of either
+    // flavour. Saying it rather than leaving Mode_Default means a build that
+    // grew a JIT would still interpret until someone chose otherwise here.
+    //
+    // It says nothing about an AOT module. RunningMode has no Mode_AOT — an
+    // AOT module is native code and there is no interpreter to run it in —
+    // and wasm_runtime_set_running_mode applies to interpreter instances
+    // only. The AOT loader is compiled in (WAMR_BUILD_AOT=1) so the five core
+    // plugins can be shipped as code we compiled ourselves; see
+    // scripts/build-plugin-aot.sh, and `aotRefusal` below for what the host
+    // checks before it hands one over.
+    args.running_mode = c.Mode_Interp;
+    if (!c.wasm_runtime_full_init(&args)) return error.RuntimeInit;
+    errdefer c.wasm_runtime_destroy();
+    try wasiInit();
+}
+
+pub fn deinitRuntime() void {
+    wasiDeinit();
+    c.wasm_runtime_destroy();
+}
+
+/// Every thread that enters wasm needs its own runtime thread environment —
+/// the interpreter's stack boundary and signal handling are per-thread, and a
+/// call from a thread without one traps with "thread signal env not inited"
+/// rather than running. initRuntime does this for the thread that calls it;
+/// any OTHER thread (the host's dispatch thread, the harness's) calls this
+/// once before its first call and destroyThreadEnv when it is done.
+///
+/// The setup mprotects the guard page below the calling thread's stack, and on
+/// macOS that fails for stacks of 8 MiB and up — Zig's std.Thread default is
+/// 16 MiB, so a thread that will enter wasm must be spawned with a smaller
+/// one (host.zig uses 2 MiB).
+pub fn initThreadEnv() Error!void {
+    if (!c.wasm_runtime_init_thread_env()) return error.RuntimeInit;
+}
+
+pub fn destroyThreadEnv() void {
+    c.wasm_runtime_destroy_thread_env();
+}
+
+// ---- native functions the host offers plugins ----
+
+/// One host import. `signature` is WAMR's argument-type string, written from
+/// the wasm-visible types of the function:
+///   `i` i32 · `I` i64 · `f` f32 · `F` f64 · `*` pointer argument (an i32 app
+///   address that WAMR bounds-checks and hands over as a native pointer) ·
+///   `~` the length of the preceding `*` · `$` NUL-terminated string.
+/// The return type follows the parens, empty for void — `log(level, ptr, len)`
+/// is `"(i*~)"`, `now_ms()` is `"()I"`, `publish(ptr, len)` is `"(*~)i"`.
+/// Every native takes `wasm_exec_env_t` as its first parameter, which the
+/// signature does not mention.
+pub const Native = struct {
+    name: [:0]const u8,
+    /// Pointer to the native function itself.
+    func: *const anyopaque,
+    signature: [:0]const u8,
+    /// Retrieved inside the native with attachment(exec_env). Per-symbol, so
+    /// one Zig function can serve several imports.
+    user_data: ?*anyopaque = null,
+};
+
+/// Build the C symbol table for a comptime-known list. The result must live
+/// as long as the runtime does — WAMR stores the array pointer, it does not
+/// copy — so hold it in a container-level `var`, not on the stack.
+pub fn nativeSymbols(comptime list: []const Native) [list.len]c.NativeSymbol {
+    var out: [list.len]c.NativeSymbol = undefined;
+    for (list, 0..) |n, i| out[i] = .{
+        .symbol = n.name.ptr,
+        .func_ptr = @constCast(n.func),
+        .signature = n.signature.ptr,
+        .attachment = n.user_data,
+    };
+    return out;
+}
+
+/// Register a symbol table under a wasm import module name (`lookout` for
+/// this host). Imports are resolved at instantiation, so every native a
+/// plugin may import has to be registered before Instance.init — a module
+/// importing an unregistered name fails to instantiate, which is how the
+/// grant filter refuses capabilities structurally. `syms` must outlive the
+/// runtime; see nativeSymbols().
+pub fn registerNatives(module_name: [:0]const u8, syms: []c.NativeSymbol) Error!void {
+    if (!c.wasm_runtime_register_natives(module_name.ptr, syms.ptr, @intCast(syms.len)))
+        return error.RegisterNatives;
+}
+
+pub fn unregisterNatives(module_name: [:0]const u8, syms: []c.NativeSymbol) void {
+    _ = c.wasm_runtime_unregister_natives(module_name.ptr, syms.ptr);
+}
+
+// ---- helpers for use inside a native function ----
+
+/// The instance that called the native.
+pub fn callerInstance(env: c.wasm_exec_env_t) c.wasm_module_inst_t {
+    return c.wasm_runtime_get_module_inst(env);
+}
+
+/// The per-instance pointer set with Instance.setUserData — how a native
+/// finds which plugin is calling it.
+pub fn callerUserData(env: c.wasm_exec_env_t) ?*anyopaque {
+    return c.wasm_runtime_get_user_data(env);
+}
+
+/// The per-symbol pointer given as Native.user_data.
+pub fn attachment(env: c.wasm_exec_env_t) ?*anyopaque {
+    return c.wasm_runtime_get_function_attachment(env);
+}
+
+/// Translate an (app address, length) pair from any module instance into a
+/// host slice, rejecting anything outside linear memory. Natives declared
+/// with `*~` already receive a checked pointer; this is for the ones that
+/// take a bare i32 address.
+pub fn sliceOf(inst: c.wasm_module_inst_t, off: u32, len: u32) Error![]u8 {
+    // A zero-length range has no address to check and nothing to read.
+    if (len == 0) return @constCast(&[_]u8{});
+    if (!c.wasm_runtime_validate_app_addr(inst, off, len)) return error.BadAppAddr;
+    const native = c.wasm_runtime_addr_app_to_native(inst, off) orelse return error.BadAppAddr;
+    return @as([*]u8, @ptrCast(native))[0..len];
+}
+
+// ---- WASI: a language floor, not a capability surface ----
+//
+// Go and Rust do not produce a module that runs without WASI. Their runtimes
+// import wasi_snapshot_preview1 before any of your code executes, and a module
+// with an unresolved import does not instantiate. So the runtime answers WASI,
+// and this section decides what the answer is.
+//
+// The answer, in one line: clocks, randomness and two log streams. Nothing
+// else. Concretely —
+//
+//   * NO FILESYSTEM. Zero preopened directories, so fd_prestat_get(3) is EBADF
+//     and path_open has no directory descriptor to open from. There is no
+//     path a plugin can name.
+//   * NO SOCKETS. WAMR's WASI carries a socket family that preview1 itself
+//     does not define. sock_connect, sock_bind and sock_addr_resolve are
+//     already refused by WAMR's empty address and name-lookup pools, but
+//     sock_open still creates a real kernel socket before anything checks
+//     where it may go — a file-descriptor leak with no legitimate use here.
+//     It is overridden below and returns ENOTSUP.
+//   * NO ENVIRONMENT, NO ARGUMENTS. Both lists are empty, so a plugin cannot
+//     read the app's configuration or its command line.
+//   * NO SLEEPING. poll_oneoff reports success and no events, and never
+//     waits. WAMR implements a one-clock poll as clock_nanosleep on the
+//     calling thread, and a thread parked in a syscall does not see the
+//     watchdog's terminate flag — the interpreter tests that flag, and the
+//     interpreter is not running. A plugin that slept would therefore hold its
+//     dispatch thread for as long as it liked. With the wait removed, a
+//     time.Sleep becomes a spin, and a spin the watchdog can kill. Waiting is
+//     what the `timer_set` import is for.
+//     It reports SUCCESS rather than ENOTSUP because Go's runtime treats a
+//     failed poll_oneoff as fatal: `fatal error: wasi_snapshot_preview1.
+//     poll_oneoff`, and no Go plugin would boot.
+//   * STDOUT AND STDERR ARE LOG LINES. fd_write is overridden and delivers to
+//     `stdio_sink`; the bytes never reach a descriptor.
+//   * THE THREE STANDARD DESCRIPTORS ARE THE NULL DEVICE. Belt and braces
+//     under the fd_write override: fd_read(0) cannot eat the app's stdin, and
+//     no metadata call on 1 or 2 can touch a file the app redirected them to.
+//   * clock_time_get, clock_res_get, random_get and sched_yield work. They are
+//     the floor the languages actually need.
+//
+// The overrides work because WAMR resolves an import by walking its registered
+// symbol tables from the most recently registered backwards, and takes the
+// first table that HAS the name. Registering fd_write, poll_oneoff and
+// sock_open under the WASI module names after wasm_runtime_full_init puts them
+// in front of WAMR's own table for those three, and leaves every other WASI
+// call resolving to WAMR.
+
+/// Which of a plugin's two output streams a line came from.
+pub const Stream = enum { out, err };
+
+/// Where a plugin's WASI stdout and stderr go. `user_data` is what
+/// Instance.setUserData put on the calling instance — the broker's per-plugin
+/// state — so a sink can name the plugin the line came from.
+///
+/// Set it once, after initRuntime and before the first module runs. Until it
+/// is set, lines go to the host's own stderr with a prefix: a println is a
+/// diagnostic, and a diagnostic that disappears is worse than one in the wrong
+/// place.
+pub const StdioSink = *const fn (user_data: ?*anyopaque, stream: Stream, line: []const u8) void;
+pub var stdio_sink: ?StdioSink = null;
+
+/// Longest line a sink is handed. It matches the cap the plugin library puts
+/// on its own log lines. A longer line is cut, not split.
+const max_stdio_line: usize = 512;
+
+/// The WASI preview1 error numbers this file returns.
+const wasi_errno = struct {
+    const success: u32 = 0;
+    const badf: u32 = 8;
+    const fault: u32 = 21;
+    const notsup: u32 = 58;
+};
+
+/// `__wasi_ciovec_t` as it lies in the module's linear memory: an app address
+/// and a length.
+const IovecApp = extern struct { buf_offset: u32, buf_len: u32 };
+
+/// A handle on the null device, or -1 when there is none. WAMR backs WASI's
+/// three standard descriptors with it. One handle serves every instance and it
+/// stays open for the runtime's life, which is safe: WAMR never closes a
+/// descriptor it was handed as stdio.
+///
+/// -1 tells WAMR to use the platform default, which is the app's own stdin,
+/// stdout and stderr. The fd_write override keeps output away from them even
+/// then, so the loss is only the belt-and-braces half.
+var null_handle: i64 = -1;
+
+var wasi_syms = nativeSymbols(&.{
+    .{ .name = "fd_write", .func = @ptrCast(&wasiFdWrite), .signature = "(i*i*)i" },
+    .{ .name = "poll_oneoff", .func = @ptrCast(&wasiPollOneoff), .signature = "(**i*)i" },
+    .{ .name = "sock_open", .func = @ptrCast(&wasiSockOpen), .signature = "(iii*)i" },
+});
+
+/// Both names WAMR answers WASI on. preview1 is what Go and Rust emit;
+/// wasi_unstable is preview0, and it is overridden too so that importing the
+/// older name is not a way around the three overrides.
+const wasi_modules = [_][:0]const u8{ "wasi_snapshot_preview1", "wasi_unstable" };
+
+fn wasiInit() Error!void {
+    null_handle = openNullDevice();
+    for (wasi_modules) |name| try registerNatives(name, &wasi_syms);
+}
+
+fn wasiDeinit() void {
+    for (wasi_modules) |name| unregisterNatives(name, &wasi_syms);
+    closeNullDevice();
+    null_handle = -1;
+}
+
+/// The raw OS handle WAMR wants, which is a file descriptor on POSIX and a
+/// HANDLE on Windows. Opened here rather than through std.Io, which in Zig
+/// 0.16 needs an Io implementation this layer has no business holding.
+fn openNullDevice() i64 {
+    // An `else` rather than an early return: a plain `if` leaves the POSIX
+    // body in the analysed path on Windows, where std.c.open does not compile.
+    if (comptime builtin.os.tag == .windows) {
+        const h = win32CreateFileW(
+            std.unicode.utf8ToUtf16LeStringLiteral("NUL"),
+            win32.generic_read | win32.generic_write,
+            win32.file_share_read | win32.file_share_write,
+            null,
+            win32.open_existing,
+            0,
+            null,
+        );
+        if (@intFromPtr(h) == win32.invalid_handle) return -1;
+        return @bitCast(@as(u64, @intFromPtr(h)));
+    } else {
+        const fd = std.c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
+        return if (fd < 0) -1 else @intCast(fd);
+    }
+}
+
+fn closeNullDevice() void {
+    if (null_handle < 0) return;
+    if (comptime builtin.os.tag == .windows) {
+        _ = win32CloseHandle(@ptrFromInt(@as(usize, @intCast(null_handle))));
+    } else {
+        _ = std.c.close(@intCast(null_handle));
+    }
+}
+
+/// Win32 values the null device needs. std.os.windows moved these into nested
+/// namespaces in Zig 0.16, and they are ABI constants, so they are written out
+/// here rather than tracked through the standard library's layout.
+const win32 = struct {
+    const generic_read: std.os.windows.DWORD = 0x8000_0000;
+    const generic_write: std.os.windows.DWORD = 0x4000_0000;
+    const file_share_read: std.os.windows.DWORD = 0x0000_0001;
+    const file_share_write: std.os.windows.DWORD = 0x0000_0002;
+    const open_existing: std.os.windows.DWORD = 3;
+    const invalid_handle: usize = std.math.maxInt(usize);
+};
+
+// std.os.windows.kernel32 does not declare these in Zig 0.16, so the two the
+// null device needs are declared here.
+extern "kernel32" fn CreateFileW(
+    lpFileName: [*:0]const u16,
+    dwDesiredAccess: std.os.windows.DWORD,
+    dwShareMode: std.os.windows.DWORD,
+    lpSecurityAttributes: ?*std.os.windows.SECURITY_ATTRIBUTES,
+    dwCreationDisposition: std.os.windows.DWORD,
+    dwFlagsAndAttributes: std.os.windows.DWORD,
+    hTemplateFile: ?std.os.windows.HANDLE,
+) callconv(.winapi) std.os.windows.HANDLE;
+const win32CreateFileW = CreateFileW;
+
+extern "kernel32" fn CloseHandle(hObject: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
+const win32CloseHandle = CloseHandle;
+
+/// Give a loaded module the WASI context described at the top of this section.
+/// WAMR reads these at instantiation, so they are set on the module and not on
+/// the instance. Every pointer is null and every count is zero on purpose:
+/// there is nothing to preopen, nothing to map, no environment and no argv.
+fn setWasiFloor(handle: c.wasm_module_t) void {
+    c.wasm_runtime_set_wasi_args_ex(
+        handle,
+        null, // dir_list
+        0,
+        null, // map_dir_list
+        0,
+        null, // env
+        0,
+        null, // argv
+        0,
+        null_handle,
+        null_handle,
+        null_handle,
+    );
+}
+
+/// fd_write(fd, iovs, iovs_len, nwritten). Writes to 1 and 2 become log lines
+/// and everything else is EBADF, which is what a descriptor that was never
+/// opened deserves.
+///
+/// A write is logged as it arrives. One `println` is one write in both Go and
+/// Rust, so one println is one line; a plugin that writes half a line in one
+/// call and the rest in the next gets two lines, which is a fair price for
+/// holding no per-instance buffer.
+fn wasiFdWrite(
+    env: c.wasm_exec_env_t,
+    fd: u32,
+    iovs: ?[*]const IovecApp,
+    iovs_len: u32,
+    nwritten: ?*u32,
+) callconv(.c) u32 {
+    const inst = callerInstance(env);
+    // WAMR's `*` conversion validates one byte of each pointer argument, so
+    // the real extent is checked here, exactly as WAMR's own wrapper does.
+    const out = nwritten orelse return wasi_errno.fault;
+    if (!c.wasm_runtime_validate_native_addr(inst, out, @sizeOf(u32))) return wasi_errno.fault;
+    const vec = iovs orelse return wasi_errno.fault;
+    const vec_bytes = @as(u64, iovs_len) * @sizeOf(IovecApp);
+    if (vec_bytes != 0 and
+        !c.wasm_runtime_validate_native_addr(inst, @constCast(@as(*const anyopaque, @ptrCast(vec))), vec_bytes))
+        return wasi_errno.fault;
+    if (fd != 1 and fd != 2) return wasi_errno.badf;
+
+    const stream: Stream = if (fd == 2) .err else .out;
+    var written: u32 = 0;
+    for (vec[0..iovs_len]) |v| {
+        const bytes = sliceOf(inst, v.buf_offset, v.buf_len) catch return wasi_errno.fault;
+        writeStdio(env, stream, bytes);
+        written +%= v.buf_len;
+    }
+    out.* = written;
+    return wasi_errno.success;
+}
+
+fn writeStdio(env: c.wasm_exec_env_t, stream: Stream, bytes: []const u8) void {
+    const user_data = callerUserData(env);
+    var rest = bytes;
+    while (rest.len != 0) {
+        const nl = std.mem.indexOfScalar(u8, rest, '\n');
+        var line = if (nl) |i| rest[0..i] else rest;
+        rest = if (nl) |i| rest[i + 1 ..] else rest[rest.len..];
+        if (line.len != 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+        if (line.len == 0) continue;
+        if (line.len > max_stdio_line) line = line[0..max_stdio_line];
+        if (stdio_sink) |sink| {
+            sink(user_data, stream, line);
+        } else {
+            std.debug.print("plugin {s}: {s}\n", .{ if (stream == .err) "stderr" else "stdout", line });
+        }
+    }
+}
+
+/// poll_oneoff(in, out, nsubscriptions, nevents). Answers "nothing is ready"
+/// at once and never waits; see the note on sleeping above. `out` is left
+/// untouched, which is correct for zero events.
+fn wasiPollOneoff(
+    env: c.wasm_exec_env_t,
+    _: ?*const anyopaque,
+    _: ?*anyopaque,
+    _: u32,
+    nevents: ?*u32,
+) callconv(.c) u32 {
+    const out = nevents orelse return wasi_errno.fault;
+    if (!c.wasm_runtime_validate_native_addr(callerInstance(env), out, @sizeOf(u32)))
+        return wasi_errno.fault;
+    out.* = 0;
+    return wasi_errno.success;
+}
+
+/// sock_open(poolfd, af, socktype, sockfd). Refused: a plugin's only route to
+/// the network is the broker's `tcp_connect`, which is grant-checked.
+fn wasiSockOpen(
+    _: c.wasm_exec_env_t,
+    _: u32,
+    _: u32,
+    _: u32,
+    _: ?*u32,
+) callconv(.c) u32 {
+    return wasi_errno.notsup;
+}
+
+// ---- modules and instances ----
+
+pub const Module = struct {
+    handle: c.wasm_module_t,
+
+    /// Load wasm bytecode. WAMR reads and patches the buffer in place and
+    /// keeps referring to it, so `bytes` must be writable, at least 4-byte
+    /// aligned, and must outlive the Module.
+    pub fn load(bytes: []u8, err: *ErrBuf) Error!Module {
+        const handle = c.wasm_runtime_load(bytes.ptr, @intCast(bytes.len), &err.bytes, err.bytes.len) orelse
+            return error.LoadFailed;
+        // Harmless for a wasm32-freestanding module, which imports no WASI at
+        // all: the context is built at instantiation either way and this one
+        // reaches nothing.
+        setWasiFloor(handle);
+        return .{ .handle = handle };
+    }
+
+    pub fn deinit(self: *Module) void {
+        c.wasm_runtime_unload(self.handle);
+        self.handle = null;
+    }
+};
+
+// ---- ahead-of-time modules ----
+//
+// `Module.load` takes either kind: wasm_runtime_load reads the first four
+// bytes and dispatches, so nothing in the host has to say which it has. What
+// the host DOES have to do is decide whether an .aot on disk belongs to THIS
+// binary before handing it over, and that is what the two functions below are
+// for. See src/plugin/host.zig for the policy and scripts/build-plugin-aot.sh
+// for how the files are produced.
+
+/// What a module file holds, from its first four bytes: `\0asm` bytecode or
+/// `\0aot`. Anything else — an empty file, a truncated download, a zip — is
+/// `unknown`.
+pub const Package = enum { bytecode, aot, unknown };
+
+pub fn packageType(bytes: []const u8) Package {
+    return switch (c.wasm_runtime_get_file_package_type(bytes.ptr, @intCast(bytes.len))) {
+        c.Wasm_Module_Bytecode => .bytecode,
+        c.Wasm_Module_AoT => .aot,
+        else => .unknown,
+    };
+}
+
+/// The machine name WAMR's AOT loader accepts in this binary. It comes from
+/// the archive's BUILD_TARGET, so it is the host CPU: `get_current_target` in
+/// core/iwasm/aot/arch/aot_reloc_<arch>.c writes "aarch64v8" for an AARCH64
+/// build and "x86_64" for an x86-64 one, and compares it against the file's
+/// with a PREFIX match, which is why the aarch64 sub-version is not spelled
+/// out here. Empty on an architecture whose runtime has no AOT relocations at
+/// all, and an empty expectation refuses every .aot, which is the right answer
+/// there.
+pub const aot_arch: []const u8 = switch (builtin.cpu.arch) {
+    .aarch64, .aarch64_be => "aarch64",
+    .x86_64 => "x86_64",
+    else => "",
+};
+
+/// The wamrc flag set every .aot this host will run was compiled with. It is
+/// `AOT_FLAGS_ID` in scripts/build-plugin-aot.sh, and the two must be changed
+/// together: the script writes it into the AOT_VERSION stamp, and a file whose
+/// stamp does not carry this exact word is refused.
+///
+/// It reads as a build detail and it is a SAFETY CHECK. The first of the four
+/// flags it names is --bounds-checks=1, and an .aot compiled without it has no
+/// memory sandbox at all — no software check, and no hardware one either,
+/// because this runtime is built with WAMR_DISABLE_HW_BOUND_CHECK. The AOT
+/// format does not record the setting, so this stamp is the only thing that
+/// distinguishes a file we compiled from one we did not.
+pub const aot_flags_id = "swbounds+threadmgr+nosimd+extconst";
+
+/// Why the AOT_VERSION stamp beside a set of .aot files does not describe this
+/// binary's runtime, or null when it does. The message is written into `buf`.
+///
+/// The stamp is `<WAMR tag> <commit> <runtime features> <wamrc flags> <target>
+/// <input digest>`. Two of those fields are checked: the release, against the
+/// runtime linked in here, and the flag word. The rest is there to read.
+pub fn aotStampRefusal(stamp: []const u8, buf: []u8) ?[]const u8 {
+    var major: u32 = 0;
+    var minor: u32 = 0;
+    var patch: u32 = 0;
+    c.wasm_runtime_get_version(&major, &minor, &patch);
+    var want_buf: [32]u8 = undefined;
+    const want = std.fmt.bufPrint(&want_buf, "WAMR-{d}.{d}.{d}", .{ major, minor, patch }) catch return "the WAMR version is unreadable";
+
+    if (stamp.len == 0)
+        return std.fmt.bufPrint(buf, "there is no AOT_VERSION beside it saying which {s} build it belongs to", .{want}) catch
+            "there is no AOT_VERSION beside it";
+
+    var it = std.mem.tokenizeAny(u8, stamp, " \t");
+    const tag = it.next() orelse "";
+    if (!std.mem.eql(u8, tag, want))
+        return std.fmt.bufPrint(buf, "it was built against {s} and this is {s}", .{ tag, want }) catch
+            "it was built against another WAMR release";
+
+    while (it.next()) |word| {
+        if (std.mem.eql(u8, word, aot_flags_id)) return null;
+    }
+    return std.fmt.bufPrint(buf, "its AOT_VERSION does not name the {s} flag set", .{aot_flags_id}) catch
+        "its AOT_VERSION does not name the flag set this host requires";
+}
+
+/// Why this .aot must not be loaded in this process, in a sentence, or null
+/// when nothing is wrong with it. The message is written into `buf`.
+///
+/// WHY LOOK AT ALL, when the runtime checks the same things. Because the
+/// answer belongs in the log with the plugin's name beside it, and because a
+/// file that fails here is never handed to the loader: no mapping, no
+/// relocation, no partially built module to tear down. WAMR then re-checks
+/// every one of these — this is a gate, not a substitute.
+///
+/// WHAT IT CANNOT SEE. Whether the file was compiled with software bounds
+/// checks. Nothing in the format records it and nothing in the loader looks,
+/// so an .aot built with wamrc's default --bounds-checks=0 would load here and
+/// run with no memory sandbox at all. That is the whole reason the host also
+/// insists on the AOT_VERSION stamp beside the file: the stamp names the flag
+/// set, and only files this project compiled carry it.
+pub fn aotRefusal(bytes: []const u8, buf: []u8) ?[]const u8 {
+    const say = struct {
+        fn f(b: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
+            // A message that will not fit is still a refusal.
+            return std.fmt.bufPrint(b, fmt, args) catch "it is not usable in this build";
+        }
+    }.f;
+
+    if (packageType(bytes) != .aot) return say(buf, "it is not an AOT module", .{});
+
+    // The file header is `\0aot` + a u32 format version, and the target info
+    // section always comes first: a u32 type (0) and a u32 size, then the 48
+    // bytes read below. Layout from aot_emit_target_info_section().
+    if (bytes.len < 64) return say(buf, "it is too short to hold target information", .{});
+
+    const version = std.mem.readInt(u32, bytes[4..][0..4], .little);
+    const want = c.wasm_runtime_get_current_package_version(c.Wasm_Module_AoT);
+    if (version != want)
+        return say(buf, "it is AOT format version {d} and this WAMR build reads {d}", .{ version, want });
+
+    if (std.mem.readInt(u32, bytes[8..][0..4], .little) != 0 or
+        std.mem.readInt(u32, bytes[12..][0..4], .little) < 48)
+        return say(buf, "its target information section is missing or short", .{});
+
+    // bin_type: bit 0 set means big endian, bit 1 set means 64-bit.
+    const bin_type = std.mem.readInt(u16, bytes[16..][0..2], .little);
+    const file_big_endian = bin_type & 1 != 0;
+    const file_64_bit = bin_type & 2 != 0;
+    if (file_big_endian != (builtin.cpu.arch.endian() == .big) or file_64_bit != (@sizeOf(usize) == 8))
+        return say(buf, "it is a {s} {s} file and this is a {s} {s} build", .{
+            if (file_64_bit) "64-bit" else "32-bit",
+            if (file_big_endian) "big-endian" else "little-endian",
+            if (@sizeOf(usize) == 8) "64-bit" else "32-bit",
+            if (builtin.cpu.arch.endian() == .big) "big-endian" else "little-endian",
+        });
+
+    const arch = std.mem.sliceTo(bytes[48..64], 0);
+    if (aot_arch.len == 0)
+        return say(buf, "this build has no AOT support for {s}", .{@tagName(builtin.cpu.arch)});
+    if (!std.mem.startsWith(u8, arch, aot_arch))
+        return say(buf, "it is compiled for {s} and this is {s}", .{ arch, aot_arch });
+
+    return null;
+}
+
+/// Instantiation limits. Sizes are bytes except where noted.
+pub const Limits = struct {
+    /// Interpreter stack for this instance's execution environment.
+    stack_bytes: u32 = 64 * 1024,
+    /// Heap WAMR manages inside linear memory for wasm_runtime_module_malloc.
+    /// Zero: the API routes host-to-plugin buffers through the module's own
+    /// lk_alloc, so nothing needs it.
+    heap_bytes: u32 = 0,
+    /// Hard cap on linear memory, in 64 KiB wasm pages. Past it `memory.grow`
+    /// is refused and the module's own allocation fails; instantiation fails
+    /// outright if the module's declared minimum memory exceeds it.
+    ///
+    /// 256 pages = 16 MiB is the floor for anything driven directly, such as
+    /// the smoke test. The HOST sets the real per-plugin budget from
+    /// `broker.max_memory_pages`, and registers the callback that makes a
+    /// refusal visible.
+    max_memory_pages: u32 = 256,
+};
+
+/// The five exports every plugin provides (PROTOTYPE.md, API v0).
+const api_exports = struct {
+    const api = "lk_abi";
+    const alloc = "lk_alloc";
+    const free = "lk_free";
+    const start = "lk_start";
+    const event = "lk_event";
+};
+
+// REACTOR INITIALISATION IS WAMR'S JOB, NOT THIS FILE'S. A Go module's
+// `_initialize` is where the Go runtime starts its scheduler and runs every
+// package's `init`, and it must run before any other export. WAMR calls it
+// inside wasm_runtime_instantiate for any module that imports WASI, exactly
+// once. Calling it here as well made Go abort with "randinit twice" — its
+// scheduler had already started. Rust's cdylib exports no `_initialize`;
+// wasm-ld calls its constructors from the top of each export instead. A Zig
+// wasm32-freestanding plugin has nothing to initialise.
+
+/// A (app address, length) range inside a plugin's linear memory.
+pub const Buf = struct {
+    off: u32,
+    len: u32,
+};
+
+pub const Instance = struct {
+    inst: c.wasm_module_inst_t,
+    env: c.wasm_exec_env_t,
+    fn_api: c.wasm_function_inst_t,
+    fn_alloc: c.wasm_function_inst_t,
+    fn_free: c.wasm_function_inst_t,
+    fn_start: c.wasm_function_inst_t,
+    fn_event: c.wasm_function_inst_t,
+
+    /// Instantiate under `limits` and resolve the API exports. A module
+    /// missing any of the five is not a plugin, so this fails rather than
+    /// deferring the error to the first call.
+    pub fn init(module: Module, limits: Limits, err: *ErrBuf) Error!Instance {
+        const args: c.InstantiationArgs = .{
+            .default_stack_size = limits.stack_bytes,
+            .host_managed_heap_size = limits.heap_bytes,
+            .max_memory_pages = limits.max_memory_pages,
+        };
+        const inst = c.wasm_runtime_instantiate_ex(module.handle, &args, &err.bytes, err.bytes.len) orelse
+            return error.InstantiateFailed;
+        errdefer c.wasm_runtime_deinstantiate(inst);
+
+        const env = c.wasm_runtime_create_exec_env(inst, limits.stack_bytes) orelse
+            return error.ExecEnvFailed;
+        errdefer c.wasm_runtime_destroy_exec_env(env);
+
+        return .{
+            .inst = inst,
+            .env = env,
+            .fn_api = c.wasm_runtime_lookup_function(inst, api_exports.api) orelse return error.MissingExport,
+            .fn_alloc = c.wasm_runtime_lookup_function(inst, api_exports.alloc) orelse return error.MissingExport,
+            .fn_free = c.wasm_runtime_lookup_function(inst, api_exports.free) orelse return error.MissingExport,
+            .fn_start = c.wasm_runtime_lookup_function(inst, api_exports.start) orelse return error.MissingExport,
+            .fn_event = c.wasm_runtime_lookup_function(inst, api_exports.event) orelse return error.MissingExport,
+        };
+    }
+
+    pub fn deinit(self: *Instance) void {
+        c.wasm_runtime_destroy_exec_env(self.env);
+        c.wasm_runtime_deinstantiate(self.inst);
+        self.env = null;
+        self.inst = null;
+    }
+
+    /// Pointer handed to every native this instance calls, via
+    /// callerUserData(exec_env) — the broker's per-plugin state.
+    ///
+    /// It is set on the INSTANCE as well, because a runtime callback that is
+    /// not a native — the one for a refused `memory.grow` — is handed the
+    /// instance and only sometimes an exec env.
+    pub fn setUserData(self: *Instance, ptr: ?*anyopaque) void {
+        c.wasm_runtime_set_user_data(self.env, ptr);
+        c.wasm_runtime_set_custom_data(self.inst, ptr);
+    }
+
+    /// WAMR's text for the last trap, or null. Cleared by clearException().
+    pub fn exception(self: *Instance) ?[]const u8 {
+        const msg = c.wasm_runtime_get_exception(self.inst) orelse return null;
+        return std.mem.sliceTo(msg, 0);
+    }
+
+    pub fn clearException(self: *Instance) void {
+        c.wasm_runtime_clear_exception(self.inst);
+    }
+
+    /// Stop whatever this instance is doing, FROM ANOTHER THREAD. The call in
+    /// flight fails as if it had trapped, so the thread inside the module
+    /// returns error.Trap and unwinds normally; a plugin spinning in a loop
+    /// that calls nothing stops too. This is the host watchdog's only weapon.
+    ///
+    /// It works because scripts/build-wamr.sh builds with
+    /// WAMR_BUILD_THREAD_MGR=1. Without that flag this call only writes the
+    /// instance's exception string, and the interpreter never reads it — a
+    /// spinning module would ignore it forever. With it, the write also raises
+    /// the exec env's terminate flag, and the fast interpreter tests that flag
+    /// at every branch, loop back edge and call.
+    ///
+    /// Safe on an instance that is idle, but not free: the exception stays set,
+    /// so the NEXT call into the module fails too. The host treats a terminated
+    /// plugin as disabled for good, which makes that moot.
+    pub fn terminate(self: *Instance) void {
+        c.wasm_runtime_terminate(self.inst);
+    }
+
+    /// Any export beyond the five, by name. The host uses this for nothing;
+    /// tests and future API versions do.
+    pub fn lookup(self: *Instance, name: [:0]const u8) ?c.wasm_function_inst_t {
+        return c.wasm_runtime_lookup_function(self.inst, name.ptr);
+    }
+
+    /// Call into the module. Results are written into `results`, which must
+    /// have exactly as many slots as the function returns values.
+    pub fn call(
+        self: *Instance,
+        func: c.wasm_function_inst_t,
+        results: []c.wasm_val_t,
+        args: []c.wasm_val_t,
+    ) Error!void {
+        const ok = c.wasm_runtime_call_wasm_a(
+            self.env,
+            func,
+            @intCast(results.len),
+            results.ptr,
+            @intCast(args.len),
+            args.ptr,
+        );
+        if (!ok) return error.Trap;
+    }
+
+    // ---- the five exports ----
+
+    /// lk_abi() — the API version the module speaks. 1 is the only one this
+    /// host accepts; the caller decides what to do with anything else.
+    pub fn apiVersion(self: *Instance) Error!u32 {
+        var results: [1]c.wasm_val_t = undefined;
+        try self.call(self.fn_api, &results, &.{});
+        return @bitCast(results[0].of.i32);
+    }
+
+    /// lk_alloc(len) — space inside the module for an inbound payload.
+    /// Returns the app address; a module that cannot allocate returns null,
+    /// which surfaces as PluginOutOfMemory.
+    pub fn alloc(self: *Instance, len: u32) Error!Buf {
+        var results: [1]c.wasm_val_t = undefined;
+        var args = [_]c.wasm_val_t{iv32(@bitCast(len))};
+        try self.call(self.fn_alloc, &results, &args);
+        const off: u32 = @bitCast(results[0].of.i32);
+        if (off == 0) return error.PluginOutOfMemory;
+        return .{ .off = off, .len = len };
+    }
+
+    /// lk_free(ptr, len) — hand a buffer back.
+    pub fn free(self: *Instance, buf: Buf) Error!void {
+        var args = [_]c.wasm_val_t{ iv32(@bitCast(buf.off)), iv32(@bitCast(buf.len)) };
+        try self.call(self.fn_free, &.{}, &args);
+    }
+
+    /// lk_start(ptr, len) — the start JSON. Non-zero means the plugin refused
+    /// to start.
+    pub fn start(self: *Instance, json: []const u8) Error!i32 {
+        const buf = try self.writeAlloc(json);
+        defer self.free(buf) catch {};
+        var results: [1]c.wasm_val_t = undefined;
+        var args = [_]c.wasm_val_t{ iv32(@bitCast(buf.off)), iv32(@bitCast(buf.len)) };
+        try self.call(self.fn_start, &results, &args);
+        return results[0].of.i32;
+    }
+
+    /// lk_event(kind, handle, ptr, len) with a payload already in plugin
+    /// memory. The caller owns `payload` and frees it after the call, so one
+    /// buffer can serve a burst of events.
+    pub fn event(self: *Instance, kind: u32, handle: u64, payload: Buf) Error!i32 {
+        var results: [1]c.wasm_val_t = undefined;
+        var args = [_]c.wasm_val_t{
+            iv32(@bitCast(kind)),
+            iv64(@bitCast(handle)),
+            iv32(@bitCast(payload.off)),
+            iv32(@bitCast(payload.len)),
+        };
+        try self.call(self.fn_event, &results, &args);
+        return results[0].of.i32;
+    }
+
+    /// lk_event with a host buffer: allocate inside the module, copy, call,
+    /// free. The common path for a store update or a chunk of TCP data.
+    pub fn eventWith(self: *Instance, kind: u32, handle: u64, payload: []const u8) Error!i32 {
+        const buf = try self.writeAlloc(payload);
+        defer self.free(buf) catch {};
+        return self.event(kind, handle, buf);
+    }
+
+    // ---- linear memory ----
+
+    /// A host slice over an (app address, length) range, rejecting anything
+    /// outside linear memory. Valid only until the module's memory grows.
+    pub fn slice(self: *Instance, off: u32, len: u32) Error![]u8 {
+        return sliceOf(self.inst, off, len);
+    }
+
+    /// Allocate through the module's lk_alloc and copy `bytes` in. The
+    /// returned Buf belongs to the caller, who passes it to lk_event/lk_start
+    /// and then frees it.
+    pub fn writeAlloc(self: *Instance, bytes: []const u8) Error!Buf {
+        const buf = try self.alloc(@intCast(bytes.len));
+        errdefer self.free(buf) catch {};
+        const dst = try self.slice(buf.off, buf.len);
+        @memcpy(dst, bytes);
+        return buf;
+    }
+};
+
+fn iv32(v: i32) c.wasm_val_t {
+    return .{ .kind = c.WASM_I32, ._paddings = @splat(0), .of = .{ .i32 = v } };
+}
+
+fn iv64(v: i64) c.wasm_val_t {
+    return .{ .kind = c.WASM_I64, ._paddings = @splat(0), .of = .{ .i64 = v } };
+}

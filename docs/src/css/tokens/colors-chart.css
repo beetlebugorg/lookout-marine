@@ -1,0 +1,232 @@
+/* S-52 chart colours — the depth ramp and every other charted colour.
+
+   GENERATED, NOT AUTHORED. Verbatim from the chart engine's colour tables:
+     zig-pkg/tile57-<version-hash>/bindings/wasm/assets/colortables.json
+   The design system's rule is that a chart colour is never hand-tuned, so if a
+   value here disagrees with a mockup, this file wins. Regenerate rather than edit.
+
+   Day sits on :root. Dusk and night are selected by [data-chart-scheme], which
+   the docs theme couples to the reader's light/dark choice — see custom.css. */
+
+:root {
+  /* day */
+  --chart-adinf: #a5a527;
+  --chart-aplrt: #e38039;
+  --chart-arpat: #2da879;
+  --chart-bkaj1: #0e1315;
+  --chart-bkaj2: #1c2327;
+  --chart-chblk: #000000;
+  --chart-chbrn: #a19653;
+  --chart-chcor: #e38039;
+  --chart-chgrd: #4c5b63;
+  --chart-chgrf: #768c97;
+  --chart-chgrn: #52e83b;
+  --chart-chmgd: #c045d1;
+  --chart-chmgf: #cba9f9;
+  --chart-chred: #ea5471;
+  --chart-chwht: #c9edff;
+  --chart-chylw: #e1e139;
+  --chart-cstln: #4c5b63;
+  --chart-cursr: #e38039;
+  --chart-depcn: #768c97;
+  --chart-depdw: #c9edff;
+  --chart-depit: #58af9c;
+  --chart-depmd: #a7d9fb;
+  --chart-depms: #82caff;
+  --chart-depsc: #4c5b63;
+  --chart-depvs: #61b7ff;
+  --chart-dnghl: #ea5471;
+  --chart-isdng: #c045d1;
+  --chart-landa: #bfbe8f;
+  --chart-landf: #8d642e;
+  --chart-litgn: #52e83b;
+  --chart-litrd: #ea5471;
+  --chart-lityw: #e1e139;
+  --chart-marbl: #0080ff;
+  --chart-marcy: #008f84;
+  --chart-marmg: #c64da6;
+  --chart-marwh: #717f77;
+  --chart-ninfo: #e38039;
+  --chart-nodta: #93aebb;
+  --chart-outll: #8d642e;
+  --chart-outlw: #000000;
+  --chart-plrte: #d63f24;
+  --chart-pstrk: #000000;
+  --chart-radhi: #52e83b;
+  --chart-radlo: #2f8e20;
+  --chart-res01: #768c97;
+  --chart-res02: #768c97;
+  --chart-res03: #768c97;
+  --chart-resbl: #2e7bff;
+  --chart-resgr: #768c97;
+  --chart-sclbr: #e38039;
+  --chart-ships: #000000;
+  --chart-sndg1: #768c97;
+  --chart-sndg2: #000000;
+  --chart-sytrk: #768c97;
+  --chart-trfcd: #c045d1;
+  --chart-trfcf: #cba9f9;
+  --chart-uiafd: #61b7ff;
+  --chart-uiaff: #bfbe8f;
+  --chart-uibck: #c9edff;
+  --chart-uibdr: #4c5b63;
+  --chart-uinfb: #2e7bff;
+  --chart-uinfd: #000000;
+  --chart-uinff: #4c5b63;
+  --chart-uinfg: #52e83b;
+  --chart-uinfm: #c045d1;
+  --chart-uinfo: #e38039;
+  --chart-uinfr: #ea5471;
+}
+
+/* BUILT-CSS SAFETY: each selector below is qualified with `html` so it outranks
+   :root on specificity. The minifier merges all :root blocks and emits them
+   after these, which would otherwise let the light values win in dark mode. */
+
+/* The docs pair a dark reader with the DUSK ramp, not night: night's four
+   deepest bands differ by a few units of RGB, so the ladder stops reading as a
+   ladder. Night stays available by asking for it — the block below wins by
+   coming later. This pairing is the docs' own; the token files do not say which
+   chart scheme a dark appearance takes. */
+html[data-chart-scheme="dusk"],
+html[data-theme="dark"] {
+  /* dusk */
+  --chart-adinf: #646514;
+  --chart-aplrt: #86491e;
+  --chart-arpat: #21825c;
+  --chart-bkaj1: #000000;
+  --chart-bkaj2: #101518;
+  --chart-chblk: #6b7f89;
+  --chart-chbrn: #57502a;
+  --chart-chcor: #86491e;
+  --chart-chgrd: #6b7f89;
+  --chart-chgrf: #4c5b63;
+  --chart-chgrn: #2f8e20;
+  --chart-chmgd: #826ca1;
+  --chart-chmgf: #772782;
+  --chart-chred: #9b3549;
+  --chart-chwht: #8ca6b3;
+  --chart-chylw: #8b8b1f;
+  --chart-cstln: #6b7f89;
+  --chart-cursr: #86491e;
+  --chart-depcn: #4c5b63;
+  --chart-depdw: #000000;
+  --chart-depit: #234c44;
+  --chart-depmd: #0f1b21;
+  --chart-depms: #1d3246;
+  --chart-depsc: #6b7f89;
+  --chart-depvs: #1e4165;
+  --chart-dnghl: #9b3549;
+  --chart-isdng: #826ca1;
+  --chart-landa: #40402e;
+  --chart-landf: #7f5a29;
+  --chart-litgn: #2f8e20;
+  --chart-litrd: #9b3549;
+  --chart-lityw: #8b8b1f;
+  --chart-marbl: #0077f3;
+  --chart-marcy: #00857a;
+  --chart-marmg: #b8479a;
+  --chart-marwh: #69766e;
+  --chart-ninfo: #86491e;
+  --chart-nodta: #404d53;
+  --chart-outll: #40402e;
+  --chart-outlw: #000000;
+  --chart-plrte: #952916;
+  --chart-pstrk: #8ca6b3;
+  --chart-radhi: #2f8e20;
+  --chart-radlo: #195710;
+  --chart-res01: #4c5b63;
+  --chart-res02: #4c5b63;
+  --chart-res03: #4c5b63;
+  --chart-resbl: #1d55b4;
+  --chart-resgr: #6b7f89;
+  --chart-sclbr: #86491e;
+  --chart-ships: #8ca6b3;
+  --chart-sndg1: #4c5b63;
+  --chart-sndg2: #8ca6b3;
+  --chart-sytrk: #4c5b63;
+  --chart-trfcd: #826ca1;
+  --chart-trfcf: #772782;
+  --chart-uiafd: #1e4165;
+  --chart-uiaff: #7f5a29;
+  --chart-uibck: #000000;
+  --chart-uibdr: #6b7f89;
+  --chart-uinfb: #1d55b4;
+  --chart-uinfd: #8ca6b3;
+  --chart-uinff: #6b7f89;
+  --chart-uinfg: #2f8e20;
+  --chart-uinfm: #826ca1;
+  --chart-uinfo: #86491e;
+  --chart-uinfr: #9b3549;
+}
+
+html[data-chart-scheme="night"] {
+  /* night */
+  --chart-adinf: #222203;
+  --chart-aplrt: #301705;
+  --chart-arpat: #052a1b;
+  --chart-bkaj1: #000000;
+  --chart-bkaj2: #020304;
+  --chart-chblk: #252d31;
+  --chart-chbrn: #211e0c;
+  --chart-chcor: #301705;
+  --chart-chgrd: #252d31;
+  --chart-chgrf: #181e21;
+  --chart-chgrn: #0c3406;
+  --chart-chmgd: #411247;
+  --chart-chmgf: #411247;
+  --chart-chred: #390e16;
+  --chart-chwht: #364147;
+  --chart-chylw: #323206;
+  --chart-cstln: #252d31;
+  --chart-cursr: #301705;
+  --chart-depcn: #181e21;
+  --chart-depdw: #000000;
+  --chart-depit: #0b201c;
+  --chart-depmd: #03070a;
+  --chart-depms: #050e16;
+  --chart-depsc: #252d31;
+  --chart-depvs: #071727;
+  --chart-dnghl: #390e16;
+  --chart-isdng: #411247;
+  --chart-landa: #17160e;
+  --chart-landf: #2f1f0a;
+  --chart-litgn: #0c3406;
+  --chart-litrd: #390e16;
+  --chart-lityw: #323206;
+  --chart-marbl: #002655;
+  --chart-marcy: #002b27;
+  --chart-marmg: #3f1333;
+  --chart-marwh: #202522;
+  --chart-ninfo: #301705;
+  --chart-nodta: #171e21;
+  --chart-outll: #17160e;
+  --chart-outlw: #000000;
+  --chart-plrte: #330803;
+  --chart-pstrk: #364147;
+  --chart-radhi: #0c3406;
+  --chart-radlo: #041b02;
+  --chart-res01: #181e21;
+  --chart-res02: #181e21;
+  --chart-res03: #181e21;
+  --chart-resbl: #051b44;
+  --chart-resgr: #181e21;
+  --chart-sclbr: #301705;
+  --chart-ships: #364147;
+  --chart-sndg1: #181e21;
+  --chart-sndg2: #364147;
+  --chart-sytrk: #181e21;
+  --chart-trfcd: #411247;
+  --chart-trfcf: #411247;
+  --chart-uiafd: #071727;
+  --chart-uiaff: #442e12;
+  --chart-uibck: #000000;
+  --chart-uibdr: #252d31;
+  --chart-uinfb: #051b44;
+  --chart-uinfd: #364147;
+  --chart-uinff: #252d31;
+  --chart-uinfg: #0c3406;
+  --chart-uinfm: #411247;
+  --chart-uinfo: #301705;
+  --chart-uinfr: #390e16;
+}

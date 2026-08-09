@@ -57,12 +57,33 @@ for abi in $ABIS; do
     triple="$(abi_triple "$abi")"
     echo ">> building core for $abi ($triple) [$OPT]"
     # backend defaults to vk on *-linux-android (raw Vulkan; no SDL anywhere)
-    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" )
+    #
+    # -Dplugins: the wasm plugin host. Off by default everywhere but Apple
+    # (build.zig's note: the non-Apple shells didn't name libvmlib.a in their
+    # link lines), so android asks for it explicitly and the CMake link below
+    # carries the third archive. Only arm64 has a WAMR archive
+    # (vendor/wamr-dist-android-arm64), so another ABI must build without it.
+    plugins=false
+    [ "$abi" = "arm64-v8a" ] && [ -f "$core/vendor/wamr-dist-android-arm64/lib/libvmlib.a" ] && plugins=true
+    # Its OWN install prefix, per ABI, the way the iOS build phases use
+    # zig-out-$PLATFORM_NAME. The default zig-out is where a NATIVE `zig build`
+    # also installs, so a desktop build running at the same time (an editor, a
+    # test run, another checkout task) overwrites liblookout_marine.a between
+    # this build and the copy below — the archive then links as Mach-O and the
+    # ELF check at the foot of this loop is what catches it. Separate prefixes
+    # make the two builds independent instead of racing.
+    prefix="$core/zig-out-android-$abi"
+    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" -Dplugins="$plugins" -p "$prefix" )
     dest="$here/app/jni/prebuilt/$abi"
     mkdir -p "$dest"
     # On android liblookout doesn't embed tile57 (nested .a breaks ld.lld), so
     # ship both archives; CMake links liblookout then libtile57.
-    cp "$core/zig-out/lib/liblookout_marine.a" "$core/zig-out/lib/libtile57.a" "$dest/"
+    cp "$prefix/lib/liblookout_marine.a" "$prefix/lib/libtile57.a" "$dest/"
+    # Same reason for the wasm runtime: off Apple the static core embeds no
+    # archive, so libvmlib.a rides along and CMake links it third. A stale copy
+    # from an earlier plugins=true build would otherwise linger and link.
+    rm -f "$dest/libvmlib.a"
+    [ "$plugins" = true ] && cp "$prefix/lib/libvmlib.a" "$dest/"
     # sanity: must be an AArch64/x86-64 ELF archive, never a native Mach-O one
     python3 - "$dest/liblookout_marine.a" <<'PY'
 import sys

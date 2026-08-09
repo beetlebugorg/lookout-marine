@@ -465,11 +465,41 @@ lk_raster_sets_equal (GPtrArray *a, GPtrArray *b)
       const LkRasterSet *other = g_ptr_array_index (b, i);
 
       if (one->id != other->id || one->in_view != other->in_view ||
-          g_strcmp0 (one->name, other->name) != 0)
+          one->shown != other->shown || g_strcmp0 (one->name, other->name) != 0)
         return FALSE;
     }
 
   return TRUE;
+}
+
+/* Write down which sets are drawn. Everything that can move the selection comes
+ * through the sync below, so this is the one place it is saved: the pill's
+ * menu, the Chart menu, the cycle key, and switching a chart off in the
+ * settings, which can move the selection on its own.
+ *
+ * Read back from the engine rather than tracked here. The engine owns the
+ * election — showing one set turns off the sets covering the same water — so
+ * what it says after the change is the only account that can be right. */
+static void
+lk_app_model_save_raster_shown (LkAppModel *self)
+{
+  if (self->raster_sets->len == 0)
+    return; /* no chart open, or no raster charts in it: nothing to say */
+
+  g_autoptr (GPtrArray) shown = g_ptr_array_new ();
+  g_autoptr (GPtrArray) hidden = g_ptr_array_new ();
+
+  for (guint i = 0; i < self->raster_sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (self->raster_sets, i);
+      g_ptr_array_add (set->shown ? shown : hidden, set->name);
+    }
+
+  g_ptr_array_add (shown, NULL);
+  g_ptr_array_add (hidden, NULL);
+  lk_raster_charts_note_shown (self->raster_charts,
+                               (const char *const *) shown->pdata,
+                               (const char *const *) hidden->pdata);
 }
 
 /* Read the engine's raster state into the model. TRUE when something moved —
@@ -499,6 +529,7 @@ lk_app_model_sync_raster (LkAppModel *self)
   self->raster_available = g_steal_pointer (&available);
   g_clear_pointer (&self->raster_sets, g_ptr_array_unref);
   self->raster_sets = g_ptr_array_ref (sets);
+  lk_app_model_save_raster_shown (self);
   return TRUE;
 }
 
@@ -509,6 +540,38 @@ lk_app_model_refresh_raster_state (LkAppModel *self)
 
   if (lk_app_model_sync_raster (self))
     g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
+}
+
+/* Put back which sets the mariner had drawn. Adding a source draws its set,
+ * which is right for a chart just picked and wrong for one being re-installed
+ * at launch, so every open has to correct it — after every source is in,
+ * because switching one chart off can move which set is drawn, and before the
+ * first frame, or a set the mariner switched off flashes on screen.
+ *
+ * Two passes. Hiding first and showing second is what keeps the election: where
+ * two providers cover one coast, the sources were added in an order that drew
+ * the first of them, so showing the mariner's pick before hiding its rival
+ * would leave the rival to turn the pick straight back off. */
+static void
+lk_app_model_restore_raster_shown (LkAppModel *self)
+{
+  g_autoptr (GPtrArray) sets = lk_chart_controller_raster_sets (self->controller);
+
+  for (guint i = 0; i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (!lk_raster_charts_shown (self->raster_charts, set->name))
+        lk_chart_controller_raster_set_shown (self->controller, set->id, FALSE);
+    }
+
+  for (guint i = 0; i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (lk_raster_charts_shown (self->raster_charts, set->name))
+        lk_chart_controller_raster_set_shown (self->controller, set->id, TRUE);
+    }
 }
 
 void
@@ -530,8 +593,17 @@ lk_app_model_reinstall_raster_charts (LkAppModel *self)
     }
 
   if (lk_raster_charts_count (self->raster_charts) > 0)
-    g_message ("raster: %u/%u chart(s) re-installed", installed,
-               lk_raster_charts_count (self->raster_charts));
+    {
+      lk_app_model_restore_raster_shown (self);
+      g_message ("raster: %u/%u chart(s) re-installed", installed,
+                 lk_raster_charts_count (self->raster_charts));
+    }
+
+  /* The ENC-over-picture state belongs to the mariner too, and it only does
+   * anything where a picture covers, so it is safe to put back before knowing
+   * whether one does. */
+  if (lk_store_load_chart_hidden ())
+    lk_chart_controller_set_chart_hidden (self->controller, TRUE);
 }
 
 /* Draw the set the last added file belongs to, when it covers this view. The
@@ -690,6 +762,9 @@ lk_app_model_toggle_chart (LkAppModel *self)
 
   lk_chart_controller_toggle_chart (self->controller);
   lk_app_model_refresh_raster_state (self);
+  /* From the engine, not from what was asked for: with no chart open the toggle
+   * does nothing, and the saved flag has to agree with the picture. */
+  lk_store_save_chart_hidden (lk_chart_controller_chart_hidden (self->controller));
 }
 
 GPtrArray *

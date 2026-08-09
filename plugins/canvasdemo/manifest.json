@@ -1,0 +1,6 @@
+{
+  "id": "org.example.canvasdemo",
+  "name": "Wind dial",
+  "api": 1,
+  "capabilities": ["vessel.read", "overlay.draw"]
+}

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="currentColor" stroke="currentColor" role="img" aria-label="Lookout Marine">
+<title>Lookout Marine</title>
+  <!-- Mono "Beacon, quiet", sector lights off: the sector arc is removed
+       (design source project 756ed7a7, m-quiet-mono, showSectors=false).
+       Paints with currentColor. -->
+  <path d="M0 74 Q18 82 32 96 Q44 108 50 128" fill="none" stroke-width="4"/>
+  <g fill="none" stroke-width="2.2">
+    <rect x="31.2" y="69" width="5.6" height="5.8"/>
+    <path d="M31.2 74.8 L29 96"/>
+    <path d="M36.8 74.8 L39 96"/>
+    <path d="M24.9 96 H43.1"/>
+    <circle cx="34" cy="96" r="2"/>
+  </g>
+</svg>

@@ -16,6 +16,11 @@ extension AppModel {
     func openSettings() { SettingsWindowController.shared.show(model: self) }
 
     /// Present the Open panel; open the chosen `.pmtiles` file or a folder of cells.
+    ///
+    /// A plugin may read files too — a weather file, say — and the panel says so
+    /// in its message rather than in allowedContentTypes, for the reason above:
+    /// naming types at all greys out the mariner's charts. What the mariner
+    /// chose goes to openFileOrChart, which lets the core decide.
     func presentOpenPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -23,11 +28,14 @@ extension AppModel {
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.title = "Open Chart"
-        panel.message = "Choose a baked .pmtiles chart, or a folder of cells."
+        let types = pluginFileTypes()
+        panel.message = types.isEmpty
+            ? "Choose a baked .pmtiles chart, or a folder of cells."
+            : "Choose a baked .pmtiles chart, a folder of cells, or a data file: \(types.joined(separator: ", "))."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        if isDir.boolValue { openChartDirectory(url.path) } else { openChart(url.path) }
+        if isDir.boolValue { openChartDirectory(url.path) } else { openFileOrChart(url.path) }
     }
 
     /// Present the Add Raster Charts panel. Multiple selection and folders both, because
@@ -67,6 +75,34 @@ extension AppModel {
 import Foundation
 
 extension AppModel {
+    /// One file the mariner chose. A plugin that claims the file type gets it
+    /// and reads it; anything else is a chart, which is what this panel opens
+    /// nearly every time.
+    ///
+    /// The core answers which — the app never matches extensions itself, so
+    /// every shell routes the same file the same way.
+    func openFileOrChart(_ path: String) {
+        #if os(macOS)
+        // A plugin package goes to consent, never to the chart engine. The
+        // extension is the package's own, so this is routing, not sniffing.
+        if path.lowercased().hasSuffix(".lkplug") {
+            beginPluginInstall(path)
+            return
+        }
+        #endif
+        if controller?.openFileForPlugins(path) == true { return }
+        openChart(path)
+    }
+
+    /// Every file extension the loaded plugins read, for the open panel's
+    /// message. Empty when no plugin claims one, which is the state a build
+    /// with no plugin layer is always in.
+    func pluginFileTypes() -> [String] {
+        PluginSettings.parse(controller?.pluginsJSON())
+            .filter(\.live)
+            .flatMap(\.fileTypes)
+    }
+
     /// Every raster chart under a directory. `.mbtiles` today; the extension is
     /// a hint only — the engine decides by what the file IS.
     func rasterPathsIn(_ dir: String) -> [String] {
@@ -83,8 +119,14 @@ extension AppModel {
 import Foundation
 
 extension AppModel {
-    /// Open the mariner form. On iOS it is a sheet, so the flag is enough.
-    func openSettings() { showSettings = true }
+    /// Open the mariner form. On iOS it is a sheet, and it opens on the LIST
+    /// of sections: the list is the form's first page here, the way the
+    /// sidebar is the Mac window's left edge. A caller that wants a particular
+    /// section (the screenshot hook) sets `settingsTab` after this.
+    func openSettings() {
+        settingsTab = ""
+        showSettings = true
+    }
 
     /// Import a picked chart (or folder of cells) into the app container, then
     /// open the copy. Copying sidesteps security-scope lifetime: the engine
@@ -107,7 +149,7 @@ extension AppModel {
         }
         var isDir: ObjCBool = false
         fm.fileExists(atPath: dest.path, isDirectory: &isDir)
-        if isDir.boolValue { openChartDirectory(dest.path) } else { openChart(dest.path) }
+        if isDir.boolValue { openChartDirectory(dest.path) } else { openFileOrChart(dest.path) }
     }
 
     /// Install the raster charts picked on iOS.

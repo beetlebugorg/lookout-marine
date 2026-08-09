@@ -1,10 +1,11 @@
-//! Raw Vulkan transport for Android: device, four pipelines, persistent
+//! Raw Vulkan transport for Android: device, the pipelines, persistent
 //! buffers, and a per-frame render (present into the Java shell's
 //! ANativeWindow OR headless offscreen readback). Selected by src/gpu.zig via
 //! `-Dbackend=vk`. All vector work happens in tile57; the frame phase only
 //! pushes a uniform and issues draws in paint order.
 //!
-//! Mirrors gpu_sdl.zig's contract exactly — same SPIR-V (shaders/vk/*.spv),
+//! Mirrors gpu_sdl.zig's contract exactly — same SPIR-V (the engine's chart
+//! programs in shaders/vk/*.spv, the host's plugin overlay in src/shaders/),
 //! same vertex layouts, same blend state, same de-indexed triangles — with the
 //! SDL_GPU conveniences hand-rolled:
 //!   * per-draw uniforms: one host-visible ring buffer + dynamic-offset UBO
@@ -20,6 +21,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const cc = @import("c.zig").c; // tile57 + stb (shared; matches root's scene types)
 const c_vk = @import("c_vk.zig");
+const ov = @import("overlay.zig");
 const vk = c_vk.c; // Vulkan (+ ANativeWindow and the android log sink on Android)
 
 // Precompiled SPIR-V (see build.zig: -Dbackend=vk embeds these), converted to
@@ -40,6 +42,11 @@ const sprite_frag_spv = spvWords(@embedFile("sprite_frag_spv"));
 const sdf_frag_spv = spvWords(@embedFile("sdf_frag_spv"));
 const pattern_vert_spv = spvWords(@embedFile("pattern_vert_spv"));
 const pattern_frag_spv = spvWords(@embedFile("pattern_frag_spv"));
+// The overlay program is the HOST's, not the engine's, so it is embedded from
+// this source tree rather than through the tile57 dependency. Sources and the
+// recompile command are in src/shaders/overlay.*.
+const overlay_vert_spv = spvWords(@embedFile("shaders/overlay.vert.spv"));
+const overlay_frag_spv = spvWords(@embedFile("shaders/overlay.frag.spv"));
 
 /// Vertex/fragment uniform block (128 bytes), byte-identical to `struct U` in
 /// shaders/vk/*. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig Uniforms,
@@ -279,12 +286,24 @@ pub const Gpu = struct {
     raster_buf: Buffer = .{},
     raster_draws: []RasterDraw = &.{},
     raster_alloc: ?std.mem.Allocator = null,
+    /// Chart overlays (src/overlay.zig): one triangle stream in world space,
+    /// coloured per vertex, drawn after everything else. Re-uploaded when the
+    /// store's generation moves — a plugin batch or a zoom step, not a frame.
+    overlay_buf: Buffer = .{},
+    overlay_count: u32 = 0,
+    overlay_gen: u64 = 0, // 0 = nothing uploaded yet (a built store is >= 1)
+    /// The overlay pass's own frame uniform — the chart's, with the MVP and
+    /// wrap rebuilt for the overlay's origin. setOverlay writes it, and it is
+    /// the only thing that fills overlay_buf, so a buffer to draw always has a
+    /// uniform to draw it with.
+    overlay_u: Uniforms = std.mem.zeroes(Uniforms),
     pipe_layout: vk.VkPipelineLayout = null,
     pipeline: vk.VkPipeline = null, // chart
     sprite_pipeline: vk.VkPipeline = null,
     raster_pipeline: vk.VkPipeline = null, // sprite program, depth-write on
     sdf_pipeline: vk.VkPipeline = null,
     pattern_pipeline: vk.VkPipeline = null,
+    overlay_pipeline: vk.VkPipeline = null,
 
     dpool: vk.VkDescriptorPool = null,
     vtx_uni_set: vk.VkDescriptorSet = null, // set 1 -> ring (dynamic)
@@ -802,6 +821,11 @@ pub const Gpu = struct {
         .{ .loc = 6, .format = vk.VK_FORMAT_R32_UINT, .offset = 36 },
         .{ .loc = 7, .format = vk.VK_FORMAT_R32_SFLOAT, .offset = 40 },
     };
+    // overlay: overlay.Vertex (24B) — world f2@0, colour f4@8.
+    const overlay_attrs = [_]VAttr{
+        .{ .loc = 0, .format = vk.VK_FORMAT_R32G32_SFLOAT, .offset = 0 },
+        .{ .loc = 1, .format = vk.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 8 },
+    };
 
     /// `depth_write` is for the raster underlay alone. Everything else TESTS
     /// depth and never writes it, which is what leaves the chart in painter's
@@ -904,6 +928,9 @@ pub const Gpu = struct {
         // The same sprite program, writing depth: the underlay, and nothing
         // else, puts a plane in front of the chart's opaque fills.
         self.raster_pipeline = try self.buildPipeline(sprite_vert_spv, sprite_frag_spv, @sizeOf(cc.tile57_gpu_quad), &quad_attrs, true);
+        // The overlay tests depth like the chart and writes none. Its shader
+        // emits z = 0, the near plane, so the chart cannot hide plugin content.
+        self.overlay_pipeline = try self.buildPipeline(overlay_vert_spv, overlay_frag_spv, @sizeOf(ov.Vertex), &overlay_attrs, false);
     }
 
     // ---- commands / sync ----------------------------------------------------------
@@ -1267,7 +1294,7 @@ pub const Gpu = struct {
                 _ = vk.vkDeviceWaitIdle(self.device);
                 self.releaseOffscreen();
                 self.releaseMsaa();
-        self.releaseDepth();
+                self.releaseDepth();
                 self.width = w;
                 self.height = h;
                 try self.ensureOffscreenTargets();
@@ -1449,6 +1476,59 @@ pub const Gpu = struct {
             if (self.raster_alloc) |a| a.free(self.raster_draws);
             self.raster_draws = &.{};
         }
+    }
+
+    // ---- chart overlays -----------------------------------------------------
+
+    /// Adopt an overlay frame and the view it is drawn with. The BUFFER upload
+    /// is a no-op while the generation is unchanged, so the render thread may
+    /// call this every frame. `u` is taken every time: the vertices are
+    /// relative to the frame's origin, so the pass needs the MVP and wrap built
+    /// for that origin, and the camera moves every frame while the geometry
+    /// does not.
+    pub fn setOverlay(self: *Gpu, fr: ov.Frame, u: Uniforms) !void {
+        self.overlay_u = u;
+        if (fr.generation == self.overlay_gen) return;
+        self.overlay_gen = fr.generation;
+        self.freeOverlayBuf();
+        if (fr.verts.len == 0) return;
+        const bytes = std.mem.sliceAsBytes(fr.verts);
+        self.overlay_buf = try self.createBuffer(bytes.len, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        @memcpy(self.overlay_buf.mapped.?[0..bytes.len], bytes);
+        self.overlay_count = @intCast(fr.verts.len);
+    }
+
+    /// Drop the overlay geometry (every plugin stopped, or teardown). The next
+    /// setOverlay re-uploads whatever the store then holds.
+    pub fn clearOverlay(self: *Gpu) void {
+        self.freeOverlayBuf();
+        self.overlay_gen = 0;
+    }
+
+    fn freeOverlayBuf(self: *Gpu) void {
+        if (self.overlay_buf.buf != null) {
+            // The frame in flight may still be reading it — the same wait
+            // clearRasterFrame takes.
+            _ = vk.vkWaitForFences(self.device, 1, &self.fence, vk.VK_TRUE, std.math.maxInt(u64));
+            self.destroyBuffer(&self.overlay_buf);
+        }
+        self.overlay_count = 0;
+    }
+
+    /// Draw the overlay LAST — after the raster underlay and the whole chart,
+    /// in the same render pass. The overlay carries its OWN uniform
+    /// (setOverlay): the shader reads mvp and wrap_x, and both are built for
+    /// the overlay's origin, not the chart's. It goes in the ring like every
+    /// other draw's, on set 1.
+    fn recordOverlay(self: *Gpu, cmd: vk.VkCommandBuffer) void {
+        if (self.overlay_count == 0 or self.overlay_buf.buf == null) return;
+        const pipe = self.overlay_pipeline orelse return;
+        vk.vkCmdBindPipeline(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        const zero: u64 = 0;
+        vk.vkCmdBindVertexBuffers(cmd, 0, 1, &self.overlay_buf.buf, &zero);
+        const voff = self.pushUniform(&self.overlay_u) orelse return;
+        vk.vkCmdBindDescriptorSets(cmd, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipe_layout, 1, 1, &self.vtx_uni_set, 1, &voff);
+        vk.vkCmdDraw(cmd, self.overlay_count, 1, 0, 0);
     }
 
     /// Draw the underlay: sprite pipeline, one draw per tile (each carries its
@@ -1639,11 +1719,18 @@ pub const Gpu = struct {
         const scis = vk.VkRect2D{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = self.width, .height = self.height } };
         vk.vkCmdSetScissor(cmd, 0, 1, &scis);
 
-        // Before the chart, and before the early return below: where the chart
-        // has no data is exactly where the mariner most needs the picture, so a
-        // missing scene must not take the underlay away.
+        // Before the chart: where the chart has no data is exactly where the
+        // mariner most needs the picture, so a missing scene must not take the
+        // underlay away.
         self.recordRaster(cmd, u);
+        self.recordScene(cmd, u, text_on, sound_on);
+        // The overlay runs even when there is no scene — an own-ship symbol
+        // must not vanish because the chart is still loading.
+        self.recordOverlay(cmd);
+    }
 
+    /// The chart itself, in paint order.
+    fn recordScene(self: *Gpu, cmd: vk.VkCommandBuffer, u: Uniforms, text_on: bool, sound_on: bool) void {
         const s = if (self.scene) |*sc| sc else return; // no scene: clear only
         var bound_pipe: vk.VkPipeline = null;
         var bound_tex: vk.VkDescriptorSet = null;
@@ -1810,6 +1897,7 @@ pub const Gpu = struct {
     pub fn deinit(self: *Gpu) void {
         _ = vk.vkDeviceWaitIdle(self.device);
         self.clearRasterFrame();
+        self.clearOverlay();
         self.freeScene();
         if (self.sprite_tex) |*t| self.destroyTexture(t);
         if (self.glyph_tex) |*t| self.destroyTexture(t);
@@ -1831,6 +1919,7 @@ pub const Gpu = struct {
         if (self.raster_pipeline != null) vk.vkDestroyPipeline(self.device, self.raster_pipeline, null);
         if (self.sdf_pipeline != null) vk.vkDestroyPipeline(self.device, self.sdf_pipeline, null);
         if (self.pattern_pipeline != null) vk.vkDestroyPipeline(self.device, self.pattern_pipeline, null);
+        if (self.overlay_pipeline != null) vk.vkDestroyPipeline(self.device, self.overlay_pipeline, null);
         if (self.pipe_layout != null) vk.vkDestroyPipelineLayout(self.device, self.pipe_layout, null);
         if (self.dpool != null) vk.vkDestroyDescriptorPool(self.device, self.dpool, null);
         if (self.set_layout_empty != null) vk.vkDestroyDescriptorSetLayout(self.device, self.set_layout_empty, null);

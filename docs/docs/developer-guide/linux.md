@@ -36,7 +36,7 @@ when the view is finer than the data permits. The scale is also a control: a cli
 opens the scale entry, where you type a scale or select a band. A narrow window
 drops the band and takes a smaller type, which is the rule the phone shells use.
 
-## The pick report
+## How the pick report is composed
 
 A click on the chart marks the object and opens the report beside the mark.
 
@@ -68,7 +68,7 @@ applies each edit after a short delay, and it keeps each value.
 
 ![The mariner settings panel above the chart](../img/linux-settings.webp)
 
-## Raster charts
+## Handling raster charts
 
 The engine draws the [raster charts](../user-guide/raster-charts.md) below the
 ENC. The shell supplies the list and the controls. The keys are the macOS keys
@@ -98,7 +98,7 @@ form prints is the name the pill cycles.
 
 Which sets cover the view changes as the mariner sails, so the state is read off
 the engine with the other readouts, at 10 Hz. Anything that changes the selection
-outside a frame — a switch in the settings panel, a chart added — reads it back at
+outside a frame (a switch in the settings panel, a chart added) reads it back at
 once, because the readouts only run while the chart renders and the panel can be
 open over a chart that is standing still.
 
@@ -142,7 +142,7 @@ call the core (`lookout_pan`, `lookout_zoom_at_logical`, and others). The core
 returns its readouts through the controller to the app model, and the HUD shows
 them.
 
-### Two earlier designs
+### Two earlier ways of getting the chart on screen
 
 Both worked. Each failed one of the two requirements above.
 
@@ -170,7 +170,7 @@ integrated GPU exports, because the integrated GPU uses a private tiling format
 Design 2 is removed. One part of it remains in the core: the offscreen Vulkan
 device selects a **discrete** GPU first. This is still the correct default.
 
-## Rendering
+## Rendering each frame
 
 The core makes the Vulkan instance, the device, and four pipelines (chart, sprite,
 SDF, and pattern) from precompiled SPIR-V. The core opens with
@@ -189,7 +189,7 @@ while the scene is not clean. The callback removes itself when the chart is stat
 Therefore a static chart uses no CPU time. All of the code runs on the main thread,
 because the engine permits only one thread and GTK requires the main thread.
 
-## Prerequisites
+## Before you build
 
 - **GTK 4.10** or later, the **Vulkan** headers, a Vulkan loader, and the X11 or
   Wayland client libraries.
@@ -206,7 +206,7 @@ tile57 is not a prerequisite. It is a Zig package dependency of the core. If a
 sibling `../../tile57` checkout is available, the build uses it. If it is not
 available, the build gets the commit that `../build.zig.zon` specifies.
 
-## Build and run
+## Building and running
 
 ```sh
 cd linux
@@ -227,7 +227,7 @@ the most recent chart. Then it looks for
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`. Set
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` to select the first camera position.
 
-## Files
+## Where the code lives
 
 | File | Function |
 |------|----------|
@@ -248,7 +248,7 @@ the most recent chart. Then it looks for
 | `build-core.sh` | It builds the Zig core where meson expects the outputs. |
 | `screenshots.sh` | It makes the documentation screenshots. Refer to [the protocol](screenshots.md). |
 
-## Cautions
+## What to watch out for
 
 - **Two GPUs.** The offscreen Vulkan device selects a discrete GPU first. The
   device that draws to the screen must be able to drive the surface. The loader

@@ -13,8 +13,12 @@ turns about the centre of the view.
 
 ![The chart turned 45 degrees](../img/macos-rotated.webp)
 
-The north bubble in the top right corner points north the whole time. Click or
-tap it, or press ⌘↑ (Ctrl+↑), and the chart returns to north-up.
+The north bubble in the top right corner points north the whole time. Press ⌘↑
+(Ctrl+↑) and the chart returns to north-up.
+
+Clicking or tapping the bubble does something else: it locks the chart to your
+boat. See [holding the boat on the
+screen](your-boat.md#holding-the-boat-on-the-screen).
 
 ![The north bubble on a turned chart](../img/detail/north-bubble.webp)
 
@@ -22,7 +26,7 @@ On a touch screen the twist waits until you have turned about 18 degrees. Two
 fingers never pinch without some twist, and without the pause every zoom would
 also spin the chart.
 
-## Go to a scale
+## Going to a scale
 
 Click the blue scale in the bar at the bottom.
 
@@ -36,7 +40,7 @@ Click the blue scale in the bar at the bottom.
 If you ask for more than the survey holds, the chart stops at the closest scale
 it has.
 
-## Search
+## Searching for a position
 
 The search bubble is in the top left corner. Type a position and press Return.
 Latitude first:
@@ -49,7 +53,7 @@ Latitude first:
 The zoom and the rotation stay as they are. Search by place name is not
 available yet.
 
-## Keys
+## Keyboard shortcuts
 
 Mac uses Command. Windows and Linux use Control.
 
@@ -66,7 +70,7 @@ Mac uses Command. Windows and Linux use Control.
 | ⌘, | Mariner settings |
 | Ctrl+F | Search (Windows and Linux) |
 
-## Mouse and trackpad
+## Mouse and trackpad gestures
 
 | Action | Result |
 |---|---|
@@ -77,7 +81,7 @@ Mac uses Command. Windows and Linux use Control.
 | Click | Pick report for what is under the cursor. |
 | Double-click (Windows) | Zoom in at the pointer. |
 
-## Touch
+## Touch gestures
 
 | Action | Result |
 |---|---|

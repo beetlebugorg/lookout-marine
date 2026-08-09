@@ -1,12 +1,13 @@
 /* d3d12_shim.c — the Direct3D 12 transport behind d3d12_shim.h.
  *
  * One context owns the device (hardware, or WARP when there is none), the
- * direct queue, the runtime-compiled shaders (D3DCompile of
- * shaders/lookout.hlsl), the pipelines, and a composition swapchain for the
- * host's SwapChainPanel. Two frames in flight; per-frame command allocator and
- * uniform ring. Buffer/texture creation is thread-safe (the scene build
- * worker); texture uploads run on a private queue behind a lock, and frees are
- * deferred until the frame fence passes the resource.
+ * direct queue, the runtime-compiled shaders (D3DCompile of the engine's
+ * shaders/lookout.hlsl, and of the overlay source this file carries), the
+ * pipelines, and a composition swapchain for the host's SwapChainPanel. Two
+ * frames in flight; per-frame command allocator and uniform ring.
+ * Buffer/texture creation is thread-safe (the scene build worker); texture
+ * uploads run on a private queue behind a lock, and frees are deferred until
+ * the frame fence passes the resource.
  */
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
@@ -21,15 +22,38 @@
 
 #include "d3d12_shim.h"
 
+/* The Windows SDK's C binding for the descriptor-handle getters takes the
+ * result through an out parameter, which is the form this file calls. mingw's
+ * headers declare the same vtable entry but poison the macro, so a cross
+ * compile (zig -target x86_64-windows-gnu, the only type check available off
+ * Windows) fails on it. Restore the SDK shape there. MSVC never sees this. */
+#ifdef __MINGW32__
+#undef ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart
+#define ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart(This, RetVal) \
+    ((This)->lpVtbl->GetCPUDescriptorHandleForHeapStart(This, RetVal))
+#undef ID3D12DescriptorHeap_GetGPUDescriptorHandleForHeapStart
+#define ID3D12DescriptorHeap_GetGPUDescriptorHandleForHeapStart(This, RetVal) \
+    ((This)->lpVtbl->GetGPUDescriptorHandleForHeapStart(This, RetVal))
+#endif
+
 #define LKD_FMT DXGI_FORMAT_B8G8R8A8_UNORM
 #define LKD_DEPTH_FMT DXGI_FORMAT_D32_FLOAT
 #define LKD_FRAMES 2
 #define LKD_SRV_SLOTS 1024
 #define LKD_URING_BYTES (256 * 2048)
 
-/* The first five match LKD_PIPE_* by value (apply_draw_state indexes with the
+/* The first six match LKD_PIPE_* by value (apply_draw_state indexes with the
  * pipe); PSO_CHART_OPAQUE is reached only through the depth-mode override. */
-enum { PSO_CHART = 0, PSO_SPRITE, PSO_SDF, PSO_PATTERN, PSO_RASTER, PSO_CHART_OPAQUE, PSO_COUNT };
+enum {
+    PSO_CHART = 0,
+    PSO_SPRITE,
+    PSO_SDF,
+    PSO_PATTERN,
+    PSO_RASTER,
+    PSO_OVERLAY,
+    PSO_CHART_OPAQUE,
+    PSO_COUNT
+};
 
 typedef struct retire_item {
     ID3D12Resource *res;
@@ -325,12 +349,70 @@ static int make_backbuffer_rtvs(lkd_ctx *c)
 
 /* ---- pipeline construction ------------------------------------------------ */
 
-static ID3DBlob *compile_shader(const char *src, const char *entry, const char *target,
-                                char err[LKD_ERR_LEN])
+/* The overlay pipeline's shader (LKD_PIPE_OVERLAY). The chart's shaders come
+ * from the engine (tile57 shaders/lookout.hlsl, handed in as hlsl_source); the
+ * overlay is the host's own content, so its source lives here and compiles into
+ * the same pipeline set at create. Self-contained on purpose: nothing here may
+ * break if the engine renames a struct.
+ *
+ * The cbuffer is a byte-for-byte copy of tile57_gpu_uniforms (128 B), so the
+ * overlay pass takes the same uniform block the chart does — only mvp and
+ * wrap_x are read, the rest holds the offsets. HLSL has no static_assert; the
+ * ABI gate in root.zig is what catches a layout skew. */
+static const char *const LKD_OVERLAY_HLSL =
+    "cbuffer U : register(b0)\n"
+    "{\n"
+    "    float4x4 mvp;\n"
+    "    float2   px_to_clip;\n"
+    "    float    size_scale;\n"
+    "    float    current_scale;\n"
+    "    uint     cat_mask;\n"
+    "    float    wrap_x;\n"
+    "    float    rot_sin;\n"
+    "    float    rot_cos;\n"
+    "    float4   color;\n"
+    "    float2   anchor_px;\n"
+    "    float2   cell_px;\n"
+    "};\n"
+    /* overlay.Vertex, 24 B. The offsets are pinned by overlay_layout below. */
+    "struct OverlayVin\n"
+    "{\n"
+    "    float2 world : WORLD;\n"
+    "    float4 color : COLOR;\n"
+    "};\n"
+    "struct OverlayOut\n"
+    "{\n"
+    "    float4 pos   : SV_Position;\n"
+    "    float4 color : COLOR0;\n"
+    "};\n"
+    "OverlayOut overlay_vs(OverlayVin v)\n"
+    "{\n"
+    /* Same antimeridian wrap the chart shader applies: draw at the world
+     * instance nearest the camera, so an overlay across the seam is seamless.
+     * The vertices are relative to the overlay's build origin, and so are mvp
+     * and wrap_x — a whole world width is 1.0 in that frame too. */
+    "    float2 world = float2(v.world.x + round(wrap_x - v.world.x), v.world.y);\n"
+    "    float4 clip = mul(mvp, float4(world, 0.0, 1.0));\n"
+    /* z = 0 is the near plane. The chart's paint-order depths are all in (0,1),
+     * so a depth-test-only overlay pass is never hidden by the chart it
+     * annotates — and it writes nothing, so it cannot hide the chart either. */
+    "    clip.z = 0.0;\n"
+    "    OverlayOut o;\n"
+    "    o.pos = clip;\n"
+    "    o.color = v.color;\n"
+    "    return o;\n"
+    "}\n"
+    "float4 overlay_ps(OverlayOut i) : SV_Target\n"
+    "{\n"
+    "    return i.color;\n"
+    "}\n";
+
+static ID3DBlob *compile_shader(const char *src, const char *src_name, const char *entry,
+                                const char *target, char err[LKD_ERR_LEN])
 {
     ID3DBlob *code = NULL;
     ID3DBlob *msgs = NULL;
-    HRESULT hr = D3DCompile(src, strlen(src), "lookout.hlsl", NULL, NULL, entry, target,
+    HRESULT hr = D3DCompile(src, strlen(src), src_name, NULL, NULL, entry, target,
                             D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &msgs);
     if (FAILED(hr)) {
         if (err) {
@@ -424,6 +506,12 @@ static const D3D12_INPUT_ELEMENT_DESC quad_layout[] = {
     { "DEPTH", 0, DXGI_FORMAT_R32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
 };
 
+/* overlay.Vertex, 24 B: world position then straight-alpha RGBA floats. */
+static const D3D12_INPUT_ELEMENT_DESC overlay_layout[] = {
+    { "WORLD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+};
+
 static ID3D12PipelineState *make_pso(lkd_ctx *c, ID3DBlob *vs, ID3DBlob *ps,
                                      const D3D12_INPUT_ELEMENT_DESC *layout, UINT layout_n,
                                      int depth_write)
@@ -473,14 +561,17 @@ static ID3D12PipelineState *make_pso(lkd_ctx *c, ID3DBlob *vs, ID3DBlob *ps,
 
 static int make_pipelines(lkd_ctx *c, const char *hlsl, char err[LKD_ERR_LEN])
 {
-    ID3DBlob *chart_vs = compile_shader(hlsl, "chart_vs", "vs_5_0", err);
-    ID3DBlob *chart_ps = compile_shader(hlsl, "chart_ps", "ps_5_0", err);
-    ID3DBlob *pattern_vs = compile_shader(hlsl, "pattern_vs", "vs_5_0", err);
-    ID3DBlob *pattern_ps = compile_shader(hlsl, "pattern_ps", "ps_5_0", err);
-    ID3DBlob *sprite_vs = compile_shader(hlsl, "sprite_vs", "vs_5_0", err);
-    ID3DBlob *sprite_ps = compile_shader(hlsl, "sprite_ps", "ps_5_0", err);
-    ID3DBlob *sdf_ps = compile_shader(hlsl, "sdf_ps", "ps_5_0", err);
-    int ok = chart_vs && chart_ps && pattern_vs && pattern_ps && sprite_vs && sprite_ps && sdf_ps;
+    ID3DBlob *chart_vs = compile_shader(hlsl, "lookout.hlsl", "chart_vs", "vs_5_0", err);
+    ID3DBlob *chart_ps = compile_shader(hlsl, "lookout.hlsl", "chart_ps", "ps_5_0", err);
+    ID3DBlob *pattern_vs = compile_shader(hlsl, "lookout.hlsl", "pattern_vs", "vs_5_0", err);
+    ID3DBlob *pattern_ps = compile_shader(hlsl, "lookout.hlsl", "pattern_ps", "ps_5_0", err);
+    ID3DBlob *sprite_vs = compile_shader(hlsl, "lookout.hlsl", "sprite_vs", "vs_5_0", err);
+    ID3DBlob *sprite_ps = compile_shader(hlsl, "lookout.hlsl", "sprite_ps", "ps_5_0", err);
+    ID3DBlob *sdf_ps = compile_shader(hlsl, "lookout.hlsl", "sdf_ps", "ps_5_0", err);
+    ID3DBlob *ov_vs = compile_shader(LKD_OVERLAY_HLSL, "overlay.hlsl", "overlay_vs", "vs_5_0", err);
+    ID3DBlob *ov_ps = compile_shader(LKD_OVERLAY_HLSL, "overlay.hlsl", "overlay_ps", "ps_5_0", err);
+    int ok = chart_vs && chart_ps && pattern_vs && pattern_ps && sprite_vs && sprite_ps &&
+             sdf_ps && ov_vs && ov_ps;
     if (ok) {
         c->psos[PSO_CHART] = make_pso(c, chart_vs, chart_ps, chart_layout,
                                       _countof(chart_layout), 0);
@@ -496,8 +587,13 @@ static int make_pipelines(lkd_ctx *c, const char *hlsl, char err[LKD_ERR_LEN])
          * LKD_PIPE_RASTER in the header). */
         c->psos[PSO_RASTER] = make_pso(c, sprite_vs, sprite_ps, quad_layout,
                                        _countof(quad_layout), 1);
+        /* Plugin overlays: alpha blend (from make_pso), depth test, no depth
+         * write — the pass annotates the chart and must not occlude it. */
+        c->psos[PSO_OVERLAY] = make_pso(c, ov_vs, ov_ps, overlay_layout,
+                                        _countof(overlay_layout), 0);
         ok = c->psos[PSO_CHART] && c->psos[PSO_CHART_OPAQUE] && c->psos[PSO_PATTERN] &&
-             c->psos[PSO_SPRITE] && c->psos[PSO_SDF] && c->psos[PSO_RASTER];
+             c->psos[PSO_SPRITE] && c->psos[PSO_SDF] && c->psos[PSO_RASTER] &&
+             c->psos[PSO_OVERLAY];
         if (!ok)
             set_err(err, "create pipeline state", E_FAIL);
     }
@@ -508,6 +604,8 @@ static int make_pipelines(lkd_ctx *c, const char *hlsl, char err[LKD_ERR_LEN])
     if (sprite_vs) ID3D10Blob_Release(sprite_vs);
     if (sprite_ps) ID3D10Blob_Release(sprite_ps);
     if (sdf_ps) ID3D10Blob_Release(sdf_ps);
+    if (ov_vs) ID3D10Blob_Release(ov_vs);
+    if (ov_ps) ID3D10Blob_Release(ov_ps);
     return ok;
 }
 
@@ -1121,7 +1219,8 @@ void lkd_set_uniforms(lkd_frame *f, const void *bytes, size_t len)
 }
 
 /* Bind the PSO and vertex stream the pending draw needs. The stride follows
- * the pipeline: chart/pattern read tile57_gpu_vertex, sprite/SDF tile57_gpu_quad. */
+ * the pipeline: chart/pattern read tile57_gpu_vertex, sprite/SDF/raster
+ * tile57_gpu_quad, overlay overlay.Vertex. */
 static void apply_draw_state(lkd_frame *f)
 {
     lkd_ctx *c = f->ctx;
@@ -1131,7 +1230,11 @@ static void apply_draw_state(lkd_frame *f)
         ID3D12GraphicsCommandList_SetPipelineState(c->list, pso);
         f->cur_pso = pso;
     }
-    UINT stride = (f->pipe == LKD_PIPE_CHART || f->pipe == LKD_PIPE_PATTERN) ? 32 : 44;
+    UINT stride = 44;
+    if (f->pipe == LKD_PIPE_CHART || f->pipe == LKD_PIPE_PATTERN)
+        stride = 32;
+    else if (f->pipe == LKD_PIPE_OVERLAY)
+        stride = 24;
     if (f->vbuf != NULL && (f->vbuf != f->bound_vbuf || stride != f->bound_stride)) {
         D3D12_VERTEX_BUFFER_VIEW v;
         v.BufferLocation = ID3D12Resource_GetGPUVirtualAddress(f->vbuf->res);

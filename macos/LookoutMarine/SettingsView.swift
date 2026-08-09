@@ -1,9 +1,13 @@
-//  SettingsView.swift — the S-52 mariner settings, tabbed on BOTH platforms
-//  (Display / Depths / Text & Symbols / Advanced — the mariner thinks in those
-//  groups). macOS sizes the tab window itself; iOS lets the sheet size the
-//  TabView (the old fixed 460x430 frame fought the sheet). One MarinerSettings
-//  model behind both: bind() loads the engine state, edits auto-apply
-//  (debounced) and SAVE.
+//  SettingsView.swift — the mariner settings window: a SIDEBAR of sections on
+//  macOS (Display / Depths / Text / Charts / … / Advanced), the same sections
+//  in the same order on iOS, pushed one at a time on a phone and stood beside
+//  the sidebar on an iPad. One MarinerSettings model behind all of them:
+//  bind() loads the engine state, edits auto-apply (debounced) and SAVE.
+//
+//  The sidebar is a slot list, not a fixed menu. The four core sections and
+//  Advanced always exist; Vessels, Alarms and Connections appear only while
+//  something puts settings in them, and today that something is a plugin. The
+//  mariner is never told which: AIS settings are chart settings.
 //
 //  The Depths section explains the S-52 shading model instead of assuming it:
 //  the single most-reported "bug" was a safety-contour change not turning
@@ -13,42 +17,269 @@
 
 import SwiftUI
 
+/// One entry in the sidebar. `core` sections are the app's own and are always
+/// listed; the rest are listed only while they hold something. The ids are the
+/// core's section names (src/plugin/host.zig, `Tab`), so a plugin and the shell
+/// mean the same thing by "alarms".
+struct SettingsSection: Identifiable {
+    let id: String
+    let label: String
+    let icon: String
+    let core: Bool
+
+    /// Every section, in the order the sidebar shows them. Advanced is last:
+    /// it is where anything unclaimed lands.
+    static let all: [SettingsSection] = [
+        .init(id: "display", label: "Display", icon: "paintpalette", core: true),
+        .init(id: "depths", label: "Depths", icon: "water.waves", core: true),
+        .init(id: "text", label: "Text", icon: "textformat", core: true),
+        .init(id: "charts", label: "Charts", icon: "map", core: true),
+        .init(id: "vessels", label: "Vessels", icon: "ferry", core: false),
+        .init(id: "alarms", label: "Alarms", icon: "bell", core: false),
+        .init(id: "connections", label: "Connections", icon: "antenna.radiowaves.left.and.right", core: false),
+        // Plugins is the one section that talks ABOUT plugins: install,
+        // grants, uninstall. It is the app's own, not a slot a schema fills.
+        .init(id: "plugins", label: "Plugins", icon: "puzzlepiece.extension", core: true),
+        .init(id: "advanced", label: "Advanced", icon: "slider.horizontal.3", core: true),
+    ]
+}
+
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @StateObject private var m = MarinerSettings()
+    @StateObject private var p = PluginSettings()
 
     var body: some View {
         content
-            .onAppear { m.bind(to: model.controller) }
+            .onAppear {
+                m.bind(to: model.controller)
+                p.bind(to: model.controller)
+                // A connection's line moves on its own while the window is up.
+                p.startPolling()
+            }
+            .onDisappear { p.stopPolling() }
+            #if os(iOS)
+            // The chart pickers, presented BY THE FORM. A sheet cannot present
+            // another sheet from the window's own view, which is where the
+            // chart's importers hang, so Add Charts had to dismiss the form
+            // and time a re-present. These come up over the form and leave it
+            // where it was.
+            .fileImporter(isPresented: $model.showSettingsImporter,
+                          allowedContentTypes: [.item, .folder]) { result in
+                if case .success(let url) = result { model.openImported(url) }
+            }
+            .fileImporter(isPresented: $model.showSettingsRasterImporter,
+                          allowedContentTypes: [.item, .folder],
+                          allowsMultipleSelection: true) { result in
+                if case .success(let urls) = result { model.importRasterCharts(urls) }
+            }
+            #endif
+    }
+
+    /// The one thing the whole window promises. It stands under the list of
+    /// sections rather than repeating itself in every one of them.
+    private static let promise = "Applies at once · kept for next launch"
+
+    private var sections: [SettingsSection] {
+        let filled = p.populatedTabs
+        return SettingsSection.all.filter { s in
+            #if os(iOS)
+            // NOTHING ON IOS INSTALLS A PLUGIN: the app claims no .lkplug
+            // type, there is no Finder to open one from and no panel to pick
+            // one with. On a device carrying only the shipped set the section
+            // could say nothing but "No plugins installed" under a heading
+            // with no button, which reads as a broken page rather than an
+            // empty one. So it follows the rule Vessels, Alarms and
+            // Connections already follow — a section appears while it holds
+            // something — and a developer copy or an installed plugin brings
+            // it back with its grant switches, which is the part that matters.
+            if s.id == "plugins" { return p.plugins.contains { $0.origin != "bundled" } }
+            #endif
+            return s.core || filled.contains(s.id)
+        }
+    }
+
+    /// The section on screen. A section can go away — a plugin that never came
+    /// up takes its section with it — so a stale selection falls back.
+    private var selected: String {
+        sections.contains { $0.id == model.settingsTab } ? model.settingsTab : "display"
     }
 
     @ViewBuilder private var content: some View {
-        // The presenting sheet (iOS) supplies the Done button.
-        TabView(selection: $model.settingsTab) {
-            Form { DisplaySections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Display", systemImage: "paintpalette") }.tag(0)
-            Form { DepthsSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Depths", systemImage: "water.waves") }.tag(1)
-            Form { SymbolsSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Text", systemImage: "textformat") }.tag(2)
-            Form { ChartsSections(model: model) }.formStyle(.grouped)
-                .tabItem { Label("Charts", systemImage: "map") }.tag(3)
-            Form { AdvancedSections(m: m) }.formStyle(.grouped)
-                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }.tag(4)
-        }
         #if os(macOS)
-        // The five tab labels need this width. In a narrower window macOS
-        // collapses the tab bar into an overflow menu.
-        .frame(minWidth: 660, minHeight: 560)
+        NavigationSplitView {
+            List(sections, selection: $model.settingsTab) { s in
+                Label(s.label, systemImage: s.icon)
+            }
+            .navigationSplitViewColumnWidth(min: 168, ideal: 178, max: 220)
+            // No collapse control: the list IS the navigation, and a window
+            // with it hidden has no way back to another section.
+            .toolbar(removing: .sidebarToggle)
+            .safeAreaInset(edge: .bottom) {
+                Text(Self.promise)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } detail: {
+            pane(selected)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 720, minHeight: 560)
+        #else
+        // iOS never had this sidebar. It had a TabView, and a tab bar holds
+        // FOUR of nine sections before the rest go behind More — on the
+        // 13-inch iPad as well as the phone — so Connections, the one a
+        // mariner opens at the dock with a gateway in front of them, was two
+        // taps down an overflow menu with no title on the page it landed on.
+        //
+        // The same sections in the same order, in this platform's own
+        // navigation instead: a phone pushes a section onto a stack, and a
+        // sheet wide enough to hold both columns stands the list beside the
+        // pane, which is the shape of the Mac window.
+        GeometryReader { geo in
+            if geo.size.width >= Self.splitWidth {
+                splitLayout
+            } else {
+                stackLayout
+            }
+        }
         #endif
+    }
+
+    #if os(iOS)
+    /// Narrower than this and two columns leave the pane nothing to stand in,
+    /// so the sections push instead. An iPhone sheet is 402pt wide; the
+    /// settings sheet on a 13-inch iPad is 571pt.
+    private static let splitWidth: CGFloat = 500
+
+    /// A phone: the list of sections, and one section pushed onto it.
+    ///
+    /// The path IS `settingsTab` — one section deep, or none while the list
+    /// itself is on screen — so the screenshot hook's `settings:connections`
+    /// comes up already on Connections, and Back puts the list back.
+    private var stackLayout: some View {
+        NavigationStack(path: pushedSection) {
+            List {
+                Section {
+                    ForEach(sections) { s in
+                        NavigationLink(value: s.id) {
+                            Label(s.label, systemImage: s.icon)
+                        }
+                    }
+                } footer: {
+                    Text(Self.promise).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Mariner Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: String.self) { id in
+                pane(id)
+                    .navigationTitle(sectionLabel(id))
+                    .navigationBarTitleDisplayMode(.inline)
+                    // Every pane carries its own: a pushed view does not
+                    // inherit the root's toolbar, and a mariner two taps into
+                    // Connections must be able to shut the form from there.
+                    .toolbar { doneItem }
+            }
+            .toolbar { doneItem }
+        }
+    }
+
+    /// An iPad: the list beside the pane, the Mac window's own shape.
+    private var splitLayout: some View {
+        NavigationSplitView {
+            List(sections, selection: sidebarSelection) { s in
+                Label(s.label, systemImage: s.icon)
+            }
+            .navigationTitle("Mariner Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+            // No collapse control, for the Mac window's reason: the list IS
+            // the navigation, and a sheet with it hidden has no way back to
+            // another section.
+            .toolbar(removing: .sidebarToggle)
+            .safeAreaInset(edge: .bottom) {
+                Text(Self.promise)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .toolbar { doneItem }
+        } detail: {
+            NavigationStack {
+                pane(selected)
+                    .navigationTitle(sectionLabel(selected))
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+        // A SHEET IS COMPACT EVEN ON A 13-INCH IPAD, and a compact split view
+        // collapses to a stack. The sheet was measured above and is wide
+        // enough for two columns, so it says so.
+        .environment(\.horizontalSizeClass, .regular)
+    }
+
+    /// The stack's path: the section on screen, or nothing while the list is.
+    private var pushedSection: Binding<[String]> {
+        Binding(
+            get: { sections.contains { $0.id == model.settingsTab } ? [model.settingsTab] : [] },
+            set: { model.settingsTab = $0.last ?? "" }
+        )
+    }
+
+    /// The sidebar's selection. `selected` already falls back when a section
+    /// goes away with the plugin that filled it, and the pane follows the same
+    /// value, so the two can never disagree.
+    private var sidebarSelection: Binding<String?> {
+        Binding(get: { selected }, set: { model.settingsTab = $0 ?? selected })
+    }
+
+    /// A section's own name, for the title of its pane. Until now a pushed
+    /// pane carried nothing but a floating back chevron.
+    private func sectionLabel(_ id: String) -> String {
+        SettingsSection.all.first { $0.id == id }?.label ?? "Settings"
+    }
+
+    /// The sheet's Done. It came from the presenting view's NavigationStack
+    /// while that view owned the container; the form owns it now.
+    @ToolbarContentBuilder private var doneItem: some ToolbarContent {
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Done") { model.showSettings = false }
+        }
+    }
+    #endif
+
+    /// One section's form: the app's own settings for it, then whatever a
+    /// plugin contributed to the same section.
+    @ViewBuilder private func pane(_ id: String) -> some View {
+        Form {
+            switch id {
+            case "display": DisplaySections(m: m)
+            case "depths": DepthsSections(m: m)
+            case "text": SymbolsSections(m: m)
+            case "charts": ChartsSections(model: model)
+            case "plugins": PluginsManageSections(p: p, model: model)
+            case "advanced": AdvancedSections(m: m)
+            default: EmptyView()
+            }
+            PluginSections(p: p, tab: id)
+            PluginListSections(p: p, tab: id)
+        }
+        .formStyle(.grouped)
     }
 }
 
 // MARK: - Charts
 
 /// Chart selection: the open library, recents, and the picker. iOS imports via
-/// the file importer (sheet-swapped by addChartsFromSettings); macOS uses the
-/// shared NSOpenPanel.
+/// the form's OWN file importers (SettingsView attaches them, so they present
+/// over the sheet); macOS uses the shared NSOpenPanel.
 private struct ChartsSections: View {
     @ObservedObject var model: AppModel
 
@@ -140,7 +371,12 @@ private struct ChartsSections: View {
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
+                            // .help is a POINTER tooltip. On touch a bare
+                            // minus circle says nothing at all, so the words
+                            // travel as the button's own label and hint.
                             .help("Remove. Takes effect the next time a chart opens.")
+                            .accessibilityLabel("Remove \(displayName(p))")
+                            .accessibilityHint("Takes effect the next time a chart opens.")
                         }
                         .padding(.leading, 22)
                     }
@@ -150,7 +386,10 @@ private struct ChartsSections: View {
                 #if os(macOS)
                 model.presentRasterPanel()
                 #else
-                model.showRasterImporter = true
+                // The form's own importer, not the chart's: the chart's is
+                // attached to the view presenting this sheet and cannot come
+                // up while the sheet is over it.
+                model.showSettingsRasterImporter = true
                 #endif
             } label: {
                 Label("Add Raster Charts…", systemImage: "plus")
@@ -177,22 +416,33 @@ private struct DisplaySections: View {
     @ObservedObject var m: MarinerSettings
     var body: some View {
         Section {
-            Picker("Color scheme", selection: $m.scheme) {
-                ForEach(MarinerScheme.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-        } footer: { Text("Day, dusk and night palettes switch instantly.").captionFooter() }
+            SchemeSwatches(scheme: $m.scheme)
+        } header: {
+            SectionHead("Colour scheme", hint: "⌘L steps")
+        } footer: {
+            Text("The palettes switch instantly. Night keeps your eyes dark-adapted.").captionFooter()
+        }
 
         Section {
-            Picker("Display category", selection: $m.displayCategory) {
-                ForEach(MarinerDisplayCategory.allCases) { Text($0.label).tag($0) }
+            ForEach(MarinerDisplayCategory.allCases) { c in
+                ChoiceRow(title: c.label, desc: c.desc, selected: m.displayCategory == c) {
+                    m.displayCategory = c
+                }
             }
-            .pickerStyle(.segmented)
-            Picker("Soundings", selection: $m.soundings) {
-                ForEach(MarinerSoundings.allCases) { Text($0.label).tag($0) }
+        } header: {
+            SectionHead("Display category", hint: "⌘D adds Other")
+        } footer: {
+            Text("Each category contains the one before it.").captionFooter()
+        }
+
+        Section {
+            ForEach(MarinerSoundings.allCases) { s in
+                ChoiceRow(title: s.label, desc: s.desc, selected: m.soundings == s) {
+                    m.soundings = s
+                }
             }
-        } header: { Text("Detail") } footer: {
-            Text("Base ⊂ Standard ⊂ Other. Spot soundings switch independently of the category.").captionFooter()
+        } header: {
+            SectionHead("Soundings", hint: "⌘⇧S steps")
         }
     }
 }
@@ -218,15 +468,13 @@ private struct DepthsSections: View {
 
     var body: some View {
         Section {
-            Picker("Depth unit", selection: $m.depthUnit) {
+            SegmentedRow("Depth unit", selection: $m.depthUnit) {
                 ForEach(MarinerDepthUnit.allCases) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
-            Picker("Water shading", selection: $m.fourShadeWater) {
+            SegmentedRow("Water shading", selection: $m.fourShadeWater) {
                 Text("Two shades").tag(false)
                 Text("Four shades").tag(true)
             }
-            .pickerStyle(.segmented)
         } footer: {
             Text(m.fourShadeWater
                  ? "Four shades: white (safe) water starts at the DEEP contour; the safety contour separates the two middle blues."
@@ -315,10 +563,9 @@ private struct SymbolsSections: View {
         }
         Section("Symbols") {
             Toggle("Simplified point symbols", isOn: $m.simplifiedPoints)
-            Picker("Boundaries", selection: $m.boundaryStyle) {
+            SegmentedRow("Boundaries", selection: $m.boundaryStyle) {
                 ForEach(MarinerBoundaryStyle.allCases) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
             Toggle("Full light-sector lines", isOn: $m.showFullSectorLines)
         }
     }
@@ -374,10 +621,17 @@ private struct DepthRow: View {
                     .frame(width: 62)
                     .multilineTextAlignment(.trailing)
                     #if os(iOS)
+                    // Borderless, a contour depth reads as a printed value
+                    // rather than something to change. The row editors wear
+                    // the border already; these match them.
+                    .textFieldStyle(.roundedBorder)
                     .keyboardType(whole ? .numberPad : .decimalPad)
+                    .keyboardDone()
                     #endif
                 Stepper("", value: $value, in: 0...660, step: 1).labelsHidden()
-                Text(unit).foregroundStyle(.secondary).frame(width: 20, alignment: .leading)
+                Text(unit).foregroundStyle(.secondary)
+                    .fixedSize()
+                    .frame(minWidth: 20, alignment: .leading)
             }
         }
     }

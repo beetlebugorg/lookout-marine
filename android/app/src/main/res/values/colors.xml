@@ -7,4 +7,8 @@
          clears to, so the window and the loading cover show the same colour the
          first frame arrives on and there is no black flash between them. -->
     <color name="nodata">#93AEBB</color>
+    <!-- S-52 DEPDW, the day palette's deep water. The background layer of the
+         adaptive launcher icon: the foreground is full-bleed, so this shows
+         only in the parallax gap when a launcher slides the two layers. -->
+    <color name="ic_launcher_background">#c9edff</color>
 </resources>

@@ -1,0 +1,57 @@
+/* Geometry, elevation and motion. Every number is a literal from
+   windows/ui/MainWindow.xaml or macos/LookoutMarine/Chrome.swift. They are not
+   a 4/8 grid and they are not rounded here. */
+
+:root {
+  /* chrome geometry */
+  --chrome-bubble: 48px;      /* Bubble style: 48x48, CornerRadius 24 */
+  --chrome-gap: 10px;         /* Spacing between chrome items */
+  --chrome-margin: 16px;      /* chrome to window edge */
+  --chrome-capsule-h: 44px;   /* HudPill height, CornerRadius 22 */
+  --chrome-glyph: 18px;       /* FontIcon size inside a bubble */
+  --chrome-marker: 34px;      /* pick marker diameter */
+  --scalebar-h: 6px;
+  --scalebar-max: 140px;      /* the bar is 140pt or less */
+  --settings-pane-w: 380px;
+  --scale-panel-w: 340px;
+  --pick-list-w: 200px;
+  --search-field-w: 320px;
+
+  /* spacing steps actually used in the panels */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-9: 22px;
+  --space-10: 24px;
+  --space-11: 28px;
+
+  /* radii */
+  --radius-6: 6px;    /* flat control, inline image */
+  --radius-8: 8px;    /* panel, raster pill, overscale badge */
+  --radius-10: 10px;  /* preset chip, scale field, picture viewer */
+  --radius-12: 12px;  /* pick card, empty state, scale panel */
+  --radius-14: 14px;  /* building pill */
+  --radius-pill: 999px;
+
+  /* borders */
+  --hairline: 1px;
+  --hairline-thin: 0.5px;
+
+  /* elevation — the two shadows the product has */
+  --shadow-bubble: 0 2px 5px rgba(0, 0, 0, 0.18);
+  --shadow-bubble-pressed: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-panel: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --shadow-capsule: 0 2px 6px rgba(0, 0, 0, 0.18);
+  --shadow-viewer: 0 8px 20px rgba(0, 0, 0, 0.4);
+
+  /* motion — one duration, one curve, everywhere */
+  --ease-out: cubic-bezier(0, 0, 0.58, 1); /* @kind other */
+  --duration: 120ms; /* @kind other */
+  --press-scale: 0.94; /* @kind other */
+  --disabled-opacity: 0.45; /* @kind other */
+}

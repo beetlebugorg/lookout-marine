@@ -33,10 +33,13 @@ android {
     }
     applicationVariants.all { variant ->
         tasks["merge${variant.name.capitalize()}Assets"]
-            .dependsOn("externalNativeBuild${variant.name.capitalize()}")
+            .dependsOn("externalNativeBuild${variant.name.capitalize()}",
+                       "stageBundledPlugins")
     }
     sourceSets.main {
         jniLibs.srcDir 'libs'
+        // The plugin assets' generated source dir is registered beside the
+        // stageBundledPlugins task at the foot of this file.
     }
     externalNativeBuild {
         cmake {
@@ -102,3 +105,31 @@ def zigAbis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
         dependsOn t
     }
 }
+
+// ---- the core plugins travel inside the APK --------------------------------
+//
+// Own ship, AIS targets, laylines and the NMEA 0183 / Signal K sources are wasm
+// modules, not core code, so an APK that ships none is a chartplotter with no
+// boat and no traffic. This is the Android analogue of the Xcode "Bundle the
+// core plugins into Resources/Plugins" phase — zig-out/plugins-bundled is the
+// SHIPPED set (zig-out/plugins is the developer working set and may carry
+// examples), and the modules are wasm, so one build serves every ABI and this
+// sits outside the per-ABI core loop above.
+//
+// They ride as APK assets under assets/plugins/, staged into a GENERATED assets
+// source dir so no build output is ever written into the source tree. An APK
+// asset has no filesystem path of its own, so LookoutActivity extracts the
+// directory to filesDir/plugins at first run — the same shape as the bundled
+// chart — and ChartController names that real path to lookout_plugins_load.
+def zigPlugins = tasks.register('buildZigPlugins', Exec) {
+    workingDir = file("${projectDir}/../..")        // the repo root
+    // Homebrew's bin is not on the PATH gradle inherits from Android Studio.
+    environment 'PATH', "/opt/homebrew/bin:/usr/local/bin:${System.getenv('PATH')}"
+    commandLine 'zig', 'build', 'plugins'
+}
+tasks.register('stageBundledPlugins', Copy) {
+    dependsOn zigPlugins
+    from file("${projectDir}/../../zig-out/plugins-bundled")
+    into layout.buildDirectory.dir('generated/lookout-assets/plugins')
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/lookout-assets'))

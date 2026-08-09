@@ -1,0 +1,14 @@
+// Win32 resources for the unpackaged WinUI 3 shell.
+//
+// This app is unpackaged (WindowsPackageType=None, AppxPackage=false), so
+// there is no Package.appxmanifest and no Logo element to point at: the icon
+// has to be linked into the executable as a classic ICON resource. The .ico
+// carries six frames (16/32/48/64/128/256) and Windows picks the one it needs.
+//
+// The window's own titlebar/taskbar icon is a separate thing — an HWND wears
+// whatever WM_SETICON gave it — and is set in MainWindow's constructor from
+// this same resource.
+
+#include "resource.h"
+
+IDI_APPICON ICON "LookoutMarine.ico"

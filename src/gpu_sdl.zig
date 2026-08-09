@@ -7,13 +7,15 @@
 //!
 //! Adapted from the `sdl-gpu` tag's renderer, reconciled to the CURRENT
 //! tile57_gpu_vertex(32B)/quad(44B): per-vertex colour + paint-order depth, the
-//! shaders in shaders/vk/*.spv (embedded). Triangles are de-indexed at upload
-//! (indexed draws mis-resolve on the macOS SDL_GPU->MoltenVK->Metal stack), and
-//! ranges are drawn in paint order with alpha blending (single phase).
+//! chart shaders in shaders/vk/*.spv and the plugin overlay's in src/shaders/,
+//! both embedded. Triangles are de-indexed at upload (indexed draws mis-resolve
+//! on the macOS SDL_GPU->MoltenVK->Metal stack), and ranges are drawn in paint
+//! order with alpha blending (single phase).
 const std = @import("std");
 const cc = @import("c.zig").c; // tile57 + stb (shared; matches root's scene types)
 const sdl = @import("c_sdl.zig").c; // SDL3 (window + SDL_GPU)
 const png = @import("png.zig");
+const ov = @import("overlay.zig");
 
 // Precompiled SPIR-V (see build.zig: -Dbackend=sdl embeds these).
 const chart_vert_spv: []const u8 = @embedFile("chart_vert_spv");
@@ -23,6 +25,11 @@ const sprite_frag_spv: []const u8 = @embedFile("sprite_frag_spv");
 const sdf_frag_spv: []const u8 = @embedFile("sdf_frag_spv");
 const pattern_vert_spv: []const u8 = @embedFile("pattern_vert_spv");
 const pattern_frag_spv: []const u8 = @embedFile("pattern_frag_spv");
+// The overlay program is the HOST's, not the engine's, so it is embedded from
+// this source tree rather than through the tile57 dependency. Sources and the
+// recompile command are in src/shaders/overlay.*.
+const overlay_vert_spv: []const u8 = @embedFile("shaders/overlay.vert.spv");
+const overlay_frag_spv: []const u8 = @embedFile("shaders/overlay.frag.spv");
 
 /// Vertex/fragment uniform block (128 bytes), byte-identical to `struct U` in
 /// shaders/vk/*. THE ENGINE OWNS THIS LAYOUT (tile57 render/gpu.zig Uniforms,
@@ -98,6 +105,18 @@ pub const Gpu = struct {
     sprite_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
     sdf_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
     pattern_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
+    /// Chart overlays (src/overlay.zig): one triangle stream in world space,
+    /// coloured per vertex, drawn after everything else. Re-uploaded when the
+    /// store's generation moves — a plugin batch or a zoom step, not a frame.
+    overlay_pipeline: ?*sdl.SDL_GPUGraphicsPipeline = null,
+    overlay_buf: ?*sdl.SDL_GPUBuffer = null,
+    overlay_count: u32 = 0,
+    overlay_gen: u64 = 0, // 0 = nothing uploaded yet (a built store is >= 1)
+    /// The overlay pass's own frame uniform — the chart's, with the MVP and
+    /// wrap rebuilt for the overlay's origin. setOverlay writes it, and it is
+    /// the only thing that fills overlay_buf, so a buffer to draw always has a
+    /// uniform to draw it with.
+    overlay_u: Uniforms = std.mem.zeroes(Uniforms),
     sampler: ?*sdl.SDL_GPUSampler = null,
     color_format: sdl.SDL_GPUTextureFormat,
     sample_count: sdl.SDL_GPUSampleCount,
@@ -180,6 +199,7 @@ pub const Gpu = struct {
             .sprite_pipeline = try buildQuadPipeline(device, color_format, sample_count, sprite_vert_spv, sprite_frag_spv, 0),
             .sdf_pipeline = try buildQuadPipeline(device, color_format, sample_count, sprite_vert_spv, sdf_frag_spv, 1),
             .pattern_pipeline = try buildTriPipeline(device, color_format, sample_count, pattern_vert_spv, pattern_frag_spv),
+            .overlay_pipeline = try buildOverlayPipeline(device, color_format, sample_count),
             .sampler = try makeSampler(device),
             .color_format = color_format,
             .sample_count = sample_count,
@@ -383,6 +403,35 @@ pub const Gpu = struct {
         return try checkPtr(sdl.SDL_CreateGPUGraphicsPipeline(device, &p), "quad pipeline");
     }
 
+    // overlay: overlay.Vertex (24B) — world f2@0, colour f4@8. No texture, and
+    // the vertex uniform is the overlay's own (setOverlay), not the chart's.
+    fn buildOverlayPipeline(device: *sdl.SDL_GPUDevice, color_format: sdl.SDL_GPUTextureFormat, sc: sdl.SDL_GPUSampleCount) !*sdl.SDL_GPUGraphicsPipeline {
+        const vshader = try makeShader(device, overlay_vert_spv, sdl.SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, "overlay vertex shader");
+        defer sdl.SDL_ReleaseGPUShader(device, vshader);
+        const fshader = try makeShader(device, overlay_frag_spv, sdl.SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, "overlay fragment shader");
+        defer sdl.SDL_ReleaseGPUShader(device, fshader);
+
+        const vbufs = [_]sdl.SDL_GPUVertexBufferDescription{
+            .{ .slot = 0, .pitch = @sizeOf(ov.Vertex), .input_rate = sdl.SDL_GPU_VERTEXINPUTRATE_VERTEX, .instance_step_rate = 0 },
+        };
+        const vattrs = [_]sdl.SDL_GPUVertexAttribute{
+            .{ .location = 0, .buffer_slot = 0, .format = sdl.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = 0 },
+            .{ .location = 1, .buffer_slot = 0, .format = sdl.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, .offset = 8 },
+        };
+        const color_targets = [_]sdl.SDL_GPUColorTargetDescription{.{ .format = color_format, .blend_state = blendState() }};
+        var p = std.mem.zeroes(sdl.SDL_GPUGraphicsPipelineCreateInfo);
+        p.vertex_shader = vshader;
+        p.fragment_shader = fshader;
+        p.vertex_input_state = .{ .vertex_buffer_descriptions = &vbufs, .num_vertex_buffers = 1, .vertex_attributes = &vattrs, .num_vertex_attributes = vattrs.len };
+        p.primitive_type = sdl.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        p.rasterizer_state.fill_mode = sdl.SDL_GPU_FILLMODE_FILL;
+        p.rasterizer_state.cull_mode = sdl.SDL_GPU_CULLMODE_NONE;
+        p.rasterizer_state.enable_depth_clip = true;
+        p.multisample_state.sample_count = sc;
+        p.target_info = .{ .color_target_descriptions = &color_targets, .num_color_targets = 1, .depth_stencil_format = 0, .has_depth_stencil_target = false };
+        return try checkPtr(sdl.SDL_CreateGPUGraphicsPipeline(device, &p), "overlay pipeline");
+    }
+
     fn makeSampler(device: *sdl.SDL_GPUDevice) !*sdl.SDL_GPUSampler {
         var si = std.mem.zeroes(sdl.SDL_GPUSamplerCreateInfo);
         si.min_filter = sdl.SDL_GPU_FILTER_LINEAR;
@@ -462,6 +511,21 @@ pub const Gpu = struct {
         self.raster_draws = try a.dupe(RasterDraw, draws);
     }
 
+    /// The depth src/raster.zig writes into the underlay's vertices. This
+    /// backend has no depth target (every pipeline sets
+    /// has_depth_stencil_target = false), so the value only has to stay inside
+    /// the clip range: the underlay draws before the chart and the chart paints
+    /// over it, and chart-over-picture cannot work here at all. The Metal and
+    /// Vulkan backends derive real depths from the scene's ranges.
+    pub fn rasterDepth(self: *const Gpu) f32 {
+        _ = self;
+        return 0.999;
+    }
+    pub fn rasterDepthFront(self: *const Gpu) f32 {
+        _ = self;
+        return 0.5;
+    }
+
     pub fn clearRasterFrame(self: *Gpu) void {
         if (self.raster_buf) |b| sdl.SDL_ReleaseGPUBuffer(self.device, b);
         self.raster_buf = null;
@@ -469,6 +533,53 @@ pub const Gpu = struct {
             if (self.raster_alloc) |a| a.free(self.raster_draws);
             self.raster_draws = &.{};
         }
+    }
+
+    // ---- chart overlays -----------------------------------------------------
+
+    /// Adopt an overlay frame and the view it is drawn with. The BUFFER upload
+    /// is a no-op while the generation is unchanged, so the render thread may
+    /// call this every frame; SDL_GPU holds a released buffer until the frames
+    /// using it are done, so replacing it wholesale here is safe. `u` is taken
+    /// every time: the vertices are relative to the frame's origin, so the pass
+    /// needs the MVP and wrap built for that origin, and the camera moves every
+    /// frame while the geometry does not.
+    pub fn setOverlay(self: *Gpu, fr: ov.Frame, u: Uniforms) !void {
+        self.overlay_u = u;
+        if (fr.generation == self.overlay_gen) return;
+        self.overlay_gen = fr.generation;
+        self.freeOverlayBuf();
+        if (fr.verts.len == 0) return;
+        self.overlay_buf = try self.uploadBuffer(sdl.SDL_GPU_BUFFERUSAGE_VERTEX, std.mem.sliceAsBytes(fr.verts));
+        self.overlay_count = @intCast(fr.verts.len);
+    }
+
+    /// Drop the overlay geometry (every plugin stopped, or teardown). The next
+    /// setOverlay re-uploads whatever the store then holds.
+    pub fn clearOverlay(self: *Gpu) void {
+        self.freeOverlayBuf();
+        self.overlay_gen = 0;
+    }
+
+    fn freeOverlayBuf(self: *Gpu) void {
+        if (self.overlay_buf) |b| sdl.SDL_ReleaseGPUBuffer(self.device, b);
+        self.overlay_buf = null;
+        self.overlay_count = 0;
+    }
+
+    /// Draw the overlay LAST — after the raster underlay and the whole chart,
+    /// in the same render pass, so it lands on top in paint order. The overlay
+    /// carries its OWN uniform (setOverlay): the shader reads mvp and wrap_x,
+    /// and both are built for the overlay's origin, not the chart's.
+    fn recordOverlay(self: *Gpu, cmd: *sdl.SDL_GPUCommandBuffer, pass: ?*sdl.SDL_GPURenderPass) void {
+        const buf = self.overlay_buf orelse return;
+        if (self.overlay_count == 0) return;
+        const pipe = self.overlay_pipeline orelse return;
+        sdl.SDL_BindGPUGraphicsPipeline(pass, pipe);
+        const bind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = buf, .offset = 0 }};
+        sdl.SDL_BindGPUVertexBuffers(pass, 0, &bind, 1);
+        sdl.SDL_PushGPUVertexUniformData(cmd, 0, &self.overlay_u, @sizeOf(Uniforms));
+        sdl.SDL_DrawGPUPrimitives(pass, self.overlay_count, 1, 0, 0);
     }
 
     /// Draw the underlay: sprite pipeline, one draw per tile (each carries its
@@ -659,10 +770,17 @@ pub const Gpu = struct {
         const scis = sdl.SDL_Rect{ .x = 0, .y = 0, .w = @intCast(self.width), .h = @intCast(self.height) };
         sdl.SDL_SetGPUScissor(pass, &scis);
 
-        // Before the chart, and before the early return below: where the chart
-        // has no data is exactly where the mariner most needs the picture.
+        // Before the chart: where the chart has no data is exactly where the
+        // mariner most needs the picture.
         self.recordRaster(cmd, pass, u);
+        self.recordScene(cmd, pass, u, text_on, sound_on);
+        // The overlay runs even when there is no scene — an own-ship symbol
+        // must not vanish because the chart is still loading.
+        self.recordOverlay(cmd, pass);
+    }
 
+    /// The chart itself, in paint order.
+    fn recordScene(self: *Gpu, cmd: *sdl.SDL_GPUCommandBuffer, pass: ?*sdl.SDL_GPURenderPass, u: Uniforms, text_on: bool, sound_on: bool) void {
         const s = if (self.scene) |*sc| sc else return;
         const vbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.vbuf, .offset = 0 }};
         const qbind = [_]sdl.SDL_GPUBufferBinding{.{ .buffer = s.qbuf, .offset = 0 }};
@@ -789,6 +907,7 @@ pub const Gpu = struct {
 
     pub fn deinit(self: *Gpu) void {
         self.clearRasterFrame();
+        self.clearOverlay();
         const d = self.device;
         self.freeScene();
         self.releaseTargets();
@@ -796,6 +915,7 @@ pub const Gpu = struct {
         if (self.sprite_pipeline) |p| sdl.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sdf_pipeline) |p| sdl.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.pattern_pipeline) |p| sdl.SDL_ReleaseGPUGraphicsPipeline(d, p);
+        if (self.overlay_pipeline) |p| sdl.SDL_ReleaseGPUGraphicsPipeline(d, p);
         if (self.sprite_tex) |t| sdl.SDL_ReleaseGPUTexture(d, t);
         if (self.glyph_tex) |t| sdl.SDL_ReleaseGPUTexture(d, t);
         if (self.glyph_bold_tex) |t| sdl.SDL_ReleaseGPUTexture(d, t);

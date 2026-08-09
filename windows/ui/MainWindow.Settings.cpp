@@ -20,10 +20,75 @@ namespace winrt::LookoutMarine::implementation
         if (SettingsPane().Visibility() == Visibility::Visible)
         {
             SettingsPane().Visibility(Visibility::Collapsed);
+            StopPluginStatusPoll();
             return;
         }
         LoadSettings();
         SettingsPane().Visibility(Visibility::Visible);
+        // While the pane is up, the connection lines move on their own.
+        StartPluginStatusPoll();
+    }
+
+    // The sections, in the order the strip shows them. The four the app owns are
+    // always listed; Vessels, Alarms and Connections only while something puts
+    // settings in them, and today that something is a plugin — the mariner is
+    // never told which. Plugins is the one section that talks ABOUT plugins.
+    // Advanced is last: it is where anything unclaimed lands.
+    void MainWindow::BuildSettingsTabs()
+    {
+        std::string selected = settings_tab >= 0 && settings_tab < (int)settings_tabs.size()
+                                   ? settings_tabs[settings_tab].id
+                                   : "display";
+
+        settings_tabs.clear();
+        settings_tabs.push_back({ "display", L"Display" });
+        settings_tabs.push_back({ "depths", L"Depths" });
+        settings_tabs.push_back({ "text", L"Text" });
+        settings_tabs.push_back({ "charts", L"Charts" });
+        if (PluginTabPopulated("vessels"))
+            settings_tabs.push_back({ "vessels", L"Vessels" });
+        if (PluginTabPopulated("alarms"))
+            settings_tabs.push_back({ "alarms", L"Alarms" });
+        if (PluginTabPopulated("connections"))
+            settings_tabs.push_back({ "connections", L"Connections" });
+        if (!plugins.empty())
+            settings_tabs.push_back({ "plugins", L"Plugins" });
+        settings_tabs.push_back({ "advanced", L"Advanced" });
+
+        // A section can go away — a plugin that never came up takes its section
+        // with it — so a stale selection falls back rather than indexing off the
+        // end of the strip.
+        settings_tab = 0;
+        for (int i = 0; i < (int)settings_tabs.size(); ++i)
+        {
+            if (settings_tabs[i].id == selected)
+                settings_tab = i;
+        }
+
+        auto strip = SettingsTabs();
+        strip.Children().Clear();
+        for (int i = 0; i < (int)settings_tabs.size(); ++i)
+        {
+            Controls::Button tb;
+            tb.Content(winrt::box_value(winrt::hstring{ settings_tabs[i].label }));
+            tb.Padding({ 10, 4, 10, 6 });
+            tb.CornerRadius({ 14, 14, 14, 14 });
+            tb.BorderThickness({ 0, 0, 0, 0 });
+            tb.Background(Media::SolidColorBrush{ i == settings_tab
+                                                      ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
+                                                      : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+            tb.Click([this, i](auto &&, auto &&) {
+                settings_tab = i;
+                for (uint32_t j = 0; j < SettingsTabs().Children().Size(); ++j)
+                {
+                    auto b = SettingsTabs().Children().GetAt(j).as<Controls::Button>();
+                    b.Background(Media::SolidColorBrush{ (int)j == i ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
+                                                                     : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                }
+                BuildSettingsPage();
+            });
+            strip.Children().Append(tb);
+        }
     }
 
     void MainWindow::ScheduleApply()
@@ -48,6 +113,11 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::LoadSettings()
     {
         lk_controller_get_mariner(controller, &pending);
+        // The plugin schemas are read here, not at construction: there is no
+        // plugin layer until a chart opens. What a plugin DECLARES does not
+        // change while the pane is up, so this is the only whole read.
+        ReloadPlugins();
+        BuildSettingsTabs();
         BuildSettingsPage();
     }
 
@@ -140,9 +210,11 @@ namespace winrt::LookoutMarine::implementation
             stack.Children().Append(sl);
         };
 
-        switch (settings_tab)
-        {
-        case 0: // Display
+        std::string tab = settings_tab >= 0 && settings_tab < (int)settings_tabs.size()
+                              ? settings_tabs[settings_tab].id
+                              : "display";
+
+        if (tab == "display")
         {
             combo(L"Color scheme", { L"Day", L"Dusk", L"Night" }, (int)pending.scheme,
                   [this](int i) { pending.scheme = (tile57_scheme)i; });
@@ -154,9 +226,9 @@ namespace winrt::LookoutMarine::implementation
             });
             combo(L"Soundings", { L"Follow category", L"Always on", L"Always off" }, (int)pending.soundings,
                   [this](int i) { pending.soundings = (uint8_t)i; });
-            break;
         }
-        case 1: // Depths
+        else if (tab == "depths")
+        {
             combo(L"Depth unit", { L"Meters", L"Feet" }, (int)pending.depth_unit, [this](int i) {
                 pending.depth_unit = (tile57_depth_unit)i;
                 BuildSettingsPage(); // re-show the depth fields in the new unit
@@ -176,8 +248,9 @@ namespace winrt::LookoutMarine::implementation
                        [this](double v) { pending.deep_contour = v; });
             number(feet ? L"Safety depth (ft)" : L"Safety depth (m)", pending.safety_depth,
                    [this](double v) { pending.safety_depth = v; });
-            break;
-        case 2: // Text & symbols
+        }
+        else if (tab == "text")
+        {
             header(L"Text");
             toggle(L"Feature names", pending.text_names, [this](bool v) { pending.text_names = v; });
             toggle(L"Light descriptions", pending.show_light_descriptions,
@@ -190,8 +263,8 @@ namespace winrt::LookoutMarine::implementation
                   [this](int i) { pending.boundary_style = (tile57_boundary_style)i; });
             toggle(L"Full light-sector lines", pending.show_full_sector_lines,
                    [this](bool v) { pending.show_full_sector_lines = v; });
-            break;
-        case 3: // Charts
+        }
+        else if (tab == "charts")
         {
             header(L"Open");
             Controls::TextBlock open_tb;
@@ -404,9 +477,9 @@ namespace winrt::LookoutMarine::implementation
             raster_foot.Opacity(0.7);
             raster_foot.TextWrapping(TextWrapping::Wrap);
             stack.Children().Append(raster_foot);
-            break;
         }
-        case 4: // Advanced
+        else if (tab == "advanced")
+        {
             header(L"Safety & Quality");
             toggle(L"Data quality overlay", pending.data_quality, [this](bool v) { pending.data_quality = v; });
             toggle(L"Isolated dangers in shallow water", pending.show_isolated_dangers_shallow,
@@ -445,8 +518,16 @@ namespace winrt::LookoutMarine::implementation
                 });
                 stack.Children().Append(date);
             }
-            break;
         }
+        else if (tab == "plugins")
+        {
+            BuildPluginsPage();
+        }
+
+        // Whatever a plugin filed under this section, after the app's own
+        // settings for it. A section nothing contributed to draws nothing.
+        if (tab != "plugins")
+            BuildPluginSections(tab);
 
         settings_loading = false;
     }

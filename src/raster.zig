@@ -395,6 +395,38 @@ pub const Layer = struct {
         self.built_sig = 0;
     }
 
+    /// Is set `i` drawn where it covers? The state itself, with no camera in it.
+    ///
+    /// `shownIndex` answers for one view, which is enough to mark a menu and not
+    /// enough to save. A host writing down what the mariner chose has to read
+    /// every set, including the coasts that are nowhere near the current view.
+    pub fn isShown(self: *const Layer, i: usize) bool {
+        if (i >= self.sets.items.len) return false;
+        return self.sets.items[i].shown;
+    }
+
+    /// Draw set `i`, or stop drawing it, without a camera.
+    ///
+    /// `selectSet` answers "here", so it cannot put back a set covering water
+    /// the opening view is nowhere near, and its null case turns off whatever is
+    /// drawn here rather than one named set. Restoring a saved selection needs
+    /// both of those to be by index instead.
+    ///
+    /// Showing still goes through `show`, so the election holds: two sets
+    /// covering the same water can never both come back on. A set with every
+    /// source switched off cannot draw at all, and stays off.
+    pub fn setShown(self: *Layer, i: usize, on: bool) void {
+        if (i >= self.sets.items.len) return;
+        if (on) {
+            if (!self.setHasEnabled(i)) return;
+            self.show(i);
+        } else {
+            self.sets.items[i].shown = false;
+        }
+        self.built_valid = false;
+        self.built_sig = 0;
+    }
+
     /// Draw set `i` and hide the sets it competes with.
     fn show(self: *Layer, i: usize) void {
         self.sets.items[i].shown = true;
@@ -1228,6 +1260,191 @@ test "zoom selection clamps into the source's own band" {
     try testing.expectEqual(@as(u8, 9), pickZoom(info, 3.0)); // zoomed out past it
     try testing.expectEqual(@as(u8, 12), pickZoom(info, 12.7));
     try testing.expectEqual(@as(u8, 17), pickZoom(info, 20.0)); // stretch, never vanish
+}
+
+/// One set for the election tests: a name, a longitude span, and whether its
+/// single chart is switched on.
+const TestSet = struct { name: []const u8, west: f64, east: f64, enabled: bool = true };
+
+/// A Layer with hand-placed sets, so the election can be tested without opening
+/// a chart file. The source's `chart` never reaches the tile reader: nothing
+/// under test here dereferences it.
+fn testLayer(a: std.mem.Allocator, specs: []const TestSet) !Layer {
+    var l = Layer.init(a);
+    for (specs) |s| {
+        var info: cc.tile57_raster_chart_info = std.mem.zeroes(cc.tile57_raster_chart_info);
+        info.west = s.west;
+        info.east = s.east;
+        info.north = 40;
+        info.south = 38;
+        try l.sets.append(a, .{ .name = try a.dupeZ(u8, s.name) });
+        const set = &l.sets.items[l.sets.items.len - 1];
+        try set.sources.append(a, .{
+            .chart = @ptrFromInt(0x1000),
+            .info = info,
+            .label = try a.dupe(u8, s.name),
+            .path = try a.dupe(u8, s.name),
+            .enabled = s.enabled,
+        });
+    }
+    return l;
+}
+
+fn freeTestLayer(l: *Layer) void {
+    for (l.sets.items) |*s| {
+        for (s.sources.items) |*src| {
+            l.alloc.free(src.label);
+            l.alloc.free(src.path);
+        }
+        s.sources.deinit(l.alloc);
+        l.alloc.free(s.name);
+    }
+    l.sets.deinit(l.alloc);
+}
+
+/// What `addSource` leaves behind: each new set draws unless something already
+/// covering that water does.
+fn asJustAdded(l: *Layer) void {
+    for (l.sets.items, 0..) |*s, i| {
+        if (!l.anyShownOver(i)) s.shown = true;
+    }
+}
+
+/// What a host does at launch: hide what the mariner had off, then show what
+/// they had on.
+fn restore(l: *Layer, saved: []const bool) void {
+    for (saved, 0..) |on, i| {
+        if (!on) l.setShown(i, false);
+    }
+    for (saved, 0..) |on, i| {
+        if (on) l.setShown(i, true);
+    }
+}
+
+test "a set the mariner turned off is still off after a relaunch re-adds it" {
+    const a = testing.allocator;
+    var l = try testLayer(a, &.{.{ .name = "ArcGIS", .west = -77, .east = -76 }});
+    defer freeTestLayer(&l);
+
+    asJustAdded(&l);
+    try testing.expect(l.isShown(0));
+
+    // The mariner switches the picture off.
+    l.setShown(0, false);
+    try testing.expect(!l.isShown(0));
+    const saved = [_]bool{l.isShown(0)};
+
+    // Relaunch: the host re-adds the same file, which draws the set again, then
+    // puts the saved state back. Being the only set covering the view is not a
+    // reason to turn it on.
+    var l2 = try testLayer(a, &.{.{ .name = "ArcGIS", .west = -77, .east = -76 }});
+    defer freeTestLayer(&l2);
+    asJustAdded(&l2);
+    try testing.expect(l2.isShown(0));
+    restore(&l2, &saved);
+    try testing.expect(!l2.isShown(0));
+
+    // Off, not gone: the set is still installed and its chart still enabled, so
+    // the pill can still offer it.
+    try testing.expectEqual(@as(usize, 1), l2.setCount());
+    try testing.expect(l2.isEnabled("ArcGIS"));
+}
+
+test "the restore keeps the election: one picture over one piece of water" {
+    const a = testing.allocator;
+    const specs = [_]TestSet{
+        .{ .name = "ArcGIS", .west = -77, .east = -76 },
+        .{ .name = "Bing", .west = -76.5, .east = -75.5 }, // same coast
+        .{ .name = "Google", .west = 12, .east = 13 }, // the Adriatic, no contest
+    };
+    var l = try testLayer(a, &specs);
+    defer freeTestLayer(&l);
+
+    // Adding draws ArcGIS and leaves Bing alone (they meet), and draws Google.
+    asJustAdded(&l);
+    try testing.expect(l.isShown(0));
+    try testing.expect(!l.isShown(1));
+    try testing.expect(l.isShown(2));
+
+    // The mariner prefers Bing over this coast and turns the Adriatic off.
+    l.setShown(1, true);
+    l.setShown(2, false);
+    const saved = [_]bool{ l.isShown(0), l.isShown(1), l.isShown(2) };
+    try testing.expectEqualSlices(bool, &.{ false, true, false }, &saved);
+
+    var l2 = try testLayer(a, &specs);
+    defer freeTestLayer(&l2);
+    asJustAdded(&l2);
+    restore(&l2, &saved);
+    try testing.expect(!l2.isShown(0));
+    try testing.expect(l2.isShown(1));
+    try testing.expect(!l2.isShown(2));
+}
+
+test "a set with every chart switched off cannot be shown" {
+    const a = testing.allocator;
+    var l = try testLayer(a, &.{.{ .name = "ArcGIS", .west = -77, .east = -76, .enabled = false }});
+    defer freeTestLayer(&l);
+
+    l.setShown(0, true);
+    try testing.expect(!l.isShown(0));
+    // And an index past the end is a no-op, not a crash.
+    l.setShown(9, true);
+    try testing.expect(!l.isShown(9));
+}
+
+fn named(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+/// The restore a host actually performs: it saved set NAMES, and it hides the
+/// ones the mariner had off before it shows the rest.
+fn restoreHidden(l: *Layer, hidden: []const []const u8) void {
+    for (l.sets.items, 0..) |*s, i| {
+        if (named(hidden, s.name)) l.setShown(i, false);
+    }
+    for (l.sets.items, 0..) |*s, i| {
+        if (!named(hidden, s.name)) l.setShown(i, true);
+    }
+}
+
+test "the restore follows the names, which a chart that will not open reorders" {
+    const a = testing.allocator;
+
+    // The mariner carries two providers for the Chesapeake and one for the
+    // Adriatic, and prefers Bing over this coast with the Adriatic quiet.
+    var l = try testLayer(a, &.{
+        .{ .name = "ArcGIS", .west = -77, .east = -76 },
+        .{ .name = "Bing", .west = -76.5, .east = -75.5 },
+        .{ .name = "Google", .west = 12, .east = 13 },
+    });
+    defer freeTestLayer(&l);
+    asJustAdded(&l);
+    l.setShown(1, true);
+    l.setShown(2, false);
+    const hidden = [_][]const u8{ "ArcGIS", "Google" };
+
+    // Next launch the ArcGIS drive is unplugged, so its chart never opens and
+    // every set after it moves down one. The set at the index Bing had is
+    // Google now, so an index-keyed restore would put the picture on the wrong
+    // coast; the names still say what the mariner chose.
+    var l2 = try testLayer(a, &.{
+        .{ .name = "Bing", .west = -76.5, .east = -75.5 },
+        .{ .name = "Google", .west = 12, .east = 13 },
+    });
+    defer freeTestLayer(&l2);
+    asJustAdded(&l2);
+    try testing.expect(!std.mem.eql(u8, "Bing", l2.sets.items[1].name));
+
+    restoreHidden(&l2, &hidden);
+    try testing.expect(l2.isShown(0));
+    try testing.expect(!l2.isShown(1));
+
+    // And the unplugged set is not forgotten: it is simply not here to restore.
+    try testing.expectEqual(@as(usize, 2), l2.setCount());
 }
 
 test "the key packs a whole tile address" {

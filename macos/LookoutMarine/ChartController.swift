@@ -33,6 +33,36 @@ struct PickFeature: Identifiable, Hashable {
     let s57: String     // full S-57 attribute JSON (unused in the HUD line)
 }
 
+/// One overlay object the mariner pinned: which object it is, what it says
+/// now, and where it draws now. Re-read from the core every render tick.
+struct OverlayPin: Equatable {
+    let id: String
+    var info: OverlayHover
+    var lon: Double
+    var lat: Double
+}
+
+/// What a plugin overlay symbol says about itself. Decoded from the JSON
+/// `lookout_overlay_at` returns.
+struct OverlayHover: Equatable {
+    let title: String
+    let rows: [(String, String)]
+
+    static func == (a: OverlayHover, b: OverlayHover) -> Bool {
+        a.title == b.title && a.rows.count == b.rows.count
+            && zip(a.rows, b.rows).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
+    }
+
+    init?(json: Data) {
+        guard let top = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let title = top["title"] as? String else { return nil }
+        self.title = title
+        self.rows = (top["rows"] as? [[String]] ?? []).compactMap {
+            $0.count >= 2 ? ($0[0], $0[1]) : nil
+        }
+    }
+}
+
 @MainActor
 final class ChartController: NSObject {
     /// The opaque `lookout*`. nil until a chart is opened.
@@ -50,6 +80,9 @@ final class ChartController: NSObject {
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval = 0
     private var idleTicks = 0
+    /// Runs only while the display link is paused and plugins are loaded.
+    /// See "Idle poll" below.
+    private var idlePoll: Timer?
     /// Rendering runs OFF the main thread so UIKit gesture bursts can never
     /// delay a frame slot (the 120Hz budget is 8.3ms). The display link stays
     /// on main as the pacemaker; each tick hands one render to this queue.
@@ -125,9 +158,16 @@ final class ChartController: NSObject {
                 ok += 1
                 if model?.rasterOff.contains(p) == true { setRasterEnabled(p, false) }
             }
-            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed")
+            // After every source is in, because switching one chart off can move
+            // which set is drawn, and the saved answer is the one that wins.
+            restoreRasterShown()
+            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed, \(model?.rasterHidden.count ?? 0) set(s) off")
             model?.rasterName = rasterName()
         }
+        // The ENC-over-picture state belongs to the mariner too, and it only
+        // does anything where a picture covers, so it is safe to put back before
+        // knowing whether one does.
+        if model?.chartHiddenSaved == true { setChartHidden(true) }
 
         // Reopen where we left off. With nothing saved the opening view is the
         // engine's own (lookout_default_view) — the same policy every host gets,
@@ -166,10 +206,33 @@ final class ChartController: NSObject {
         MarinerSettings.applySavedOverlay(&mm)
         setMariner(mm)
 
+        // The plugin sets, in the order that decides an id collision: whatever
+        // LOOKOUT_PLUGINS brought up inside lookout_open loaded first, so a
+        // developer copy keeps its id; then the set that ships inside the app,
+        // so a mariner who has installed nothing still gets own ship, AIS,
+        // NMEA 0183, Signal K and laylines; then the installed set. Either of
+        // the two calls creates the plugin layer when nothing has yet.
+        loadBundledPlugins()
+        loadInstalledPlugins()
+
+        // The plugins are up, so their saved settings can go in now. A plugin
+        // with none stays on its manifest defaults.
+        PluginSettings.applySaved(to: self)
+
+        #if os(macOS)
+        // And their declared tables can take their place in the menu bar.
+        model?.refreshPluginTables()
+        // Anything they raise from here on reaches the mariner.
+        model?.startAlertWatch()
+        #endif
+
         startDisplayLink()
         pushReadouts()
         model?.hasChart = true
         model?.chartPath = chartPath
+        // A .lkplug opened before the chart was up waited for the plugin
+        // layer; it can go to its consent sheet now.
+        model?.drainPendingInstall()
         return true
     }
 
@@ -193,6 +256,11 @@ final class ChartController: NSObject {
 
     func close() {
         stopDisplayLink()
+        #if os(macOS)
+        // The plugins go with the handle, so nothing is left watching the
+        // conditions their alarms describe.
+        model?.stopAlertWatch()
+        #endif
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
@@ -223,16 +291,24 @@ final class ChartController: NSObject {
     private func stopDisplayLink() {
         displayLink?.invalidate()
         displayLink = nil
+        stopIdlePoll()
     }
 
-    /// A pick report belongs to the view it was taken in. Any camera move
-    /// retires it, so the report never floats over water it does not describe.
-    private func retirePickReport() {
+    /// A pick report and the chart menu both belong to the view they were
+    /// raised in: both describe one point on the water. Any camera move
+    /// retires them, so neither floats over water it does not describe.
+    ///
+    /// The rename field is not in here. It is anchored to its marker and
+    /// re-projected every frame, and a mariner typing a name while the boat
+    /// drifts under follow must not lose what they typed.
+    private func retireChartChrome() {
         if model?.pickPoint != nil { model?.closePick() }
+        if model?.chartMenu != nil { model?.closeChartMenu() }
     }
 
     /// Resume ticking after any state change (mutating calls funnel through here).
     private func kick() {
+        stopIdlePoll()
         idleTicks = 0
         if let link = displayLink {
             if link.isPaused { lastTimestamp = 0; link.isPaused = false }
@@ -241,9 +317,111 @@ final class ChartController: NSObject {
         }
     }
 
+    // MARK: - Idle poll
+    //
+    // The display link pauses when nothing is moving, and only input restarts
+    // it. A plugin posts geometry with no input behind it, so while plugins
+    // are loaded a timer polls needs-redraw and kicks the link when it answers
+    // yes. Without it, AIS traffic froze until the mariner touched the
+    // trackpad.
+
+    /// Poll rate while paused. The AIS store coalesces to 2 Hz; this is twice
+    /// that.
+    private static let idlePollInterval: TimeInterval = 0.25
+
+    private func startIdlePoll() {
+        guard idlePoll == nil, let h = handle, lookout_plugins_active(h) != 0 else { return }
+        idlePoll = Timer.scheduledTimer(withTimeInterval: Self.idlePollInterval,
+                                        repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let h = self.handle else { return }
+                if lookout_needs_redraw(h) != 0 { self.kick() }
+            }
+        }
+    }
+
+    private func stopIdlePoll() {
+        idlePoll?.invalidate()
+        idlePoll = nil
+    }
+
+    // MARK: - Overlay hover
+
+    /// What the plugin overlay says about the symbol nearest a point, in
+    /// logical points. nil when nothing is near it.
+    func overlayInfo(atPoint p: CGPoint) -> OverlayHover? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let raw = lookout_overlay_at(h, Float(p.x), Float(p.y), &len), len > 0 else {
+            return nil
+        }
+        // Borrowed until the next call, so copy before anything else runs.
+        return OverlayHover(json: Data(bytes: raw, count: len))
+    }
+
+    /// The overlay object under a point, with its id and anchor. nil when
+    /// nothing is near it. A tap uses this; hover uses `overlayInfo(atPoint:)`.
+    func overlayHit(atPoint p: CGPoint) -> OverlayPin? {
+        guard let h = handle else { return nil }
+        var o = lookout_overlay_obj()
+        guard lookout_overlay_hit(h, Float(p.x), Float(p.y), &o) != 0 else { return nil }
+        return pin(from: o)
+    }
+
+    /// What a pinned object says now, or nil once it is gone.
+    func overlayInfo(id: String) -> OverlayPin? {
+        guard let h = handle else { return nil }
+        var o = lookout_overlay_obj()
+        guard id.withCString({ lookout_overlay_info(h, $0, &o) }) != 0 else { return nil }
+        return pin(from: o)
+    }
+
+    /// Everything in the struct is borrowed until the next overlay call, so
+    /// copy both strings out before anything else runs.
+    private func pin(from o: lookout_overlay_obj) -> OverlayPin? {
+        guard let idp = o.id, let infop = o.info, o.info_len > 0 else { return nil }
+        let id = String(cString: idp)
+        guard let info = OverlayHover(json: Data(bytes: infop, count: o.info_len)) else { return nil }
+        return OverlayPin(id: id, info: info, lon: o.lon, lat: o.lat)
+    }
+
     // CADisplayLink fires on the main run loop; assume main-actor isolation.
     @objc private nonisolated func displayLinkFired(_ link: CADisplayLink) {
         MainActor.assumeIsolated { self.step(link) }
+    }
+
+    /// Chrome that belongs to a place on the chart — the pick mark and a
+    /// pinned bubble — re-projected every frame. Follow moves the chart with
+    /// no gesture behind it, so a point measured when the mariner tapped
+    /// slides off its object. Assigns only on a real move: @Published fires
+    /// on assignment, and this runs at frame rate.
+    private func syncGeoChrome() {
+        guard let model else { return }
+        if let g = model.pickGeo, model.pickPoint != nil {
+            let p = screenPoint(forGeoLon: g.lon, lat: g.lat)
+            if moved(model.pickPoint, p) { model.pickPoint = p }
+        }
+        // The rename field rides its marker, for the same reason.
+        if let r = model.renaming {
+            let p = screenPoint(forGeoLon: r.lon, lat: r.lat)
+            if moved(model.renamingPoint, p) { model.renamingPoint = p }
+        }
+        // A pinned bubble is re-read, not remembered: the target moves, its
+        // values change, and it goes away when the plugin drops it.
+        if let pinned = model.pinned {
+            if let now = overlayInfo(id: pinned.id) {
+                if model.pinned != now { model.pinned = now }
+                let p = screenPoint(forGeoLon: now.lon, lat: now.lat)
+                if moved(model.pinnedPoint, p) { model.pinnedPoint = p }
+            } else {
+                model.closePin()
+            }
+        }
+    }
+
+    private func moved(_ a: CGPoint?, _ b: CGPoint) -> Bool {
+        guard let a else { return true }
+        return abs(a.x - b.x) >= 0.5 || abs(a.y - b.y) >= 0.5
     }
 
     private func step(_ link: CADisplayLink) {
@@ -264,10 +442,17 @@ final class ChartController: NSObject {
                 renderQueue.async { [weak self] in
                     _ = lookout_render(h)
                     self?.renderGate.signal()
-                    DispatchQueue.main.async { self?.pushReadouts() }
+                    DispatchQueue.main.async {
+                        self?.syncGeoChrome()
+                        self?.pushReadouts()
+                    }
                 }
             }
             idleTicks = 0
+            // The first scene is up once a frame has gone out with no build
+            // outstanding. Own ship moves between fixes, so with plugins
+            // running the loop may never reach the idle branch below.
+            if !building, model?.firstBuildDone == false { model?.firstBuildDone = true }
         } else if building {
             // A background tessellation is filling in — keep ticking so it appears.
             idleTicks = 0
@@ -277,7 +462,10 @@ final class ChartController: NSObject {
             // rendered — retire the startup loader.
             if model?.firstBuildDone == false { model?.firstBuildDone = true }
             idleTicks += 1
-            if idleTicks > 2 { link.isPaused = true }
+            if idleTicks > 2 {
+                link.isPaused = true
+                startIdlePoll()
+            }
         }
     }
 
@@ -294,7 +482,7 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         var vv = v
         lookout_set_view(h, &vv)
-        retirePickReport()
+        retireChartChrome()
         kick(); pushReadouts()
     }
 
@@ -323,7 +511,7 @@ final class ChartController: NSObject {
     func pan(dxPt: CGFloat, dyPt: CGFloat) {
         guard let h = handle else { return }
         lookout_pan_logical(h, Float(dxPt), Float(dyPt))
-        retirePickReport()
+        retireChartChrome()
         kick()
     }
 
@@ -341,7 +529,7 @@ final class ChartController: NSObject {
     func zoom(_ dz: Double, atPt pt: CGPoint) {
         guard let h = handle else { return }
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))
-        retirePickReport()
+        retireChartChrome()
         kick()
     }
 
@@ -355,7 +543,7 @@ final class ChartController: NSObject {
     func rotateDrag(from a: CGPoint, to b: CGPoint) {
         guard let h = handle else { return }
         lookout_rotate_drag_logical(h, Float(a.x), Float(a.y), Float(b.x), Float(b.y))
-        retirePickReport()
+        retireChartChrome()
         kick(); pushReadouts()
     }
 
@@ -369,6 +557,248 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         lookout_fling_start(h, vx, vy)
         kick()
+    }
+
+    // MARK: - Follow mode
+
+    /// 0 off, 1 following own ship, 2 on and waiting for a fix. The core turns
+    /// follow off on a pan, so this is read on the render tick, not remembered.
+    var followState: Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_follow_active(h))
+    }
+
+    func setFollow(_ on: Bool) {
+        guard let h = handle else { return }
+        lookout_follow_set(h, on ? 1 : 0)
+        retireChartChrome()
+        kick(); pushReadouts()
+    }
+
+    /// 0 off, 1 turning with own ship, 2 on and waiting for a heading.
+    var courseUpState: Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_course_up_active(h))
+    }
+
+    func setCourseUp(_ on: Bool) {
+        guard let h = handle else { return }
+        lookout_course_up_set(h, on ? 1 : 0)
+        kick(); pushReadouts()
+    }
+
+    /// 1 while the wasm plugin layer is up. Own ship comes from a plugin, so
+    /// the follow control has nothing to lock on to without one.
+    var pluginsActive: Bool {
+        guard let h = handle else { return false }
+        return lookout_plugins_active(h) != 0
+    }
+
+    // MARK: - Own ship's position
+
+    /// What the position readout may say. The core decides: `live` carries a
+    /// fix inside its freshness window, `lost` means a source published once
+    /// and has stopped, `none` means nothing ever has.
+    enum FixState: Int { case none = 0, lost = 1, live = 2 }
+
+    /// Own ship's reported position, or nil for either of the other two
+    /// states. Never the map centre and never the cursor: a coordinate with no
+    /// boat behind it is the ambiguity this removes.
+    func ownShip() -> (state: FixState, lat: Double, lon: Double)? {
+        guard let h = handle else { return nil }
+        var lon = 0.0, lat = 0.0
+        let s = FixState(rawValue: Int(lookout_own_ship(h, &lon, &lat))) ?? .none
+        return (s, lat, lon)
+    }
+
+    // MARK: - Markers
+
+    /// One of the mariner's own marks, copied out of the core. The core owns
+    /// the list and the file it lives in; this is a snapshot for the UI.
+    struct Marker: Identifiable, Equatable {
+        let id: UInt64
+        let lon: Double
+        let lat: Double
+        let name: String
+        let droppedAt: Date
+    }
+
+    private func marker(from m: lookout_marker) -> Marker {
+        Marker(id: m.id,
+               lon: m.lon,
+               lat: m.lat,
+               name: m.name.map(String.init(cString:)) ?? "",
+               droppedAt: Date(timeIntervalSince1970: Double(m.dropped_ms) / 1000))
+    }
+
+    /// Drop a marker at a geographic point. It is named in the same call, so
+    /// nothing waits for typing. Nil when the core would not take it.
+    @discardableResult
+    func dropMarker(lon: Double, lat: Double) -> Marker? {
+        guard let h = handle else { return nil }
+        let id = lookout_marker_add(h, lon, lat)
+        guard id != 0 else { return nil }
+        kick()
+        var m = lookout_marker()
+        guard lookout_marker_by_id(h, id, &m) != 0 else { return nil }
+        return marker(from: m)
+    }
+
+    /// Every marker, in drop order.
+    func markers() -> [Marker] {
+        guard let h = handle else { return [] }
+        let n = Int(lookout_marker_count(h))
+        return (0..<n).compactMap { i in
+            var m = lookout_marker()
+            guard lookout_marker_get(h, UInt32(i), &m) != 0 else { return nil }
+            return marker(from: m)
+        }
+    }
+
+    /// The marker under a point, in logical points, or nil when none is near.
+    func marker(atPoint p: CGPoint) -> Marker? {
+        guard let h = handle else { return nil }
+        var m = lookout_marker()
+        guard lookout_marker_at(h, Float(p.x), Float(p.y), &m) != 0 else { return nil }
+        return marker(from: m)
+    }
+
+    func marker(id: UInt64) -> Marker? {
+        guard let h = handle else { return nil }
+        var m = lookout_marker()
+        guard lookout_marker_by_id(h, id, &m) != 0 else { return nil }
+        return marker(from: m)
+    }
+
+    /// Rename a marker. An empty name keeps the old one, which the core
+    /// decides so every shell agrees.
+    @discardableResult
+    func renameMarker(_ id: UInt64, to name: String) -> Bool {
+        guard let h = handle else { return false }
+        let ok = name.withCString { lookout_marker_rename(h, id, $0) } == 0
+        if ok { kick() }
+        return ok
+    }
+
+    @discardableResult
+    func removeMarker(_ id: UInt64) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_marker_remove(h, id) == 0
+        if ok { kick() }
+        return ok
+    }
+
+    // MARK: - Plugin settings
+
+    /// Every loaded plugin with its settings schema, as JSON. The settings pane
+    /// renders straight from this: the app knows nothing about what a plugin is
+    /// for, only what controls it asked for.
+    func pluginsJSON() -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = lookout_plugins_json(h, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+
+    /// One plugin's settings object, or nil when the id is not loaded.
+    func pluginConfigJSON(_ id: String) -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = lookout_plugin_config_get(h, id, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+
+    /// Offer a file the mariner opened to the plugins. True when one claims
+    /// that file type and now holds the file.
+    ///
+    /// False for a chart, for a type nobody claims, and for a build with no
+    /// plugin layer — so the caller has one fallback, not three.
+    func openFileForPlugins(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        let took = lookout_open_file(h, path) == 1
+        if took { kick() }
+        return took
+    }
+
+    /// Push settings to a plugin. Applied live — the plugin redraws inside the
+    /// call, so the chart is kicked to show it.
+    @discardableResult
+    func setPluginConfig(_ id: String, _ json: String) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_plugin_config_set(h, id, json) == 0
+        if ok { kick() }
+        return ok
+    }
+
+    // MARK: - Plugin install and consent
+
+    /// The plugin set that travels inside the app: Contents/Resources/Plugins,
+    /// filled by the "Bundle the core plugins" build phase out of
+    /// zig-out/plugins-bundled. Loaded through the ordinary directory call, so
+    /// the host gives it origin `bundled`: anything that is not the directory
+    /// LOOKOUT_PLUGINS names is bundled by definition.
+    ///
+    /// False when the app carries no such directory, which is a build without
+    /// the phase, not a mariner's problem: the log says so and the installed
+    /// set still loads.
+    @discardableResult
+    func loadBundledPlugins() -> Bool {
+        guard let h = handle,
+              let dir = Bundle.main.resourceURL?.appendingPathComponent("Plugins", isDirectory: true),
+              FileManager.default.fileExists(atPath: dir.path)
+        else {
+            lkLog("no bundled plugins in this build (Resources/Plugins is absent)")
+            return false
+        }
+        return lookout_plugins_load(h, dir.path) == 0
+    }
+
+    /// Load the installed plugin set — what Install put under Application
+    /// Support — creating the plugin layer when the environment brought none.
+    @discardableResult
+    func loadInstalledPlugins() -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugins_load_installed(h) == 0
+    }
+
+    /// Everything the consent sheet shows for a .lkplug, as JSON, without
+    /// installing it. Nil only when no plugin layer can come up.
+    func inspectPlugin(_ path: String) -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = lookout_plugin_inspect(h, path, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self)
+    }
+
+    /// Install a consented .lkplug. Nil on success — the plugin is already
+    /// drawing — else the one sentence to show the mariner.
+    func installPlugin(_ path: String) -> String? {
+        guard let h = handle else { return "Open a chart before installing a plugin." }
+        guard let err = lookout_plugin_install(h, path) else {
+            kick()
+            return nil
+        }
+        return String(cString: err)
+    }
+
+    /// Remove an installed plugin and everything it owns. False for a bundled
+    /// or developer plugin, which install never wrote.
+    @discardableResult
+    func uninstallPlugin(_ id: String) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_plugin_uninstall(h, id) == 0
+        if ok { kick() }
+        return ok
+    }
+
+    /// Switch one granted capability on or off, live. The plugin keeps
+    /// running; a revoked capability simply answers it -1 from here on.
+    @discardableResult
+    func setPluginGrant(_ id: String, _ cap: String, _ on: Bool) -> Bool {
+        guard let h = handle else { return false }
+        let ok = lookout_plugin_grant_set(h, id, cap, on ? 1 : 0) == 0
+        if ok { kick() }
+        return ok
     }
 
     // MARK: - Geo <-> screen (points API; pixels under the hood)
@@ -388,6 +818,95 @@ final class ChartController: NSObject {
         lookout_geo_to_screen(h, lon, lat, &x, &y)
         return CGPoint(x: CGFloat(x), y: CGFloat(y))
     }
+
+    // MARK: - Plugin tables
+
+    #if os(macOS)
+    /// Every table the loaded plugins declare. The shell builds a menu item
+    /// and a window per declaration and knows nothing about the plugins.
+    func tableSpecs() -> [PluginTableSpec] {
+        guard let h = handle else { return [] }
+        var len = 0
+        guard let raw = lookout_plugin_tables_json(h, &len), len > 0 else { return [] }
+        // Borrowed until the next plugin query, so decode before anything else
+        // runs.
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["tables"] as? [[String: Any]] else { return [] }
+        return list.compactMap { PluginTableSpec($0) }
+    }
+
+    /// One table's rows, already ordered by the plugin's bands and then by the
+    /// column asked for. `seq` moves when the plugin has fed the table since
+    /// the last read. `columns` is the declaration's count, so a row that
+    /// carried fewer cells than the table has columns still lines up.
+    func tableRows(plugin: String, key: String, sortKey: String, ascending: Bool, columns: Int)
+        -> (seq: Int, rows: [PluginTableRow])? {
+        guard let h = handle else { return nil }
+        var len = 0
+        let raw = plugin.withCString { p in
+            key.withCString { k in
+                sortKey.withCString { s in
+                    lookout_plugin_table_rows(h, p, k, s, ascending ? 1 : 0, &len)
+                }
+            }
+        }
+        guard let raw, len > 0 else { return nil }
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["rows"] as? [[String: Any]] else { return nil }
+        let rows = list.compactMap { PluginTableRow($0, columns: columns) }
+        return (top["seq"] as? Int ?? 0, rows)
+    }
+
+    /// Every alert the plugins have raised, already ordered: what nobody has
+    /// answered first, then the loudest, then the oldest. `seq` moves when the
+    /// set has changed since the last read.
+    func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let raw = lookout_plugin_alerts_json(h, &len), len > 0 else { return nil }
+        // Borrowed until the next plugin query, so decode before anything else
+        // runs.
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["alerts"] as? [[String: Any]] else { return nil }
+        return (top["seq"] as? Int ?? 0, list.compactMap { PluginAlert($0) })
+    }
+
+    /// Silence one alert. It stays listed until the condition clears.
+    @discardableResult
+    func acknowledgeAlert(_ id: UInt64) -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugin_alert_ack(h, id) == 0
+    }
+
+    /// Tell the plugin its table is on screen, or is not.
+    func setTableOpen(plugin: String, key: String, _ open: Bool) {
+        guard let h = handle else { return }
+        _ = plugin.withCString { p in
+            key.withCString { k in lookout_plugin_table_open(h, p, k, open ? 1 : 0) }
+        }
+        kick()
+    }
+
+    /// Put a place at the centre of the chart and hand back whatever plugin
+    /// object draws there, for the bubble. Follow is switched off first: a
+    /// chart that slides back to own ship a moment later has not shown the
+    /// mariner the target they asked for.
+    @discardableResult
+    func reveal(lon: Double, lat: Double) -> OverlayPin? {
+        guard let h = handle else { return nil }
+        if lookout_follow_active(h) != 0 { lookout_follow_set(h, 0) }
+        var v = currentView
+        v.lon = lon
+        v.lat = lat
+        setView(v)
+        // The camera has moved, so the row's own position is the middle of the
+        // view: the object under that point is the row's symbol.
+        return overlayHit(atPoint: screenPoint(forGeoLon: lon, lat: lat))
+    }
+    #endif
 
     // MARK: - Mariner state
 
@@ -432,11 +951,15 @@ final class ChartController: NSObject {
     }
     /// Hide or show the vector chart. The picture beneath it stays.
     func toggleChart()        { guard let h = handle else { return }; lookout_toggle_chart(h); kick(); pushReadouts() }
+    func setChartHidden(_ hidden: Bool) { guard let h = handle else { return }; lookout_set_chart_hidden(h, hidden ? 1 : 0) }
     func chartHidden() -> Bool { guard let h = handle else { return false }; return lookout_chart_hidden(h) != 0 }
-    /// Every set, with whether it is in view and which one is drawn. This is
+    /// Every set, with whether it is in view and whether it is drawn. This is
     /// what the pill's menu is built from — a mariner has to see what they
     /// carry, not guess at it through a cycle.
-    struct RasterSet: Identifiable { let id: Int; let name: String; let inView: Bool }
+    ///
+    /// `shown` is the set's own state, not "drawn over this view": that is what
+    /// gets saved, and a coast off screen still has an answer.
+    struct RasterSet: Identifiable { let id: Int; let name: String; let inView: Bool; let shown: Bool }
     func rasterSets() -> [RasterSet] {
         guard let h = handle else { return [] }
         let n = Int(lookout_raster_set_count(h))
@@ -446,11 +969,38 @@ final class ChartController: NSObject {
             let name = (p != nil && len > 0)
                 ? String(decoding: UnsafeRawBufferPointer(start: p!, count: len), as: UTF8.self) : ""
             return RasterSet(id: i, name: name,
-                             inView: lookout_raster_set_in_view(h, UInt32(i)) != 0)
+                             inView: lookout_raster_set_in_view(h, UInt32(i)) != 0,
+                             shown: lookout_raster_shown(h, UInt32(i)) != 0)
         }
     }
     func rasterActiveIndex() -> Int { guard let h = handle else { return -1 }; return Int(lookout_raster_active_index(h)) }
     func rasterSelect(_ i: Int) { guard let h = handle else { return }; lookout_raster_select(h, Int32(i)); kick(); pushReadouts() }
+
+    /// Draw a set, or stop drawing it, by index and without reference to the
+    /// camera. `rasterSelect` cannot do this: it answers for the view on screen,
+    /// and the view a launch opens into is often nowhere near the set being
+    /// restored. Showing still turns off the sets covering the same water.
+    func rasterSetShown(_ i: Int, _ on: Bool) {
+        guard let h = handle else { return }
+        lookout_raster_set_shown(h, UInt32(i), on ? 1 : 0)
+    }
+
+    /// Put back which raster sets the mariner had drawn. Adding a source draws
+    /// its set, which is right for a chart just picked and wrong for one being
+    /// re-installed at launch, so every open has to correct it — and before the
+    /// first frame, or a set the mariner switched off flashes on screen.
+    ///
+    /// Two passes. Hiding first and showing second is what keeps the election:
+    /// where two providers cover one coast, the sources were added in an order
+    /// that drew the first of them, so showing the mariner's pick before hiding
+    /// its rival would leave the rival to turn the pick straight back off.
+    private func restoreRasterShown() {
+        guard let hidden = model?.rasterHidden else { return }
+        let sets = rasterSets()
+        guard !sets.isEmpty else { return }
+        for s in sets where hidden.contains(s.name) { rasterSetShown(s.id, false) }
+        for s in sets where !hidden.contains(s.name) { rasterSetShown(s.id, true) }
+    }
 
     /// Turn one raster chart on or off without removing it.
     @discardableResult
@@ -552,11 +1102,30 @@ final class ChartController: NSObject {
         if model.rasterAvailable != avail { model.rasterAvailable = avail }
         let sets = rasterSets()
         if model.rasterSets.map(\.id) != sets.map(\.id)
-            || model.rasterSets.map(\.inView) != sets.map(\.inView) { model.rasterSets = sets }
+            || model.rasterSets.map(\.inView) != sets.map(\.inView)
+            || model.rasterSets.map(\.shown) != sets.map(\.shown) { model.rasterSets = sets }
         let ai = rasterActiveIndex()
         if model.rasterActive != ai { model.rasterActive = ai }
         let active = rasterName()
         if model.rasterName != active { model.rasterName = active }
+        // The core turns follow off itself on a pan; polling here is what makes
+        // the lock button follow the core instead of its own last tap.
+        let follow = followState
+        if model.followState != follow { model.followState = follow }
+        let cup = courseUpState
+        if model.courseUpState != cup { model.courseUpState = cup }
+        let plugged = pluginsActive
+        if model.pluginsActive != plugged { model.pluginsActive = plugged }
+        // Own ship, for the position readout. The state and the numbers move
+        // together: a readout that kept the last position through a lost fix
+        // would be presenting a stale one as live.
+        if let ship = ownShip() {
+            if model.fixState != ship.state { model.fixState = ship.state }
+            let lat: Double? = ship.state == .live ? ship.lat : nil
+            let lon: Double? = ship.state == .live ? ship.lon : nil
+            if model.shipLat != lat { model.shipLat = lat }
+            if model.shipLon != lon { model.shipLon = lon }
+        }
         if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
         if model.centerLat != v.lat { model.centerLat = v.lat }

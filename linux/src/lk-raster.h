@@ -37,6 +37,21 @@ void     lk_raster_charts_remove (LkRasterCharts *self, const char *path);
 void     lk_raster_charts_set_enabled (LkRasterCharts *self, const char *path, gboolean on);
 gboolean lk_raster_charts_enabled (LkRasterCharts *self, const char *path);
 
+/* Which SETS the mariner has stopped drawing, by set name. The engine draws a
+ * set as it opens it, which is right for a chart being added now and wrong for
+ * one being re-installed at launch, so the choice has to be kept here and put
+ * back into every chart the engine opens.
+ *
+ * `note_shown` takes the whole engine account at once: the sets it reports
+ * drawn, and the sets it reports not drawn. A name in neither list is left as
+ * it stands, so a set on a drive that is unplugged today keeps the answer the
+ * mariner gave it. TRUE when something changed, which is also when it was
+ * written to disk. */
+gboolean lk_raster_charts_shown (LkRasterCharts *self, const char *name);
+gboolean lk_raster_charts_note_shown (LkRasterCharts    *self,
+                                      const char *const *shown,
+                                      const char *const *hidden);
+
 /* One provider's files: what the pill draws as a single picture, and what the
  * settings form switches with one control. */
 typedef struct {

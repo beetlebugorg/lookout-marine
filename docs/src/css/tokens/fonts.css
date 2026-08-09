@@ -1,0 +1,26 @@
+/* Lookout Marine ships NO webfont binary. Every shell asks its platform for the
+   system UI face — SF Pro on Apple, Segoe UI Variable on Windows, Roboto on
+   Android, the GNOME default on Linux — and the docs site uses the Docusaurus
+   system stack.
+
+   The two named faces below are therefore declared as LOCAL ONLY. There is
+   nothing to download and nothing to ship: if the reader's machine has the
+   face, it is used; otherwise the stack in typography.css falls through to the
+   next entry. Do not replace either with a webfont — a substituted family would
+   stop matching the product on the platform it belongs to. */
+
+@font-face {
+  font-family: "SF Pro Text";
+  src: local("SF Pro Text"), local("SFProText-Regular"), local("-apple-system");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Cascadia Mono";
+  src: local("Cascadia Mono"), local("CascadiaMono-Regular"), local("Cascadia Code");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}

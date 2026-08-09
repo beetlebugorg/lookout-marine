@@ -12,8 +12,59 @@ import UIKit
 
 #if os(macOS)
 
+/// The app delegate exists for one job: files LaunchServices hands the app —
+/// a double-clicked .lkplug, `open x.lkplug`, a chart dropped on the Dock
+/// icon. A WindowGroup has no other hook for them. Files that arrive before
+/// the content view has published the model wait here.
+@MainActor
+final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    static weak var model: AppModel? {
+        didSet { deliverPending() }
+    }
+    private static var pending: [String] = []
+
+    /// Hand the chart to the copy already running, and go.
+    ///
+    /// Two copies share one preferences domain and one plugin storage
+    /// directory, so the second to quit overwrites what the first saved: a
+    /// mariner loses connections, alarm limits and raster choices without
+    /// being told. They also compete for the instrument feed, which serves
+    /// one client.
+    ///
+    /// LOOKOUT_MULTI lifts it. The screenshot protocol takes every frame from
+    /// its own instance and needs several at once, and a developer comparing
+    /// two builds side by side needs the same.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.environment["LOOKOUT_MULTI"] == nil else { return }
+        let me = NSRunningApplication.current
+        let others = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? ""
+        ).filter { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }
+        guard let first = others.first else { return }
+        lkLog("another copy is running (pid \(first.processIdentifier)); handing over to it")
+        first.activate(options: [.activateAllWindows])
+        // exit rather than NSApp.terminate: nothing is open yet to unwind, and
+        // terminate part way through launching runs a teardown against state
+        // that was never built.
+        exit(0)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Self.pending.append(contentsOf: urls.map(\.path))
+        Self.deliverPending()
+    }
+
+    private static func deliverPending() {
+        guard let model else { return }
+        let paths = pending
+        pending = []
+        for p in paths { model.openFileOrChart(p) }
+    }
+}
+
 @main
 struct LookoutMarineApp: App {
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     // Held as @State so the controller (and its lookout* handle / display link)
     // survives view-tree rebuilds.
@@ -35,6 +86,7 @@ struct LookoutMarineApp: App {
         WindowGroup {
             ContentView(model: model, controller: controller)
                 .frame(minWidth: 720, minHeight: 520)
+                .onAppear { MacAppDelegate.model = model }
         }
         // A chart needs room. The default window was 900×520, which is the
         // minimum size, not a working size.
@@ -228,28 +280,82 @@ struct ContentView: View {
             } message: {
                 Text(model.openError ?? "")
             }
+            // The .lkplug consent sheet. Every install entry point sets
+            // pendingInstall; the sheet is the only way from there to disk.
+            .sheet(item: Binding(
+                get: { model.pendingInstall },
+                set: { model.pendingInstall = $0 })) { pkg in
+                PluginConsentSheet(model: model, pkg: pkg)
+            }
+            .alert("Couldn't install plugin", isPresented: Binding(
+                get: { model.installError != nil },
+                set: { if !$0 { model.installError = nil } })) {
+                Button("OK", role: .cancel) { model.installError = nil }
+            } message: {
+                Text(model.installError ?? "")
+            }
+            #if os(macOS)
+            // A file dropped on the chart takes the path the Open panel takes:
+            // the core decides what it is, and a .lkplug goes to consent.
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                for p in providers {
+                    _ = p.loadObject(ofClass: URL.self) { url, _ in
+                        guard let url else { return }
+                        DispatchQueue.main.async { model.openFileOrChart(url.path) }
+                    }
+                }
+                return !providers.isEmpty
+            }
+            #endif
             // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
-            // scale, search, pick opens that chrome once the chart is up. On
-            // the simulator, pass it as SIMCTL_CHILD_LOOKOUT_SHOW.
+            // scale, search, pick, menu, marker, rename opens that chrome once
+            // the chart is up. On the simulator, pass it as
+            // SIMCTL_CHILD_LOOKOUT_SHOW.
             .onAppear {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespaces) })
-                let tabs = ["display": 0, "depths": 1, "text": 2, "charts": 3, "advanced": 4]
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     for item in want {
                         let part = item.split(separator: ":", maxSplits: 1).map(String.init)
                         switch part[0] {
+                        // settings:<section>, the section named as the core
+                        // names it (display, depths, text, charts, vessels,
+                        // alarms, connections, advanced).
+                        // The section is named AFTER the window opens: on iOS
+                        // openSettings puts the form on its list of sections,
+                        // and this is what pushes one of them.
                         case "settings":
-                            model.settingsTab = part.count > 1 ? (tabs[part[1]] ?? 0) : 0
+                            let want = part.count > 1 ? part[1] : "display"
                             model.openSettings()
+                            model.settingsTab = want
                         case "scale": model.beginScaleEntry()
+                        // table[:key[:sort[:desc]]] opens a plugin's declared
+                        // dialog, the way the menu item the declaration asked
+                        // for does, with the sort a mariner would click for.
+                        #if os(macOS)
+                        case "table":
+                            model.openPluginTable(part.count > 1 ? part[1] : "")
+                        // target[:id] pins one declared row on the chart, the
+                        // way a double-click in the dialog does, without the
+                        // dialog. No id takes the first row of the declared
+                        // sort.
+                        case "target":
+                            model.revealTableRow(part.count > 1 ? part[1] : "")
+                        #endif
                         // scheme:1 dusk, scheme:2 night — the chrome must
                         // follow the chart's hours, and a screenshot proves it.
                         case "scheme":
                             let n = part.count > 1 ? (Int(part[1]) ?? 1) : 1
                             for _ in 0..<n { model.controller?.cycleScheme() }
                         case "search": model.searchOpen = true
+                        // install:<path> — a .lkplug straight to its consent
+                        // sheet, for the screenshot protocol. Parsed from the
+                        // raw variable: a path keeps its case.
+                        case "install":
+                            if let r = show.range(of: "install:", options: .caseInsensitive) {
+                                model.beginPluginInstall(String(show[r.upperBound...]))
+                            }
                         // pick at the centre, or at a fraction of the view:
                         // pick:0.5x0.85 lands low in the chart. ("x", because
                         // the comma splits the LOOKOUT_SHOW list itself.)
@@ -258,6 +364,22 @@ struct ContentView: View {
                                 ? part[1].split(separator: "x").compactMap { Double($0) } : []
                             if f.count == 2 { model.pickAt(fx: f[0], fy: f[1]) }
                             else { model.pickAtCentre() }
+                        // The chart menu, a dropped mark, and the rename field
+                        // on the newest mark. Same fraction as pick, because
+                        // the hook has no pointer to press with:
+                        // menu:0.5x0.5, marker:0.45x0.5, rename.
+                        case "menu":
+                            let f = part.count > 1
+                                ? part[1].split(separator: "x").compactMap { Double($0) } : []
+                            model.showChartMenu(fx: f.count == 2 ? f[0] : 0.5,
+                                                fy: f.count == 2 ? f[1] : 0.5)
+                        case "marker":
+                            let f = part.count > 1
+                                ? part[1].split(separator: "x").compactMap { Double($0) } : []
+                            model.showDropMarker(fx: f.count == 2 ? f[0] : 0.5,
+                                                 fy: f.count == 2 ? f[1] : 0.5)
+                        case "rename":
+                            model.showRenameNewestMarker()
                         // pick, then the next object's report 5s later: the
                         // screenshot protocol's way of watching the selection.
                         case "page":

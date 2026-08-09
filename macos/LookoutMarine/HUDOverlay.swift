@@ -18,9 +18,8 @@ import AppKit
 import UIKit
 #endif
 
-/// Scale band, 1:N, zoom and lat/lon. The position is the cursor position, or
-/// the view centre when there is no cursor. The scale and the raster chart pill
-/// are the controls.
+/// Scale band, 1:N, zoom and OWN SHIP's position. The scale, the position pill
+/// and the raster chart pill are the controls.
 struct ReadoutsCapsule: View {
     @ObservedObject var model: AppModel
     /// A narrow window (a phone) uses a smaller type size. Whether the row
@@ -70,8 +69,7 @@ struct ReadoutsCapsule: View {
     /// The position, and the zoom beside it. The second line when there is one.
     private var positionLine: some View {
         HStack(spacing: 10) {
-            Text(coordString)
-                .foregroundStyle(Chrome.ink)
+            PositionReadout(model: model, compact: compact)
             separator
             Text(String(format: "z%.1f", model.zoomLevel))
                 .foregroundStyle(Chrome.muted)
@@ -108,8 +106,7 @@ struct ReadoutsCapsule: View {
                 Text(String(format: "z%.1f", model.zoomLevel))
                     .foregroundStyle(Chrome.muted)
                 separator
-                Text(coordString)
-                    .foregroundStyle(Chrome.ink)
+                PositionReadout(model: model, compact: compact)
             }
             if model.overscale > 1.05 {
                 Text(String(format: "×%.1f", model.overscale))
@@ -315,11 +312,85 @@ struct ReadoutsCapsule: View {
     private var separator: some View {
         Rectangle().fill(Chrome.rule).frame(width: 1, height: 20)
     }
+}
 
+/// OWN SHIP's position, and a pill saying whether to believe it.
+///
+/// The readout carries own ship and nothing else. It does not follow the map
+/// centre and it does not switch meaning when the mariner pans away, because
+/// panning away is exactly when a mistaken reading is dangerous. Where there
+/// is no fix it shows NO NUMBERS: a coordinate with no boat behind it is the
+/// ambiguity this removes. The coordinates of a PLACE come from the chart
+/// menu, on demand, at the point the mariner asked about.
+///
+/// The pill differs by more than its text, so it reads at a glance in bad
+/// light: the colour changes, the glyph changes, the fill goes from solid to
+/// outlined, and the third state is a BUTTON rather than a label. That state
+/// is the one place the app tells a mariner they have no position, so it
+/// carries the fix.
+struct PositionReadout: View {
+    @ObservedObject var model: AppModel
+    let compact: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch model.fixState {
+            case .live:
+                pill("GPS", system: "location.fill", tint: Chrome.accent, solid: true)
+                Text(coordString)
+                    .font(.system(size: compact ? 12 : 14).monospacedDigit())
+                    .foregroundStyle(Chrome.ink)
+            case .lost:
+                pill("NO GPS", system: "location.slash", tint: Chrome.overscale, solid: false)
+            case .none:
+                Button(action: model.configurePosition) {
+                    pill("Configure GPS", system: "gearshape.fill",
+                         tint: Chrome.accent, solid: false)
+                }
+                .buttonStyle(ChromeFlatStyle(cornerRadius: 8))
+                .help("No source of position. Add a gateway or a Signal K server.")
+                .accessibilityLabel("Configure GPS. No source of position; add a gateway or a Signal K server.")
+                .accessibilityIdentifier("configure-gps")
+                .chromeHitRegion("position-pill")
+            }
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .contain)
+        .accessibilityValue(stateName)
+    }
+
+    /// A solid pill reads as a state that is good and settled; an outlined one
+    /// as a state waiting on the mariner. Both carry their own glyph.
+    private func pill(_ text: String, system: String, tint: Color, solid: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return HStack(spacing: 5) {
+            Image(systemName: system).font(.system(size: 9, weight: .bold))
+            Text(text)
+        }
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(solid ? Color.white : tint)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(solid ? tint : tint.opacity(0.16), in: shape)
+        .overlay(shape.strokeBorder(solid ? .clear : tint.opacity(0.55), lineWidth: 1))
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Own ship's position, or nothing at all. Never the map centre.
     private var coordString: String {
-        let lat = model.cursorLat ?? model.centerLat
-        let lon = model.cursorLon ?? model.centerLon
+        guard let lat = model.shipLat, let lon = model.shipLon else { return "" }
         return CoordFormat.position(lat: lat, lon: lon)
+    }
+
+    /// The state as one stable word, for assistive technology and the UI
+    /// tests. The help text reads well and changes freely; this does not.
+    private var stateName: String {
+        switch model.fixState {
+        case .live: return "own ship"
+        case .lost: return "no fix"
+        case .none: return "no source"
+        }
     }
 }
 
@@ -335,6 +406,140 @@ private final class RasterMenuTarget: NSObject {
     @objc func add() { model.presentRasterPanel() }
 }
 #endif
+
+/// The chart menu, raised at a point on the water.
+///
+/// Every item acts on the point under the press, not on the map centre and not
+/// on where the cursor drifts to afterwards, so the coordinates are taken once
+/// when the menu opens and the menu carries them.
+///
+/// It is app chrome, not a system menu. The chrome follows the CHART's hours:
+/// dusk and night wear the dark palette whatever the desktop is set to, while
+/// a system menu takes its appearance from the desktop, which would put a
+/// bright panel on a night passage. It is also anchored to a place on the
+/// chart, and it closes when the camera moves, the way the pick report does.
+struct ChartMenuPanel: View {
+    @ObservedObject var model: AppModel
+    let menu: AppModel.ChartMenu
+
+    static let width: CGFloat = 236
+    /// Only used to decide which way the menu flips at an edge, never as a
+    /// frame. The panel sizes itself.
+    static func assumedHeight(hasMarker: Bool) -> CGFloat {
+        (hasMarker ? 84 : 60) + 34 * (hasMarker ? 4 : 3)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider().overlay(Chrome.rule)
+            VStack(alignment: .leading, spacing: 1) {
+                item("What is here", system: "info.circle", action: model.chartMenuPick)
+                if menu.marker == nil {
+                    item("Drop marker", system: "mappin", action: model.chartMenuDropMarker)
+                } else {
+                    item("Rename marker", system: "pencil", action: model.chartMenuRenameMarker)
+                    item("Remove marker", system: "trash", action: model.chartMenuRemoveMarker)
+                }
+                item("Copy position", system: "doc.on.doc", action: model.chartMenuCopyPosition)
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(width: Self.width, alignment: .leading)
+        .panelSurface(cornerRadius: 10, opaque: true)
+    }
+
+    /// The point's own coordinates, in the mariner's format. Reading them is
+    /// the common case, so it costs no click at all. Over a marker the mark's
+    /// name rides above them, because that is what Rename and Remove act on.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let mark = menu.marker {
+                HStack(spacing: 5) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Chrome.magenta)
+                    Text(mark.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Chrome.ink)
+                        .lineLimit(1)
+                }
+            }
+            Text(CoordFormat.position(lat: menu.lat, lon: menu.lon))
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(menu.marker == nil ? Chrome.ink : Chrome.muted)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.top, 9)
+        .padding(.bottom, 8)
+    }
+
+    private func item(_ title: String, system: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: system)
+                    .font(.system(size: 12))
+                    .frame(width: 16)
+                    .foregroundStyle(Chrome.muted)
+                Text(title).font(.system(size: 13))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Chrome.ink)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
+        .padding(.horizontal, 4)
+        .accessibilityLabel(title)
+    }
+}
+
+/// The rename field, anchored to its marker.
+///
+/// A separate, unhurried action: the drop already placed and named the mark,
+/// so nothing on the water is waiting for this. Return commits, Escape
+/// abandons, an empty field keeps the old name, and the field takes 32
+/// characters, which is a name and not a note.
+struct MarkerRenameField: View {
+    @ObservedObject var model: AppModel
+    @FocusState private var focused: Bool
+
+    static let width: CGFloat = 200
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "mappin.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(Chrome.magenta)
+            TextField("Name", text: $model.renamingText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Chrome.ink)
+                .focused($focused)
+                .onSubmit { model.commitRename() }
+                .onChange(of: model.renamingText) { clip() }
+                .accessibilityIdentifier("marker-name-field")
+        }
+        .padding(.horizontal, 10)
+        .frame(width: Self.width, height: 32)
+        .panelSurface(cornerRadius: 8, opaque: true)
+        .onAppear { focused = true }
+        #if os(macOS)
+        .onExitCommand { model.cancelRename() }
+        #endif
+    }
+
+    /// Cut here as well as in the core, so the field never shows more than
+    /// will be kept.
+    private func clip() {
+        if model.renamingText.count > 32 {
+            model.renamingText = String(model.renamingText.prefix(32))
+        }
+    }
+}
 
 /// The scale entry. Type a scale or select a band, and the view zooms to it.
 struct ScaleEntryPanel: View {
