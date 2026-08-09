@@ -895,6 +895,10 @@ pub const Host = struct {
             self.br.say(broker.level_err, manifest.id, "lk_start refused with {d}", .{rc});
             return Error.StartRefused;
         }
+        // First thing behind `lk_start`: what the mariner has left on. A plugin
+        // whose grant was switched off in an earlier run learns it here rather
+        // than by having its calls refused one at a time.
+        self.pushGrants(state.index, grants);
 
         const dir_owned: []u8 = if (plugin_dir.len > 0) try self.alloc.dupe(u8, plugin_dir) else &.{};
         errdefer if (dir_owned.len > 0) self.alloc.free(dir_owned);
@@ -1582,10 +1586,29 @@ pub const Host = struct {
         // readings it published, and both would sit there unchanging while
         // looking current.
         if (!on) self.br.withdraw(index, cap, broker.wallMs());
+        // The plugin is told what it now holds, after the takeback, so it can
+        // stop producing what the host would only refuse. Enforcement is
+        // unchanged: every call is still checked, and one that arrives before
+        // this event is answered -1 like any other.
+        self.pushGrants(index, grants);
         self.persistGrants(id, grants) catch |e| {
             self.br.say(broker.level_warn, id, "grant change not saved: {s}", .{@errorName(e)});
         };
         self.br.say(broker.level_info, id, "grant {s} switched {s}", .{ cap.name(), if (on) "on" else "off" });
+    }
+
+    /// Hand a plugin the set of capabilities it holds, as
+    /// `{"v":1,"granted":[…]}`. Sent once the module has started, and again on
+    /// every change, which is the only way a plugin learns what it may do: the
+    /// manifest is what it asked for, not what the mariner left on.
+    ///
+    /// A failure to build the JSON is silent. The event is an optimisation for
+    /// the plugin, never the permission itself.
+    fn pushGrants(self: *Host, index: u32, caps: broker.Caps) void {
+        var json: std.ArrayList(u8) = .empty;
+        defer json.deinit(self.alloc);
+        writeGrantsJson(&json, self.alloc, caps) catch return;
+        self.br.push(index, broker.Kind.grants_changed, 0, json.items);
     }
 
     /// Write the grants file beside the plugin's wasm, atomically. A set that
@@ -1900,6 +1923,8 @@ pub const Host = struct {
             return false;
         }
         e.clean_since_ms.store(broker.monoMs(), .release);
+        // A fresh instance knows nothing, including what it is allowed to do.
+        self.pushGrants(e.state.index, e.grants);
         self.br.say(
             broker.level_info,
             e.manifest.id,

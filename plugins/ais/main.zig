@@ -11,6 +11,12 @@
 //! slows under the gate or drops its heading loses exactly what it stopped
 //! earning, and this file keeps no memory of what is drawn.
 //!
+//! TWO PATHS. `onUpdate` decides and `draw` renders. Every report that arrives
+//! is run through the gate at once, whatever rate the chart is being drawn at;
+//! `draw` colours each target from the decision waiting for it in `gates`. A
+//! decision taken in `draw` would run at whatever rate suits the picture, and
+//! the picture is not what a collision alarm answers to.
+//!
 //! AIDS TO NAVIGATION share the store and nothing else. A buoy is not going
 //! anywhere, so it gets one object — a diamond, broken open when the aid is
 //! virtual — with no CPA, no vector and no heading line, and it ages on its own
@@ -26,7 +32,8 @@
 //! target inside `cpa_limit` and less than `tcpa_limit` ahead is drawn
 //! `target_danger` and raises one alarm. The gate state is per MMSI, in
 //! `gates` below: the alarm fires on the edge into the gate and re-arms only
-//! after that target leaves it.
+//! after that target leaves it. The edge is what holds the alarm to one however
+//! often the readings arrive.
 //!
 //! WITHOUT OWN POSITION there is no relative motion to compute, which is why
 //! own ship's three readings are optional inputs: the traffic is still drawn,
@@ -97,12 +104,11 @@ pub const inputs = struct {
     });
 };
 
-// ---- state that outlives a draw --------------------------------------------
+// ---- state that outlives one pass ------------------------------------------
 
-/// What this plugin remembers about one MMSI between draws. Where the target
-/// is, how old its report is and whether it is on the chart are the library's
-/// now; the two latches are not, because they are about edges rather than
-/// about the current picture.
+/// What this plugin decided about one MMSI, and what it remembers between
+/// decisions. Where the target is and how old its report is are the library's;
+/// what is here is this plugin's own ruling on it, which `draw` renders.
 const Gate = struct {
     mmsi: u32 = 0,
     /// True while the target is inside the danger gate. The alarm fires on the
@@ -111,15 +117,19 @@ const Gate = struct {
     /// True once the off-position warning has gone out for this aid. Cleared
     /// when it reports itself back on station.
     warned: bool = false,
-    /// In the snapshot this draw is describing. Scratch for one call.
+    /// In the snapshot the last evaluation walked. Scratch for one pass.
     seen: bool = false,
+    /// The approach the last evaluation solved, or null when own ship's fix
+    /// would not allow one. The triangle's colour, the hover and the table row
+    /// all read this, so none of the three can disagree with the alarm.
+    sol: ?cpa.Solution = null,
 };
 
 var gates: [max_targets]Gate = @splat(.{});
 var n_gates: usize = 0;
 
 /// Set once when the table has overflowed, so the warning is logged once
-/// rather than once a second forever.
+/// rather than on every evaluation forever.
 var table_full_logged: bool = false;
 
 // ---- lifecycle ---------------------------------------------------------------
@@ -130,8 +140,9 @@ pub fn onStart(_: lk.raw.Start) !void {
     lk.say(.starting, "waiting for targets", .{});
 }
 
-/// A settings change is applied by the library, which then redraws. The line
-/// is what a mariner's change looks like in the host log.
+/// A settings change is applied by the library, which then redraws. The gate
+/// is re-run first, so the new limits rule that redraw rather than the next
+/// report. The line is what a mariner's change looks like in the host log.
 pub fn onSettings() void {
     const s = cfg.Tuned.now();
     lk.log(.info, "settings: cpa {d:.0} m, tcpa {d:.0} s, alarm {}, vector {d:.0} s, min sog {d:.2} m/s", .{
@@ -141,6 +152,80 @@ pub fn onSettings() void {
         s.vector_seconds,
         s.min_sog_mps,
     });
+    evaluate();
+}
+
+// ---- the decision ----------------------------------------------------------
+
+/// New readings have landed: own ship's position, or the whole AIS set.
+pub fn onUpdate() void {
+    evaluate();
+}
+
+/// Run every target against own ship and leave the ruling in its gate.
+///
+/// This is where the alarm is raised. The gate's edge is what holds one
+/// approach to one alarm: the reports arrive faster than the chart is drawn,
+/// and a target that stays inside the gate is already accounted for.
+fn evaluate() void {
+    const set = cfg.Tuned.now();
+    const own = ownShip();
+
+    for (gates[0..n_gates]) |*g| g.seen = false;
+    for (inputs.traffic.targets()) |*t| {
+        const g = gateFor(t.mmsi) orelse continue;
+        g.seen = true;
+        g.sol = null;
+
+        // Off the chart, and out of the gate: a target that has stopped
+        // reporting, slowed under the mariner's limit or lost its position may
+        // alarm again when it comes back.
+        if (!visible(t, set)) {
+            g.in_gate = false;
+            continue;
+        }
+        if (t.aton) {
+            checkAid(t, g);
+            continue;
+        }
+        const at = t.at.?;
+        const sol = if (own) |o| cpa.solve(o, .{
+            .lat = at.lat,
+            .lon = at.lon,
+            .sog_mps = t.sog_mps orelse 0,
+            .cog_deg = t.cog_deg orelse t.heading_deg orelse 0,
+        }) else null;
+        g.sol = sol;
+
+        // With the alarm switched off there is no danger colour either: the
+        // mariner chose silence, and a red triangle nobody hears is worse than
+        // no red triangle.
+        const in_gate = set.cpa_alarm and if (sol) |s|
+            s.dangerous(set.cpa_limit_m, set.tcpa_limit_s)
+        else
+            false;
+        if (in_gate and !g.in_gate) alarm(t, sol.?);
+        g.in_gate = in_gate;
+    }
+    prune();
+}
+
+/// One aid to navigation's own ruling: a warning the first time it says it has
+/// drifted, re-armed when it reports itself back on station.
+fn checkAid(t: *const lk.Target, g: *Gate) void {
+    if (aton.wantsWarning(t.virtual_aton, t.off_position, g.warned)) {
+        g.warned = true;
+        offPositionWarning(t);
+    } else if (aton.rearm(t.off_position)) g.warned = false;
+}
+
+/// True when a target belongs on the chart: it has a position, it has been
+/// heard from recently enough, and it is not under the speed the mariner set.
+/// Applied on both paths, so the picture and the ruling cover the same set.
+fn visible(t: *const lk.Target, set: cfg.Tuned) bool {
+    if (t.at == null) return false;
+    if (t.age_ms > staleMs(t.aton)) return false;
+    return !set.hidden(t.sog_mps, t.aton);
 }
 
 // ---- the scene ----------------------------------------------------------------
@@ -148,36 +233,25 @@ pub fn onSettings() void {
 pub fn draw(c: *lk.Chart) void {
     const set = cfg.Tuned.now();
     const own = ownShip();
-    const traffic = inputs.traffic.targets();
-
-    for (gates[0..n_gates]) |*g| g.seen = false;
 
     var drawn: usize = 0;
     var danger: usize = 0;
-    for (traffic) |*t| {
-        const g = gateFor(t.mmsi) orelse continue;
-        g.seen = true;
-
-        const at = t.at orelse {
-            // Off the chart, and out of the gate: a target that has stopped
-            // reporting may alarm again when it comes back.
-            g.in_gate = false;
-            continue;
-        };
-        if (t.age_ms > staleMs(t.aton) or set.hidden(t.sog_mps, t.aton)) {
-            g.in_gate = false;
-            continue;
-        }
+    for (inputs.traffic.targets()) |*t| {
+        // A target with no gate is one the table had no room for. It is not
+        // drawn, exactly as it is not judged.
+        const g = gateOf(t.mmsi) orelse continue;
+        if (!visible(t, set)) continue;
+        const at = t.at.?;
 
         if (t.aton) {
-            drawAid(c, t, at, g);
+            drawAid(c, t, at);
             if (Targets.isOpen()) targets.aid(t, at, own);
-        } else if (drawVessel(c, t, at, g, own, set)) {
-            danger += 1;
+        } else {
+            drawVessel(c, t, at, g, own, set);
+            if (g.in_gate) danger += 1;
         }
         drawn += 1;
     }
-    prune();
 
     // Silence a mariner chose has to look different from silence that is
     // broken, so the line says "alarms off" while the switch is off. No own
@@ -190,32 +264,18 @@ pub fn draw(c: *lk.Chart) void {
         c.status("{d} targets, alarms off", .{drawn});
 }
 
-/// One vessel: the triangle, its heading line and its speed vector. Answers
-/// true when it is inside the danger gate.
+/// One vessel: the triangle, its heading line and its speed vector, coloured
+/// by the ruling already in its gate.
 fn drawVessel(
     c: *lk.Chart,
     t: *const lk.Target,
     at: lk.Point,
-    g: *Gate,
+    g: *const Gate,
     own: ?cpa.State,
     set: cfg.Tuned,
-) bool {
-    const sol: ?cpa.Solution = if (own) |o| cpa.solve(o, .{
-        .lat = at.lat,
-        .lon = at.lon,
-        .sog_mps = t.sog_mps orelse 0,
-        .cog_deg = t.cog_deg orelse t.heading_deg orelse 0,
-    }) else null;
-
-    // With the alarm switched off there is no danger colour either: the
-    // mariner chose silence, and a red triangle nobody hears is worse than no
-    // red triangle.
-    const in_gate = set.cpa_alarm and if (sol) |s|
-        s.dangerous(set.cpa_limit_m, set.tcpa_limit_s)
-    else
-        false;
-    if (in_gate and !g.in_gate) alarm(t, sol.?);
-    g.in_gate = in_gate;
+) void {
+    const sol = g.sol;
+    const in_gate = g.in_gate;
     // The row carries the same solution the triangle is coloured by, so the
     // table and the chart can never disagree about which vessel is dangerous.
     if (Targets.isOpen()) targets.vessel(t, at, own, sol, in_gate);
@@ -248,17 +308,10 @@ fn drawVessel(
             .dash = true,
         });
     }
-    return in_gate;
 }
 
-/// One aid to navigation: the diamond, and a warning the first time it says it
-/// has drifted.
-fn drawAid(c: *lk.Chart, t: *const lk.Target, at: lk.Point, g: *Gate) void {
-    if (aton.wantsWarning(t.virtual_aton, t.off_position, g.warned)) {
-        g.warned = true;
-        offPositionWarning(t);
-    } else if (aton.rearm(t.off_position)) g.warned = false;
-
+/// One aid to navigation: the diamond, broken open when the aid is virtual.
+fn drawAid(c: *lk.Chart, t: *const lk.Target, at: lk.Point) void {
     var idb: [id_len]u8 = undefined;
     var pick: Pick = .{};
     pick.aid(t);
@@ -296,6 +349,15 @@ fn staleMs(is_aton: bool) i64 {
 
 // ---- the gate table -------------------------------------------------------
 
+/// The ruling on this MMSI, or null when no evaluation has reached it. `draw`
+/// reads this and never creates: the gate table is the decision path's.
+fn gateOf(mmsi: u32) ?*const Gate {
+    for (gates[0..n_gates]) |*g| {
+        if (g.mmsi == mmsi) return g;
+    }
+    return null;
+}
+
 fn gateFor(mmsi: u32) ?*Gate {
     for (gates[0..n_gates]) |*g| {
         if (g.mmsi == mmsi) return g;
@@ -313,9 +375,9 @@ fn gateFor(mmsi: u32) ?*Gate {
     return g;
 }
 
-/// Drop the targets this draw did not see. They have left the host's snapshot,
-/// so nothing is latched for them any more; the last entry fills the hole,
-/// because order carries no meaning here.
+/// Drop the targets this evaluation did not see. They have left the host's
+/// snapshot, so nothing is latched for them any more; the last entry fills the
+/// hole, because order carries no meaning here.
 fn prune() void {
     var i: usize = 0;
     while (i < n_gates) {

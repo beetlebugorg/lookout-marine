@@ -148,6 +148,10 @@ way to notice that a fix went stale, because staleness is time passing rather
 than an event that arrives. Declare `pub const draw_rate_ms: i64 = 250` when you
 draw something that has to move smoothly.
 
+That rate is for the picture, and nothing else should hang off it. Work that
+has to keep up with the boat goes in `pub fn onUpdate() void`, which the SDK
+calls as soon as an input has a new value.
+
 [The plugin SDK](sdk/index.md) is the full surface: the other input kinds, the
 symbol and area calls, the settings struct, connections, and publishing.
 

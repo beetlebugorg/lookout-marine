@@ -25,6 +25,7 @@ pub const Kind = struct {
     pub const ws_closed: u32 = 14;
     pub const table_open: u32 = 15;
     pub const table_closed: u32 = 16;
+    pub const grants_changed: u32 = 17;
     pub const shutdown: u32 = 99;
 };
 

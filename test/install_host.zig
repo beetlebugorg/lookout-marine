@@ -10,8 +10,8 @@
 //!     NAME, with the sentence the shell shows — INCLUDING a package that
 //!     brings an .aot, which is the case that keeps native code out;
 //!   - an installed package lands under the install root, loads, and draws;
-//!   - a grant revoked live behaves exactly like one the manifest never
-//!     asked for: the call answers -1, denied counts, the plugin runs on;
+//!   - a grant revoked live takes back what it drew, stands the plugin's draw
+//!     timer down, and gives it back when the grant returns;
 //!   - grants.json round-trips through a reload;
 //!   - a reinstall's consent sheet carries the grant delta and the downgrade;
 //!   - uninstall removes the directory, the storage file and every overlay
@@ -75,16 +75,26 @@ fn fixJson(buf: []u8, lat: f64) []const u8 {
         "{{\"path\":\"environment.wind.directionTrue\",\"value\":215,\"ts\":1000,\"age_ms\":100}}]}}", .{lat}) catch unreachable;
 }
 
+/// The periodic timer this plugin holds, or 0 when it holds none. The library
+/// cancels its draw timer while the chart grant is off and takes a fresh id
+/// when the grant returns, so a hard-coded id would stop driving the draw.
+fn drawTimerId(rig: *Rig, index: u32) u64 {
+    rig.br.mu.lock();
+    defer rig.br.mu.unlock();
+    for (rig.br.timers.items) |tm| {
+        if (tm.plugin == index and tm.period > 0) return @bitCast(tm.id);
+    }
+    return 0;
+}
+
 /// A fresh fix followed by the plugin's own draw tick. lk2 records readings
 /// on STORE_CHANGED and draws on its timer, which the broker's I/O thread
 /// would fire; this rig pumps deterministically, so the tick is pushed by
-/// hand. The draw timer is the first timer the (fresh) broker handed out.
-const draw_timer_id: u64 = 1;
-
+/// hand.
 fn pushFix(rig: *Rig, index: u32, lat: f64) void {
     var buf: [512]u8 = undefined;
     rig.br.push(index, broker.Kind.store_changed, 0, fixJson(&buf, lat));
-    rig.br.push(index, broker.Kind.timer, draw_timer_id, "");
+    rig.br.push(index, broker.Kind.timer, drawTimerId(rig, index), "");
 }
 
 // ---------------------------------------------------------------------------
@@ -463,19 +473,25 @@ test "the downwind example installs hot, draws, loses a grant live, and uninstal
         const spath = try std.fmt.bufPrint(&spath_buf, "{s}/{s}.json", .{ storage, downwind_id });
         try must(exists(spath), "storage file exists");
 
-        // Revoke overlay.draw live: the next draw is refused with -1 inside
-        // the module, counted denied, logged by capability name, and the
-        // plugin keeps running. Exactly a capability never asked for.
+        // Revoke overlay.draw live. What the capability drew goes with the
+        // capability, and the host tells the plugin what it now holds.
         try h.grantSet(downwind_id, "overlay.draw", false);
         try must(exists(grants_path), "grants.json written beside the wasm");
         // What the capability drew goes with the capability. An object left
         // behind stops updating and still reads as live.
         try must(!rig.ov.objs.contains(downwind_id ++ "/windline"), "the revoke took the drawing off the chart");
+        _ = h.pump();
+        try must(std.mem.indexOf(u8, p.status(), "not drawing") != null, "the status says why the chart is empty");
+        try must(drawTimerId(&rig, p.index) == 0, "the draw timer stood down");
+
+        // Nothing is spent on a scene the host would refuse: no overlay call,
+        // so no refusal to count. Enforcement has not moved. A call that did
+        // arrive would still answer -1; there is simply no call to make.
         const denied_before = p.denied;
         pushFix(&rig, p.index, 38.9800);
         _ = h.pump();
-        try must(p.denied > denied_before, "the revoked draw was denied");
-        try must(rig.log.has("does not request capability overlay.draw"), "the refusal names the capability");
+        try std.testing.expectEqual(denied_before, p.denied);
+        try must(!rig.ov.objs.contains(downwind_id ++ "/windline"), "nothing was drawn while the grant was off");
         try must(h.find(downwind_id) != null, "the plugin runs on");
 
         // The registry now says so, for the settings switch to render.
@@ -483,9 +499,14 @@ test "the downwind example installs hot, draws, loses a grant live, and uninstal
         try h.registryJson(&reg);
         try must(std.mem.indexOf(u8, reg.items, "\"cap\":\"overlay.draw\",\"sentence\":\"Draw on the chart.\",\"granted\":false") != null, "registry shows the revocation");
 
-        // Switch it back on: drawing resumes, nothing new is denied.
+        // Switch it back on: the timer is re-armed, the whole scene is
+        // described again rather than a difference against objects the host
+        // has already dropped, and nothing new is denied.
         try h.grantSet(downwind_id, "overlay.draw", true);
         const denied_after = p.denied;
+        _ = h.pump();
+        try must(drawTimerId(&rig, p.index) != 0, "the draw timer came back");
+        try must(rig.ov.objs.contains(downwind_id ++ "/windline"), "the windline is back on the chart");
         pushFix(&rig, p.index, 38.9850);
         _ = h.pump();
         try std.testing.expectEqual(denied_after, p.denied);
@@ -512,9 +533,16 @@ test "the downwind example installs hot, draws, loses a grant live, and uninstal
         try std.testing.expect(p.caps.contains(.vessel_read));
         try std.testing.expect(!p.caps.contains(.overlay_draw));
 
+        // A grant switched off in an earlier run is switched off from the
+        // start. The plugin is told once it has started, so it never spends a
+        // draw on a chart that will not take one.
+        _ = h.pump();
+        try must(drawTimerId(&rig, p.index) == 0, "a plugin loaded without the grant does not arm a draw timer");
+
         // Uninstall: directory, grants, storage and overlay all gone.
         rig.br.setStorageDir(storage);
         try h.grantSet(downwind_id, "overlay.draw", true);
+        _ = h.pump();
         pushFix(&rig, p.index, 38.9763);
         _ = h.pump();
         try std.testing.expectEqual(@as(usize, 1), rig.ov.count());

@@ -66,6 +66,37 @@ Lookout calls your `onData` function when bytes arrive, not on the draw
 timer, so the freshness gate has not run there. Read inputs with `fresh()`
 inside `onData`.
 
+## Acting on a reading as it arrives
+
+Declare `pub fn onUpdate() void` and Lookout calls it the moment a batch of
+readings lands, with every input already holding its new value. It is the
+clock for work that is not drawing. A plugin that only watches a condition
+declares `onUpdate` and no `draw` at all.
+
+```zig
+pub fn onUpdate() void {
+    const d = inputs.depth.fresh() orelse return;
+    const shallow = d < limit;
+    if (shallow and !was_shallow) _ = lk.alert(.alarm, "Shallow water", "under the limit");
+    was_shallow = shallow;
+}
+```
+
+`draw_rate_ms` is a graphics rate you chose for the picture. Decide in
+`onUpdate` and draw the decision, so how often the chart is redrawn cannot
+change how quickly a plugin reacts. Keep the latch that stops one condition
+becoming a run of alarms in `onUpdate` too: it runs far more often than
+`draw` does.
+
+Lookout coalesces, so `onUpdate` runs once for a batch and not once per
+reading: at most 10 times a second for store readings, twice a second for the
+AIS set, and less than either when the instruments report more slowly. It
+does not run for a batch that touched none of your declared inputs, and a
+settings change calls `onSettings` instead.
+
+Inside `onUpdate` the freshness gate has not run, so read a required input
+with `fresh()` here rather than `get()`.
+
 ## When a reading goes stale
 
 A reading goes stale when its age passes `max_age_ms`. When a required

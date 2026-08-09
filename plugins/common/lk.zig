@@ -636,9 +636,32 @@ pub const Event = union(enum) {
     /// The key of a table the shell has closed. Stop building its rows; the
     /// host has already dropped them.
     table_closed: []const u8,
+    /// `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities the
+    /// plugin holds right now. Sent once after `start` and again whenever the
+    /// mariner changes one, so a plugin never has to ask. `granted` reads it.
+    ///
+    /// A grant that has gone stops the calls it covered from succeeding, and
+    /// the host has already taken back what those calls produced. Stop doing
+    /// the work; the check is still per call and still answers -1.
+    grants_changed: []const u8,
     /// Last thing you will ever be handed. Close sockets, post a final status.
     shutdown,
 };
+
+/// True when a GRANTS_CHANGED payload lists this capability, by its manifest
+/// name: `"overlay.draw"`, `"alerts.raise"`. False for a payload that will not
+/// parse, which is the safe answer for a permissions list.
+pub fn granted(payload: []const u8, cap: []const u8) bool {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, scratch(), payload, .{}) catch return false;
+    if (root != .object) return false;
+    const list = root.object.get("granted") orelse return false;
+    if (list != .array) return false;
+    for (list.array.items) |item| {
+        const name = jstr(item) orelse continue;
+        if (std.mem.eql(u8, name, cap)) return true;
+    }
+    return false;
+}
 
 /// What `start` receives: the host's `{"abi":1,"config":{...}}`, parsed.
 pub const Start = struct {
@@ -662,6 +685,7 @@ const kind_ws_data: u32 = 13;
 const kind_ws_closed: u32 = 14;
 const kind_table_open: u32 = 15;
 const kind_table_closed: u32 = 16;
+const kind_grants_changed: u32 = 17;
 const kind_shutdown: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
@@ -796,6 +820,7 @@ pub fn registerPlugin(comptime P: type) void {
                     else
                         .{ .table_closed = table_key };
                 },
+                kind_grants_changed => .{ .grants_changed = payload },
                 kind_shutdown => .shutdown,
                 // The API says an unknown kind is ignored and answered 0. A
                 // future host must be able to add events without breaking a

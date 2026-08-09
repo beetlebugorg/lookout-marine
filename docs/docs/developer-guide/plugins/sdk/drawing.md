@@ -11,6 +11,16 @@ Lookout calls your `draw` function once a second. Declare
 `pub const draw_rate_ms: i64 = 250;` to change that. A plugin that draws
 nothing does not declare `draw`, and gets no timer.
 
+The timer runs while there is somewhere for a scene to land. Switch
+`overlay.draw` off and Lookout takes what the plugin drew off the chart,
+stops calling `draw`, and posts the reason on the plugin's status line;
+switch it back on and the timer returns with the whole scene described
+again. A dialog the plugin declared is not drawing and costs no capability,
+so `draw` keeps running while one is open, and builds rows without
+describing a scene. Nothing about enforcement moves: every host call is
+still checked on its own, and one made without the grant still answers -1
+and counts as denied. There is simply no call left to make.
+
 Your plugin should draw its entire view on each `draw` call. Lookout compares
 that scene with the last one: an object with the same id and the same content
 is left alone, a changed one is replaced, and one you did not draw is taken

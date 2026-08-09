@@ -108,6 +108,13 @@ fn stage(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     return std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path});
 }
 
+/// Deliver the GRANTS_CHANGED each plugin is handed once it has started, and
+/// check there was exactly one per plugin. These tests drive the queue by
+/// hand, so the wire has to be clear before a test pushes an event of its own.
+fn deliverGrants(h: *host.Host, plugins: usize) !void {
+    try std.testing.expectEqual(plugins, h.pump());
+}
+
 test "the echo plugin loads, draws, and is refused the grant it never asked for" {
     const alloc = std.testing.allocator;
 
@@ -138,6 +145,7 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
 
     try h.loadDir(dir_path);
     try std.testing.expectEqual(@as(usize, 1), h.count());
+    try deliverGrants(&h, 1);
     const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
 
     // lk_start ran: the manifest's three grants are in place, the plugin
@@ -231,6 +239,7 @@ test "a settings change reaches the plugin and changes what it draws" {
     var h = host.Host.init(alloc, &br, .{});
     defer h.deinit();
     try h.loadDir(dir_path);
+    try deliverGrants(&h, 1);
     const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
 
     // The schema arrived with the manifest, and the registry JSON carries it
@@ -338,6 +347,7 @@ test "a plugin survives repeated events whose scratch outgrows its arena" {
     var h = host.Host.init(alloc, &br, .{});
     defer h.deinit();
     try h.loadDir(dir_path);
+    try deliverGrants(&h, 1);
     const echo = h.find(echo_id) orelse return error.EchoNotLoaded;
 
     // 230 targets is a little over 30 kB — several times the 256 kB static
@@ -485,6 +495,7 @@ test "a file the mariner opens reaches the plugin that claims its type" {
     defer h.deinit();
     try h.loadDir(dir_path);
     try std.testing.expectEqual(@as(usize, 2), h.count());
+    try deliverGrants(&h, 2);
     const grib = h.find(grib_id) orelse return error.GribNotLoaded;
 
     // The registry a shell reads carries the claim, so an open panel can say
@@ -597,6 +608,7 @@ test "two plugins claiming one file type both lose it, and the log names them" {
     defer h.deinit();
     try h.loadDir(dir_path);
     try std.testing.expectEqual(@as(usize, 3), h.count()); // echo + the two granted
+    try deliverGrants(&h, 3);
     try std.testing.expect(h.find("org.beetlebug.ungranted") == null);
     try std.testing.expect(sink.has("org.beetlebug.ungranted not loaded: BadManifest"));
 

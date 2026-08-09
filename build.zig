@@ -813,6 +813,25 @@ pub fn build(b: *std.Build) void {
                 }
             }
 
+            // The ais module's collision alarm on the data path: the real
+            // stores driven by hand, no gateway and no sockets. The overlay
+            // store comes too, to prove what did and did not reach the chart.
+            if (ais_wasm) |abin| {
+                const alarm_mod = b.createModule(.{
+                    .root_source_file = b.path("test/ais_alarm.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                });
+                alarm_mod.addImport("host", host_mod);
+                alarm_mod.addImport("overlay", ov_mod);
+                alarm_mod.addAnonymousImport("ais_plugin_wasm", .{ .root_source_file = abin });
+                alarm_mod.addAnonymousImport("ais_manifest", .{ .root_source_file = b.path("plugins/ais/manifest.json") });
+                const alarm_run = b.addRunArtifact(b.addTest(.{ .root_module = alarm_mod }));
+                b.step("ais-alarm", "Run the AIS collision alarm data-path test").dependOn(&alarm_run.step);
+                test_step.dependOn(&alarm_run.step);
+            }
+
             // The install path end to end: a .lkplug packed in-test around the
             // windline module (the docs' downwind example), refused packages,
             // hot install, live grant revocation, grants.json persistence and
@@ -935,6 +954,7 @@ pub fn build(b: *std.Build) void {
         "test/install_host.zig",
         "test/host_isolation.zig",
         "test/host_restart.zig",
+        "test/ais_alarm.zig",
     };
     checkTestCoverage(b, test_step, &pure_test_roots, &reached_test_files);
 }

@@ -33,8 +33,10 @@ pub const trap_timer_id: i64 = 515151;
 const lon: f64 = -76.4750;
 const lat: f64 = 38.9850;
 
-/// Events THIS INSTANCE has seen. A restart is a new instance with new linear
-/// memory, so the count starts again at zero.
+/// Events THIS INSTANCE has answered. A restart is a new instance with new
+/// linear memory, so the count starts again at zero. A kind this fixture
+/// ignores is not counted, so a kind added to the wire does not move the
+/// numbers the tests read.
 var events: u32 = 0;
 
 /// Set by the setting of the same name, at start and at every settings change:
@@ -57,7 +59,10 @@ pub fn start(s: lk.Start) !void {
 }
 
 pub fn onEvent(e: lk.Event) !void {
-    events += 1;
+    switch (e) {
+        .timer, .config_changed, .store_changed, .shutdown => events += 1,
+        else => return,
+    }
     switch (e) {
         .timer => |id| {
             if (id == trap_timer_id) {

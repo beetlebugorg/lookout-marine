@@ -25,7 +25,10 @@
 //!   * the subscription, and one recorded value per declared input, aged
 //!     against the monotonic clock rather than the wall clock;
 //!   * the draw timer. `draw` runs at `draw_rate_ms`, 1 Hz by default, not on
-//!     every store change: the store fans out at up to 10 Hz;
+//!     every store change: the store fans out at up to 10 Hz. It runs only
+//!     while there is somewhere for a scene to land, so a plugin whose
+//!     `overlay.draw` grant the mariner has switched off stops drawing until
+//!     it comes back, or until a table of its own is opened;
 //!   * the freshness gate. `draw` runs only when every required input is
 //!     inside its window. Otherwise the scene is cleared and the status names
 //!     every missing input at once;
@@ -37,6 +40,15 @@
 //!   * the settings, parsed into a typed struct, with the manifest's schema
 //!     generated from the same declaration.
 //!
+//! WHERE A DECISION BELONGS. `onUpdate` runs the moment a declared input has a
+//! new value, with every input already current. It is the clock for work that
+//! is not drawing: a plugin that only watches a condition declares `onUpdate`
+//! and no `draw`, and a plugin that does both keeps the decision here and
+//! renders it there. `draw_rate_ms` is a graphics rate an author picked, so a
+//! decision taken in `draw` runs at whatever rate suits the picture. The host
+//! coalesces, so `onUpdate` runs at most once per batch: 10 Hz for store
+//! readings, 2 Hz for the AIS set, and slower when the instruments are slower.
+//!
 //! WHAT A PLUGIN MAY DECLARE at its root. All of it is optional; `plugin`
 //! reads what is there and wires only that.
 //!
@@ -44,6 +56,7 @@
 //!                         `lk.subscribePosition` / `lk.subscribeAis`
 //!   draw(c)               the scene, on the library's timer
 //!   draw_rate_ms          how often, default 1000
+//!   onUpdate()            after an input changed, before anything is drawn
 //!   Settings              one settings group, or a tuple of them
 //!   onSettings()          after a settings change, before the redraw
 //!   Connections           a connection list
@@ -2058,17 +2071,27 @@ const RawSpill = struct {
     }
 };
 
+/// What one `.store_changed` batch left behind.
+const Routed = struct {
+    /// The readings no declared input claimed, or null when the inputs took
+    /// the lot. What reaches the plugin's own `onEvent`.
+    rest: ?[]const u8,
+    /// How many readings landed in a declared input. Zero means no input
+    /// changed, so nothing depending on one has anything to recompute.
+    claimed: usize,
+};
+
 /// Route one `.store_changed` batch: hand each reading to the input that
-/// declared its path, and give back the readings nobody claimed, or null when
-/// the declared inputs took the lot.
+/// declared its path, and give back the readings nobody claimed.
 ///
 /// The batch arrives already parsed, and the clock arrives as an argument,
 /// because `readings` and `monoMs` both reach the host: keeping them out is
 /// what lets the routing be tested natively, the same reason `lkRecord` takes
 /// a clock. `src` is the payload they came from, which is what goes through
 /// unsplit if the rebuild will not fit.
-fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, src: []const u8, mono: i64) ?[]const u8 {
+fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, src: []const u8, mono: i64) Routed {
     var spill = RawSpill.init(src);
+    var took: usize = 0;
     for (list) |r| {
         var claimed = false;
         inline for (inputs) |In| {
@@ -2080,9 +2103,9 @@ fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, sr
         // A plugin may declare inputs AND raw-subscribe paths of its own; see
         // `subscribeAlso`. The readings no input claimed are that plugin's,
         // and swallowing them here is how they used to be lost.
-        if (!claimed) spill.take(r);
+        if (claimed) took += 1 else spill.take(r);
     }
-    return spill.rest();
+    return .{ .rest = spill.rest(), .claimed = took };
 }
 
 /// Emit the API exports and wire them to what the plugin declares. Call once,
@@ -2095,7 +2118,15 @@ fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, sr
 pub fn plugin(comptime P: type) void {
     const D = Declared(P);
     const Impl = struct {
+        /// What the status says while the chart grant is off.
+        const no_draw_line = "not drawing: permission to draw on the chart is off";
+
         var draw_timer: i64 = -1;
+        /// True while the mariner leaves `overlay.draw` on. The host refuses
+        /// every overlay call without it, so a scene described then is work
+        /// thrown away. Assumed on until the host says otherwise, which it
+        /// does once the module has started.
+        var may_draw: bool = true;
 
         pub fn start(s: raw_lk.Start) !void {
             readSettings(P, s.config);
@@ -2127,14 +2158,18 @@ pub fn plugin(comptime P: type) void {
         pub fn onEvent(e: raw_lk.Event) !void {
             switch (e) {
                 .store_changed => |payload| if (comptime D.inputs.len > 0) {
-                    const rest = routeReadings(D.inputs, raw_lk.readings(payload), payload, monoMs());
+                    const routed = routeReadings(D.inputs, raw_lk.readings(payload), payload, monoMs());
                     if (comptime @hasDecl(P, "onEvent")) {
-                        if (rest) |json| try P.onEvent(.{ .store_changed = json });
+                        if (routed.rest) |json| try P.onEvent(.{ .store_changed = json });
+                    }
+                    if (comptime D.has_update) {
+                        if (routed.claimed > 0) P.onUpdate();
                     }
                     return;
                 },
                 .ais_changed => |payload| if (comptime D.has_ais) {
                     D.Ais.lkRecord(payload, monoMs());
+                    if (comptime D.has_update) P.onUpdate();
                     return;
                 },
                 .config_changed => |payload| {
@@ -2146,6 +2181,9 @@ pub fn plugin(comptime P: type) void {
                     // A changed setting must show now, not at the next tick.
                     if (comptime D.has_draw) runDraw();
                     return;
+                },
+                .grants_changed => |payload| {
+                    if (comptime D.has_draw) setMayDraw(raw_lk.granted(payload, "overlay.draw"));
                 },
                 .timer => |id| {
                     if (comptime D.has_draw) {
@@ -2166,13 +2204,21 @@ pub fn plugin(comptime P: type) void {
                         if (T.lkOpen(key, true)) mine = true;
                     }
                     if (mine) {
-                        if (comptime D.has_draw) runDraw();
+                        if (comptime D.has_draw) {
+                            armTimer();
+                            runDraw();
+                        }
                         return;
                     }
                 },
                 .table_closed => |key| {
+                    var mine = false;
                     inline for (D.tables) |T| {
-                        if (T.lkOpen(key, false)) return;
+                        if (T.lkOpen(key, false)) mine = true;
+                    }
+                    if (mine) {
+                        if (comptime D.has_draw) armTimer();
+                        return;
                     }
                 },
                 .shutdown => {
@@ -2193,6 +2239,50 @@ pub fn plugin(comptime P: type) void {
                 },
             }
             if (comptime @hasDecl(P, "onEvent")) try P.onEvent(e);
+        }
+
+        /// True while a draw has somewhere to land: the chart, or a table the
+        /// mariner has open. A table costs no capability, so a dialog on
+        /// screen keeps filling whatever the chart grant says.
+        fn drawWanted() bool {
+            if (may_draw) return true;
+            inline for (D.tables) |T| {
+                if (T.isOpen()) return true;
+            }
+            return false;
+        }
+
+        /// Run the draw timer exactly while a draw has somewhere to land.
+        fn armTimer() void {
+            const want = drawWanted();
+            if (want == (draw_timer >= 0)) return;
+            if (want) {
+                draw_timer = raw_lk.timerSet(D.draw_rate_ms, true);
+                if (draw_timer < 0) log(.err, "draw timer refused; nothing will be drawn", .{});
+                return;
+            }
+            raw_lk.timerCancel(draw_timer);
+            draw_timer = -1;
+        }
+
+        /// Take the chart grant on or off.
+        ///
+        /// The host has already removed what this plugin drew, so the diff
+        /// held here describes objects that are gone. Forget it: the next
+        /// draw sends the whole scene rather than a difference against
+        /// nothing.
+        fn setMayDraw(on: bool) void {
+            if (on == may_draw) return;
+            may_draw = on;
+            scene.forget();
+            armTimer();
+            if (on) {
+                runDraw();
+                return;
+            }
+            // The chart is empty and the mariner is the reason. Say so, or the
+            // plugin looks broken.
+            sayText("degraded", no_draw_line);
         }
 
         /// One frame: gate on freshness, let the plugin describe the scene,
@@ -2220,12 +2310,12 @@ pub fn plugin(comptime P: type) void {
                     w.print("no {s}", .{m}) catch {};
                 }
                 scene.begin();
-                scene.commit(); // draws nothing, so everything drawn is deleted
+                sendScene(); // draws nothing, so everything drawn is deleted
                 inline for (D.tables) |T| {
                     T.begin();
                     T.flush(); // and describes no rows, so the table empties
                 }
-                sayText("degraded", w.buffered());
+                sayStatus("degraded", w.buffered());
                 return;
             }
 
@@ -2233,9 +2323,28 @@ pub fn plugin(comptime P: type) void {
             scene.begin();
             inline for (D.tables) |T| T.begin();
             P.draw(&c);
-            scene.commit();
+            sendScene();
             inline for (D.tables) |T| T.flush();
-            if (c.said) sayText(@tagName(c.state), c.detail.text()) else sayText("running", "");
+            if (c.said) sayStatus(@tagName(c.state), c.detail.text()) else sayStatus("running", "");
+        }
+
+        /// The scene, when the chart will take it. Without the grant the
+        /// batch is dropped in the module: every call in it would be refused,
+        /// and a refusal costs a crossing into the host and a denied count.
+        fn sendScene() void {
+            if (may_draw) scene.commit() else scene.forget();
+        }
+
+        /// The status, with the reason nothing is on the chart in front of the
+        /// plugin's own line. A draw still runs while a table is open, and its
+        /// "running" would otherwise cover the one thing the mariner needs to
+        /// read.
+        fn sayStatus(state: []const u8, detail: []const u8) void {
+            if (may_draw) {
+                sayText(state, detail);
+                return;
+            }
+            sayText("degraded", no_draw_line);
         }
     };
     raw_lk.registerPlugin(Impl);
@@ -2277,6 +2386,7 @@ fn joinLabels(comptime labels: []const []const u8, comptime sep: []const u8) []c
 fn Declared(comptime P: type) type {
     return struct {
         const has_draw = @hasDecl(P, "draw");
+        const has_update = @hasDecl(P, "onUpdate");
         const has_connections = @hasDecl(P, "Connections");
         const draw_rate_ms: i64 = if (@hasDecl(P, "draw_rate_ms")) P.draw_rate_ms else default_draw_rate_ms;
 
@@ -2643,10 +2753,16 @@ fn spilled(alloc: std.mem.Allocator, json: []const u8) !std.json.Parsed(std.json
 test "a plugin that declares one input and raw-subscribes another sees both" {
     const a = expect.allocator;
 
-    const rest = routeReadings(&.{MixedSpeed}, &.{
+    const routed = routeReadings(&.{MixedSpeed}, &.{
         reading("navigation.speedOverGround", .{ .float = 3.2 }, 1, 10),
         reading(raw_path, .{ .float = 4.5 }, 2, 20),
     }, "", 100_000);
+    const rest = routed.rest;
+
+    // One reading was a declared input's. That count is what tells the library
+    // an input changed, so `onUpdate` runs on a batch that touched one and not
+    // on a batch that touched none.
+    try expect.expectEqual(@as(usize, 1), routed.claimed);
 
     // THE DECLARED HALF still lands in its input, aged and gated as always.
     try expect.expectApproxEqAbs(@as(f64, 3.2), MixedSpeed.get(), 1e-9);
@@ -2668,10 +2784,11 @@ test "a plugin that declares one input and raw-subscribes another sees both" {
 }
 
 test "a batch the declared inputs took whole reaches no handler" {
-    const rest = routeReadings(&.{MixedSpeed}, &.{
+    const routed = routeReadings(&.{MixedSpeed}, &.{
         reading("navigation.speedOverGround", .{ .float = 6.1 }, 3, 0),
     }, "", 200_000);
-    try expect.expect(rest == null);
+    try expect.expect(routed.rest == null);
+    try expect.expectEqual(@as(usize, 1), routed.claimed);
     try expect.expectApproxEqAbs(@as(f64, 6.1), MixedSpeed.get(), 1e-9);
 }
 
@@ -2685,12 +2802,14 @@ test "a removal and an object value survive the rebuild" {
     try at.put(a, "lat", .{ .float = 38.9763 });
     try at.put(a, "lon", .{ .float = -76.4767 });
 
-    const rest = routeReadings(&.{MixedSpeed}, &.{
+    const routed = routeReadings(&.{MixedSpeed}, &.{
         reading(raw_path, .null, 4, 0),
         reading("navigation.position", .{ .object = at }, 5, 0),
     }, "", 300_000);
+    // Neither path is the declared input's, so no input changed.
+    try expect.expectEqual(@as(usize, 0), routed.claimed);
 
-    var parsed = try spilled(a, rest orelse return error.RawReadingLost);
+    var parsed = try spilled(a, routed.rest orelse return error.RawReadingLost);
     defer parsed.deinit();
     const values = parsed.value.object.get("values").?.array.items;
     try expect.expectEqual(@as(usize, 2), values.len);
@@ -2707,8 +2826,8 @@ test "a rebuild that will not fit passes the whole batch through" {
     const long = "x" ** (store_spill_bytes / 8);
     var many: [16]raw_lk.Reading = @splat(reading(raw_path, .{ .string = long }, 6, 0));
     const src = "{\"values\":[]}";
-    const rest = routeReadings(&.{MixedSpeed}, &many, src, 400_000);
-    try expect.expectEqualStrings(src, rest.?);
+    const routed = routeReadings(&.{MixedSpeed}, &many, src, 400_000);
+    try expect.expectEqualStrings(src, routed.rest.?);
 }
 
 test "subscribeAlso sends the declared paths beside the plugin's own" {

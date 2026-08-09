@@ -148,6 +148,12 @@ input is the word that appears in that list.
 **The window is 5 seconds**, the same one the vessel store uses. Raise it per
 input with `.max_age_ms` for a reading that arrives less often.
 
+**Deciding something is not drawing it.** `draw` runs on a timer you set for
+the picture. Declare `pub fn onUpdate() void` and Lookout calls it as soon as
+an input has a new value, which is where a decision belongs; a plugin that
+only watches a condition declares it and no `draw` at all. Read inputs with
+`fresh()` there: the freshness gate has not run.
+
 Reference: [STORE_CHANGED](wire.md#store_changed) and
 [vessel data goes stale after 5 seconds](rules.md#vessel-data-goes-stale-after-5-seconds).
 
@@ -453,10 +459,16 @@ warn, the other two at info.
 Everything else is a status line. An alarm that fires when nothing is wrong gets
 switched off, and then the real one is not heard.
 
+**Decide it in `onUpdate`, not in `draw`.** The readings are what the alarm
+answers to, so put the test where they land. An alarm decided in `draw` fires
+at whatever rate suits the picture, and stops altogether for a plugin whose
+drawing the mariner has switched off.
+
 **Latch it.** Raise on the edge, not every tick, and re-arm only when the
-condition has genuinely cleared. Give the gate a dead band if the quantity can
-sit on the limit: a target parked at exactly the alarm distance must not alarm
-once a second.
+condition has genuinely cleared. The latch matters more on the data path than
+it did on the draw timer, because `onUpdate` runs an order of magnitude more
+often. Give the gate a dead band if the quantity can sit on the limit: a
+target parked at exactly the alarm distance must not alarm once a second.
 
 **Put the target in the body.** The host tells one alert from another by your
 plugin, the title and the body, so a title naming the condition and a body
