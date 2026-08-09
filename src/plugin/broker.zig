@@ -2381,6 +2381,11 @@ pub const Broker = struct {
 /// Wall clock, milliseconds since the epoch: what a `ts` on the wire means and
 /// what the stores are stamped with. Zig 0.16 dropped std.time.milliTimestamp,
 /// so this reads the platform clock directly.
+///
+/// src/clock.zig holds the same read for the core. The plugin host is rooted as
+/// its own module by several test targets, so it cannot import a file above
+/// src/plugin; merging the two costs a module dependency in every one of those
+/// targets.
 pub fn wallMs() i64 {
     if (comptime builtin.os.tag == .windows) {
         // FILETIME counts 100 ns ticks from 1601-01-01. 11644473600 seconds

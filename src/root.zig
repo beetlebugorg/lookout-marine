@@ -28,6 +28,7 @@ pub const Scheme = cc.tile57_scheme;
 /// find, so the file must not be analysed at all.
 const plugins_on = @import("build_options").plugins;
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
+const clock = @import("clock.zig");
 
 // The async build's WORKER runs tessellation (runJob — pure engine, no GPU) on
 // every backend: a rebuild takes ~1s on a phone and must never sit inside
@@ -1427,7 +1428,7 @@ pub const Lookout = struct {
     /// Drop a marker at a geographic point and name it at once. Returns its
     /// id, or 0 when nothing could be stored.
     pub fn markerAdd(self: *Lookout, lon: f64, lat: f64) u64 {
-        const now: i64 = if (plugins_on) phost.broker.wallMs() else std.time.milliTimestamp();
+        const now: i64 = clock.wallMs();
         const id = self.markers.add(lon, lat, now);
         if (id != 0) self.postMarkers();
         return id;
