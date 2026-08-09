@@ -11,10 +11,10 @@
 //! the protocol and nothing else: what to send when a stream opens, and what
 //! each document means.
 //!
-//! Everything published lands in ONE source: the store sees the plugin, not
-//! the connection. This plugin is a source of its own beside `nmea0183`, so a
-//! Signal K server and a NMEA gateway carrying the same path are arbitrated by
-//! the store's election rather than by whichever arrived last.
+//! EACH SERVER PUBLISHES AS ITSELF. The store keeps one source per row, so two
+//! servers carrying the same path are arbitrated by its election in the
+//! mariner's list order: the top row holds a path while its values are fresh,
+//! and the one below it takes over when they go stale.
 //!
 //! A document that is not JSON, a path outside the vocabulary and a vessel
 //! with no MMSI are counted and dropped without a log line, because a real
@@ -41,8 +41,8 @@ const Connection = Connections.Connection;
 /// to 253 bytes, a port and the spec's path.
 var url_buf: [320]u8 = undefined;
 
-/// What the mapping threw away, counted for the whole plugin: the store has
-/// one source whatever the connection.
+/// What the mapping threw away, counted for the whole plugin. The count is a
+/// diagnostic, so one number over every server is what a reader wants.
 var counts: delta.Counts = .{};
 
 /// Where a connection is dialled. The two transports differ here and nowhere
@@ -79,8 +79,8 @@ pub fn onData(conn: *Connection, bytes: []const u8) void {
             // identity empty. An empty identity matches no context, so own
             // ship stays unpublished and the connection's line says so.
             .hello => |id| if (id.len > 0 and id.len <= cfg.max_identity) s.self_id.set(id),
-            .own => |ups| publishOwn(ups),
-            .target => |target| upsert(target),
+            .own => |ups| publishOwn(conn, ups),
+            .target => |target| upsert(conn, target),
             .ignored => {},
         }
     }
@@ -96,8 +96,8 @@ fn kind(conn: *Connection) transport.Kind {
     return if (conn.cols.websocket) .ws else .tcp;
 }
 
-fn publishOwn(ups: delta.Updates) void {
-    var p = lk.Publish.begin();
+fn publishOwn(conn: *Connection, ups: delta.Updates) void {
+    var p = lk.Publish.from(conn);
     for (ups.slice()) |u| switch (u.value) {
         .number => |v| p.number(u.path.text(), v),
         .position => |g| p.position(u.path.text(), .{ .lat = g.lat, .lon = g.lon }),
@@ -107,8 +107,8 @@ fn publishOwn(ups: delta.Updates) void {
     _ = p.send();
 }
 
-fn upsert(target: delta.TargetFields) void {
-    var u = lk.Upsert.begin();
+fn upsert(conn: *Connection, target: delta.TargetFields) void {
+    var u = lk.Upsert.from(conn);
     var t = lk.Target{
         .mmsi = target.mmsi,
         .at = if (target.lat != null and target.lon != null)

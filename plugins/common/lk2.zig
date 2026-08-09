@@ -1374,8 +1374,19 @@ pub const Publish = struct {
     b: raw_lk.Publish,
     ts: i64,
 
+    /// The plugin publishing as itself.
     pub fn begin() Publish {
         return .{ .b = raw_lk.Publish.init(&publish_buf), .ts = nowMs() };
+    }
+
+    /// One connection publishing as itself. The host keeps a source per
+    /// connection, so a boat with two gateways carrying position gets an
+    /// election between them in the mariner's list order instead of a value
+    /// that jumps to whichever sentence landed last.
+    ///
+    /// Every plugin holding a `lk.connections` list should publish this way.
+    pub fn from(c: anytype) Publish {
+        return .{ .b = raw_lk.Publish.initFrom(&publish_buf, c.place()), .ts = nowMs() };
     }
 
     pub fn number(self: *Publish, path: []const u8, v: f64) void {
@@ -1406,8 +1417,16 @@ pub const Upsert = struct {
     b: raw_lk.AisUpsert,
     ts: i64,
 
+    /// The plugin upserting as itself.
     pub fn begin() Upsert {
         return .{ .b = raw_lk.AisUpsert.init(&upsert_buf), .ts = nowMs() };
+    }
+
+    /// Targets one connection heard. A target belongs to whichever source last
+    /// updated it, so switching one receiver off leaves the other's targets on
+    /// the chart.
+    pub fn from(c: anytype) Upsert {
+        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place()), .ts = nowMs() };
     }
 
     pub fn target(self: *Upsert, t: Target) void {

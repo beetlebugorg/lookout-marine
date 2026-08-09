@@ -599,8 +599,10 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
 
     const sk_plugin = rig.h.find(sk_id) orelse return error.PluginNotLoaded;
     const nmea_plugin = rig.h.find(nmea_id) orelse return error.PluginNotLoaded;
-    // Load order is sorted file order and load order is source priority, so
-    // the gateway registered first and outranks the server.
+    // Each plugin owns a block of source ids, one per connection its list can
+    // hold. Load order is sorted file order and registration order is
+    // priority, so the whole of the gateway's block outranks the whole of the
+    // server's.
     try must(nmea_plugin.source < sk_plugin.source, "the gateway is the higher-priority source");
 
     var cfg: std.ArrayList(u8) = .empty;
@@ -630,8 +632,10 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
             return number(v, sog_path) != null;
         }
     }.ready);
+    // The winning source is the gateway's ONE CONNECTION, not the plugin at
+    // large: the mariner's first row in the gateway's list.
     const elected = pathValue(rig.vessels, heading_path).?;
-    try must(elected.source == nmea_plugin.source, "the gateway holds the path");
+    try must(elected.source == nmea_plugin.sourceAt(1), "the gateway's connection holds the path");
 
     // The gateway goes off the air. Its value ages past the window and the
     // election falls to the Signal K server, whose heading is 90 degrees.
@@ -643,7 +647,7 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
         }
     }.ready);
     const after = pathValue(rig.vessels, heading_path).?;
-    try must(after.source == sk_plugin.source, "the server took the path over");
+    try must(after.source == sk_plugin.sourceAt(1), "the server's connection took the path over");
     try must(!after.stale, "the value that took over is fresh");
 
     try must(!rig.log.has("trapped"), "nothing trapped");

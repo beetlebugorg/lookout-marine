@@ -180,6 +180,22 @@ const writeFieldCore = settings_json.writeFieldCore;
 const writeFieldJson = settings_json.writeFieldJson;
 const writeJsonString = settings_json.writeJsonString;
 
+/// How many consecutive store sources one plugin owns: its own, and one for
+/// every row its connection list can hold.
+///
+/// PRIORITY IS THE MARINER'S LIST ORDER. The store elects in registration
+/// order and the block is registered in ascending order at load, so within a
+/// plugin the row at the top of the Connections list holds a path while its
+/// values are fresh and the row below it takes over when they go stale. Moving
+/// a row moves its rank, because the rank is the place and not the row.
+///
+/// A plugin that declares no list publishes as itself and takes one id. The
+/// block is one size whatever a manifest lists, because what numbers the places
+/// is the SDK's connection library and that owns one list.
+fn sourceSpan(m: *const Manifest) u32 {
+    return if (m.lists.len == 0) 1 else 1 + max_list_rows;
+}
+
 /// How long a plugin may stay inside ONE module call before the watchdog
 /// terminates it.
 ///
@@ -476,7 +492,8 @@ pub const Host = struct {
     /// True between the first successful load and deinit.
     runtime_held: bool = false,
     /// Source ids are handed out in load order, which the vessel store reads
-    /// as priority order. 1-based: 0 is the host's own reserved id.
+    /// as priority order. 1-based: 0 is the host's own reserved id. A plugin
+    /// takes a consecutive block, not a single id; see `sourceSpan`.
     next_source: store.SourceId = 1,
     /// Guards every entry's `values`. A settings change comes from the shell's
     /// thread; the config JSON it produces is built under this lock and handed
@@ -841,6 +858,7 @@ pub const Host = struct {
             .index = @intCast(self.entries.items.len),
             .id = manifest.id,
             .source = self.next_source,
+            .source_span = sourceSpan(&manifest),
             .caps = grants,
             .http_hosts = manifest.http_hosts,
             .ws_hosts = manifest.ws_hosts,
@@ -856,9 +874,13 @@ pub const Host = struct {
             return Error.ApiMismatch;
         }
 
-        // Priority order in the vessel store is registration order, and the
-        // source has to exist before the plugin's first publish.
-        try self.br.vessels.registerSource(state.source);
+        // Priority order in the vessel store is registration order, and every
+        // source has to exist before the plugin's first publish. The block is
+        // registered in one go and in ascending order, so a connection's rank
+        // is its place in the mariner's list whenever the row is filled in.
+        for (0..state.source_span) |k| {
+            try self.br.vessels.registerSource(state.source + @as(store.SourceId, @intCast(k)));
+        }
         try self.br.registerPlugin(state);
         // Both, in this order: dropPlugin releases what the plugin managed to
         // acquire during lk_start, removePlugin takes the record itself out of
@@ -920,13 +942,23 @@ pub const Host = struct {
         // is what `scheduleRestart` measures a first fault against.
         entry.clean_since_ms.store(broker.monoMs(), .release);
 
-        self.next_source += 1;
+        self.next_source += state.source_span;
         {
             self.reg_mu.lock();
             defer self.reg_mu.unlock();
             try self.entries.append(self.alloc, entry);
         }
-        self.br.say(broker.level_info, manifest.id, "started ({s}, source {d})", .{ manifest.name, state.source });
+        if (state.source_span > 1) self.br.say(
+            broker.level_info,
+            manifest.id,
+            "started ({s}, sources {d}..{d}, one per connection)",
+            .{ manifest.name, state.source, state.source + state.source_span - 1 },
+        ) else self.br.say(
+            broker.level_info,
+            manifest.id,
+            "started ({s}, source {d})",
+            .{ manifest.name, state.source },
+        );
         // Loaded hot: the dispatch threads are already running, so this
         // plugin gets its own at once instead of waiting for a start() that
         // already happened.

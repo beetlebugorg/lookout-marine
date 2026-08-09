@@ -11,10 +11,10 @@
 //! the protocol and nothing else: reassembly, the parse, and what each sentence
 //! means.
 //!
-//! Everything published lands in ONE source: the store sees the plugin, not the
-//! connection. Two connections carrying the same sentence therefore overwrite
-//! each other in publish order, which is a real thing to fix later and not this
-//! pass.
+//! EACH CONNECTION PUBLISHES AS ITSELF. The store keeps one source per row, so
+//! two gateways carrying position are arbitrated by its election in the
+//! mariner's list order: the top row holds own ship while its fixes are fresh,
+//! and the one below it takes over when they go stale.
 //!
 //! A line that fails its checksum, a sentence type the parser does not decode
 //! and an AIS payload that will not decode are dropped without a log line,
@@ -60,16 +60,16 @@ pub fn onData(conn: *Connection, bytes: []const u8) void {
         // proprietary line — or one whose fields are unreadable.
         const sentence = parser.parse(line) catch continue;
         switch (sentence) {
-            .vdm => |v| upsertTarget(s, v),
-            else => publish(sentence),
+            .vdm => |v| upsertTarget(conn, v),
+            else => publish(conn, sentence),
         }
     }
 }
 
-fn publish(sentence: parser.Sentence) void {
+fn publish(conn: *Connection, sentence: parser.Sentence) void {
     const ups = paths.fromSentence(sentence);
     if (ups.slice().len == 0) return;
-    var p = lk.Publish.begin();
+    var p = lk.Publish.from(conn);
     for (ups.slice()) |u| switch (u.value) {
         .number => |v| p.number(u.path.text(), v),
         .position => |g| p.position(u.path.text(), .{ .lat = g.lat, .lon = g.lon }),
@@ -79,8 +79,8 @@ fn publish(sentence: parser.Sentence) void {
 
 /// One AIVDM sentence, which is a fragment of an AIS message. The assembler
 /// answers only when the last fragment lands.
-fn upsertTarget(s: *cfg.Stream, v: parser.Vdm) void {
-    const msg = s.assembler.push(v) orelse return;
+fn upsertTarget(conn: *Connection, v: parser.Vdm) void {
+    const msg = conn.state.assembler.push(v) orelse return;
     // AIVDO is this receiver's own transmission. Own ship comes from the
     // position sentences; upserting it as an AIS target would draw the boat
     // twice.
@@ -89,7 +89,7 @@ fn upsertTarget(s: *cfg.Stream, v: parser.Vdm) void {
     const decoded = parser.decode(msg.payload, msg.fill, &text) catch return;
     const f = paths.fromAis(decoded) orelse return;
 
-    var u = lk.Upsert.begin();
+    var u = lk.Upsert.from(conn);
     var target = lk.Target{
         .mmsi = f.mmsi,
         .at = if (f.lat != null and f.lon != null)

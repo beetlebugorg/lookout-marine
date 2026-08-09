@@ -12,7 +12,10 @@
 //!      presentation can say "GPS lost" instead of drawing an old fix.
 //!   4. Arbitration is host policy — priority is source registration order:
 //!      the first-registered source wins while its value is fresh, and a stale
-//!      elected value falls back to the next fresh source.
+//!      elected value falls back to the next fresh source. The host registers
+//!      a plugin's block in the order the mariner's connection list runs, so
+//!      what that rule means on the water is that the gateway at the top of
+//!      the list wins.
 //!
 //! No wall clock is read here. The caller injects `ts_ms` on write and
 //! `now_ms` on read, so the host, the replay harness and the tests all see the
@@ -68,7 +71,8 @@ else
         }
     };
 
-/// A source is a plugin instance (or a host service) as the host numbers them.
+/// A source as the host numbers them: a plugin instance, one connection of a
+/// plugin that holds a list of them, or a host service.
 pub const SourceId = u32;
 
 /// A subscription handle. Ids are never reused, so a stale handle is inert.

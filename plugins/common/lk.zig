@@ -1100,8 +1100,21 @@ pub const Publish = struct {
     n: usize = 0,
 
     pub fn init(buffer: []u8) Publish {
+        return initFrom(buffer, 0);
+    }
+
+    /// A batch published as one of the plugin's connections rather than as the
+    /// plugin. `place` is the connection's place in the mariner's list,
+    /// counting from one, and the host reads it as a rank: the first row holds
+    /// a path while its values are fresh, and the next takes over when they go
+    /// stale. Zero is the plugin publishing as itself.
+    pub fn initFrom(buffer: []u8, place: u32) Publish {
         var p = Publish{ .b = Buf.init(buffer) };
-        p.b.raw("{\"updates\":[");
+        if (place > 0) {
+            p.b.print("{{\"source\":{d},\"updates\":[", .{place});
+        } else {
+            p.b.raw("{\"updates\":[");
+        }
         return p;
     }
 
@@ -1152,8 +1165,21 @@ pub const AisUpsert = struct {
     n: usize = 0,
 
     pub fn init(buffer: []u8) AisUpsert {
+        return initFrom(buffer, 0);
+    }
+
+    /// Targets heard by one of the plugin's connections rather than by the
+    /// plugin at large. `place` is the connection's place in the mariner's
+    /// list, counting from one; zero is the plugin itself. A target belongs to
+    /// whichever source last updated it, so this is what lets one receiver be
+    /// switched off without taking the other's targets with it.
+    pub fn initFrom(buffer: []u8, place: u32) AisUpsert {
         var u = AisUpsert{ .b = Buf.init(buffer) };
-        u.b.raw("{\"targets\":[");
+        if (place > 0) {
+            u.b.print("{{\"source\":{d},\"targets\":[", .{place});
+        } else {
+            u.b.raw("{\"targets\":[");
+        }
         return u;
     }
 
