@@ -345,6 +345,27 @@ namespace winrt::LookoutMarine::implementation
                     lk_store_set_raster_enabled(path.c_str(), v ? 1 : 0);
                     lk_controller_raster_set_enabled(controller, path.c_str(), v ? 1 : 0);
                 };
+                auto set_group_enabled = [this](std::vector<std::string> const &files, bool v) {
+                    std::vector<const char *> cps;
+                    for (auto const &p : files)
+                        cps.push_back(p.c_str());
+                    lk_store_set_rasters_enabled(cps.data(), (int)cps.size(), v ? 1 : 0);
+                    for (auto const &p : files)
+                        lk_controller_raster_set_enabled(controller, p.c_str(), v ? 1 : 0);
+                };
+                auto remove_group = [this](std::vector<std::string> const &files) {
+                    std::vector<const char *> cps;
+                    for (auto const &p : files)
+                        cps.push_back(p.c_str());
+                    lk_store_forget_rasters(cps.data(), (int)cps.size());
+                    for (auto const &p : files)
+                    {
+                        lk_controller_raster_set_enabled(controller, p.c_str(), 0);
+                        raster_paths.erase(
+                            std::remove(raster_paths.begin(), raster_paths.end(), p),
+                            raster_paths.end());
+                    }
+                };
                 auto mini_switch = [this](bool is_on, auto &&set) {
                     Controls::ToggleSwitch ts;
                     ts.OnContent(nullptr);
@@ -368,15 +389,15 @@ namespace winrt::LookoutMarine::implementation
                         group_on = group_on || on.count(p) == 0 || on[p];
 
                     Controls::Grid row;
-                    Controls::ColumnDefinition c0, c1, c2;
+                    Controls::ColumnDefinition c0, c1, c2, c3;
                     c0.Width({ 0, GridUnitType::Auto });
                     c1.Width({ 1, GridUnitType::Star });
                     c2.Width({ 0, GridUnitType::Auto });
-                    row.ColumnDefinitions().ReplaceAll({ c0, c1, c2 });
+                    c3.Width({ 0, GridUnitType::Auto });
+                    row.ColumnDefinitions().ReplaceAll({ c0, c1, c2, c3 });
 
-                    auto gts = mini_switch(group_on, [this, set_file_enabled, files](bool v) {
-                        for (auto const &p : files)
-                            set_file_enabled(p, v);
+                    auto gts = mini_switch(group_on, [this, set_group_enabled, files](bool v) {
+                        set_group_enabled(files, v);
                     });
                     row.Children().Append(gts);
 
@@ -398,7 +419,32 @@ namespace winrt::LookoutMarine::implementation
                     count.VerticalAlignment(VerticalAlignment::Center);
                     Controls::Grid::SetColumn(count, 2);
                     row.Children().Append(count);
+
+                    Controls::Button grm;
+                    Controls::FontIcon gminus;
+                    gminus.Glyph(L"\uE738"); // Remove
+                    gminus.FontSize(12);
+                    grm.Content(gminus);
+                    grm.Padding({ 4, 2, 4, 2 });
+                    grm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    grm.BorderThickness({ 0, 0, 0, 0 });
+                    Automation::AutomationProperties::SetName(grm,
+                        L"Remove the whole set. Takes full effect the next time a chart opens.");
+                    grm.Click([this, remove_group, files](auto &&, auto &&) {
+                        remove_group(files);
+                        UpdateReadouts(true);
+                        BuildSettingsPage();
+                    });
+                    Controls::Grid::SetColumn(grm, 3);
+                    row.Children().Append(grm);
                     stack.Children().Append(row);
+
+                    // A baked bundle is hundreds of sheets: no mariner switches
+                    // those one by one, and hundreds of rows stall the pane.
+                    // The group row carries the whole set; files list only when
+                    // the set is small enough to reason about per file.
+                    if (files.size() > 16)
+                        continue;
 
                     for (auto const &p : files)
                     {

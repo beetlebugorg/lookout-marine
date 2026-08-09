@@ -40,6 +40,11 @@ void   lk_store_note_raster(const char *path);
 void   lk_store_forget_raster(const char *path);
 void   lk_store_set_raster_enabled(const char *path, int enabled);
 void   lk_store_free_rasters(char **paths, int *enabled);
+/* Batch forms: one load + one save whatever the count. A baked BSB/KAP
+ * bundle adds hundreds of sheets at once. */
+void   lk_store_note_rasters(const char *const *paths, int n);
+void   lk_store_forget_rasters(const char *const *paths, int n);
+void   lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled);
 
 /* Plugin settings, kept as the config object each plugin was last handed —
  * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per

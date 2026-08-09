@@ -13,8 +13,10 @@ namespace lkw
     /* Startup chart: $LOOKOUT_OPEN, then the last recent, then the repo test cell. */
     std::vector<std::string> InitialPaths();
 
-    /* Every .mbtiles under dir (case-insensitive), recursive, sorted. BSB/KAP
-     * sheets are deliberately not matched: they must be baked first. */
+    /* Every raster chart under dir (case-insensitive, recursive, sorted):
+     * .mbtiles, and .pmtiles for baked BSB/KAP sheets (tile57 bake writes
+     * <root>/<stem>/<stem>.pmtiles). Raw .kap is not matched: it must be
+     * baked first. The extension is a hint; the engine decides per file. */
     std::vector<std::string> CollectRasterCharts(std::string const &dir);
     /* The engine's set name for a raster chart (raster.zig setNameFor),
      * replicated so Settings' groups and the post-add auto-select agree with

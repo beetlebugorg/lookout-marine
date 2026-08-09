@@ -14,7 +14,9 @@
 #define LK_GROUP_RASTER  "raster"
 
 #define LK_MAX_RECENTS 10
-#define LK_MAX_RASTERS 64
+/* A baked BSB/KAP bundle is one chart per sheet — the OpenSeaMap West Coast
+ * set alone is 968 files. */
+#define LK_MAX_RASTERS 2048
 
 /* %APPDATA%\lookout-marine\settings.ini (created on first write). One static
  * buffer: the store is only touched from the UI thread. */
@@ -185,38 +187,60 @@ lk_store_free_recents(char **recents)
 
 /* ---- raster charts ------------------------------------------------------- */
 
+/* The whole group is read and written as ONE section (GetPrivateProfileSection
+ * / WritePrivateProfileSection): a baked sheet bundle holds hundreds of paths,
+ * and per-key profile calls re-parse the file every time. */
+
 char **
 lk_store_load_rasters(int **enabled_out)
 {
     if (enabled_out != NULL)
         *enabled_out = NULL;
 
-    int count = 0;
-    get_int(LK_GROUP_RASTER, "count", &count);
-    if (count < 0) count = 0;
-    if (count > LK_MAX_RASTERS) count = LK_MAX_RASTERS;
-
-    char **out = (char **)calloc((size_t)count + 1, sizeof(char *));
-    int *en = (int *)calloc((size_t)count + 1, sizeof(int));
-    if (out == NULL || en == NULL) {
-        free(out);
-        free(en);
+    static const DWORD SEC_BYTES = 1u << 20;
+    char *sec = (char *)malloc(SEC_BYTES);
+    char **by_idx = (char **)calloc(LK_MAX_RASTERS, sizeof(char *));
+    int *en_by_idx = (int *)malloc(LK_MAX_RASTERS * sizeof(int));
+    char **out = (char **)calloc(LK_MAX_RASTERS + 1, sizeof(char *));
+    int *en = (int *)calloc(LK_MAX_RASTERS + 1, sizeof(int));
+    if (sec == NULL || by_idx == NULL || en_by_idx == NULL || out == NULL || en == NULL) {
+        free(sec); free(by_idx); free(en_by_idx); free(out); free(en);
         return NULL;
     }
+    for (int i = 0; i < LK_MAX_RASTERS; i++)
+        en_by_idx[i] = 1;
 
-    int n = 0;
-    for (int i = 0; i < count; i++) {
-        char key[32], buf[MAX_PATH * 2];
-        snprintf(key, sizeof key, "item%d", i);
-        if (get_str(LK_GROUP_RASTER, key, buf, sizeof buf) && buf[0] != '\0') {
-            int e = 1;
-            snprintf(key, sizeof key, "enabled%d", i);
-            get_int(LK_GROUP_RASTER, key, &e);
-            en[n] = e ? 1 : 0;
-            out[n++] = _strdup(buf);
+    GetPrivateProfileSectionA(LK_GROUP_RASTER, sec, SEC_BYTES, store_path());
+
+    /* "key=value" entries, NUL-separated; addressed by index so a reordered
+     * file still loads. "count" is written for a human reader and ignored. */
+    for (char *p = sec; *p != '\0'; p += strlen(p) + 1) {
+        char *eq = strchr(p, '=');
+        if (eq == NULL)
+            continue;
+        *eq = '\0';
+        const char *val = eq + 1;
+        int idx;
+        if (sscanf(p, "item%d", &idx) == 1 && idx >= 0 && idx < LK_MAX_RASTERS) {
+            if (by_idx[idx] == NULL && val[0] != '\0')
+                by_idx[idx] = _strdup(val);
+        } else if (sscanf(p, "enabled%d", &idx) == 1 && idx >= 0 && idx < LK_MAX_RASTERS) {
+            en_by_idx[idx] = atoi(val) ? 1 : 0;
         }
     }
+    free(sec);
+
+    int n = 0;
+    for (int i = 0; i < LK_MAX_RASTERS; i++) {
+        if (by_idx[i] == NULL)
+            continue;
+        out[n] = by_idx[i];
+        en[n] = en_by_idx[i];
+        n++;
+    }
     out[n] = NULL;
+    free(by_idx);
+    free(en_by_idx);
 
     if (enabled_out != NULL)
         *enabled_out = en;
@@ -228,66 +252,117 @@ lk_store_load_rasters(int **enabled_out)
 static void
 save_rasters(const char *const *paths, const int *enabled, int n)
 {
-    /* Rewrite the whole group: a removal must not leave a stale tail. */
-    WritePrivateProfileStringA(LK_GROUP_RASTER, NULL, NULL, store_path());
-    set_int(LK_GROUP_RASTER, "count", n);
+    size_t cap = 64;
+    for (int i = 0; i < n; i++)
+        cap += strlen(paths[i]) + 48;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL)
+        return;
+
+    size_t off = 0;
+    off += (size_t)snprintf(buf + off, cap - off, "count=%d", n) + 1;
     for (int i = 0; i < n; i++) {
-        char key[32];
-        snprintf(key, sizeof key, "item%d", i);
-        set_str(LK_GROUP_RASTER, key, paths[i]);
-        snprintf(key, sizeof key, "enabled%d", i);
-        set_int(LK_GROUP_RASTER, key, enabled[i] ? 1 : 0);
+        off += (size_t)snprintf(buf + off, cap - off, "item%d=%s", i, paths[i]) + 1;
+        off += (size_t)snprintf(buf + off, cap - off, "enabled%d=%d", i, enabled[i] ? 1 : 0) + 1;
     }
+    buf[off] = '\0'; /* double NUL ends the section */
+
+    /* Replaces the whole section, so a removal never leaves a stale tail. */
+    WritePrivateProfileSectionA(LK_GROUP_RASTER, buf, store_path());
+    free(buf);
 }
 
-/* Rebuild the list around one edit. op: 0 = append (enabled, deduped),
- * 1 = remove, 2 = set the enabled flag to `arg`. */
-static void
-edit_rasters(const char *path, int op, int arg)
+static int
+in_list(const char *const *list, int n, const char *path)
 {
-    if (path == NULL || path[0] == '\0')
+    for (int i = 0; i < n; i++)
+        if (list[i] != NULL && _stricmp(list[i], path) == 0)
+            return 1;
+    return 0;
+}
+
+/* Rebuild the list around one edit of `n_edit` paths. op: 0 = append
+ * (enabled, deduped, moved to the tail), 1 = remove, 2 = set the enabled
+ * flag to `arg`. One load + one save, whatever the batch size. */
+static void
+edit_rasters(const char *const *edit, int n_edit, int op, int arg)
+{
+    if (edit == NULL || n_edit <= 0)
         return;
 
     int *enabled = NULL;
     char **existing = lk_store_load_rasters(&enabled);
 
-    const char *paths[LK_MAX_RASTERS];
-    int flags[LK_MAX_RASTERS];
+    const char **paths = (const char **)malloc(LK_MAX_RASTERS * sizeof *paths);
+    int *flags = (int *)malloc(LK_MAX_RASTERS * sizeof *flags);
+    if (paths == NULL || flags == NULL) {
+        free(paths);
+        free(flags);
+        lk_store_free_rasters(existing, enabled);
+        return;
+    }
+
     int n = 0;
     for (int i = 0; existing && existing[i] != NULL && n < LK_MAX_RASTERS; i++) {
-        int same = _stricmp(existing[i], path) == 0;
-        if (same && (op == 0 || op == 1))
+        int hit = in_list(edit, n_edit, existing[i]);
+        if (hit && (op == 0 || op == 1))
             continue; /* re-added at the tail / removed */
         paths[n] = existing[i];
-        flags[n] = (same && op == 2) ? (arg ? 1 : 0) : enabled[i];
+        flags[n] = (hit && op == 2) ? (arg ? 1 : 0) : enabled[i];
         n++;
     }
-    if (op == 0 && n < LK_MAX_RASTERS) {
-        paths[n] = path;
-        flags[n] = 1;
-        n++;
+    if (op == 0) {
+        for (int j = 0; j < n_edit && n < LK_MAX_RASTERS; j++) {
+            if (edit[j] == NULL || edit[j][0] == '\0')
+                continue;
+            if (in_list(edit, j, edit[j]))
+                continue; /* duplicate within the batch itself */
+            paths[n] = edit[j];
+            flags[n] = 1;
+            n++;
+        }
     }
 
     save_rasters(paths, flags, n);
+    free(paths);
+    free(flags);
     lk_store_free_rasters(existing, enabled);
 }
 
 void
 lk_store_note_raster(const char *path)
 {
-    edit_rasters(path, 0, 0);
+    edit_rasters(&path, 1, 0, 0);
 }
 
 void
 lk_store_forget_raster(const char *path)
 {
-    edit_rasters(path, 1, 0);
+    edit_rasters(&path, 1, 1, 0);
 }
 
 void
 lk_store_set_raster_enabled(const char *path, int enabled)
 {
-    edit_rasters(path, 2, enabled);
+    edit_rasters(&path, 1, 2, enabled);
+}
+
+void
+lk_store_note_rasters(const char *const *paths, int n)
+{
+    edit_rasters(paths, n, 0, 0);
+}
+
+void
+lk_store_forget_rasters(const char *const *paths, int n)
+{
+    edit_rasters(paths, n, 1, 0);
+}
+
+void
+lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled)
+{
+    edit_rasters(paths, n, 2, enabled);
 }
 
 void
