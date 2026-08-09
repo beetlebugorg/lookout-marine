@@ -489,7 +489,7 @@ final class AppModel: ObservableObject {
         if chartMenu != nil { chartMenu = nil }
     }
 
-    /// "What is here": the pick report for the point the menu was raised at.
+    /// "Pick report": the report for the point the menu was raised at.
     /// The report itself is unchanged; only how it is raised has.
     func chartMenuPick() {
         guard let m = chartMenu, let c = controller else { return }
