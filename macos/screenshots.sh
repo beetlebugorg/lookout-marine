@@ -75,26 +75,31 @@ SECTIONS="display depths text charts vessels alarms connections plugins advanced
 # a live feed would publish real vessels, and so would one that let the app
 # read this machine's saved connection list, which is why every instance is
 # started with LOOKOUT_CLEAN.
-WINDOWS="ais-targets ais-target ais-aids"
+WINDOWS="ais-targets ais-target ais-aids alarm-banner"
 shot_show ()  { case $1 in
                   ais-targets) echo "table:targets:cpa" ;;
                   ais-target)  echo "target" ;;
                   ais-aids)    echo "" ;;
+                  alarm-banner) echo "" ;;
                 esac; }
 shot_title () { case $1 in ais-targets) echo "AIS Targets" ;; *) echo "" ;; esac; }
 shot_out ()   { case $1 in
                   ais-targets) echo "ais-targets.webp" ;;
                   ais-target)  echo "detail/ais-target.webp" ;;
                   ais-aids)    echo "detail/ais-aids.webp" ;;
+                  alarm-banner) echo "detail/alarm-banner.webp" ;;
                 esac; }
 shot_crop ()  { case $1 in
                   ais-target)  echo "0.425x0.415x0.315x0.395" ;;
                   ais-aids)    echo "0.361x0.375x0.273x0.281" ;;
+                  # The top strip only: the point of the frame is how little
+                  # of the water the alert covers.
+                  alarm-banner) echo "0.10x0.0x0.80x0.16" ;;
                 esac; }
 # How long to let the replay run before the frame is taken, when the default
 # is not enough. The collision alarm needs the target inside the 600 s gate,
 # which the log reaches about 45 s in.
-shot_settle () { case $1 in ais-target) echo 75 ;; esac; }
+shot_settle () { case $1 in ais-target) echo 75 ;; alarm-banner) echo 115 ;; esac; }
 # The chart camera a detail frame is taken from, when it is not the demo one.
 shot_view ()  { case $1 in
                   ais-target)  echo "-76.4638,38.9745,14.5" ;;

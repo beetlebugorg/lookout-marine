@@ -108,29 +108,38 @@ struct AlertBanner: View {
     let alerts: [PluginAlert]
     let onAcknowledge: (PluginAlert) -> Void
 
-    /// How many are shown. Beyond this the panel would cover the water the
-    /// mariner is trying to look at; the rest are counted on the last line and
-    /// take their turn as the ones above are answered.
-    private static let maxVisible = 3
-    static let width: CGFloat = 460
+    /// How many are shown. The strip must not cover the water the mariner is
+    /// reading, least of all during a collision alarm, when the target it
+    /// names is on the chart underneath. The rest are counted on the last
+    /// line and take their turn as the ones above are answered.
+    private static let maxVisible = 2
+    static let maxWidth: CGFloat = 560
+
+    /// Only what still needs answering. Acknowledging takes a row off the
+    /// chart, because the panel covers the water and its job is to say
+    /// something needs attention now. What is still dangerous after that is
+    /// the chart's to show: the target stays red, and the AIS Targets dialog
+    /// holds it at the top of the list with its state.
+    private var unanswered: [PluginAlert] { alerts.filter { !$0.acknowledged } }
 
     var body: some View {
-        if !alerts.isEmpty {
+        if !unanswered.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(alerts.prefix(Self.maxVisible).enumerated()), id: \.element.id) { i, alert in
+                ForEach(Array(unanswered.prefix(Self.maxVisible).enumerated()), id: \.element.id) { i, alert in
                     if i > 0 { Divider().overlay(Chrome.rule) }
                     AlertRow(alert: alert) { onAcknowledge(alert) }
                 }
-                if alerts.count > Self.maxVisible {
+                if unanswered.count > Self.maxVisible {
                     Divider().overlay(Chrome.rule)
-                    Text("\(alerts.count - Self.maxVisible) more")
+                    Text("\(unanswered.count - Self.maxVisible) more")
                         .font(.system(size: 12))
                         .foregroundStyle(Chrome.muted)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                 }
             }
-            .frame(width: Self.width)
+            .frame(maxWidth: Self.maxWidth)
+            .fixedSize(horizontal: false, vertical: true)
             .panelSurface(opaque: true)
         }
     }
@@ -142,50 +151,50 @@ private struct AlertRow: View {
     let onAcknowledge: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        // One line. The words say which danger and which vessel; the water
+        // under them is what the mariner is actually looking at, so the row
+        // stays the height of its text and the body truncates rather than
+        // wrapping into a second line.
+        HStack(spacing: 8) {
+            Image(systemName: Self.glyph(alert.severity))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Self.tint(alert.severity))
+            Text(alert.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Chrome.ink)
+                .fixedSize()
+            if !alert.body.isEmpty {
+                Text(alert.body)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Chrome.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 8)
+            Button(action: onAcknowledge) {
+                Text("Acknowledge")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Chrome.ink)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ChromeFlatStyle(resting: Chrome.hoverFill, cornerRadius: 6))
+            .help("Silence this alert and take it off the chart")
+            .fixedSize()
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.vertical, 8)
+        // The severity bar is an overlay, not a sibling. A Rectangle is greedy
+        // in both directions and only its width is set here, so as a sibling
+        // it would take every point of height going and drag the row with it.
+        // An overlay takes the height the words settle on.
+        .overlay(alignment: .leading) {
             Rectangle()
                 .fill(Self.tint(alert.severity))
                 .frame(width: 4)
-                // An acknowledged alert is still live. It is dimmed, not
-                // removed: the mariner can see what they silenced.
-                .opacity(alert.acknowledged ? 0.45 : 1)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Image(systemName: Self.glyph(alert.severity))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Self.tint(alert.severity))
-                    Text(alert.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Chrome.ink)
-                }
-                if !alert.body.isEmpty {
-                    Text(alert.body)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Chrome.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
-            if alert.acknowledged {
-                Text("Acknowledged")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Chrome.muted)
-            } else {
-                Button(action: onAcknowledge) {
-                    Text("Acknowledge")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Chrome.ink)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(ChromeFlatStyle(resting: Chrome.hoverFill, cornerRadius: 6))
-                .help("Silence this alert. It stays listed until the condition clears")
-            }
         }
-        .padding(.trailing, 10)
-        .padding(.vertical, 8)
-        .opacity(alert.acknowledged ? 0.7 : 1)
     }
 
     /// Alarm takes the palette's strongest warning colour, a warning takes
