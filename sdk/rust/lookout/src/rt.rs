@@ -94,7 +94,7 @@ struct Driver<P: Plugin, L: ConnSpec> {
     scene: Scene,
     conns: Conns<L>,
     draw_timer: i64,
-    /// The appointment for the next reading to expire, and -1 when there is
+    /// The appointment for the next value to expire, and -1 when there is
     /// none. A plugin with nothing that can go stale never holds one.
     update_timer: i64,
     /// The moment `update_timer` is set for. Read only while it is up.
@@ -134,9 +134,9 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
 
     /// One pass on the data path: the plugin's decision, and the rows it fills
     /// around it. The chart grant does not reach here. A table is data, it
-    /// costs no capability, and a dialog on screen fills whether or not the
-    /// plugin may draw.
-    /// The cycle runs when a reading arrives and when one expires. A plugin
+    /// no manifest has to ask for it, and a dialog on screen fills whether or
+    /// not the plugin may draw.
+    /// The cycle runs when a value arrives and when one expires. A plugin
     /// that only heard about arrivals could never notice an absence.
     fn run_update(&mut self, mono: i64) {
         for table in self.plugin.tables() {
@@ -149,9 +149,9 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
         self.arm_update(mono);
     }
 
-    /// Wake once, exactly when the next reading expires.
+    /// Wake once, exactly when the next value expires.
     ///
-    /// A reading carries its window, so the moment it stops counting is known
+    /// A value carries its window, so the moment it stops counting is known
     /// when it lands. The library takes the earliest such moment across the
     /// declared inputs and arms a one-shot for it; the cycle it fires reads
     /// that input as stale, and the plugin empties whatever depended on it.
@@ -169,8 +169,8 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
     /// The chart grant does not reach here. A plugin that may not draw still
     /// has a dialog to fill and a condition to watch.
     fn arm_update(&mut self, mono: i64) {
-        // A reading is still fresh on the last millisecond of its window, so
-        // the appointment is one past it. A wakeup that found the reading
+        // A value is still fresh on the last millisecond of its window, so
+        // the appointment is one past it. A wakeup that found the value
         // fresh would have nothing to tell the plugin.
         let due = self
             .plugin
@@ -194,7 +194,7 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
         if self.update_timer < 0 {
             raw::log(
                 raw::Level::Error,
-                "update timer refused; a reading going stale will pass unnoticed",
+                "update timer refused; a value going stale will pass unnoticed",
             );
             return;
         }
@@ -422,16 +422,16 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
                 let mut inputs = d.plugin.inputs();
                 let any = !inputs.is_empty();
                 if any {
-                    let readings = raw::readings(text);
+                    let path_values = raw::path_values(text);
                     mono = raw::mono_ms();
                     for input in &mut inputs {
                         let path = match input.path() {
                             Some(p) => p,
                             None => continue,
                         };
-                        for r in &readings {
+                        for r in &path_values {
                             if &*r.path == path {
-                                input.take_reading(r, mono);
+                                input.take_path_value(r, mono);
                                 claimed += 1;
                             }
                         }
@@ -472,7 +472,7 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
             }
         }
         // A table the mariner just opened is filled at once: the dialog must
-        // not sit empty until the next batch of readings.
+        // not sit empty until the next batch of values.
         raw::KIND_TABLE_OPEN | raw::KIND_TABLE_CLOSED => {
             let open = kind == raw::KIND_TABLE_OPEN;
             let key = raw::table_key(text).unwrap_or_default();

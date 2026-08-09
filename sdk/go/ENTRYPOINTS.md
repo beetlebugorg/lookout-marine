@@ -372,7 +372,7 @@ cycle before that call and sends what changed after it. A row the cycle does
 not describe leaves the table. `lk.TablesJSON(targets)` renders the `"tables"`
 array the manifest must carry, for a `go test` to compare.
 
-`OnUpdate` runs when a reading arrives and when one expires. A reading carries
+`OnUpdate` runs when a value arrives and when one expires. A value carries
 its window, so the library arms a one-shot for the earliest moment a declared
 input stops counting and runs the cycle there; the input reads stale in that
 call, and the rows that depended on it leave. Each input expires on its own
@@ -380,7 +380,7 @@ wakeup, and once every one has expired nothing is armed. A plugin that declares
 no input has nothing that can expire.
 
 The declared inputs decide that, not the methods beside them. A plugin that only
-draws is woken the same way, because a picture held up by a reading that stopped
+draws is woken the same way, because a picture held up by a value that stopped
 counting has to come off the chart.
 
 `Cell` takes any value and reads the declared column type to decide how to
@@ -403,7 +403,7 @@ the event itself.
 `OnEvent(e lk.Event) error` receives everything the library did not consume:
 `lk.Timer`, `lk.TCPData`, `lk.WSData`, `lk.HTTPResponded`, `lk.FileOpened` and
 the rest. `e.Kind` is the kind, `e.Handle` correlates, `e.Payload` belongs to the
-host until the call returns. The parsers hang off the event —`e.Readings()`,
+host until the call returns. The parsers hang off the event —`e.PathValues()`,
 `e.Targets()`, `e.Response()`, `e.File()` — and the host calls are package
 functions: `lk.TCPConnect`, `lk.TimerSet`, `lk.HTTPFetch`, `lk.StorageGet`,
 `lk.SubscribePaths`, `lk.Alert`.

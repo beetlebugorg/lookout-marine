@@ -478,7 +478,7 @@ impl Row<'_> {
     }
 
     /// One cell of a text or flag column. `None` is null on the wire and a dash
-    /// on screen: never heard and heard as zero are different readings.
+    /// on screen: never heard and heard as zero are different values.
     pub fn text(mut self, key: &str, value: Option<&str>) -> Self {
         if self.cell(key, true) {
             match value {

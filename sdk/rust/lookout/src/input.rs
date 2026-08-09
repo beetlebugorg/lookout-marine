@@ -20,19 +20,19 @@ pub const DEFAULT_MAX_AGE_MS: i64 = 5_000;
 pub const DEFAULT_AIS_MAX_AGE_MS: i64 = 600_000;
 pub const DEFAULT_ATON_MAX_AGE_MS: i64 = 1_800_000;
 
-/// A value the store carries, and how to read one out of a reading.
+/// A value the store carries, and how to read one out of a `PathValue`.
 pub trait Value: Copy + Default + 'static {
-    fn from_reading(r: &raw::Reading<'_>) -> Option<Self>;
+    fn from_path_value(r: &raw::PathValue<'_>) -> Option<Self>;
 }
 
 impl Value for f64 {
-    fn from_reading(r: &raw::Reading<'_>) -> Option<f64> {
+    fn from_path_value(r: &raw::PathValue<'_>) -> Option<f64> {
         r.number().filter(|v| v.is_finite())
     }
 }
 
 impl Value for Point {
-    fn from_reading(r: &raw::Reading<'_>) -> Option<Point> {
+    fn from_path_value(r: &raw::PathValue<'_>) -> Option<Point> {
         let (lat, lon) = r.position()?;
         let at = Point::new(lat, lon);
         if at.valid() {
@@ -110,7 +110,7 @@ impl<T: Value> Input<T, Required> {
         }
     }
 
-    /// Never block `draw` on this reading, and never name it on the status
+    /// Never block `draw` on this value, and never name it on the status
     /// line. The value is read with [`Input::fresh`]; there is no `get`.
     pub const fn optional(self) -> Input<T, Optional> {
         Input {
@@ -133,7 +133,7 @@ impl<T: Value> Input<T, Required> {
 }
 
 impl<T: Value, R> Input<T, R> {
-    /// What the status line calls this reading when it is missing: `no wind`.
+    /// What the status line calls this value when it is missing: `no wind`.
     /// Defaults to the last segment of the path.
     pub const fn label(mut self, label: &'static str) -> Self {
         self.label = label;
@@ -179,17 +179,17 @@ impl<T: Value, R> Input<T, R> {
 pub trait AnyInput {
     /// The store path to subscribe to, or nothing for the AIS set.
     fn path(&self) -> Option<&'static str>;
-    /// What the status line calls this reading when it is missing. The
+    /// What the status line calls this value when it is missing. The
     /// builder is `Input::label`; this is what the library reads.
     fn status_label(&self) -> &'static str;
     /// True when `draw` waits for it.
     fn required(&self) -> bool;
     fn is_fresh(&self, mono_ms: i64) -> bool;
     /// The monotonic moment this input stops counting, or nothing when it
-    /// already has. The window is known the moment a reading lands, so its
+    /// already has. The window is known the moment a value lands, so its
     /// expiry is an appointment rather than something to poll for.
     fn stale_at(&self, mono_ms: i64) -> Option<i64>;
-    fn take_reading(&mut self, r: &raw::Reading<'_>, mono_ms: i64);
+    fn take_path_value(&mut self, r: &raw::PathValue<'_>, mono_ms: i64);
     /// True when the plugin must be subscribed to AIS.
     fn wants_ais(&self) -> bool {
         false
@@ -230,14 +230,14 @@ impl<T: Value, R> AnyInput for Input<T, R> {
         }
     }
 
-    fn take_reading(&mut self, r: &raw::Reading<'_>, mono_ms: i64) {
+    fn take_path_value(&mut self, r: &raw::PathValue<'_>, mono_ms: i64) {
         // A null value means the path has no source left. Treat it as removal:
-        // the reading is gone, not zero.
+        // the value is gone, not zero.
         if r.removed() {
             self.value = None;
             return;
         }
-        if let Some(v) = T::from_reading(r) {
+        if let Some(v) = T::from_path_value(r) {
             self.value = Some(v);
             self.at_mono_ms = mono_ms;
             self.age_at_ms = r.age_ms.max(0);
@@ -422,7 +422,7 @@ impl AnyInput for Ais {
             .min()
     }
 
-    fn take_reading(&mut self, _r: &raw::Reading<'_>, _mono_ms: i64) {}
+    fn take_path_value(&mut self, _r: &raw::PathValue<'_>, _mono_ms: i64) {}
 
     fn wants_ais(&self) -> bool {
         true
@@ -451,8 +451,8 @@ mod tests {
     use super::*;
     use crate::json::Json;
 
-    fn reading<'a>(path: &'a str, value: Json<'a>, age_ms: i64) -> raw::Reading<'a> {
-        raw::Reading {
+    fn path_value<'a>(path: &'a str, value: Json<'a>, age_ms: i64) -> raw::PathValue<'a> {
+        raw::PathValue {
             path: std::borrow::Cow::Borrowed(path),
             value,
             ts_ms: 0,
@@ -463,8 +463,8 @@ mod tests {
     #[test]
     fn a_recorded_value_ages_off_the_monotonic_clock() {
         let mut twd: Number = Number::new("environment.wind.directionTrue");
-        twd.take_reading(
-            &reading("environment.wind.directionTrue", Json::Num(215.0), 400),
+        twd.take_path_value(
+            &path_value("environment.wind.directionTrue", Json::Num(215.0), 400),
             1_000,
         );
         assert_eq!(twd.get(), 215.0);
@@ -476,25 +476,28 @@ mod tests {
     #[test]
     fn a_cleared_path_removes_the_value_rather_than_zeroing_it() {
         let mut depth: Number = Number::new("environment.depth.belowKeel");
-        depth.take_reading(
-            &reading("environment.depth.belowKeel", Json::Num(4.2), 0),
+        depth.take_path_value(
+            &path_value("environment.depth.belowKeel", Json::Num(4.2), 0),
             100,
         );
         assert!(depth.is_fresh(100));
-        depth.take_reading(&reading("environment.depth.belowKeel", Json::Null, 0), 200);
+        depth.take_path_value(
+            &path_value("environment.depth.belowKeel", Json::Null, 0),
+            200,
+        );
         assert!(!depth.is_fresh(200));
         assert_eq!(depth.get(), 0.0);
     }
 
     #[test]
-    fn a_reading_that_is_not_a_number_is_dropped_and_the_last_one_stands() {
+    fn a_value_that_is_not_a_number_is_dropped_and_the_last_one_stands() {
         let mut sog: Number = Number::new("navigation.speedOverGround");
-        sog.take_reading(
-            &reading("navigation.speedOverGround", Json::Num(3.5), 0),
+        sog.take_path_value(
+            &path_value("navigation.speedOverGround", Json::Num(3.5), 0),
             10,
         );
-        sog.take_reading(
-            &reading("navigation.speedOverGround", Json::Bool(true), 0),
+        sog.take_path_value(
+            &path_value("navigation.speedOverGround", Json::Bool(true), 0),
             20,
         );
         assert_eq!(sog.get(), 3.5);
@@ -512,8 +515,8 @@ mod tests {
             (std::borrow::Cow::Borrowed("lat"), Json::Num(91.0)),
             (std::borrow::Cow::Borrowed("lon"), Json::Num(0.0)),
         ]);
-        boat.take_reading(&reading("navigation.position", good, 0), 10);
-        boat.take_reading(&reading("navigation.position", bad, 0), 20);
+        boat.take_path_value(&path_value("navigation.position", good, 0), 10);
+        boat.take_path_value(&path_value("navigation.position", bad, 0), 20);
         assert_eq!(boat.get(), Point::new(38.9, -76.4));
     }
 
@@ -553,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reading_expires_at_an_appointment_it_carries() {
+    fn a_value_expires_at_an_appointment_it_carries() {
         // Nothing has arrived, so nothing can expire and there is nothing to
         // wait for.
         let mut twd: Number = Number::new("environment.wind.directionTrue");
@@ -561,8 +564,8 @@ mod tests {
 
         // 400 ms old at delivery, so it stops counting 4600 ms after it
         // arrived, and the appointment is that moment rather than a guess.
-        twd.take_reading(
-            &reading("environment.wind.directionTrue", Json::Num(215.0), 400),
+        twd.take_path_value(
+            &path_value("environment.wind.directionTrue", Json::Num(215.0), 400),
             1_000,
         );
         assert_eq!(twd.stale_at(1_000), Some(1_000 + 4_600));
@@ -571,9 +574,9 @@ mod tests {
         assert_eq!(twd.stale_at(1_000 + 4_600), None);
         assert_eq!(twd.stale_at(1_000 + 9_000), None);
 
-        // A reading that arrives resets its own appointment.
-        twd.take_reading(
-            &reading("environment.wind.directionTrue", Json::Num(216.0), 0),
+        // A value that arrives resets its own appointment.
+        twd.take_path_value(
+            &path_value("environment.wind.directionTrue", Json::Num(216.0), 0),
             9_000,
         );
         assert_eq!(twd.stale_at(9_000), Some(9_000 + DEFAULT_MAX_AGE_MS));
@@ -581,21 +584,21 @@ mod tests {
 
     #[test]
     fn the_earliest_window_rules_the_appointment() {
-        // Two readings on different clocks, delivered together. They stop
+        // Two values on different clocks, delivered together. They stop
         // counting at different moments, so each expires on its own wakeup and
         // the plugin can say which one went.
         let mut boat: Position = Position::new("navigation.position");
         let mut twd: Number = Number::new("environment.wind.directionTrue").max_age(20_000);
-        boat.take_reading(
-            &reading(
+        boat.take_path_value(
+            &path_value(
                 "navigation.position",
                 Json::parse(r#"{"lat":38.97,"lon":-76.46}"#).unwrap(),
                 0,
             ),
             1_000,
         );
-        twd.take_reading(
-            &reading("environment.wind.directionTrue", Json::Num(215.0), 0),
+        twd.take_path_value(
+            &path_value("environment.wind.directionTrue", Json::Num(215.0), 0),
             1_000,
         );
 

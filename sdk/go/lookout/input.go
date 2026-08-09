@@ -17,16 +17,16 @@ import (
 	"time"
 )
 
-// DefaultMaxAge is how old a reading may be and still count. One 5 s window
+// DefaultMaxAge is how old a value may be and still count. One 5 s window
 // rules all vessel data; the store and every shipped plugin use the same number.
 const DefaultMaxAge = 5 * time.Second
 
 // InputOpts is how one declared input behaves.
 type InputOpts struct {
-	// Label is what the status line calls this reading when it is missing:
+	// Label is what the status line calls this value when it is missing:
 	// "no wind". It defaults to the last segment of the path.
 	Label string
-	// MaxAge overrides DefaultMaxAge, for a reading that arrives on a slower
+	// MaxAge overrides DefaultMaxAge, for a value that arrives on a slower
 	// clock.
 	MaxAge time.Duration
 	// Optional keeps this input out of the freshness gate and out of the status
@@ -55,7 +55,7 @@ type input struct {
 // Path is the vessel path this input subscribed to.
 func (i *input) Path() string { return i.path }
 
-// Label is what the status line calls this reading.
+// Label is what the status line calls this value.
 func (i *input) Label() string { return i.label }
 
 // Age is how old the value is, and false when there is none.
@@ -71,7 +71,7 @@ func (i *input) ageMs(mono int64) int64 { return i.ageAt + (mono - i.atMono) }
 func (i *input) freshAt(mono int64) bool { return i.have && i.ageMs(mono) <= i.maxAge }
 
 // staleAt is the monotonic moment this value stops counting, and false when it
-// already has. The window is known the moment the reading lands, so its expiry
+// already has. The window is known the moment the value lands, so its expiry
 // is an appointment rather than something to poll for.
 func (i *input) staleAt(mono int64) (int64, bool) {
 	if !i.have {
@@ -94,9 +94,9 @@ func (i *input) stamp(ageMs, mono int64) {
 	}
 }
 
-func (i *input) record(r Reading, mono int64) {
+func (i *input) record(r PathValue, mono int64) {
 	// A null value means the path has no source left. Treat it as removal: the
-	// reading is gone, not zero.
+	// value is gone, not zero.
 	if r.Removed() {
 		i.have = false
 		return

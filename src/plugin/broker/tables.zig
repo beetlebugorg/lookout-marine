@@ -85,7 +85,7 @@ pub const Column = struct {
 };
 
 /// One cell. `none` is a cell the plugin sent as null, which the shell renders
-/// as a dash: never heard and heard as zero are different readings and stay
+/// as a dash: never heard and heard as zero are different values and stay
 /// different here.
 pub const Cell = union(enum) {
     none,

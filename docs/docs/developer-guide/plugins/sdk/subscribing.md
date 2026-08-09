@@ -33,7 +33,7 @@ pub const inputs = struct {
 | `lk.subscribeAis(.{ .max = 128 })` | the AIS target set |
 
 Every value carries its age: the time since it arrived, measured on the
-monotonic clock. A reading is **fresh** while its age is under the input's
+monotonic clock. A value is **fresh** while its age is under the input's
 `max_age_ms`, 5 seconds unless the declaration says otherwise. Past that it
 is **stale**.
 
@@ -41,7 +41,7 @@ is **stale**.
 
 | Field | Default | What it does |
 |---|---|---|
-| `label` | the last segment of the path | what the status line calls this reading when it is missing |
+| `label` | the last segment of the path | what the status line calls this value when it is missing |
 | `max_age_ms` | `5_000` | how old the value may be and still count as fresh |
 | `optional` | `false` | takes the input out of the freshness gate and out of the status line |
 
@@ -69,9 +69,9 @@ Lookout calls your `onData` function when bytes arrive, not on the draw
 timer, so the freshness gate has not run there. Read inputs with `fresh()`
 inside `onData`.
 
-## Acting on a reading as it arrives
+## Acting on a value as it arrives
 
-Declare an update hook and Lookout calls it the moment a batch of readings
+Declare an update hook and Lookout calls it the moment a batch of values
 lands, with every input already holding its new value. It is the clock for
 work that is not drawing. A plugin that only watches a condition declares the
 update hook and no `draw` at all.
@@ -131,7 +131,7 @@ becoming a run of alarms in the update hook too: it runs far more often than
 your `draw` function does.
 
 Lookout coalesces, so the update hook runs once for a batch and not once per
-reading: at most 10 times a second for store readings, twice a second for the
+value: at most 10 times a second for store values, twice a second for the
 AIS set, and less than either when the instruments report more slowly. It
 does not run for a batch that touched none of your declared inputs, and a
 settings change calls your settings hook instead.
@@ -139,26 +139,26 @@ settings change calls your settings hook instead.
 Inside the update hook the freshness gate has not run, so read a required
 input with `fresh()` here rather than `get()`.
 
-## Acting on a reading that has expired
+## Acting on a value that has expired
 
 A plugin that only heard about arrivals could never notice an absence. Lookout
-calls the update hook when a reading expires as well, so one function covers
-both cases: the reading is there, or it has gone.
+calls the update hook when a value expires as well, so one function covers
+both cases: the value is there, or it has gone.
 
-A reading carries its window, so the moment it stops counting is known when it
+A value carries its window, so the moment it stops counting is known when it
 lands. Lookout takes the earliest such moment across your declared inputs and
 wakes your plugin then. Read the input with `fresh()` in that call and it
 answers null. Empty the rows that depended on it, clear the condition you were
 watching, and say what is missing.
 
 Windows differ, so each input expires on its own wakeup and you can tell which
-reading went. Nothing polls. Once every input has expired there is no next
+value went. Nothing polls. Once every input has expired there is no next
 moment, nothing is armed, and a plugin on a boat with the instruments off costs
-nothing until a reading arrives. That arrival runs the cycle and sets the next
+nothing until a value arrives. That arrival runs the cycle and sets the next
 wakeup.
 
 The inputs you declare decide this, not the hooks beside them. A plugin that
-only draws is woken the same way, because a picture held up by a reading that
+only draws is woken the same way, because a picture held up by a value that
 stopped counting is a confident drawing of a guess and has to come off the
 chart.
 
@@ -344,7 +344,7 @@ call.
 Building rows costs nothing while nobody is looking: ask the table whether it
 is open and return if it is not. Lookout fills the dialog the moment the
 mariner opens it, and sends at most one batch a second after that, however
-fast the readings arrive.
+fast the values arrive.
 
 Every value in a row is SI, as it is everywhere else: metres, metres per
 second, degrees true, seconds. The shell formats each one in the mariner's own
@@ -368,10 +368,10 @@ The manifest carries the same declaration. `lk.expectTables` in Zig,
 `lk.TablesJSON` in Go and `lk::tables_json` in Rust each render it, so your
 plugin's own test compares the two.
 
-## When a reading goes stale
+## When a value goes stale
 
-A reading goes stale when its age passes `max_age_ms`. When a required
-reading goes stale, Lookout clears everything your plugin drew, skips the
+A value goes stale when its age passes `max_age_ms`. When a required
+value goes stale, Lookout clears everything your plugin drew, skips the
 call to your `draw` function, and posts one degraded line naming every
 missing input at once: `no wind, no
 position`. Naming all of them matters: a line that says only "no wind" while
@@ -391,7 +391,7 @@ snapshot, so they answer inside your `draw` function and inside the update hook
 alike.
 
 Each target carries the fields below. A field the vessel has not broadcast is
-null: never heard and heard as zero are different readings.
+null: never heard and heard as zero are different values.
 
 | Field | Type | Note |
 |---|---|---|

@@ -247,14 +247,14 @@ const char *lookout_plugin_tables_json(lookout *h, size_t *out_len);
  *
  * "cells" is one value per declared column, in declaration order: a number, a
  * string, or null for a cell the plugin did not send, which renders as a
- * dash, because never heard and heard as zero are different readings.
+ * dash, because never heard and heard as zero are different values.
  *
  * THE ORDER IS THE PLUGIN'S POLICY FIRST. Every row carries a "band" (0
  * first); `sort_key` sorts WITHIN a band and never across one, so a plugin
  * that puts its alarmed rows in band 0 keeps them at the top of the table
  * whatever column the mariner sorted by. Rows equal on the sorted column keep
  * the order they arrived in, and an empty cell sorts last in both directions.
- * A "flag" column is the exception: an empty flag is not a reading nobody has
+ * A "flag" column is the exception: an empty flag is not a value nobody has
  * heard, it is a row with nothing wrong with it, so a flag column sorts by
  * severity (alarm, warning, then nothing) and reverses like any other.
  *
@@ -573,12 +573,12 @@ typedef enum {
  * A READOUT SHOWS THESE NUMBERS OR IT SHOWS NONE. It never falls back to the
  * map centre or the cursor: a coordinate with no boat behind it is exactly the
  * ambiguity this removes, and panning away from own ship is when a mistaken
- * reading is dangerous. The coordinates of a PLACE come from the chart menu,
+ * value is dangerous. The coordinates of a PLACE come from the chart menu,
  * on demand, at the point the mariner asked about.
  *
  * The reported fix, not the display position own ship draws at: that one is
  * carried forward along COG between fixes, and a dead-reckoned number must
- * never be shown as a reading. Staleness is the vessel store's own account,
+ * never be shown as a reported value. Staleness is the vessel store's own account,
  * so there is no second clock to disagree with it.
  *
  * LOOKOUT_FIX_NONE is the state that carries a fix-it: no plugin has ever

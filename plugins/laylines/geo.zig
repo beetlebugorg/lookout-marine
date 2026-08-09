@@ -99,7 +99,7 @@ test "a wind out of range gives the same bearings as its folded form" {
     try t.expectApproxEqAbs(stbdBearingDeg(10, 45), stbdBearingDeg(-350, 45), 1e-12);
     // A wind direction that is not a number folds to due north rather than
     // carrying a NaN into the overlay, where it would fail the whole batch.
-    // The library refuses a non-finite reading before this, so nothing off a
+    // The library refuses a non-finite value before this, so nothing off a
     // real instrument reaches here; the fold is the second line of defence.
     try t.expectEqual(@as(f64, 0), portBearingDeg(std.math.nan(f64), 45));
     try t.expectEqual(@as(f64, 0), stbdBearingDeg(std.math.nan(f64), 45));

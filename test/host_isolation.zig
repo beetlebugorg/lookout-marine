@@ -176,7 +176,7 @@ test "a plugin stuck in a loop is terminated, and only that plugin stops" {
     }
     _ = try waitFor(2_000, &sink, struct {
         fn f(s: *LogSink) bool {
-            return s.count(echo_handled) >= 5 and s.count("spin saw 1 reading(s)") >= 5;
+            return s.count(echo_handled) >= 5 and s.count("spin saw 1 value(s)") >= 5;
         }
     }.f);
     try std.testing.expect(echo.enabled);

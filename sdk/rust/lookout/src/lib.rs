@@ -74,26 +74,27 @@
 //! renders it here. `DRAW_RATE_MS` is a graphics rate an author picked, so a
 //! decision taken in `draw` runs at whatever rate suits the picture.
 //!
-//! `on_update` ALSO RUNS WHEN A READING EXPIRES. A plugin that only heard about
-//! arrivals could never notice an absence. A reading carries its window, so the
+//! `on_update` ALSO RUNS WHEN A VALUE EXPIRES. A plugin that only heard about
+//! arrivals could never notice an absence. A value carries its window, so the
 //! moment it stops counting is known when it lands: the library arms a one-shot
 //! for the earliest such moment across the declared inputs and runs the cycle
 //! there. The input reads stale in that call, and the plugin empties what
 //! depended on it. Windows differ, so each input expires on its own wakeup.
 //! Nothing polls: once every input has expired there is no next moment, nothing
-//! is armed, and an idle plugin costs nothing at all until the next reading
+//! is armed, and an idle plugin costs nothing at all until the next value
 //! arrives. A plugin with no declared inputs has nothing that can expire and
 //! hears only about arrivals.
 //!
 //! The declared inputs decide that, not the methods beside them. A plugin that
-//! only draws is woken the same way, because a picture held up by a reading
+//! only draws is woken the same way, because a picture held up by a value
 //! that stopped counting is a confident drawing of a guess and has to come off
 //! the chart.
 //!
 //! A TABLE IS FILLED FROM `on_update`. Rows are data. The library opens a table
 //! cycle before that call and closes it after, so a plugin upserts its rows
-//! there and nowhere else. A table costs no capability, so its rows keep
-//! arriving while the chart grant is off and the draw timer is down.
+//! there and nowhere else. A plugin does not need to request a capability to
+//! fill a table, so its rows keep arriving while the chart grant is off and
+//! the draw timer is down.
 //!
 //! TARGET. `wasm32-wasip1`, `crate-type = ["cdylib"]`. One thread, no
 //! filesystem, no sockets but the host's. See [`raw`] for the floor.
@@ -199,7 +200,7 @@ pub trait Plugin: Default + 'static {
         Vec::new()
     }
 
-    /// The data path: a batch of readings has landed and every declared input
+    /// The data path: a batch of values has landed and every declared input
     /// holds its new value. Decide here, and fill any table here.
     fn on_update(&mut self) {}
 

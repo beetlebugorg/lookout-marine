@@ -663,7 +663,7 @@ pub const Broker = struct {
 
     /// Take back what a capability produced, for a plugin that still runs.
     /// A revoked grant stops future calls, and what earlier calls drew or
-    /// published must go with it: a frozen overlay object or a held reading
+    /// published must go with it: a frozen overlay object or a held value
     /// reads as live data and is not.
     pub fn withdraw(self: *Broker, index: u32, cap: Cap, now_ms: i64) void {
         var id: []const u8 = "";

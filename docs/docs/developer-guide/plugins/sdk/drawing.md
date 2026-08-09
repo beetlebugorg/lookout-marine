@@ -21,8 +21,9 @@ as denied. There is simply no call left to make.
 
 While the timer is down, Lookout leaves the status line alone, so a plugin that
 posts its own line from the update hook is still heard. The rest of the plugin
-runs as it always did: readings arrive, the update hook runs, and a dialog the
-plugin declared keeps filling. A table is data and costs no capability. See
+runs as it always did: values arrive, the update hook runs, and a dialog the
+plugin declared keeps filling. A table is data, and a plugin never has to
+request a capability to fill one. See
 [Subscribing to data](subscribing.md#filling-a-dialog).
 
 Your plugin should draw its entire view on each `draw` call. Lookout compares

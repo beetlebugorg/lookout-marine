@@ -15,7 +15,7 @@ position `ownship` draws.
 var p = lk.Publish.begin();
 p.number("navigation.speedOverGround", mps);
 p.position("navigation.position", .{ .lat = lat, .lon = lon });
-p.clear("environment.wind.speedTrue");   // held by this source, no reading right now
+p.clear("environment.wind.speedTrue");   // held by this source, no value right now
 _ = p.send();
 
 var u = lk.Upsert.begin();
@@ -28,7 +28,7 @@ ages against. `send` answers the number of values Lookout took, or -1 when
 the manifest did not ask for the capability; an empty batch is not sent and
 answers 0.
 
-`clear` is for an instrument that reports having no reading, which is
+`clear` is for an instrument that reports having no value, which is
 different from one that went quiet. A depth sounder that loses the bottom
 says so: if your plugin simply stops publishing, the last depth stays on the
 chart until it ages out, five seconds of a number you know is wrong. `clear`

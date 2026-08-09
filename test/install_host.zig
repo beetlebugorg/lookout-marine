@@ -87,7 +87,7 @@ fn drawTimerId(rig: *Rig, index: u32) u64 {
     return 0;
 }
 
-/// A fresh fix followed by the plugin's own draw tick. lk2 records readings
+/// A fresh fix followed by the plugin's own draw tick. lk2 records values
 /// on STORE_CHANGED and draws on its timer, which the broker's I/O thread
 /// would fire; this rig pumps deterministically, so the tick is pushed by
 /// hand.

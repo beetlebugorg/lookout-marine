@@ -318,7 +318,7 @@ struct ReadoutsCapsule: View {
 ///
 /// The readout carries own ship and nothing else. It does not follow the map
 /// centre and it does not switch meaning when the mariner pans away, because
-/// panning away is exactly when a mistaken reading is dangerous. Where there
+/// panning away is exactly when a mistaken value is dangerous. Where there
 /// is no fix it shows NO NUMBERS: a coordinate with no boat behind it is the
 /// ambiguity this removes. The coordinates of a PLACE come from the chart
 /// menu, on demand, at the point the mariner asked about.

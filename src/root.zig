@@ -295,10 +295,10 @@ const ShipDisplay = struct {
     sog_ms: ?f64 = null,
     heading_deg: ?f64 = null,
     /// The course the display position is travelling, low-passed. Course up
-    /// turns the chart to this, not to the raw reading.
+    /// turns the chart to this, not to the raw value.
     course_deg: ?f64 = null,
 
-    /// Take this frame's reading. A fix already held is not a new fix.
+    /// Take this frame's values. A fix already held is not a new fix.
     fn observe(self: *ShipDisplay, r: ShipRead) void {
         var fresh = false;
         if (r.fix) |f| {
@@ -320,7 +320,7 @@ const ShipDisplay = struct {
         if (fresh) self.trackCourse();
     }
 
-    /// Fold this reading's course into the smoothed one. A boat under the
+    /// Fold this frame's course into the smoothed one. A boat under the
     /// speed floor keeps the course it had: a drifting GPS would otherwise
     /// spin the chart while the boat sits still.
     fn trackCourse(self: *ShipDisplay) void {
@@ -1492,7 +1492,7 @@ pub const Lookout = struct {
     ///
     /// The reported fix, not the display position: the display position is
     /// carried forward along COG between fixes so the boat symbol moves
-    /// smoothly, and a dead-reckoned number must never be shown as a reading.
+    /// smoothly, and a dead-reckoned number must never be shown as a reported value.
     /// The vessel store's own staleness is what decides; nothing here keeps a
     /// second clock.
     pub fn ownShip(self: *Lookout, out: *[2]f64) FixState {

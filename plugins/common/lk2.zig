@@ -47,28 +47,29 @@
 //! renders it there. `draw_rate_ms` is a graphics rate an author picked, so a
 //! decision taken in `draw` runs at whatever rate suits the picture. The host
 //! coalesces, so `onUpdate` runs at most once per batch: 10 Hz for store
-//! readings, 2 Hz for the AIS set, and slower when the instruments are slower.
+//! values, 2 Hz for the AIS set, and slower when the instruments are slower.
 //!
-//! `onUpdate` ALSO RUNS WHEN A READING EXPIRES. A plugin that only heard about
-//! arrivals could never notice an absence. A reading carries its window, so
+//! `onUpdate` ALSO RUNS WHEN A VALUE EXPIRES. A plugin that only heard about
+//! arrivals could never notice an absence. A value carries its window, so
 //! the moment it stops counting is known when it lands: the library arms a
 //! one-shot for the earliest such moment across the declared inputs and runs
 //! the cycle there. The input reads stale in that call, and the plugin empties
 //! what depended on it. Windows differ, so each input expires on its own
 //! wakeup. Nothing polls: once every input has expired there is no next
 //! moment, nothing is armed, and an idle plugin costs nothing at all until the
-//! next reading arrives. A plugin with no declared inputs has nothing that can
+//! next value arrives. A plugin with no declared inputs has nothing that can
 //! expire and hears only about arrivals.
 //!
 //! The declared inputs decide that, not the declarations beside them. A plugin
 //! that only draws is woken the same way, because a picture held up by a
-//! reading that stopped counting is a confident drawing of a guess and has to
+//! value that stopped counting is a confident drawing of a guess and has to
 //! come off the chart.
 //!
 //! A TABLE IS FILLED FROM `onUpdate`. Rows are data. The library opens a table
 //! cycle before `onUpdate` and closes it after, so a plugin upserts its rows
-//! there and nowhere else. A table costs no capability, so its rows keep
-//! arriving while the chart grant is off and the draw timer is down.
+//! there and nowhere else. A plugin does not need to request a capability to
+//! fill a table, so its rows keep arriving while the chart grant is off and
+//! the draw timer is down.
 //!
 //! WHAT A PLUGIN MAY DECLARE at its root. All of it is optional; `plugin`
 //! reads what is there and wires only that.
@@ -95,7 +96,7 @@
 //! Ask for it with `lk.subscribeAlso`, never `lk.raw.subscribePaths`: the host
 //! holds ONE subscription per plugin and a second call replaces the first, so
 //! the raw form takes the declared inputs off the wire without saying so. The
-//! declared readings go to the inputs; the rest reach `onEvent` as a
+//! declared values go to the inputs; the rest reach `onEvent` as a
 //! `.store_changed` carrying only those.
 //!
 //! TARGET. wasm32-freestanding: no threads, no filesystem, no clock but the
@@ -288,11 +289,11 @@ pub fn scratch() std.mem.Allocator {
 
 /// How one declared input behaves.
 pub const InputOpts = struct {
-    /// What the status line calls this reading when it is missing: `no wind`.
+    /// What the status line calls this value when it is missing: `no wind`.
     /// Defaults to the last segment of the path.
     label: []const u8 = "",
     /// How old the value may be and still count. One 5 s window rules all
-    /// vessel data; raise it for a reading that arrives on a slower clock.
+    /// vessel data; raise it for a value that arrives on a slower clock.
     max_age_ms: i64 = default_max_age_ms,
     /// An optional input never blocks `draw` and never reaches the status
     /// line. It has no `get`: read it with `fresh`, and decide yourself.
@@ -325,7 +326,7 @@ fn Sample(comptime T: type) type {
         }
 
         /// The monotonic moment this value stops counting, or null when it
-        /// already has. The window is known the moment the reading lands, so
+        /// already has. The window is known the moment the value lands, so
         /// its expiry is an appointment rather than something to poll for.
         fn staleAt(self: Self, mono: i64, limit_ms: i64) ?i64 {
             if (!self.have) return null;
@@ -386,9 +387,9 @@ fn Input(comptime T: type, comptime path_: []const u8, comptime opts: InputOpts)
             return sample.staleAt(mono, opts.max_age_ms);
         }
 
-        fn lkRecord(r: raw_lk.Reading, mono: i64) void {
+        fn lkRecord(r: raw_lk.PathValue, mono: i64) void {
             // A null value means the path has no source left. Treat it as
-            // removal: the reading is gone, not zero.
+            // removal: the value is gone, not zero.
             if (r.removed()) {
                 sample.have = false;
                 return;
@@ -436,7 +437,7 @@ var declared_paths: []const []const u8 = &.{};
 /// declared inputs off the wire, silently, and the draw goes to "no position"
 /// for ever. This sends the union instead, so both keep arriving.
 ///
-/// The declared readings go to the inputs as usual; the rest reach the
+/// The declared values go to the inputs as usual; the rest reach the
 /// plugin's own `onEvent` as a `.store_changed` carrying only those.
 pub fn subscribeAlso(extra: []const []const u8) i32 {
     var all: [max_subscribe_paths][]const u8 = undefined;
@@ -1385,7 +1386,7 @@ pub const Publish = struct {
         self.b.position(path, at.lat, at.lon, self.ts);
     }
 
-    /// This source holds the path and has no reading for it right now.
+    /// This source holds the path and has no value for it right now.
     pub fn clear(self: *Publish, path: []const u8) void {
         self.b.clear(path, self.ts);
     }
@@ -1841,7 +1842,7 @@ const TableWriter = struct {
     }
 
     /// One cell. Null is null on the wire and a dash on screen: never heard
-    /// and heard as zero are different readings.
+    /// and heard as zero are different values.
     fn cell(self: *TableWriter, comptime ctype: ?ColumnType, value: anytype) void {
         const V = @TypeOf(value);
         switch (@typeInfo(V)) {
@@ -2068,10 +2069,10 @@ pub fn expectTables(manifest_text: []const u8, comptime spec_list: anytype) !voi
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Room for the readings one batch can spill.
+/// Room for the values one batch can spill.
 ///
 /// The worst case is a batch in which no declared input claims anything:
-/// `max_subscribe_paths` readings, each a path and a value the vessel store
+/// `max_subscribe_paths` of them, each a path and a value the vessel store
 /// bounds at 512 bytes of JSON, with the envelope. That is a little over ten
 /// kilobytes and this is the round number above it. A batch past it goes
 /// through whole rather than being cut, so the number is a working set and not
@@ -2085,17 +2086,17 @@ const store_spill_bytes = 12 * 1024;
 /// global.
 var spill_buf: [store_spill_bytes]u8 = undefined;
 
-/// The readings in one `.store_changed` batch that no declared input claimed,
+/// The values in one `.store_changed` batch that no declared input claimed,
 /// rebuilt as a payload of the same shape for the plugin's own `onEvent`.
 ///
 /// A plugin that mixes tiers — declared `inputs` for what the library should
 /// age and gate on, `subscribeAlso` for a path it wants raw — used to lose the
 /// raw half here: the library matched the declared paths and returned. This
 /// carries the rest through, and only the rest, so a handler looking for its
-/// own path is not handed readings it already has through an input.
+/// own path is not handed values it already has through an input.
 ///
 /// A batch that overruns the buffer goes through WHOLE instead. A plugin
-/// seeing a reading it already has through an input is a plugin that can
+/// seeing a value it already has through an input is a plugin that can
 /// ignore it; one that never sees its own is the bug being fixed.
 const RawSpill = struct {
     src: []const u8,
@@ -2107,7 +2108,7 @@ const RawSpill = struct {
         return .{ .src = payload, .w = .fixed(&spill_buf) };
     }
 
-    fn take(self: *RawSpill, r: raw_lk.Reading) void {
+    fn take(self: *RawSpill, r: raw_lk.PathValue) void {
         if (self.over) return;
         if (self.n == 0) {
             self.w.writeAll("{\"values\":[") catch {
@@ -2121,7 +2122,7 @@ const RawSpill = struct {
         self.n += 1;
     }
 
-    fn write(self: *RawSpill, r: raw_lk.Reading) !void {
+    fn write(self: *RawSpill, r: raw_lk.PathValue) !void {
         if (self.n > 0) try self.w.writeByte(',');
         try self.w.writeAll("{\"path\":");
         try std.json.Stringify.value(r.path, .{}, &self.w);
@@ -2130,7 +2131,7 @@ const RawSpill = struct {
         try self.w.print(",\"ts\":{d},\"age_ms\":{d}}}", .{ r.ts_ms, r.age_ms });
     }
 
-    /// The unclaimed readings as a payload, or null when every reading in the
+    /// The unclaimed values as a payload, or null when every value in the
     /// batch was claimed and there is nothing to pass on.
     fn rest(self: *RawSpill) ?[]const u8 {
         if (self.n == 0) return null;
@@ -2142,23 +2143,23 @@ const RawSpill = struct {
 
 /// What one `.store_changed` batch left behind.
 const Routed = struct {
-    /// The readings no declared input claimed, or null when the inputs took
+    /// The values no declared input claimed, or null when the inputs took
     /// the lot. What reaches the plugin's own `onEvent`.
     rest: ?[]const u8,
-    /// How many readings landed in a declared input. Zero means no input
+    /// How many values landed in a declared input. Zero means no input
     /// changed, so nothing depending on one has anything to recompute.
     claimed: usize,
 };
 
-/// Route one `.store_changed` batch: hand each reading to the input that
-/// declared its path, and give back the readings nobody claimed.
+/// Route one `.store_changed` batch: hand each value to the input that
+/// declared its path, and give back the values nobody claimed.
 ///
 /// The batch arrives already parsed, and the clock arrives as an argument,
-/// because `readings` and `monoMs` both reach the host: keeping them out is
+/// because `values` and `monoMs` both reach the host: keeping them out is
 /// what lets the routing be tested natively, the same reason `lkRecord` takes
 /// a clock. `src` is the payload they came from, which is what goes through
 /// unsplit if the rebuild will not fit.
-fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, src: []const u8, mono: i64) Routed {
+fn routeValues(comptime inputs: []const type, list: []const raw_lk.PathValue, src: []const u8, mono: i64) Routed {
     var spill = RawSpill.init(src);
     var took: usize = 0;
     for (list) |r| {
@@ -2170,7 +2171,7 @@ fn routeReadings(comptime inputs: []const type, list: []const raw_lk.Reading, sr
             }
         }
         // A plugin may declare inputs AND raw-subscribe paths of its own; see
-        // `subscribeAlso`. The readings no input claimed are that plugin's,
+        // `subscribeAlso`. The values no input claimed are that plugin's,
         // and swallowing them here is how they used to be lost.
         if (claimed) took += 1 else spill.take(r);
     }
@@ -2212,7 +2213,7 @@ fn Wiring(comptime P: type) type {
         /// does once the module has started.
         var may_draw: bool = true;
 
-        /// The appointment for the next reading to expire, and -1 when there
+        /// The appointment for the next value to expire, and -1 when there
         /// is none. A plugin with nothing that can go stale never holds one.
         var update_timer: i64 = -1;
         /// The moment `update_timer` is set for. Read only while it is up.
@@ -2254,7 +2255,7 @@ fn Wiring(comptime P: type) type {
             switch (e) {
                 .store_changed => |payload| if (comptime D.inputs.len > 0) {
                     const mono = monoMs();
-                    const routed = routeReadings(D.inputs, raw_lk.readings(payload), payload, mono);
+                    const routed = routeValues(D.inputs, raw_lk.pathValues(payload), payload, mono);
                     if (comptime @hasDecl(P, "onEvent")) {
                         if (routed.rest) |json| try P.onEvent(.{ .store_changed = json });
                     }
@@ -2301,7 +2302,7 @@ fn Wiring(comptime P: type) type {
                     }
                 },
                 // A table the mariner just opened is filled at once: the
-                // dialog must not sit empty until the next batch of readings.
+                // dialog must not sit empty until the next batch of values.
                 .table_open => |key| {
                     var mine = false;
                     inline for (D.tables) |T| {
@@ -2345,10 +2346,10 @@ fn Wiring(comptime P: type) type {
 
         /// One pass on the data path: the plugin's decision, and the rows it
         /// upserts around it. The chart grant does not reach here. A table is
-        /// data, it costs no capability, and a dialog on screen fills whether
-        /// or not the plugin may draw.
+        /// data, no manifest has to ask for it, and a dialog on screen fills
+        /// whether or not the plugin may draw.
         ///
-        /// The cycle runs when a reading arrives and when one expires. A
+        /// The cycle runs when a value arrives and when one expires. A
         /// plugin that only heard about arrivals could never notice an
         /// absence. A plugin with no hook and no table runs it for the
         /// appointment alone.
@@ -2359,9 +2360,9 @@ fn Wiring(comptime P: type) type {
             if (comptime wants_update_timer) armUpdate(mono);
         }
 
-        /// Wake once, exactly when the next reading expires.
+        /// Wake once, exactly when the next value expires.
         ///
-        /// A reading carries its window, so the moment it stops counting is
+        /// A value carries its window, so the moment it stops counting is
         /// known when it lands. The library takes the earliest such moment
         /// across the declared inputs and arms a one-shot for it; the cycle it
         /// fires reads that input as stale, and the plugin empties whatever
@@ -2386,9 +2387,9 @@ fn Wiring(comptime P: type) type {
                     if (next == null or at < next.?) next = at;
                 }
             }
-            // A reading is still fresh on the last millisecond of its window,
+            // A value is still fresh on the last millisecond of its window,
             // so the appointment is one past it. A wakeup that found the
-            // reading fresh would have nothing to tell the plugin.
+            // value fresh would have nothing to tell the plugin.
             const due: ?i64 = if (next) |at| at + 1 else null;
 
             if (update_timer >= 0) {
@@ -2399,7 +2400,7 @@ fn Wiring(comptime P: type) type {
             const at = due orelse return;
             update_timer = raw_lk.timerSet(at - mono, false);
             if (update_timer < 0) {
-                log(.err, "update timer refused; a reading going stale will pass unnoticed", .{});
+                log(.err, "update timer refused; a value going stale will pass unnoticed", .{});
                 return;
             }
             update_due_ms = at;
@@ -2806,7 +2807,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     defer _ = TestTable.lkOpen("targets", false);
 
     // Everything is new, so everything goes out. A cell the plugin has no
-    // reading for is left off, and the host reads that as a dash.
+    // value for is left off, and the host reads that as a dash.
     TestTable.lkBegin();
     TestTable.upsert(.{
         .id = "899000101",
@@ -2889,7 +2890,7 @@ test "closing the dialog forgets what was on it" {
 }
 
 test "the cadence gate holds a rebuild to one a second whatever the data rate" {
-    // The gate is what lets the cycle ride the data path. Readings land at up
+    // The gate is what lets the cycle ride the data path. Values land at up
     // to 10 Hz and the AIS set at 2 Hz; the batch that reaches the host is
     // still one a second.
     raw_lk.test_hooks.reset();
@@ -3016,15 +3017,15 @@ test "a plugin with no draw fills the dialog it declared" {
     try expect.expectEqual(@as(usize, 0), raw_lk.test_hooks.count(.timer_set));
 }
 
-// -- the cycle runs when a reading expires -------------------------------------
+// -- the cycle runs when a value expires -------------------------------------
 
-/// One reading in the shape the host sends it.
+/// One value in the shape the host sends it.
 fn storeJson(comptime path: []const u8, comptime value: []const u8) []const u8 {
     return "{\"values\":[{\"path\":\"" ++ path ++ "\",\"value\":" ++ value ++ ",\"ts\":1,\"age_ms\":0}]}";
 }
 
-/// A plugin with one reading and a dialog. The row exists only while the
-/// reading counts, so the table has to follow the feed both ways.
+/// A plugin with one value and a dialog. The row exists only while the
+/// value counts, so the table has to follow the feed both ways.
 const FeedTable = struct {
     pub const inputs = struct {
         pub const depth = subscribeNumber("environment.depth.belowTransducer", .{});
@@ -3061,7 +3062,7 @@ test "a table empties when its feed stops" {
     try expect.expectEqual(@as(usize, 0), raw_lk.test_hooks.count(.timer_set));
 
     // A sounding lands. The row is on the dialog, and the cycle has taken an
-    // appointment for the moment that reading stops counting: one millisecond
+    // appointment for the moment that value stops counting: one millisecond
     // past its window, because the last millisecond still counts.
     try W.onEvent(.{ .store_changed = storeJson("environment.depth.belowTransducer", "3.4") });
     try expect.expect(std.mem.indexOf(
@@ -3075,7 +3076,7 @@ test "a table empties when its feed stops" {
     try expect.expectEqual(default_max_age_ms + 1, appt.num);
 
     // Now the feed stops. Nothing else arrives, ever. The appointment comes
-    // round, the cycle runs on a reading that no longer counts, and the row it
+    // round, the cycle runs on a value that no longer counts, and the row it
     // fed leaves the dialog instead of sitting there for good.
     raw_lk.test_hooks.advance(appt.num);
     try W.onEvent(.{ .timer = appt.id });
@@ -3088,11 +3089,11 @@ test "a table empties when its feed stops" {
 
     // The plugin has been told, and there is no later moment to tell it
     // about. Nothing is armed, so a boat whose instruments are off costs
-    // nothing until a reading arrives.
+    // nothing until a value arrives.
     try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
 }
 
-/// Two readings on different clocks: the wind is slower than the position, so
+/// Two values on different clocks: the wind is slower than the position, so
 /// they stop counting at different moments.
 const TwoClocks = struct {
     pub const wind_max_age_ms: i64 = 20_000;
@@ -3182,7 +3183,7 @@ test "the appointment is kept while the chart grant is off" {
     try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_cancel));
     try expect.expectEqual(draw_timer, raw_lk.test_hooks.last(.timer_cancel).?.id);
 
-    // A reading still arrives and still takes its appointment. A plugin with
+    // A value still arrives and still takes its appointment. A plugin with
     // no permission to draw has a dialog to fill and a condition to watch.
     try W.onEvent(.{ .store_changed = storeJson("navigation.speedOverGround", "3.1") });
     const appt = raw_lk.test_hooks.last(.timer_set).?;
@@ -3193,13 +3194,13 @@ test "the appointment is kept while the chart grant is off" {
     // And it is delivered, without the draw timer coming back.
     raw_lk.test_hooks.advance(appt.num);
     try W.onEvent(.{ .timer = appt.id });
-    // The reading, and its expiry.
+    // The value, and its expiry.
     try expect.expectEqual(@as(usize, 2), DrawAndDecide.updates);
     // The draw timer at start, and the appointment. Nothing else was armed.
     try expect.expectEqual(@as(usize, 2), raw_lk.test_hooks.count(.timer_set));
 }
 
-/// A plugin that draws a reading and declares no hook at all. The reading can
+/// A plugin that draws a value and declares no hook at all. The value can
 /// still stop counting, and what was drawn from it has to come off the chart.
 const DrawOnly = struct {
     pub const inputs = struct {
@@ -3211,7 +3212,7 @@ const DrawOnly = struct {
     }
 };
 
-test "a plugin that only draws is woken when its reading expires" {
+test "a plugin that only draws is woken when its value expires" {
     raw_lk.test_hooks.reset();
     defer raw_lk.test_hooks.reset();
     const W = Wiring(DrawOnly);
@@ -3223,7 +3224,7 @@ test "a plugin that only draws is woken when its reading expires" {
 
     // The wind lands, and the appointment comes with it. The declared inputs
     // decide that. Which hooks the author wrote says nothing about when a
-    // reading stops counting.
+    // value stops counting.
     try W.onEvent(.{ .store_changed = storeJson("environment.wind.directionTrue", "215") });
     try expect.expect(DrawOnly.inputs.twd.fresh() != null);
     const appt = raw_lk.test_hooks.last(.timer_set).?;
@@ -3231,7 +3232,7 @@ test "a plugin that only draws is woken when its reading expires" {
     try expect.expect(!appt.flag); // one-shot: an appointment, not a poll
     try expect.expectEqual(default_max_age_ms + 1, appt.num);
 
-    // It comes round on a reading that no longer counts, and there is no later
+    // It comes round on a value that no longer counts, and there is no later
     // moment to wait for.
     raw_lk.test_hooks.advance(appt.num);
     try W.onEvent(.{ .timer = appt.id });
@@ -3255,7 +3256,7 @@ test "a plugin with no declared input holds no appointment" {
     try W.start(.{ .api = raw_lk.api_version, .config = .null });
     const draw_timer = raw_lk.test_hooks.last(.timer_set).?.id;
 
-    // Readings land for the plugins that asked for them. This one asked for
+    // Values land for the plugins that asked for them. This one asked for
     // none, so it holds nothing that can go stale and waits on no clock.
     try W.onEvent(.{ .store_changed = storeJson("environment.wind.directionTrue", "215") });
     try W.onEvent(.{ .timer = draw_timer });
@@ -3373,12 +3374,12 @@ test "retained state follows the fixes, and a frame leaves it alone" {
 const MixedSpeed = subscribeNumber("navigation.speedOverGround", .{});
 const raw_path = "environment.depth.belowTransducer";
 
-fn reading(path: []const u8, v: std.json.Value, ts: i64, age: i64) raw_lk.Reading {
+fn pathValue(path: []const u8, v: std.json.Value, ts: i64, age: i64) raw_lk.PathValue {
     return .{ .path = path, .value = v, .ts_ms = ts, .age_ms = age };
 }
 
 /// The rebuilt payload, parsed the way a plugin's own handler would parse it.
-/// `raw_lk.readings` cannot be used here: it allocates from the scratch arena,
+/// `raw_lk.pathValues` cannot be used here: it allocates from the scratch arena,
 /// which grows through a wasm builtin this test does not have.
 fn spilled(alloc: std.mem.Allocator, json: []const u8) !std.json.Parsed(std.json.Value) {
     return std.json.parseFromSlice(std.json.Value, alloc, json, .{});
@@ -3387,13 +3388,13 @@ fn spilled(alloc: std.mem.Allocator, json: []const u8) !std.json.Parsed(std.json
 test "a plugin that declares one input and raw-subscribes another sees both" {
     const a = expect.allocator;
 
-    const routed = routeReadings(&.{MixedSpeed}, &.{
-        reading("navigation.speedOverGround", .{ .float = 3.2 }, 1, 10),
-        reading(raw_path, .{ .float = 4.5 }, 2, 20),
+    const routed = routeValues(&.{MixedSpeed}, &.{
+        pathValue("navigation.speedOverGround", .{ .float = 3.2 }, 1, 10),
+        pathValue(raw_path, .{ .float = 4.5 }, 2, 20),
     }, "", 100_000);
     const rest = routed.rest;
 
-    // One reading was a declared input's. That count is what tells the library
+    // One value was a declared input's. That count is what tells the library
     // an input changed, so `onUpdate` runs on a batch that touched one and not
     // on a batch that touched none.
     try expect.expectEqual(@as(usize, 1), routed.claimed);
@@ -3403,7 +3404,7 @@ test "a plugin that declares one input and raw-subscribes another sees both" {
 
     // THE RAW HALF reaches the plugin instead of being swallowed. This is the
     // whole bug: the library matched the declared paths and returned.
-    var parsed = try spilled(a, rest orelse return error.RawReadingLost);
+    var parsed = try spilled(a, rest orelse return error.RawValueLost);
     defer parsed.deinit();
     const values = parsed.value.object.get("values").?.array.items;
     try expect.expectEqual(@as(usize, 1), values.len);
@@ -3413,13 +3414,13 @@ test "a plugin that declares one input and raw-subscribes another sees both" {
     try expect.expectEqual(@as(i64, 20), values[0].object.get("age_ms").?.integer);
 
     // ...and only that half: a handler looking for its own path is not handed
-    // readings it already has through an input.
+    // values it already has through an input.
     try expect.expect(std.mem.indexOf(u8, rest.?, "speedOverGround") == null);
 }
 
 test "a batch the declared inputs took whole reaches no handler" {
-    const routed = routeReadings(&.{MixedSpeed}, &.{
-        reading("navigation.speedOverGround", .{ .float = 6.1 }, 3, 0),
+    const routed = routeValues(&.{MixedSpeed}, &.{
+        pathValue("navigation.speedOverGround", .{ .float = 6.1 }, 3, 0),
     }, "", 200_000);
     try expect.expect(routed.rest == null);
     try expect.expectEqual(@as(usize, 1), routed.claimed);
@@ -3436,14 +3437,14 @@ test "a removal and an object value survive the rebuild" {
     try at.put(a, "lat", .{ .float = 38.9763 });
     try at.put(a, "lon", .{ .float = -76.4767 });
 
-    const routed = routeReadings(&.{MixedSpeed}, &.{
-        reading(raw_path, .null, 4, 0),
-        reading("navigation.position", .{ .object = at }, 5, 0),
+    const routed = routeValues(&.{MixedSpeed}, &.{
+        pathValue(raw_path, .null, 4, 0),
+        pathValue("navigation.position", .{ .object = at }, 5, 0),
     }, "", 300_000);
     // Neither path is the declared input's, so no input changed.
     try expect.expectEqual(@as(usize, 0), routed.claimed);
 
-    var parsed = try spilled(a, routed.rest orelse return error.RawReadingLost);
+    var parsed = try spilled(a, routed.rest orelse return error.RawValueLost);
     defer parsed.deinit();
     const values = parsed.value.object.get("values").?.array.items;
     try expect.expectEqual(@as(usize, 2), values.len);
@@ -3455,12 +3456,12 @@ test "a removal and an object value survive the rebuild" {
 
 test "a rebuild that will not fit passes the whole batch through" {
     // The fallback, which is what keeps the buffer a working set rather than a
-    // correctness bound: the plugin sees everything, including readings it
+    // correctness bound: the plugin sees everything, including values it
     // already has, rather than nothing.
     const long = "x" ** (store_spill_bytes / 8);
-    var many: [16]raw_lk.Reading = @splat(reading(raw_path, .{ .string = long }, 6, 0));
+    var many: [16]raw_lk.PathValue = @splat(pathValue(raw_path, .{ .string = long }, 6, 0));
     const src = "{\"values\":[]}";
-    const routed = routeReadings(&.{MixedSpeed}, &many, src, 400_000);
+    const routed = routeValues(&.{MixedSpeed}, &many, src, 400_000);
     try expect.expectEqualStrings(src, routed.rest.?);
 }
 
@@ -3480,7 +3481,7 @@ test "subscribeAlso sends the declared paths beside the plugin's own" {
     try expect.expectEqualStrings(raw_path, all[2]);
 
     // A path already declared is not sent twice: the host would take it, but
-    // the reading would then match an input and never spill.
+    // the value would then match an input and never spill.
     try expect.expectEqual(@as(usize, 2), unionPaths(&all, &.{"navigation.position"}).?);
 
     // One past the budget is refused whole rather than trimmed: a plugin

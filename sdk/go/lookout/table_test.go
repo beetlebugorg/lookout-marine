@@ -127,14 +127,14 @@ func TestATableIsFilledFromOnUpdateAndNotFromDraw(t *testing.T) {
 		t.Fatalf("the frame sent rows: %v", testHost.TableBatches)
 	}
 
-	// A batch of readings does: the data path is what the cycle rides.
+	// A batch of values does: the data path is what the cycle rides.
 	testHost.Mono += TableInterval.Milliseconds()
 	dispatchEvent(StoreChanged, 0, []byte(oneSpeed))
 	if p.updates != 2 {
-		t.Fatalf("the reading did not reach OnUpdate: %d updates", p.updates)
+		t.Fatalf("the value did not reach OnUpdate: %d updates", p.updates)
 	}
 	if !strings.Contains(lastTableBatch(), `"cpa":2`) {
-		t.Fatalf("the row did not follow the reading: %s", lastTableBatch())
+		t.Fatalf("the row did not follow the value: %s", lastTableBatch())
 	}
 }
 
@@ -145,7 +145,7 @@ func TestTheCadenceGateHoldsARebuildToOneASecond(t *testing.T) {
 		t.Fatalf("want the opening batch, got %v", testHost.TableBatches)
 	}
 
-	// Eleven batches of readings across the next 990 ms, each changing the
+	// Eleven batches of values across the next 990 ms, each changing the
 	// row. Exactly one of them clears the 950 ms gate.
 	for i := 0; i < 11; i++ {
 		testHost.Mono += 90
@@ -237,11 +237,11 @@ func (p *oddCellsTest) OnUpdate() {
 	r := p.table.Row("899000202")
 	r.Cell("name", 12.0)            // a number in a text column
 	r.Cell("cpa", "close")          // a string in a number column
-	r.Cell("state", (*string)(nil)) // a reading the plugin does not have
+	r.Cell("state", (*string)(nil)) // a value the plugin does not have
 	r.Cell("heading", 180.0)        // a column nobody declared
 	r.Done()
 
-	// The same cells through pointers, which is how a plugin holds a reading
+	// The same cells through pointers, which is how a plugin holds a value
 	// that may be absent.
 	r = p.table.Row("899000303")
 	r.Cell("name", ptr("ANNE"))
@@ -288,10 +288,10 @@ func TestACellOutsideACycleIsDropped(t *testing.T) {
 	}
 }
 
-// -- the cycle runs when a reading expires -------------------------------------
+// -- the cycle runs when a value expires -------------------------------------
 
-// feedTest is a plugin with one reading and a dialog. The row exists only while
-// the reading counts, so the table has to follow the feed both ways.
+// feedTest is a plugin with one value and a dialog. The row exists only while
+// the value counts, so the table has to follow the feed both ways.
 type feedTest struct {
 	depth   *NumberInput
 	table   *Table
@@ -339,7 +339,7 @@ func TestATableEmptiesWhenItsFeedStops(t *testing.T) {
 	}
 
 	// A sounding lands. The row is on the dialog, and the cycle has taken an
-	// appointment for the moment that reading stops counting: one millisecond
+	// appointment for the moment that value stops counting: one millisecond
 	// past its window, because the last millisecond still counts.
 	dispatchEvent(StoreChanged, 0, []byte(oneDepth))
 	if got := lastTableBatch(); !strings.Contains(got, `"depth":3.4`) {
@@ -347,7 +347,7 @@ func TestATableEmptiesWhenItsFeedStops(t *testing.T) {
 	}
 	appt := reg.updateTimer
 	if appt < 0 {
-		t.Fatal("the reading took no appointment")
+		t.Fatal("the value took no appointment")
 	}
 	if testHost.Periodic[appt] {
 		t.Fatal("the appointment is a poll, not a one-shot")
@@ -357,7 +357,7 @@ func TestATableEmptiesWhenItsFeedStops(t *testing.T) {
 	}
 
 	// Now the feed stops. Nothing else arrives, ever. The appointment comes
-	// round, the cycle runs on a reading that no longer counts, and the row it
+	// round, the cycle runs on a value that no longer counts, and the row it
 	// fed leaves the dialog instead of sitting there for good.
 	testHost.Mono += testHost.Timers[appt]
 	armed := len(testHost.Timers)
@@ -373,7 +373,7 @@ func TestATableEmptiesWhenItsFeedStops(t *testing.T) {
 
 	// The plugin has been told, and there is no later moment to tell it about.
 	// Nothing is armed, so a boat whose instruments are off costs nothing until
-	// a reading arrives.
+	// a value arrives.
 	if reg.updateTimer >= 0 {
 		t.Fatalf("an appointment was kept with nothing left to expire")
 	}
@@ -417,7 +417,7 @@ func TestEachInputExpiresOnItsOwnWakeup(t *testing.T) {
 	dispatchEvent(StoreChanged, 0, []byte(
 		`{"values":[{"path":"environment.wind.directionTrue","value":210,"ts":1,"age_ms":0}]}`))
 	if !p.haveBoat || !p.haveWind {
-		t.Fatal("both readings should count")
+		t.Fatal("both values should count")
 	}
 
 	// The earliest window rules the appointment. The wind has fifteen seconds
@@ -464,13 +464,13 @@ func TestTheAppointmentIsKeptWhileTheChartGrantIsOff(t *testing.T) {
 		t.Fatal("the draw timer is still up")
 	}
 
-	// A reading still arrives and still takes its appointment. A plugin with no
+	// A value still arrives and still takes its appointment. A plugin with no
 	// permission to draw has a dialog to fill and a condition to watch.
 	before := p.updates
 	dispatchEvent(StoreChanged, 0, []byte(oneSpeed))
 	appt := reg.updateTimer
 	if appt < 0 {
-		t.Fatal("the reading took no appointment while the grant was off")
+		t.Fatal("the value took no appointment while the grant was off")
 	}
 	if appt == drawTimer {
 		t.Fatal("the appointment is the draw timer")

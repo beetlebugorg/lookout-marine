@@ -5,7 +5,7 @@
 //! and reads back the alert the plugin raised. What it proves, which nothing
 //! else does:
 //!
-//!   - the alarm is decided when the readings arrive, so it fires with the
+//!   - the alarm is decided when the values arrive, so it fires with the
 //!     plugin's draw timer stood down and nothing on the chart;
 //!   - the gate's edge holds one approach to one alarm, however many reports
 //!     arrive between the crossing and the end of the run. Evaluating on the
@@ -30,7 +30,7 @@ const ais_manifest = @embedFile("ais_manifest");
 const ais_id = "org.beetlebug.ais";
 const io = std.Io.Threaded.global_single_threaded.io();
 
-/// How long a wait-for gives up after. Generous: the readings have to cross
+/// How long a wait-for gives up after. Generous: the values have to cross
 /// the fanout tick and the interpreter on a loaded machine.
 const deadline_ms: i64 = 8_000;
 

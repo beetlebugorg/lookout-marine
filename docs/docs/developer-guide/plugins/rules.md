@@ -18,7 +18,7 @@ nothing.
 ## State lives in globals
 
 `lk.scratch()` is a bump arena that is **reset the moment your handler returns**.
-Anything you allocate from it (a parsed JSON tree, a slice of readings, a
+Anything you allocate from it (a parsed JSON tree, a slice of values, a
 formatted string) is gone when the next event arrives. State that must survive
 goes in a container-level `var`: a counter, a fixed array, a struct.
 
@@ -42,7 +42,7 @@ plugin is called sixty times a second.
 If you find yourself wanting to draw on a timer faster than about 1 Hz, the
 thing you want is probably an anchor or a retained object that already moves.
 
-## Redraw on a timer, not on every reading
+## Redraw on a timer, not on every value
 
 `STORE_CHANGED` arrives at up to 10 Hz. Rebuilding the chart's vertex buffers ten
 times a second for a line that a mariner reads once a minute is waste, and a line

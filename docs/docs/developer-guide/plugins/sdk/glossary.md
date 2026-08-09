@@ -20,7 +20,7 @@ plugin's status. The dev harness prints that count at the end of every run.
 |---|---|
 | `vessel.read` | declared inputs: `subscribeNumber`, `subscribePosition` |
 | `ais.read` | the AIS target set: `subscribeAis` |
-| `vessel.publish` | `lk.Publish`: writing readings into the store |
+| `vessel.publish` | `lk.Publish`: writing values into the store |
 | `ais.publish` | `lk.Upsert`: writing AIS targets into the store |
 | `overlay.draw` | your `draw` function and the chart scene |
 | `alerts.raise` | `lk.alert`: alarms the mariner sees and hears |
@@ -68,7 +68,7 @@ instruments are connected.
 | `navigation.log`, `navigation.trip.log` | VLW |
 
 An XDR carries a list of transducers a boat's own instruments name, so a
-reading is found by its name and never by its place in the list. A boat
+value is found by its name and never by its place in the list. A boat
 whose instruments call heel something else publishes nothing for it.
 
 **From `signalk`**, the first eight of those paths, read from a Signal K
@@ -80,7 +80,7 @@ the store carries degrees).
 aids to navigation including virtual ones. Read it with `subscribeAis`, not
 a path.
 
-A sentence with an empty field publishes nothing for it, so an absent reading
+A sentence with an empty field publishes nothing for it, so an absent value
 ages out instead of arriving as a guess. Two plugins publishing the same path
 coexist; the store elects one source and falls back to the other when it goes
 quiet.

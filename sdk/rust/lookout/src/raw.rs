@@ -674,7 +674,7 @@ pub enum Event<'a> {
     },
     HttpResponse(HttpResponse<'a>),
     FileOpened(FileOpened),
-    /// `{"values":[...]}`. [`readings`] parses it.
+    /// `{"values":[...]}`. [`path_values`] parses it.
     StoreChanged(&'a str),
     /// `{"targets":[...]}`, the full set. [`targets`] parses it.
     AisChanged(&'a str),
@@ -724,17 +724,17 @@ impl Start<'_> {
 /// `path` is a `Cow` because it usually borrows the payload and only copies
 /// when the JSON had an escape in it. Compare it with `&*r.path`.
 #[derive(Debug)]
-pub struct Reading<'a> {
+pub struct PathValue<'a> {
     pub path: Cow<'a, str>,
     /// `Json::Null` means the path has NO value any more — the source was
-    /// cleared — not that a source published a null. [`Reading::removed`]
+    /// cleared — not that a source published a null. [`PathValue::removed`]
     /// reports it.
     pub value: Json<'a>,
     pub ts_ms: i64,
     pub age_ms: i64,
 }
 
-impl Reading<'_> {
+impl PathValue<'_> {
     /// True when the path has no value at all any more. Treat it as removal:
     /// stop drawing whatever the value fed.
     pub fn removed(&self) -> bool {
@@ -772,8 +772,8 @@ pub fn table_key(payload: &str) -> Option<String> {
     Some(Json::parse(payload)?.str_or("key", "").to_owned())
 }
 
-/// Parse a `StoreChanged` payload. The readings borrow the payload.
-pub fn readings(payload: &str) -> Vec<Reading<'_>> {
+/// Parse a `StoreChanged` payload. The values borrow the payload.
+pub fn path_values(payload: &str) -> Vec<PathValue<'_>> {
     let root = match Json::parse(payload) {
         Some(v) => v,
         None => return Vec::new(),
@@ -788,7 +788,7 @@ pub fn readings(payload: &str) -> Vec<Reading<'_>> {
             Some(p) => p,
             None => continue,
         };
-        out.push(Reading {
+        out.push(PathValue {
             path,
             value: item.get("value").cloned().unwrap_or(Json::Null),
             ts_ms: item.i64_or("ts", 0),
@@ -1363,8 +1363,8 @@ mod tests {
     }
 
     #[test]
-    fn readings_survive_a_cleared_path() {
-        let rs = readings(r#"{"values":[{"path":"a","value":null,"ts":1,"age_ms":2}]}"#);
+    fn path_values_survive_a_cleared_path() {
+        let rs = path_values(r#"{"values":[{"path":"a","value":null,"ts":1,"age_ms":2}]}"#);
         assert_eq!(rs.len(), 1);
         assert!(rs[0].removed());
     }

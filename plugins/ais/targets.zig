@@ -46,7 +46,7 @@ pub const Targets = lk.table(.{
 
 /// One vessel. `sol` is null when own ship's fix would not allow a CPA, and
 /// then both approach columns are dashes rather than zeroes: never solved and
-/// solved as zero are different readings.
+/// solved as zero are different values.
 pub fn vessel(
     t: *const lk.Target,
     at: lk.Point,

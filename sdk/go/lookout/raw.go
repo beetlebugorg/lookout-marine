@@ -459,8 +459,8 @@ func (s Start) Unmarshal(v any) error {
 	return json.Unmarshal(s.Config, v)
 }
 
-// Reading is one entry of a StoreChanged payload.
-type Reading struct {
+// PathValue is one entry of a StoreChanged payload.
+type PathValue struct {
 	Path string `json:"path"`
 	// Value is null when the path has NO value any more — the source was
 	// cleared — not when a source published a null. Removed reports it.
@@ -471,10 +471,10 @@ type Reading struct {
 
 // Removed is true when the path has no value at all any more. Treat it as
 // removal: stop drawing whatever the value fed.
-func (r Reading) Removed() bool { return len(r.Value) == 0 || string(r.Value) == "null" }
+func (r PathValue) Removed() bool { return len(r.Value) == 0 || string(r.Value) == "null" }
 
 // Number reads the value as a number.
-func (r Reading) Number() (float64, bool) {
+func (r PathValue) Number() (float64, bool) {
 	var v float64
 	if r.Removed() || json.Unmarshal(r.Value, &v) != nil {
 		return 0, false
@@ -483,7 +483,7 @@ func (r Reading) Number() (float64, bool) {
 }
 
 // Position reads the value as a fix.
-func (r Reading) Position() (Point, bool) {
+func (r PathValue) Position() (Point, bool) {
 	var v struct {
 		Lat *float64 `json:"lat"`
 		Lon *float64 `json:"lon"`
@@ -494,11 +494,11 @@ func (r Reading) Position() (Point, bool) {
 	return Point{Lat: *v.Lat, Lon: *v.Lon}, true
 }
 
-// Readings parses a StoreChanged payload. It returns nothing for any other
+// PathValues parses a StoreChanged payload. It returns nothing for any other
 // event, and nothing for a payload that will not parse.
-func (e Event) Readings() []Reading {
+func (e Event) PathValues() []PathValue {
 	var doc struct {
-		Values []Reading `json:"values"`
+		Values []PathValue `json:"values"`
 	}
 	if json.Unmarshal(e.Payload, &doc) != nil {
 		return nil
@@ -603,7 +603,7 @@ func (p *Publish) Position(path string, at Point) {
 	p.close()
 }
 
-// Clear says this source holds the path and has no reading for it right now.
+// Clear says this source holds the path and has no value for it right now.
 func (p *Publish) Clear(path string) {
 	p.open(path)
 	p.b = append(p.b, "null"...)

@@ -39,10 +39,10 @@
 //! `target_danger` and raises one alarm. The gate state is per MMSI, in
 //! `gates` below: the alarm fires on the edge into the gate and re-arms only
 //! after that target leaves it. The edge is what holds the alarm to one however
-//! often the readings arrive.
+//! often the values arrive.
 //!
 //! WITHOUT OWN POSITION there is no relative motion to compute, which is why
-//! own ship's three readings are optional inputs: the traffic is still drawn,
+//! own ship's three values are optional inputs: the traffic is still drawn,
 //! nothing is flagged, and the status line says degraded.
 
 const std = @import("std");
@@ -173,7 +173,7 @@ pub fn onSettings() void {
 
 // ---- the decision ----------------------------------------------------------
 
-/// New readings have landed: own ship's position, or the whole AIS set.
+/// New values have landed: own ship's position, or the whole AIS set.
 pub fn onUpdate() void {
     evaluate();
 }

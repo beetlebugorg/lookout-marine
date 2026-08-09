@@ -91,7 +91,7 @@ pub const Position = struct { lat: f64, lon: f64 };
 pub const Value = union(enum) {
     number: f64,
     position: Position,
-    /// The server sent an explicit null: it holds the path and has no reading
+    /// The server sent an explicit null: it holds the path and has no value
     /// for it now. The host takes the same meaning.
     none,
 };

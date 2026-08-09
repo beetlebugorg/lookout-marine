@@ -7,7 +7,7 @@ sidebar_position: 7
 # Signal K servers
 
 Signal K is an open standard for boat data: a server on the boat reads every
-instrument it can reach and streams the readings in one format.
+instrument it can reach and streams the values in one format.
 
 A Signal K server is a second way in, beside a
 [NMEA gateway](instrument-connections.md). A boat can have both, and Lookout
@@ -35,14 +35,14 @@ stream. Use 8375 with **WebSocket** off, or 3000 with **WebSocket** on.
 A row reports its state the same way a gateway's does: **Connected** with a
 rate, **Reconnecting**, **Unreachable**, **Paused** or **No address**. The rate
 counts deltas a second. A delta is one update from the server, which may carry
-several readings.
+several values.
 
 ## How a Signal K server differs from a gateway
 
 A gateway repeats one instrument network, sentence by sentence, and whatever is
 not on that network is not in the stream. A server collects from everything it
 can reach, NMEA 0183 and NMEA 2000 and anything else it has a driver for, and
-sends the boat as one named set of readings.
+sends the boat as one named set of values.
 
 What Lookout takes out of that stream is the same short list either way: your
 position, heading, course and speed, the depth, the wind, and the AIS traffic. A

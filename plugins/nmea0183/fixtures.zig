@@ -98,7 +98,7 @@ pub const mwd = "$WIMWD,220.0,T,209.0,M,12.0,N,6.2,M*66";
 pub const vhw = "$VWVHW,274.0,T,262.0,M,5.5,N,10.2,K*60";
 
 /// CAPTURED, off a B&G Zeus. Five transducers: air temperature and barometer
-/// listed with no reading, then heel, trim and rudder angle. The value of the
+/// listed with no value, then heel, trim and rudder angle. The value of the
 /// fixture is the shape: a variable-length list whose names sit in an order no
 /// other boat has to repeat.
 pub const xdr = "$IIXDR,C,,C,AIRTEMP,A,3.4,D,HEEL,A,1.9,D,TRIM,P,,B,BARO,A,-2.2,D,RUDDER*0B";
@@ -108,7 +108,7 @@ pub const xdr_expect = .{
     .rudder_deg = -2.2,
 };
 
-/// The same three readings a different instrument's way: rudder first, heel
+/// The same three values a different instrument's way: rudder first, heel
 /// last, and an engine temperature in between that nothing here reads. A parser
 /// that matched on position would report the rudder angle as heel.
 pub const xdr_reordered = "$YXXDR,A,-4.2,D,RUDDER,C,21.5,C,ENGINETEMP,A,12.0,D,HEEL*59";

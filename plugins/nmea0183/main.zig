@@ -1,6 +1,6 @@
 //! NMEA 0183 over TCP, from one or MORE gateways.
 //!
-//! NMEA 0183 is the instrument network's own wire format: one line per reading,
+//! NMEA 0183 is the instrument network's own wire format: one line per value,
 //! terminated by a checksum. A WiFi gateway on the boat repeats what the
 //! network carries over TCP. This plugin reads the lines, decodes the sentences
 //! it knows, and publishes them.

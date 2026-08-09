@@ -310,12 +310,12 @@ knots, and converting is the parsing plugin's job. An aid to navigation adds
            {"path":"environment.wind.directionTrue","value":null}]}
 ```
 
-Only the paths you subscribed to, only when the elected reading changed, and at
+Only the paths you subscribed to, only when the elected value changed, and at
 most 10 Hz. `age_ms` is how old the value was **when the host wrote the payload**;
 it is already stale when you read it, so age it on with `mono_ms` if you need it
 later.
 
-**A `null` value is a removal, not a null reading.** The path has no value from
+**A `null` value is a removal, not a null value.** The path has no value from
 any source any more, because a source was cleared or the plugin that owned it was
 disabled. Stop drawing whatever it fed. There is no separate delete list, and a
 removal carries no `ts` and no `age_ms`, because there is no value for them to

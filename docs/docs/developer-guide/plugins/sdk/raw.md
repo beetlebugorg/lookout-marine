@@ -25,7 +25,7 @@ returns -1 when your manifest did not ask for the capability it needs.
 | TCP | `tcpConnect`, `tcpSend`, `tcpClose` |
 | Timers | `timerSet(ms, repeat)`, `timerCancel(id)` |
 | Files | `fileRead`, `fileWrite`, and the `file_opened` event |
-| The store, raw | `subscribePaths`, `aisSubscribe`, `readings(payload)`, `targets(payload)` |
+| The store, raw | `subscribePaths`, `aisSubscribe`, `pathValues(payload)`, `targets(payload)` |
 | Publishing, raw | `Publish` and `AisUpsert` with a caller buffer and an explicit timestamp |
 | The overlay, raw | `Overlay`: `symbol`, `polyline`, `polygon`, `del`, `send`, and the ownship-anchored and pick variants |
 | Text | `logf`, `status`, `raiseAlert`, `Buf`, and the JSON helpers |

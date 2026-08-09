@@ -105,12 +105,12 @@ func TestTheStoreFeedsTheInputsAndTheTimerDraws(t *testing.T) {
 	}
 }
 
-func TestAStaleReadingClearsTheSceneAndNamesEveryMissingInstrument(t *testing.T) {
+func TestAStaleValueClearsTheSceneAndNamesEveryMissingInstrument(t *testing.T) {
 	startWindline(t)
 	dispatchEvent(StoreChanged, 0, []byte(positionAndWind))
 	tick(t)
 
-	// Five seconds and a millisecond later, both readings are outside the
+	// Five seconds and a millisecond later, both values are outside the
 	// window.
 	testHost.Mono += 5001
 	tick(t)
@@ -159,17 +159,17 @@ func TestAnOptionalInputNeverHoldsTheDrawBack(t *testing.T) {
 	}
 }
 
-func TestAPluginThatOnlyDrawsIsWokenWhenItsReadingExpires(t *testing.T) {
+func TestAPluginThatOnlyDrawsIsWokenWhenItsValueExpires(t *testing.T) {
 	p := startWindline(t)
 	drawTimer := reg.drawTimer
 
-	// The readings land, and the appointment comes with them. The declared
+	// The values land, and the appointment comes with them. The declared
 	// inputs decide that. Which methods the author wrote says nothing about
-	// when a reading stops counting.
+	// when a value stops counting.
 	dispatchEvent(StoreChanged, 0, []byte(positionAndWind))
 	appt := reg.updateTimer
 	if appt < 0 {
-		t.Fatal("the readings took no appointment")
+		t.Fatal("the values took no appointment")
 	}
 	if appt == drawTimer {
 		t.Fatal("the appointment is the draw timer")
@@ -181,7 +181,7 @@ func TestAPluginThatOnlyDrawsIsWokenWhenItsReadingExpires(t *testing.T) {
 		t.Fatalf("the appointment is in %d ms, want %d", testHost.Timers[appt], want)
 	}
 
-	// It comes round on readings that no longer count. Nothing is drawn from it
+	// It comes round on values that no longer count. Nothing is drawn from it
 	// and there is no later moment to wait for.
 	testHost.Mono += testHost.Timers[appt]
 	dispatchEvent(Timer, appt, nil)
@@ -203,7 +203,7 @@ func TestAPluginWithNoDeclaredInputHoldsNoAppointment(t *testing.T) {
 	dispatchStart([]byte(`{"abi":1,"config":{}}`))
 	armed := len(testHost.Timers)
 
-	// Readings land for the plugins that asked for them. This one asked for
+	// Values land for the plugins that asked for them. This one asked for
 	// none, so it holds nothing that can go stale and waits on no clock.
 	dispatchEvent(StoreChanged, 0, []byte(positionAndWind))
 	tick(t)

@@ -2,7 +2,7 @@
 //
 // The same plugin as the Zig walkthrough in
 // docs/developer-guide/plugins/build-your-first.md, so the two languages can be
-// read side by side. The library subscribes, ages both readings against the 5 s
+// read side by side. The library subscribes, ages both values against the 5 s
 // window, runs Draw once a second, and takes the line off the chart and says
 // which instrument is missing when either one goes stale.
 //

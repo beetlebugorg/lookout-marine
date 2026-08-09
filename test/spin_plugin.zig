@@ -86,7 +86,7 @@ pub fn onEvent(e: lk.Event) !void {
             lk.status("running", "{d} events", .{events});
         },
         .store_changed => |payload| {
-            lk.logf(.info, "spin saw {d} reading(s)", .{lk.readings(payload).len});
+            lk.logf(.info, "spin saw {d} value(s)", .{lk.pathValues(payload).len});
             draw();
         },
         .ais_changed => |payload| lk.logf(.info, "spin saw {d} ais targets", .{lk.targets(payload).len}),

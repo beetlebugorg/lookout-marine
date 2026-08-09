@@ -53,7 +53,7 @@ pub fn writeSentence(out: *std.ArrayList(u8), alloc: std.mem.Allocator, cap: bro
     switch (cap) {
         .vessel_read => try out.appendSlice(alloc, "Read your instruments: position, heading, depth, wind."),
         .ais_read => try out.appendSlice(alloc, "Read AIS traffic."),
-        .vessel_publish => try out.appendSlice(alloc, "Provide instrument readings to the chart."),
+        .vessel_publish => try out.appendSlice(alloc, "Provide instrument values to the chart."),
         .ais_publish => try out.appendSlice(alloc, "Provide AIS targets to the chart."),
         .overlay_draw => try out.appendSlice(alloc, "Draw on the chart."),
         .alerts_raise => try out.appendSlice(alloc, "Raise alarms."),
@@ -287,7 +287,7 @@ test "the consent sentences read exactly as install.md words them" {
     const expect = [_][]const u8{
         "Read your instruments: position, heading, depth, wind.",
         "Read AIS traffic.",
-        "Provide instrument readings to the chart.",
+        "Provide instrument values to the chart.",
         "Provide AIS targets to the chart.",
         "Draw on the chart.",
         "Raise alarms.",

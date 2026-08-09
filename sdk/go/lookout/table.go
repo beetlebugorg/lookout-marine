@@ -359,7 +359,7 @@ func (r *TableRow) Band(band int) {
 // takes a number.
 //
 // A nil value is null on the wire and a dash on screen: never heard and heard
-// as zero are different readings. A *float64, *string or *bool is read through,
+// as zero are different values. A *float64, *string or *bool is read through,
 // and a nil pointer is a dash.
 func (r *TableRow) Cell(key string, value any) {
 	if !r.live {
@@ -465,7 +465,7 @@ func deref(value any) (any, bool) {
 	return value, true
 }
 
-// asFloat is every numeric shape a plugin holds a reading in. A bool counts:
+// asFloat is every numeric shape a plugin holds a value in. A bool counts:
 // a flag column is text, so a bool in a number column is a count of one.
 func asFloat(value any) (float64, bool) {
 	switch v := value.(type) {

@@ -78,26 +78,27 @@
 // graphics rate you chose, so a decision taken in Draw runs at whatever rate
 // suits the picture.
 //
-// OnUpdate also runs when a reading expires. A plugin that only heard about
-// arrivals could never notice an absence. A reading carries its window, so the
+// OnUpdate also runs when a value expires. A plugin that only heard about
+// arrivals could never notice an absence. A value carries its window, so the
 // moment it stops counting is known when it lands: the library arms a one-shot
 // for the earliest such moment across the declared inputs and runs the cycle
 // there. The input reads stale in that call, and the plugin empties what
 // depended on it. Windows differ, so each input expires on its own wakeup.
 // Nothing polls: once every input has expired there is no next moment, nothing
-// is armed, and an idle plugin costs nothing at all until the next reading
+// is armed, and an idle plugin costs nothing at all until the next value
 // arrives. A plugin with no declared inputs has nothing that can expire and
 // hears only about arrivals.
 //
 // The declared inputs decide that, not the methods beside them. A plugin that
-// only draws is woken the same way, because a picture held up by a reading that
+// only draws is woken the same way, because a picture held up by a value that
 // stopped counting is a confident drawing of a guess and has to come off the
 // chart.
 //
 // A table is filled from OnUpdate. Rows are data. The library opens a table
 // cycle before that call and closes it after, so a plugin upserts its rows
-// there and nowhere else. A table costs no capability, so its rows keep
-// arriving while the chart grant is off and the draw timer is down.
+// there and nowhere else. A plugin does not need to request a capability to
+// fill a table, so its rows keep arriving while the chart grant is off and the
+// draw timer is down.
 //
 // # Register in init, not in main
 //
@@ -158,7 +159,7 @@ type Drawer interface{ Draw(c *Chart) }
 // DrawRater sets how often Draw runs.
 type DrawRater interface{ DrawRate() time.Duration }
 
-// Updater is the data path: a batch of readings has landed and every declared
+// Updater is the data path: a batch of values has landed and every declared
 // input holds its new value. Decide here, and fill any table here.
 type Updater interface{ OnUpdate() }
 
@@ -220,7 +221,7 @@ type registry struct {
 	drawEvery int64
 	missing   []string
 
-	// updateTimer is the appointment for the next reading to expire, and -1
+	// updateTimer is the appointment for the next value to expire, and -1
 	// when there is none. A plugin with nothing that can go stale never holds
 	// one. updateDue is the moment it is set for, read only while it is up.
 	updateTimer int64
@@ -485,7 +486,7 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 		if len(reg.inputs) > 0 {
 			mono := MonoMs()
 			claimed := 0
-			for _, r := range e.Readings() {
+			for _, r := range e.PathValues() {
 				for _, in := range reg.inputs {
 					if in.path == r.Path {
 						in.record(r, mono)
@@ -527,7 +528,7 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 		}
 	case TableOpen, TableClosed:
 		// A table the mariner just opened is filled at once: the dialog must
-		// not sit empty until the next batch of readings.
+		// not sit empty until the next batch of values.
 		mine := false
 		for _, t := range reg.tables {
 			if t.setOpen(e.TableKey(), kind == TableOpen) {
@@ -594,9 +595,9 @@ const noDrawLine = "not drawing: permission to draw on the chart is off"
 
 // runUpdate is one pass on the data path: the plugin's decision, and the rows it
 // fills around it. The chart grant does not reach here. A table is data, it
-// costs no capability, and a dialog on screen fills whether or not the plugin
-// may draw.
-// The cycle runs when a reading arrives and when one expires. A plugin that
+// no manifest has to ask for it, and a dialog on screen fills whether or not
+// the plugin may draw.
+// The cycle runs when a value arrives and when one expires. A plugin that
 // only heard about arrivals could never notice an absence. A plugin with no
 // hook and no table runs it for the appointment alone.
 func runUpdate(mono int64) {
@@ -624,9 +625,9 @@ func wantsUpdateTimer() bool {
 	return len(reg.inputs) > 0 || reg.ais != nil
 }
 
-// armUpdate wakes the plugin once, exactly when the next reading expires.
+// armUpdate wakes the plugin once, exactly when the next value expires.
 //
-// A reading carries its window, so the moment it stops counting is known when
+// A value carries its window, so the moment it stops counting is known when
 // it lands. The library takes the earliest such moment across the declared
 // inputs and arms a one-shot for it; the cycle it fires reads that input as
 // stale, and the plugin empties whatever depended on it. Windows differ, so
@@ -653,8 +654,8 @@ func armUpdate(mono int64) {
 			found = true
 		}
 	}
-	// A reading is still fresh on the last millisecond of its window, so the
-	// appointment is one past it. A wakeup that found the reading fresh would
+	// A value is still fresh on the last millisecond of its window, so the
+	// appointment is one past it. A wakeup that found the value fresh would
 	// have nothing to tell the plugin.
 	due := next + 1
 
@@ -670,7 +671,7 @@ func armUpdate(mono int64) {
 	}
 	reg.updateTimer = TimerSet(due-mono, false)
 	if reg.updateTimer < 0 {
-		Log(Error, "update timer refused; a reading going stale will pass unnoticed")
+		Log(Error, "update timer refused; a value going stale will pass unnoticed")
 		return
 	}
 	reg.updateDue = due

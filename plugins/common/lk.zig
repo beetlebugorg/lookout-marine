@@ -629,7 +629,7 @@ pub const Event = union(enum) {
     file_opened: FileOpened,
     /// `{"values":[{"path":..,"value":..,"ts":..,"age_ms":..}]}`. A value of
     /// null means the path has NO value any more — the source was cleared —
-    /// not that it published a null. `readings` parses it.
+    /// not that it published a null. `pathValues` parses it.
     store_changed: []const u8,
     /// `{"targets":[...]}`, the full set. `targets` parses it.
     ais_changed: []const u8,
@@ -848,11 +848,11 @@ pub fn registerPlugin(comptime P: type) void {
 }
 
 // ---------------------------------------------------------------------------
-// Reading what the host sends
+// Values the host sends
 // ---------------------------------------------------------------------------
 
 /// One entry of a STORE_CHANGED payload.
-pub const Reading = struct {
+pub const PathValue = struct {
     path: []const u8,
     value: std.json.Value,
     ts_ms: i64,
@@ -860,16 +860,16 @@ pub const Reading = struct {
 
     /// True when the path has no value at all any more. Treat it as removal:
     /// stop drawing whatever the value fed.
-    pub fn removed(self: Reading) bool {
+    pub fn removed(self: PathValue) bool {
         return self.value == .null;
     }
 
-    pub fn number(self: Reading) ?f64 {
+    pub fn number(self: PathValue) ?f64 {
         return jnum(self.value);
     }
 
     /// `.{ lat, lon }`, or null when the value is not a position.
-    pub fn position(self: Reading) ?[2]f64 {
+    pub fn position(self: PathValue) ?[2]f64 {
         if (self.value != .object) return null;
         const lat = jnum(self.value.object.get("lat") orelse return null) orelse return null;
         const lon = jnum(self.value.object.get("lon") orelse return null) orelse return null;
@@ -879,13 +879,13 @@ pub const Reading = struct {
 
 /// Parse a `.store_changed` payload. The slice and its strings live in the
 /// scratch arena, so they are gone when your handler returns.
-pub fn readings(payload: []const u8) []const Reading {
+pub fn pathValues(payload: []const u8) []const PathValue {
     const a = scratch();
     const root = std.json.parseFromSliceLeaky(std.json.Value, a, payload, .{}) catch return &.{};
     if (root != .object) return &.{};
     const arr = root.object.get("values") orelse return &.{};
     if (arr != .array) return &.{};
-    const out = a.alloc(Reading, arr.array.items.len) catch return &.{};
+    const out = a.alloc(PathValue, arr.array.items.len) catch return &.{};
     var n: usize = 0;
     for (arr.array.items) |item| {
         if (item != .object) continue;
@@ -931,7 +931,7 @@ pub const Target = struct {
     }
 };
 
-/// Parse an `.ais_changed` payload. Scratch-allocated, like `readings`.
+/// Parse an `.ais_changed` payload. Scratch-allocated, like `pathValues`.
 pub fn targets(payload: []const u8) []const Target {
     const a = scratch();
     const root = std.json.parseFromSliceLeaky(std.json.Value, a, payload, .{}) catch return &.{};

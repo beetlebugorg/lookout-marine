@@ -119,7 +119,7 @@ use port 10110.
 
 **Signal K servers.** A Signal K server on the boat. Signal K is an open
 marine data standard: the server reads every instrument it can reach and streams
-the readings in one format. Give it the server's address and port. The stream is
+the values in one format. Give it the server's address and port. The stream is
 usually on port 8375. Port 3000 is the server's own web page, which is not the
 stream.
 
@@ -129,7 +129,7 @@ source without deleting it: the connection closes and stays closed until you
 switch it back on. Open a row with the chevron to change its address.
 
 Everything switched on here feeds the same chart. When two sources carry the
-same reading (a Signal K server and a NMEA gateway both reporting heading), the
+same value (a Signal K server and a NMEA gateway both reporting heading), the
 chart uses one of them and falls back to the other if the first goes quiet for
 five seconds. You cannot yet choose which one wins.
 
