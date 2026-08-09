@@ -275,8 +275,8 @@ value is elected and flagged stale.
 ### ais_upsert
 
 ```json
-{"targets":[{"mmsi":366123456,"lat":38.98,"lon":-76.47,"sog":5.1,"cog":210.0,
-             "heading":211.0,"name":"EVER GIVEN","ts":1754400000123}]}
+{"targets":[{"mmsi":899000404,"lat":38.98,"lon":-76.47,"sog":5.1,"cog":210.0,
+             "heading":211.0,"name":"TANGERINE OTTER","ts":1754400000123}]}
 ```
 
 Only `mmsi` is required; the upsert merges each field it carries into the target
@@ -322,7 +322,7 @@ every three minutes.
 ### overlay
 
 ```json
-{"del":["t366123456","t366123456/vec"],
+{"del":["t899000404","t899000404/vec"],
  "set":[{"id":"ownship","kind":"symbol","sym":"ownship","at":[-76.4767,38.9763],
          "rot_deg":213.0,"scale":1.0,"color":"ownship","anchor":"ownship"},
         {"id":"hdg","kind":"polyline","pts":[[-76.47,38.97],[-76.46,38.98]],
@@ -386,7 +386,7 @@ has no carried position. Dead reckoning stops at the 5 s staleness window.
 **Pick payloads.** A symbol may carry what a hover or a tap reports:
 
 ```json
-"pick":{"title":"EVER GIVEN","rows":[["MMSI","366123456"],["SOG","9.9 kn"],["CPA","149 m in 591 s"]]}
+"pick":{"title":"TANGERINE OTTER","rows":[["MMSI","899000404"],["SOG","9.9 kn"],["CPA","149 m in 591 s"]]}
 ```
 
 Both parts are optional and a payload with neither is dropped. The core

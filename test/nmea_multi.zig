@@ -388,17 +388,18 @@ test "two connections feed one chart, and pausing one leaves the other running" 
 ///   * a class B position report and the single-sentence type 24 part A that
 ///     names her, from the generated Annapolis log.
 ///
-/// Both vessels are invented, like everything else the tests here send.
+/// Both vessels are invented on MID 899, which is unallocated, so neither
+/// MMSI can belong to a real ship.
 const ais_lines = [_][]const u8{
-    "!AIVDM,1,1,,,15NtpTh00lJQtlpFCD83IRht0000,0*47",
+    "!AIVDM,1,1,,,1=IFar000lJQtlpFCD83IRht0000,0*15",
     "!AIVDM,1,1,,B,B=IFWsh0?6`O6V5TjPmDI3P4h000,0*5B",
-    "!AIVDM,2,1,4,,55NtpTh00001LASO3C8M85V0PE8tp000000000163064440008hCSPD3k2Dh,0*55",
+    "!AIVDM,2,1,4,,5=IFar000000EP4m33==0D<dhDB0dEA@hD0000163064440008hCSPD3k2Dh,0*52",
     "!AIVDM,2,2,5,,00000000000,2*60",
     "!AIVDM,1,1,,B,H=IFWsi=0D<dhDB1@D50u@000000,0*68",
 };
 
-const class_a_mmsi: u32 = 367999123;
-const class_a_name = "GRAY HERON";
+const class_a_mmsi: u32 = 899000808;
+const class_a_name = "SPECKLED KETTLE";
 const class_b_mmsi: u32 = 899000303;
 const class_b_name = "SPECKLED TEAPOT";
 
@@ -482,7 +483,7 @@ test "an AIS name reaches the row the targets dialog draws, not the MMSI" {
     // reported a name shows it there; the number beside it is the identifier,
     // not the label, and the two are never the same string.
     try must(
-        std.mem.indexOf(u8, rows.items, "\"cells\":[\"" ++ class_a_name ++ "\",\"367999123\"") != null,
+        std.mem.indexOf(u8, rows.items, "\"cells\":[\"" ++ class_a_name ++ "\",\"899000808\"") != null,
         "the class A row leads with her name",
     );
     try must(

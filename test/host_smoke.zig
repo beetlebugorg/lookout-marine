@@ -83,7 +83,7 @@ fn aisSnapshot(alloc: std.mem.Allocator, n: usize, tick: usize) ![]u8 {
         try out.print(alloc,
             \\{{"mmsi":{d},"lat":{d:.5},"lon":{d:.5},"sog":{d:.2},"cog":{d:.1},"heading":{d:.1},"name":"TARGET {d:0>6}","ts":{d},"age_ms":{d}}}
         , .{
-            366000000 + i,
+            899001000 + i,
             38.90 + k * 0.0001,
             -76.55 + k * 0.0001,
             k * 0.01,

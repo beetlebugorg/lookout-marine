@@ -1,11 +1,18 @@
 //! Signal K documents the tests read, and what each one should decode to.
 //!
 //! PROVENANCE. Every fixture says where it came from. A fixture marked
-//! SPEC is copied byte for byte out of the Signal K specification repository
-//! at the file named beside it, and it is the only kind that proves this
-//! plugin reads what a real server writes. A fixture marked BUILT was written
-//! here, because the specification prints no example of that case; a BUILT
-//! fixture proves the plugin's own logic and nothing about the wire.
+//! SPEC is copied out of the Signal K specification repository at the file
+//! named beside it, and it is the only kind that proves this plugin reads what
+//! a real server writes. A fixture marked BUILT was written here, because the
+//! specification prints no example of that case; a BUILT fixture proves the
+//! plugin's own logic and nothing about the wire.
+//!
+//! IDENTITIES. Every vessel MMSI here is invented on MID 899, which is
+//! unallocated, so none can belong to a real vessel; an aid to navigation
+//! uses 99, then 899, then four digits. A SPEC fixture keeps the
+//! specification's document shape, paths and values and carries an invented
+//! identity in place of the one the specification prints: what the fixture
+//! proves is the reading of the shape, not the number in the context URN.
 //!
 //! Version 1.8.2 of the specification is the one read. The pages are
 //! `streaming_api`, `data_model`, `subscription_protocol` and `urls_ports`,
@@ -49,16 +56,16 @@ pub const hello_minimal =
 // ---------------------------------------------------------------------------
 
 pub const spec_data_model =
-    \\{"context":"vessels.urn:mrn:imo:mmsi:234567890","updates":[{"source":{"label":"N2000-01","type":"NMEA2000","src":"017","pgn":127488},"timestamp":"2010-01-07T07:18:44Z","values":[{"path":"propulsion.0.revolutions","value":16.341667},{"path":"propulsion.0.boostPressure","value":45500.0}]},{"source":{"label":"N2000-01","type":"NMEA2000","src":"115","pgn":128267},"timestamp":"2014-08-15T16:00:00.081Z","values":[{"path":"navigation.courseOverGroundTrue","value":2.971},{"path":"navigation.speedOverGround","value":3.85}]},{"source":{"label":"N2000-01","type":"NMEA2000","src":"115","pgn":128267},"timestamp":"2014-08-15T19:02:31.507Z","values":[{"path":"","value":{"name":"WRANGO"}}]}]}
+    \\{"context":"vessels.urn:mrn:imo:mmsi:899000606","updates":[{"source":{"label":"N2000-01","type":"NMEA2000","src":"017","pgn":127488},"timestamp":"2010-01-07T07:18:44Z","values":[{"path":"propulsion.0.revolutions","value":16.341667},{"path":"propulsion.0.boostPressure","value":45500.0}]},{"source":{"label":"N2000-01","type":"NMEA2000","src":"115","pgn":128267},"timestamp":"2014-08-15T16:00:00.081Z","values":[{"path":"navigation.courseOverGroundTrue","value":2.971},{"path":"navigation.speedOverGround","value":3.85}]},{"source":{"label":"N2000-01","type":"NMEA2000","src":"115","pgn":128267},"timestamp":"2014-08-15T19:02:31.507Z","values":[{"path":"","value":{"name":"MOSSY LANTERN"}}]}]}
 ;
 
-pub const spec_data_model_identity = "vessels.urn:mrn:imo:mmsi:234567890";
+pub const spec_data_model_identity = "vessels.urn:mrn:imo:mmsi:899000606";
 pub const spec_data_model_expect = .{
-    .mmsi = @as(u32, 234567890),
+    .mmsi = @as(u32, 899000606),
     .sog_mps = 3.85,
     // 2.971 rad in degrees.
     .cog_deg = 170.22576093336758,
-    .name = "WRANGO",
+    .name = "MOSSY LANTERN",
     // The two propulsion paths.
     .unmapped = @as(u64, 2),
 };
@@ -86,7 +93,7 @@ pub const spec_multiple_values_expect_cog_deg = 207.16;
 // ---------------------------------------------------------------------------
 
 pub const spec_sources =
-    \\{"updates":[{"source":{"label":"ttyUSB0","type":"NMEA2000","pgn":127251,"src":"204"},"timestamp":"2017-04-15T20:38:26.709Z","values":[{"path":"navigation.rateOfTurn","value":-0.000412469}]}],"context":"vessels.urn:mrn:imo:mmsi:338184312"}
+    \\{"updates":[{"source":{"label":"ttyUSB0","type":"NMEA2000","pgn":127251,"src":"204"},"timestamp":"2017-04-15T20:38:26.709Z","values":[{"path":"navigation.rateOfTurn","value":-0.000412469}]}],"context":"vessels.urn:mrn:imo:mmsi:899001010"}
 ;
 
 // ---------------------------------------------------------------------------
@@ -161,7 +168,7 @@ pub const null_delta =
 // ---------------------------------------------------------------------------
 
 pub const name_path_delta =
-    \\{"context":"vessels.urn:mrn:imo:mmsi:366982330","updates":[{"values":[{"path":"name","value":"WRANGO"},{"path":"navigation.speedOverGround","value":4.1}]}]}
+    \\{"context":"vessels.urn:mrn:imo:mmsi:899000505","updates":[{"values":[{"path":"name","value":"COPPER KETTLE"},{"path":"navigation.speedOverGround","value":4.1}]}]}
 ;
 
 // ---------------------------------------------------------------------------

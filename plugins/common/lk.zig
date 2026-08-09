@@ -150,7 +150,7 @@ pub fn tableDeclareJson(json: []const u8) i32 {
 }
 
 /// One keyed batch of rows: `{"key":"targets","upsert":[{"id":"899000101",
-/// "band":0,"cpa":124,...}],"remove":["366999999"]}`. Cell values are SI:
+/// "band":0,"cpa":124,...}],"remove":["899000707"]}`. Cell values are SI:
 /// metres, metres per second, degrees true, seconds, and the shell formats
 /// them for the mariner. Returns the rows the batch touched, or -1 when it was
 /// refused whole (too fast, or over the row budget).

@@ -1440,7 +1440,7 @@ test "the not-available sentinels decode as null, not as numbers" {
     const done = asm_state.push(v).?;
     var text: [text_scratch_bytes]u8 = undefined;
     const p = (try decode(done.payload, done.fill, &text)).position;
-    try testing.expectEqual(@as(u32, 366999999), p.mmsi);
+    try testing.expectEqual(@as(u32, 899000707), p.mmsi);
     try testing.expect(p.lat == null); // 91°
     try testing.expect(p.lon == null); // 181°
     try testing.expect(p.sog_kn == null); // 1023
@@ -1560,7 +1560,7 @@ const Packer = struct {
 fn packAton(p: *Packer, name: []const u8, second: u64, extension: []const u8) void {
     p.put(21, 6);
     p.put(0, 2);
-    p.put(993672001, 30);
+    p.put(998990003, 30); // an invented aid: 99, then the unallocated MID 899
     p.put(19, 5); // special mark
     p.text(name, 20);
     p.put(0, 1); // accuracy

@@ -606,7 +606,7 @@ test "own ship is the empty context and the literal vessels.self" {
     // the spec's own samples write both ways.
     try t.expect(isSelf("vessels.urn:mrn:signalk:uuid:abc", "urn:mrn:signalk:uuid:abc"));
     try t.expect(isSelf("urn:mrn:signalk:uuid:abc", "vessels.urn:mrn:signalk:uuid:abc"));
-    try t.expect(!isSelf("vessels.urn:mrn:imo:mmsi:234567890", "urn:mrn:signalk:uuid:abc"));
+    try t.expect(!isSelf("vessels.urn:mrn:imo:mmsi:899000606", "urn:mrn:signalk:uuid:abc"));
 }
 
 test "an explicit null is a value the source no longer has" {
@@ -643,8 +643,8 @@ test "a vessel name arrives as its own path too" {
     defer h.deinit();
     const out = h.read(fx.name_path_delta);
     try t.expect(out == .target);
-    try t.expectEqual(@as(u32, 366982330), out.target.mmsi);
-    try t.expectEqualStrings("WRANGO", out.target.name.?);
+    try t.expectEqual(@as(u32, 899000505), out.target.mmsi);
+    try t.expectEqualStrings("COPPER KETTLE", out.target.name.?);
     try t.expectApproxEqAbs(@as(f64, 4.1), out.target.sog.?, 1e-12);
 }
 
@@ -675,19 +675,19 @@ test "a malformed document is counted, not published" {
 }
 
 test "an MMSI comes out of the context URN" {
-    try t.expectEqual(@as(u32, 366982330), mmsiOf("vessels.urn:mrn:imo:mmsi:366982330").?);
-    try t.expectEqual(@as(u32, 230035780), mmsiOf("urn:mrn:imo:mmsi:230035780").?);
+    try t.expectEqual(@as(u32, 899000505), mmsiOf("vessels.urn:mrn:imo:mmsi:899000505").?);
+    try t.expectEqual(@as(u32, 899000909), mmsiOf("urn:mrn:imo:mmsi:899000909").?);
     // A UUID identity holds no MMSI.
     try t.expect(mmsiOf("vessels.urn:mrn:signalk:uuid:705f5f1a-efaf-44aa-9cb8-a0fd6305567c") == null);
     // Neither does a truncated URN, a non-digit, or a count of digits that is
     // not nine.
     try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:") == null);
-    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:36698233x") == null);
-    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:3669823300") == null);
-    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:36698233") == null);
-    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:036698233") == null);
+    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:89900050x") == null);
+    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:8990005050") == null);
+    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:89900050") == null);
+    try t.expect(mmsiOf("vessels.urn:mrn:imo:mmsi:089900050") == null);
     // The bare-number context of the spec's legacy sample files.
-    try t.expect(mmsiOf("vessels.366982330") == null);
+    try t.expect(mmsiOf("vessels.899000505") == null);
 }
 
 test "every fixture in the file reads without a fault" {

@@ -509,18 +509,18 @@ test "a Signal K server feeds the chart, and the mariner can pause it" {
     // The AIS target the server heard, keyed by the MMSI in its context.
     try waitFor("the AIS target in the store", rig.ais, struct {
         fn ready(a: *aisstore.AisStore) bool {
-            const g = a.get(366982330) orelse return false;
+            const g = a.get(899000505) orelse return false;
             return g.name() != null and g.cog != null;
         }
     }.ready);
-    const target = rig.ais.get(366982330).?;
+    const target = rig.ais.get(899000505).?;
     try std.testing.expectApproxEqAbs(@as(f64, 38.966), target.lat.?, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, -76.434), target.lon.?, 1e-9);
     // Speed over ground is metres per second on both sides of the wire.
     try std.testing.expectApproxEqAbs(@as(f64, 2.1), target.sog.?, 1e-9);
     // Course over ground is radians on the wire and degrees in the store.
     try std.testing.expectApproxEqAbs(@as(f64, 300.0), target.cog.?, 1e-9);
-    try std.testing.expectEqualStrings("BAY TRADER", target.name().?);
+    try std.testing.expectEqualStrings("TIN WHISTLE", target.name().?);
     // The vessel with a UUID context has no MMSI, so it is not a target.
     try std.testing.expectEqual(@as(usize, 1), rig.ais.count());
 
@@ -698,11 +698,11 @@ test "the same server over its websocket feeds the same chart" {
 
     try waitFor("the AIS target over the websocket", rig.ais, struct {
         fn ready(a: *aisstore.AisStore) bool {
-            const g = a.get(366982330) orelse return false;
+            const g = a.get(899000505) orelse return false;
             return g.name() != null and g.cog != null;
         }
     }.ready);
-    try std.testing.expectEqualStrings("BAY TRADER", rig.ais.get(366982330).?.name().?);
+    try std.testing.expectEqualStrings("TIN WHISTLE", rig.ais.get(899000505).?.name().?);
 
     const plugin = rig.h.find(sk_id) orelse return error.PluginNotLoaded;
     try waitFor("the row to read connected", plugin, struct {

@@ -175,14 +175,14 @@ test "AIS_CHANGED omits fields never heard and always carries age" {
     const a = t.allocator;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(a);
-    var named = ais_store.Target{ .mmsi = 366123456, .lat = 38.98, .lon = -76.47, .sog = 2.6, .ts_ms = 1_000 };
-    @memcpy(named.name_buf[0..10], "EVER GIVEN");
-    named.name_len = 10;
+    var named = ais_store.Target{ .mmsi = 899000404, .lat = 38.98, .lon = -76.47, .sog = 2.6, .ts_ms = 1_000 };
+    @memcpy(named.name_buf[0..15], "TANGERINE OTTER");
+    named.name_len = 15;
     const targets = [_]ais_store.Target{ named, .{ .mmsi = 7, .ts_ms = 500 } };
     try writeAisChanged(&out, a, &targets, 2_000);
     try t.expectEqualStrings(
         "{\"targets\":[" ++
-            "{\"mmsi\":366123456,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.6,\"name\":\"EVER GIVEN\",\"ts\":1000,\"age_ms\":1000}," ++
+            "{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.6,\"name\":\"TANGERINE OTTER\",\"ts\":1000,\"age_ms\":1000}," ++
             "{\"mmsi\":7,\"ts\":500,\"age_ms\":1500}]}",
         out.items,
     );
@@ -211,5 +211,5 @@ test "a published value re-emits as the text the store parses" {
     out.clearRetainingCapacity();
     try writeJsonValue(&out, a, .{ .null = {} });
     try t.expectEqualStrings("null", out.items);
-    try t.expectError(error.Unsupported, writeJsonValue(&out, a, .{ .string = "EVER GIVEN" }));
+    try t.expectError(error.Unsupported, writeJsonValue(&out, a, .{ .string = "TANGERINE OTTER" }));
 }

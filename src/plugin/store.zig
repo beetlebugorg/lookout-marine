@@ -527,7 +527,7 @@ test "a value parses as number, position or null" {
     const p = try parseValue(a, pos_a);
     try t.expectApproxEqAbs(@as(f64, 38.9763), p.position.lat, 1e-9);
     try t.expectApproxEqAbs(@as(f64, -76.4767), p.position.lon, 1e-9);
-    try t.expectError(error.UnsupportedValue, parseValue(a, "\"EVER GIVEN\""));
+    try t.expectError(error.UnsupportedValue, parseValue(a, "\"TANGERINE OTTER\""));
     try t.expectError(error.UnsupportedValue, parseValue(a, "{\"lat\":1}"));
     try t.expectError(error.InvalidValueJson, parseValue(a, "{lat:1}"));
     try t.expectError(error.ValueTooLarge, parseValue(a, "0" ** (max_value_json + 1)));

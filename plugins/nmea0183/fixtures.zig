@@ -1,5 +1,16 @@
 //! Real-format NMEA 0183 lines and the values they must decode to.
 //!
+//! Two rules govern every identity in this repository's fixtures:
+//!
+//!   - An identity a fixture INVENTS uses MID 899, which is unallocated, so
+//!     no real vessel can hold it. An aid to navigation uses 99, then 899,
+//!     then four digits.
+//!   - An identity QUOTED from a published reference keeps its real value and
+//!     carries a comment naming the source, because changing it destroys what
+//!     the fixture proves.
+//!
+//! Anything else is a bug.
+//!
 //! Provenance matters here, because a fixture built to agree with the
 //! parser proves nothing about the parser:
 //!
@@ -13,9 +24,8 @@
 //!     outside this repository.
 //!   - The XDR is CAPTURED off a B&G Zeus, because no published example shows
 //!     a real boat's transducer list. The Zeus type 5 pair copies that same
-//!     device's FRAMING, which no published example shows either, around a
-//!     vessel out of the encoder: a fixture never carries another boat's
-//!     identity, and the framing is what it is there to prove.
+//!     device's FRAMING, which no published example shows either, around an
+//!     invented vessel. The framing is what it is there to prove.
 //!   - The virtual and off-position type 21 lines have no published example.
 //!     They come from the encoder in `tools/nmea_gen.zig`, and each says so.
 //!   - The rest follow the same field layouts by hand: a receiver with no
@@ -127,7 +137,8 @@ pub const no_checksum = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,2303
 
 // --- AIS -------------------------------------------------------------------
 
-/// Type 1, moored in Seattle.
+/// Type 1, moored in Seattle. The MMSI is quoted from the AIVDM/AIVDO
+/// decoding guide that LICENSE credits, and stays as that guide prints it.
 pub const aivdm_type1 = "!AIVDM,1,1,,B,177KQJ5000G?tO`K>RA1wUbN0TKH,0*5C";
 pub const aivdm_type1_expect = .{
     .mmsi = @as(u32, 477553000),
@@ -139,7 +150,8 @@ pub const aivdm_type1_expect = .{
     .nav_status = @as(u8, 5),
 };
 
-/// Type 18, a class B under way in the Caspian.
+/// Type 18, a class B under way in the Caspian. The MMSI is quoted from the
+/// AIVDM/AIVDO decoding guide that LICENSE credits, and stays as printed.
 pub const aivdm_type18 = "!AIVDM,1,1,,A,B6CdCm0t3`tba35f@V9faHi7kP06,0*58";
 pub const aivdm_type18_expect = .{
     .mmsi = @as(u32, 423302100),
@@ -149,7 +161,9 @@ pub const aivdm_type18_expect = .{
     .cog_deg = 177.0,
 };
 
-/// Type 5 in two fragments: 60 armored characters then 11, fill 2.
+/// Type 5 in two fragments: 60 armored characters then 11, fill 2. The MMSI,
+/// callsign and ship name are quoted from the AIVDM/AIVDO decoding guide that
+/// LICENSE credits, and stay as that guide prints them.
 pub const aivdm_type5_a = "!AIVDM,2,1,1,A,55?MbV02;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8,0*1C";
 pub const aivdm_type5_b = "!AIVDM,2,2,1,A,88888888880,2*25";
 pub const aivdm_type5_expect = .{
@@ -174,17 +188,17 @@ pub const aivdm_bad_index = "!AIVDM,2,3,1,A,88888888880,2*24";
 /// increments the id per SENTENCE, so every multi-fragment message it sends
 /// arrives with fragments that disagree about which message they belong to.
 ///
-/// The vessel is invented and so is everything identifying her: the ship the
-/// framing was observed on is somebody's boat, and her MMSI and name are hers.
-/// The payload comes from the encoder in `tools/nmea_gen.zig` and is a whole
+/// Only the framing was observed. The vessel inside it is invented, on MID
+/// 899, because the boat the framing was seen on owns her own identity. The
+/// payload comes from the encoder in `tools/nmea_gen.zig` and is a whole
 /// 424-bit type 5, split 60 and 11 characters with two fill bits, which is the
 /// split the observed message used.
-pub const zeus_type5_a = "!AIVDM,2,1,4,,55NtpTh00001LASO3C8M85V0PE8tp000000000163064440008hCSPD3k2Dh,0*55";
+pub const zeus_type5_a = "!AIVDM,2,1,4,,5=IFar000000EP4m33==0D<dhDB0dEA@hD0000163064440008hCSPD3k2Dh,0*52";
 pub const zeus_type5_b = "!AIVDM,2,2,5,,00000000000,2*60";
 pub const zeus_type5_expect = .{
-    .mmsi = @as(u32, 367999123),
-    .callsign = "WDX7042",
-    .name = "GRAY HERON",
+    .mmsi = @as(u32, 899000808),
+    .callsign = "EXAMP03",
+    .name = "SPECKLED KETTLE",
     .destination = "ANNAPOLIS",
 };
 
@@ -199,15 +213,17 @@ pub const aivdm_type24_expect = .{
 };
 
 /// A type 1 carrying every not-available sentinel at once: latitude 91°,
-/// longitude 181°, speed 1023, course 3600, heading 511, status 15.
-pub const aivdm_sentinels = "!AIVDM,1,1,,A,15MwqgwP?w<tSF0l4Q@>4?wp0000,0*77";
+/// longitude 181°, speed 1023, course 3600, heading 511, status 15. The MMSI
+/// is the one field that carries a value, and it is invented on MID 899.
+pub const aivdm_sentinels = "!AIVDM,1,1,,A,1=IFaPwP?w<tSF0l4Q@>4?wp0000,0*6D";
 
 // --- type 21, aids to navigation -------------------------------------------
 
 /// EXTERNALLY CORROBORATED. The two-fragment type 21 from the AIVDM/AIVDO
 /// decoding guide's own sample data, with the decode that document prints
-/// beside it — including the name that runs into the name extension. It is
-/// 346 bits, so 74 of them are extension.
+/// beside it, including the name that runs into the name extension. It is
+/// 346 bits, so 74 of them are extension. The MMSI and the aid name are quoted
+/// from that guide, which LICENSE credits, and stay as it prints them.
 pub const aivdm_type21_a = "!AIVDM,2,1,5,B,E1mg=5J1T4W0h97aRh6ba84<h2d;W:Te=eLvH50```q,0*46";
 pub const aivdm_type21_b = "!AIVDM,2,2,5,B,:D44QDlp0C1DU00,2*36";
 pub const aivdm_type21_expect = .{

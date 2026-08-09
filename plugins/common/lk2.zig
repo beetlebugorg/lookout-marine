@@ -2553,13 +2553,13 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
         .lat = 38.97,
         .lon = -76.46,
     });
-    TestTable.upsert(.{ .id = "366999999", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
+    TestTable.upsert(.{ .id = "899000707", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
     TestTable.flush();
     try expect.expectEqualStrings(
         "{\"key\":\"targets\",\"upsert\":[" ++
             "{\"id\":\"899000101\",\"band\":0,\"name\":\"ANNE\",\"cpa\":124,\"state\":\"alarm\"," ++
             "\"lat\":38.97,\"lon\":-76.46}," ++
-            "{\"id\":\"366999999\",\"band\":1,\"name\":\"BRAVO\",\"cpa\":null}]," ++
+            "{\"id\":\"899000707\",\"band\":1,\"name\":\"BRAVO\",\"cpa\":null}]," ++
             "\"remove\":[]}",
         TestTable.lkBatch(),
     );
@@ -2575,7 +2575,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
         .lat = 38.97,
         .lon = -76.46,
     });
-    TestTable.upsert(.{ .id = "366999999", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
+    TestTable.upsert(.{ .id = "899000707", .band = @as(i32, 1), .name = "BRAVO", .cpa = @as(?f64, null) });
     TestTable.flush();
     // Not even an empty batch: the commit sees nothing to say and returns,
     // leaving the envelope it opened unfinished.
@@ -2595,7 +2595,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     });
     TestTable.flush();
     try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"cpa\":96") != null);
-    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"366999999\"]") != null);
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"899000707\"]") != null);
 
     // And a row taken out by hand leaves at the next commit.
     TestTable.begin();

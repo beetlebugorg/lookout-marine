@@ -274,20 +274,20 @@ test "an upsert merges fields and leaves the rest alone" {
     defer s.deinit();
 
     // A position report, then a static report with only the name.
-    try s.upsert(.{ .mmsi = 366123456, .lat = 38.98, .lon = -76.47, .sog = 5.1, .cog = 210, .ts_ms = 1_000 }, 1);
-    try s.upsert(.{ .mmsi = 366123456, .name = "EVER GIVEN", .ts_ms = 2_000 }, 1);
+    try s.upsert(.{ .mmsi = 899000404, .lat = 38.98, .lon = -76.47, .sog = 5.1, .cog = 210, .ts_ms = 1_000 }, 1);
+    try s.upsert(.{ .mmsi = 899000404, .name = "TANGERINE OTTER", .ts_ms = 2_000 }, 1);
 
-    const a = s.get(366123456).?;
-    try t.expectEqualStrings("EVER GIVEN", a.name().?);
+    const a = s.get(899000404).?;
+    try t.expectEqualStrings("TANGERINE OTTER", a.name().?);
     try t.expectApproxEqAbs(@as(f64, 38.98), a.lat.?, 1e-9);
     try t.expectApproxEqAbs(@as(f64, 5.1), a.sog.?, 1e-9);
     try t.expectEqual(@as(i64, 2_000), a.ts_ms);
     try t.expect(a.heading == null);
 
     // A later position report keeps the name.
-    try s.upsert(.{ .mmsi = 366123456, .lat = 38.99, .lon = -76.46, .heading = 211, .ts_ms = 3_000 }, 1);
-    const b = s.get(366123456).?;
-    try t.expectEqualStrings("EVER GIVEN", b.name().?);
+    try s.upsert(.{ .mmsi = 899000404, .lat = 38.99, .lon = -76.46, .heading = 211, .ts_ms = 3_000 }, 1);
+    const b = s.get(899000404).?;
+    try t.expectEqualStrings("TANGERINE OTTER", b.name().?);
     try t.expectApproxEqAbs(@as(f64, 38.99), b.lat.?, 1e-9);
     try t.expectApproxEqAbs(@as(f64, 211), b.heading.?, 1e-9);
     try t.expectApproxEqAbs(@as(f64, 210), b.cog.?, 1e-9);
@@ -319,7 +319,7 @@ test "an aid to navigation keeps its nature and gets the AtoN eviction clock" {
         .ts_ms = 0,
     }, 1);
     // A vessel beside it, heard at the same instant.
-    try s.upsert(.{ .mmsi = 366123456, .lat = 38.98, .lon = -76.47, .ts_ms = 0 }, 1);
+    try s.upsert(.{ .mmsi = 899000404, .lat = 38.98, .lon = -76.47, .ts_ms = 0 }, 1);
 
     const a = s.get(998990002).?;
     try t.expect(a.aton);

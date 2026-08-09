@@ -2625,11 +2625,11 @@ test "a pick payload survives the round trip, escaped and capped" {
     defer s.deinit();
     try s.applyBatch("p",
         \\{"set":[{"id":"t1","kind":"symbol","sym":"target","at":[-76.47,38.97],"color":"target",
-        \\ "pick":{"title":"EVER \"GIVEN\"","rows":[["MMSI","366123456"],["SOG","9.9 kn"]]}}]}
+        \\ "pick":{"title":"TANGERINE \"OTTER\"","rows":[["MMSI","899000404"],["SOG","9.9 kn"]]}}]}
     );
     const got = s.objs.get("p/t1").?.pick;
     try t.expectEqualStrings(
-        \\{"title":"EVER \"GIVEN\"","rows":[["MMSI","366123456"],["SOG","9.9 kn"]]}
+        \\{"title":"TANGERINE \"OTTER\"","rows":[["MMSI","899000404"],["SOG","9.9 kn"]]}
     , got);
 
     // A control byte cannot break the shape, and the result parses back.
