@@ -12,6 +12,8 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
+
 #include <cmath>
 #include <map>
 
@@ -406,7 +408,14 @@ namespace winrt::LookoutMarine::implementation
         for (auto const &col : spec.columns)
             width += lkw::ColumnWidth(col.type) + 4;
         width = std::min(std::max(width, 480.0), 1100.0);
-        w.AppWindow().ResizeClient({ (int32_t)width, 420 });
+        // ResizeClient counts physical pixels, so a layout width has to be
+        // scaled or the window opens narrower than its own columns.
+        double density = Density();
+        w.AppWindow().ResizeClient({ (int32_t)(width * density), (int32_t)(420 * density) });
+        HWND hwnd = nullptr;
+        if (auto native = w.try_as<::IWindowNative>())
+            if (SUCCEEDED(native->get_WindowHandle(&hwnd)))
+                ApplyWindowIcon(hwnd);
 
         lkw::BuildTableHeader(t.get());
 

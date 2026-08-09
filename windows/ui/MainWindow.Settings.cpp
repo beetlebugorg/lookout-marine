@@ -3,6 +3,8 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
+
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -15,18 +17,107 @@ using namespace Microsoft::UI::Xaml;
 
 namespace winrt::LookoutMarine::implementation
 {
-    void MainWindow::ToggleSettings()
+    // The settings have their own window. Over the chart they had to dodge
+    // the readouts and the corner bubbles, which left no room for a list
+    // beside a form and put the pane under the chrome it covered.
+    //
+    // The markup is built with the main window (it names the two panels the
+    // code fills), so it is taken out of the chart's tree here and handed to
+    // the settings window. It goes back the same way when that window closes.
+    bool MainWindow::SettingsOpen()
     {
-        if (SettingsPane().Visibility() == Visibility::Visible)
+        return settings_window != nullptr;
+    }
+
+    // A dialog belongs to the window that raised it: an uninstall asked for
+    // in the settings must not open behind them, over the chart.
+    Microsoft::UI::Xaml::XamlRoot MainWindow::DialogRoot()
+    {
+        if (settings_window != nullptr)
+            if (auto content = settings_window.Content())
+                return content.XamlRoot();
+        return Root().XamlRoot();
+    }
+
+    void MainWindow::DetachSettingsPane()
+    {
+        uint32_t idx = 0;
+        if (Root().Children().IndexOf(SettingsPane(), idx))
+            Root().Children().RemoveAt(idx);
+        SettingsPane().Visibility(Visibility::Visible);
+    }
+
+    void MainWindow::ShowSettings()
+    {
+        if (settings_window != nullptr)
         {
-            SettingsPane().Visibility(Visibility::Collapsed);
-            StopPluginStatusPoll();
+            settings_window.Activate(); // a second ask brings it forward
             return;
         }
+
         LoadSettings();
-        SettingsPane().Visibility(Visibility::Visible);
-        // While the pane is up, the connection lines move on their own.
+
+        Window w;
+        w.Title(L"Mariner Settings");
+        w.Content(SettingsPane());
+        settings_window = w;
+
+        // Big enough for a list beside a form, and it opens where it was left:
+        // a mariner who widened it to read a connection's address should not
+        // widen it again next time.
+        //
+        // ResizeClient counts PHYSICAL pixels, so the size a layout is written
+        // in has to be scaled: asking for 720 on a 150% display gave a window
+        // 480 points wide, which is narrower than the form inside it.
+        auto app_window = w.AppWindow();
+        int width = 0, height = 0;
+        if (!lk_store_load_settings_size(&width, &height) || width < 480 || height < 380)
+        {
+            double density = Density();
+            width = (int)(720 * density);
+            height = (int)(560 * density);
+        }
+        app_window.ResizeClient({ width, height });
+
+        app_window.Changed([this](auto &&sender, auto &&args) {
+            if (args.DidSizeChange())
+            {
+                auto size = sender.ClientSize();
+                lk_store_save_settings_size(size.Width, size.Height);
+            }
+        });
+
+        w.Closed([this](auto &&, auto &&) {
+            StopPluginStatusPoll();
+            if (settings_window != nullptr)
+                settings_window.Content(nullptr); // the markup outlives the window
+            settings_window = nullptr;
+        });
+
+        // The app's mark, so the settings wear it in Alt-Tab and the taskbar
+        // rather than the stock WinUI one.
+        HWND hwnd = nullptr;
+        if (auto native = w.try_as<::IWindowNative>())
+            if (SUCCEEDED(native->get_WindowHandle(&hwnd)))
+                ApplyWindowIcon(hwnd);
+
+        w.Activate();
+        // While the window is up, the connection lines move on their own.
         StartPluginStatusPoll();
+    }
+
+    void MainWindow::CloseSettings()
+    {
+        if (settings_window != nullptr)
+            settings_window.Close();
+    }
+
+    void MainWindow::ToggleSettings()
+    {
+        if (SettingsOpen())
+            CloseSettings();
+        else
+            ShowSettings();
     }
 
     // The sections, in the order the strip shows them. The four the app owns are
@@ -112,18 +203,16 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    // Open the pane on one section by its id ("connections" from the GPS
-    // pill). A section a plugin never populated falls back to the first tab.
+    // Open the settings on one section by its id ("connections" from the GPS
+    // pill). A section a plugin never populated falls back to the first one.
     void MainWindow::OpenSettingsTab(std::string const &id)
     {
-        LoadSettings();
+        ShowSettings();
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
             if (settings_tabs[i].id == id)
                 settings_tab = i;
         BuildSettingsTabs();
         BuildSettingsPage();
-        SettingsPane().Visibility(Visibility::Visible);
-        StartPluginStatusPoll();
     }
 
     void MainWindow::ScheduleApply()
@@ -154,8 +243,8 @@ namespace winrt::LookoutMarine::implementation
         bool dark = pending.scheme != 0;
         SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
         SettingsPane().Background(Media::SolidColorBrush{
-            dark ? winrt::Windows::UI::Color{ 0xF5, 0x20, 0x24, 0x28 }
-                 : winrt::Windows::UI::Color{ 0xF5, 0xF8, 0xF8, 0xF8 } });
+            dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x24, 0x28 }
+                 : winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
         // The plugin schemas are read here, not at construction: there is no
         // plugin layer until a chart opens. What a plugin DECLARES does not
         // change while the pane is up, so this is the only whole read.

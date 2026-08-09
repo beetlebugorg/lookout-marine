@@ -1096,7 +1096,7 @@ namespace winrt::LookoutMarine::implementation
     {
         auto lifetime = get_strong();
         Controls::ContentDialog dialog;
-        dialog.XamlRoot(Root().XamlRoot());
+        dialog.XamlRoot(DialogRoot());
         dialog.Title(winrt::box_value(Wide("Uninstall " + name + "?")));
         dialog.Content(winrt::box_value(L"Removes the plugin and everything it drew."));
         dialog.PrimaryButtonText(L"Uninstall");

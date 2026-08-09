@@ -77,8 +77,8 @@ the last recent, then the repo's bundled test cell.
 Environment variables: `LOOKOUT_OPEN=<chart|dir>` opens at startup.
 `LOOKOUT_VIEW=lon,lat,zoom[,rot]` pins the opening camera. `LOOKOUT_WARP=1`
 forces the software rasterizer. `LOOKOUT_OPEN_SETTINGS=1` opens the mariner
-pane at startup, and `LOOKOUT_OPEN_SETTINGS=<section>` (`connections`,
-`plugins`, …) opens it on one section (screenshots). `LOOKOUT_SHOW=pick` (or
+settings at startup, and `LOOKOUT_OPEN_SETTINGS=<section>` (`connections`,
+`plugins`, …) opens them on one section (screenshots). `LOOKOUT_SHOW=pick` (or
 `pick:0.5x0.85`, a view fraction) runs a cursor pick 3 s after the chart
 opens — the screenshot protocol's pick frame. `LOOKOUT_NMEA=host:port` seeds
 the NMEA 0183 plugin with one connection, and `LOOKOUT_PLUGINS=<dir>` loads a
@@ -112,7 +112,7 @@ captures.
 | `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
 | `ui/MainWindow.Raster.cpp` | The raster pill and its menu, the add flow, the re-install at every open |
 | `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
-| `ui/MainWindow.Settings.cpp` | The mariner pane: the tab strip, tabbed pages, debounced apply |
+| `ui/MainWindow.Settings.cpp` | The mariner settings window: the section list, the pages, debounced apply |
 | `ui/MainWindow.Plugins.cpp` | The plugin-declared settings sections, the connection list, capability grants, apply and save |
 | `ui/MainWindow.Alerts.cpp` | The alert strip and the siren: an alarm sounds and repeats until acknowledged |
 | `ui/MainWindow.Vessels.cpp` | Plugin table windows (AIS Targets): shell-side units, seq-gated reload, reveal on chart |

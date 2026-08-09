@@ -32,7 +32,15 @@ namespace winrt::LookoutMarine::implementation
         void WireChrome();
         void ToggleSettings();
         void LoadSettings();      // reads the live mariner state, shows the current tab
-        void BuildSettingsTabs(); // the tab strip; plugin sections come and go
+        void BuildSettingsTabs(); // the section list; plugin sections come and go
+        // The settings live in their own window (see MainWindow.Settings.cpp).
+        void ShowSettings();
+        void CloseSettings();
+        bool SettingsOpen();
+        void DetachSettingsPane(); // move the markup out of the chart's tree
+        // Every window this app opens wears the app's mark.
+        static void ApplyWindowIcon(HWND hwnd);
+        Microsoft::UI::Xaml::XamlRoot DialogRoot(); // the window a dialog belongs to
         void BuildSettingsPage(); // rebuilds the rows for the selected tab
         void ScheduleApply();     // 60 ms debounce, then set + save
         // wasm plugin settings (MainWindow.Plugins.cpp)
@@ -224,6 +232,7 @@ namespace winrt::LookoutMarine::implementation
         };
         std::vector<SettingsTab> settings_tabs;
         int settings_tab{ 0 };
+        Microsoft::UI::Xaml::Window settings_window{ nullptr };
         Microsoft::UI::Xaml::DispatcherTimer apply_timer{ nullptr };
 
         // wasm plugin settings. The schemas are read when the pane opens; only

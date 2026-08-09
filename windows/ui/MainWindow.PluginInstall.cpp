@@ -59,7 +59,7 @@ namespace winrt::LookoutMarine::implementation
     {
         auto lifetime = get_strong();
         Controls::ContentDialog dialog;
-        dialog.XamlRoot(Root().XamlRoot());
+        dialog.XamlRoot(DialogRoot());
         dialog.Title(winrt::box_value(L"Couldn't install plugin"));
         dialog.Content(winrt::box_value(msg));
         dialog.CloseButtonText(L"OK");
@@ -150,7 +150,7 @@ namespace winrt::LookoutMarine::implementation
         }
 
         Controls::ContentDialog dialog;
-        dialog.XamlRoot(Root().XamlRoot());
+        dialog.XamlRoot(DialogRoot());
         dialog.Title(winrt::box_value(name.empty() ? L"Install Plugin" : name));
         dialog.Content(body);
         dialog.PrimaryButtonText(L"Install");
@@ -171,7 +171,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The plugin is live: its tables and settings sections exist now.
         RefreshPluginTables();
-        if (SettingsPane().Visibility() == Visibility::Visible)
+        if (SettingsOpen())
             LoadSettings();
     }
 

@@ -28,6 +28,11 @@ void   lk_store_free_recents(char **recents);
 void lk_store_save_mariner(const tile57_mariner *m);
 void lk_store_apply_saved_mariner(tile57_mariner *m);
 
+/* The settings window's client size, so it opens where it was left. load
+ * returns 1 when a size was saved. */
+int  lk_store_load_settings_size(int *width, int *height);
+void lk_store_save_settings_size(int width, int height);
+
 /* Raster charts: the installed list survives a change of ENC and a restart —
  * the shell re-adds every stored path after each open. Each path carries its
  * own enabled flag (half-gigabyte downloads are switched off, not deleted).

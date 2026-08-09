@@ -215,7 +215,7 @@ namespace winrt::LookoutMarine::implementation
         }
 
         UpdateReadouts(true);
-        if (SettingsPane().Visibility() == Visibility::Visible)
+        if (SettingsOpen())
             BuildSettingsPage();
 
         // One batched alert: picking a folder of twenty must not ask twenty times.
@@ -276,7 +276,7 @@ namespace winrt::LookoutMarine::implementation
     {
         auto lifetime = get_strong();
         Controls::ContentDialog dialog;
-        dialog.XamlRoot(Root().XamlRoot());
+        dialog.XamlRoot(DialogRoot());
         dialog.Title(winrt::box_value(L"Raster Charts"));
         dialog.Content(winrt::box_value(msg));
         dialog.CloseButtonText(L"OK");

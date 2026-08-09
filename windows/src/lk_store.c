@@ -185,6 +185,33 @@ lk_store_free_recents(char **recents)
     free(recents);
 }
 
+/* ---- the settings window -------------------------------------------------- */
+
+#define LK_GROUP_WINDOW "window"
+
+int
+lk_store_load_settings_size(int *width, int *height)
+{
+    if (width == NULL || height == NULL)
+        return 0;
+    int w = 0, h = 0;
+    if (!get_int(LK_GROUP_WINDOW, "settings_w", &w) ||
+        !get_int(LK_GROUP_WINDOW, "settings_h", &h))
+        return 0;
+    *width = w;
+    *height = h;
+    return 1;
+}
+
+void
+lk_store_save_settings_size(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+        return;
+    set_int(LK_GROUP_WINDOW, "settings_w", width);
+    set_int(LK_GROUP_WINDOW, "settings_h", height);
+}
+
 /* ---- raster charts ------------------------------------------------------- */
 
 /* The whole group is read and written as ONE section (GetPrivateProfileSection

@@ -18,18 +18,19 @@
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 
-namespace
+namespace winrt::LookoutMarine::implementation
 {
     // The window's own icon. The ICON resource in LookoutMarine.rc is what
     // Explorer and the taskbar read off the executable, but an HWND wears only
     // what WM_SETICON gave it — without this an unpackaged WinUI 3 window opens
-    // with the stock WinUI mark in its titlebar and Alt-Tab.
+    // with the stock WinUI mark in its titlebar and Alt-Tab. Every window this
+    // app opens wears it, not just the chart.
     //
     // LoadImage rather than LoadIcon: asking for an exact size lets Windows
     // pick the matching frame out of the six in the .ico instead of scaling the
     // system-default one. The icons are owned by the resource, not by us, so
     // there is nothing to destroy.
-    void ApplyWindowIcon(HWND hwnd)
+    void MainWindow::ApplyWindowIcon(HWND hwnd)
     {
         if (hwnd == nullptr)
             return;
@@ -75,9 +76,10 @@ namespace winrt::LookoutMarine::implementation
                 rendering_token = {};
             }
             StopAlertWatch();
-            // The table windows hold this controller and this window: they
+            // The other windows hold this controller and this window: they
             // cannot outlive either.
             CloseVesselWindows();
+            CloseSettings();
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
@@ -110,12 +112,10 @@ namespace winrt::LookoutMarine::implementation
         SearchBtn().Click([this](auto &&, auto &&) { Command('f'); });
         RasterPill().Click([this](auto &&, auto &&) { ShowRasterMenu(); });
         VesselsBtn().Click([this](auto &&, auto &&) { ShowVesselsMenu(); });
-        SettingsClose().Click([this](auto &&, auto &&) {
-            // The X and Ctrl+, are the same close: the status poll must stop
-            // with the pane or it rebuilds a hidden page every second forever.
-            SettingsPane().Visibility(Visibility::Collapsed);
-            StopPluginStatusPoll();
-        });
+        // The settings markup is built with this window because it names the
+        // panels the code fills; its home is the settings window, so it comes
+        // out of the chart's tree before anything lays out.
+        DetachSettingsPane();
         WirePick();
         WireScale();
 
