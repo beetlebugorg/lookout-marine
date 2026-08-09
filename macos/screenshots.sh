@@ -211,42 +211,19 @@ echo "plugins staged: $(ls "$tmp"/plugins/*.wasm | wc -l | tr -d ' ') from $PLUG
 # each client gets it from the top, so a frame does not depend on how long the
 # run before it took.
 serve_fixture () {
-  cat > "$tmp/feed.py" <<'PY'
-import socket, sys, threading, time
-
-lines = open(sys.argv[1], "rb").read().splitlines()
-srv = socket.socket()
-srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-srv.bind(("127.0.0.1", 0))
-srv.listen(4)
-open(sys.argv[2], "w").write(str(srv.getsockname()[1]))
-
-def feed(c):
-    try:
-        while True:
-            first = True
-            for ln in lines:
-                if ln.startswith(b"$") and b"RMC" in ln[:9]:
-                    if not first:
-                        time.sleep(1)
-                    first = False
-                c.sendall(ln + b"\r\n")
-    except Exception:
-        pass
-    finally:
-        c.close()
-
-while True:
-    c, _ = srv.accept()
-    threading.Thread(target=feed, args=(c,), daemon=True).start()
-PY
-  python3 "$tmp/feed.py" "$LOG" "$tmp/feed.port" >"$tmp/feed.log" 2>&1 &
+  ( cd "$repo" && zig run -lc tools/nmea_replay.zig -- --port 0 "$LOG" ) \
+    >"$tmp/feed.log" 2>&1 &
   feed_pid=$!
   i=0
-  while [ $i -lt 40 ] && [ ! -s "$tmp/feed.port" ]; do sleep 0.25; i=$((i + 1)); done
-  [ -s "$tmp/feed.port" ] || { echo "the fixture feed never came up:" >&2
-                               cat "$tmp/feed.log" >&2; exit 1; }
-  NMEA=127.0.0.1:$(cat "$tmp/feed.port")
+  while [ $i -lt 120 ]; do
+    NMEA=$(sed -n 's/.*on \(127\.0\.0\.1:[0-9]*\).*/\1/p' "$tmp/feed.log" | head -1)
+    [ -n "$NMEA" ] && break
+    kill -0 "$feed_pid" 2>/dev/null || break
+    sleep 0.5
+    i=$((i + 1))
+  done
+  [ -n "$NMEA" ] || { echo "the fixture feed never came up:" >&2
+                      cat "$tmp/feed.log" >&2; exit 1; }
   echo "feed: $LOG on $NMEA"
 }
 
