@@ -434,7 +434,7 @@ struct ChartMenuPanel: View {
             header
             Divider().overlay(Chrome.rule)
             VStack(alignment: .leading, spacing: 1) {
-                item("What is here", system: "info.circle", action: model.chartMenuPick)
+                item("Pick report", system: "info.circle", action: model.chartMenuPick)
                 if menu.marker == nil {
                     item("Drop marker", system: "mappin", action: model.chartMenuDropMarker)
                 } else {
