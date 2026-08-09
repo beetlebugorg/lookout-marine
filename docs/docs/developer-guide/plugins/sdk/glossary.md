@@ -39,8 +39,8 @@ can consent to:
 "capabilities": ["vessel.read", {"net.http": ["nomads.ncep.noaa.gov"]}]
 ```
 
-Logging, the two clocks, timers and the status line need no capability; every
-plugin has them.
+You never request a capability for logging, the two clocks, timers or the
+status line; every plugin has them.
 
 Reference: [the manifest](../wire.md#the-manifest) has the exact rules and
 every refusal.

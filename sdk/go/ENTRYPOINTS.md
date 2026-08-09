@@ -392,8 +392,8 @@ the column cannot hold is a dash too, and one log line.
 The library reads `GRANTS_CHANGED` and follows `overlay.draw`. When the grant
 goes it cancels the draw timer, forgets the scene diff and posts one status line
 saying why the chart is empty; when it comes back it arms the timer and sends
-the whole scene again. `OnUpdate` and the tables carry on throughout: a table
-costs no capability.
+the whole scene again. `OnUpdate` and the tables carry on throughout: a plugin
+never asks for a capability to fill a table.
 
 `e.Granted("overlay.draw")` reads the payload, for a tier-3 plugin that handles
 the event itself.

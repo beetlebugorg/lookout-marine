@@ -1,6 +1,6 @@
-//! Tables: the dialogs a plugin fills. A table is data, not drawing. It costs
-//! no capability, and the library runs its cycle on the data path, around
-//! [`crate::Plugin::on_update`].
+//! Tables: the dialogs a plugin fills. A table is data, not drawing. There is
+//! no capability to ask for, and the library runs its cycle on the data path,
+//! around [`crate::Plugin::on_update`].
 //!
 //! ```ignore
 //! const TARGETS: lk::TableSpec = lk::TableSpec {

@@ -13,7 +13,7 @@ title: Logging, clocks and alerts
 | `lk.scratch()` | an allocator reset the moment your function returns |
 | `lk.alert(.alarm, title, body)` | raise an alert. Needs `alerts.raise` |
 
-Logging and the clocks need no capability. Anything that must outlive an
+You never request a capability to log or to read the clocks. Anything that must outlive an
 event is a global: a plugin is single-threaded by contract, and
 `lk.scratch()` is gone as soon as you return.
 

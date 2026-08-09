@@ -20,7 +20,8 @@
 //! The targets dialog is on the deciding path too. A row is the ruling in
 //! `gates` written out, so `evaluate` fills it and the mariner reads the same
 //! set the chart is coloured from. The rows keep coming while the chart grant
-//! is off, because a table is data and costs no capability.
+//! is off, because a table is data and filling one is not something a plugin
+//! asks permission for.
 //!
 //! AIDS TO NAVIGATION share the store and nothing else. A buoy is not going
 //! anywhere, so it gets one object — a diamond, broken open when the aid is

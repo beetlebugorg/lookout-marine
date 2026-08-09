@@ -1548,8 +1548,8 @@ pub const table_min_interval_ms: i64 = 950;
 ///
 /// FILL IT FROM `onUpdate`. The library opens a cycle before that call and
 /// sends what changed after it, so `upsert` belongs there and nowhere else.
-/// A table costs no capability and is not drawing, so the rows keep coming
-/// while the chart grant is off.
+/// Filling a table is not drawing, and there is no capability to ask for, so
+/// the rows keep coming while the chart grant is off.
 ///
 /// The library declares it at start, tells you when the mariner opens it
 /// (`isOpen`), and sends what changed once a cycle. DESCRIBE THE WHOLE SET

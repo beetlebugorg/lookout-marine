@@ -450,8 +450,9 @@ struct ChartMenuPanel: View {
     }
 
     /// The point's own coordinates, in the mariner's format. Reading them is
-    /// the common case, so it costs no click at all. Over a marker the mark's
-    /// name rides above them, because that is what Rename and Remove act on.
+    /// the common case, so they are there without a click. Over a marker the
+    /// mark's name rides above them, because that is what Rename and Remove
+    /// act on.
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
             if let mark = menu.marker {

@@ -226,7 +226,7 @@ mod off_host {
 use off_host::*;
 
 // ---------------------------------------------------------------------------
-// Logging and clocks — no capability needed for either
+// Logging and clocks: no capability to request for either
 // ---------------------------------------------------------------------------
 
 /// How loud a log line is.

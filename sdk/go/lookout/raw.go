@@ -18,7 +18,7 @@ import (
 const APIVersion uint32 = 1
 
 // ---------------------------------------------------------------------------
-// Logging and clocks — no capability needed for either
+// Logging and clocks: no capability to request for either
 // ---------------------------------------------------------------------------
 
 // Level is how loud a log line is.

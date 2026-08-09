@@ -77,8 +77,8 @@ func TestATableKeepsFillingWhileTheChartGrantIsOff(t *testing.T) {
 	openTable(t, "targets")
 	grantsOff(t)
 
-	// A table costs no capability, so the dialog follows the data whatever the
-	// chart grant says.
+	// Nothing in the manifest has to ask for a table, so the dialog follows
+	// the data whatever the chart grant says.
 	testHost.Mono += TableInterval.Milliseconds()
 	dispatchEvent(StoreChanged, 0, []byte(oneSpeed))
 	if p.updates != 2 {

@@ -71,8 +71,8 @@ Losing `overlay.draw` is the case worth writing for. Cancel the timer that
 drives your scene, forget the diff you were keeping, because the host has
 already removed what it described, and post one status line saying why the
 chart is empty. Arm the timer again and send the whole scene when the grant
-comes back. `TABLE_UPDATE` needs no grant, so a dialog on screen keeps filling
-throughout. Each SDK does all of this for you.
+comes back. There is no capability to request for `TABLE_UPDATE`, so a dialog
+on screen keeps filling throughout. Each SDK does all of this for you.
 
 **One datagram is one event.** The host never joins two `UDP_DATA` payloads and
 never splits one, so a plugin parsing NMEA over UDP does not reassemble anything.
@@ -116,8 +116,8 @@ not trap.
 | `file_write` | `(handle: i64, ptr, len) -> i32` | `files` | Bytes appended, or -1 for a read handle, or one that is not yours. |
 | `file_close` | `(handle: i64)` | `files` | Nothing. The host also closes every handle you hold when you stop. |
 
-Timers, status lines, the log and the clocks need no capability. Every plugin
-can report what it is doing and measure time without asking for one.
+A plugin never requests a capability for timers, status lines, the log or the
+clocks. Every plugin can report what it is doing and measure time.
 
 **There is no `file_open`.** You cannot name a path. Every file handle you ever
 see arrived as a `FILE_OPENED` event because the host granted it, and the host

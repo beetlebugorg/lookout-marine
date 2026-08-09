@@ -1,7 +1,8 @@
 package lookout
 
-// Tables: the dialogs a plugin fills. A table is data, not drawing. It costs no
-// capability, and the library runs its cycle on the data path, around OnUpdate.
+// Tables: the dialogs a plugin fills. A table is data, not drawing. There is no
+// capability to ask for, and the library runs its cycle on the data path,
+// around OnUpdate.
 //
 // Declare one as a package-level variable, the way an input is declared, and
 // the library tells the host about it at start:
