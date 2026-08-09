@@ -20,28 +20,37 @@ out.
 
 Two lines run out of it.
 
-- **The heading line** is solid, short, and always the same length. It is where
-  the bow points, from the compass.
-- **The course line** is dashed. It is the track you are making over the
-  ground, from the GPS, and its length comes from your speed. It goes when you
-  stop.
+- **The heading line** is short and always the same length. It is where the bow
+  points, from the compass.
+- **The course line** is the longer one, with a small circle on its end. It is
+  the track you are making over the ground, from the GPS, and it reaches as far
+  as you travel in six minutes. It shrinks as you slow down, so it is a stub on
+  the hull at a mooring.
+
+Six minutes is where it starts. Change it under **Vessels** in the settings.
 
 In still water the two lie on top of each other. In a tide they do not. The bow
 points one way and the boat travels another, and the angle between the lines is
-the set you are carrying. The dashed line is the one to lay on the course you
+the set you are carrying. The ringed line is the one to lay on the course you
 want to make good.
 
 With no compass on the boat the hull is turned to the course over ground
-instead, and the solid line follows the course as well. Both lines then say the
-same thing, and the tide is not visible in them.
+instead, and the heading line follows the course as well. Both lines then say
+the same thing, and the tide is not visible in them.
 
 ## Reading the port and starboard laylines
 
-If the instruments report a true wind direction, two more dashed lines run out
+If the instruments report a true wind direction, four more dashed lines run out
 of the boat, each a nautical mile long: red for the port tack, green for the
-starboard tack. They are the close-hauled course on each tack, taken at 45
-degrees off the true wind for every boat. They come off the chart as soon as the
-wind reading stops.
+starboard tack. Two of them are the close-hauled course on each tack, up
+towards the wind. The other two are the course on each gybe, running away from
+it. They come off the chart as soon as the wind reading stops.
+
+The angles are yours to set, under **Display** in the settings. They start at 45
+degrees off the true wind upwind and 170 downwind. Both are measured off the
+wind the same way, so 170 puts the downwind pair ten degrees either side of dead
+before it, and 180 puts the two on top of each other. Take the numbers off your
+boat's polar, or off the angles you find yourself sailing.
 
 ## Reading the track astern
 

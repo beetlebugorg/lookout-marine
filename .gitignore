@@ -21,6 +21,9 @@ zig-pkg/
 # (macOS and the iOS simulator alike); the glob also catches older trees.
 macos/build*/
 macos/DerivedData/
+# One developer's window positions, breakpoints and last-run scheme. Opening
+# the project writes these, so they appear whoever builds.
+**/xcuserdata/
 # Docusaurus build output
 docs/build/
 docs/.docusaurus/

@@ -71,7 +71,7 @@ With a connection running:
   line along its course. See [Your boat on the chart](your-boat.md).
 - Every vessel the receiver hears draws as a triangle, and every aid to
   navigation as a diamond. See [AIS traffic](ais-traffic.md).
-- A true wind direction draws the two
+- A true wind direction draws the four
   [laylines](your-boat.md#reading-the-port-and-starboard-laylines).
 
 Depth and speed arrive over the same stream. Nothing on the screen shows either

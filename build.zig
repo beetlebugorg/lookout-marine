@@ -521,11 +521,13 @@ pub fn build(b: *std.Build) void {
         "plugins/signalk/transport.zig",
         "plugins/signalk/config.zig",
         "plugins/ownship/track.zig",
+        "plugins/ownship/config.zig",
         "plugins/ais/cpa.zig",
         "plugins/ais/vector.zig",
         "plugins/ais/config.zig",
         "plugins/ais/aton.zig",
         "plugins/laylines/geo.zig",
+        "plugins/laylines/config.zig",
         // lk v2. The surface has no wasm builtin on any path a test reaches,
         // so the geodesy, the settings schema and the manifest checks run
         // natively beside everything else.

@@ -2,5 +2,17 @@
   "id": "org.beetlebug.laylines",
   "name": "Laylines",
   "api": 1,
-  "capabilities": ["vessel.read", "overlay.draw"]
+  "capabilities": ["vessel.read", "overlay.draw"],
+  "settings": {
+    "groups": [
+      {
+        "label": "Laylines",
+        "tab": "display",
+        "fields": [
+          {"key": "upwind_deg", "label": "Upwind angle", "desc": "How close to the true wind the boat holds on the beat. Half the angle you tack through.", "kind": "number", "unit": "deg", "min": 25, "max": 60, "default": 45},
+          {"key": "downwind_deg", "label": "Downwind angle", "desc": "How deep the boat runs, measured off the true wind the same way. At 180 the two lines lie on top of each other.", "kind": "number", "unit": "deg", "min": 120, "max": 180, "default": 170}
+        ]
+      }
+    ]
+  }
 }

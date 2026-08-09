@@ -2,5 +2,16 @@
   "id": "org.beetlebug.ownship",
   "name": "Own ship",
   "api": 1,
-  "capabilities": ["vessel.read", "overlay.draw"]
+  "capabilities": ["vessel.read", "overlay.draw"],
+  "settings": {
+    "groups": [
+      {
+        "label": "Own ship",
+        "tab": "vessels",
+        "fields": [
+          {"key": "vector_min", "label": "Course vector", "desc": "How far ahead of the boat its course line reaches, at the speed it is making now.", "kind": "number", "unit": "min", "min": 1, "max": 24, "default": 6}
+        ]
+      }
+    ]
+  }
 }
