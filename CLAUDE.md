@@ -59,6 +59,12 @@ Do not read these end to end. Grep for the section you need.
   key is `api`.
 - **Overlay vertices are origin-relative f32** with a per-frame uniform.
   Absolute world coordinates in f32 quantise visibly at zoom.
+- **Idle means idle.** A boat runs off a battery, so anything that wakes on a
+  clock must stop when there is nothing left to change: no repaint without a
+  reason to repaint, no timer that keeps ticking after it has said everything
+  it has to say, no poll that could be an event. A plugin's update heartbeat
+  stops once every input it declared has gone stale and it has been told once.
+  Work that costs nothing when idle is a feature, not an optimisation.
 
 ## The gates
 
