@@ -72,7 +72,7 @@ carries forward between fixes, so the object stays still on screen instead of
 stepping once a second. Own ship's heading line uses it.
 
 **A pick payload** is
-`.{ .title = …, .rows = &.{ .{ "MMSI", "367123450" } } }`, and only a symbol
+`.{ .title = …, .rows = &.{ .{ "MMSI", "899000101" } } }`, and only a symbol
 carries one: a line and an area have no single point to measure a tap
 against. The values are strings the plugin has already formatted, because
 only the plugin knows the unit.

@@ -136,7 +136,7 @@ t=   20.0s [info] org.beetlebug.ais: status {"state":"running","detail":"5 targe
 **`--print alert`.** Alerts, at the level their severity picked:
 
 ```
-t=   20.0s [error] org.beetlebug.ais: ALERT {"severity":"alarm","title":"AIS CPA alarm","body":"367123450: CPA 149 m in 591 s"}
+t=   20.0s [error] org.beetlebug.ais: ALERT {"severity":"alarm","title":"AIS CPA alarm","body":"899000101: CPA 149 m in 591 s"}
 ```
 
 **`--print deltas`.** The vessel store and the AIS store as they change. This
@@ -146,8 +146,8 @@ successful publishes:
 ```
 t=   12.0s publish navigation.position = {"lat":38.97655,"lon":-76.47494} src 1 (age 84 ms)
 t=   30.0s publish environment.wind.directionTrue gone
-t=   12.0s ais 367123450 38.96612,-76.43431 sog 4.1 m/s cog 300 hdg 300 (age 540 ms)
-t=  180.0s ais 366987650 gone
+t=   12.0s ais 899000101 38.96612,-76.43431 sog 4.1 m/s cog 300 hdg 300 (age 540 ms)
+t=  180.0s ais 899000202 gone
 ```
 
 `src N` is the source that won the election, `STALE` appears when no source is
@@ -161,14 +161,14 @@ printed:
 ```
 t=    2.0s overlay + org.beetlebug.ownship/ownship (symbol ownship)
 t=    2.0s overlay + org.beetlebug.ownship/track (polyline track 2 pts)
-t=  190.0s overlay - org.beetlebug.ais/t366987650
+t=  190.0s overlay - org.beetlebug.ais/t899000202
 ```
 
 Every run ends with the inventory and a line per plugin:
 
 ```
 overlay: 16 object(s)
-  org.beetlebug.ais/t367123450: target target_danger at -76.43431,38.96612 rot 300
+  org.beetlebug.ais/t899000101: target target_danger at -76.43431,38.96612 rot 300
   org.beetlebug.ownship/ownship: ownship ownship at -76.47494,38.97655 rot 75
   org.beetlebug.laylines/layline_port: polyline layline_port 2 pts dashed
   ...

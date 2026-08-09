@@ -23,6 +23,10 @@
 //! hand buoy whose name runs into the name extension, and a virtual isolated
 //! danger with nothing in the water behind it.
 //!
+//! MID 899 is unallocated, so no MMSI here can belong to a real vessel or aid,
+//! and anything added to this scene must keep that MID and a name no ship
+//! would carry.
+//!
 //! Everything here is deterministic — no clock, no randomness — so two runs
 //! produce identical bytes and a golden test can diff them.
 //!
@@ -202,7 +206,7 @@ fn targetA(track: []const Vec) Target {
     const offset = perp.scale(cpa_range_m / perp.len());
     const at_cpa = track[@intFromFloat(cpa_time_s)].add(offset);
     return .{
-        .mmsi = 367123450,
+        .mmsi = 899000101,
         .start = at_cpa.sub(v.scale(cpa_time_s)),
         .velocity = v,
         .course_deg = course,
@@ -217,7 +221,7 @@ fn targetA(track: []const Vec) Target {
 /// the closest any course own ship steers brings her is 1249 m, so she never
 /// enters the gate however long the replay runs.
 const target_b = Target{
-    .mmsi = 366987650,
+    .mmsi = 899000202,
     .start = .{ .x = -400.0, .y = 1350.0 },
     .velocity = .{},
     .course_deg = 0.0,
@@ -235,14 +239,14 @@ const target_b = Target{
 /// the name extension. Both report ON position: an off-position aid raises a
 /// warning alert, and the replay's alert count is what the phase gate reads.
 const aton_physical = Aton{
-    .mmsi = 993672315,
+    .mmsi = 998990001,
     .aid_type = 25, // starboard hand mark
-    .name = "ANNAPOLIS CHANNEL BUOY 2",
+    .name = "EXAMPLE CHANNEL BUOY 2",
     .at = .{ .x = 900.0, .y = -450.0 },
 };
 
 const aton_virtual = Aton{
-    .mmsi = 993672099,
+    .mmsi = 998990002,
     .aid_type = 28, // isolated danger
     .name = "VIRTUAL WRECK MARK",
     // Abeam of the buoy, 250 m away, so one crop of the render holds both and
@@ -260,7 +264,7 @@ const aton_period_s = 180;
 /// negative throughout — the case the gate must refuse however small the CPA
 /// she passed at.
 const target_c = Target{
-    .mmsi = 338111222,
+    .mmsi = 899000303,
     .start = .{ .x = 500.0, .y = -600.0 },
     .velocity = velocity(135.0, 6.0),
     .course_deg = 135.0,
@@ -570,8 +574,8 @@ pub fn generate(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     const a = targetA(&track);
     const ship_b = Ship{
         .imo = 9271234,
-        .callsign = "WDF2871",
-        .name = "CHESAPEAKE BELLE",
+        .callsign = "EXAMP01",
+        .name = "GRUMBLING WALRUS",
         .ship_type = 37,
         .to_bow = 12,
         .to_stern = 6,
@@ -581,8 +585,8 @@ pub fn generate(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
         .destination = "ANNAPOLIS",
     };
     const ship_c = Ship{
-        .callsign = "WDG5512",
-        .name = "SEA SPRITE",
+        .callsign = "EXAMP02",
+        .name = "SPECKLED TEAPOT",
         .ship_type = 37,
         .to_bow = 8,
         .to_stern = 4,
@@ -954,9 +958,9 @@ test "the generated log parses back to the scene it was built from" {
     try testing.expectEqual(@as(u64, 0), feeder.stats.no_checksum);
     try testing.expectEqual(@as(u64, 0), feeder.stats.oversize);
 
-    try testing.expectEqualStrings("CHESAPEAKE BELLE", name_b[0..name_b_len]);
-    try testing.expectEqualStrings("SEA SPRITE", name_c[0..name_c_len]);
-    try testing.expectEqualStrings("WDG5512", call_c[0..call_c_len]);
+    try testing.expectEqualStrings("GRUMBLING WALRUS", name_b[0..name_b_len]);
+    try testing.expectEqualStrings("SPECKLED TEAPOT", name_c[0..name_c_len]);
+    try testing.expectEqualStrings("EXAMP02", call_c[0..call_c_len]);
 
     // Own ship ends where the integrated track says, within the rounding
     // the 1/10000-minute position fields impose.

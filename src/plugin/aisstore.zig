@@ -308,7 +308,7 @@ test "an aid to navigation keeps its nature and gets the AtoN eviction clock" {
     var s = AisStore.init(t.allocator);
     defer s.deinit();
     try s.upsert(.{
-        .mmsi = 993672099,
+        .mmsi = 998990002,
         .lat = 38.98,
         .lon = -76.47,
         .name = "VIRTUAL WRECK MARK",
@@ -321,7 +321,7 @@ test "an aid to navigation keeps its nature and gets the AtoN eviction clock" {
     // A vessel beside it, heard at the same instant.
     try s.upsert(.{ .mmsi = 366123456, .lat = 38.98, .lon = -76.47, .ts_ms = 0 }, 1);
 
-    const a = s.get(993672099).?;
+    const a = s.get(998990002).?;
     try t.expect(a.aton);
     try t.expect(a.virtual_aton);
     try t.expectEqual(@as(u8, 28), a.aton_type.?);
@@ -329,18 +329,18 @@ test "an aid to navigation keeps its nature and gets the AtoN eviction clock" {
 
     // The vessel goes at ten minutes; the aid stays until thirty.
     try t.expectEqual(@as(usize, 1), try s.evict(600_001));
-    try t.expect(s.get(993672099) != null);
+    try t.expect(s.get(998990002) != null);
     try t.expectEqual(@as(usize, 0), try s.evict(1_800_000));
     try t.expectEqual(@as(usize, 1), try s.evict(1_800_001));
-    try t.expect(s.get(993672099) == null);
+    try t.expect(s.get(998990002) == null);
 }
 
 test "an AtoN that also sends a position report stays an AtoN" {
     var s = AisStore.init(t.allocator);
     defer s.deinit();
-    try s.upsert(.{ .mmsi = 993672315, .lat = 38.98, .lon = -76.47, .aton = true, .aton_type = 25, .ts_ms = 0 }, 1);
-    try s.upsert(.{ .mmsi = 993672315, .lat = 38.99, .lon = -76.46, .ts_ms = 1_000 }, 1);
-    const a = s.get(993672315).?;
+    try s.upsert(.{ .mmsi = 998990001, .lat = 38.98, .lon = -76.47, .aton = true, .aton_type = 25, .ts_ms = 0 }, 1);
+    try s.upsert(.{ .mmsi = 998990001, .lat = 38.99, .lon = -76.46, .ts_ms = 1_000 }, 1);
+    const a = s.get(998990001).?;
     try t.expect(a.aton);
     try t.expectEqual(@as(u8, 25), a.aton_type.?);
     try t.expectApproxEqAbs(@as(f64, 38.99), a.lat.?, 1e-9);

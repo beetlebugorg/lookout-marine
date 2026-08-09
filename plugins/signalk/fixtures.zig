@@ -170,7 +170,7 @@ pub const name_path_delta =
 // ---------------------------------------------------------------------------
 
 pub const aton_context_delta =
-    \\{"context":"atons.urn:mrn:imo:mmsi:993672315","updates":[{"values":[{"path":"navigation.position","value":{"longitude":-76.466,"latitude":38.972}}]}]}
+    \\{"context":"atons.urn:mrn:imo:mmsi:998990001","updates":[{"values":[{"path":"navigation.position","value":{"longitude":-76.466,"latitude":38.972}}]}]}
 ;
 
 // ---------------------------------------------------------------------------

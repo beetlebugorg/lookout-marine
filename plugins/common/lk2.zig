@@ -2545,7 +2545,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     // reading for is left off, and the host reads that as a dash.
     TestTable.begin();
     TestTable.upsert(.{
-        .id = "367123450",
+        .id = "899000101",
         .band = @as(i32, 0),
         .name = "ANNE",
         .cpa = 124.0,
@@ -2557,7 +2557,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     TestTable.flush();
     try expect.expectEqualStrings(
         "{\"key\":\"targets\",\"upsert\":[" ++
-            "{\"id\":\"367123450\",\"band\":0,\"name\":\"ANNE\",\"cpa\":124,\"state\":\"alarm\"," ++
+            "{\"id\":\"899000101\",\"band\":0,\"name\":\"ANNE\",\"cpa\":124,\"state\":\"alarm\"," ++
             "\"lat\":38.97,\"lon\":-76.46}," ++
             "{\"id\":\"366999999\",\"band\":1,\"name\":\"BRAVO\",\"cpa\":null}]," ++
             "\"remove\":[]}",
@@ -2567,7 +2567,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     // The same picture again: nothing changed, so nothing is sent.
     TestTable.begin();
     TestTable.upsert(.{
-        .id = "367123450",
+        .id = "899000101",
         .band = @as(i32, 0),
         .name = "ANNE",
         .cpa = 124.0,
@@ -2585,7 +2585,7 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
     // removal, and the mariner's table follows the sea.
     TestTable.begin();
     TestTable.upsert(.{
-        .id = "367123450",
+        .id = "899000101",
         .band = @as(i32, 0),
         .name = "ANNE",
         .cpa = 96.0,
@@ -2599,10 +2599,10 @@ test "a cycle sends the rows that changed and removes the ones it did not descri
 
     // And a row taken out by hand leaves at the next commit.
     TestTable.begin();
-    TestTable.upsert(.{ .id = "367123450", .band = @as(i32, 0), .name = "ANNE", .cpa = 96.0, .state = @as(?[]const u8, "alarm"), .lat = 38.97, .lon = -76.46 });
-    TestTable.remove("367123450");
+    TestTable.upsert(.{ .id = "899000101", .band = @as(i32, 0), .name = "ANNE", .cpa = 96.0, .state = @as(?[]const u8, "alarm"), .lat = 38.97, .lon = -76.46 });
+    TestTable.remove("899000101");
     TestTable.flush();
-    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"367123450\"]") != null);
+    try expect.expect(std.mem.indexOf(u8, TestTable.lkBatch(), "\"remove\":[\"899000101\"]") != null);
 }
 
 test "closing the dialog forgets what was on it" {

@@ -391,16 +391,16 @@ test "two connections feed one chart, and pausing one leaves the other running" 
 /// Both vessels are invented, like everything else the tests here send.
 const ais_lines = [_][]const u8{
     "!AIVDM,1,1,,,15NtpTh00lJQtlpFCD83IRht0000,0*47",
-    "!AIVDM,1,1,,B,B52LbuP0?6`O6V5TjPmDI3P4h000,0*29",
+    "!AIVDM,1,1,,B,B=IFWsh0?6`O6V5TjPmDI3P4h000,0*5B",
     "!AIVDM,2,1,4,,55NtpTh00001LASO3C8M85V0PE8tp000000000163064440008hCSPD3k2Dh,0*55",
     "!AIVDM,2,2,5,,00000000000,2*60",
-    "!AIVDM,1,1,,B,H52LbuQ<D61=18U@D00000000000,0*4A",
+    "!AIVDM,1,1,,B,H=IFWsi=0D<dhDB1@D50u@000000,0*68",
 };
 
 const class_a_mmsi: u32 = 367999123;
 const class_a_name = "GRAY HERON";
-const class_b_mmsi: u32 = 338111222;
-const class_b_name = "SEA SPRITE";
+const class_b_mmsi: u32 = 899000303;
+const class_b_name = "SPECKLED TEAPOT";
 
 fn named(store: *aisstore.AisStore, mmsi: u32, want: []const u8) bool {
     const t = store.get(mmsi) orelse return false;
@@ -486,7 +486,7 @@ test "an AIS name reaches the row the targets dialog draws, not the MMSI" {
         "the class A row leads with her name",
     );
     try must(
-        std.mem.indexOf(u8, rows.items, "\"cells\":[\"" ++ class_b_name ++ "\",\"338111222\"") != null,
+        std.mem.indexOf(u8, rows.items, "\"cells\":[\"" ++ class_b_name ++ "\",\"899000303\"") != null,
         "the class B row leads with her name",
     );
 

@@ -307,10 +307,10 @@ describe.
 ### AIS_CHANGED
 
 ```json
-{"targets":[{"mmsi":367123450,"lat":38.966,"lon":-76.434,"sog":4.1,"cog":300.0,
+{"targets":[{"mmsi":899000101,"lat":38.966,"lon":-76.434,"sog":4.1,"cog":300.0,
              "ts":1754400000123,"age_ms":540},
-            {"mmsi":993672315,"lat":38.972,"lon":-76.466,"aton":true,
-             "aton_type":25,"name":"CHANNEL BUOY 3","ts":1754400000000,"age_ms":663}]}
+            {"mmsi":998990001,"lat":38.972,"lon":-76.466,"aton":true,
+             "aton_type":25,"name":"EXAMPLE CHANNEL BUOY 2","ts":1754400000000,"age_ms":663}]}
 ```
 
 The **whole** target set, at most twice a second and only when something moved.
@@ -422,7 +422,7 @@ and no alarm surface yet.
 ### alert
 
 ```json
-{"severity":"alarm","title":"AIS CPA alarm","body":"367123450: CPA 149 m in 591 s"}
+{"severity":"alarm","title":"AIS CPA alarm","body":"899000101: CPA 149 m in 591 s"}
 ```
 
 There is no alarm surface yet, so **your alert is a log line and nothing more**.

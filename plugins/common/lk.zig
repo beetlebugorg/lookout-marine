@@ -149,7 +149,7 @@ pub fn tableDeclareJson(json: []const u8) i32 {
     return host.table_declare(json.ptr, @intCast(json.len));
 }
 
-/// One keyed batch of rows: `{"key":"targets","upsert":[{"id":"367123450",
+/// One keyed batch of rows: `{"key":"targets","upsert":[{"id":"899000101",
 /// "band":0,"cpa":124,...}],"remove":["366999999"]}`. Cell values are SI:
 /// metres, metres per second, degrees true, seconds, and the shell formats
 /// them for the mariner. Returns the rows the batch touched, or -1 when it was

@@ -242,8 +242,8 @@ const char *lookout_plugin_tables_json(lookout *h, size_t *out_len);
  *
  *   {"key":"targets","seq":42,"open":true,
  *    "sort":{"key":"cpa","ascending":true},
- *    "rows":[{"id":"367123450","band":0,"at":[-76.46,38.97],
- *             "cells":["ANNE","367123450",1852,45,6.2,124,585,"alarm"]}]}
+ *    "rows":[{"id":"899000101","band":0,"at":[-76.46,38.97],
+ *             "cells":["ANNE","899000101",1852,45,6.2,124,585,"alarm"]}]}
  *
  * "cells" is one value per declared column, in declaration order: a number, a
  * string, or null for a cell the plugin did not send, which renders as a

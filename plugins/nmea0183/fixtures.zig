@@ -189,12 +189,12 @@ pub const zeus_type5_expect = .{
 };
 
 /// Type 24 A and B for target C of the synthetic log.
-pub const aivdm_type24a = "!AIVDM,1,1,,B,H52LbuQ<D61=18U@D00000000000,0*4A";
-pub const aivdm_type24b = "!AIVDM,1,1,,B,H52LbuTU<;?40CBG47mmij104220,0*4F";
+pub const aivdm_type24a = "!AIVDM,1,1,,B,H=IFWsi=0D<dhDB1@D50u@000000,0*68";
+pub const aivdm_type24b = "!AIVDM,1,1,,B,H=IFWslU<;?40CB5H1=@hj104220,0*49";
 pub const aivdm_type24_expect = .{
-    .mmsi = @as(u32, 338111222),
-    .name = "SEA SPRITE",
-    .callsign = "WDG5512",
+    .mmsi = @as(u32, 899000303),
+    .name = "SPECKLED TEAPOT",
+    .callsign = "EXAMP02",
     .ship_type = @as(u8, 37),
 };
 
@@ -224,9 +224,9 @@ pub const aivdm_type21_expect = .{
 /// water, written by the encoder in `tools/nmea_gen.zig` and read back here.
 /// No published example of a virtual aid was available; the bit layout it is
 /// built on is the one the corroborated fixture above checks.
-pub const aivdm_type21_virtual = "!AIVDM,1,1,,B,E>k`s`v;4a::PV@;a2QUh6Pa5P0=@uoO;9kjH20@@@g010,4*3D";
+pub const aivdm_type21_virtual = "!AIVDM,1,1,,B,E>pePdf;4a::PV@;a2QUh6Pa5P0=@uoO;9kjH20@@@g010,4*14";
 pub const aivdm_type21_virtual_expect = .{
-    .mmsi = @as(u32, 993672099),
+    .mmsi = @as(u32, 998990002),
     .aid_type = @as(u8, 28), // isolated danger
     .name = "VIRTUAL WRECK MARK",
     .lat = 38.983498333,
@@ -236,12 +236,12 @@ pub const aivdm_type21_virtual_expect = .{
 };
 
 /// SELF-CONSISTENT, same provenance. A physical starboard hand buoy reporting
-/// itself off station, with a 24-character name that needs the extension.
-pub const aivdm_type21_offpos = "!AIVDM,1,1,,B,E>k`tNtPW70`7V4ah1T0W72V@1:e@vpV;9VVh20@@@gh03nH<P,4*22";
+/// itself off station, with a 22-character name that needs the extension.
+pub const aivdm_type21_offpos = "!AIVDM,1,1,,B,E>pePdLRd0V`62h1T0W72V@1:Wde@vpV;9VVh20@@@g@08<P,0*58";
 pub const aivdm_type21_offpos_expect = .{
-    .mmsi = @as(u32, 993672315),
+    .mmsi = @as(u32, 998990001),
     .aid_type = @as(u8, 25), // starboard hand mark
-    .name = "ANNAPOLIS CHANNEL BUOY 2",
+    .name = "EXAMPLE CHANNEL BUOY 2",
     .lat = 38.97225,
     .lon = -76.466283333,
     .off_position = true,

@@ -440,7 +440,7 @@ for you once it owns the row.
 ```zig
 if (crossing and !alarmed) {
     alarmed = true;
-    _ = lk.alert(.alarm, "AIS CPA alarm", "367123450: CPA 149 m in 591 s");
+    _ = lk.alert(.alarm, "AIS CPA alarm", "899000101: CPA 149 m in 591 s");
 }
 ```
 

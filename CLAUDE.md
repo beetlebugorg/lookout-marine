@@ -72,7 +72,7 @@ zig build && zig build plugins && zig build test
 ```
 
 The day-run bar passes when there is **exactly one CPA alarm** (MMSI
-367123450), every plugin reads `live, 0 denied call(s)`, and it exits 0.
+899000101), every plugin reads `live, 0 denied call(s)`, and it exits 0.
 
 `zig build` alone does NOT rebuild plugin wasm. Run `zig build plugins`. A
 stale wasm has sent this project chasing a phantom bug more than once.

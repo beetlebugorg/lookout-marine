@@ -125,7 +125,7 @@ test "an RMC line is recognised by talker-independent sentence id" {
     try t.expect(isRmc("$GPRMC,140000,A,3858.5780,N,07628.6020,W,5.0,30.0,050826,11.0,W,A*12"));
     try t.expect(isRmc("$GNRMC,140000,V,,,,,,,050826,,,N*67"));
     try t.expect(!isRmc("$HEHDT,30.0,T*1C"));
-    try t.expect(!isRmc("!AIVDM,1,1,,A,15N7KvPP1@JR1QLFCLdKf9H00000,0*62"));
+    try t.expect(!isRmc("!AIVDM,1,1,,A,1=IFW9@P1@JR1QLFCLdKf9H00000,0*5F"));
     try t.expect(!isRmc("$GP"));
     try t.expect(!isRmc(""));
 }
@@ -147,7 +147,7 @@ test "a group runs from one RMC to the next and carries its second" {
     const log =
         "$GPRMC,140000,A,3858.5780,N,07628.6020,W,5.0,30.0,050826,11.0,W,A*12\n" ++
         "$HEHDT,30.0,T*1C\n" ++
-        "!AIVDM,1,1,,A,15N7KvPP1@JR1QLFCLdKf9H00000,0*62\n" ++
+        "!AIVDM,1,1,,A,1=IFW9@P1@JR1QLFCLdKf9H00000,0*5F\n" ++
         "$GPRMC,140001,A,3858.5792,N,07628.6011,W,5.0,30.5,050826,11.0,W,A*17\n" ++
         "$HEHDT,30.5,T*1C\n";
     var s = Splitter.init(log);
