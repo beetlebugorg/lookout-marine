@@ -21,3 +21,9 @@ the rules below are not style preferences.
   crossing into danger alarms once and not on every report while it stays
   there. The day run asserts exactly one alarm on MMSI 899000101; if that
   becomes two, the latch broke.
+- **The alert is keyed on the MMSI, and its body holds nothing that moves.**
+  The host holds one alert per plugin per key, so the vessel is what the
+  mariner acknowledges. A CPA or a TCPA written into the body would change
+  every second, and under a plugin that raised again without a key that is a
+  fresh unacknowledged alarm every second. Both figures are on the chart and
+  in the targets dialog, where they are already live.
