@@ -54,7 +54,7 @@ typo like `Setting` is not an error, it is a plugin with no settings.
 | `inputs` | subscribes the plugin to store values | [Subscribing to data](subscribing.md) |
 | `draw(c)` | describes the scene, on a timer | [Drawing on the chart](drawing.md) |
 | `draw_rate_ms` | how often `draw` runs, default 1000 | [Drawing on the chart](drawing.md) |
-| `onUpdate()` | runs when an input has a new value, and fills any table | [Subscribing to data](subscribing.md#acting-on-a-reading-as-it-arrives) |
+| `onUpdate()` | runs when an input has a new value or expires, and fills any table | [Subscribing to data](subscribing.md#acting-on-a-reading-as-it-arrives) |
 | `lk.table(…)` | a dialog the mariner opens from a menu | [Subscribing to data](subscribing.md#filling-a-dialog) |
 | `Settings` | settings the mariner can change | [Adding settings](settings.md) |
 | `onSettings()` | runs after a settings change | [Adding settings](settings.md) |

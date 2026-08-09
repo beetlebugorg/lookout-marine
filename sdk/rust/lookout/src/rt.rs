@@ -94,6 +94,11 @@ struct Driver<P: Plugin, L: ConnSpec> {
     scene: Scene,
     conns: Conns<L>,
     draw_timer: i64,
+    /// The appointment for the next reading to expire, and -1 when there is
+    /// none. A plugin with nothing that can go stale never holds one.
+    update_timer: i64,
+    /// The moment `update_timer` is set for. Read only while it is up.
+    update_due_ms: i64,
     /// True while the mariner leaves `overlay.draw` on. The host refuses every
     /// overlay call without it, so a scene described then is work thrown away.
     /// Assumed on until the host says otherwise, which it does once the module
@@ -108,6 +113,8 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
             scene: Scene::new(),
             conns: Conns::new(),
             draw_timer: -1,
+            update_timer: -1,
+            update_due_ms: 0,
             may_draw: true,
         }
     }
@@ -129,22 +136,65 @@ impl<P: Source<L>, L: ConnSpec> Driver<P, L> {
     /// around it. The chart grant does not reach here. A table is data, it
     /// costs no capability, and a dialog on screen fills whether or not the
     /// plugin may draw.
-    fn run_update(&mut self) {
-        {
-            let mut tables = self.plugin.tables();
-            if !tables.is_empty() {
-                // A plugin with no dialog reads no clock: the cadence gate is
-                // the only thing that wants one here.
-                let mono = raw::mono_ms();
-                for table in &mut tables {
-                    table.begin(mono);
-                }
-            }
+    /// The cycle runs when a reading arrives and when one expires. A plugin
+    /// that only heard about arrivals could never notice an absence.
+    fn run_update(&mut self, mono: i64) {
+        for table in self.plugin.tables() {
+            table.begin(mono);
         }
         self.plugin.on_update();
         for table in self.plugin.tables() {
             table.flush();
         }
+        self.arm_update(mono);
+    }
+
+    /// Wake once, exactly when the next reading expires.
+    ///
+    /// A reading carries its window, so the moment it stops counting is known
+    /// when it lands. The library takes the earliest such moment across the
+    /// declared inputs and arms a one-shot for it; the cycle it fires reads
+    /// that input as stale, and the plugin empties whatever depended on it.
+    /// Windows differ, so each input expires on its own wakeup and the plugin
+    /// can say which one went.
+    ///
+    /// When every input has already expired there is no next moment and
+    /// nothing is armed. The next arrival runs a cycle, and the cycle makes
+    /// the next appointment.
+    ///
+    /// The chart grant does not reach here. A plugin that may not draw still
+    /// has a dialog to fill and a condition to watch.
+    fn arm_update(&mut self, mono: i64) {
+        // A reading is still fresh on the last millisecond of its window, so
+        // the appointment is one past it. A wakeup that found the reading
+        // fresh would have nothing to tell the plugin.
+        let due = self
+            .plugin
+            .inputs()
+            .iter()
+            .filter_map(|input| input.stale_at(mono))
+            .min()
+            .map(|at| at + 1);
+
+        if self.update_timer >= 0 {
+            if due == Some(self.update_due_ms) {
+                return;
+            }
+            raw::timer_cancel(self.update_timer);
+            self.update_timer = -1;
+        }
+        let Some(at) = due else {
+            return;
+        };
+        self.update_timer = raw::timer_set(at - mono, false);
+        if self.update_timer < 0 {
+            raw::log(
+                raw::Level::Error,
+                "update timer refused; a reading going stale will pass unnoticed",
+            );
+            return;
+        }
+        self.update_due_ms = at;
     }
 
     /// Route one table_open or table_closed event. True when the key was one of
@@ -363,12 +413,13 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
         // it has not: a plugin that declares no input still sees the raw event.
         raw::KIND_STORE_CHANGED => {
             let mut claimed = 0;
+            let mut mono = 0;
             let declares_inputs = {
                 let mut inputs = d.plugin.inputs();
                 let any = !inputs.is_empty();
                 if any {
                     let readings = raw::readings(text);
-                    let mono = raw::mono_ms();
+                    mono = raw::mono_ms();
                     for input in &mut inputs {
                         let path = match input.path() {
                             Some(p) => p,
@@ -388,15 +439,15 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
                 // A batch that touched none of the declared inputs is not an
                 // update: nothing this plugin reads has changed.
                 if claimed > 0 {
-                    d.run_update();
+                    d.run_update(mono);
                 }
                 return 0;
             }
         }
         raw::KIND_AIS_CHANGED => {
+            let mono = raw::mono_ms();
             let taken = {
                 let mut inputs = d.plugin.inputs();
-                let mono = raw::mono_ms();
                 let mut taken = false;
                 for input in &mut inputs {
                     if input.wants_ais() {
@@ -407,7 +458,7 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
                 taken
             };
             if taken {
-                d.run_update();
+                d.run_update(mono);
                 return 0;
             }
         }
@@ -423,7 +474,7 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
             let key = raw::table_key(text).unwrap_or_default();
             if d.set_table_open(&key, open) {
                 if open {
-                    d.run_update();
+                    d.run_update(raw::mono_ms());
                 }
                 return 0;
             }
@@ -450,6 +501,13 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
                 d.run_draw();
                 return 0;
             }
+            if d.update_timer >= 0 && handle == d.update_timer {
+                // The host drops a one-shot when it fires, so the handle is
+                // spent and the cycle makes the next.
+                d.update_timer = -1;
+                d.run_update(raw::mono_ms());
+                return 0;
+            }
             if Conns::<L>::declared() {
                 let Driver { plugin, conns, .. } = d;
                 if conns.timer(plugin, handle) {
@@ -461,6 +519,10 @@ pub fn event<P: Source<L>, L: ConnSpec>(kind: u32, handle: i64, ptr: u32, len: u
             if d.draw_timer >= 0 {
                 raw::timer_cancel(d.draw_timer);
                 d.draw_timer = -1;
+            }
+            if d.update_timer >= 0 {
+                raw::timer_cancel(d.update_timer);
+                d.update_timer = -1;
             }
             d.conns.shutdown();
             d.plugin.on_shutdown();

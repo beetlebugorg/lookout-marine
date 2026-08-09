@@ -13,6 +13,13 @@ use std::marker::PhantomData;
 /// use the same number. Raise it per input where the data is slower.
 pub const DEFAULT_MAX_AGE_MS: i64 = 5_000;
 
+/// How long an AIS vessel's report stays interesting when the plugin declares
+/// no window, and the same for an aid to navigation. Both match the host's
+/// eviction clocks: past them the target is out of the store and no snapshot
+/// can carry it again.
+pub const DEFAULT_AIS_MAX_AGE_MS: i64 = 600_000;
+pub const DEFAULT_ATON_MAX_AGE_MS: i64 = 1_800_000;
+
 /// A value the store carries, and how to read one out of a reading.
 pub trait Value: Copy + Default + 'static {
     fn from_reading(r: &raw::Reading<'_>) -> Option<Self>;
@@ -178,6 +185,10 @@ pub trait AnyInput {
     /// True when `draw` waits for it.
     fn required(&self) -> bool;
     fn is_fresh(&self, mono_ms: i64) -> bool;
+    /// The monotonic moment this input stops counting, or nothing when it
+    /// already has. The window is known the moment a reading lands, so its
+    /// expiry is an appointment rather than something to poll for.
+    fn stale_at(&self, mono_ms: i64) -> Option<i64>;
     fn take_reading(&mut self, r: &raw::Reading<'_>, mono_ms: i64);
     /// True when the plugin must be subscribed to AIS.
     fn wants_ais(&self) -> bool {
@@ -207,6 +218,16 @@ impl<T: Value, R> AnyInput for Input<T, R> {
 
     fn is_fresh(&self, mono_ms: i64) -> bool {
         self.fresh_at(mono_ms)
+    }
+
+    fn stale_at(&self, mono_ms: i64) -> Option<i64> {
+        self.value.as_ref()?;
+        let at = self.at_mono_ms + self.max_age_ms - self.age_at_ms;
+        if at > mono_ms {
+            Some(at)
+        } else {
+            None
+        }
     }
 
     fn take_reading(&mut self, r: &raw::Reading<'_>, mono_ms: i64) {
@@ -304,6 +325,8 @@ impl Target {
 /// missing instrument.
 pub struct Ais {
     max: usize,
+    max_age_ms: i64,
+    aton_max_age_ms: i64,
     list: Vec<Target>,
     at_mono_ms: i64,
 }
@@ -314,9 +337,27 @@ impl Ais {
     pub const fn new(max: usize) -> Ais {
         Ais {
             max,
+            max_age_ms: DEFAULT_AIS_MAX_AGE_MS,
+            aton_max_age_ms: DEFAULT_ATON_MAX_AGE_MS,
             list: Vec::new(),
             at_mono_ms: 0,
         }
+    }
+
+    /// How long a vessel's report stays interesting. Past it the target can no
+    /// longer change anything the plugin decides, so the library stops waking
+    /// for it. Set it to the age at which this plugin drops a target.
+    pub const fn max_age(mut self, ms: i64) -> Self {
+        self.max_age_ms = ms;
+        self
+    }
+
+    /// The same, for an aid to navigation. An aid reports about every three
+    /// minutes, so a vessel's window would age one out while it is still on
+    /// station.
+    pub const fn aton_max_age(mut self, ms: i64) -> Self {
+        self.aton_max_age_ms = ms;
+        self
     }
 
     /// Every target in the last snapshot. Each `age_ms` is the age at the
@@ -361,6 +402,24 @@ impl AnyInput for Ais {
 
     fn is_fresh(&self, _mono_ms: i64) -> bool {
         true
+    }
+
+    /// When the next target in the set ages out, or nothing when none can.
+    /// Each target keeps its own clock, so the set produces one appointment
+    /// per target rather than one for the snapshot.
+    fn stale_at(&self, mono_ms: i64) -> Option<i64> {
+        self.list
+            .iter()
+            .map(|t| {
+                let window = if t.aton {
+                    self.aton_max_age_ms
+                } else {
+                    self.max_age_ms
+                };
+                self.at_mono_ms + window - t.age_ms
+            })
+            .filter(|at| *at > mono_ms)
+            .min()
     }
 
     fn take_reading(&mut self, _r: &raw::Reading<'_>, _mono_ms: i64) {}
@@ -491,5 +550,89 @@ mod tests {
         assert!(ais.find(3).is_none());
         assert!(!ais.required());
         assert!(ais.wants_ais());
+    }
+
+    #[test]
+    fn a_reading_expires_at_an_appointment_it_carries() {
+        // Nothing has arrived, so nothing can expire and there is nothing to
+        // wait for.
+        let mut twd: Number = Number::new("environment.wind.directionTrue");
+        assert_eq!(twd.stale_at(0), None);
+
+        // 400 ms old at delivery, so it stops counting 4600 ms after it
+        // arrived, and the appointment is that moment rather than a guess.
+        twd.take_reading(
+            &reading("environment.wind.directionTrue", Json::Num(215.0), 400),
+            1_000,
+        );
+        assert_eq!(twd.stale_at(1_000), Some(1_000 + 4_600));
+
+        // Once it has, there is no later moment to wake for.
+        assert_eq!(twd.stale_at(1_000 + 4_600), None);
+        assert_eq!(twd.stale_at(1_000 + 9_000), None);
+
+        // A reading that arrives resets its own appointment.
+        twd.take_reading(
+            &reading("environment.wind.directionTrue", Json::Num(216.0), 0),
+            9_000,
+        );
+        assert_eq!(twd.stale_at(9_000), Some(9_000 + DEFAULT_MAX_AGE_MS));
+    }
+
+    #[test]
+    fn the_earliest_window_rules_the_appointment() {
+        // Two readings on different clocks, delivered together. They stop
+        // counting at different moments, so each expires on its own wakeup and
+        // the plugin can say which one went.
+        let mut boat: Position = Position::new("navigation.position");
+        let mut twd: Number = Number::new("environment.wind.directionTrue").max_age(20_000);
+        boat.take_reading(
+            &reading(
+                "navigation.position",
+                Json::parse(r#"{"lat":38.97,"lon":-76.46}"#).unwrap(),
+                0,
+            ),
+            1_000,
+        );
+        twd.take_reading(
+            &reading("environment.wind.directionTrue", Json::Num(215.0), 0),
+            1_000,
+        );
+
+        let inputs: Vec<&dyn AnyInput> = vec![&boat, &twd];
+        let earliest =
+            |mono: i64| -> Option<i64> { inputs.iter().filter_map(|i| i.stale_at(mono)).min() };
+        assert_eq!(earliest(1_000), Some(1_000 + DEFAULT_MAX_AGE_MS));
+
+        // The position has gone and the wind has not. The next appointment is
+        // the wind's own.
+        let after_boat = 1_000 + DEFAULT_MAX_AGE_MS + 1;
+        assert!(!boat.is_fresh(after_boat));
+        assert!(twd.is_fresh(after_boat));
+        assert_eq!(earliest(after_boat), Some(1_000 + 20_000));
+
+        // Both gone: nothing further can change, so nothing is armed.
+        assert_eq!(earliest(1_000 + 20_001), None);
+    }
+
+    #[test]
+    fn each_target_ages_out_on_its_own_clock() {
+        // A vessel and an aid heard at the same moment. An aid reports about
+        // every three minutes, so a vessel's window would age one out while it
+        // is still on station.
+        let mut ais = Ais::new(8).max_age(180_000).aton_max_age(600_000);
+        ais.take_ais(
+            r#"{"targets":[{"mmsi":899000101,"lat":38.97,"lon":-76.46},
+                {"mmsi":998990101,"lat":38.98,"lon":-76.47,"aton":true}]}"#,
+            1_000,
+        );
+
+        // The vessel's own limit comes first, then the aid's.
+        assert_eq!(ais.stale_at(1_000), Some(1_000 + 180_000));
+        assert_eq!(ais.stale_at(1_000 + 180_000), Some(1_000 + 600_000));
+
+        // An empty sea can change no further on its own.
+        assert_eq!(ais.stale_at(1_000 + 600_000), None);
+        assert_eq!(Ais::new(8).stale_at(0), None);
     }
 }

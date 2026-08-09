@@ -92,7 +92,16 @@ const max_name = 34;
 pub const inputs = struct {
     /// The traffic. The library records each snapshot and ages it; an empty
     /// sea is not a missing instrument, so this never holds the draw back.
-    pub const traffic = lk.subscribeAis(.{ .max = max_targets });
+    ///
+    /// The two windows are the ages at which `visible` stops drawing a target,
+    /// so the library wakes this plugin the moment one crosses its own limit.
+    /// A target that stops reporting leaves the chart and the dialog together
+    /// whether or not any other target is still being heard.
+    pub const traffic = lk.subscribeAis(.{
+        .max = max_targets,
+        .max_age_ms = stale_target_ms,
+        .aton_max_age_ms = stale_aton_ms,
+    });
 
     /// Own ship. All three are optional: the CPA needs them and the drawing
     /// does not, so a boat with no GPS still sees the traffic.

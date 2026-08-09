@@ -319,7 +319,7 @@ and one that is absent is not wired.
 |---|---|
 | `Draw(*lk.Chart)` | the scene, on the library's timer |
 | `DrawRate() time.Duration` | how often, default 1 s |
-| `OnUpdate()` | after an input changed: the decision, and the rows |
+| `OnUpdate()` | after an input changed or expired: the decision, and the rows |
 | `OnSettings()` | after a settings change, before the redraw |
 | `OnData(*lk.Conn, []byte)` | bytes from one connection's socket |
 | `OnOpen(*lk.Conn)` | a stream came up; send a subscription |
@@ -371,6 +371,13 @@ The rows are written from `OnUpdate` and nowhere else: the library opens a
 cycle before that call and sends what changed after it. A row the cycle does
 not describe leaves the table. `lk.TablesJSON(targets)` renders the `"tables"`
 array the manifest must carry, for a `go test` to compare.
+
+`OnUpdate` runs when a reading arrives and when one expires. A reading carries
+its window, so the library arms a one-shot for the earliest moment a declared
+input stops counting and runs the cycle there; the input reads stale in that
+call, and the rows that depended on it leave. Each input expires on its own
+wakeup, and once every one has expired nothing is armed. A plugin that declares
+no input has nothing that can expire.
 
 `Cell` takes any value and reads the declared column type to decide how to
 write it. A `nil`, or a nil `*float64`, `*string` or `*bool`, is a dash. A value

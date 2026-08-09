@@ -154,6 +154,10 @@ an input has a new value, which is where a decision belongs; a plugin that
 only watches a condition declares it and no `draw` at all. Read inputs with
 `fresh()` there: the freshness gate has not run.
 
+**A reading that stops arriving still reaches you.** Lookout calls `onUpdate`
+when an input expires as well, so clear the condition there rather than
+assuming the next reading will come.
+
 Reference: [STORE_CHANGED](wire.md#store_changed) and
 [vessel data goes stale after 5 seconds](rules.md#vessel-data-goes-stale-after-5-seconds).
 

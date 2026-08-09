@@ -5,6 +5,7 @@ package lookout
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // A plugin that draws and keeps a dialog. Draw fills no rows: the rows are
@@ -284,5 +285,207 @@ func TestACellOutsideACycleIsDropped(t *testing.T) {
 	r.Done()
 	if len(testHost.TableBatches) != before {
 		t.Fatalf("a row outside a cycle went out: %v", testHost.TableBatches)
+	}
+}
+
+// -- the cycle runs when a reading expires -------------------------------------
+
+// feedTest is a plugin with one reading and a dialog. The row exists only while
+// the reading counts, so the table has to follow the feed both ways.
+type feedTest struct {
+	depth   *NumberInput
+	table   *Table
+	updates int
+}
+
+func (p *feedTest) OnUpdate() {
+	p.updates++
+	d, ok := p.depth.Fresh()
+	if !ok {
+		return
+	}
+	r := p.table.Row("belowTransducer")
+	r.Cell("depth", d)
+	r.Done()
+}
+
+func startFeed(t *testing.T) *feedTest {
+	t.Helper()
+	resetHost()
+	testHost.Mono = 1
+	p := &feedTest{
+		depth: SubscribeNumber("environment.depth.belowTransducer"),
+		table: NewTable(TableOpts{
+			Key: "sounder", Title: "Sounder", Menu: "Test",
+			Columns: []Column{{Key: "depth", Label: "Depth", Type: ColDistance}},
+		}),
+	}
+	Register(p)
+	if rc := dispatchStart([]byte(`{"abi":1,"config":{}}`)); rc != 0 {
+		t.Fatalf("lk_start answered %d: %v", rc, testHost.Logs)
+	}
+	return p
+}
+
+const oneDepth = `{"values":[{"path":"environment.depth.belowTransducer","value":3.4,"ts":1,"age_ms":0}]}`
+
+func TestATableEmptiesWhenItsFeedStops(t *testing.T) {
+	p := startFeed(t)
+	openTable(t, "sounder")
+
+	// Nothing has arrived, so nothing can expire and nothing is waiting.
+	if len(testHost.Timers) != 0 {
+		t.Fatalf("a timer was armed with nothing to wait for: %v", testHost.Timers)
+	}
+
+	// A sounding lands. The row is on the dialog, and the cycle has taken an
+	// appointment for the moment that reading stops counting: one millisecond
+	// past its window, because the last millisecond still counts.
+	dispatchEvent(StoreChanged, 0, []byte(oneDepth))
+	if got := lastTableBatch(); !strings.Contains(got, `"depth":3.4`) {
+		t.Fatalf("the sounding is not on the dialog: %s", got)
+	}
+	appt := reg.updateTimer
+	if appt < 0 {
+		t.Fatal("the reading took no appointment")
+	}
+	if testHost.Periodic[appt] {
+		t.Fatal("the appointment is a poll, not a one-shot")
+	}
+	if want := DefaultMaxAge.Milliseconds() + 1; testHost.Timers[appt] != want {
+		t.Fatalf("the appointment is in %d ms, want %d", testHost.Timers[appt], want)
+	}
+
+	// Now the feed stops. Nothing else arrives, ever. The appointment comes
+	// round, the cycle runs on a reading that no longer counts, and the row it
+	// fed leaves the dialog instead of sitting there for good.
+	testHost.Mono += testHost.Timers[appt]
+	armed := len(testHost.Timers)
+	dispatchEvent(Timer, appt, nil)
+	if p.updates != 3 {
+		// Opening the dialog, the sounding, and the expiry.
+		t.Fatalf("the cycle ran %d times, want 3", p.updates)
+	}
+	want := `{"key":"sounder","upsert":[],"remove":["belowTransducer"]}`
+	if got := lastTableBatch(); got != want {
+		t.Fatalf("the batch is\n%s\nwant\n%s", got, want)
+	}
+
+	// The plugin has been told, and there is no later moment to tell it about.
+	// Nothing is armed, so a boat whose instruments are off costs nothing until
+	// a reading arrives.
+	if reg.updateTimer >= 0 {
+		t.Fatalf("an appointment was kept with nothing left to expire")
+	}
+	if len(testHost.Timers) != armed {
+		t.Fatalf("a timer was armed after everything had expired: %v", testHost.Timers)
+	}
+}
+
+// twoClocksTest reads two values on different clocks: the wind is slower than
+// the position, so they stop counting at different moments.
+type twoClocksTest struct {
+	boat     *PositionInput
+	twd      *NumberInput
+	haveBoat bool
+	haveWind bool
+}
+
+func (p *twoClocksTest) OnUpdate() {
+	_, p.haveBoat = p.boat.Fresh()
+	_, p.haveWind = p.twd.Fresh()
+}
+
+func TestEachInputExpiresOnItsOwnWakeup(t *testing.T) {
+	resetHost()
+	testHost.Mono = 1
+	const windMaxAge = 20 * time.Second
+	p := &twoClocksTest{
+		boat: SubscribePosition("navigation.position", InputOpts{Optional: true}),
+		twd: SubscribeNumber("environment.wind.directionTrue", InputOpts{
+			Optional: true,
+			MaxAge:   windMaxAge,
+		}),
+	}
+	Register(p)
+	if rc := dispatchStart([]byte(`{"abi":1,"config":{}}`)); rc != 0 {
+		t.Fatalf("lk_start answered %d: %v", rc, testHost.Logs)
+	}
+
+	dispatchEvent(StoreChanged, 0, []byte(
+		`{"values":[{"path":"navigation.position","value":{"lat":38.97,"lon":-76.46},"ts":1,"age_ms":0}]}`))
+	dispatchEvent(StoreChanged, 0, []byte(
+		`{"values":[{"path":"environment.wind.directionTrue","value":210,"ts":1,"age_ms":0}]}`))
+	if !p.haveBoat || !p.haveWind {
+		t.Fatal("both readings should count")
+	}
+
+	// The earliest window rules the appointment. The wind has fifteen seconds
+	// left, so waking for it now would find nothing to say.
+	first := reg.updateTimer
+	if want := DefaultMaxAge.Milliseconds() + 1; testHost.Timers[first] != want {
+		t.Fatalf("the first appointment is in %d ms, want %d", testHost.Timers[first], want)
+	}
+
+	// The position goes and the wind stays. The plugin is told which one, and
+	// the next appointment is the wind's own.
+	testHost.Mono += testHost.Timers[first]
+	dispatchEvent(Timer, first, nil)
+	if p.haveBoat {
+		t.Fatal("the position should have expired")
+	}
+	if !p.haveWind {
+		t.Fatal("the wind should still count")
+	}
+	second := reg.updateTimer
+	if want := (windMaxAge - DefaultMaxAge).Milliseconds(); testHost.Timers[second] != want {
+		t.Fatalf("the second appointment is in %d ms, want %d", testHost.Timers[second], want)
+	}
+
+	// The wind goes too. Both are stale, nothing further can change, and
+	// nothing is armed.
+	testHost.Mono += testHost.Timers[second]
+	dispatchEvent(Timer, second, nil)
+	if p.haveWind {
+		t.Fatal("the wind should have expired")
+	}
+	if reg.updateTimer >= 0 {
+		t.Fatal("an appointment was kept with nothing left to expire")
+	}
+}
+
+func TestTheAppointmentIsKeptWhileTheChartGrantIsOff(t *testing.T) {
+	p := startTabled(t)
+	drawTimer := reg.drawTimer
+
+	// The mariner switches drawing off and the draw timer goes down.
+	dispatchEvent(GrantsChanged, 0, []byte(`{"granted":[]}`))
+	if reg.drawTimer >= 0 {
+		t.Fatal("the draw timer is still up")
+	}
+
+	// A reading still arrives and still takes its appointment. A plugin with no
+	// permission to draw has a dialog to fill and a condition to watch.
+	before := p.updates
+	dispatchEvent(StoreChanged, 0, []byte(oneSpeed))
+	appt := reg.updateTimer
+	if appt < 0 {
+		t.Fatal("the reading took no appointment while the grant was off")
+	}
+	if appt == drawTimer {
+		t.Fatal("the appointment is the draw timer")
+	}
+	if testHost.Periodic[appt] {
+		t.Fatal("the appointment is a poll, not a one-shot")
+	}
+
+	// And it is delivered, without the draw timer coming back.
+	testHost.Mono += testHost.Timers[appt]
+	dispatchEvent(Timer, appt, nil)
+	if p.updates != before+2 {
+		t.Fatalf("the cycle ran %d times, want %d", p.updates-before, 2)
+	}
+	if reg.drawTimer >= 0 {
+		t.Fatal("the draw timer came back on an expiry")
 	}
 }

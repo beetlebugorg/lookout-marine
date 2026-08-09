@@ -409,6 +409,13 @@ drawing plugin can answer an HTTP response without giving anything up.
 already holding its new value. Decide there rather than in `draw`, whose rate is
 one you chose for the picture.
 
+It runs when a reading expires as well. A reading carries its window, so the
+library arms a one-shot for the earliest moment a declared input stops counting
+and runs the cycle there; the input reads stale in that call, and whatever
+depended on it goes. Each input expires on its own wakeup, and once every one
+has expired nothing is armed. A plugin that declares no input has nothing that
+can expire.
+
 A table is a dialog the shell builds from a `TableSpec`. List it in
 `Plugin::tables` and the library declares it at start, tells you when the
 mariner opens it, and sends what changed once a cycle.

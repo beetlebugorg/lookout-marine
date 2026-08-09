@@ -78,6 +78,17 @@
 // graphics rate you chose, so a decision taken in Draw runs at whatever rate
 // suits the picture.
 //
+// OnUpdate also runs when a reading expires. A plugin that only heard about
+// arrivals could never notice an absence. A reading carries its window, so the
+// moment it stops counting is known when it lands: the library arms a one-shot
+// for the earliest such moment across the declared inputs and runs the cycle
+// there. The input reads stale in that call, and the plugin empties what
+// depended on it. Windows differ, so each input expires on its own wakeup.
+// Nothing polls: once every input has expired there is no next moment, nothing
+// is armed, and an idle plugin costs nothing at all until the next reading
+// arrives. A plugin with no declared inputs has nothing that can expire and
+// hears only about arrivals.
+//
 // A table is filled from OnUpdate. Rows are data. The library opens a table
 // cycle before that call and closes it after, so a plugin upserts its rows
 // there and nowhere else. A table costs no capability, so its rows keep
@@ -204,6 +215,12 @@ type registry struct {
 	drawEvery int64
 	missing   []string
 
+	// updateTimer is the appointment for the next reading to expire, and -1
+	// when there is none. A plugin with nothing that can go stale never holds
+	// one. updateDue is the moment it is set for, read only while it is up.
+	updateTimer int64
+	updateDue   int64
+
 	// mayDraw is true while the mariner leaves overlay.draw on. The host
 	// refuses every overlay call without it, so a scene described then is work
 	// thrown away. Assumed on until the host says otherwise, which it does once
@@ -220,7 +237,7 @@ type registry struct {
 
 var reg = newRegistry()
 
-func newRegistry() registry { return registry{drawTimer: -1, mayDraw: true} }
+func newRegistry() registry { return registry{drawTimer: -1, updateTimer: -1, mayDraw: true} }
 
 // Register wires the exports to p. Call it once, from an init function or a
 // package-level variable — NOT from main, which a reactor module never runs.
@@ -474,14 +491,15 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 			// A batch that touched none of the declared inputs is not an
 			// update: nothing this plugin reads has changed.
 			if claimed > 0 {
-				runUpdate()
+				runUpdate(mono)
 			}
 			return 0
 		}
 	case AISChanged:
 		if reg.ais != nil {
-			reg.ais.record(e, MonoMs())
-			runUpdate()
+			mono := MonoMs()
+			reg.ais.record(e, mono)
+			runUpdate(mono)
 			return 0
 		}
 	case ConfigChanged:
@@ -513,13 +531,20 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 		}
 		if mine {
 			if kind == TableOpen {
-				runUpdate()
+				runUpdate(MonoMs())
 			}
 			return 0
 		}
 	case Timer:
 		if reg.drawTimer >= 0 && handle == reg.drawTimer {
 			runDraw()
+			return 0
+		}
+		if reg.updateTimer >= 0 && handle == reg.updateTimer {
+			// The host drops a one-shot when it fires, so the handle is spent
+			// and the cycle makes the next.
+			reg.updateTimer = -1
+			runUpdate(MonoMs())
 			return 0
 		}
 		if reg.conns != nil && reg.conns.timer(handle) {
@@ -529,6 +554,10 @@ func dispatchEvent(kind Kind, handle int64, raw []byte) int32 {
 		if reg.drawTimer >= 0 {
 			TimerCancel(reg.drawTimer)
 			reg.drawTimer = -1
+		}
+		if reg.updateTimer >= 0 {
+			TimerCancel(reg.updateTimer)
+			reg.updateTimer = -1
 		}
 		if reg.conns != nil {
 			reg.conns.shutdown()
@@ -562,17 +591,16 @@ const noDrawLine = "not drawing: permission to draw on the chart is off"
 // fills around it. The chart grant does not reach here. A table is data, it
 // costs no capability, and a dialog on screen fills whether or not the plugin
 // may draw.
-func runUpdate() {
+// The cycle runs when a reading arrives and when one expires. A plugin that
+// only heard about arrivals could never notice an absence.
+func runUpdate(mono int64) {
 	u, updates := reg.plugin.(Updater)
 	if !updates && len(reg.tables) == 0 {
 		// Nothing to run and no rows to hold, so not even a clock is read.
 		return
 	}
-	if len(reg.tables) > 0 {
-		mono := MonoMs()
-		for _, t := range reg.tables {
-			t.begin(mono)
-		}
+	for _, t := range reg.tables {
+		t.begin(mono)
 	}
 	if updates {
 		u.OnUpdate()
@@ -580,6 +608,70 @@ func runUpdate() {
 	for _, t := range reg.tables {
 		t.flush()
 	}
+	if wantsUpdateTimer() {
+		armUpdate(mono)
+	}
+}
+
+// wantsUpdateTimer is true when an input can go stale, so an expiry is worth
+// waiting for. A plugin with no declared inputs hears only about arrivals.
+func wantsUpdateTimer() bool {
+	if _, ok := reg.plugin.(Updater); !ok {
+		return false
+	}
+	return len(reg.inputs) > 0 || reg.ais != nil
+}
+
+// armUpdate wakes the plugin once, exactly when the next reading expires.
+//
+// A reading carries its window, so the moment it stops counting is known when
+// it lands. The library takes the earliest such moment across the declared
+// inputs and arms a one-shot for it; the cycle it fires reads that input as
+// stale, and the plugin empties whatever depended on it. Windows differ, so
+// each input expires on its own wakeup and the plugin can say which one went.
+//
+// When every input has already expired there is no next moment and nothing is
+// armed. The next arrival runs a cycle, and the cycle makes the next
+// appointment.
+//
+// The chart grant does not reach here. A plugin that may not draw still has a
+// dialog to fill and a condition to watch.
+func armUpdate(mono int64) {
+	next := int64(0)
+	found := false
+	for _, in := range reg.inputs {
+		if at, ok := in.staleAt(mono); ok && (!found || at < next) {
+			next = at
+			found = true
+		}
+	}
+	if reg.ais != nil {
+		if at, ok := reg.ais.staleAt(mono); ok && (!found || at < next) {
+			next = at
+			found = true
+		}
+	}
+	// A reading is still fresh on the last millisecond of its window, so the
+	// appointment is one past it. A wakeup that found the reading fresh would
+	// have nothing to tell the plugin.
+	due := next + 1
+
+	if reg.updateTimer >= 0 {
+		if found && due == reg.updateDue {
+			return
+		}
+		TimerCancel(reg.updateTimer)
+		reg.updateTimer = -1
+	}
+	if !found {
+		return
+	}
+	reg.updateTimer = TimerSet(due-mono, false)
+	if reg.updateTimer < 0 {
+		Log(Error, "update timer refused; a reading going stale will pass unnoticed")
+		return
+	}
+	reg.updateDue = due
 }
 
 // setMayDraw takes the chart grant on or off.

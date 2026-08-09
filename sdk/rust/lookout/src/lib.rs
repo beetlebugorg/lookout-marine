@@ -74,6 +74,17 @@
 //! renders it here. `DRAW_RATE_MS` is a graphics rate an author picked, so a
 //! decision taken in `draw` runs at whatever rate suits the picture.
 //!
+//! `on_update` ALSO RUNS WHEN A READING EXPIRES. A plugin that only heard about
+//! arrivals could never notice an absence. A reading carries its window, so the
+//! moment it stops counting is known when it lands: the library arms a one-shot
+//! for the earliest such moment across the declared inputs and runs the cycle
+//! there. The input reads stale in that call, and the plugin empties what
+//! depended on it. Windows differ, so each input expires on its own wakeup.
+//! Nothing polls: once every input has expired there is no next moment, nothing
+//! is armed, and an idle plugin costs nothing at all until the next reading
+//! arrives. A plugin with no declared inputs has nothing that can expire and
+//! hears only about arrivals.
+//!
 //! A TABLE IS FILLED FROM `on_update`. Rows are data. The library opens a table
 //! cycle before that call and closes it after, so a plugin upserts its rows
 //! there and nowhere else. A table costs no capability, so its rows keep

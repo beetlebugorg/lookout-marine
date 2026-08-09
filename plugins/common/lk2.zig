@@ -49,6 +49,17 @@
 //! coalesces, so `onUpdate` runs at most once per batch: 10 Hz for store
 //! readings, 2 Hz for the AIS set, and slower when the instruments are slower.
 //!
+//! `onUpdate` ALSO RUNS WHEN A READING EXPIRES. A plugin that only heard about
+//! arrivals could never notice an absence. A reading carries its window, so
+//! the moment it stops counting is known when it lands: the library arms a
+//! one-shot for the earliest such moment across the declared inputs and runs
+//! the cycle there. The input reads stale in that call, and the plugin empties
+//! what depended on it. Windows differ, so each input expires on its own
+//! wakeup. Nothing polls: once every input has expired there is no next
+//! moment, nothing is armed, and an idle plugin costs nothing at all until the
+//! next reading arrives. A plugin with no declared inputs has nothing that can
+//! expire and hears only about arrivals.
+//!
 //! A TABLE IS FILLED FROM `onUpdate`. Rows are data. The library opens a table
 //! cycle before `onUpdate` and closes it after, so a plugin upserts its rows
 //! there and nowhere else. A table costs no capability, so its rows keep
@@ -112,6 +123,13 @@ pub const default_max_age_ms: i64 = 5_000;
 
 /// How often `draw` runs when the plugin declares no rate.
 pub const default_draw_rate_ms: i64 = 1_000;
+
+/// How long an AIS vessel's report stays interesting when the plugin declares
+/// no window, and the same for an aid to navigation. Both match the host's
+/// eviction clocks: past them the target is out of the store and no snapshot
+/// can carry it again.
+pub const default_ais_max_age_ms: i64 = 600_000;
+pub const default_aton_max_age_ms: i64 = 1_800_000;
 
 /// Most objects one plugin's scene may hold. The host's own budget is 4096
 /// across every plugin; this is the table the diff keeps.
@@ -300,6 +318,15 @@ fn Sample(comptime T: type) type {
         fn fresh(self: Self, mono: i64, limit_ms: i64) bool {
             return self.have and self.ageMs(mono) <= limit_ms;
         }
+
+        /// The monotonic moment this value stops counting, or null when it
+        /// already has. The window is known the moment the reading lands, so
+        /// its expiry is an appointment rather than something to poll for.
+        fn staleAt(self: Self, mono: i64, limit_ms: i64) ?i64 {
+            if (!self.have) return null;
+            const at = self.at_mono_ms + limit_ms - self.age_at_ms;
+            return if (at > mono) at else null;
+        }
     };
 }
 
@@ -348,6 +375,10 @@ fn Input(comptime T: type, comptime path_: []const u8, comptime opts: InputOpts)
 
         fn lkFresh(mono: i64) bool {
             return sample.fresh(mono, opts.max_age_ms);
+        }
+
+        fn lkStaleAt(mono: i64) ?i64 {
+            return sample.staleAt(mono, opts.max_age_ms);
         }
 
         fn lkRecord(r: raw_lk.Reading, mono: i64) void {
@@ -466,6 +497,14 @@ pub const Target = struct {
 pub const AisOpts = struct {
     /// Most targets kept. A snapshot longer than this is truncated and logged.
     max: usize = 128,
+    /// How long a vessel's report stays interesting. Past it the target can no
+    /// longer change anything the plugin decides, so the library stops waking
+    /// for it. Set it to the age at which this plugin drops a target.
+    max_age_ms: i64 = default_ais_max_age_ms,
+    /// The same, for an aid to navigation. An aid reports about every three
+    /// minutes, so a vessel's window would age one out while it is still on
+    /// station.
+    aton_max_age_ms: i64 = default_aton_max_age_ms,
 };
 
 /// The AIS target set, recorded and aged by the library. Declare it beside the
@@ -518,6 +557,20 @@ pub fn subscribeAis(comptime opts: AisOpts) type {
                 if (src.name) |n| dst.name_str.set(n);
             }
             at_mono_ms = mono;
+        }
+
+        /// When the next target in the set ages out, monotonic, or null when
+        /// none can. Each target keeps its own clock, so the set produces one
+        /// appointment per target rather than one for the snapshot.
+        fn lkStaleAt(mono: i64) ?i64 {
+            var next: ?i64 = null;
+            for (list[0..count]) |*t| {
+                const window = if (t.aton) opts.aton_max_age_ms else opts.max_age_ms;
+                const at = at_mono_ms + window - t.age_ms;
+                if (at <= mono) continue;
+                if (next == null or at < next.?) next = at;
+            }
+            return next;
         }
     };
 }
@@ -2154,6 +2207,16 @@ fn Wiring(comptime P: type) type {
         /// does once the module has started.
         var may_draw: bool = true;
 
+        /// The appointment for the next reading to expire, and -1 when there
+        /// is none. A plugin with nothing that can go stale never holds one.
+        var update_timer: i64 = -1;
+        /// The moment `update_timer` is set for. Read only while it is up.
+        var update_due_ms: i64 = 0;
+
+        /// True when an input can go stale, so an expiry is worth waiting for.
+        /// A plugin with no declared inputs hears only about arrivals.
+        const wants_update_timer = D.has_update and (D.inputs.len > 0 or D.has_ais);
+
         pub fn start(s: raw_lk.Start) !void {
             readSettings(P, s.config);
 
@@ -2184,16 +2247,18 @@ fn Wiring(comptime P: type) type {
         pub fn onEvent(e: raw_lk.Event) !void {
             switch (e) {
                 .store_changed => |payload| if (comptime D.inputs.len > 0) {
-                    const routed = routeReadings(D.inputs, raw_lk.readings(payload), payload, monoMs());
+                    const mono = monoMs();
+                    const routed = routeReadings(D.inputs, raw_lk.readings(payload), payload, mono);
                     if (comptime @hasDecl(P, "onEvent")) {
                         if (routed.rest) |json| try P.onEvent(.{ .store_changed = json });
                     }
-                    if (routed.claimed > 0) runUpdate();
+                    if (routed.claimed > 0) runUpdate(mono);
                     return;
                 },
                 .ais_changed => |payload| if (comptime D.has_ais) {
-                    D.Ais.lkRecord(payload, monoMs());
-                    runUpdate();
+                    const mono = monoMs();
+                    D.Ais.lkRecord(payload, mono);
+                    runUpdate(mono);
                     return;
                 },
                 .config_changed => |payload| {
@@ -2216,6 +2281,15 @@ fn Wiring(comptime P: type) type {
                             return;
                         }
                     }
+                    if (comptime wants_update_timer) {
+                        if (id == update_timer) {
+                            // The host drops a one-shot when it fires, so the
+                            // handle is spent and the cycle makes the next.
+                            update_timer = -1;
+                            runUpdate(monoMs());
+                            return;
+                        }
+                    }
                     if (comptime D.has_connections) {
                         if (P.Connections.lkTimer(P, id)) return;
                     }
@@ -2228,7 +2302,7 @@ fn Wiring(comptime P: type) type {
                         if (T.lkOpen(key, true)) mine = true;
                     }
                     if (mine) {
-                        runUpdate();
+                        runUpdate(monoMs());
                         return;
                     }
                 },
@@ -2242,6 +2316,10 @@ fn Wiring(comptime P: type) type {
                 .shutdown => {
                     if (comptime D.has_draw) {
                         if (draw_timer >= 0) raw_lk.timerCancel(draw_timer);
+                    }
+                    if (comptime wants_update_timer) {
+                        if (update_timer >= 0) raw_lk.timerCancel(update_timer);
+                        update_timer = -1;
                     }
                     if (comptime D.has_connections) P.Connections.lkShutdown();
                     if (comptime @hasDecl(P, "onShutdown")) P.onShutdown();
@@ -2263,10 +2341,61 @@ fn Wiring(comptime P: type) type {
         /// upserts around it. The chart grant does not reach here. A table is
         /// data, it costs no capability, and a dialog on screen fills whether
         /// or not the plugin may draw.
-        fn runUpdate() void {
+        ///
+        /// The cycle runs when a reading arrives and when one expires. A
+        /// plugin that only heard about arrivals could never notice an
+        /// absence.
+        fn runUpdate(mono: i64) void {
             inline for (D.tables) |T| T.lkBegin();
             if (comptime D.has_update) P.onUpdate();
             inline for (D.tables) |T| T.lkFlush();
+            if (comptime wants_update_timer) armUpdate(mono);
+        }
+
+        /// Wake once, exactly when the next reading expires.
+        ///
+        /// A reading carries its window, so the moment it stops counting is
+        /// known when it lands. The library takes the earliest such moment
+        /// across the declared inputs and arms a one-shot for it; the cycle it
+        /// fires reads that input as stale, and the plugin empties whatever
+        /// depended on it. Windows differ, so each input expires on its own
+        /// wakeup and the plugin can say which one went.
+        ///
+        /// When every input has already expired there is no next moment and
+        /// nothing is armed. The next arrival runs a cycle, and the cycle
+        /// makes the next appointment.
+        ///
+        /// The chart grant does not reach here. A plugin that may not draw
+        /// still has a dialog to fill and a condition to watch.
+        fn armUpdate(mono: i64) void {
+            var next: ?i64 = null;
+            inline for (D.inputs) |In| {
+                if (In.lkStaleAt(mono)) |at| {
+                    if (next == null or at < next.?) next = at;
+                }
+            }
+            if (comptime D.has_ais) {
+                if (D.Ais.lkStaleAt(mono)) |at| {
+                    if (next == null or at < next.?) next = at;
+                }
+            }
+            // A reading is still fresh on the last millisecond of its window,
+            // so the appointment is one past it. A wakeup that found the
+            // reading fresh would have nothing to tell the plugin.
+            const due: ?i64 = if (next) |at| at + 1 else null;
+
+            if (update_timer >= 0) {
+                if (due != null and due.? == update_due_ms) return;
+                raw_lk.timerCancel(update_timer);
+                update_timer = -1;
+            }
+            const at = due orelse return;
+            update_timer = raw_lk.timerSet(at - mono, false);
+            if (update_timer < 0) {
+                log(.err, "update timer refused; a reading going stale will pass unnoticed", .{});
+                return;
+            }
+            update_due_ms = at;
         }
 
         /// Run the draw timer exactly while the chart grant is on. Without it
@@ -2874,6 +3003,250 @@ test "a plugin with no draw fills the dialog it declared" {
     const before = raw_lk.test_hooks.count(.table_update);
     try W.onEvent(.{ .table_open = "other plugin's key" });
     try expect.expectEqual(before, raw_lk.test_hooks.count(.table_update));
+
+    // It declares no input either, so it has nothing that can go stale and
+    // waits for nothing. An idle plugin holds no timer at all.
+    try expect.expectEqual(@as(usize, 0), raw_lk.test_hooks.count(.timer_set));
+}
+
+// -- the cycle runs when a reading expires -------------------------------------
+
+/// One reading in the shape the host sends it.
+fn storeJson(comptime path: []const u8, comptime value: []const u8) []const u8 {
+    return "{\"values\":[{\"path\":\"" ++ path ++ "\",\"value\":" ++ value ++ ",\"ts\":1,\"age_ms\":0}]}";
+}
+
+/// A plugin with one reading and a dialog. The row exists only while the
+/// reading counts, so the table has to follow the feed both ways.
+const FeedTable = struct {
+    pub const inputs = struct {
+        pub const depth = subscribeNumber("environment.depth.belowTransducer", .{});
+    };
+
+    pub const Rows = table(.{
+        .key = "sounder",
+        .title = "Sounder",
+        .menu = "Test",
+        .columns = &.{.{ .key = "depth", .label = "Depth", .type = .distance }},
+    });
+
+    var updates: usize = 0;
+
+    pub fn onUpdate() void {
+        updates += 1;
+        const d = inputs.depth.fresh() orelse return;
+        Rows.upsert(.{ .id = "belowTransducer", .depth = d });
+    }
+};
+
+test "a table empties when its feed stops" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(FeedTable);
+    FeedTable.updates = 0;
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    try W.onEvent(.{ .table_open = "sounder" });
+    defer _ = FeedTable.Rows.lkOpen("sounder", false);
+
+    // Nothing has arrived, so nothing can expire and nothing is waiting.
+    try expect.expectEqual(@as(usize, 0), raw_lk.test_hooks.count(.timer_set));
+
+    // A sounding lands. The row is on the dialog, and the cycle has taken an
+    // appointment for the moment that reading stops counting: one millisecond
+    // past its window, because the last millisecond still counts.
+    try W.onEvent(.{ .store_changed = storeJson("environment.depth.belowTransducer", "3.4") });
+    try expect.expect(std.mem.indexOf(
+        u8,
+        raw_lk.test_hooks.last(.table_update).?.payload(),
+        "\"depth\":3.4",
+    ) != null);
+    const appt = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
+    try expect.expect(!appt.flag); // one-shot: an appointment, not a poll
+    try expect.expectEqual(default_max_age_ms + 1, appt.num);
+
+    // Now the feed stops. Nothing else arrives, ever. The appointment comes
+    // round, the cycle runs on a reading that no longer counts, and the row it
+    // fed leaves the dialog instead of sitting there for good.
+    raw_lk.test_hooks.advance(appt.num);
+    try W.onEvent(.{ .timer = appt.id });
+    // Opening the dialog, the sounding, and the expiry: three cycles.
+    try expect.expectEqual(@as(usize, 3), FeedTable.updates);
+    try expect.expectEqualStrings(
+        "{\"key\":\"sounder\",\"upsert\":[],\"remove\":[\"belowTransducer\"]}",
+        raw_lk.test_hooks.last(.table_update).?.payload(),
+    );
+
+    // The plugin has been told, and there is no later moment to tell it
+    // about. Nothing is armed, so a boat whose instruments are off costs
+    // nothing until a reading arrives.
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_set));
+}
+
+/// Two readings on different clocks: the wind is slower than the position, so
+/// they stop counting at different moments.
+const TwoClocks = struct {
+    pub const wind_max_age_ms: i64 = 20_000;
+
+    pub const inputs = struct {
+        pub const boat = subscribePosition("navigation.position", .{ .optional = true });
+        pub const twd = subscribeNumber("environment.wind.directionTrue", .{
+            .optional = true,
+            .max_age_ms = wind_max_age_ms,
+        });
+    };
+
+    var have_boat: bool = false;
+    var have_wind: bool = false;
+
+    pub fn onUpdate() void {
+        have_boat = inputs.boat.fresh() != null;
+        have_wind = inputs.twd.fresh() != null;
+    }
+};
+
+test "each input expires on its own wakeup" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(TwoClocks);
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    try W.onEvent(.{ .store_changed = storeJson("navigation.position", "{\"lat\":38.97,\"lon\":-76.46}") });
+    try W.onEvent(.{ .store_changed = storeJson("environment.wind.directionTrue", "210") });
+    try expect.expect(TwoClocks.have_boat);
+    try expect.expect(TwoClocks.have_wind);
+
+    // The earliest window rules the appointment. The wind has fifteen seconds
+    // left, so waking for it now would find nothing to say.
+    const first = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expectEqual(default_max_age_ms + 1, first.num);
+
+    // The position goes and the wind stays. The plugin is told which one, and
+    // the next appointment is the wind's own.
+    raw_lk.test_hooks.advance(first.num);
+    try W.onEvent(.{ .timer = first.id });
+    try expect.expect(!TwoClocks.have_boat);
+    try expect.expect(TwoClocks.have_wind);
+    const second = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expectEqual(TwoClocks.wind_max_age_ms - default_max_age_ms, second.num);
+
+    // The wind goes too. Both are stale, nothing further can change, and
+    // nothing is armed.
+    const set_before = raw_lk.test_hooks.count(.timer_set);
+    raw_lk.test_hooks.advance(second.num);
+    try W.onEvent(.{ .timer = second.id });
+    try expect.expect(!TwoClocks.have_wind);
+    try expect.expectEqual(set_before, raw_lk.test_hooks.count(.timer_set));
+}
+
+/// A plugin that draws and decides. The two run off different clocks, and the
+/// mariner can switch off only one of them.
+const DrawAndDecide = struct {
+    pub const inputs = struct {
+        pub const sog = subscribeNumber("navigation.speedOverGround", .{});
+    };
+
+    var updates: usize = 0;
+
+    pub fn onUpdate() void {
+        updates += 1;
+    }
+
+    pub fn draw(c: *Chart) void {
+        c.status("drawing", .{});
+    }
+};
+
+test "the appointment is kept while the chart grant is off" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(DrawAndDecide);
+    DrawAndDecide.updates = 0;
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    const draw_timer = raw_lk.test_hooks.last(.timer_set).?.id;
+
+    // The mariner switches drawing off and the draw timer goes down.
+    try W.onEvent(.{ .grants_changed = "{\"granted\":[]}" });
+    try expect.expectEqual(@as(usize, 1), raw_lk.test_hooks.count(.timer_cancel));
+    try expect.expectEqual(draw_timer, raw_lk.test_hooks.last(.timer_cancel).?.id);
+
+    // A reading still arrives and still takes its appointment. A plugin with
+    // no permission to draw has a dialog to fill and a condition to watch.
+    try W.onEvent(.{ .store_changed = storeJson("navigation.speedOverGround", "3.1") });
+    const appt = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expect(appt.id != draw_timer);
+    try expect.expect(!appt.flag);
+    try expect.expectEqual(default_max_age_ms + 1, appt.num);
+
+    // And it is delivered, without the draw timer coming back.
+    raw_lk.test_hooks.advance(appt.num);
+    try W.onEvent(.{ .timer = appt.id });
+    // The reading, and its expiry.
+    try expect.expectEqual(@as(usize, 2), DrawAndDecide.updates);
+    // The draw timer at start, and the appointment. Nothing else was armed.
+    try expect.expectEqual(@as(usize, 2), raw_lk.test_hooks.count(.timer_set));
+}
+
+/// A plugin watching the traffic and nothing else.
+const WatchTraffic = struct {
+    pub const vessel_ms: i64 = 180_000;
+    pub const aid_ms: i64 = 600_000;
+
+    pub const inputs = struct {
+        pub const traffic = subscribeAis(.{
+            .max = 8,
+            .max_age_ms = vessel_ms,
+            .aton_max_age_ms = aid_ms,
+        });
+    };
+
+    var live: usize = 0;
+
+    pub fn onUpdate() void {
+        live = 0;
+        for (inputs.traffic.targets()) |*t| {
+            const window = if (t.aton) aid_ms else vessel_ms;
+            if (t.age_ms <= window) live += 1;
+        }
+    }
+};
+
+test "a target ages out on its own wakeup, without another target reporting" {
+    raw_lk.test_hooks.reset();
+    defer raw_lk.test_hooks.reset();
+    const W = Wiring(WatchTraffic);
+    raw_lk.test_hooks.advance(1);
+
+    try W.start(.{ .api = raw_lk.api_version, .config = .null });
+    // One vessel and one aid, heard at the same moment. They age on different
+    // clocks, so they leave on different wakeups.
+    try W.onEvent(.{ .ais_changed = "{\"targets\":[" ++
+        "{\"mmsi\":899000101,\"lat\":38.97,\"lon\":-76.46,\"age_ms\":0}," ++
+        "{\"mmsi\":998990101,\"lat\":38.98,\"lon\":-76.47,\"aton\":true,\"age_ms\":0}]}" });
+    try expect.expectEqual(@as(usize, 2), WatchTraffic.live);
+
+    // The receiver goes quiet. The vessel's own limit comes first.
+    const first = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expectEqual(WatchTraffic.vessel_ms + 1, first.num);
+    raw_lk.test_hooks.advance(first.num);
+    try W.onEvent(.{ .timer = first.id });
+    try expect.expectEqual(@as(usize, 1), WatchTraffic.live);
+
+    // Then the aid's, on the slower clock an aid reports to.
+    const second = raw_lk.test_hooks.last(.timer_set).?;
+    try expect.expectEqual(WatchTraffic.aid_ms - WatchTraffic.vessel_ms, second.num);
+    const set_before = raw_lk.test_hooks.count(.timer_set);
+    raw_lk.test_hooks.advance(second.num);
+    try W.onEvent(.{ .timer = second.id });
+    try expect.expectEqual(@as(usize, 0), WatchTraffic.live);
+
+    // An empty sea can change no further on its own.
+    try expect.expectEqual(set_before, raw_lk.test_hooks.count(.timer_set));
 }
 
 // -- mixing declared inputs with raw subscriptions -----------------------------

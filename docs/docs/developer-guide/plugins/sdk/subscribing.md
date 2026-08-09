@@ -139,6 +139,75 @@ settings change calls your settings hook instead.
 Inside the update hook the freshness gate has not run, so read a required
 input with `fresh()` here rather than `get()`.
 
+## Acting on a reading that has expired
+
+A plugin that only heard about arrivals could never notice an absence. Lookout
+calls the update hook when a reading expires as well, so one function covers
+both cases: the reading is there, or it has gone.
+
+A reading carries its window, so the moment it stops counting is known when it
+lands. Lookout takes the earliest such moment across your declared inputs and
+wakes your plugin then. Read the input with `fresh()` in that call and it
+answers null. Empty the rows that depended on it, clear the condition you were
+watching, and say what is missing.
+
+Windows differ, so each input expires on its own wakeup and you can tell which
+reading went. Nothing polls. Once every input has expired there is no next
+moment, nothing is armed, and a plugin on a boat with the instruments off costs
+nothing until a reading arrives. That arrival runs the cycle and sets the next
+wakeup.
+
+A plugin that declares no inputs has nothing that can expire, so it hears about
+arrivals alone. A plugin that watches its own connection for silence keeps its
+own clock.
+
+## Ageing an AIS target out
+
+The AIS set expires one target at a time. Each target ages on the window for
+its kind, and Lookout wakes your plugin as each crosses it, so a target that
+stops reporting leaves the chart and the dialog whether or not any other target
+is still being heard. Set the two windows to the ages at which your plugin
+drops a target. An aid to navigation reports about every three minutes, which
+is why it has a window of its own.
+
+<Tabs groupId="plugin-language">
+<TabItem value="zig" label="Zig" default>
+
+```zig
+pub const traffic = lk.subscribeAis(.{
+    .max = 256,
+    .max_age_ms = 180_000,
+    .aton_max_age_ms = 600_000,
+});
+```
+
+</TabItem>
+<TabItem value="go" label="Go">
+
+```go
+var traffic = lk.SubscribeAIS(lk.AISOpts{
+	Max:        256,
+	MaxAge:     180 * time.Second,
+	AtonMaxAge: 600 * time.Second,
+})
+```
+
+</TabItem>
+<TabItem value="rust" label="Rust">
+
+```rust
+traffic: lk::subscribe_ais(256)
+    .max_age(180_000)
+    .aton_max_age(600_000),
+```
+
+</TabItem>
+</Tabs>
+
+Leave them alone and they sit at the host's own eviction clocks, ten minutes
+for a vessel and thirty for an aid. Past those the target is out of the store
+and no snapshot can carry it again.
+
 ## Filling a dialog
 
 A table is a dialog the shell builds from your declaration, opens from a menu,
