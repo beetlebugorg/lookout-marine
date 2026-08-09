@@ -8,6 +8,7 @@
 const std = @import("std");
 
 const broker = @import("../broker.zig");
+const alerts = @import("alerts.zig");
 const budgets = @import("budgets.zig");
 // `caps` names a local in the grant tests below, so this one is suffixed.
 const caps_mod = @import("caps.zig");
@@ -27,7 +28,6 @@ const Plugin = budgets.Plugin;
 const level_err = caps_mod.level_err;
 const level_info = caps_mod.level_info;
 const level_warn = caps_mod.level_warn;
-const max_alert = budgets.max_alert;
 const monoMs = broker.monoMs;
 const wallMs = broker.wallMs;
 const atonType = registry_json.atonType;
@@ -200,49 +200,29 @@ fn hostTableUpdate(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) cal
 }
 
 /// The log level an alert of this severity goes out at: alarm at error,
-/// warning at warn, notice and caution at info.
+/// warning at warn, notice at info.
 ///
-/// The prototype has no alarm surface, so an alert IS its log line, and the
-/// line has to carry the difference between "you may want to know" and "act
-/// now": an alarm at info is an alarm nobody sees, and a notice at error is an
-/// operator who learns to ignore red. Anything unrecognised — including a
-/// payload with no severity at all — is treated as an alarm, because an
-/// unreadable severity is not a reason to be quiet.
-///
-/// `caution` is here because that is the third name plugins/common/lk.zig
-/// offers; `notice` is the name the ruling used. Both mean the same tier.
+/// The line has to carry the difference between "you may want to know" and
+/// "act now": an alarm at info is an alarm nobody sees, and a notice at error
+/// is an operator who learns to ignore red. `alerts.severityOf` decides which
+/// tier the payload named.
 fn alertLevel(json: []const u8) u32 {
-    const sev = jsonStringField(json, "severity") orelse return level_err;
-    if (std.mem.eql(u8, sev, "notice") or std.mem.eql(u8, sev, "caution")) return level_info;
-    if (std.mem.eql(u8, sev, "warning")) return level_warn;
-    return level_err;
+    return switch (alerts.severityOf(json)) {
+        .notice => level_info,
+        .warning => level_warn,
+        .alarm => level_err,
+    };
 }
 
-/// The string value of a top-level-ish `"key":"value"` pair, by scan rather
-/// than by parse: this runs on every alert and the payload is the plugin's own
-/// one-line JSON, not a document.
-fn jsonStringField(json: []const u8, key: []const u8) ?[]const u8 {
-    var quoted: [32]u8 = undefined;
-    if (key.len + 2 > quoted.len) return null;
-    quoted[0] = '"';
-    @memcpy(quoted[1 .. 1 + key.len], key);
-    quoted[1 + key.len] = '"';
-    const at = std.mem.indexOf(u8, json, quoted[0 .. key.len + 2]) orelse return null;
-    var i = at + key.len + 2;
-    while (i < json.len and (json[i] == ' ' or json[i] == ':')) i += 1;
-    if (i >= json.len or json[i] != '"') return null;
-    i += 1;
-    const end = std.mem.indexOfScalarPos(u8, json, i, '"') orelse return null;
-    return json[i..end];
-}
-
+/// Raise an alert: the host holds it for the shell to show and to sound, and
+/// says it in the log. -1 for a payload with nothing in it, matching the SDK,
+/// where -1 means the grant is missing or the payload did not fit.
 fn hostAlert(env: wasm.c.wasm_exec_env_t, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
     const p = caller(env) orelse return -1;
     if (!allow(p, .alerts_raise, "alert")) return -1;
     const text = bytes(ptr, len);
-    const n = @min(text.len, max_alert);
-    @memcpy(p.alert_buf[0..n], text[0..n]);
-    p.alert_len = n;
+    if (std.mem.trim(u8, text, " \t\r\n").len == 0) return -1;
+    p.broker.raiseAlert(p, text);
     p.broker.say(alertLevel(text), p.id, "ALERT {s}", .{text});
     return 0;
 }

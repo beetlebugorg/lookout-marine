@@ -540,6 +540,28 @@ fn jsonDouble(v: std.json.Value) f64 {
     };
 }
 
+/// What the shell would show and sound: every alert the host is still holding,
+/// read back through the call the shell makes. A raise is one log line; this is
+/// the surface a mariner is left with once the deduplication has run.
+fn dumpAlerts(alloc: std.mem.Allocator, p: PluginsRef) void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    p.br.alertsJson(&out) catch return;
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, out.items, .{}) catch return;
+    defer parsed.deinit();
+    const list = (parsed.value.object.get("alerts") orelse return).array.items;
+    emit("alerts: {d} held\n", .{list.len});
+    for (list) |a| {
+        const o = a.object;
+        emit("  held [{s}] {s} | {s}{s}\n", .{
+            o.get("severity").?.string,
+            o.get("title").?.string,
+            o.get("body").?.string,
+            if (o.get("acknowledged").?.bool) " (acknowledged)" else "",
+        });
+    }
+}
+
 /// What the dialog would show: the declaration, then every row in the order
 /// the shell would draw it: the plugin's bands first, then the column asked
 /// for. The values are the SI the plugin sent; the shell is what turns them
@@ -1021,6 +1043,7 @@ pub fn main(init: std.process.Init) !void {
         state.conns.load(.monotonic),
     });
     emit("frames: {d} rendered, {d} alert(s) raised\n", .{ frames, state.alerts.load(.monotonic) });
+    if (ps) |p| dumpAlerts(alloc, p);
     emit("harness: stopping the plugins\n", .{});
 
     if (trapped) {

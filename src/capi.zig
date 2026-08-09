@@ -329,6 +329,31 @@ export fn lookout_plugin_table_open(h: ?*lookout, id: [*:0]const u8, key: [*:0]c
     return if (ps.br.setTableOpen(std.mem.span(id), std.mem.span(key), open != 0)) 0 else -1;
 }
 
+/// Every alert the plugins have raised and the mariner has not seen off, most
+/// urgent first, as JSON. The shell shows them and sounds the alarms. Borrowed
+/// until the next plugin query; NULL when no layer is up.
+export fn lookout_plugin_alerts_json(h: ?*lookout, out_len: ?*usize) ?[*]const u8 {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return null;
+    ps.json.clearRetainingCapacity();
+    ps.br.alertsJson(&ps.json) catch return null;
+    if (out_len) |p| p.* = ps.json.items.len;
+    return ps.json.items.ptr;
+}
+
+/// Acknowledge one alert: the alarm stops sounding and the alert stays listed
+/// until the condition clears. One alert, not one class of them. 0 on success,
+/// -1 when no alert holds that id.
+export fn lookout_plugin_alert_ack(h: ?*lookout, id: u64) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return -1;
+    return if (ps.br.ackAlert(id)) 0 else -1;
+}
+
 /// The plugin layer with the installed set loaded, created on first need.
 /// True when the layer is up afterwards. The install root is created empty
 /// rather than treated as an error: a first install has nothing yet.

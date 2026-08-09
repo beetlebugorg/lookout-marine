@@ -270,6 +270,41 @@ const char *lookout_plugin_table_rows(lookout *h, const char *id, const char *ke
  * Returns 0, or -1 when the plugin or the table is unknown. */
 int lookout_plugin_table_open(lookout *h, const char *id, const char *key, int open);
 
+/* ---- plugin alerts -------------------------------------------------------- */
+
+/* Every alert the plugins have raised and the mariner has not seen off:
+ *
+ *   {"seq":7,"alerts":[
+ *     {"id":3,"plugin":"org.beetlebug.ais","severity":"alarm",
+ *      "title":"AIS CPA alarm","body":"ANNE: CPA 124 m in 585 s",
+ *      "raised":1754700000000,"acknowledged":false}]}
+ *
+ * SEVERITY IS THE CONTRACT WITH THE SHELL. An "alarm" is audible and repeats
+ * until it is acknowledged; a "warning" and a "notice" are visible only. A
+ * marine alarm does not time out, and looking at it is not acknowledging it.
+ *
+ * "raised" is the wall clock in milliseconds since the epoch. "seq" bumps on
+ * every change to the set: re-read when it moves and leave the list alone when
+ * it has not. The order is fixed here: what nobody has answered first, then the
+ * loudest, then the oldest, so an alert on screen does not jump when another
+ * arrives beneath it.
+ *
+ * ONE CONDITION IS ONE ALERT. The host keys them on the plugin, the title and
+ * the body, so a plugin restating the same danger updates its alert instead of
+ * stacking another, and two vessels closing stay two alarms. An alert whose
+ * plugin unloads, or loses the alerts.raise grant, is withdrawn with it.
+ *
+ * Borrowed until the next plugin query; NULL when no plugin layer is up. */
+const char *lookout_plugin_alerts_json(lookout *h, size_t *out_len);
+
+/* Acknowledge one alert by its id: the alarm stops sounding, and the alert
+ * stays listed (as "acknowledged") until the condition clears. It silences THAT
+ * alert and no other: a mariner who has seen the vessel crossing ahead has not
+ * seen the one coming up astern. Once the condition clears and returns, the
+ * plugin raises it again and it sounds again. Returns 0, or -1 when no alert
+ * holds that id. */
+int lookout_plugin_alert_ack(lookout *h, uint64_t id);
+
 /* Offer a file the mariner opened to the plugins.
  *
  * A manifest claims file types — "file_types":[".grib2",".grb"] — and this

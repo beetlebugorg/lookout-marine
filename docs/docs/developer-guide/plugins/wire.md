@@ -416,8 +416,8 @@ Your status is nearly the only thing you can put in front of a person away from
 the chart itself. Use it to say what you are doing, or what you are missing. It
 reaches Lookout through `lookout_plugins_json`. If your settings include a list,
 a status can also carry one line per row. See
-[status items](#status-items-one-line-per-row). There are no jobs, no progress
-and no alarm surface yet.
+[status items](#status-items-one-line-per-row). There are no jobs and no
+progress. An alarm belongs in [alert](#alert), not here.
 
 ### alert
 
@@ -425,20 +425,25 @@ and no alarm surface yet.
 {"severity":"alarm","title":"AIS CPA alarm","body":"899000101: CPA 149 m in 591 s"}
 ```
 
-There is no alarm surface yet, so **your alert is a log line and nothing more**.
-Nobody at the helm will see it. Raise your alerts anyway, and set the severity
-honestly: it picks the log level, so the log still shows how urgent the alert
-was.
+The host holds the alert for the shell and logs it. **Set the severity
+honestly.** An `alarm` is sounded and repeats until the mariner acknowledges it;
+a `warning` and a `notice` are shown and never sounded. The severity also picks
+the log level.
 
-| Severity | Log level |
-|---|---|
-| `alarm` | error |
-| `warning` | warn |
-| `caution`, `notice` | info |
-| anything else, or no severity at all | error |
+| Severity | Shown how | Log level |
+|---|---|---|
+| `alarm` | shown, and sounded until acknowledged | error |
+| `warning` | shown | warn |
+| `caution`, `notice` | shown | info |
+| anything else, or no severity at all | treated as `alarm` | error |
 
-An unrecognised severity is logged at error rather than dropped. The host also
-keeps the last alert per plugin, up to 400 bytes.
+An unreadable severity is an alarm rather than a dropped alert.
+
+One condition is one alert. The host keys them on your plugin, the title and the
+body, so restating the same danger updates the alert you already raised and two
+vessels closing stay two alarms. The title is cut at 96 bytes and the body at
+240. An alert whose plugin unloads, or loses `alerts.raise`, is withdrawn with
+it.
 
 ### http_fetch
 

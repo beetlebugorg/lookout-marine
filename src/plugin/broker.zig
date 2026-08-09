@@ -71,6 +71,7 @@ const net = @import("net.zig");
 const webio = @import("webio.zig");
 
 const caps = @import("broker/caps.zig");
+const alerts = @import("broker/alerts.zig");
 const budgets = @import("broker/budgets.zig");
 const tables = @import("broker/tables.zig");
 const queue = @import("broker/queue.zig");
@@ -89,6 +90,7 @@ comptime {
     // from. These references do, so every part's tests run wherever this one's
     // do.
     _ = caps;
+    _ = alerts;
     _ = budgets;
     _ = tables;
     _ = queue;
@@ -123,7 +125,14 @@ pub const Cap = caps.Cap;
 pub const Caps = caps.Caps;
 
 pub const max_status = budgets.max_status;
-pub const max_alert = budgets.max_alert;
+
+pub const max_alerts_per_plugin = alerts.max_alerts_per_plugin;
+pub const max_alert_title = alerts.max_alert_title;
+pub const max_alert_body = alerts.max_alert_body;
+pub const alert_clear_ms = alerts.alert_clear_ms;
+pub const Severity = alerts.Severity;
+pub const Alert = alerts.Alert;
+
 pub const default_wire_bytes_per_s = budgets.default_wire_bytes_per_s;
 pub const default_log_lines_per_s = budgets.default_log_lines_per_s;
 pub const budget_say_ms = budgets.budget_say_ms;
@@ -195,6 +204,8 @@ const defaultStorageDir = storage.defaultStorageDir;
 const printableKey = storage.printableKey;
 const baseName = storage.baseName;
 const Order = tables.Order;
+const AlertOrder = alerts.Order;
+const freeAlert = alerts.freeAlert;
 const freeCells = tables.freeCells;
 const freeRow = tables.freeRow;
 const freeTable = tables.freeTable;
@@ -287,6 +298,11 @@ pub const Broker = struct {
     kv: std.ArrayList(KvStore) = .empty,
     /// Every table any plugin has declared, with the rows it has fed them.
     tables: std.ArrayList(Table) = .empty,
+    /// Every alert raised and not yet cleared. A shell polls `alerts_seq` and
+    /// re-reads the list when it moves.
+    alerts: std.ArrayList(Alert) = .empty,
+    alerts_seq: u64 = 0,
+    next_alert_id: u64 = 1,
     /// Files the host granted to plugins.
     files: std.ArrayList(FileHandle) = .empty,
     /// Where the per-plugin key-value files live, or null when no writable
@@ -357,6 +373,8 @@ pub const Broker = struct {
         self.kv.deinit(self.alloc);
         for (self.tables.items) |*tab| freeTable(self.alloc, tab);
         self.tables.deinit(self.alloc);
+        for (self.alerts.items) |a| freeAlert(self.alloc, a);
+        self.alerts.deinit(self.alloc);
         for (self.files.items) |*f| f.file.close(io);
         self.files.deinit(self.alloc);
         if (self.storage_dir) |d| self.alloc.free(d);
@@ -633,6 +651,10 @@ pub const Broker = struct {
                 var tab = self.tables.orderedRemove(i);
                 freeTable(self.alloc, &tab);
             }
+            // Its alerts go too. Nothing is left watching the condition, so
+            // nothing can ever say it has passed, and an alarm the mariner
+            // cannot make stop by fixing the boat is a lie.
+            self.dropAlertsLocked(index);
         }
         if (id.len > 0) self.overlay.remove(id);
         self.vessels.clearSource(source, now_ms);
@@ -660,7 +682,176 @@ pub const Broker = struct {
             .overlay_draw => if (id.len > 0) self.overlay.remove(id),
             .vessel_publish => self.vessels.clearSource(source, now_ms),
             .ais_publish => _ = self.ais.clearSource(source) catch {},
+            .alerts_raise => self.dropAlerts(index),
             else => {},
+        }
+    }
+
+    // -- alerts ---------------------------------------------------------------
+
+    /// Take one alert from a plugin, deduplicated.
+    ///
+    /// ONE CONDITION IS ONE ALERT. What tells two apart is the plugin, the
+    /// title and the body: the title names the condition and the body names
+    /// the instance of it, so two vessels closing are two alarms and one
+    /// vessel restated is one. A restatement updates the alert in place. A
+    /// LOUDER restatement also takes back the acknowledgement, because a
+    /// warning that has become an alarm is news.
+    ///
+    /// The caller has already checked the capability and logged the line.
+    pub fn raiseAlert(self: *Broker, p: *Plugin, json: []const u8) void {
+        const raised = alerts.Raised.parse(json) orelse return;
+        self.mu.lock();
+        defer self.mu.unlock();
+        const now = monoMs();
+        self.clearAlertsLocked(now);
+
+        for (self.alerts.items) |*a| {
+            if (a.plugin != p.index) continue;
+            if (!std.mem.eql(u8, a.title, raised.title)) continue;
+            if (!std.mem.eql(u8, a.body, raised.body)) continue;
+            a.last_ms = now;
+            if (raised.severity.louderThan(a.severity)) {
+                a.severity = raised.severity;
+                a.acknowledged = false;
+                self.alerts_seq += 1;
+            }
+            return;
+        }
+        if (!self.makeAlertRoomLocked(p.index)) {
+            self.say(level_warn, p.id, "alert refused: {d} unacknowledged alert(s) already raised", .{max_alerts_per_plugin});
+            return;
+        }
+        const title = self.alloc.dupe(u8, raised.title) catch return;
+        const body = self.alloc.dupe(u8, raised.body) catch {
+            self.alloc.free(title);
+            return;
+        };
+        self.alerts.append(self.alloc, .{
+            .plugin = p.index,
+            .plugin_id = p.id,
+            .id = self.next_alert_id,
+            .severity = raised.severity,
+            .title = title,
+            .body = body,
+            .raised_ms = wallMs(),
+            .last_ms = now,
+        }) catch {
+            self.alloc.free(title);
+            self.alloc.free(body);
+            return;
+        };
+        self.next_alert_id += 1;
+        self.alerts_seq += 1;
+    }
+
+    /// Silence one alert. The key is the alert and not the condition class: a
+    /// mariner who has seen the vessel crossing ahead has not seen the one
+    /// coming up astern, and one control for both would hide the second.
+    /// True when an alert holds that id.
+    pub fn ackAlert(self: *Broker, id: u64) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.alerts.items) |*a| {
+            if (a.id != id) continue;
+            if (!a.acknowledged) {
+                a.acknowledged = true;
+                a.last_ms = monoMs();
+                self.alerts_seq += 1;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// Every live alert, most urgent first: what nobody has answered, then the
+    /// loudest, then the oldest.
+    pub fn alertsJson(self: *Broker, out: *std.ArrayList(u8)) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.clearAlertsLocked(monoMs());
+        const alloc = self.alloc;
+
+        const order = try alloc.alloc(u32, self.alerts.items.len);
+        defer alloc.free(order);
+        for (order, 0..) |*x, i| x.* = @intCast(i);
+        std.mem.sort(u32, order, AlertOrder{ .alerts = self.alerts.items }, AlertOrder.less);
+
+        try out.print(alloc, "{{\"seq\":{d},\"alerts\":[", .{self.alerts_seq});
+        for (order, 0..) |idx, n| {
+            const a = self.alerts.items[idx];
+            if (n > 0) try out.append(alloc, ',');
+            try out.print(alloc, "{{\"id\":{d},\"plugin\":", .{a.id});
+            try writeJsonString(out, alloc, a.plugin_id);
+            try out.print(alloc, ",\"severity\":\"{s}\",\"title\":", .{a.severity.name()});
+            try writeJsonString(out, alloc, a.title);
+            try out.appendSlice(alloc, ",\"body\":");
+            try writeJsonString(out, alloc, a.body);
+            try out.print(alloc, ",\"raised\":{d},\"acknowledged\":{s}}}", .{
+                a.raised_ms,
+                if (a.acknowledged) "true" else "false",
+            });
+        }
+        try out.appendSlice(alloc, "]}");
+    }
+
+    /// Retire the alerts nobody is keeping alive. An ACKNOWLEDGED alert with
+    /// nothing happening to it for `alert_clear_ms` is a condition that has
+    /// passed, so the same condition returning raises a fresh alert and sounds
+    /// again. An unacknowledged one never retires here: an alarm ends when the
+    /// mariner ends it, not when it gets old.
+    fn clearAlertsLocked(self: *Broker, now_ms: i64) void {
+        var i: usize = 0;
+        while (i < self.alerts.items.len) {
+            const a = self.alerts.items[i];
+            if (!a.acknowledged or now_ms - a.last_ms < alert_clear_ms) {
+                i += 1;
+                continue;
+            }
+            _ = self.alerts.orderedRemove(i);
+            freeAlert(self.alloc, a);
+            self.alerts_seq += 1;
+        }
+    }
+
+    /// Room for one more of this plugin's alerts. The oldest one the mariner
+    /// has already answered gives way first, because a danger nobody has seen
+    /// outranks a decision already made. False when every one of them is
+    /// unanswered, and the raise is refused rather than quietly dropping an
+    /// alarm still sounding.
+    fn makeAlertRoomLocked(self: *Broker, index: u32) bool {
+        var live: usize = 0;
+        var oldest: ?usize = null;
+        for (self.alerts.items, 0..) |a, i| {
+            if (a.plugin != index) continue;
+            live += 1;
+            if (!a.acknowledged) continue;
+            if (oldest == null or a.id < self.alerts.items[oldest.?].id) oldest = i;
+        }
+        if (live < max_alerts_per_plugin) return true;
+        const at = oldest orelse return false;
+        const gone = self.alerts.orderedRemove(at);
+        freeAlert(self.alloc, gone);
+        self.alerts_seq += 1;
+        return true;
+    }
+
+    fn dropAlerts(self: *Broker, index: u32) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.dropAlertsLocked(index);
+    }
+
+    fn dropAlertsLocked(self: *Broker, index: u32) void {
+        var i: usize = 0;
+        while (i < self.alerts.items.len) {
+            if (self.alerts.items[i].plugin != index) {
+                i += 1;
+                continue;
+            }
+            const gone = self.alerts.orderedRemove(i);
+            freeAlert(self.alloc, gone);
+            self.alerts_seq += 1;
         }
     }
 

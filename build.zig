@@ -914,6 +914,7 @@ pub fn build(b: *std.Build) void {
         "src/plugin/host/install.zig",
         "src/plugin/host/manifest.zig",
         "src/plugin/host/settings_json.zig",
+        "src/plugin/broker/alerts.zig",
         "src/plugin/broker/budgets.zig",
         "src/plugin/broker/caps.zig",
         "src/plugin/broker/http.zig",

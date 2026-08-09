@@ -444,8 +444,10 @@ if (crossing and !alarmed) {
 }
 ```
 
-Severity is `alarm`, `warning`, `notice` or `caution`. The host maps them to log
-levels: alarm at error, warning at warn, the other two at info.
+Severity is `alarm`, `warning`, `notice` or `caution`. An `alarm` is sounded and
+keeps sounding until the mariner acknowledges it; the rest are shown and never
+sounded. The host maps the same four to log levels: alarm at error, warning at
+warn, the other two at info.
 
 **Raise one only when the mariner must act now and would not otherwise know.**
 Everything else is a status line. An alarm that fires when nothing is wrong gets
@@ -456,9 +458,10 @@ condition has genuinely cleared. Give the gate a dead band if the quantity can
 sit on the limit: a target parked at exactly the alarm distance must not alarm
 once a second.
 
-**There is no alarm surface yet.** An alert is a log line and nothing more
-today, with no sound and no banner. Build the behaviour now; it will work when
-the chrome for it is built.
+**Put the target in the body.** The host tells one alert from another by your
+plugin, the title and the body, so a title naming the condition and a body
+naming the vessel gives one alarm per vessel. A title alone would collapse two
+close passes into one.
 
 Reference: [alert](wire.md#alert).
 

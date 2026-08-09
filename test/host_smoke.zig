@@ -153,7 +153,12 @@ test "the echo plugin loads, draws, and is refused the grant it never asked for"
     try std.testing.expectEqual(@as(u32, 1), echo.denied);
     try std.testing.expectEqual(@as(u32, 1), br.denied);
     try std.testing.expect(sink.has("denied alert: manifest does not request capability alerts.raise"));
-    try std.testing.expectEqual(@as(usize, 0), echo.lastAlert().len);
+    // A refused call raises nothing: the mariner is not shown an alarm the
+    // plugin was never allowed to make.
+    var alerts_json: std.ArrayList(u8) = .empty;
+    defer alerts_json.deinit(alloc);
+    try br.alertsJson(&alerts_json);
+    try std.testing.expectEqualStrings("{\"seq\":0,\"alerts\":[]}", alerts_json.items);
 
     // A synthetic STORE_CHANGED, in the shape the fanout tick builds. The echo
     // plugin answers it by drawing its symbol at the position it was given.

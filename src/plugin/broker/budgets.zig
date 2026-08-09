@@ -31,8 +31,6 @@ const monoMs = broker.monoMs;
 /// nmea0183 plugin reports each connection separately. Eight connections of
 /// `{"id":…,"state":…,"detail":…}` fit with the envelope.
 pub const max_status = 768;
-/// Longest alert text kept per plugin (severity + title + body, as posted).
-pub const max_alert = 400;
 
 // ---- the budgets -----------------------------------------------------------
 //
@@ -157,8 +155,6 @@ pub const Plugin = struct {
     /// slice every caller can hold.
     line_buf: [max_status + max_budget_note]u8 = @splat(0),
     line_len: usize = 0,
-    alert_buf: [max_alert]u8 = @splat(0),
-    alert_len: usize = 0,
     /// Calls refused for want of a capability. The smoke test asserts on this.
     denied: u32 = 0,
 
@@ -298,10 +294,6 @@ pub const Plugin = struct {
             "throttled: {d} event{s} dropped over the {d}-event queue budget",
             .{ self.dropped_events, plural(self.dropped_events), max_queued },
         );
-    }
-
-    pub fn lastAlert(self: *const Plugin) []const u8 {
-        return self.alert_buf[0..self.alert_len];
     }
 };
 

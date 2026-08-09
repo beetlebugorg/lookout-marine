@@ -317,6 +317,17 @@ struct OverlayLayer: View {
                 .overlay(alignment: .top) {
                     if model.isBuilding { BuildingPill().padding(.top, 10) }
                 }
+                // Top centre: what the plugins are alarming about. It is drawn
+                // after the building pill, so an alarm is never under it, and
+                // it takes the pointer because the mariner has to be able to
+                // press Acknowledge.
+                .overlay(alignment: .top) {
+                    if !model.alerts.isEmpty {
+                        AlertBanner(alerts: model.alerts) { model.acknowledgeAlert($0) }
+                            .chromeHitRegion("plugin-alerts")
+                            .padding(.top, Chrome.margin)
+                    }
+                }
                 .overlay {
                     if let picture = model.picture {
                         PictureViewer(model: model, picture: picture)

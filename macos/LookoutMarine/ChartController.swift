@@ -222,6 +222,8 @@ final class ChartController: NSObject {
         #if os(macOS)
         // And their declared tables can take their place in the menu bar.
         model?.refreshPluginTables()
+        // Anything they raise from here on reaches the mariner.
+        model?.startAlertWatch()
         #endif
 
         startDisplayLink()
@@ -254,6 +256,11 @@ final class ChartController: NSObject {
 
     func close() {
         stopDisplayLink()
+        #if os(macOS)
+        // The plugins go with the handle, so nothing is left watching the
+        // conditions their alarms describe.
+        model?.stopAlertWatch()
+        #endif
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
@@ -850,6 +857,28 @@ final class ChartController: NSObject {
               let list = top["rows"] as? [[String: Any]] else { return nil }
         let rows = list.compactMap { PluginTableRow($0, columns: columns) }
         return (top["seq"] as? Int ?? 0, rows)
+    }
+
+    /// Every alert the plugins have raised, already ordered: what nobody has
+    /// answered first, then the loudest, then the oldest. `seq` moves when the
+    /// set has changed since the last read.
+    func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let raw = lookout_plugin_alerts_json(h, &len), len > 0 else { return nil }
+        // Borrowed until the next plugin query, so decode before anything else
+        // runs.
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["alerts"] as? [[String: Any]] else { return nil }
+        return (top["seq"] as? Int ?? 0, list.compactMap { PluginAlert($0) })
+    }
+
+    /// Silence one alert. It stays listed until the condition clears.
+    @discardableResult
+    func acknowledgeAlert(_ id: UInt64) -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugin_alert_ack(h, id) == 0
     }
 
     /// Tell the plugin its table is on screen, or is not.
