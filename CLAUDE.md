@@ -98,6 +98,13 @@ macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
 - **Check disk before a big build**: `df -h /System/Volumes/Data`. The caches
   here fill 100 GB fast.
 - **Licensed imagery must never reach docs.** No C-MAP chart, drawn or named.
+- **"Behind main" on this branch may be ancestry, not content.** `feat/plugins`
+  was rebuilt at some point, so main's work is here under different SHAs and
+  the commit count lies. Before merging anything, ask what is actually missing:
+  `git cherry HEAD origin/main` compares by patch and prints `+` only for a
+  commit whose content you really lack. In August every one of main's 104
+  non-merge commits came back `-`, and a merge would have re-applied all of
+  them as 159 conflicts.
 - **`grep` in this shell is a gitignore-aware wrapper**, not `/usr/bin/grep`. A
   recursive sweep from the repo root silently skips ignored paths and reports
   clean when the string is still on disk. Verify with `git grep -n --untracked`
