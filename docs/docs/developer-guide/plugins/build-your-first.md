@@ -93,7 +93,7 @@ manifest in a test. See
 ```zig
 //! Downwind line: one dashed line 1 nm downwind from own ship.
 //!
-//! The whole plugin. The library subscribes, ages both readings against the
+//! The whole plugin. The library subscribes, ages both values against the
 //! 5 s window, runs `draw` once a second, and takes the line off the chart and
 //! says which instrument is missing when either one goes stale.
 
@@ -127,7 +127,7 @@ write.
   records every value that arrives and stamps its age. Each input accepts a
   freshness window, `max_age_ms`; neither declaration sets one here, so both
   use the default of 5 seconds. Lookout calls your `draw` function only while
-  both readings are younger than their window. When one is not, Lookout takes
+  both values are younger than their window. When one is not, Lookout takes
   the line off the chart and posts `no position, no wind`. The
   `.label = "wind"` is the word in that list, in place of the path's last
   segment.
@@ -141,7 +141,7 @@ write.
   nothing will catch. See
   [state lives in globals](rules.md#state-lives-in-globals).
 
-`draw` runs on the SDK's timer at 1 Hz, not on every reading. Boat data
+`draw` runs on the SDK's timer at 1 Hz, not on every value. Boat data
 arrives at up to 10 Hz, and redrawing at that rate makes the core rebuild vertex
 buffers ten times a second for a line nobody can see move. It is also the only
 way to notice that a fix went stale, because staleness is time passing rather
@@ -307,7 +307,7 @@ frames: 14 rendered, 1 alert(s) raised
 
 Read four things there.
 
-- **`waiting for position, wind`** is the SDK, before either reading has
+- **`waiting for position, wind`** is the SDK, before either value has
   arrived. It names both, and it names them from the input declarations. Once
   the fix and the wind sentence have both landed inside their windows, the
   plugin goes to `running`. The `t` stamps are replay seconds, and `--rate`
@@ -384,7 +384,7 @@ an alarm, storage. [The plugin SDK](sdk/index.md) is the reference for
 everything those recipes call.
 
 The plugins that ship with Lookout are the worked examples, in rising order of
-difficulty: `laylines` draws two lines from the same two readings as yours;
+difficulty: `laylines` draws two lines from the same two values as yours;
 `ownship` draws the boat and keeps a track between calls; `nmea0183` opens
 sockets the mariner configures, reassembles a stream and publishes; `signalk`
 does the same from a JSON protocol over two transports; `ais` adds settings, an

@@ -26,6 +26,9 @@ type recordingHost struct {
 	Upserts   []string
 	Alerts    []string
 	Subscribe []string
+	// Tables declared at start, and the row batches sent since.
+	TablesDeclared []string
+	TableBatches   []string
 
 	// Timers, connections and sockets get ids from these counters, so a test
 	// knows what the library was handed.
@@ -99,6 +102,16 @@ func hostStatus(b []byte) { testHost.Statuses = append(testHost.Statuses, string
 
 func hostAlert(b []byte) int32 {
 	testHost.Alerts = append(testHost.Alerts, string(b))
+	return 0
+}
+
+func hostTableDeclare(b []byte) int32 {
+	testHost.TablesDeclared = append(testHost.TablesDeclared, string(b))
+	return 0
+}
+
+func hostTableUpdate(b []byte) int32 {
+	testHost.TableBatches = append(testHost.TableBatches, string(b))
 	return 0
 }
 
@@ -193,6 +206,14 @@ func lastOverlay() string {
 		return ""
 	}
 	return testHost.Overlays[len(testHost.Overlays)-1]
+}
+
+// lastTableBatch is the most recent set of rows the library sent.
+func lastTableBatch() string {
+	if len(testHost.TableBatches) == 0 {
+		return ""
+	}
+	return testHost.TableBatches[len(testHost.TableBatches)-1]
 }
 
 func logsWith(substr string) []string {

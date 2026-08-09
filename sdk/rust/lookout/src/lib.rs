@@ -33,7 +33,10 @@
 //! * the subscription, and one recorded value per declared input, aged against
 //!   the monotonic clock rather than the wall clock;
 //! * the draw timer. `draw` runs at [`Plugin::DRAW_RATE_MS`], 1 Hz by default,
-//!   not on every store change: the store fans out at up to 10 Hz;
+//!   not on every store change: the store fans out at up to 10 Hz. It runs only
+//!   while there is somewhere for a scene to land, so a plugin whose
+//!   `overlay.draw` grant the mariner has switched off stops drawing until it
+//!   comes back;
 //! * the freshness gate. `draw` runs only when every required input is inside
 //!   its window. Otherwise the scene is cleared and the status names every
 //!   missing input at once;
@@ -53,6 +56,8 @@
 //! | `inputs()` | the `Number`, `Position` and `Ais` fields the library feeds |
 //! | `draw(c)` | the scene, on the library's timer |
 //! | `DRAW_RATE_MS` | how often, default 1000; `0` sets no timer at all |
+//! | `on_update()` | after an input changed: the decision, and the rows |
+//! | `tables()` | the [`Table`] fields the library declares and sends |
 //! | `SETTINGS` | the settings groups, as `SettingsHook::of::<Group>()` |
 //! | `on_settings()` | after a settings change, before the redraw |
 //! | `on_start(s)` | anything else at startup |
@@ -61,6 +66,35 @@
 //!
 //! and for tier 2, on [`Source`]: `on_data(conn, bytes)`, `on_open`,
 //! `on_close`, `connection_note` and `endpoint`.
+//!
+//! WHERE A DECISION BELONGS. `on_update` runs the moment a declared input has a
+//! new value, with every input already current. It is the clock for work that
+//! is not drawing: a plugin that only watches a condition writes `on_update`
+//! and no `draw`, and a plugin that does both keeps the decision there and
+//! renders it here. `DRAW_RATE_MS` is a graphics rate an author picked, so a
+//! decision taken in `draw` runs at whatever rate suits the picture.
+//!
+//! `on_update` ALSO RUNS WHEN A VALUE EXPIRES. A plugin that only heard about
+//! arrivals could never notice an absence. A value carries its window, so the
+//! moment it stops counting is known when it lands: the library arms a one-shot
+//! for the earliest such moment across the declared inputs and runs the cycle
+//! there. The input reads stale in that call, and the plugin empties what
+//! depended on it. Windows differ, so each input expires on its own wakeup.
+//! Nothing polls: once every input has expired there is no next moment, nothing
+//! is armed, and an idle plugin costs nothing at all until the next value
+//! arrives. A plugin with no declared inputs has nothing that can expire and
+//! hears only about arrivals.
+//!
+//! The declared inputs decide that, not the methods beside them. A plugin that
+//! only draws is woken the same way, because a picture held up by a value
+//! that stopped counting is a confident drawing of a guess and has to come off
+//! the chart.
+//!
+//! A TABLE IS FILLED FROM `on_update`. Rows are data. The library opens a table
+//! cycle before that call and closes it after, so a plugin upserts its rows
+//! there and nowhere else. A plugin does not need to request a capability to
+//! fill a table, so its rows keep arriving while the chart grant is off and
+//! the draw timer is down.
 //!
 //! TARGET. `wasm32-wasip1`, `crate-type = ["cdylib"]`. One thread, no
 //! filesystem, no sockets but the host's. See [`raw`] for the floor.
@@ -74,6 +108,7 @@ mod geo;
 mod input;
 mod post;
 mod settings;
+mod table;
 
 pub use chart::{
     Anchor, Area, Chart, Color, Line, Pick, State, Sym, Symbol, MAX_OBJECTS, SCENE_BYTES,
@@ -92,6 +127,10 @@ pub use raw::{log, mono_ms, now_ms, Level, Severity, API_VERSION};
 pub use settings::{
     expect_manifest, settings_json, Field, FieldSpec, Fields, Flag, Group, ListInfo, Num,
     SettingsGroup, SettingsHook, Spec, Store, Tab, Text, MAX_FIELDS, MAX_ROWS, MAX_TEXT_BYTES,
+};
+pub use table::{
+    tables_json, Column, ColumnType, Row, Table, TableAt, TableSort, TableSpec, MAX_COLUMNS,
+    MAX_TABLE_ROWS, TABLE_INTERVAL_MS,
 };
 
 use std::borrow::Cow;
@@ -154,6 +193,16 @@ pub trait Plugin: Default + 'static {
     fn inputs(&mut self) -> Vec<&mut dyn AnyInput> {
         Vec::new()
     }
+
+    /// The dialogs the library declares, opens and sends rows for. List every
+    /// [`Table`] field the plugin holds; anything left out is never declared.
+    fn tables(&mut self) -> Vec<&mut Table> {
+        Vec::new()
+    }
+
+    /// The data path: a batch of values has landed and every declared input
+    /// holds its new value. Decide here, and fill any table here.
+    fn on_update(&mut self) {}
 
     /// The whole scene, every call. The library sends the difference.
     fn draw(&mut self, chart: &mut Chart<'_>) {

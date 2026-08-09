@@ -364,7 +364,7 @@ pub const Hdt = struct {
 };
 
 pub const Hdg = struct {
-    /// The compass reading before deviation and variation are applied.
+    /// The compass heading before deviation and variation are applied.
     sensor_mag: ?f64,
     /// Deviation, east positive.
     deviation: ?f64,
@@ -396,7 +396,7 @@ pub const Mwv = struct {
     angle_deg: ?f64,
     reference: WindRef,
     speed_mps: ?f64,
-    /// `A` — the sensor reports the reading as valid.
+    /// `A` — the sensor reports the value as valid.
     valid: bool,
 };
 
@@ -426,24 +426,24 @@ pub const Vlw = struct {
     trip_m: ?f64,
 };
 
-/// One transducer reading out of an `XDR` list.
+/// One transducer value out of an `XDR` list.
 pub const Transducer = struct {
     /// The transducer type letter: `A` angular, `C` temperature, `P` pressure,
     /// `D` linear displacement. 0 when the field was empty.
     kind: u8,
-    /// Null when the sentence listed the transducer with no reading, which is
+    /// Null when the sentence listed the transducer with no value, which is
     /// what a boat wired for a sensor it does not have sends.
     value: ?f64,
     /// The unit letter: `D` degrees, `C` celsius, `B` bars. 0 when empty.
     unit: u8,
-    /// The transducer's name, which is what identifies the reading. Points
+    /// The transducer's name, which is what identifies the value. Points
     /// into the caller's line.
     name: []const u8,
 };
 
 /// A transducer list: any number of `type,value,unit,name` quadruples.
 ///
-/// A reading is found by NAME and never by position. The list is the device's
+/// A value is found by NAME and never by position. The list is the device's
 /// own: one boat sends heel, trim and rudder, another sends engine pressures,
 /// and the same name may sit in a different quadruple on the next boat.
 pub const Xdr = struct {
@@ -455,15 +455,15 @@ pub const Xdr = struct {
         fields: std.mem.SplitIterator(u8, .scalar),
 
         /// The next whole quadruple. A trailing part-quadruple ends the walk:
-        /// half a reading is not a reading.
+        /// half a quadruple is not a value.
         pub fn next(it: *Iterator) ?Transducer {
             const kind = it.fields.next() orelse return null;
-            const value = it.fields.next() orelse return null;
+            const v = it.fields.next() orelse return null;
             const unit = it.fields.next() orelse return null;
             const name = it.fields.next() orelse return null;
             return .{
                 .kind = letter(kind),
-                .value = num(value),
+                .value = num(v),
                 .unit = letter(unit),
                 .name = name,
             };
@@ -475,10 +475,10 @@ pub const Xdr = struct {
     }
 
     /// The named transducer's value, when it carries the type and unit letters
-    /// asked for. A reading in another unit is skipped rather than converted:
+    /// asked for. A value in another unit is skipped rather than converted:
     /// the name belongs to the device, so a unit that does not match means the
     /// name means something else on this boat.
-    pub fn reading(self: Xdr, name: []const u8, kind: u8, unit: u8) ?f64 {
+    pub fn value(self: Xdr, name: []const u8, kind: u8, unit: u8) ?f64 {
         var it = self.iterator();
         while (it.next()) |t| {
             if (!eq(t.name, name)) continue;
@@ -490,7 +490,7 @@ pub const Xdr = struct {
 
     /// An angular transducer, in degrees.
     pub fn degrees(self: Xdr, name: []const u8) ?f64 {
-        return self.reading(name, 'A', 'D');
+        return self.value(name, 'A', 'D');
     }
 };
 
@@ -1282,9 +1282,9 @@ test "XDR finds a transducer by name, whatever order the list is in" {
     try expectNear(fx.xdr_expect.heel_deg, x.degrees("HEEL"), tol);
     try expectNear(fx.xdr_expect.trim_deg, x.degrees("TRIM"), tol);
     try expectNear(fx.xdr_expect.rudder_deg, x.degrees("RUDDER"), tol);
-    // Listed with no reading: present in the walk, absent as a value.
-    try testing.expect(x.reading("AIRTEMP", 'C', 'C') == null);
-    try testing.expect(x.reading("BARO", 'P', 'B') == null);
+    // Listed with no value: present in the walk, absent as a number.
+    try testing.expect(x.value("AIRTEMP", 'C', 'C') == null);
+    try testing.expect(x.value("BARO", 'P', 'B') == null);
     // A name this boat does not carry.
     try testing.expect(x.degrees("PITCH") == null);
 
@@ -1294,13 +1294,13 @@ test "XDR finds a transducer by name, whatever order the list is in" {
     try expectNear(-4.2, r.degrees("RUDDER"), tol);
     try expectNear(12.0, r.degrees("HEEL"), tol);
     try testing.expect(r.degrees("TRIM") == null);
-    try expectNear(21.5, r.reading("ENGINETEMP", 'C', 'C'), tol);
+    try expectNear(21.5, r.value("ENGINETEMP", 'C', 'C'), tol);
 }
 
-test "an XDR reading in another unit is not read as degrees" {
+test "an XDR value in another unit is not read as degrees" {
     const x = (try parse(fx.xdr_wrong_unit)).xdr;
     try testing.expect(x.degrees("HEEL") == null);
-    try expectNear(0.30, x.reading("HEEL", 'A', 'R'), tol);
+    try expectNear(0.30, x.value("HEEL", 'A', 'R'), tol);
 }
 
 test "an XDR list walks whole quadruples and stops at a partial one" {
@@ -1309,7 +1309,7 @@ test "an XDR list walks whole quadruples and stops at a partial one" {
     while (whole.next()) |_| n += 1;
     try testing.expectEqual(@as(usize, 5), n);
 
-    // Three fields left over at the end are not a reading.
+    // Three fields left over at the end are not a value.
     var short = (try parse("$IIXDR,A,1.0,D,HEEL,A,2.0,D*65")).xdr.iterator();
     const first = short.next().?;
     try testing.expectEqualStrings("HEEL", first.name);

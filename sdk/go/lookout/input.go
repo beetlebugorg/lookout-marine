@@ -17,16 +17,16 @@ import (
 	"time"
 )
 
-// DefaultMaxAge is how old a reading may be and still count. One 5 s window
+// DefaultMaxAge is how old a value may be and still count. One 5 s window
 // rules all vessel data; the store and every shipped plugin use the same number.
 const DefaultMaxAge = 5 * time.Second
 
 // InputOpts is how one declared input behaves.
 type InputOpts struct {
-	// Label is what the status line calls this reading when it is missing:
+	// Label is what the status line calls this value when it is missing:
 	// "no wind". It defaults to the last segment of the path.
 	Label string
-	// MaxAge overrides DefaultMaxAge, for a reading that arrives on a slower
+	// MaxAge overrides DefaultMaxAge, for a value that arrives on a slower
 	// clock.
 	MaxAge time.Duration
 	// Optional keeps this input out of the freshness gate and out of the status
@@ -55,7 +55,7 @@ type input struct {
 // Path is the vessel path this input subscribed to.
 func (i *input) Path() string { return i.path }
 
-// Label is what the status line calls this reading.
+// Label is what the status line calls this value.
 func (i *input) Label() string { return i.label }
 
 // Age is how old the value is, and false when there is none.
@@ -70,6 +70,20 @@ func (i *input) ageMs(mono int64) int64 { return i.ageAt + (mono - i.atMono) }
 
 func (i *input) freshAt(mono int64) bool { return i.have && i.ageMs(mono) <= i.maxAge }
 
+// staleAt is the monotonic moment this value stops counting, and false when it
+// already has. The window is known the moment the value lands, so its expiry
+// is an appointment rather than something to poll for.
+func (i *input) staleAt(mono int64) (int64, bool) {
+	if !i.have {
+		return 0, false
+	}
+	at := i.atMono + i.maxAge - i.ageAt
+	if at <= mono {
+		return 0, false
+	}
+	return at, true
+}
+
 func (i *input) stamp(ageMs, mono int64) {
 	i.have = true
 	i.atMono = mono
@@ -80,9 +94,9 @@ func (i *input) stamp(ageMs, mono int64) {
 	}
 }
 
-func (i *input) record(r Reading, mono int64) {
+func (i *input) record(r PathValue, mono int64) {
 	// A null value means the path has no source left. Treat it as removal: the
-	// reading is gone, not zero.
+	// value is gone, not zero.
 	if r.Removed() {
 		i.have = false
 		return
@@ -188,31 +202,86 @@ func (p *PositionInput) Fresh() (Point, bool) {
 // AIS traffic
 // ---------------------------------------------------------------------------
 
+// DefaultAISMaxAge is how long a vessel's report stays interesting, and
+// DefaultAtonMaxAge the same for an aid to navigation. Both match the host's
+// eviction clocks: past them the target is out of the store and no snapshot can
+// carry it again.
+const (
+	DefaultAISMaxAge  = 600 * time.Second
+	DefaultAtonMaxAge = 1800 * time.Second
+)
+
 // AISOpts is how the target set behaves.
 type AISOpts struct {
 	// Max is the most targets kept. A snapshot longer than this is truncated
 	// and logged. It defaults to 128.
 	Max int
+	// MaxAge is how long a vessel's report stays interesting. Past it the
+	// target can no longer change anything the plugin decides, so the library
+	// stops waking for it. Set it to the age at which this plugin drops a
+	// target.
+	MaxAge time.Duration
+	// AtonMaxAge is the same, for an aid to navigation. An aid reports about
+	// every three minutes, so a vessel's window would age one out while it is
+	// still on station.
+	AtonMaxAge time.Duration
 }
 
 // AISInput is the AIS target set, recorded and aged by the library. Declare it
 // beside the vessel inputs; it never holds Draw back, because an empty sea is
 // not a missing instrument.
 type AISInput struct {
-	max    int
-	list   []Target
-	atMono int64
+	max        int
+	maxAge     int64
+	atonMaxAge int64
+	list       []Target
+	atMono     int64
 }
 
 // SubscribeAIS declares the AIS target set. The library subscribes at start.
 func SubscribeAIS(opts ...AISOpts) *AISInput {
-	max := 128
-	if len(opts) > 0 && opts[0].Max > 0 {
-		max = opts[0].Max
+	var o AISOpts
+	if len(opts) > 0 {
+		o = opts[0]
 	}
-	a := &AISInput{max: max}
+	max := 128
+	if o.Max > 0 {
+		max = o.Max
+	}
+	maxAge := o.MaxAge
+	if maxAge == 0 {
+		maxAge = DefaultAISMaxAge
+	}
+	atonMaxAge := o.AtonMaxAge
+	if atonMaxAge == 0 {
+		atonMaxAge = DefaultAtonMaxAge
+	}
+	a := &AISInput{max: max, maxAge: maxAge.Milliseconds(), atonMaxAge: atonMaxAge.Milliseconds()}
 	registerAIS(a)
 	return a
+}
+
+// staleAt is when the next target in the set ages out, and false when none can.
+// Each target keeps its own clock, so the set produces one appointment per
+// target rather than one for the snapshot.
+func (a *AISInput) staleAt(mono int64) (int64, bool) {
+	next := int64(0)
+	found := false
+	for i := range a.list {
+		window := a.maxAge
+		if a.list[i].ATON {
+			window = a.atonMaxAge
+		}
+		at := a.atMono + window - a.list[i].AgeMs
+		if at <= mono {
+			continue
+		}
+		if !found || at < next {
+			next = at
+			found = true
+		}
+	}
+	return next, found
 }
 
 // Targets is every target in the last snapshot, aged to now.

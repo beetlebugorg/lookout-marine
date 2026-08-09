@@ -52,7 +52,7 @@ what lets the host add an event without breaking a module built today.
 | 12 | `WS_OPEN` | The connection id | `{"protocol":"v1.signalk"}`. The subprotocol the server chose, empty when it chose none. |
 | 13 | `WS_DATA` | The connection id | One whole text message. The host joins the fragments, so this is never half of one. |
 | 14 | `WS_CLOSED` | The connection id | `{"code":1000,"reason":"…"}`. The last event on that connection, whoever ended it. |
-| 15 | `TABLE_OPEN` | 0 | `{"key":"targets"}`. A shell has put one of your declared tables on screen. Build its rows from here on; before this nobody was looking. |
+| 15 | `TABLE_OPEN` | 0 | `{"key":"targets"}`. A shell has put one of your declared tables on screen. Build its rows from here on; before this nobody was looking. Send the first batch from inside this call, or the dialog sits empty. |
 | 16 | `TABLE_CLOSED` | 0 | `{"key":"targets"}`. The shell closed it and the host has already dropped the rows. |
 | 17 | `GRANTS_CHANGED` | 0 | `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities you hold right now. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
@@ -66,6 +66,13 @@ started, and again on every change. Use it to stop producing what the host would
 only refuse: a grant that has gone means the calls it covered will answer -1, and
 whatever earlier calls produced has already been taken back. It is not the
 permission. Every call is still checked on its own, whether or not you read this.
+
+Losing `overlay.draw` is the case worth writing for. Cancel the timer that
+drives your scene, forget the diff you were keeping, because the host has
+already removed what it described, and post one status line saying why the
+chart is empty. Arm the timer again and send the whole scene when the grant
+comes back. There is no capability to request for `TABLE_UPDATE`, so a dialog
+on screen keeps filling throughout. Each SDK does all of this for you.
 
 **One datagram is one event.** The host never joins two `UDP_DATA` payloads and
 never splits one, so a plugin parsing NMEA over UDP does not reassemble anything.
@@ -109,8 +116,8 @@ not trap.
 | `file_write` | `(handle: i64, ptr, len) -> i32` | `files` | Bytes appended, or -1 for a read handle, or one that is not yours. |
 | `file_close` | `(handle: i64)` | `files` | Nothing. The host also closes every handle you hold when you stop. |
 
-Timers, status lines, the log and the clocks need no capability. Every plugin
-can report what it is doing and measure time without asking for one.
+A plugin never requests a capability for timers, status lines, the log or the
+clocks. Every plugin can report what it is doing and measure time.
 
 **There is no `file_open`.** You cannot name a path. Every file handle you ever
 see arrived as a `FILE_OPENED` event because the host granted it, and the host
@@ -303,12 +310,12 @@ knots, and converting is the parsing plugin's job. An aid to navigation adds
            {"path":"environment.wind.directionTrue","value":null}]}
 ```
 
-Only the paths you subscribed to, only when the elected reading changed, and at
+Only the paths you subscribed to, only when the elected value changed, and at
 most 10 Hz. `age_ms` is how old the value was **when the host wrote the payload**;
 it is already stale when you read it, so age it on with `mono_ms` if you need it
 later.
 
-**A `null` value is a removal, not a null reading.** The path has no value from
+**A `null` value is a removal, not a null value.** The path has no value from
 any source any more, because a source was cleared or the plugin that owned it was
 disabled. Stop drawing whatever it fed. There is no separate delete list, and a
 removal carries no `ts` and no `age_ms`, because there is no value for them to

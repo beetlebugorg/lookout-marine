@@ -17,7 +17,7 @@
 //  the vessels under an alarmed one and never moves it off the top line.
 //
 //  A null cell is a dash. Never heard and heard as zero are different
-//  readings, and the table says which one it has.
+//  values, and the table says which one it has.
 
 #if os(macOS)
 import AppKit
@@ -390,7 +390,7 @@ final class PluginTableWindowController: NSObject, NSWindowDelegate,
         field.stringValue = PluginTableFormat.text(cell, col.type)
         field.alignment = col.type.numeric ? .right : .left
         // A cell the plugin never sent is greyed: the mariner can tell a
-        // reading that is missing from one that is small.
+        // value that is missing from one that is small.
         switch cell {
         case .empty: field.textColor = .tertiaryLabelColor
         default: field.textColor = col.type == .flag ? Self.flagColor(cell) : .labelColor

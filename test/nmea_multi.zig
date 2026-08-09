@@ -184,12 +184,12 @@ fn waitFor(ctx: anytype, ready: fn (@TypeOf(ctx)) bool) !void {
     return error.TimedOut;
 }
 
-fn reading(vessels: *vstore.Store, path: []const u8) ?vstore.Reading {
+fn pathValue(vessels: *vstore.Store, path: []const u8) ?vstore.PathValue {
     return vessels.readElected(path, broker.wallMs());
 }
 
 fn number(vessels: *vstore.Store, path: []const u8) ?f64 {
-    const r = reading(vessels, path) orelse return null;
+    const r = pathValue(vessels, path) orelse return null;
     return switch (r.value) {
         .number => |v| v,
         else => null,
@@ -320,11 +320,11 @@ test "two connections feed one chart, and pausing one leaves the other running" 
     // read into the queue are still delivered, so the baseline is taken after
     // a short drain — otherwise a late line makes the paused row look alive.
     broker.sleepMs(400);
-    const heading_at_pause = reading(&vessels, heading_path).?.ts_ms;
-    const depth_at_pause = reading(&vessels, depth_path).?.ts_ms;
+    const heading_at_pause = pathValue(&vessels, heading_path).?.ts_ms;
+    const depth_at_pause = pathValue(&vessels, depth_path).?.ts_ms;
     broker.sleepMs(700);
-    try must(reading(&vessels, heading_path).?.ts_ms == heading_at_pause, "the paused row published nothing more");
-    try must(reading(&vessels, depth_path).?.ts_ms >= depth_at_pause, "the other row kept publishing");
+    try must(pathValue(&vessels, heading_path).?.ts_ms == heading_at_pause, "the paused row published nothing more");
+    try must(pathValue(&vessels, depth_path).?.ts_ms >= depth_at_pause, "the other row kept publishing");
 
     // The status says which row is which: one connected, one switched off,
     // and the plugin itself is still running.
@@ -499,7 +499,7 @@ test "an AIS name reaches the row the targets dialog draws, not the MMSI" {
 // the transducer, temperature and log sentences
 // ---------------------------------------------------------------------------
 
-/// A boat's own instruments: a transducer list with two of its five readings
+/// A boat's own instruments: a transducer list with two of its five values
 /// empty, the water temperature, and the log. The XDR is the shape that matters
 /// here, because it is the only sentence the plugin reads whose fields are a
 /// list rather than a fixed layout.

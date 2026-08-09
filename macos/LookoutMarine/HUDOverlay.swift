@@ -318,7 +318,7 @@ struct ReadoutsCapsule: View {
 ///
 /// The readout carries own ship and nothing else. It does not follow the map
 /// centre and it does not switch meaning when the mariner pans away, because
-/// panning away is exactly when a mistaken reading is dangerous. Where there
+/// panning away is exactly when a mistaken value is dangerous. Where there
 /// is no fix it shows NO NUMBERS: a coordinate with no boat behind it is the
 /// ambiguity this removes. The coordinates of a PLACE come from the chart
 /// menu, on demand, at the point the mariner asked about.
@@ -450,8 +450,9 @@ struct ChartMenuPanel: View {
     }
 
     /// The point's own coordinates, in the mariner's format. Reading them is
-    /// the common case, so it costs no click at all. Over a marker the mark's
-    /// name rides above them, because that is what Rename and Remove act on.
+    /// the common case, so they are there without a click. Over a marker the
+    /// mark's name rides above them, because that is what Rename and Remove
+    /// act on.
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
             if let mark = menu.marker {

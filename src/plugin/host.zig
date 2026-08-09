@@ -1583,7 +1583,7 @@ pub const Host = struct {
         }
         // A grant that goes off takes back what it produced. The plugin keeps
         // running, so nothing else clears the overlay objects it drew or the
-        // readings it published, and both would sit there unchanging while
+        // values it published, and both would sit there unchanging while
         // looking current.
         if (!on) self.br.withdraw(index, cap, broker.wallMs());
         // The plugin is told what it now holds, after the takeback, so it can

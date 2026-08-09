@@ -42,7 +42,7 @@ impl Publish {
         self.b.position(path, at.lat, at.lon, self.ts);
     }
 
-    /// This source holds the path and has no reading for it right now.
+    /// This source holds the path and has no value for it right now.
     pub fn clear(&mut self, path: &str) {
         self.b.clear(path, self.ts);
     }

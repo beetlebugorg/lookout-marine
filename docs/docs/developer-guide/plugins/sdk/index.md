@@ -54,7 +54,8 @@ typo like `Setting` is not an error, it is a plugin with no settings.
 | `inputs` | subscribes the plugin to store values | [Subscribing to data](subscribing.md) |
 | `draw(c)` | describes the scene, on a timer | [Drawing on the chart](drawing.md) |
 | `draw_rate_ms` | how often `draw` runs, default 1000 | [Drawing on the chart](drawing.md) |
-| `onUpdate()` | runs when an input has a new value | [Subscribing to data](subscribing.md) |
+| `onUpdate()` | runs when an input has a new value or expires, and fills any table | [Subscribing to data](subscribing.md#acting-on-a-value-as-it-arrives) |
+| `lk.table(…)` | a dialog the mariner opens from a menu | [Subscribing to data](subscribing.md#filling-a-dialog) |
 | `Settings` | settings the mariner can change | [Adding settings](settings.md) |
 | `onSettings()` | runs after a settings change | [Adding settings](settings.md) |
 | `Connections` | a connection list | [Connecting to instruments](connections.md) |
@@ -223,7 +224,7 @@ impl lk::Plugin for Windline {
 That is a complete plugin. The plugin subscribes to both paths. Lookout
 records and ages what arrives, calls your `draw` function once a second (the
 default; see [Drawing on the chart](drawing.md)), and sends the difference
-between this scene and the last. When either reading passes its 5 s window the line comes
+between this scene and the last. When either value passes its 5 s window the line comes
 off the chart and the status reads `no position, no wind`.
 
 The windline example is available in each language: `plugins/windline/`,
@@ -241,18 +242,25 @@ The windline example is available in each language: `plugins/windline/`,
 | The draw hook | `pub fn draw(c)` | `Draw(*lk.Chart)` | `fn draw(&mut self, c)` |
 | Draw a line | `c.line(id, pts, style)` | `c.Line(id, pts, style)` | `c.line(id, pts, style)` |
 | The status line | `c.status(fmt, args)` | `c.Status(format, a…)` | `c.status(&text)` |
+| The update hook | `pub fn onUpdate()` | `OnUpdate()` | `fn on_update(&mut self)` |
+| Declare a table | `lk.table(.{})` | `lk.NewTable(opts)` | `lk::TableSpec` |
+| Write a row | `T.upsert(.{ … })` | `t.Row(id)…Done()` | `t.row(id)…done()` |
 | Settings values | `lk.settings(G)` | the `Settings` field | `G::get()` |
 | A connection list | `lk.connections(.{})` | `lk.Connections(opts)` | `impl lk::ConnSpec` |
 | The data hook | `pub fn onData(conn, b)` | `OnData(*lk.Conn, []byte)` | `fn on_data(&mut self, …)` |
-| Publish readings | `lk.Publish.begin()` | `lk.NewPublish()` | `lk::Publish::begin()` |
+| Publish values | `lk.Publish.begin()` | `lk.NewPublish()` | `lk::Publish::begin()` |
 | Raise an alarm | `lk.alert(sev, t, b)` | `lk.Alert(sev, t, b)` | `lk::alert(sev, t, b)` |
 
-Three differences between the languages are not cosmetic.
+Four differences between the languages are not cosmetic.
 
 - **Zig catches a misused optional input at compile time.** `get()` on an
   optional input is a compile error naming the two ways out. Rust encodes the
   same thing in the type. Go has no way to say it, so `Get()` answers the
   last value whether or not it is stale.
+- **Zig catches a misdeclared table cell at compile time.** A row field that
+  names no column is a compile error. Rust has one method for a text cell and
+  one for a number, so the column type is checked where you write it. Go takes
+  any value and answers a mismatch with a dash on screen and one log line.
 - **Zig's limits are fixed arrays.** The scene batch is 64 KiB, an overlay id
   is kept to 48 bytes and a connection list holds 8 connections. Go and Rust
   grow instead, so a scene or a connection count that Zig drops still goes

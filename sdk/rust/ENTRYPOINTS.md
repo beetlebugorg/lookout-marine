@@ -96,7 +96,7 @@ impl lk::Plugin for Windline {
 `plugin!` writes the five exports and builds the plugin with `Default` on
 the first call. The library subscribes to both paths, records and ages what
 arrives, runs `draw` once a second, and sends the difference between this
-scene and the last. A reading older than 5 s takes the line off the chart and
+scene and the last. A value older than 5 s takes the line off the chart and
 posts `degraded, no position, no wind`.
 
 ## Inputs
@@ -328,7 +328,7 @@ adds a phrase after the connection's rate.
 let mut p = lk::Publish::begin();
 p.number("navigation.speedOverGround", mps);
 p.position("navigation.position", lk::Point::new(lat, lon));
-p.clear("environment.depth.belowKeel");   // held, and no reading right now
+p.clear("environment.depth.belowKeel");   // held, and no value right now
 p.send();
 ```
 
@@ -381,7 +381,7 @@ impl raw::RawPlugin for Probe {
     fn on_event(&mut self, e: raw::Event<'_>) -> lookout::Result {
         match e {
             raw::Event::StoreChanged(payload) => {
-                for r in raw::readings(payload) { … }
+                for r in raw::path_values(payload) { … }
             }
             raw::Event::Timer(id) if id == self.timer => …,
             _ => {}
@@ -402,6 +402,88 @@ lk::raw::http_fetch(&lk::raw::HttpRequest::get("https://tiles.example.org/x"));
 
 `Plugin::on_event` receives every event the library did not consume, so a
 drawing plugin can answer an HTTP response without giving anything up.
+
+## Acting on a value, and filling a dialog
+
+`Plugin::on_update` runs the moment a batch of values lands, with every input
+already holding its new value. Decide there rather than in `draw`, whose rate is
+one you chose for the picture.
+
+It runs when a value expires as well. A value carries its window, so the
+library arms a one-shot for the earliest moment a declared input stops counting
+and runs the cycle there; the input reads stale in that call, and whatever
+depended on it goes. Each input expires on its own wakeup, and once every one
+has expired nothing is armed. A plugin that declares no input has nothing that
+can expire.
+
+The declared inputs decide that, not the methods beside them. A plugin that only
+draws is woken the same way, because a picture held up by a value that stopped
+counting has to come off the chart.
+
+A table is a dialog the shell builds from a `TableSpec`. List it in
+`Plugin::tables` and the library declares it at start, tells you when the
+mariner opens it, and sends what changed once a cycle.
+
+```rust
+const TARGETS: lk::TableSpec = lk::TableSpec {
+    key: "targets",
+    title: "AIS Targets",
+    menu: "Vessels",
+    columns: &[
+        lk::Column::text("name", "Vessel"),
+        lk::Column::new("cpa", "CPA", lk::ColumnType::Distance),
+        lk::Column::flag("state"),
+    ],
+    sort: Some(lk::TableSort::by("cpa")),
+    at: Some(lk::TableAt { lat: "lat", lon: "lon" }),
+};
+
+struct Ais {
+    targets: lk::Table,
+}
+
+impl Default for Ais {
+    fn default() -> Self {
+        Ais { targets: lk::Table::new(TARGETS) }
+    }
+}
+
+impl lk::Plugin for Ais {
+    fn tables(&mut self) -> Vec<&mut lk::Table> {
+        vec![&mut self.targets]
+    }
+
+    fn on_update(&mut self) {
+        if !self.targets.is_open() {
+            return;
+        }
+        self.targets
+            .row("899000101")
+            .band(0)
+            .text("name", Some("ANNE"))
+            .num("cpa", Some(124.0))
+            .at(lk::Point::new(38.97, -76.46))
+            .done();
+    }
+}
+```
+
+The rows are written from `on_update` and nowhere else: the library opens a
+cycle before that call and sends what changed after it. A row the cycle does
+not describe leaves the table. `text` and `num` take an `Option`, and `None` is
+a dash on screen. `lk::tables_json(&[&self.targets])` renders the `"tables"`
+array the manifest must carry, for a `cargo test` to compare.
+
+## The chart grant
+
+The library reads `GRANTS_CHANGED` and follows `overlay.draw`. When the grant
+goes it cancels the draw timer, forgets the scene diff and posts one status line
+saying why the chart is empty; when it comes back it arms the timer and sends
+the whole scene again. `on_update` and the tables carry on throughout: a plugin
+never asks for a capability to fill a table.
+
+`lk::raw::granted(payload, "overlay.draw")` reads the payload, for a tier-3
+plugin that handles the event itself.
 
 ## What it costs
 

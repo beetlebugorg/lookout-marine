@@ -104,7 +104,7 @@ pub const Value = union(enum) {
 };
 
 /// What a consumer reads: the elected value plus everything needed to judge it.
-pub const Reading = struct {
+pub const PathValue = struct {
     value: Value,
     ts_ms: i64,
     age_ms: i64,
@@ -114,12 +114,12 @@ pub const Reading = struct {
     stale: bool,
 };
 
-/// One coalesced change for a subscriber. `reading` is null when the path has
+/// One coalesced change for a subscriber. `value` is null when the path has
 /// no value at all any more, which is what a subscriber sees after the source
 /// that owned the path was cleared.
 pub const Change = struct {
     path: []const u8,
-    reading: ?Reading,
+    value: ?PathValue,
 };
 
 /// Values older than this are stale. One window rules every path: on the
@@ -150,7 +150,7 @@ const Entry = struct {
     slots: std.ArrayList(Slot) = .empty,
     subs: std.ArrayList(SubId) = .empty,
     /// The election result at the last write or refresh, for change detection.
-    last: ?Reading = null,
+    last: ?PathValue = null,
 };
 
 const Subscriber = struct {
@@ -328,7 +328,7 @@ pub const Store = struct {
     // -- reading -------------------------------------------------------------
 
     /// The elected value for a path, or null when no source holds one.
-    pub fn readElected(self: *Store, path: []const u8, now_ms: i64) ?Reading {
+    pub fn readElected(self: *Store, path: []const u8, now_ms: i64) ?PathValue {
         self.mu.lock();
         defer self.mu.unlock();
         const idx = self.index.get(path) orelse return null;
@@ -387,7 +387,7 @@ pub const Store = struct {
         const sub = &(self.subs.items[sub_id] orelse return);
         for (sub.dirty.items) |idx| {
             const e = &self.entries.items[idx];
-            try out.append(self.alloc, .{ .path = e.path, .reading = self.electLocked(e, now_ms) });
+            try out.append(self.alloc, .{ .path = e.path, .value = self.electLocked(e, now_ms) });
         }
         sub.dirty.clearRetainingCapacity();
     }
@@ -423,7 +423,7 @@ pub const Store = struct {
     /// staleness window wins. If none is fresh, the most recent stale value is
     /// returned flagged stale — a mariner is told the fix is old, not left with
     /// a blank where a boat was.
-    fn electLocked(self: *const Store, e: *const Entry, now_ms: i64) ?Reading {
+    fn electLocked(self: *const Store, e: *const Entry, now_ms: i64) ?PathValue {
         var stale_best: ?Slot = null;
         for (self.sources.items) |sid| {
             const slot = for (e.slots.items) |s| {
@@ -457,7 +457,7 @@ pub const Store = struct {
     fn reelectLocked(self: *Store, idx: u32, now_ms: i64) bool {
         const e = &self.entries.items[idx];
         const now = self.electLocked(e, now_ms);
-        const changed = !sameReading(e.last, now);
+        const changed = !samePathValue(e.last, now);
         e.last = now;
         if (!changed) return false;
         for (e.subs.items) |sid| {
@@ -473,7 +473,7 @@ pub const Store = struct {
     }
 };
 
-fn sameReading(a: ?Reading, b: ?Reading) bool {
+fn samePathValue(a: ?PathValue, b: ?PathValue) bool {
     if (a == null or b == null) return (a == null) == (b == null);
     return a.?.source == b.?.source and a.?.ts_ms == b.?.ts_ms and
         a.?.stale == b.?.stale and a.?.value.eql(b.?.value);
@@ -653,7 +653,7 @@ test "a subscriber collects each changed path once per flush" {
     try t.expect(s.hasChanges(sub));
     try s.collectChanged(sub, 0, &out);
     try t.expectEqual(@as(usize, 2), out.items.len);
-    try t.expect(out.items[0].reading == null);
+    try t.expect(out.items[0].value == null);
     out.clearRetainingCapacity();
 
     // Ten writes to one path between flushes coalesce into one change.
@@ -664,7 +664,7 @@ test "a subscriber collects each changed path once per flush" {
     try s.collectChanged(sub, 1_010, &out);
     try t.expectEqual(@as(usize, 1), out.items.len);
     try t.expectEqualStrings("navigation.position", out.items[0].path);
-    try t.expectEqual(@as(i64, 1_009), out.items[0].reading.?.ts_ms);
+    try t.expectEqual(@as(i64, 1_009), out.items[0].value.?.ts_ms);
     out.clearRetainingCapacity();
 
     // Nothing changed since, so nothing is collected.
@@ -691,7 +691,7 @@ test "an election that changes with time alone reaches the subscriber" {
     try s.set("navigation.position", pos_a, 0, 1); // the boat's GPS, then silent
     try s.set("navigation.position", pos_b, 2_000, 2); // the phone, still going
     try s.collectChanged(sub, 2_000, &out);
-    try t.expectEqual(@as(SourceId, 1), out.items[0].reading.?.source);
+    try t.expectEqual(@as(SourceId, 1), out.items[0].value.?.source);
     out.clearRetainingCapacity();
 
     // No write happens; source 1 simply ages out of its 5 s window and hands over.
@@ -700,15 +700,15 @@ test "an election that changes with time alone reaches the subscriber" {
     try t.expectEqual(@as(usize, 1), s.refresh(6_000));
     try s.collectChanged(sub, 6_000, &out);
     try t.expectEqual(@as(usize, 1), out.items.len);
-    try t.expect(!out.items[0].reading.?.stale);
-    try t.expectEqual(@as(SourceId, 2), out.items[0].reading.?.source);
+    try t.expect(!out.items[0].value.?.stale);
+    try t.expectEqual(@as(SourceId, 2), out.items[0].value.?.source);
 
     // Both stale: the most recent value reads, flagged, rather than vanishing.
     try t.expectEqual(@as(usize, 1), s.refresh(20_000));
     out.clearRetainingCapacity();
     try s.collectChanged(sub, 20_000, &out);
-    try t.expect(out.items[0].reading.?.stale);
-    try t.expectEqual(@as(SourceId, 2), out.items[0].reading.?.source);
+    try t.expect(out.items[0].value.?.stale);
+    try t.expectEqual(@as(SourceId, 2), out.items[0].value.?.source);
 }
 
 test "clearing a source tells its subscribers the value is gone" {
@@ -725,7 +725,7 @@ test "clearing a source tells its subscribers the value is gone" {
     s.clearSource(1, 1_100);
     try s.collectChanged(sub, 1_100, &out);
     try t.expectEqual(@as(usize, 1), out.items.len);
-    try t.expect(out.items[0].reading == null);
+    try t.expect(out.items[0].value == null);
 }
 
 test "clearing a source drops the subscriptions it owned" {

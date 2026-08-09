@@ -342,12 +342,12 @@ fn waitFor(comptime what: []const u8, ctx: anytype, ready: fn (@TypeOf(ctx)) boo
     return error.TimedOut;
 }
 
-fn reading(vessels: *vstore.Store, path: []const u8) ?vstore.Reading {
+fn pathValue(vessels: *vstore.Store, path: []const u8) ?vstore.PathValue {
     return vessels.readElected(path, broker.wallMs());
 }
 
 fn number(vessels: *vstore.Store, path: []const u8) ?f64 {
-    const r = reading(vessels, path) orelse return null;
+    const r = pathValue(vessels, path) orelse return null;
     return switch (r.value) {
         .number => |v| v,
         else => null,
@@ -486,7 +486,7 @@ test "a Signal K server feeds the chart, and the mariner can pause it" {
     // subscription, so reaching this line proves the plugin sent one.
     try waitFor("own ship in the store", rig.vessels, struct {
         fn ready(v: *vstore.Store) bool {
-            return number(v, heading_path) != null and reading(v, position_path) != null;
+            return number(v, heading_path) != null and pathValue(v, position_path) != null;
         }
     }.ready);
     try must(sk.subscribed.load(.monotonic) >= 1, "the plugin subscribed");
@@ -501,7 +501,7 @@ test "a Signal K server feeds the chart, and the mariner can pause it" {
     try std.testing.expectApproxEqAbs(@as(f64, 90.0), number(rig.vessels, heading_path).?, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 2.5722), number(rig.vessels, sog_path).?, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 4.1), number(rig.vessels, depth_path).?, 1e-9);
-    const pos = reading(rig.vessels, position_path).?;
+    const pos = pathValue(rig.vessels, position_path).?;
     try must(pos.value == .position, "the position is a position");
     try std.testing.expectApproxEqAbs(@as(f64, 38.9763), pos.value.position.lat, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, -76.4767), pos.value.position.lon, 1e-9);
@@ -548,9 +548,9 @@ test "a Signal K server feeds the chart, and the mariner can pause it" {
     // Bytes already read into the queue are still delivered, so the baseline
     // is taken after a short drain.
     broker.sleepMs(400);
-    const at_pause = reading(rig.vessels, heading_path).?.ts_ms;
+    const at_pause = pathValue(rig.vessels, heading_path).?.ts_ms;
     broker.sleepMs(700);
-    try must(reading(rig.vessels, heading_path).?.ts_ms == at_pause, "the paused row published nothing more");
+    try must(pathValue(rig.vessels, heading_path).?.ts_ms == at_pause, "the paused row published nothing more");
 
     // Switching it back on reopens the stream and the server sees a second
     // client, which subscribes again.
@@ -563,7 +563,7 @@ test "a Signal K server feeds the chart, and the mariner can pause it" {
     }.ready);
     try waitFor("a fresh heading after resume", rig.vessels, struct {
         fn ready(v: *vstore.Store) bool {
-            return !reading(v, heading_path).?.stale;
+            return !pathValue(v, heading_path).?.stale;
         }
     }.ready);
 
@@ -619,7 +619,7 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
     // Both are publishing the same path. The store elects the gateway.
     try waitFor("the gateway's heading elected", rig.vessels, struct {
         fn ready(v: *vstore.Store) bool {
-            const r = reading(v, heading_path) orelse return false;
+            const r = pathValue(v, heading_path) orelse return false;
             return !r.stale and r.value == .number and r.value.number == 123.0;
         }
     }.ready);
@@ -630,7 +630,7 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
             return number(v, sog_path) != null;
         }
     }.ready);
-    const elected = reading(rig.vessels, heading_path).?;
+    const elected = pathValue(rig.vessels, heading_path).?;
     try must(elected.source == nmea_plugin.source, "the gateway holds the path");
 
     // The gateway goes off the air. Its value ages past the window and the
@@ -638,11 +638,11 @@ test "a Signal K server and a NMEA gateway contend for one path, and it fails ov
     nmea.close();
     try waitFor("the heading to fail over to the server", rig.vessels, struct {
         fn ready(v: *vstore.Store) bool {
-            const r = reading(v, heading_path) orelse return false;
+            const r = pathValue(v, heading_path) orelse return false;
             return !r.stale and r.value == .number and r.value.number == 90.0;
         }
     }.ready);
-    const after = reading(rig.vessels, heading_path).?;
+    const after = pathValue(rig.vessels, heading_path).?;
     try must(after.source == sk_plugin.source, "the server took the path over");
     try must(!after.stale, "the value that took over is fresh");
 
@@ -678,7 +678,7 @@ test "the same server over its websocket feeds the same chart" {
     // before the plugin sees a byte.
     try waitFor("own ship in the store over the websocket", rig.vessels, struct {
         fn ready(v: *vstore.Store) bool {
-            return number(v, heading_path) != null and reading(v, position_path) != null;
+            return number(v, heading_path) != null and pathValue(v, position_path) != null;
         }
     }.ready);
     try must(sk.subscribed.load(.monotonic) >= 1, "the plugin subscribed over the websocket");
@@ -692,7 +692,7 @@ test "the same server over its websocket feeds the same chart" {
 
     try std.testing.expectApproxEqAbs(@as(f64, 90.0), number(rig.vessels, heading_path).?, 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 2.5722), number(rig.vessels, sog_path).?, 1e-9);
-    const pos = reading(rig.vessels, position_path).?;
+    const pos = pathValue(rig.vessels, position_path).?;
     try must(pos.value == .position, "the position is a position");
     try std.testing.expectApproxEqAbs(@as(f64, 38.9763), pos.value.position.lat, 1e-9);
 

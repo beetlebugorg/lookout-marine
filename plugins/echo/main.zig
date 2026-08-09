@@ -21,7 +21,7 @@ const default_lon: f64 = -76.4767;
 const default_lat: f64 = 38.9763;
 
 var ticks: u32 = 0;
-var readings_seen: u32 = 0;
+var values_seen: u32 = 0;
 var lon: f64 = default_lon;
 var lat: f64 = default_lat;
 
@@ -62,8 +62,8 @@ pub fn onEvent(e: lk.Event) !void {
             draw();
         },
         .store_changed => |payload| {
-            for (lk.readings(payload)) |r| {
-                readings_seen += 1;
+            for (lk.pathValues(payload)) |r| {
+                values_seen += 1;
                 if (r.removed()) {
                     lk.logf(.info, "{s} removed", .{r.path});
                     continue;
@@ -78,7 +78,7 @@ pub fn onEvent(e: lk.Event) !void {
         },
         .timer => |id| {
             ticks += 1;
-            lk.status("running", "timer {d}, {d} ticks, {d} readings", .{ id, ticks, readings_seen });
+            lk.status("running", "timer {d}, {d} ticks, {d} values", .{ id, ticks, values_seen });
         },
         .ais_changed => |payload| lk.logf(.info, "{d} ais targets", .{lk.targets(payload).len}),
         .tcp_connected => |id| lk.logf(.info, "connected {d}", .{id}),

@@ -139,20 +139,24 @@ pub fn draw(c: *lk.Chart) void {
 `get()` needs no null check. An optional one has no `get` at all, so calling it
 is a compile error; `fresh()` returns a `?f64` for you to check.
 
-**What happens when a reading goes stale.** The SDK takes everything this
+**What happens when a value goes stale.** The SDK takes everything this
 plugin drew off the chart and posts `degraded`, naming every missing input at
 once: `no wind, no position`. A line that says only "no wind" while the GPS is
 also out sends the mariner to the wrong instrument. The `.label` you give an
 input is the word that appears in that list.
 
 **The window is 5 seconds**, the same one the vessel store uses. Raise it per
-input with `.max_age_ms` for a reading that arrives less often.
+input with `.max_age_ms` for a value that arrives less often.
 
 **Deciding something is not drawing it.** `draw` runs on a timer you set for
 the picture. Declare `pub fn onUpdate() void` and Lookout calls it as soon as
 an input has a new value, which is where a decision belongs; a plugin that
 only watches a condition declares it and no `draw` at all. Read inputs with
 `fresh()` there: the freshness gate has not run.
+
+**A value that stops arriving still reaches you.** Lookout calls `onUpdate`
+when an input expires as well, so clear the condition there rather than
+assuming the next value will come.
 
 Reference: [STORE_CHANGED](wire.md#store_changed) and
 [vessel data goes stale after 5 seconds](rules.md#vessel-data-goes-stale-after-5-seconds).
@@ -306,7 +310,7 @@ Reference: [the overlay payload](wire.md#overlay).
 **Capabilities:** `ais.read`.
 
 Declare the target set like any other input. It never holds `draw` back,
-because no targets in range is a normal condition rather than a missing reading.
+because no targets in range is a normal condition rather than a missing value.
 
 ```zig
 pub const inputs = struct {
@@ -459,7 +463,7 @@ warn, the other two at info.
 Everything else is a status line. An alarm that fires when nothing is wrong gets
 switched off, and then the real one is not heard.
 
-**Decide it in `onUpdate`, not in `draw`.** The readings are what the alarm
+**Decide it in `onUpdate`, not in `draw`.** The values are what the alarm
 answers to, so put the test where they land. An alarm decided in `draw` fires
 at whatever rate suits the picture, and stops altogether for a plugin whose
 drawing the mariner has switched off.

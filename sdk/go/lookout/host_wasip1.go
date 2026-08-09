@@ -34,6 +34,12 @@ func wasmOverlay(ptr unsafe.Pointer, n uint32) int32
 //go:wasmimport lookout chrome_status
 func wasmChromeStatus(ptr unsafe.Pointer, n uint32)
 
+//go:wasmimport lookout table_declare
+func wasmTableDeclare(ptr unsafe.Pointer, n uint32) int32
+
+//go:wasmimport lookout table_update
+func wasmTableUpdate(ptr unsafe.Pointer, n uint32) int32
+
 //go:wasmimport lookout alert
 func wasmAlert(ptr unsafe.Pointer, n uint32) int32
 
@@ -130,6 +136,10 @@ func hostAISUpsert(b []byte) int32 { p, n := bytesOf(b); return wasmAISUpsert(p,
 func hostOverlay(b []byte) int32   { p, n := bytesOf(b); return wasmOverlay(p, n) }
 func hostStatus(b []byte)          { p, n := bytesOf(b); wasmChromeStatus(p, n) }
 func hostAlert(b []byte) int32     { p, n := bytesOf(b); return wasmAlert(p, n) }
+
+func hostTableDeclare(b []byte) int32 { p, n := bytesOf(b); return wasmTableDeclare(p, n) }
+func hostTableUpdate(b []byte) int32  { p, n := bytesOf(b); return wasmTableUpdate(p, n) }
+
 func hostSubscribe(b []byte) int32 { p, n := bytesOf(b); return wasmSubscribe(p, n) }
 func hostAISSubscribe() int32      { return wasmAISSubscribe() }
 

@@ -11,9 +11,12 @@
 //!   cog_end  a ring on the end of that vector, held at one screen size
 //!   track    where the boat has been, up to 600 kept positions
 //!
+//! A fix arriving is what adds a point to the track. `draw` reads the track
+//! and renders it.
+//!
 //! The library holds `draw` until the fix is fresh, so every call has a
-//! position for the symbol and the track. Heading, course and speed are
-//! optional: a missing one takes its own object off the chart and nothing else.
+//! position for the symbol. Heading, course and speed are optional. A missing
+//! one takes its own object off the chart. The rest of the scene stands.
 
 const lk = @import("lk2");
 const cfg = @import("config.zig");
@@ -49,10 +52,11 @@ const cog_min_sog_mps: f64 = 0.05;
 const cog_ring_pt: f64 = 4.0;
 const cog_ring_width_pt: f64 = 1.5;
 
-/// Track spacing gates. The draw timer offers one fix a second, so distance is
-/// what thins the track; the time gate is half the timer's period and rejects a
-/// fix offered twice and a clock that went backwards. A full second there threw
-/// away any offer whose fix was a few ms younger than the tick before it.
+/// Track spacing gates. Distance is what thins the track. The time gate rejects
+/// the same fix offered twice, which is what a cycle carrying only heading,
+/// course or speed offers, and a clock that went backwards. It is half the
+/// interval a GPS reports at: a full second there threw away any offer whose
+/// fix was a few ms younger than the one before it.
 const track_min_ms: i64 = 500;
 const track_min_m: f64 = 2.0;
 
@@ -70,12 +74,19 @@ var track: trk.Track = .{};
 /// 9.6 KiB and the wasm stack is 64 KiB.
 var pts: [trk.max_points]lk.Point = undefined;
 
+pub fn onUpdate() void {
+    // The freshness gate runs before `draw`, not before this, so a position
+    // that stopped counting has to be refused here. A stale fix charted as a
+    // leg would draw a line the boat never sailed.
+    const boat = inputs.fix.fresh() orelse return;
+    // The time the fix was taken, not now: the gates measure fix to fix, and a
+    // GPS slower than the cycle has one fix offered several times.
+    _ = track.consider(lk.monoMs() - (inputs.fix.ageMs() orelse 0), boat, track_min_ms, track_min_m);
+}
+
 pub fn draw(c: *lk.Chart) void {
     const set = cfg.Tuned.now();
     const boat = inputs.fix.get();
-    // The time the fix was taken, not now: the gates measure fix to fix, and a
-    // GPS slower than the draw timer has one fix offered several times.
-    _ = track.consider(lk.monoMs() - (inputs.fix.ageMs() orelse 0), boat, track_min_ms, track_min_m);
 
     // A compass says where the bow points and a GPS course says where the boat
     // is going. Only the first is what the symbol's rotation claims to show, so

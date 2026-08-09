@@ -18,7 +18,7 @@ import (
 const APIVersion uint32 = 1
 
 // ---------------------------------------------------------------------------
-// Logging and clocks — no capability needed for either
+// Logging and clocks: no capability to request for either
 // ---------------------------------------------------------------------------
 
 // Level is how loud a log line is.
@@ -73,6 +73,16 @@ func StatusJSON(b []byte) { hostStatus(b) }
 // AlertJSON raises an alert. It needs the alerts.raise capability; without it
 // this returns -1 and the host logs the refusal.
 func AlertJSON(b []byte) int32 { return hostAlert(b) }
+
+// TableDeclareJSON tells the host about one dialog, which is what makes it
+// appear in the shell's menu. A tier-1 plugin never calls this: [NewTable]
+// declares itself at start.
+func TableDeclareJSON(b []byte) int32 { return hostTableDeclare(b) }
+
+// TableUpdateJSON posts one batch of rows, {"key":…,"upsert":[…],"remove":[…]}.
+// The host takes at most one batch per table per 900 ms. [Table] owns the batch
+// and the diff behind it.
+func TableUpdateJSON(b []byte) int32 { return hostTableUpdate(b) }
 
 // TCPConnect opens a connection and returns a connection id at once — the
 // connect completes on the host's I/O thread and arrives as [TCPConnected], or
@@ -276,6 +286,9 @@ const (
 	WSOpen        Kind = 12
 	WSData        Kind = 13
 	WSClosed      Kind = 14
+	TableOpen     Kind = 15
+	TableClosed   Kind = 16
+	GrantsChanged Kind = 17
 	Shutdown      Kind = 99
 )
 
@@ -286,7 +299,7 @@ func (k Kind) known() bool {
 	switch k {
 	case ConfigChanged, Timer, TCPConnected, TCPData, TCPClosed, UDPData,
 		HTTPResponded, FileOpened, StoreChanged, AISChanged, WSOpen, WSData,
-		WSClosed, Shutdown:
+		WSClosed, TableOpen, TableClosed, GrantsChanged, Shutdown:
 		return true
 	}
 	return false
@@ -320,6 +333,37 @@ func (e Event) Protocol() string {
 	}
 	_ = json.Unmarshal(e.Payload, &doc)
 	return doc.Protocol
+}
+
+// TableKey is the table a TableOpen or TableClosed event is about. A tier-1
+// plugin never reads this: [Table] tracks its own dialog.
+func (e Event) TableKey() string {
+	var doc struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(e.Payload, &doc)
+	return doc.Key
+}
+
+// Granted is true when a GrantsChanged event lists this capability, by its
+// manifest name: "overlay.draw", "alerts.raise". It is false for a payload that
+// will not parse, which is the safe answer for a permissions list.
+//
+// GRANTS_CHANGED IS THE ONLY WAY TO KNOW WHAT YOU HOLD. The manifest is what
+// the plugin asked for; this is what the mariner left switched on.
+func (e Event) Granted(capability string) bool {
+	var doc struct {
+		Granted []string `json:"granted"`
+	}
+	if json.Unmarshal(e.Payload, &doc) != nil {
+		return false
+	}
+	for _, c := range doc.Granted {
+		if c == capability {
+			return true
+		}
+	}
+	return false
 }
 
 // Close reads a WSClosed event: the RFC 6455 code, or 0 when the connection
@@ -415,8 +459,8 @@ func (s Start) Unmarshal(v any) error {
 	return json.Unmarshal(s.Config, v)
 }
 
-// Reading is one entry of a StoreChanged payload.
-type Reading struct {
+// PathValue is one entry of a StoreChanged payload.
+type PathValue struct {
 	Path string `json:"path"`
 	// Value is null when the path has NO value any more — the source was
 	// cleared — not when a source published a null. Removed reports it.
@@ -427,10 +471,10 @@ type Reading struct {
 
 // Removed is true when the path has no value at all any more. Treat it as
 // removal: stop drawing whatever the value fed.
-func (r Reading) Removed() bool { return len(r.Value) == 0 || string(r.Value) == "null" }
+func (r PathValue) Removed() bool { return len(r.Value) == 0 || string(r.Value) == "null" }
 
 // Number reads the value as a number.
-func (r Reading) Number() (float64, bool) {
+func (r PathValue) Number() (float64, bool) {
 	var v float64
 	if r.Removed() || json.Unmarshal(r.Value, &v) != nil {
 		return 0, false
@@ -439,7 +483,7 @@ func (r Reading) Number() (float64, bool) {
 }
 
 // Position reads the value as a fix.
-func (r Reading) Position() (Point, bool) {
+func (r PathValue) Position() (Point, bool) {
 	var v struct {
 		Lat *float64 `json:"lat"`
 		Lon *float64 `json:"lon"`
@@ -450,11 +494,11 @@ func (r Reading) Position() (Point, bool) {
 	return Point{Lat: *v.Lat, Lon: *v.Lon}, true
 }
 
-// Readings parses a StoreChanged payload. It returns nothing for any other
+// PathValues parses a StoreChanged payload. It returns nothing for any other
 // event, and nothing for a payload that will not parse.
-func (e Event) Readings() []Reading {
+func (e Event) PathValues() []PathValue {
 	var doc struct {
-		Values []Reading `json:"values"`
+		Values []PathValue `json:"values"`
 	}
 	if json.Unmarshal(e.Payload, &doc) != nil {
 		return nil
@@ -559,7 +603,7 @@ func (p *Publish) Position(path string, at Point) {
 	p.close()
 }
 
-// Clear says this source holds the path and has no reading for it right now.
+// Clear says this source holds the path and has no value for it right now.
 func (p *Publish) Clear(path string) {
 	p.open(path)
 	p.b = append(p.b, "null"...)

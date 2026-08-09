@@ -81,6 +81,10 @@ extern "C" {
     fn host_overlay(ptr: *const u8, len: u32) -> i32;
     #[link_name = "chrome_status"]
     fn host_chrome_status(ptr: *const u8, len: u32);
+    #[link_name = "table_declare"]
+    fn host_table_declare(ptr: *const u8, len: u32) -> i32;
+    #[link_name = "table_update"]
+    fn host_table_update(ptr: *const u8, len: u32) -> i32;
     #[link_name = "alert"]
     fn host_alert(ptr: *const u8, len: u32) -> i32;
     #[link_name = "tcp_connect"]
@@ -153,6 +157,12 @@ mod off_host {
         -1
     }
     pub unsafe fn host_chrome_status(ptr: *const u8, len: u32) {}
+    pub unsafe fn host_table_declare(ptr: *const u8, len: u32) -> i32 {
+        -1
+    }
+    pub unsafe fn host_table_update(ptr: *const u8, len: u32) -> i32 {
+        -1
+    }
     pub unsafe fn host_alert(ptr: *const u8, len: u32) -> i32 {
         -1
     }
@@ -216,7 +226,7 @@ mod off_host {
 use off_host::*;
 
 // ---------------------------------------------------------------------------
-// Logging and clocks — no capability needed for either
+// Logging and clocks: no capability to request for either
 // ---------------------------------------------------------------------------
 
 /// How loud a log line is.
@@ -272,6 +282,19 @@ pub fn overlay_json(s: &str) -> i32 {
 /// host keeps the latest per plugin and logs every text it has not seen.
 pub fn status_json(s: &str) {
     unsafe { host_chrome_status(s.as_ptr(), s.len() as u32) }
+}
+
+/// Tell the host about one dialog, which is what puts it in the shell's menu.
+/// A tier-1 plugin never calls this: [`crate::Table`] declares itself at start.
+pub fn table_declare_json(s: &str) -> i32 {
+    unsafe { host_table_declare(s.as_ptr(), s.len() as u32) }
+}
+
+/// Post one batch of rows, `{"key":…,"upsert":[…],"remove":[…]}`. The host
+/// takes at most one batch per table per 900 ms. [`crate::Table`] owns the
+/// batch and the diff behind it.
+pub fn table_update_json(s: &str) -> i32 {
+    unsafe { host_table_update(s.as_ptr(), s.len() as u32) }
 }
 
 /// Raise an alert. Needs `alerts.raise`; without it this returns -1 and the
@@ -651,13 +674,25 @@ pub enum Event<'a> {
     },
     HttpResponse(HttpResponse<'a>),
     FileOpened(FileOpened),
-    /// `{"values":[...]}`. [`readings`] parses it.
+    /// `{"values":[...]}`. [`path_values`] parses it.
     StoreChanged(&'a str),
     /// `{"targets":[...]}`, the full set. [`targets`] parses it.
     AisChanged(&'a str),
     WsOpen(WsOpen),
     WsData(WsData<'a>),
     WsClosed(WsClosed),
+    /// A shell has put one of the plugin's declared tables on screen, named by
+    /// its key. [`crate::Table`] tracks its own dialog, so a tier-1 plugin
+    /// never sees this.
+    TableOpen(String),
+    /// The shell closed the dialog, and the host has already dropped its rows.
+    TableClosed(String),
+    /// `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities the
+    /// plugin holds right now. [`granted`] reads it.
+    ///
+    /// THIS IS THE ONLY WAY TO KNOW WHAT YOU HOLD. The manifest is what the
+    /// plugin asked for; this is what the mariner left switched on.
+    GrantsChanged(&'a str),
     /// The last thing a plugin is handed. Close sockets, post a final status.
     Shutdown,
 }
@@ -689,17 +724,17 @@ impl Start<'_> {
 /// `path` is a `Cow` because it usually borrows the payload and only copies
 /// when the JSON had an escape in it. Compare it with `&*r.path`.
 #[derive(Debug)]
-pub struct Reading<'a> {
+pub struct PathValue<'a> {
     pub path: Cow<'a, str>,
     /// `Json::Null` means the path has NO value any more — the source was
-    /// cleared — not that a source published a null. [`Reading::removed`]
+    /// cleared — not that a source published a null. [`PathValue::removed`]
     /// reports it.
     pub value: Json<'a>,
     pub ts_ms: i64,
     pub age_ms: i64,
 }
 
-impl Reading<'_> {
+impl PathValue<'_> {
     /// True when the path has no value at all any more. Treat it as removal:
     /// stop drawing whatever the value fed.
     pub fn removed(&self) -> bool {
@@ -719,8 +754,26 @@ impl Reading<'_> {
     }
 }
 
-/// Parse a `StoreChanged` payload. The readings borrow the payload.
-pub fn readings(payload: &str) -> Vec<Reading<'_>> {
+/// True when a `GrantsChanged` payload lists this capability, by its manifest
+/// name: `"overlay.draw"`, `"alerts.raise"`. False for a payload that will not
+/// parse, which is the safe answer for a permissions list.
+pub fn granted(payload: &str, capability: &str) -> bool {
+    let Some(root) = Json::parse(payload) else {
+        return false;
+    };
+    let Some(list) = root.get("granted").and_then(Json::as_array) else {
+        return false;
+    };
+    list.iter().any(|item| item.as_str() == Some(capability))
+}
+
+/// The table key a `TableOpen` or `TableClosed` payload names.
+pub fn table_key(payload: &str) -> Option<String> {
+    Some(Json::parse(payload)?.str_or("key", "").to_owned())
+}
+
+/// Parse a `StoreChanged` payload. The values borrow the payload.
+pub fn path_values(payload: &str) -> Vec<PathValue<'_>> {
     let root = match Json::parse(payload) {
         Some(v) => v,
         None => return Vec::new(),
@@ -735,7 +788,7 @@ pub fn readings(payload: &str) -> Vec<Reading<'_>> {
             Some(p) => p,
             None => continue,
         };
-        out.push(Reading {
+        out.push(PathValue {
             path,
             value: item.get("value").cloned().unwrap_or(Json::Null),
             ts_ms: item.i64_or("ts", 0),
@@ -1224,6 +1277,9 @@ pub(crate) const KIND_AIS_CHANGED: u32 = 11;
 pub(crate) const KIND_WS_OPEN: u32 = 12;
 pub(crate) const KIND_WS_DATA: u32 = 13;
 pub(crate) const KIND_WS_CLOSED: u32 = 14;
+pub(crate) const KIND_TABLE_OPEN: u32 = 15;
+pub(crate) const KIND_TABLE_CLOSED: u32 = 16;
+pub(crate) const KIND_GRANTS_CHANGED: u32 = 17;
 pub(crate) const KIND_SHUTDOWN: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
@@ -1262,6 +1318,27 @@ pub(crate) fn http_response(request: i64, payload: &[u8]) -> HttpResponse<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn granted_reads_the_capability_list() {
+        let payload = r#"{"v":1,"granted":["ais.read","overlay.draw"]}"#;
+        assert!(granted(payload, "overlay.draw"));
+        assert!(granted(payload, "ais.read"));
+        assert!(!granted(payload, "alerts.raise"));
+        // The safe answer for a list that will not parse is that nothing is
+        // held.
+        assert!(!granted("{", "overlay.draw"));
+        assert!(!granted(r#"{"v":1}"#, "overlay.draw"));
+    }
+
+    #[test]
+    fn a_table_event_names_its_key() {
+        assert_eq!(
+            table_key(r#"{"key":"targets"}"#).as_deref(),
+            Some("targets")
+        );
+        assert_eq!(table_key("{").as_deref(), None);
+    }
+
     // The builders write JSON without touching the host, so they are testable
     // on any target. `cargo test` runs these on the development machine.
     #[test]
@@ -1286,8 +1363,8 @@ mod tests {
     }
 
     #[test]
-    fn readings_survive_a_cleared_path() {
-        let rs = readings(r#"{"values":[{"path":"a","value":null,"ts":1,"age_ms":2}]}"#);
+    fn path_values_survive_a_cleared_path() {
+        let rs = path_values(r#"{"values":[{"path":"a","value":null,"ts":1,"age_ms":2}]}"#);
         assert_eq!(rs.len(), 1);
         assert!(rs[0].removed());
     }

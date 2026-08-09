@@ -50,15 +50,12 @@ Do not read these end to end. Grep for the section you need.
   true. Convert only in text a mariner reads.
 - **Colours are palette tokens, never RGB**, except inside a plugin canvas
   where the author owns night. The core resolves tokens per scheme.
-- **A plugin's overlay is retained and diffed.** A plugin describes its whole
-  scene every call; anything it does not draw is removed. There is no delete.
-- **A capability check is per call.** A call the manifest did not ask for
-  returns -1 and is counted as denied. It never traps.
-- **The wire is frozen where it says so.** The `lk_abi` export name and the
-  `{"abi":N}` start payload keep their old spelling on purpose; the manifest
-  key is `api`.
-- **Overlay vertices are origin-relative f32** with a per-frame uniform.
-  Absolute world coordinates in f32 quantise visibly at zoom.
+- **Idle means idle.** A boat runs off a battery, so anything that wakes on a
+  clock must stop when there is nothing left to change: no repaint without a
+  reason to repaint, no timer that keeps ticking after it has said everything
+  it has to say, no poll that could be an event. A plugin's update heartbeat
+  stops once every input it declared has gone stale and it has been told once.
+  Work that costs nothing when idle is a feature, not an optimisation.
 
 ## The gates
 
@@ -82,14 +79,7 @@ macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
 
 ## Traps that have cost real time
 
-- **Fractional zoom.** Every dash test and harness render used integer zooms,
-  which hid a bug that truncated every dashed line at any other zoom. Test
-  fractional zooms.
 - **The app runs at 2x, the harness at 1x.** A bug can live in the gap.
-- **A screenshot must capture an app window by id**, never the screen. The
-  Dock and file dialogs carry personal data. See `macos/screenshots.sh`.
-- **macOS preferences ignore a redirected HOME.** CFPreferences resolves the
-  domain from the login session; use the NSUserDefaults argument domain.
 - **A test build collects a file's tests only if it ANALYSES the file.** A
   re-export is not enough. Every test-bearing `.zig` must therefore be named in
   build.zig, on `pure_test_roots` or `reached_test_files`; the `test` step
@@ -97,7 +87,6 @@ macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
   entry by making one of its tests fail and checking the suite names it.
 - **Check disk before a big build**: `df -h /System/Volumes/Data`. The caches
   here fill 100 GB fast.
-- **Licensed imagery must never reach docs.** No C-MAP chart, drawn or named.
 - **"Behind main" on this branch may be ancestry, not content.** `feat/plugins`
   was rebuilt at some point, so main's work is here under different SHAs and
   the commit count lies. Before merging anything, ask what is actually missing:
@@ -110,24 +99,6 @@ macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
   clean when the string is still on disk. Verify with `git grep -n --untracked`
   for what ships, and `command grep -rn <dir>` for one ignored directory.
   `command grep -rn .` from the root walks `.zig-cache` and takes minutes.
-- **A screenshot instance loads this machine's saved plugin settings**, so it
-  dials the developer's own instruments and publishes other people's vessel
-  names and positions. `LOOKOUT_CLEAN=1` leaves every plugin on its manifest
-  defaults; `macos/screenshots.sh` sets it and serves the recorded fixture on
-  a port of its own. Never point a capture at whatever is on 10110.
-- **Only one copy of the app runs per machine.** A second hands over to the
-  first and exits, because two copies share one preferences domain and one
-  plugin storage directory. `LOOKOUT_MULTI=1` lifts it, which the screenshot
-  protocol needs since every frame is its own instance.
-- **An identity a fixture invents uses MID 899**, which is unallocated, so no
-  real vessel can hold it; an aid uses 99 then 899 then four digits. An
-  identity quoted from a published reference keeps its real value and carries
-  a comment naming the source. See `plugins/nmea0183/fixtures.zig`.
-- **Xcode here is a partial install**: no `Contents/Developer/Applications`, so
-  no Simulator.app and no window for a booted device. Drive simulators
-  headless with `simctl boot`, `simctl launch` (env via `SIMCTL_CHILD_*`) and
-  `simctl io <id> screenshot`. Shut them down after; a booted device burns CPU.
-
 ## House style
 
 Comments and commit messages: plain technical English, short sentences, no

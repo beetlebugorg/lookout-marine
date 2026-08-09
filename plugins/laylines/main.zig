@@ -3,7 +3,7 @@
 //!
 //! Wind or position that is missing, cleared, or older than the 5 s window
 //! takes all four lines off the chart and puts the plugin in `degraded`, because
-//! a layline from a wind reading half a minute old is a confident drawing of a
+//! a layline from a wind value half a minute old is a confident drawing of a
 //! guess. The library owns that gate, the 1 Hz redraw and the status line;
 //! this file owns the four bearings and what the lines look like.
 

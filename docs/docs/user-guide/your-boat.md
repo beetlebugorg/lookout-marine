@@ -44,7 +44,7 @@ If the instruments report a true wind direction, four more dashed lines run out
 of the boat, each a nautical mile long: red for the port tack, green for the
 starboard tack. Two of them are the close-hauled course on each tack, up
 towards the wind. The other two are the course on each gybe, running away from
-it. They come off the chart as soon as the wind reading stops.
+it. They come off the chart as soon as the wind value stops.
 
 The angles are yours to set, under **Display** in the settings. They start at 45
 degrees off the true wind upwind and 170 downwind. Both are measured off the

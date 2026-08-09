@@ -1,6 +1,6 @@
 //! Windline in Rust: one dashed line downwind from own ship, 1 nm long.
 //!
-//! The whole plugin. The library subscribes, ages both readings against the
+//! The whole plugin. The library subscribes, ages both values against the
 //! 5 s window, runs `draw` once a second, and takes the line off the chart and
 //! says which instrument is missing when either one goes stale.
 //!

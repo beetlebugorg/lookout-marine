@@ -83,7 +83,7 @@ The columns are the vessel's name, its MMSI, its range and bearing from you, its
 speed, and its closest approach with the time to it. Range under a tenth of a
 mile is given in metres.
 
-A dash is a reading the app has never heard. An aid to navigation carries dashes
+A dash is a value the app has never heard. An aid to navigation carries dashes
 for speed and for both approach columns, and a vessel that has broadcast no name
 carries one where its name would be.
 

@@ -17,6 +17,12 @@
 //! decision taken in `draw` would run at whatever rate suits the picture, and
 //! the picture is not what a collision alarm answers to.
 //!
+//! The targets dialog is on the deciding path too. A row is the ruling in
+//! `gates` written out, so `evaluate` fills it and the mariner reads the same
+//! set the chart is coloured from. The rows keep coming while the chart grant
+//! is off, because a table is data and filling one is not something a plugin
+//! asks permission for.
+//!
 //! AIDS TO NAVIGATION share the store and nothing else. A buoy is not going
 //! anywhere, so it gets one object — a diamond, broken open when the aid is
 //! virtual — with no CPA, no vector and no heading line, and it ages on its own
@@ -33,10 +39,10 @@
 //! `target_danger` and raises one alarm. The gate state is per MMSI, in
 //! `gates` below: the alarm fires on the edge into the gate and re-arms only
 //! after that target leaves it. The edge is what holds the alarm to one however
-//! often the readings arrive.
+//! often the values arrive.
 //!
 //! WITHOUT OWN POSITION there is no relative motion to compute, which is why
-//! own ship's three readings are optional inputs: the traffic is still drawn,
+//! own ship's three values are optional inputs: the traffic is still drawn,
 //! nothing is flagged, and the status line says degraded.
 
 const std = @import("std");
@@ -56,6 +62,7 @@ pub const Settings = cfg.groups;
 /// The targets dialog: the same set this file draws, in a sortable table, with
 /// the alarmed vessels held at the top by their band. Declared in targets.zig;
 /// named here because the library reads the plugin's root for what it declares.
+/// `evaluate` fills it.
 pub const Targets = targets.Targets;
 
 // ---- the numbers, all in one place -----------------------------------------
@@ -86,7 +93,16 @@ const max_name = 34;
 pub const inputs = struct {
     /// The traffic. The library records each snapshot and ages it; an empty
     /// sea is not a missing instrument, so this never holds the draw back.
-    pub const traffic = lk.subscribeAis(.{ .max = max_targets });
+    ///
+    /// The two windows are the ages at which `visible` stops drawing a target,
+    /// so the library wakes this plugin the moment one crosses its own limit.
+    /// A target that stops reporting leaves the chart and the dialog together
+    /// whether or not any other target is still being heard.
+    pub const traffic = lk.subscribeAis(.{
+        .max = max_targets,
+        .max_age_ms = stale_target_ms,
+        .aton_max_age_ms = stale_aton_ms,
+    });
 
     /// Own ship. All three are optional: the CPA needs them and the drawing
     /// does not, so a boat with no GPS still sees the traffic.
@@ -157,7 +173,7 @@ pub fn onSettings() void {
 
 // ---- the decision ----------------------------------------------------------
 
-/// New readings have landed: own ship's position, or the whole AIS set.
+/// New values have landed: own ship's position, or the whole AIS set.
 pub fn onUpdate() void {
     evaluate();
 }
@@ -186,6 +202,7 @@ fn evaluate() void {
         }
         if (t.aton) {
             checkAid(t, g);
+            if (Targets.isOpen()) targets.aid(t, t.at.?, own);
             continue;
         }
         const at = t.at.?;
@@ -206,6 +223,10 @@ fn evaluate() void {
             false;
         if (in_gate and !g.in_gate) alarm(t, sol.?);
         g.in_gate = in_gate;
+
+        // The row carries the solution the triangle is coloured by, so the
+        // table and the chart cannot disagree about which vessel is dangerous.
+        if (Targets.isOpen()) targets.vessel(t, at, own, sol, in_gate);
     }
     prune();
 }
@@ -245,9 +266,8 @@ pub fn draw(c: *lk.Chart) void {
 
         if (t.aton) {
             drawAid(c, t, at);
-            if (Targets.isOpen()) targets.aid(t, at, own);
         } else {
-            drawVessel(c, t, at, g, own, set);
+            drawVessel(c, t, at, g, set);
             if (g.in_gate) danger += 1;
         }
         drawn += 1;
@@ -271,15 +291,10 @@ fn drawVessel(
     t: *const lk.Target,
     at: lk.Point,
     g: *const Gate,
-    own: ?cpa.State,
     set: cfg.Tuned,
 ) void {
     const sol = g.sol;
     const in_gate = g.in_gate;
-    // The row carries the same solution the triangle is coloured by, so the
-    // table and the chart can never disagree about which vessel is dangerous.
-    if (Targets.isOpen()) targets.vessel(t, at, own, sol, in_gate);
-
     const color: lk.Color = if (in_gate) .target_danger else .target;
     var idb: [id_len]u8 = undefined;
     var pick: Pick = .{};

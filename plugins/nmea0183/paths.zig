@@ -101,7 +101,7 @@ pub const Updates = struct {
 };
 
 /// The publishes one sentence carries. A sentence whose fields are all empty,
-/// or whose validity flag says the reading is not usable, yields none: an
+/// or whose validity flag says the value is not usable, yields none: an
 /// absent value is left to age out of the store rather than overwritten with a
 /// guess.
 ///
@@ -346,7 +346,7 @@ test "XDR yields heel and trim as attitude, and the rudder angle, in degrees" {
     try expectNumber(r, .attitude_roll, 12.0, 1e-9);
     try expectNumber(r, .rudder_angle, -4.2, 1e-9);
 
-    // A reading in radians is not published as degrees.
+    // A value in radians is not published as degrees.
     try testing.expectEqual(@as(usize, 0), only(try parser.parse(fx.xdr_wrong_unit)).slice().len);
 }
 

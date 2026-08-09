@@ -12,7 +12,7 @@
 //! uses 99, then 899, then four digits. A SPEC fixture keeps the
 //! specification's document shape, paths and values and carries an invented
 //! identity in place of the one the specification prints: what the fixture
-//! proves is the reading of the shape, not the number in the context URN.
+//! proves is the shape, not the number in the context URN.
 //!
 //! Version 1.8.2 of the specification is the one read. The pages are
 //! `streaming_api`, `data_model`, `subscription_protocol` and `urls_ports`,
@@ -153,7 +153,7 @@ pub const no_context_delta =
 ;
 
 // ---------------------------------------------------------------------------
-// BUILT — a source that holds the path and has no reading for it. The
+// BUILT — a source that holds the path and has no value for it. The
 // specification says the value MUST be JSON null in that case, and the host
 // reads a null the same way.
 // ---------------------------------------------------------------------------

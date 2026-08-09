@@ -23,12 +23,12 @@ pub fn writeStoreChanged(out: *std.ArrayList(u8), alloc: std.mem.Allocator, chan
         first = false;
         try out.appendSlice(alloc, "{\"path\":");
         try writeJsonString(out, alloc, ch.path);
-        const r = ch.reading orelse {
+        const pv = ch.value orelse {
             try out.appendSlice(alloc, ",\"value\":null}");
             continue;
         };
-        const text = r.value.toJson(&vbuf) catch "null";
-        try out.print(alloc, ",\"value\":{s},\"ts\":{d},\"age_ms\":{d}}}", .{ text, r.ts_ms, now - r.ts_ms });
+        const text = pv.value.toJson(&vbuf) catch "null";
+        try out.print(alloc, ",\"value\":{s},\"ts\":{d},\"age_ms\":{d}}}", .{ text, pv.ts_ms, now - pv.ts_ms });
     }
     try out.appendSlice(alloc, "]}");
 }
@@ -153,14 +153,14 @@ test "STORE_CHANGED carries values, and a cleared path as a bare null" {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(a);
     const changes = [_]vstore.Change{
-        .{ .path = "navigation.position", .reading = .{
+        .{ .path = "navigation.position", .value = .{
             .value = .{ .position = .{ .lat = 38.9763, .lon = -76.4767 } },
             .ts_ms = 1_000,
             .age_ms = 120,
             .source = 1,
             .stale = false,
         } },
-        .{ .path = "environment.depth.belowTransducer", .reading = null },
+        .{ .path = "environment.depth.belowTransducer", .value = null },
     };
     try writeStoreChanged(&out, a, &changes, 1_120);
     try t.expectEqualStrings(

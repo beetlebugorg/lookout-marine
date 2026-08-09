@@ -1,7 +1,7 @@
 //! Signal K over TCP or a websocket, from one or MORE servers.
 //!
 //! Signal K is the open marine data standard. A server on the boat collects
-//! every instrument it can reach and streams the readings as deltas: small
+//! every instrument it can reach and streams the values as deltas: small
 //! JSON documents that name a path and a value. This plugin opens the stream,
 //! maps the paths it knows onto the host's own, and publishes them.
 //!
@@ -101,7 +101,7 @@ fn publishOwn(ups: delta.Updates) void {
     for (ups.slice()) |u| switch (u.value) {
         .number => |v| p.number(u.path.text(), v),
         .position => |g| p.position(u.path.text(), .{ .lat = g.lat, .lon = g.lon }),
-        // The server holds the path and has no reading for it.
+        // The server holds the path and has no value for it.
         .none => p.clear(u.path.text()),
     };
     _ = p.send();

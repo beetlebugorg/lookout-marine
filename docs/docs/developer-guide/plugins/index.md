@@ -48,7 +48,7 @@ There are two jobs. Most plugins do one of them; some do both.
 
 **Publish.** Turn a data source into values the whole app can use. Your plugin
 opens a TCP connection to something on the boat's network, such as a NMEA 0183
-multiplexer or a Signal K server, parses what comes back, and writes readings
+multiplexer or a Signal K server, parses what comes back, and writes values
 into the **vessel store**. That store is Lookout's single table of current boat
 data, keyed by path: `navigation.position`,
 `environment.depth.belowTransducer`, and so on. It can write AIS contacts into
@@ -221,7 +221,7 @@ sdk/rust/, sdk/go/       the Rust and Go SDKs and their windline example;
 `nmea0183` and `signalk` are worth reading as a pair. They do the same job from
 two protocols and land in the same stores, so what differs between them is the
 part that is yours to write: the wire format, the units, and how a source behaves
-when it cannot tell which vessel a reading belongs to.
+when it cannot tell which vessel a value belongs to.
 
 Read `src/plugin/` when this documentation and Lookout disagree. The code is the
 authority.

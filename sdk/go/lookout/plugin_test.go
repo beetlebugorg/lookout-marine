@@ -105,12 +105,12 @@ func TestTheStoreFeedsTheInputsAndTheTimerDraws(t *testing.T) {
 	}
 }
 
-func TestAStaleReadingClearsTheSceneAndNamesEveryMissingInstrument(t *testing.T) {
+func TestAStaleValueClearsTheSceneAndNamesEveryMissingInstrument(t *testing.T) {
 	startWindline(t)
 	dispatchEvent(StoreChanged, 0, []byte(positionAndWind))
 	tick(t)
 
-	// Five seconds and a millisecond later, both readings are outside the
+	// Five seconds and a millisecond later, both values are outside the
 	// window.
 	testHost.Mono += 5001
 	tick(t)
@@ -156,6 +156,62 @@ func TestAnOptionalInputNeverHoldsTheDrawBack(t *testing.T) {
 	}
 	if lastStatus() != `{"state":"running","detail":"drawn"}` {
 		t.Fatalf("an optional input must not gate the draw: %s", lastStatus())
+	}
+}
+
+func TestAPluginThatOnlyDrawsIsWokenWhenItsValueExpires(t *testing.T) {
+	p := startWindline(t)
+	drawTimer := reg.drawTimer
+
+	// The values land, and the appointment comes with them. The declared
+	// inputs decide that. Which methods the author wrote says nothing about
+	// when a value stops counting.
+	dispatchEvent(StoreChanged, 0, []byte(positionAndWind))
+	appt := reg.updateTimer
+	if appt < 0 {
+		t.Fatal("the values took no appointment")
+	}
+	if appt == drawTimer {
+		t.Fatal("the appointment is the draw timer")
+	}
+	if testHost.Periodic[appt] {
+		t.Fatal("the appointment is a poll, not a one-shot")
+	}
+	if want := DefaultMaxAge.Milliseconds() + 1; testHost.Timers[appt] != want {
+		t.Fatalf("the appointment is in %d ms, want %d", testHost.Timers[appt], want)
+	}
+
+	// It comes round on values that no longer count. Nothing is drawn from it
+	// and there is no later moment to wait for.
+	testHost.Mono += testHost.Timers[appt]
+	dispatchEvent(Timer, appt, nil)
+	if _, ok := p.twd.Fresh(); ok {
+		t.Fatal("the wind should have expired")
+	}
+	if p.draws != 0 {
+		t.Fatalf("the expiry drew %d frames", p.draws)
+	}
+	if reg.updateTimer >= 0 {
+		t.Fatal("an appointment was kept with nothing left to expire")
+	}
+}
+
+func TestAPluginWithNoDeclaredInputHoldsNoAppointment(t *testing.T) {
+	resetHost()
+	p := &funcPlugin{draw: func(c *Chart) { c.Status("drawn") }}
+	Register(p)
+	dispatchStart([]byte(`{"abi":1,"config":{}}`))
+	armed := len(testHost.Timers)
+
+	// Values land for the plugins that asked for them. This one asked for
+	// none, so it holds nothing that can go stale and waits on no clock.
+	dispatchEvent(StoreChanged, 0, []byte(positionAndWind))
+	tick(t)
+	if reg.updateTimer >= 0 {
+		t.Fatal("a plugin with no input took an appointment")
+	}
+	if len(testHost.Timers) != armed {
+		t.Fatalf("a timer was armed with nothing to wait for: %v", testHost.Timers)
 	}
 }
 

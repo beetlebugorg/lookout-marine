@@ -372,7 +372,7 @@ const Watcher = struct {
         if (wants(self.st, .overlay)) self.pollOverlay();
     }
 
-    /// The vessel store's own path list, then the elected reading for each.
+    /// The vessel store's own path list, then the elected value for each.
     /// The list is copied under the store's lock and read back through the
     /// public `readElected`, so nothing here holds a lock across a print.
     fn pollPaths(self: *Watcher, now_ms: i64) void {
