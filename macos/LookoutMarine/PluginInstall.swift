@@ -144,7 +144,7 @@ struct PluginConsentSheet: View {
     private func reinstallNote(_ was: String) -> String {
         let name = was.isEmpty ? "the installed copy" : "the installed version \(was)"
         var note = pkg.downgrade
-            ? "Replaces \(name) — this is a downgrade."
+            ? "Replaces \(name). This is a downgrade."
             : "Replaces \(name)."
         if pkg.installedOrigin == "developer" {
             note += " The developer copy keeps running until its override is dropped."

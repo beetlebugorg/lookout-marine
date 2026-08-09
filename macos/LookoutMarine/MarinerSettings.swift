@@ -38,7 +38,7 @@ enum MarinerDisplayCategory: Int, CaseIterable, Identifiable {
     /// before it (S-52 §10.2), so each line says what it ADDS.
     var desc: String {
         [
-            "Coastline, safety contour, dangers and traffic lanes — never hidden",
+            "Coastline, safety contour, dangers and traffic lanes. Never hidden.",
             "Adds buoys, beacons, lights, restricted areas and ferry routes",
             "Adds spot soundings, contour labels, seabed quality and cables",
         ][rawValue]

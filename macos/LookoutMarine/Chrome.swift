@@ -260,9 +260,9 @@ struct NorthBubble: View {
     private var help: String {
         switch orientation {
         case .unlocked: return "Follow own ship"
-        case .armed: return "Following own ship — waiting for a fix"
-        case .northUp: return "Following own ship, north up — tap for course up"
-        case .courseUp: return "Following own ship, course up — tap for north up"
+        case .armed: return "Following own ship, waiting for a fix"
+        case .northUp: return "Following own ship, north up. Tap for course up"
+        case .courseUp: return "Following own ship, course up. Tap for north up"
         }
     }
 }
