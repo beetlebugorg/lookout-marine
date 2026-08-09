@@ -23,6 +23,32 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
     private static var pending: [String] = []
 
+    /// Hand the chart to the copy already running, and go.
+    ///
+    /// Two copies share one preferences domain and one plugin storage
+    /// directory, so the second to quit overwrites what the first saved: a
+    /// mariner loses connections, alarm limits and raster choices without
+    /// being told. They also compete for the instrument feed, which serves
+    /// one client.
+    ///
+    /// LOOKOUT_MULTI lifts it. The screenshot protocol takes every frame from
+    /// its own instance and needs several at once, and a developer comparing
+    /// two builds side by side needs the same.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.environment["LOOKOUT_MULTI"] == nil else { return }
+        let me = NSRunningApplication.current
+        let others = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? ""
+        ).filter { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }
+        guard let first = others.first else { return }
+        lkLog("another copy is running (pid \(first.processIdentifier)); handing over to it")
+        first.activate(options: [.activateAllWindows])
+        // exit rather than NSApp.terminate: nothing is open yet to unwind, and
+        // terminate part way through launching runs a teardown against state
+        // that was never built.
+        exit(0)
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         Self.pending.append(contentsOf: urls.map(\.path))
         Self.deliverPending()

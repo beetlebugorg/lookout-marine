@@ -67,6 +67,9 @@ SECTIONS="display depths text charts vessels alarms connections plugins advanced
 # camera. An empty title takes the chart window, whose own title is the
 # chart's name. A crop is LEFTxTOPxWIDTHxHEIGHT as fractions of the frame.
 #
+# Each frame is its own instance, so every launch carries LOOKOUT_MULTI: the
+# app otherwise hands over to the copy already running and quits.
+#
 # Every one of these is served the same replay log as the settings frames, so
 # a frame can only ever carry fixture identities. A capture taken by hand from
 # a live feed would publish real vessels, and so would one that let the app
@@ -327,6 +330,7 @@ capture () {
           --env LOOKOUT_PLUGINS="$tmp/plugins" \
           --env LOOKOUT_NMEA="$NMEA" \
           --env LOOKOUT_CLEAN=1 \
+          --env LOOKOUT_MULTI=1 \
           --env LOOKOUT_SHOW="$show" \
           --stdout "$log" --stderr "$log" \
           "$APP" || { echo "$section: open failed" >&2; return 1; }
