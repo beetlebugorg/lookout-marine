@@ -59,6 +59,11 @@ Do not read these end to end. Grep for the section you need.
   key is `api`.
 - **Overlay vertices are origin-relative f32** with a per-frame uniform.
   Absolute world coordinates in f32 quantise visibly at zoom.
+- **Draw an estimate if it helps; never decide on one.** A plugin may carry a
+  target forward between reports so it slides instead of stepping, and that is
+  a display convenience. An alarm, a gate, a CPA: those are answered from what
+  was actually reported. A confident answer computed from a guess is the same
+  class of lie as a frozen overlay, and harder to see.
 - **Idle means idle.** A boat runs off a battery, so anything that wakes on a
   clock must stop when there is nothing left to change: no repaint without a
   reason to repaint, no timer that keeps ticking after it has said everything
