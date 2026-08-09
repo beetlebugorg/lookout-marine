@@ -39,7 +39,10 @@
 //! `target_danger` and raises one alarm. The gate state is per MMSI, in
 //! `gates` below: the alarm fires on the edge into the gate and re-arms only
 //! after that target leaves it. The edge is what holds the alarm to one however
-//! often the values arrive.
+//! often the values arrive. The alert is keyed on the MMSI, so the host holds
+//! one alert per vessel and a mariner who silences one has silenced that
+//! vessel. The body names the vessel and nothing that moves; CPA and TCPA are
+//! on the chart and in the dialog, live.
 //!
 //! WITHOUT OWN POSITION there is no relative motion to compute, which is why
 //! own ship's three values are optional inputs: the traffic is still drawn,
@@ -89,6 +92,10 @@ const max_targets: usize = 256;
 /// and up to ten digits. A name the target did report is the library's, capped
 /// at 32 bytes, and is used as it comes.
 const max_name = 34;
+
+/// The buffer an alert's dedup key is written into: a condition name and up to
+/// ten digits of MMSI.
+const max_key = 24;
 
 pub const inputs = struct {
     /// The traffic. The library records each snapshot and ages it; an empty
@@ -221,7 +228,7 @@ fn evaluate() void {
             s.dangerous(set.cpa_limit_m, set.tcpa_limit_s)
         else
             false;
-        if (in_gate and !g.in_gate) alarm(t, sol.?);
+        if (in_gate and !g.in_gate) alarm(t);
         g.in_gate = in_gate;
 
         // The row carries the solution the triangle is coloured by, so the
@@ -496,27 +503,40 @@ fn whoIs(buf: *[max_name]u8, t: *const lk.Target) []const u8 {
     return std.fmt.bufPrint(buf, "{d}", .{t.mmsi}) catch "unknown";
 }
 
+/// The key the host holds one alert under: the condition, then the MMSI. The
+/// prefix keeps the two conditions in key spaces of their own, so an aid's
+/// warning and a vessel's alarm can never be read as one alert.
+fn alertKey(buf: *[max_key]u8, comptime what: []const u8, mmsi: u32) []const u8 {
+    return std.fmt.bufPrint(buf, what ++ ":{d}", .{mmsi}) catch buf[0..0];
+}
+
 /// One warning for an aid to navigation that says it has left its charted
 /// position. A warning, not an alarm: the buoy is in the wrong place, which is
 /// a reason to distrust it, not a collision in the next ten minutes.
 fn offPositionWarning(t: *const lk.Target) void {
     var who_buf: [max_name]u8 = undefined;
+    var key_buf: [max_key]u8 = undefined;
     var body: [200]u8 = undefined;
     const text = std.fmt.bufPrint(&body, "{s} ({s}) reports itself off position", .{
         whoIs(&who_buf, t),
         aton.navaidName(t.aton_type),
     }) catch return;
-    _ = lk.alert(.warning, "AtoN off position", text);
+    _ = lk.alertKeyed(alertKey(&key_buf, "aton", t.mmsi), .warning, "AtoN off position", text);
 }
 
 /// One alarm, on the edge into the gate.
-fn alarm(t: *const lk.Target, sol: cpa.Solution) void {
+///
+/// The key is the vessel, so the same approach said again is the same alarm
+/// and the mariner's acknowledgement holds. NO CPA OR TCPA IN THE BODY: both
+/// move every second, and an alert whose words move is one the mariner cannot
+/// silence. They are on the chart and in the targets dialog, which is where a
+/// figure that moves belongs.
+fn alarm(t: *const lk.Target) void {
     var who_buf: [max_name]u8 = undefined;
-    var body: [160]u8 = undefined;
-    const text = std.fmt.bufPrint(&body, "{s}: CPA {d:.0} m in {d:.0} s", .{
+    var key_buf: [max_key]u8 = undefined;
+    var body: [200]u8 = undefined;
+    const text = std.fmt.bufPrint(&body, "{s} is closing inside your CPA limit", .{
         whoIs(&who_buf, t),
-        sol.cpa_m,
-        sol.tcpa_s orelse 0,
     }) catch return;
-    _ = lk.alert(.alarm, "AIS CPA alarm", text);
+    _ = lk.alertKeyed(alertKey(&key_buf, "cpa", t.mmsi), .alarm, "AIS CPA alarm", text);
 }

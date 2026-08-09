@@ -577,15 +577,35 @@ impl Severity {
 
 /// Raise an alert. Needs `alerts.raise`; -1 means the grant is missing.
 pub fn alert(severity: Severity, title: &str, body: &str) -> i32 {
-    let mut s = String::with_capacity(128);
+    alert_json(&alert_payload("", severity, title, body))
+}
+
+/// Raise an alert under a key of your own. The host holds one alert per plugin
+/// per key, so a raise under a key it already holds updates that alert instead
+/// of adding one, and the mariner's acknowledgement survives it.
+///
+/// Key on the identity of the thing in danger, such as a vessel's MMSI, and not
+/// on the words. An empty key is no key, and the host then tells the alert from
+/// another by the title and the body alone. The key is cut at 64 bytes.
+pub fn alert_keyed(key: &str, severity: Severity, title: &str, body: &str) -> i32 {
+    alert_json(&alert_payload(key, severity, title, body))
+}
+
+fn alert_payload(key: &str, severity: Severity, title: &str, body: &str) -> String {
+    let mut s = String::with_capacity(192);
     s.push_str("{\"severity\":\"");
     s.push_str(severity.text());
-    s.push_str("\",\"title\":");
+    s.push('"');
+    if !key.is_empty() {
+        s.push_str(",\"key\":");
+        json::push_str(&mut s, key);
+    }
+    s.push_str(",\"title\":");
     json::push_str(&mut s, title);
     s.push_str(",\"body\":");
     json::push_str(&mut s, body);
     s.push('}');
-    alert_json(&s)
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -1349,6 +1369,30 @@ mod tests {
         assert_eq!(
             ov.s.clone() + "]}",
             r#"{"del":["gone"],"set":[{"id":"line","kind":"polyline","pts":[[1,2],[3,4]],"width_pt":1.5,"dash":true,"color":"warning"}]}"#
+        );
+    }
+
+    // The key is what lets the host recognise an alert it is already holding,
+    // so a plugin that restates a danger does not raise a second one over the
+    // mariner's acknowledgement.
+    #[test]
+    fn an_alert_carries_its_key() {
+        assert_eq!(
+            alert_payload(
+                "cpa:899000101",
+                Severity::Alarm,
+                "AIS CPA alarm",
+                "GALLEON is closing"
+            ),
+            r#"{"severity":"alarm","key":"cpa:899000101","title":"AIS CPA alarm","body":"GALLEON is closing"}"#
+        );
+    }
+
+    #[test]
+    fn an_alert_with_no_key_sends_the_payload_it_always_did() {
+        assert_eq!(
+            alert_payload("", Severity::Alarm, "AIS CPA alarm", "GALLEON is closing"),
+            r#"{"severity":"alarm","title":"AIS CPA alarm","body":"GALLEON is closing"}"#
         );
     }
 

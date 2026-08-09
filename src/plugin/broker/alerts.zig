@@ -31,6 +31,10 @@ pub const max_alerts_per_plugin = 32;
 pub const max_alert_title = 96;
 pub const max_alert_body = 240;
 
+/// Longest dedup key kept. A key is an identity a plugin makes up, so it needs
+/// room for a name and a number and not for a sentence.
+pub const max_alert_key = 64;
+
 /// An ACKNOWLEDGED alert clears once this long has passed with nothing
 /// happening to it. The condition returning after that raises a fresh alert
 /// and sounds again, so a mariner who silenced one close pass still hears the
@@ -65,6 +69,10 @@ pub const Alert = struct {
     /// What an acknowledgement names. Never reused.
     id: u64,
     severity: Severity,
+    /// What the plugin calls this alert, or empty when it named nothing. Not
+    /// on the wire: the shell acknowledges an id, and this is the host's
+    /// answer to which alert a raise is about.
+    key: []u8,
     title: []u8,
     body: []u8,
     /// Wall clock, for the shell to show.
@@ -73,9 +81,23 @@ pub const Alert = struct {
     /// clear window above is measured on it.
     last_ms: i64,
     acknowledged: bool = false,
+
+    /// True when `r` restates this alert rather than raising another one.
+    ///
+    /// A KEY IS AN IDENTITY, and a plugin that supplies one owns what counts
+    /// as the same alert. The words are then free to move under it: a vessel
+    /// whose name arrives after its first position report is the same danger
+    /// under a new wording. With no key the words are all the host has, so the
+    /// title and the body are the identity, and a body carrying a figure that
+    /// moves raises a new alert every time it moves.
+    pub fn restatedBy(self: Alert, r: Raised) bool {
+        if (self.key.len > 0 or r.key.len > 0) return std.mem.eql(u8, self.key, r.key);
+        return std.mem.eql(u8, self.title, r.title) and std.mem.eql(u8, self.body, r.body);
+    }
 };
 
 pub fn freeAlert(alloc: std.mem.Allocator, a: Alert) void {
+    alloc.free(a.key);
     alloc.free(a.title);
     alloc.free(a.body);
 }
@@ -98,10 +120,13 @@ pub const Order = struct {
 
 /// What one alert payload says.
 ///
-/// The title names the condition and the body names the instance of it. The
-/// two together are what tells one alert from another; see `Broker.raiseAlert`.
+/// The optional `key` is the identity: two raises from one plugin under the
+/// same key are one alert. Without it the title and the body are the identity,
+/// the title naming the condition and the body naming the instance of it. See
+/// `Alert.restatedBy` and `Broker.raiseAlert`.
 pub const Raised = struct {
     severity: Severity,
+    key: []const u8,
     title: []const u8,
     body: []const u8,
 
@@ -121,6 +146,7 @@ pub const Raised = struct {
         if (title.len == 0) title = text;
         return .{
             .severity = severityOf(text),
+            .key = clip(jsonStringField(text, "key") orelse "", max_alert_key),
             .title = clip(title, max_alert_title),
             .body = clip(body, max_alert_body),
         };
@@ -246,6 +272,16 @@ const AlertFixture = struct {
 const cpa_alarm = "{\"severity\":\"alarm\",\"title\":\"AIS CPA alarm\",\"body\":\"ANNE: CPA 124 m in 585 s\"}";
 const cpa_alarm_other = "{\"severity\":\"alarm\",\"title\":\"AIS CPA alarm\",\"body\":\"BRAVO: CPA 90 m in 200 s\"}";
 
+/// One vessel under its own key, said twice. The second says it a second
+/// later, with figures that have moved and the name the target had not sent
+/// when it was first heard.
+const keyed_first = "{\"severity\":\"alarm\",\"key\":\"cpa:899000101\"," ++
+    "\"title\":\"AIS CPA alarm\",\"body\":\"899000101: CPA 171 m in 600 s\"}";
+const keyed_again = "{\"severity\":\"alarm\",\"key\":\"cpa:899000101\"," ++
+    "\"title\":\"AIS CPA alarm\",\"body\":\"ANNE: CPA 170 m in 599 s\"}";
+const keyed_other = "{\"severity\":\"alarm\",\"key\":\"cpa:899000102\"," ++
+    "\"title\":\"AIS CPA alarm\",\"body\":\"BRAVO: CPA 90 m in 200 s\"}";
+
 test "an alert reaches the shell, and the same condition restated does not stack" {
     const a = t.allocator;
     const f = try AlertFixture.init();
@@ -299,6 +335,57 @@ test "acknowledging silences one alert and leaves the rest sounding" {
     const acked = std.mem.indexOf(u8, json.items, "\"acknowledged\":true").?;
     try t.expect(unacked < acked);
     try t.expect(std.mem.indexOf(u8, json.items, "BRAVO").? < std.mem.indexOf(u8, json.items, "ANNE").?);
+}
+
+// AN ALARM THE MARINER CANNOT SILENCE IS THE WORST BUG THIS FILE CAN HAVE.
+// The words move while the danger stands still, and each new wording used to
+// be a fresh alert with nobody's answer on it.
+test "a keyed alert restated in different words keeps its acknowledgement" {
+    const a = t.allocator;
+    const f = try AlertFixture.init();
+    defer f.deinit();
+
+    f.raise(keyed_first);
+    const first = f.onlyId();
+    try t.expect(f.broker.ackAlert(first));
+
+    // The same vessel a second later. One alert, and it is the one the
+    // mariner already answered, so nothing sounds.
+    f.raise(keyed_again);
+    try t.expectEqual(@as(usize, 1), f.count());
+    try t.expectEqual(first, f.onlyId());
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try f.read(&json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"acknowledged\":true") != null);
+    // What the mariner reads is the last thing the plugin said.
+    try t.expect(std.mem.indexOf(u8, json.items, "ANNE: CPA 170 m in 599 s") != null);
+    try t.expect(std.mem.indexOf(u8, json.items, "CPA 171 m") == null);
+}
+
+test "two keys are two alarms, and a key is not inferred for an unkeyed raise" {
+    const a = t.allocator;
+    const f = try AlertFixture.init();
+    defer f.deinit();
+
+    f.raise(keyed_first);
+    try t.expect(f.broker.ackAlert(f.onlyId()));
+
+    // Another vessel closing is another decision. Its key is its own, so the
+    // answer given to the first is not given to it.
+    f.raise(keyed_other);
+    try t.expectEqual(@as(usize, 2), f.count());
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try f.read(&json);
+    try t.expect(std.mem.indexOf(u8, json.items, "\"acknowledged\":false") != null);
+
+    // The same words with no key are a third alert. An identity a plugin gave
+    // one alert is never guessed for another.
+    f.raise("{\"severity\":\"alarm\",\"title\":\"AIS CPA alarm\"," ++
+        "\"body\":\"899000101: CPA 171 m in 600 s\"}");
+    try t.expectEqual(@as(usize, 3), f.count());
 }
 
 test "an acknowledged alert clears, and the condition returning sounds again" {

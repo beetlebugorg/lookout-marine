@@ -11,7 +11,11 @@
 //!     arrive between the crossing and the end of the run. Evaluating on the
 //!     data path runs the gate an order of magnitude more often than the draw
 //!     timer did, and only the latch keeps that from being an order of
-//!     magnitude more alarms.
+//!     magnitude more alarms;
+//!   - an acknowledgement is the mariner's and the plugin cannot take it back.
+//!     The words move under a live alarm, because a target sends its name after
+//!     its first position report, and the alert is keyed on the vessel so all
+//!     of that stays one alert.
 //!
 //! The plugin arrives as an anonymous import, like plugins/echo does for
 //! host_smoke: importing host.zig must never drag a plugin binary into the
@@ -71,10 +75,15 @@ fn lonAt(east_m: f64) f64 {
     return base_lon + east_m / (m_per_deg_lat * cos_lat);
 }
 
-/// Own ship and the target, both `metres` along their courses from where the
-/// encounter started. Publishing the pair again with a larger `metres` is one
-/// more report of the same approach.
-fn publishEncounter(vessels: *vstore.Store, ais: *aisstore.AisStore, metres: f64) !void {
+/// The second vessel, on the same unallocated MID.
+const other_mmsi: u32 = 899000102;
+
+/// Far enough ahead that the approach is 4000 s away: outside the gate's time
+/// limit, so the target is drawn and is not dangerous.
+const opened_m: f64 = 40_000;
+
+/// Own ship, `metres` north of where the encounter started.
+fn publishOwnShip(vessels: *vstore.Store, metres: f64) !void {
     const now = broker.wallMs();
     var buf: [96]u8 = undefined;
     try vessels.set(
@@ -91,16 +100,37 @@ fn publishEncounter(vessels: *vstore.Store, ais: *aisstore.AisStore, metres: f64
         test_source,
     );
     try vessels.set("navigation.courseOverGroundTrue", "0", now, test_source);
+}
+
+/// One report from a target making south, `north_m` north of where the
+/// encounter started. A null name is a target heard by position report alone,
+/// which is how most of them are first heard: the static message carrying the
+/// name arrives on its own schedule.
+fn publishTarget(
+    ais: *aisstore.AisStore,
+    mmsi: u32,
+    name: ?[]const u8,
+    north_m: f64,
+    east_m: f64,
+) !void {
     try ais.upsert(.{
-        .mmsi = target_mmsi,
-        .lat = latAt(gap_m - metres),
-        .lon = lonAt(offset_m),
+        .mmsi = mmsi,
+        .lat = latAt(north_m),
+        .lon = lonAt(east_m),
         .sog = closing_mps,
         .cog = 180,
         .heading = 180,
-        .name = "SPECKLED KETTLE",
-        .ts_ms = now,
+        .name = name,
+        .ts_ms = broker.wallMs(),
     }, test_source);
+}
+
+/// Own ship and the target, both `metres` along their courses from where the
+/// encounter started. Publishing the pair again with a larger `metres` is one
+/// more report of the same approach.
+fn publishEncounter(vessels: *vstore.Store, ais: *aisstore.AisStore, metres: f64) !void {
+    try publishOwnShip(vessels, metres);
+    try publishTarget(ais, target_mmsi, "SPECKLED KETTLE", gap_m - metres, offset_m);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +277,39 @@ fn alarmed(log: *LogSink) bool {
     return log.has("AIS CPA alarm");
 }
 
+/// The alerts the host is holding, read back through the call the shell makes
+/// and parsed. The strings point into `text`, so the two are freed together.
+const Held = struct {
+    alloc: std.mem.Allocator,
+    text: std.ArrayList(u8),
+    doc: std.json.Parsed(std.json.Value),
+
+    fn read(alloc: std.mem.Allocator, br: *broker.Broker) !Held {
+        var text: std.ArrayList(u8) = .empty;
+        errdefer text.deinit(alloc);
+        try br.alertsJson(&text);
+        return .{
+            .alloc = alloc,
+            .text = text,
+            .doc = try std.json.parseFromSlice(std.json.Value, alloc, text.items, .{}),
+        };
+    }
+
+    fn deinit(self: *Held) void {
+        self.doc.deinit();
+        self.text.deinit(self.alloc);
+    }
+
+    fn list(self: *const Held) []std.json.Value {
+        return self.doc.value.object.get("alerts").?.array.items;
+    }
+
+    /// One alert, in the order a shell reads them: unanswered first.
+    fn at(self: *const Held, i: usize) std.json.ObjectMap {
+        return self.list()[i].object;
+    }
+};
+
 /// Every overlay object this plugin owns. The host namespaces an id by the
 /// plugin that drew it, so the prefix is the ownership test.
 fn drawnObjects(ov: *overlay.Store) usize {
@@ -295,6 +358,82 @@ test "the collision alarm fires with the draw timer stood down" {
     // mariner emptied it, and the plugin says so rather than looking broken.
     try must(drawnObjects(rig.ov) == 0, "nothing reached the chart");
     try must(p.denied == 0, "no overlay call was made, so none was refused");
+    try must(!rig.log.has("trapped"), "nothing trapped");
+}
+
+// ACKNOWLEDGEMENT IS THE MARINER'S DECISION, AND NOTHING THE PLUGIN SAYS NEXT
+// TAKES IT BACK. The words move under a live alarm: a target is first heard by
+// position report and sends its name later, and the closing figures move with
+// every report. The key is the vessel, so all of that is one alert.
+test "acknowledging the alarm holds while the words move, and the next vessel still alarms" {
+    const alloc = std.testing.allocator;
+    var rig = try Rig.init(alloc);
+    defer rig.deinit();
+    try rig.start();
+    const p = rig.h.find(ais_id) orelse return error.PluginNotLoaded;
+
+    // Heard by position report alone, so the alarm can only name the MMSI.
+    try publishOwnShip(rig.vessels, 0);
+    try publishTarget(rig.ais, target_mmsi, null, gap_m, offset_m);
+    try waitFor(rig.log, alarmed);
+
+    var silenced: u64 = 0;
+    {
+        var held = try Held.read(alloc, rig.br);
+        defer held.deinit();
+        try must(held.list().len == 1, "one alarm is up");
+        silenced = @intCast(held.at(0).get("id").?.integer);
+    }
+    try must(rig.br.ackAlert(silenced), "the mariner silences it");
+
+    // The vessel opens, which re-arms the gate. The plugin says so on the
+    // status line, which is how the test knows the report was answered.
+    try publishOwnShip(rig.vessels, 0);
+    try publishTarget(rig.ais, target_mmsi, null, opened_m, offset_m);
+    try waitFor(p, struct {
+        fn ready(s: *broker.Plugin) bool {
+            return std.mem.indexOf(u8, s.status(), "1 targets, 0 in CPA alarm") != null;
+        }
+    }.ready);
+
+    // It closes again, nearer than before and carrying the name it has since
+    // sent. New words, the same danger, and the same vessel.
+    try publishOwnShip(rig.vessels, 0);
+    try publishTarget(rig.ais, target_mmsi, "SPECKLED KETTLE", gap_m / 2, offset_m);
+    try waitFor(rig.log, struct {
+        fn ready(l: *LogSink) bool {
+            return l.count("AIS CPA alarm") >= 2;
+        }
+    }.ready);
+    {
+        var held = try Held.read(alloc, rig.br);
+        defer held.deinit();
+        try must(held.list().len == 1, "the second raise did not stack a second alert");
+        try must(held.at(0).get("acknowledged").?.bool, "the acknowledgement held");
+        try must(
+            std.mem.indexOf(u8, held.at(0).get("body").?.string, "SPECKLED KETTLE") != null,
+            "the alert names the vessel now that the name has arrived",
+        );
+    }
+
+    // A DIFFERENT VESSEL IS A DIFFERENT DANGER, and nobody has seen this one.
+    try publishOwnShip(rig.vessels, 0);
+    try publishTarget(rig.ais, other_mmsi, "GALLEON", gap_m / 2, -offset_m);
+    try waitFor(rig.log, struct {
+        fn ready(l: *LogSink) bool {
+            return l.count("AIS CPA alarm") >= 3;
+        }
+    }.ready);
+    {
+        var held = try Held.read(alloc, rig.br);
+        defer held.deinit();
+        try must(held.list().len == 2, "the second vessel raised its own alarm");
+        try must(!held.at(0).get("acknowledged").?.bool, "and nobody has answered it");
+        try must(
+            std.mem.indexOf(u8, held.at(0).get("body").?.string, "GALLEON") != null,
+            "the unanswered alarm names the vessel nobody has seen",
+        );
+    }
     try must(!rig.log.has("trapped"), "nothing trapped");
 }
 

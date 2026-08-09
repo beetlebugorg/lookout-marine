@@ -93,6 +93,17 @@ pub fn alert(severity: raw::Severity, title: &str, body: &str) -> i32 {
     raw::alert(severity, title, body)
 }
 
+/// Raise an alert under a key of your own. The host holds one alert per plugin
+/// per key, so raising again under the same key updates the alert already on
+/// screen and leaves the mariner's acknowledgement alone.
+///
+/// Key on the identity of the thing in danger, such as a vessel's MMSI, and not
+/// on the words. A body carrying a figure that moves is a new alert every time
+/// it moves when there is no key to hold it together.
+pub fn alert_keyed(key: &str, severity: raw::Severity, title: &str, body: &str) -> i32 {
+    raw::alert_keyed(key, severity, title, body)
+}
+
 static LAST: Single<Option<(String, String)>> = Single::new(None);
 
 /// Post one status line, deduped. Nothing is sent while the state and the

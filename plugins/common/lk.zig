@@ -1447,9 +1447,23 @@ pub const Severity = enum { alarm, warning, notice, caution };
 /// Raise an alert. Needs `alerts.raise`; -1 means the grant is missing or the
 /// payload did not fit.
 pub fn raiseAlert(severity: Severity, title: []const u8, body: []const u8) i32 {
-    var buf: [512]u8 = undefined;
+    return raiseAlertKeyed("", severity, title, body);
+}
+
+/// Raise an alert under a key of the plugin's own. The host holds one alert
+/// per plugin per key, so a raise under a key it already holds updates that
+/// alert instead of adding one, and the mariner's acknowledgement survives it.
+/// An empty key is no key, and the host then tells the alert from another by
+/// the title and the body. The key is cut at 64 bytes.
+pub fn raiseAlertKeyed(key: []const u8, severity: Severity, title: []const u8, body: []const u8) i32 {
+    var buf: [640]u8 = undefined;
     var b = Buf.init(&buf);
-    b.print("{{\"severity\":\"{s}\",\"title\":", .{@tagName(severity)});
+    b.print("{{\"severity\":\"{s}\"", .{@tagName(severity)});
+    if (key.len > 0) {
+        b.raw(",\"key\":");
+        b.str(key);
+    }
+    b.raw(",\"title\":");
     b.str(title);
     b.raw(",\"body\":");
     b.str(body);

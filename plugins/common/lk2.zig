@@ -1357,6 +1357,17 @@ pub fn alert(severity: Severity, title: []const u8, body: []const u8) i32 {
     return raw_lk.raiseAlert(severity, title, body);
 }
 
+/// Raise an alert under a key of your own. The host holds one alert per plugin
+/// per key, so raising again under the same key updates the alert already on
+/// screen and leaves the mariner's acknowledgement alone.
+///
+/// Key on the identity of the thing in danger, such as a vessel's MMSI, and
+/// not on the words. A body carrying a figure that moves is a new alert every
+/// time it moves when there is no key to hold it together.
+pub fn alertKeyed(key: []const u8, severity: Severity, title: []const u8, body: []const u8) i32 {
+    return raw_lk.raiseAlertKeyed(key, severity, title, body);
+}
+
 // ---------------------------------------------------------------------------
 // Publishing
 // ---------------------------------------------------------------------------
@@ -2616,6 +2627,23 @@ fn Declared(comptime P: type) type {
 const expect = std.testing;
 
 const annapolis = Point{ .lat = 38.9763, .lon = -76.4767 };
+
+test "an alert carries its key, and a plugin that names none sends the payload it always did" {
+    raw_lk.test_hooks.reset();
+
+    _ = alert(.alarm, "AIS CPA alarm", "GALLEON is closing");
+    try expect.expectEqualStrings(
+        "{\"severity\":\"alarm\",\"title\":\"AIS CPA alarm\",\"body\":\"GALLEON is closing\"}",
+        raw_lk.test_hooks.last(.alert).?.payload(),
+    );
+
+    _ = alertKeyed("cpa:899000101", .alarm, "AIS CPA alarm", "GALLEON is closing");
+    try expect.expectEqualStrings(
+        "{\"severity\":\"alarm\",\"key\":\"cpa:899000101\"," ++
+            "\"title\":\"AIS CPA alarm\",\"body\":\"GALLEON is closing\"}",
+        raw_lk.test_hooks.last(.alert).?.payload(),
+    );
+}
 
 test "1 nm at 090 from Annapolis lands where the flat-earth check says" {
     const p = annapolis.destination(90, nm_m);
