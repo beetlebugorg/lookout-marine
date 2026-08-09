@@ -84,13 +84,18 @@ for abi in $ABIS; do
     # from an earlier plugins=true build would otherwise linger and link.
     rm -f "$dest/libvmlib.a"
     [ "$plugins" = true ] && cp "$prefix/lib/libvmlib.a" "$dest/"
-    # sanity: must be an AArch64/x86-64 ELF archive, never a native Mach-O one
-    python3 - "$dest/liblookout_marine.a" <<'PY'
-import sys
-d = open(sys.argv[1], "rb").read()
-i = d.find(b"\x7fELF")
-assert i >= 0, "not an ELF archive (a native macOS build leaked in?)"
-print("   ok:", {0xb7: "AArch64", 0x3e: "x86-64"}.get(int.from_bytes(d[i+18:i+20], "little"), "?"))
-PY
+    # sanity: must be an AArch64/x86-64 ELF archive, never a native Mach-O one.
+    # llvm-objdump reports the first member's format, and it ships with the NDK
+    # this script already requires.
+    objdump="$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-objdump)"
+    fmt="$("$objdump" -f "$dest/liblookout_marine.a" 2>/dev/null |
+        sed -n 's/.*file format \([a-z0-9-]*\).*/\1/p' | head -1)"
+    case "$fmt" in
+        elf64-littleaarch64) echo "   ok: AArch64" ;;
+        elf64-x86-64)        echo "   ok: x86-64" ;;
+        elf*)                echo "   ok: $fmt" ;;
+        "") echo "error: cannot read $dest/liblookout_marine.a" >&2; exit 1 ;;
+        *)  echo "error: $fmt, not an ELF archive (a native macOS build leaked in?)" >&2; exit 1 ;;
+    esac
 done
 echo "done -> app/jni/prebuilt/"
