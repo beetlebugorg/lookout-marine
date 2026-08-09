@@ -15,9 +15,8 @@
 //  crossing ahead has not seen the one coming up astern, and a control that
 //  silenced both would hide the second.
 
-#if os(macOS)
-import AppKit
 import SwiftUI
+import AVFoundation
 
 // MARK: - What the core hands over
 
@@ -58,9 +57,12 @@ struct PluginAlert: Identifiable, Equatable {
 
 /// The alarm tone, repeated while anything is unacknowledged.
 ///
-/// A system sound stands in for the real tone, which is a product decision: a
-/// marine alarm has to cut through wind and engine noise, and choosing what
-/// that sounds like is not a thing to settle in the shell.
+/// A real alarm, not a system chime: an urgent two-tone burst synthesised at
+/// build-free runtime and played through AVAudioEngine, so it carries the same
+/// on the Mac, the iPad and the phone. On iOS it sounds through a MUTED ringer
+/// (AVAudioSession `.playback`) — a marine alarm that a silent switch could
+/// turn off is not an alarm. The exact tone is deliberately plain; a bespoke
+/// marine tone is a product decision, but "loud, urgent and unmutable" is not.
 @MainActor
 final class AlarmSiren {
     /// How often an unacknowledged alarm sounds again. Once a second is right
@@ -70,33 +72,91 @@ final class AlarmSiren {
     static let repeatInterval: TimeInterval = 10
 
     private var timer: Timer?
-    private let sound = NSSound(named: NSSound.Name("Submarine"))
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+    private lazy var burst = Self.makeBurst(format: format)
+
+    init() {
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+    }
 
     /// Start or stop the repeat. Sounding starts at once: the first alarm is
-    /// not held back for a timer.
+    /// not held back for a timer. The engine and the audio session stay up for
+    /// the whole sounding — reactivating per strike would glitch and cost
+    /// latency — and are torn down the moment nothing is unacknowledged.
     func setSounding(_ on: Bool) {
         guard on != (timer != nil) else { return }
         guard on else {
             timer?.invalidate()
             timer = nil
+            player.stop()
+            engine.stop()
+            #if os(iOS)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
             return
         }
+        #if os(iOS)
+        // .playback is the category that plays through Silent Mode and the
+        // volume-mute; .duckOthers pulls chartplotter music or a podcast down
+        // under the alarm rather than fighting it.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, options: [.duckOthers])
+        try? session.setActive(true)
+        #endif
+        do {
+            try engine.start()
+        } catch {
+            // A silent alarm is dangerous, so the failure is said, not swallowed.
+            lkLog("alarm: audio engine did not start (\(error)); the siren is silent this session")
+            return
+        }
+        player.play()
         strike()
         timer = Timer.scheduledTimer(withTimeInterval: Self.repeatInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.strike() }
         }
     }
 
+    /// One sounding: schedule the burst to play now. The node plays on between
+    /// strikes with nothing queued, so a strike is just the next buffer.
     private func strike() {
-        guard let sound else {
-            NSSound.beep()
-            return
-        }
-        // Restart rather than overlap: a sound still playing would otherwise
-        // swallow the next strike and the repeat would go quiet.
-        sound.stop()
-        sound.play()
+        guard engine.isRunning else { return }
+        player.scheduleBuffer(burst, at: nil, options: [], completionHandler: nil)
     }
+
+    /// A one-second urgent burst: six pulses alternating between two pitches,
+    /// each pulse eased in and out over 5 ms so it beeps instead of clicking.
+    /// Two alternating tones read as an alarm where a single steady one reads
+    /// as a phone ringing.
+    private static func makeBurst(format: AVAudioFormat) -> AVAudioPCMBuffer {
+        let sr = format.sampleRate
+        let onFrames = Int(0.12 * sr)     // pulse length
+        let gapFrames = Int(0.08 * sr)    // silence between pulses
+        let envFrames = Int(0.005 * sr)   // attack/release, kills the click
+        let pulses = 6
+        let freqs = [880.0, 1_245.0]      // A5 / D#6 — a minor-third urgency
+        let frames = AVAudioFrameCount(pulses * (onFrames + gapFrames))
+        let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buf.frameLength = frames
+        let s = buf.floatChannelData![0]
+        var i = 0
+        for p in 0..<pulses {
+            let f = freqs[p % freqs.count]
+            for n in 0..<onFrames {
+                var a = sin(2 * .pi * f * Double(n) / sr) * 0.6
+                if n < envFrames { a *= Double(n) / Double(envFrames) }
+                else if n >= onFrames - envFrames { a *= Double(onFrames - n) / Double(envFrames) }
+                s[i] = Float(a); i += 1
+            }
+            for _ in 0..<gapFrames { s[i] = 0; i += 1 }
+        }
+        return buf
+    }
+
+    deinit { timer?.invalidate() }
 }
 
 // MARK: - The banner
@@ -215,5 +275,3 @@ private struct AlertRow: View {
         }
     }
 }
-
-#endif

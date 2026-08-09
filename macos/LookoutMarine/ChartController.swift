@@ -222,9 +222,10 @@ final class ChartController: NSObject {
         #if os(macOS)
         // And their declared tables can take their place in the menu bar.
         model?.refreshPluginTables()
-        // Anything they raise from here on reaches the mariner.
-        model?.startAlertWatch()
         #endif
+        // Anything they raise from here on reaches the mariner — on both
+        // platforms; the banner and siren are cross-platform.
+        model?.startAlertWatch()
 
         startDisplayLink()
         pushReadouts()
@@ -256,11 +257,9 @@ final class ChartController: NSObject {
 
     func close() {
         stopDisplayLink()
-        #if os(macOS)
         // The plugins go with the handle, so nothing is left watching the
         // conditions their alarms describe.
         model?.stopAlertWatch()
-        #endif
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
@@ -859,6 +858,12 @@ final class ChartController: NSObject {
         return (top["seq"] as? Int ?? 0, rows)
     }
 
+    #endif
+
+    // The alert bridge is cross-platform: an iPad mariner hears the plugins
+    // too. The declared-table queries above are macOS-only (they feed NSWindow
+    // dialogs), so the guard closes before these and reopens after.
+
     /// Every alert the plugins have raised, already ordered: what nobody has
     /// answered first, then the loudest, then the oldest. `seq` moves when the
     /// set has changed since the last read.
@@ -881,6 +886,7 @@ final class ChartController: NSObject {
         return lookout_plugin_alert_ack(h, id) == 0
     }
 
+    #if os(macOS)
     /// Tell the plugin its table is on screen, or is not.
     func setTableOpen(plugin: String, key: String, _ open: Bool) {
         guard let h = handle else { return }

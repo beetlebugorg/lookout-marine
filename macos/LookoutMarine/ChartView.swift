@@ -996,7 +996,11 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // reclaimable caches at the next safe point instead of ignoring it.
         NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            if let h = self?.controller?.handle { lookout_memory_warning(h) }
+            // queue: .main, so this runs on the main actor; assert it so the
+            // main-actor-isolated handle is reachable from the Sendable closure.
+            MainActor.assumeIsolated {
+                if let h = self?.controller?.handle { lookout_memory_warning(h) }
+            }
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
