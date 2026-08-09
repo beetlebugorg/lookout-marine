@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -322,6 +323,7 @@ private fun RoundButton(icon: ImageVector, description: String, onClick: () -> U
     Surface(
         modifier = Modifier
             .size(44.dp)
+            .clip(CircleShape)
             .clickable(onClick = onClick),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),

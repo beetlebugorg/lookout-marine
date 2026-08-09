@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -77,8 +78,12 @@ fun ChromeBubble(
     onClick: () -> Unit,
 ) {
     Surface(
+        // Clip before clickable. The ripple is drawn by the clickable and is
+        // bounded by whatever clip precedes it in the chain, so a shape passed
+        // to Surface arrives too late and a round control flashes a square.
         modifier = modifier
             .size(Chrome.bubble)
+            .clip(CircleShape)
             .clickable(onClick = onClick),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -106,6 +111,7 @@ fun NorthBubble(rotationDeg: Double, onReset: () -> Unit, modifier: Modifier = M
     Surface(
         modifier = modifier
             .size(Chrome.bubble)
+            .clip(CircleShape)
             .clickable(onClick = onReset),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
