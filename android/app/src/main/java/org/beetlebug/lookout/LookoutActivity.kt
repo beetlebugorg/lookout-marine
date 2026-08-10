@@ -53,6 +53,18 @@ class LookoutActivity : ComponentActivity() {
         // every launch (~1s), having no cache path in the environment.
         Lookout.setCacheDir(cacheDir.absolutePath)
 
+        // The foreground service's notification is the mariner's only sight of
+        // what is holding the process up, and their only way to stop it. On API
+        // 33 and up it needs a grant; refused, the service still runs and the
+        // notification is simply not shown. Nothing to handle on the way back:
+        // the next launch asks again if it still matters.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
+        }
+
         // The bundled cell is the last resort, extracted once; the model prefers
         // a chosen library, then anything pushed into our external files dir.
         charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))
@@ -216,5 +228,6 @@ class LookoutActivity : ComponentActivity() {
         const val PLUGIN_ASSET_DIR = "plugins"
         const val PLUGIN_DIR_NAME = "plugins"
         const val REQ_READ = 1
+        const val REQ_NOTIFY = 2
     }
 }

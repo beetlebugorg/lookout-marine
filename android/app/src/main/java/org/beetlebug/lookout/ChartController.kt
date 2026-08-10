@@ -479,6 +479,8 @@ class ChartController(private val appContext: Context) {
         // nothing is left to acknowledge and nothing may go on sounding.
         alerts = emptyList()
         siren.setSounding(false)
+        // And nothing left to hold the process up for.
+        stopService()
     }
 
     /** Persist the last sampled pose. No native call — [lastPushed] has it. */
@@ -503,7 +505,7 @@ class ChartController(private val appContext: Context) {
         // Before the HUD throttle: the bubble follows its target at frame rate,
         // the readouts at 10 Hz.
         followPin(l)
-        sampleAlerts(l, frameTimeNanos)
+        watchPlugins(l, frameTimeNanos)
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
@@ -574,11 +576,47 @@ class ChartController(private val appContext: Context) {
     fun onBackgroundTick(l: Lookout): Long {
         publishAlerts(l)
         val c = connections(l)
+        updateService(c)
         return when {
             c.live -> BACKGROUND_LIVE_MS
             c.trying -> BACKGROUND_TRYING_MS
             else -> 0L
         }
+    }
+
+    // ---- the foreground service --------------------------------------------
+
+    /** Whether the process is currently being held up. RENDER THREAD. */
+    private var serviceOn = false
+    private var lastLiveMs = 0L
+
+    /**
+     * Start or stop the service from what the connections say. Live means the
+     * app is holding a session to the gateway, which is the case that has to
+     * survive the mariner looking at something else.
+     *
+     * A drop does not stop it at once. A gateway blinks, a boat's Wi-Fi hands
+     * over, and stopping on the first missed second would drop the notification,
+     * lose the process's protection, and then need a foreground start to get it
+     * back, which the platform will not allow from the background. So it
+     * lingers, and only a connection that stays down ends it.
+     *
+     * RENDER THREAD.
+     */
+    private fun updateService(c: Connections) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (c.live) lastLiveMs = now
+        val want = c.live || (serviceOn && now - lastLiveMs < SERVICE_LINGER_MS)
+        if (want == serviceOn) return
+        serviceOn = want
+        if (want) ChartService.start(appContext) else ChartService.stop(appContext)
+    }
+
+    /** The engine is going, so nothing is left to hold the process up for. */
+    private fun stopService() {
+        if (!serviceOn) return
+        serviceOn = false
+        ChartService.stop(appContext)
     }
 
     /** What the source plugins' connection rows say between them. */
@@ -607,13 +645,20 @@ class ChartController(private val appContext: Context) {
     }
 
     /**
-     * Sample the core's alert list. RENDER THREAD, off the frame loop, like the
-     * readouts and the pinned bubble.
+     * The once-a-second look at what the plugins are doing: what they are
+     * alarming about, and whether anything is still connected. Both come off
+     * the frame loop rather than a clock of their own, so an idle chart gains
+     * no wakeup it did not already have; this only decides how often that
+     * existing visit crosses into the core. The same pair is what
+     * [onBackgroundTick] does when there are no frames to ride on.
+     *
+     * RENDER THREAD.
      */
-    private fun sampleAlerts(l: Lookout, frameTimeNanos: Long) {
+    private fun watchPlugins(l: Lookout, frameTimeNanos: Long) {
         if (lastAlertNs != 0L && frameTimeNanos - lastAlertNs < ALERT_INTERVAL_NS) return
         lastAlertNs = frameTimeNanos
         publishAlerts(l)
+        updateService(connections(l))
     }
 
     /**
@@ -953,6 +998,14 @@ class ChartController(private val appContext: Context) {
          * nothing else.
          */
         const val BACKGROUND_TRYING_MS = 5_000L
+
+        /**
+         * How long a dropped connection keeps the service. Long enough to
+         * cover a gateway rebooting or a boat's Wi-Fi handing over, short
+         * enough that a mariner who unplugs at the dock sees the notification
+         * go within the minute.
+         */
+        const val SERVICE_LINGER_MS = 45_000L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
         const val SAVE_INTERVAL_NS = 3_000_000_000L

@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">Lookout Marine</string>
+    <!-- The foreground service notification. It says what the app is doing
+         while it is not on screen, which is holding the session to the boat's
+         instrument gateway open and watching what comes in for an alarm. -->
+    <string name="service_running">Receiving from the boat\'s instruments, and watching for alarms</string>
+    <string name="service_channel">Instruments</string>
 </resources>

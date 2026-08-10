@@ -33,6 +33,35 @@
       bionic's connect() answers EACCES and every source plugin sits retrying.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Keeping the boat's instruments feeding while the app is not on screen. A
+      chartplotter has to warn of a pending collision whether or not the mariner
+      is looking at it, and a merely backgrounded app is throttled, frozen and
+      reclaimed, so the work is declared instead.
+
+      The type is connectedDevice, which the platform defines as an interaction
+      with an external device over "Bluetooth, NFC, IR, USB, or network
+      connection": this app holds a TCP session to the boat's gateway and reads
+      NMEA from it. It is also the only honest type that is NOT time-limited.
+      dataSync looks obvious and is capped at six hours in any twenty-four from
+      Android 15, which on a passage means the alarms stop somewhere off the
+      coast. location becomes true alongside once the app reads the device's own
+      GPS; today position arrives over the same TCP session, so declaring it now
+      would claim something the app does not do.
+
+      CHANGE_NETWORK_STATE is connectedDevice's runtime prerequisite, not a
+      wish: the platform requires one of CHANGE_NETWORK_STATE, CHANGE_WIFI_STATE,
+      CHANGE_WIFI_MULTICAST_STATE, NFC or TRANSMIT_IR, or a granted Bluetooth or
+      UWB permission, or a USB permission request. A device reached over the
+      network has only the first group to choose from.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- API 33+: without it the service still runs but its notification is
+         suppressed, and a mariner cannot see or stop what is holding the
+         process up. Asked for at first launch. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- The launcher icon resolves to mipmap-anydpi-v26/ic_launcher.xml (the
          adaptive icon) on API 26 and up, and to the per-density
          mipmap-*/ic_launcher.png on API 24-25. -->
@@ -53,6 +82,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Started and stopped from what the connection rows say, never from
+             an alarm: the thing that detects a collision is the thing that
+             would otherwise not be running. See ChartService. -->
+        <service
+            android:name="org.beetlebug.lookout.ChartService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
     </application>
 
 </manifest>
