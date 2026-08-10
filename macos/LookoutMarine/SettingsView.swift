@@ -68,11 +68,16 @@ struct SettingsView: View {
                           allowedContentTypes: [.item, .folder]) { result in
                 if case .success(let url) = result { model.openImported(url) }
             }
-            .fileImporter(isPresented: $model.showSettingsRasterImporter,
-                          allowedContentTypes: [.item, .folder],
-                          allowsMultipleSelection: true) { result in
-                if case .success(let urls) = result { model.importRasterCharts(urls) }
-            }
+            // On its OWN view. Two .fileImporter modifiers on one view collide —
+            // SwiftUI presents only the outer, so Add Charts silently did
+            // nothing. A background node keeps the two importers apart.
+            .background(
+                Color.clear.fileImporter(isPresented: $model.showSettingsRasterImporter,
+                              allowedContentTypes: [.item, .folder],
+                              allowsMultipleSelection: true) { result in
+                    if case .success(let urls) = result { model.importRasterCharts(urls) }
+                }
+            )
             #endif
     }
 
