@@ -14,6 +14,12 @@ GtkWidget *lk_window_new (GtkApplication *app, LkAppModel *model);
 /* The Open Chart picker. Selects a FOLDER of baked cells; the engine validates. */
 void lk_present_open_chart_dialog (GtkWindow *parent, LkAppModel *model);
 
+/* One thing the mariner opened, routed the way every shell routes it: a plugin
+ * package goes to the consent sheet, a folder is a chart library, and anything
+ * else is offered to the plugins before it is treated as a chart. The core
+ * answers which, so the app never matches an extension itself. */
+void lk_window_open_path (GtkWindow *parent, LkAppModel *model, const char *path);
+
 /* The Add Raster Charts pickers: several `.mbtiles` files at once, or a whole
  * folder of them. Two dialogs because one GtkFileDialog takes files or folders,
  * never both. */
