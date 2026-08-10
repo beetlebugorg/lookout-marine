@@ -1286,7 +1286,7 @@ pub const Gpu = struct {
     /// surface and the swapchain are built. `opts` names the new handle; its
     /// width/height are ignored, the swapchain adopting the window's own extent.
     ///
-    /// Fails when the new surface does not offer the colour format the render
+    /// Fails when the new surface does not offer the color format the render
     /// pass and every pipeline were built for, because adopting another one
     /// means rebuilding both. Nothing is attached after a failure, so a caller
     /// that cannot proceed without a view reopens.

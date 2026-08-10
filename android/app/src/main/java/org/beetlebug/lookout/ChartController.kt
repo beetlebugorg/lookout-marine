@@ -429,7 +429,7 @@ class ChartController(private val appContext: Context) {
      * reads: what is missing is this object's own state and the Compose state
      * behind it.
      *
-     * MAIN THREAD; the reading is posted to [queue].
+     * MAIN THREAD; the value is posted to [queue].
      */
     fun rebind(l: Lookout, queue: Handler) {
         lk = l
