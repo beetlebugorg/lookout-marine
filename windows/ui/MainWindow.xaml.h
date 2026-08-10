@@ -8,6 +8,7 @@
 #include <atomic>
 #include <string>
 #include <thread>
+#include <functional>
 #include <vector>
 
 namespace winrt::LookoutMarine::implementation
@@ -32,6 +33,17 @@ namespace winrt::LookoutMarine::implementation
         void WireChrome();
         void ToggleSettings();
         void LoadSettings();      // reads the live mariner state, shows the current tab
+        // the menu bubble (MainWindow.Menu.cpp): built fresh on every press,
+        // because most of it names things that come and go
+        void ShowMainMenu();
+        Microsoft::UI::Xaml::Controls::MenuFlyoutItem MenuItem(
+            winrt::hstring const &label, winrt::hstring const &chord,
+            std::function<void()> action);
+        Microsoft::UI::Xaml::Controls::MenuFlyoutSubItem ChartMenu();
+        Microsoft::UI::Xaml::Controls::MenuFlyoutSubItem VesselsMenu();
+        void ToggleFullScreen(); // F11
+        bool full_screen{ false };
+
         void BuildSettingsTabs(); // the section list; plugin sections come and go
         // The settings live in their own window (see MainWindow.Settings.cpp).
         void ShowSettings();
@@ -114,7 +126,6 @@ namespace winrt::LookoutMarine::implementation
 
         // plugin tables (MainWindow.Vessels.cpp)
         void RefreshPluginTables(); // re-read the declarations at open
-        void ShowVesselsMenu();
         void OpenPluginTable(lkw::TableSpec const &spec);
         void CloseVesselWindows(); // the tables belong to the chart handle
 

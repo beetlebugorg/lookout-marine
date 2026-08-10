@@ -93,6 +93,19 @@ namespace winrt::LookoutMarine::implementation
         controller = nullptr;
     }
 
+    // Full screen is the chart and nothing else the window can spare: the
+    // title bar and its border go, the chrome bubbles stay, because they are
+    // what the mariner steers with. F11 or the menu comes back.
+    void MainWindow::ToggleFullScreen()
+    {
+        auto app_window = AppWindow();
+        full_screen = app_window.Presenter().Kind() !=
+                      winrt::Microsoft::UI::Windowing::AppWindowPresenterKind::FullScreen;
+        app_window.SetPresenter(full_screen
+            ? winrt::Microsoft::UI::Windowing::AppWindowPresenterKind::FullScreen
+            : winrt::Microsoft::UI::Windowing::AppWindowPresenterKind::Default);
+    }
+
     double MainWindow::Density()
     {
         double s = chart_panel != nullptr ? chart_panel.CompositionScaleX() : 0.0;
@@ -111,11 +124,11 @@ namespace winrt::LookoutMarine::implementation
         SettingsBtn().Click([this](auto &&, auto &&) { Command(','); });
         SearchBtn().Click([this](auto &&, auto &&) { Command('f'); });
         RasterPill().Click([this](auto &&, auto &&) { ShowRasterMenu(); });
-        VesselsBtn().Click([this](auto &&, auto &&) { ShowVesselsMenu(); });
         // The settings markup is built with this window because it names the
         // panels the code fills; its home is the settings window, so it comes
         // out of the chart's tree before anything lays out.
         DetachSettingsPane();
+        MenuBtn().Click([this](auto &&, auto &&) { ShowMainMenu(); });
         WirePick();
         WireScale();
 
@@ -218,6 +231,17 @@ namespace winrt::LookoutMarine::implementation
                 e.Handled(true);
             });
             Root().KeyboardAccelerators().Append(ka);
+        }
+
+        // Full screen carries no modifier, so it stands outside that table.
+        {
+            Input::KeyboardAccelerator f11;
+            f11.Key(Windows::System::VirtualKey::F11);
+            f11.Invoked([this](auto &&, Input::KeyboardAcceleratorInvokedEventArgs const &e) {
+                ToggleFullScreen();
+                e.Handled(true);
+            });
+            Root().KeyboardAccelerators().Append(f11);
         }
     }
 

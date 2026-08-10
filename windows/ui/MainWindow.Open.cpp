@@ -82,7 +82,7 @@ namespace winrt::LookoutMarine::implementation
         {
             InstallStoredRasters(); // the open destroyed the handle they rode on
             StartAlertWatch();      // a collision alarm must not need a pane open
-            RefreshPluginTables();  // the vessels bubble follows the declarations
+            RefreshPluginTables();  // the Vessels menu follows the declarations
             EmptyState().Visibility(Visibility::Collapsed);
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);

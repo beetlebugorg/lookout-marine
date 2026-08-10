@@ -328,29 +328,6 @@ namespace winrt::LookoutMarine::implementation
             }
             free(json);
         }
-        VesselsBtn().Visibility(tables.empty() ? Visibility::Collapsed : Visibility::Visible);
-    }
-
-    // The vessels bubble: one table opens straight away; several offer a list.
-    void MainWindow::ShowVesselsMenu()
-    {
-        if (tables.empty())
-            return;
-        if (tables.size() == 1)
-        {
-            OpenPluginTable(tables.front());
-            return;
-        }
-        Controls::MenuFlyout menu;
-        for (auto const &spec : tables)
-        {
-            Controls::MenuFlyoutItem it;
-            it.Text(winrt::to_hstring(spec.title + "\xE2\x80\xA6"));
-            auto copy = spec;
-            it.Click([this, copy](auto &&, auto &&) { OpenPluginTable(copy); });
-            menu.Items().Append(it);
-        }
-        menu.ShowAt(VesselsBtn());
     }
 
     void MainWindow::OpenPluginTable(lkw::TableSpec const &spec)
@@ -454,7 +431,5 @@ namespace winrt::LookoutMarine::implementation
             t->window.Close();
         lkw::g_tables.clear();
         tables.clear();
-        if (VesselsBtn() != nullptr)
-            VesselsBtn().Visibility(Visibility::Collapsed);
     }
 }
