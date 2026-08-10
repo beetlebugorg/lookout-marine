@@ -75,6 +75,19 @@ typedef struct {
   GPtrArray  *item_fields; /* LkPluginField*, the columns of one row */
 } LkPluginList;
 
+/* One capability the manifest asked for, in the consent sheet's own wording.
+ *
+ * A GRANT CAN NEVER EXCEED THE MANIFEST, so this is the asked-for set with a
+ * switch beside each entry: revoking is the only thing the mariner can do here.
+ * The broker checks every mediated call, so a revoked capability answers the
+ * plugin -1 and the plugin keeps running. */
+typedef struct {
+  const char *cap;      /* "ais.read", "net.http", … */
+  const char *sentence; /* what it lets the plugin do, for a person to read */
+  char       *hosts;    /* where it talks to, for net.http and net.ws; NULL else */
+  gboolean    granted;
+} LkPluginCapability;
+
 typedef struct _LkPlugins LkPlugins;
 
 /* ---- lifecycle ----------------------------------------------------------- */
@@ -188,5 +201,29 @@ const char *lk_plugins_origin (LkPlugins *self, const char *plugin_id);
  * Transfer full. */
 char *lk_plugins_status_line (LkPlugins *self, const char *plugin_id,
                               const char **out_css_class);
+
+/* What one plugin asked the manifest for, with the mariner's grant beside each
+ * entry. Transfer container: the entries belong to the model. */
+GPtrArray *lk_plugins_capabilities (LkPlugins *self, const char *plugin_id);
+
+/* Switch one capability on or off, live. FALSE when the core refused, which
+ * leaves the switch where it was. */
+gboolean lk_plugins_set_granted (LkPlugins  *self,
+                                 const char *plugin_id,
+                                 const char *cap,
+                                 gboolean    granted);
+
+/* TRUE while the plugin was INSTALLED by the mariner, which is the only origin
+ * Uninstall may act on: install never wrote a bundled or a developer copy. */
+gboolean lk_plugins_is_installed (LkPlugins *self, const char *plugin_id);
+
+/* Every file extension the LIVE plugins read (".grib2", …), joined for an open
+ * dialog's prompt. NULL when no plugin claims one, which is what a build with
+ * no plugin layer always answers. Transfer full. */
+char *lk_plugins_file_types (LkPlugins *self);
+
+/* The same, for ONE plugin, whether it is running or not. It is what the
+ * plugin's own row says it reads. NULL when the manifest claims none. */
+char *lk_plugins_file_types_for (LkPlugins *self, const char *plugin_id);
 
 G_END_DECLS

@@ -360,6 +360,374 @@ lk_chart_controller_set_plugin_config (LkChartController *self,
   return TRUE;
 }
 
+/* Follow and course up move the camera, so they retire an open pick report the
+ * same way an explicit set_view does. */
+static void lk_chart_controller_retire_pick (LkChartController *self);
+
+/* Every one of these answers a borrowed string, valid only until the next
+ * plugin query, so each is copied out before anything else can ask. */
+static char *
+lk_chart_controller_copy_borrowed (const char *text, gsize length)
+{
+  return text == NULL || length == 0 ? NULL : g_strndup (text, length);
+}
+
+char *
+lk_chart_controller_alerts_json (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL)
+    return NULL;
+
+  gsize length = 0;
+  const char *json = lookout_plugin_alerts_json (self->handle, &length);
+
+  return lk_chart_controller_copy_borrowed (json, length);
+}
+
+gboolean
+lk_chart_controller_alert_ack (LkChartController *self, guint64 id)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  return lookout_plugin_alert_ack (self->handle, id) == 0;
+}
+
+char *
+lk_chart_controller_tables_json (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL)
+    return NULL;
+
+  gsize length = 0;
+  const char *json = lookout_plugin_tables_json (self->handle, &length);
+
+  return lk_chart_controller_copy_borrowed (json, length);
+}
+
+char *
+lk_chart_controller_table_rows (LkChartController *self,
+                                const char        *plugin,
+                                const char        *key,
+                                const char        *sort_key,
+                                gboolean           ascending)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || plugin == NULL || key == NULL)
+    return NULL;
+
+  gsize length = 0;
+  const char *json = lookout_plugin_table_rows (self->handle, plugin, key,
+                                                sort_key, ascending ? 1 : 0, &length);
+
+  return lk_chart_controller_copy_borrowed (json, length);
+}
+
+void
+lk_chart_controller_table_open (LkChartController *self,
+                                const char        *plugin,
+                                const char        *key,
+                                gboolean           open)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || plugin == NULL || key == NULL)
+    return;
+  lookout_plugin_table_open (self->handle, plugin, key, open ? 1 : 0);
+}
+
+/* ---- installing a plugin ------------------------------------------------- */
+
+char *
+lk_chart_controller_plugin_inspect (LkChartController *self, const char *path)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || path == NULL)
+    return NULL;
+
+  gsize length = 0;
+  const char *json = lookout_plugin_inspect (self->handle, path, &length);
+
+  return lk_chart_controller_copy_borrowed (json, length);
+}
+
+char *
+lk_chart_controller_plugin_install (LkChartController *self, const char *path)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self),
+                        g_strdup ("The chart is not open."));
+
+  if (self->handle == NULL || path == NULL)
+    return g_strdup ("Open a chart before installing a plugin.");
+
+  const char *problem = lookout_plugin_install (self->handle, path);
+  if (problem != NULL)
+    return g_strdup (problem);
+
+  /* It loaded hot, so it may already be drawing. */
+  lk_chart_controller_start_plugin_poll (self);
+  lk_chart_controller_kick (self);
+  return NULL;
+}
+
+gboolean
+lk_chart_controller_plugin_uninstall (LkChartController *self, const char *id)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || id == NULL)
+    return FALSE;
+  if (lookout_plugin_uninstall (self->handle, id) != 0)
+    return FALSE;
+
+  /* Its overlay objects went with it, so the chart is a frame out of date. */
+  lk_chart_controller_kick (self);
+  return TRUE;
+}
+
+gboolean
+lk_chart_controller_plugin_grant_set (LkChartController *self,
+                                      const char        *id,
+                                      const char        *cap,
+                                      gboolean           on)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || id == NULL || cap == NULL)
+    return FALSE;
+  return lookout_plugin_grant_set (self->handle, id, cap, on ? 1 : 0) == 0;
+}
+
+int
+lk_chart_controller_open_file (LkChartController *self, const char *path)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL || path == NULL)
+    return 0;
+
+  int taken = lookout_open_file (self->handle, path);
+  if (taken == 1)
+    lk_chart_controller_kick (self);
+  return taken;
+}
+
+/* ---- own ship, follow and course up -------------------------------------- */
+
+LkFixState
+lk_chart_controller_own_ship (LkChartController *self, double *out_lon, double *out_lat)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), LK_FIX_NONE);
+
+  if (self->handle == NULL)
+    return LK_FIX_NONE;
+  return (LkFixState) lookout_own_ship (self->handle, out_lon, out_lat);
+}
+
+void
+lk_chart_controller_follow_set (LkChartController *self, gboolean on)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_follow_set (self->handle, on ? 1 : 0);
+  /* Turning it on moves the chart at once when a fresh fix exists. */
+  lk_chart_controller_retire_pick (self);
+  lk_chart_controller_kick (self);
+}
+
+int
+lk_chart_controller_follow_active (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  return self->handle == NULL ? 0 : lookout_follow_active (self->handle);
+}
+
+void
+lk_chart_controller_course_up_set (LkChartController *self, gboolean on)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_course_up_set (self->handle, on ? 1 : 0);
+  lk_chart_controller_retire_pick (self);
+  lk_chart_controller_kick (self);
+}
+
+int
+lk_chart_controller_course_up_active (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  return self->handle == NULL ? 0 : lookout_course_up_active (self->handle);
+}
+
+/* ---- the plugin overlay -------------------------------------------------- */
+
+void
+lk_overlay_object_free (LkOverlayObject *object)
+{
+  if (object == NULL)
+    return;
+  g_free (object->id);
+  g_free (object->info);
+  g_free (object);
+}
+
+/* Both overlay calls hand back borrowed pointers that the next overlay call
+ * invalidates, so the object is copied out whole here. */
+static LkOverlayObject *
+lk_overlay_object_copy (const lookout_overlay_obj *raw)
+{
+  LkOverlayObject *object = g_new0 (LkOverlayObject, 1);
+
+  object->id = raw->id == NULL ? g_strdup ("") : g_strndup (raw->id, raw->id_len);
+  object->info = raw->info == NULL || raw->info_len == 0
+                     ? NULL
+                     : g_strndup (raw->info, raw->info_len);
+  object->lon = raw->lon;
+  object->lat = raw->lat;
+  return object;
+}
+
+LkOverlayObject *
+lk_chart_controller_overlay_hit (LkChartController *self, double x, double y)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL)
+    return NULL;
+
+  lookout_overlay_obj raw;
+  if (lookout_overlay_hit (self->handle, (float) x, (float) y, &raw) == 0)
+    return NULL;
+  return lk_overlay_object_copy (&raw);
+}
+
+LkOverlayObject *
+lk_chart_controller_overlay_info (LkChartController *self, const char *id)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || id == NULL)
+    return NULL;
+
+  lookout_overlay_obj raw;
+  if (lookout_overlay_info (self->handle, id, &raw) == 0)
+    return NULL;
+  return lk_overlay_object_copy (&raw);
+}
+
+gboolean
+lk_chart_controller_screen_of (LkChartController *self,
+                               double lon, double lat,
+                               double *out_x, double *out_y)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+
+  /* lookout_geo_to_screen answers PIXELS, and every geometry this shell handles
+   * is in logical points, so the density it was told about divides back out. */
+  float x = 0, y = 0;
+  lookout_geo_to_screen (self->handle, lon, lat, &x, &y);
+
+  float density = lookout_pixel_density (self->handle);
+  if (density <= 0)
+    density = 1;
+
+  if (out_x != NULL)
+    *out_x = x / density;
+  if (out_y != NULL)
+    *out_y = y / density;
+  return TRUE;
+}
+
+/* ---- the mariner's own marks --------------------------------------------- */
+
+void
+lk_marker_free (LkMarker *marker)
+{
+  if (marker == NULL)
+    return;
+  g_free (marker->name);
+  g_free (marker);
+}
+
+guint64
+lk_chart_controller_marker_add (LkChartController *self, double lon, double lat)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL)
+    return 0;
+
+  guint64 id = lookout_marker_add (self->handle, lon, lat);
+  if (id != 0)
+    lk_chart_controller_kick (self); /* the core draws it */
+  return id;
+}
+
+LkMarker *
+lk_chart_controller_marker_at (LkChartController *self, double x, double y)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL)
+    return NULL;
+
+  lookout_marker raw;
+  if (lookout_marker_at (self->handle, (float) x, (float) y, &raw) == 0)
+    return NULL;
+
+  /* The name is borrowed until the next call that changes the markers. */
+  LkMarker *marker = g_new0 (LkMarker, 1);
+  marker->id = raw.id;
+  marker->lon = raw.lon;
+  marker->lat = raw.lat;
+  marker->name = raw.name == NULL ? g_strdup ("") : g_strndup (raw.name, raw.name_len);
+  return marker;
+}
+
+gboolean
+lk_chart_controller_marker_rename (LkChartController *self, guint64 id, const char *name)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || name == NULL)
+    return FALSE;
+  if (lookout_marker_rename (self->handle, id, name) != 0)
+    return FALSE;
+
+  lk_chart_controller_kick (self);
+  return TRUE;
+}
+
+gboolean
+lk_chart_controller_marker_remove (LkChartController *self, guint64 id)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  if (lookout_marker_remove (self->handle, id) != 0)
+    return FALSE;
+
+  lk_chart_controller_kick (self);
+  return TRUE;
+}
+
 /* ---- lifecycle ---------------------------------------------------------- */
 
 void
