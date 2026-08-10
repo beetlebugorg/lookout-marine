@@ -43,6 +43,16 @@ const async_stage = !(@import("build_options").gpu_sdl or @import("build_options
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
+/// The palette's name in tile57's colortables JSON, and in the sprite-atlas
+/// cache key.
+fn schemeName(s: Scheme) []const u8 {
+    return switch (s) {
+        cc.TILE57_SCHEME_DUSK => "dusk",
+        cc.TILE57_SCHEME_NIGHT => "night",
+        else => "day",
+    };
+}
+
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
 
@@ -642,6 +652,13 @@ pub const Lookout = struct {
     mariner: Mariner = undefined,
     dirty: bool = true, // scene needs a (re)build before the next render
     sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
+    /// The palette the symbol atlas was last loaded FOR. A symbol carries its
+    /// colours in its artwork, so the sheet is what decides whether symbols and
+    /// complex line styles are day-bright or night-dim, and a scheme change has
+    /// to load the sheet for the new palette. Null until the first load. Cell
+    /// sizes are palette-independent, so the scene's UVs index every sheet and
+    /// no rebuild is owed to the swap.
+    sprite_scheme: ?Scheme = null,
     /// The app's atlas cache dir ($HOME/Library/Caches/lookout/...), or null.
     assets_root: ?[]u8 = null,
     /// The density the sprite atlas was actually baked at. Usually the display
@@ -810,16 +827,22 @@ pub const Lookout = struct {
     /// Load the symbol + glyph atlases, once, at the first build or draw — by
     /// which point the host has declared its density. Both are keyed on that
     /// density, so loading any earlier bakes the wrong sheet.
+    ///
+    /// The symbol atlas loads again whenever the mariner changes scheme, because
+    /// its palette is in its pixels. The glyph atlas does not: SDF coverage is
+    /// palette-independent and the scene tints each text range.
     fn ensureAtlases(self: *Lookout) void {
-        if (self.atlases_ready) return;
-        self.atlases_ready = true;
         const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
         var t = gpu.ticksMs();
-        self.loadSpriteAtlas();
-        if (dbg) {
-            std.debug.print("  loadSpriteAtlas {d} ms\n", .{gpu.ticksMs() - t});
-            t = gpu.ticksMs();
+        if (self.sprite_scheme == null or self.sprite_scheme.? != self.mariner.scheme) {
+            self.loadSpriteAtlas();
+            if (dbg) {
+                std.debug.print("  loadSpriteAtlas {d} ms\n", .{gpu.ticksMs() - t});
+                t = gpu.ticksMs();
+            }
         }
+        if (self.atlases_ready) return;
+        self.atlases_ready = true;
         self.loadGlyphAtlas();
         if (dbg) std.debug.print("  loadGlyphAtlas {d} ms\n", .{gpu.ticksMs() - t});
     }
@@ -932,16 +955,23 @@ pub const Lookout = struct {
         return true;
     }
 
-    // Load the S-52 sprite-symbol atlas: from the app cache if present, else
-    // bake it once at the display density and cache it. The cache key includes
-    // the density (a Retina 2x bake differs from 1x); the scale that actually
-    // fit (see below) rides a small sidecar so the load matches the scene UVs.
+    // Load the S-52 sprite-symbol atlas for the mariner's scheme: from the app
+    // cache if present, else bake it at the display density and cache it. The
+    // cache key includes the density (a Retina 2x bake differs from 1x) AND the
+    // palette (the artwork is coloured), so each scheme keeps its own sheet and
+    // a scheme change re-reads rather than re-bakes. The scale that actually fit
+    // (see below) rides a small sidecar so the load matches the scene UVs.
     fn loadSpriteAtlas(self: *Lookout) void {
-        var keybuf: [24]u8 = undefined;
-        const key = std.fmt.bufPrint(&keybuf, "sprite@{d:.2}", .{self.g.pixel_density}) catch "sprite@x";
-        var pn: [32]u8 = undefined;
-        var jn: [32]u8 = undefined;
-        var sn: [32]u8 = undefined;
+        const scheme = self.mariner.scheme;
+        // Claimed before the work, not after it: a bake that fails (no memory
+        // for the sheet, a texture the device will not take) must not be
+        // retried on every frame that follows.
+        self.sprite_scheme = scheme;
+        var keybuf: [32]u8 = undefined;
+        const key = std.fmt.bufPrint(&keybuf, "sprite-{s}@{d:.2}", .{ schemeName(scheme), self.g.pixel_density }) catch "sprite-day@x";
+        var pn: [40]u8 = undefined;
+        var jn: [40]u8 = undefined;
+        var sn: [40]u8 = undefined;
         const png_name = std.fmt.bufPrint(&pn, "{s}.png", .{key}) catch return;
         const json_name = std.fmt.bufPrint(&jn, "{s}.json", .{key}) catch return;
         const scale_name = std.fmt.bufPrint(&sn, "{s}.scale", .{key}) catch return;
@@ -956,12 +986,12 @@ pub const Lookout = struct {
                     scale = std.fmt.parseFloat(f32, std.mem.trim(u8, sb, " \n\r\t")) catch scale;
                 }
                 if (self.uploadSprite(png_b, json, scale, false)) {
-                    std.debug.print("sprite atlas @ {d:.2}x (cache)\n", .{scale});
+                    std.debug.print("sprite atlas {s} @ {d:.2}x (cache)\n", .{ schemeName(scheme), scale });
                     return;
                 }
             }
         }
-        self.bakeAndCacheSprite(png_name, json_name, scale_name);
+        self.bakeAndCacheSprite(scheme, png_name, json_name, scale_name);
     }
 
     /// The largest sprite-atlas texture dimension this platform can hold as ONE
@@ -991,6 +1021,9 @@ pub const Lookout = struct {
             std.debug.print("cached sprite atlas {d}x{d} exceeds max {d}; rebaking\n", .{ a.width, a.height, spriteMaxDim() });
             return false;
         }
+        // A scheme change loads a second sheet over the first, so the outgoing
+        // one's cell map goes back now (its pixels went at the last freePixels).
+        if (self.sprite_atlas) |*old| old.deinit();
         self.sprite_atlas = a;
         self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
             self.sprite_atlas.?.deinit();
@@ -1008,7 +1041,7 @@ pub const Lookout = struct {
     // tall / ~268 MB and uploads only partially on device — the rest samples
     // black), so shrink the bake scale until it fits spriteMaxDim() and remember
     // it (atlas_scale) so scene UVs stay in step.
-    fn bakeAndCacheSprite(self: *Lookout, png_name: []const u8, json_name: []const u8, scale_name: []const u8) void {
+    fn bakeAndCacheSprite(self: *Lookout, scheme: Scheme, png_name: []const u8, json_name: []const u8, scale_name: []const u8) void {
         const max_dim: u32 = spriteMaxDim();
         var scale: f32 = self.g.pixel_density;
         self.atlas_scale = scale;
@@ -1016,7 +1049,7 @@ pub const Lookout = struct {
         while (attempts < 4) : (attempts += 1) {
             var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
             var err: cc.tile57_error = undefined;
-            if (cc.tile57_bake_sprite_mln(null, @floatCast(scale), &assets, &err) != cc.TILE57_OK) return;
+            if (cc.tile57_bake_sprite_mln(null, @floatCast(scale), scheme, &assets, &err) != cc.TILE57_OK) return;
             defer cc.tile57_assets_free(&assets);
             if (assets.sprite_png == null or assets.sprite_json == null) return;
             const png_bytes = assets.sprite_png[0..assets.sprite_png_len];
@@ -1030,6 +1063,7 @@ pub const Lookout = struct {
                 std.debug.print("sprite atlas {d}x{d} exceeds max texture {d}; rebaking at {d:.2}x\n", .{ a.width, a.height, max_dim, scale });
                 continue;
             }
+            if (self.sprite_atlas) |*old| old.deinit(); // see uploadSprite
             self.sprite_atlas = a;
             self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
                 self.sprite_atlas.?.deinit();
@@ -1038,7 +1072,7 @@ pub const Lookout = struct {
             };
             self.sprite_atlas.?.freePixels(); // GPU has its copy
             self.atlas_scale = scale;
-            std.debug.print("sprite atlas: {d}x{d} @ {d:.2}x, {d} cells (baked)\n", .{ a.width, a.height, scale, a.cells.count() });
+            std.debug.print("sprite atlas: {s} {d}x{d} @ {d:.2}x, {d} cells (baked)\n", .{ schemeName(scheme), a.width, a.height, scale, a.cells.count() });
             // Cache the fit result (the on-disk PNG/JSON are the baked bytes).
             self.writeCache(png_name, png_bytes);
             self.writeCache(json_name, json);
@@ -1063,12 +1097,7 @@ pub const Lookout = struct {
             else => return,
         };
         for (0..self.n_schemes) |i| {
-            const name = switch (self.schemes[i]) {
-                cc.TILE57_SCHEME_DUSK => "dusk",
-                cc.TILE57_SCHEME_NIGHT => "night",
-                else => "day",
-            };
-            const scheme_obj = (root_obj.get(name) orelse continue).object;
+            const scheme_obj = (root_obj.get(schemeName(self.schemes[i])) orelse continue).object;
             const hex = (scheme_obj.get("NODTA") orelse continue).string;
             if (hexColor(hex)) |c| self.nodata[i] = c;
         }
