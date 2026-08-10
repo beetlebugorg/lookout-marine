@@ -4,6 +4,13 @@
 #
 #   macos/build.sh [mac|ios|both] [Debug|Release]
 #
+# This builds everything the app needs, from nothing: the target's WAMR runtime
+# (scripts/build-wamr.sh), the Zig cores with the wasm plugin host linked in,
+# and the shipped plugin set into Resources/Plugins. That work lives in the
+# target's script phases, in macos/project.yml, so a build from Xcode.app is
+# the same build as this one. Only zig, cmake and Xcode are needed; the first
+# run clones and builds the pinned WAMR and takes a few minutes.
+#
 # Without Xcode, use build-dev.sh: swiftc and a hand-rolled bundle, macOS only.
 set -e
 
