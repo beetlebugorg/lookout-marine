@@ -80,6 +80,16 @@ namespace lkw
         std::map<std::string, PluginCell> cells;
     };
 
+    // One capability the manifest asked for: the core's consent sentence, and
+    // whether the mariner currently grants it. A grant can never exceed the
+    // manifest, so the toggles in the Plugins section are the whole surface.
+    struct PluginCapability
+    {
+        std::string cap;      // "ais.read", "net.http", ...
+        std::string sentence; // the same words every shell shows
+        bool granted{ true };
+    };
+
     // One loaded plugin and the controls it asked for.
     struct PluginInfo
     {
@@ -97,5 +107,30 @@ namespace lkw
         std::vector<PluginGroup> groups;
         std::vector<PluginList> lists;
         std::map<std::string, std::vector<PluginRow>> rows; // by list key
+        std::vector<PluginCapability> capabilities;
+        // The file types this plugin claims, so its row can say what the open
+        // panel now accepts. Empty for a plugin that opens no files.
+        std::vector<std::string> file_types;
+    };
+
+    // One declared plugin table (the AIS Targets list). A column TYPE is the
+    // unit contract: distance metres, speed m/s, bearing degrees true,
+    // duration seconds, plus number/text/flag — the plugin sends SI and the
+    // shell formats for the mariner (MainWindow.Vessels.cpp).
+    struct TableColumn
+    {
+        std::string key;
+        std::string label;
+        std::string type;
+    };
+    struct TableSpec
+    {
+        std::string plugin; // owning plugin id
+        std::string key;    // table key within the plugin
+        std::string title;  // "AIS Targets"
+        std::vector<TableColumn> columns;
+        std::string sort_key;       // declared default sort
+        bool sort_ascending{ true };
+        bool locatable{ false }; // rows carry a position: activate centres the chart
     };
 }

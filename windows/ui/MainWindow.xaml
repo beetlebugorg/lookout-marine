@@ -26,15 +26,29 @@
              in markup would exist in BOTH modes, and even an empty panel is
              external content that blanks the window over the fallback chart. -->
 
-        <!-- top-left: search -->
-        <StackPanel x:Name="SearchCluster" Orientation="Horizontal" Spacing="10"
+        <!-- top-left: search, and the menu under it.
+             The commands live in a bubble rather than a menu bar, because the
+             chart is the app: a bar would take a strip of water on every
+             screen, and this is the one shape the Mac, the iPad and the phone
+             can all wear. The list is built in code (MainWindow.Menu.cpp),
+             since most of it names things that come and go: the charts opened
+             lately, the raster sets covering this view, the tables the plugins
+             declare. -->
+        <StackPanel x:Name="SearchCluster" Spacing="10"
                     HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16">
-            <Button x:Name="SearchBtn" Style="{StaticResource Bubble}">
-                <FontIcon x:Name="SearchIcon" Glyph="&#xE721;" FontSize="18" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button x:Name="SearchBtn" Style="{StaticResource Bubble}">
+                    <FontIcon x:Name="SearchIcon" Glyph="&#xE721;" FontSize="18" />
+                </Button>
+                <TextBox x:Name="SearchBox" Width="320" Height="48" CornerRadius="24"
+                         VerticalAlignment="Center" Visibility="Collapsed"
+                         PlaceholderText="Go to coordinate  (e.g. 38.978, -76.492)" />
+            </StackPanel>
+            <Button x:Name="MenuBtn" Style="{StaticResource Bubble}"
+                    HorizontalAlignment="Left"
+                    AutomationProperties.Name="Menu">
+                <FontIcon Glyph="&#xE700;" FontSize="18" />
             </Button>
-            <TextBox x:Name="SearchBox" Width="320" Height="48" CornerRadius="24"
-                     VerticalAlignment="Center" Visibility="Collapsed"
-                     PlaceholderText="Go to coordinate  (e.g. 38.978, -76.492)" />
         </StackPanel>
 
         <!-- top-right: north -->
@@ -45,8 +59,8 @@
                 <StackPanel.RenderTransform>
                     <RotateTransform x:Name="NorthRotate" />
                 </StackPanel.RenderTransform>
-                <FontIcon Glyph="&#xEDDB;" FontSize="9" HorizontalAlignment="Center" />
-                <TextBlock Text="N" FontSize="14" FontWeight="SemiBold"
+                <FontIcon x:Name="NorthCaret" Glyph="&#xEDDB;" FontSize="9" HorizontalAlignment="Center" />
+                <TextBlock x:Name="NorthLetter" Text="N" FontSize="14" FontWeight="SemiBold"
                            HorizontalAlignment="Center" Margin="0,-1,0,0" />
             </StackPanel>
         </Button>
@@ -76,16 +90,26 @@
             <StackPanel x:Name="ScaleBarSegs" Orientation="Horizontal" Height="6" />
         </StackPanel>
 
-        <!-- top-center: build progress -->
-        <Border x:Name="BuildingPill" CornerRadius="14" Padding="12,6"
-                Background="#E6F8F8F8" BorderBrush="#33000000" BorderThickness="1"
-                HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,10,0,0"
-                Visibility="Collapsed">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <ProgressRing IsActive="True" Width="16" Height="16" />
-                <TextBlock Text="Building chart…" FontSize="13" VerticalAlignment="Center" />
-            </StackPanel>
-        </Border>
+        <!-- top-center: the plugin alert strip above the build pill, so an
+             alarm is never under it. Alert rows are built in code
+             (MainWindow.Alerts.cpp); only unacknowledged alerts show, two at
+             most, the rest as one "n more" line. -->
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Top"
+                    Margin="0,10,0,0" Spacing="8">
+            <Border x:Name="AlertStrip" MaxWidth="560" CornerRadius="8"
+                    Background="#F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                    Visibility="Collapsed">
+                <StackPanel x:Name="AlertRows" />
+            </Border>
+            <Border x:Name="BuildingPill" CornerRadius="14" Padding="12,6"
+                    Background="#E6F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                    HorizontalAlignment="Center" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressRing IsActive="True" Width="16" Height="16" />
+                    <TextBlock Text="Building chart…" FontSize="13" VerticalAlignment="Center" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
 
         <!-- pick marker: a white ring under an S-52 magenta ring, so the mark
              stays visible on a night chart. Placed in code at the pick point. -->
@@ -201,28 +225,39 @@
             </StackPanel>
         </Border>
 
-        <!-- right: mariner settings pane -->
-        <Border x:Name="SettingsPane" Width="380" CornerRadius="8" Padding="16"
-                Background="#F5F8F8F8" BorderBrush="#33000000" BorderThickness="1"
-                HorizontalAlignment="Right" VerticalAlignment="Stretch"
-                Margin="0,68,12,48" Visibility="Collapsed">
-            <Grid RowSpacing="10">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
+        <!-- The mariner settings, in the shape every shell wears: a list of
+             sections down the left, the section itself on the right, and the
+             one promise the whole thing makes standing under the list rather
+             than repeated in every section.
+             This lives in ITS OWN WINDOW (MainWindow.Settings.cpp moves it
+             there at construction). A pane over the chart had to dodge the
+             HUD and the corner bubbles, which left it too narrow for a
+             two-column form and put it under the chrome it was covering. -->
+        <Border x:Name="SettingsPane" Background="#FFF8F8F8" Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="178" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
                 <Grid>
-                    <TextBlock Text="Mariner Settings" FontSize="16" FontWeight="SemiBold" />
-                    <Button x:Name="SettingsClose" HorizontalAlignment="Right" Padding="4"
-                            Background="Transparent" BorderThickness="0">
-                        <FontIcon Glyph="&#xE711;" FontSize="12" />
-                    </Button>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <!-- section rows are added in code: the set moves
+                             when a plugin brings a section with it -->
+                        <StackPanel x:Name="SettingsTabs" Margin="8,12,8,0" Spacing="2" />
+                    </ScrollViewer>
+                    <TextBlock Grid.Row="1" Text="Applies at once · kept for next launch"
+                               FontSize="11" Opacity="0.55" TextWrapping="Wrap"
+                               Margin="14,8,10,12" />
                 </Grid>
-                <!-- tab buttons are added in code -->
-                <StackPanel x:Name="SettingsTabs" Grid.Row="1" Orientation="Horizontal" Spacing="4" />
-                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-                    <!-- rows are added in code per tab -->
+                <Rectangle Grid.Column="1" Width="1" Fill="#DDDDDD"
+                           HorizontalAlignment="Left" />
+                <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                              Padding="20,12,20,16">
+                    <!-- rows are added in code per section -->
                     <StackPanel x:Name="SettingsContent" Spacing="10" />
                 </ScrollViewer>
             </Grid>
@@ -286,6 +321,19 @@
                 <TextBlock x:Name="HudZoom" FontSize="14" Foreground="#6B6B6B"
                            VerticalAlignment="Center" Text="z—" />
                 <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
+                <!-- position source, beside the position it qualifies: GPS
+                     while a plugin publishes a fix, NO GPS when the fix is
+                     lost, Configure GPS when there is no source at all. A
+                     button in every state: it opens Settings at Connections. -->
+                <Button x:Name="GpsPill" Padding="7,2" BorderThickness="0"
+                        CornerRadius="8" VerticalAlignment="Center"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Position source">
+                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                        <FontIcon x:Name="GpsIcon" Glyph="&#xE707;" FontSize="11" />
+                        <TextBlock x:Name="GpsText" FontSize="12" FontWeight="Bold" Text="GPS" />
+                    </StackPanel>
+                </Button>
                 <TextBlock x:Name="HudCoord" FontSize="14" Foreground="#1A1A1A"
                            VerticalAlignment="Center" Text="—" />
                 <Border x:Name="HudOverscale" CornerRadius="8" Padding="6,2"
@@ -344,6 +392,22 @@
                 </StackPanel>
             </Border>
         </Grid>
+
+        <!-- a bubble pinned to an overlay object (an AIS target): placed and
+             refreshed per tick in MainWindow.Overlay.cpp, closed when the
+             object goes. The hover tip is its one-shot cousin under the
+             pointer. -->
+        <Border x:Name="OverlayBubble" CornerRadius="10" Background="White"
+                BorderBrush="#33000000" BorderThickness="1" Padding="12,8"
+                Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top">
+            <StackPanel x:Name="OverlayBubbleBody" Spacing="2" />
+        </Border>
+        <Border x:Name="HoverTip" CornerRadius="8" Background="#F2FFFFFF"
+                BorderBrush="#33000000" BorderThickness="1" Padding="10,6"
+                Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top"
+                IsHitTestVisible="False">
+            <StackPanel x:Name="HoverTipBody" Spacing="1" />
+        </Border>
 
         <!-- full-size picture viewer for a PICREP image; tap anywhere closes -->
         <Grid x:Name="PictureViewer" Background="#8C000000" Visibility="Collapsed">

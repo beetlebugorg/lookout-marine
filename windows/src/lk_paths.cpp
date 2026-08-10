@@ -43,7 +43,7 @@ namespace lkw
             std::string ext = e.path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](unsigned char c) { return (char)std::tolower(c); });
-            if (ext == ".mbtiles")
+            if (ext == ".mbtiles" || ext == ".pmtiles")
                 out.push_back(e.path().string());
         }
         std::sort(out.begin(), out.end());

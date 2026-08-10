@@ -18,18 +18,19 @@
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 
-namespace
+namespace winrt::LookoutMarine::implementation
 {
     // The window's own icon. The ICON resource in LookoutMarine.rc is what
     // Explorer and the taskbar read off the executable, but an HWND wears only
     // what WM_SETICON gave it — without this an unpackaged WinUI 3 window opens
-    // with the stock WinUI mark in its titlebar and Alt-Tab.
+    // with the stock WinUI mark in its titlebar and Alt-Tab. Every window this
+    // app opens wears it, not just the chart.
     //
     // LoadImage rather than LoadIcon: asking for an exact size lets Windows
     // pick the matching frame out of the six in the .ico instead of scaling the
     // system-default one. The icons are owned by the resource, not by us, so
     // there is nothing to destroy.
-    void ApplyWindowIcon(HWND hwnd)
+    void MainWindow::ApplyWindowIcon(HWND hwnd)
     {
         if (hwnd == nullptr)
             return;
@@ -74,6 +75,11 @@ namespace winrt::LookoutMarine::implementation
                 Media::CompositionTarget::Rendering(rendering_token);
                 rendering_token = {};
             }
+            StopAlertWatch();
+            // The other windows hold this controller and this window: they
+            // cannot outlive either.
+            CloseVesselWindows();
+            CloseSettings();
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
@@ -87,6 +93,19 @@ namespace winrt::LookoutMarine::implementation
         controller = nullptr;
     }
 
+    // Full screen is the chart and nothing else the window can spare: the
+    // title bar and its border go, the chrome bubbles stay, because they are
+    // what the mariner steers with. F11 or the menu comes back.
+    void MainWindow::ToggleFullScreen()
+    {
+        auto app_window = AppWindow();
+        full_screen = app_window.Presenter().Kind() !=
+                      winrt::Microsoft::UI::Windowing::AppWindowPresenterKind::FullScreen;
+        app_window.SetPresenter(full_screen
+            ? winrt::Microsoft::UI::Windowing::AppWindowPresenterKind::FullScreen
+            : winrt::Microsoft::UI::Windowing::AppWindowPresenterKind::Default);
+    }
+
     double MainWindow::Density()
     {
         double s = chart_panel != nullptr ? chart_panel.CompositionScaleX() : 0.0;
@@ -98,13 +117,18 @@ namespace winrt::LookoutMarine::implementation
         EmptyOpenBtn().Click([this](auto &&, auto &&) { PickChartFolder(); });
         ZoomInBtn().Click([this](auto &&, auto &&) { Command('+'); });
         ZoomOutBtn().Click([this](auto &&, auto &&) { Command('-'); });
-        NorthBtn().Click([this](auto &&, auto &&) { Command('u'); });
+        // The north bubble is the follow lock; Ctrl+U stays the plain
+        // north-up reset.
+        NorthBtn().Click([this](auto &&, auto &&) { CycleFollowLock(); });
+        GpsPill().Click([this](auto &&, auto &&) { OpenSettingsTab("connections"); });
         SettingsBtn().Click([this](auto &&, auto &&) { Command(','); });
         SearchBtn().Click([this](auto &&, auto &&) { Command('f'); });
         RasterPill().Click([this](auto &&, auto &&) { ShowRasterMenu(); });
-        SettingsClose().Click([this](auto &&, auto &&) {
-            SettingsPane().Visibility(Visibility::Collapsed);
-        });
+        // The settings markup is built with this window because it names the
+        // panels the code fills; its home is the settings window, so it comes
+        // out of the chart's tree before anything lays out.
+        DetachSettingsPane();
+        MenuBtn().Click([this](auto &&, auto &&) { ShowMainMenu(); });
         WirePick();
         WireScale();
 
@@ -133,10 +157,16 @@ namespace winrt::LookoutMarine::implementation
             GesturePress(p.X, p.Y, rot);
             Root().CapturePointer(e.Pointer());
         });
-        Root().PointerMoved([this](auto &&, Input::PointerRoutedEventArgs const &e) {
-            if (!dragging && !rotating)
-                return;
+        Root().PointerMoved([this, on_chart](auto &&, Input::PointerRoutedEventArgs const &e) {
             auto p = e.GetCurrentPoint(Root()).Position();
+            if (!dragging && !rotating)
+            {
+                // Hover over the chart asks the overlay what is under the
+                // pointer (an AIS target's payload).
+                if (on_chart(e.OriginalSource()))
+                    HoverProbe(p.X, p.Y);
+                return;
+            }
             GestureMove(p.X, p.Y);
         });
         Root().PointerReleased([this](auto &&, Input::PointerRoutedEventArgs const &e) {
@@ -158,6 +188,14 @@ namespace winrt::LookoutMarine::implementation
             auto p = e.GetPosition(Root());
             GestureDoubleTap(p.X, p.Y);
         });
+
+        // Files dropped on the chart take the same path as the pickers:
+        // consent for a .lkplug, the plugins' file types, then a chart.
+        Root().AllowDrop(true);
+        Root().DragOver([](auto &&, DragEventArgs const &e) {
+            e.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
+        });
+        Root().Drop([this](auto &&, DragEventArgs const &e) { HandleDrop(e); });
 
         // The accelerators are chart commands, not menu items: without this
         // XAML surfaces its key-tip tooltip for them (a floating "ESC").
@@ -193,6 +231,17 @@ namespace winrt::LookoutMarine::implementation
                 e.Handled(true);
             });
             Root().KeyboardAccelerators().Append(ka);
+        }
+
+        // Full screen carries no modifier, so it stands outside that table.
+        {
+            Input::KeyboardAccelerator f11;
+            f11.Key(Windows::System::VirtualKey::F11);
+            f11.Invoked([this](auto &&, Input::KeyboardAcceleratorInvokedEventArgs const &e) {
+                ToggleFullScreen();
+                e.Handled(true);
+            });
+            Root().KeyboardAccelerators().Append(f11);
         }
     }
 

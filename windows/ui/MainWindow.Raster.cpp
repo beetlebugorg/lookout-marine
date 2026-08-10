@@ -169,6 +169,7 @@ namespace winrt::LookoutMarine::implementation
             return;
 
         std::vector<std::string> failed;
+        std::vector<std::string> added;
         std::string last_added;
         for (auto const &p : paths)
         {
@@ -177,13 +178,22 @@ namespace winrt::LookoutMarine::implementation
             if (lk_controller_raster_add(controller, p.c_str()))
             {
                 raster_paths.push_back(p);
-                lk_store_note_raster(p.c_str());
+                added.push_back(p);
                 last_added = p;
             }
             else
             {
                 failed.push_back(std::filesystem::path(p).filename().string());
             }
+        }
+        // One store write for the whole batch: a baked bundle is hundreds of
+        // sheets, and a per-file write rewrites the settings file every time.
+        if (!added.empty())
+        {
+            std::vector<const char *> cps;
+            for (auto const &p : added)
+                cps.push_back(p.c_str());
+            lk_store_note_rasters(cps.data(), (int)cps.size());
         }
 
         // The chart just added is drawn if it covers the view: the mariner
@@ -205,7 +215,7 @@ namespace winrt::LookoutMarine::implementation
         }
 
         UpdateReadouts(true);
-        if (SettingsPane().Visibility() == Visibility::Visible)
+        if (SettingsOpen())
             BuildSettingsPage();
 
         // One batched alert: picking a folder of twenty must not ask twenty times.
@@ -233,6 +243,7 @@ namespace winrt::LookoutMarine::implementation
         // the engine decides, and greying out the mariner's own downloads
         // would be worse than letting it say no.
         picker.FileTypeFilter().Append(L".mbtiles");
+        picker.FileTypeFilter().Append(L".pmtiles");
         picker.FileTypeFilter().Append(L"*");
         auto files = co_await picker.PickMultipleFilesAsync();
         if (files == nullptr || files.Size() == 0)
@@ -255,7 +266,7 @@ namespace winrt::LookoutMarine::implementation
         auto paths = lkw::CollectRasterCharts(winrt::to_string(folder.Path()));
         if (paths.empty())
         {
-            ShowRasterError(L"No raster charts (.mbtiles) in that folder.");
+            ShowRasterError(L"No raster charts (.mbtiles or baked .pmtiles) in that folder.");
             co_return;
         }
         AddRasterPaths(paths);
@@ -265,7 +276,7 @@ namespace winrt::LookoutMarine::implementation
     {
         auto lifetime = get_strong();
         Controls::ContentDialog dialog;
-        dialog.XamlRoot(Root().XamlRoot());
+        dialog.XamlRoot(DialogRoot());
         dialog.Title(winrt::box_value(L"Raster Charts"));
         dialog.Content(winrt::box_value(msg));
         dialog.CloseButtonText(L"OK");

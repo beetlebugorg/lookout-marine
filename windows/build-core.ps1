@@ -8,12 +8,16 @@
 #
 # PLUGINS. Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, so
 # a core built without the host is a chartplotter with no boat and no traffic.
-# The host needs the target's WAMR archive in vendor/wamr-dist-windows-x64,
-# which is x64 only — scripts/build-wamr.sh has no ARM64 Windows slot — and it
-# has to be the MSVC-ABI archive, not the mingw one that script cross-builds:
-# `bash scripts/build-wamr.sh windows-x64 --print-msvc` prints the cmake command
-# that builds it here. When the slot is empty this builds the core without the
-# host rather than failing, and says so.
+# The host needs the target's MSVC-ABI WAMR archive:
+#   ARM64  vendor/wamr-dist-windows-arm64 — built on this machine by
+#          `bash scripts/build-wamr.sh windows-arm64` (Git Bash; zig cc
+#          targets aarch64-windows-msvc against the installed MSVC + SDK).
+#   x64    vendor/wamr-dist-windows-x64 — must be the MSVC-ABI archive, not
+#          the mingw one that script cross-builds elsewhere:
+#          `bash scripts/build-wamr.sh windows-x64 --print-msvc` prints the
+#          cmake command that builds it here.
+# When the slot is empty this builds the core without the host rather than
+# failing, and says so.
 #
 # Usage:  pwsh windows/build-core.ps1 [-Configuration Debug|Release] [-Platform ARM64|x64]
 param(
@@ -29,10 +33,12 @@ $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $opt = if ($Configuration -eq 'Debug') { 'Debug' } else { 'ReleaseFast' }
 $zigTarget = if ($Platform -eq 'x64') { 'x86_64-windows-msvc' } else { 'aarch64-windows-msvc' }
 
-# The archive the plugin host links. Only x64 has a directory at all (see
-# build.zig's wamrDist), so ARM64 never asks for the host.
-$wamr = Join-Path $repo 'vendor\wamr-dist-windows-x64\lib\libvmlib.a'
-$plugins = ($Platform -eq 'x64') -and (Test-Path $wamr)
+# The archive the plugin host links, one dist per architecture (see
+# build.zig's wamrDist). Present -> the host goes in; absent -> warn and build
+# the core without it.
+$wamrDist = if ($Platform -eq 'x64') { 'wamr-dist-windows-x64' } else { 'wamr-dist-windows-arm64' }
+$wamr = Join-Path $repo "vendor\$wamrDist\lib\libvmlib.a"
+$plugins = Test-Path $wamr
 
 Push-Location $repo
 try {
@@ -41,10 +47,10 @@ try {
         $args += '-Dplugins=true'
     }
     else {
-        Write-Warning ("no wasm plugin host in this core: " + $(if ($Platform -eq 'x64')
-            { "$wamr is missing (see the header of this script)" }
-            else { "scripts/build-wamr.sh builds no WAMR archive for ARM64 Windows" }) +
-            ". The chart will have no own ship, no AIS and no instrument input.")
+        Write-Warning ("no wasm plugin host in this core: $wamr is missing " +
+            '(see the header of this script; for ARM64 run ' +
+            '"bash scripts/build-wamr.sh windows-arm64"). ' +
+            'The chart will have no own ship, no AIS and no instrument input.')
     }
 
     Write-Host "zig build $($args -join ' ')"

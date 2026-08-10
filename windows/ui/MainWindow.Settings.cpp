@@ -3,6 +3,8 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
+
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -15,18 +17,107 @@ using namespace Microsoft::UI::Xaml;
 
 namespace winrt::LookoutMarine::implementation
 {
-    void MainWindow::ToggleSettings()
+    // The settings have their own window. Over the chart they had to dodge
+    // the readouts and the corner bubbles, which left no room for a list
+    // beside a form and put the pane under the chrome it covered.
+    //
+    // The markup is built with the main window (it names the two panels the
+    // code fills), so it is taken out of the chart's tree here and handed to
+    // the settings window. It goes back the same way when that window closes.
+    bool MainWindow::SettingsOpen()
     {
-        if (SettingsPane().Visibility() == Visibility::Visible)
+        return settings_window != nullptr;
+    }
+
+    // A dialog belongs to the window that raised it: an uninstall asked for
+    // in the settings must not open behind them, over the chart.
+    Microsoft::UI::Xaml::XamlRoot MainWindow::DialogRoot()
+    {
+        if (settings_window != nullptr)
+            if (auto content = settings_window.Content())
+                return content.XamlRoot();
+        return Root().XamlRoot();
+    }
+
+    void MainWindow::DetachSettingsPane()
+    {
+        uint32_t idx = 0;
+        if (Root().Children().IndexOf(SettingsPane(), idx))
+            Root().Children().RemoveAt(idx);
+        SettingsPane().Visibility(Visibility::Visible);
+    }
+
+    void MainWindow::ShowSettings()
+    {
+        if (settings_window != nullptr)
         {
-            SettingsPane().Visibility(Visibility::Collapsed);
-            StopPluginStatusPoll();
+            settings_window.Activate(); // a second ask brings it forward
             return;
         }
+
         LoadSettings();
-        SettingsPane().Visibility(Visibility::Visible);
-        // While the pane is up, the connection lines move on their own.
+
+        Window w;
+        w.Title(L"Mariner Settings");
+        w.Content(SettingsPane());
+        settings_window = w;
+
+        // Big enough for a list beside a form, and it opens where it was left:
+        // a mariner who widened it to read a connection's address should not
+        // widen it again next time.
+        //
+        // ResizeClient counts PHYSICAL pixels, so the size a layout is written
+        // in has to be scaled: asking for 720 on a 150% display gave a window
+        // 480 points wide, which is narrower than the form inside it.
+        auto app_window = w.AppWindow();
+        int width = 0, height = 0;
+        if (!lk_store_load_settings_size(&width, &height) || width < 480 || height < 380)
+        {
+            double density = Density();
+            width = (int)(720 * density);
+            height = (int)(560 * density);
+        }
+        app_window.ResizeClient({ width, height });
+
+        app_window.Changed([this](auto &&sender, auto &&args) {
+            if (args.DidSizeChange())
+            {
+                auto size = sender.ClientSize();
+                lk_store_save_settings_size(size.Width, size.Height);
+            }
+        });
+
+        w.Closed([this](auto &&, auto &&) {
+            StopPluginStatusPoll();
+            if (settings_window != nullptr)
+                settings_window.Content(nullptr); // the markup outlives the window
+            settings_window = nullptr;
+        });
+
+        // The app's mark, so the settings wear it in Alt-Tab and the taskbar
+        // rather than the stock WinUI one.
+        HWND hwnd = nullptr;
+        if (auto native = w.try_as<::IWindowNative>())
+            if (SUCCEEDED(native->get_WindowHandle(&hwnd)))
+                ApplyWindowIcon(hwnd);
+
+        w.Activate();
+        // While the window is up, the connection lines move on their own.
         StartPluginStatusPoll();
+    }
+
+    void MainWindow::CloseSettings()
+    {
+        if (settings_window != nullptr)
+            settings_window.Close();
+    }
+
+    void MainWindow::ToggleSettings()
+    {
+        if (SettingsOpen())
+            CloseSettings();
+        else
+            ShowSettings();
     }
 
     // The sections, in the order the strip shows them. The four the app owns are
@@ -41,19 +132,20 @@ namespace winrt::LookoutMarine::implementation
                                    : "display";
 
         settings_tabs.clear();
-        settings_tabs.push_back({ "display", L"Display" });
-        settings_tabs.push_back({ "depths", L"Depths" });
-        settings_tabs.push_back({ "text", L"Text" });
-        settings_tabs.push_back({ "charts", L"Charts" });
+        settings_tabs.push_back({ "display", L"Display", L"\uE790" });
+        settings_tabs.push_back({ "depths", L"Depths", L"\uEC48" });
+        settings_tabs.push_back({ "text", L"Text", L"\uE8D2" });
+        settings_tabs.push_back({ "charts", L"Charts", L"\uE774" });
         if (PluginTabPopulated("vessels"))
-            settings_tabs.push_back({ "vessels", L"Vessels" });
+            settings_tabs.push_back({ "vessels", L"Vessels", L"\uE7C0" });
         if (PluginTabPopulated("alarms"))
-            settings_tabs.push_back({ "alarms", L"Alarms" });
+            settings_tabs.push_back({ "alarms", L"Alarms", L"\uEA8F" });
         if (PluginTabPopulated("connections"))
-            settings_tabs.push_back({ "connections", L"Connections" });
-        if (!plugins.empty())
-            settings_tabs.push_back({ "plugins", L"Plugins" });
-        settings_tabs.push_back({ "advanced", L"Advanced" });
+            settings_tabs.push_back({ "connections", L"Connections", L"\uE701" });
+        // Plugins is the one section that talks ABOUT plugins: install,
+        // grants, uninstall. It is the app's own, not a slot a schema fills.
+        settings_tabs.push_back({ "plugins", L"Plugins", L"\uE71D" });
+        settings_tabs.push_back({ "advanced", L"Advanced", L"\uE713" });
 
         // A section can go away — a plugin that never came up takes its section
         // with it — so a stale selection falls back rather than indexing off the
@@ -65,19 +157,39 @@ namespace winrt::LookoutMarine::implementation
                 settings_tab = i;
         }
 
-        auto strip = SettingsTabs();
-        strip.Children().Clear();
+        // One row per section, down the left: its mark, its name, and the
+        // selection behind whichever one is on screen. The list IS the
+        // navigation, so there is no way to collapse it away.
+        auto list = SettingsTabs();
+        list.Children().Clear();
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
         {
-            Controls::Button tb;
-            tb.Content(winrt::box_value(winrt::hstring{ settings_tabs[i].label }));
-            tb.Padding({ 10, 4, 10, 6 });
-            tb.CornerRadius({ 14, 14, 14, 14 });
-            tb.BorderThickness({ 0, 0, 0, 0 });
-            tb.Background(Media::SolidColorBrush{ i == settings_tab
+            Controls::Button row;
+            row.HorizontalAlignment(HorizontalAlignment::Stretch);
+            row.HorizontalContentAlignment(HorizontalAlignment::Left);
+            row.Padding({ 10, 7, 10, 7 });
+            row.CornerRadius({ 6, 6, 6, 6 });
+            row.BorderThickness({ 0, 0, 0, 0 });
+            row.Background(Media::SolidColorBrush{ i == settings_tab
                                                       ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
                                                       : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-            tb.Click([this, i](auto &&, auto &&) {
+
+            Controls::StackPanel content;
+            content.Orientation(Controls::Orientation::Horizontal);
+            content.Spacing(10);
+            Controls::FontIcon icon;
+            icon.Glyph(winrt::hstring{ settings_tabs[i].glyph });
+            icon.FontSize(14);
+            icon.Opacity(0.85);
+            content.Children().Append(icon);
+            Controls::TextBlock label;
+            label.Text(winrt::hstring{ settings_tabs[i].label });
+            label.FontSize(13);
+            label.VerticalAlignment(VerticalAlignment::Center);
+            content.Children().Append(label);
+            row.Content(content);
+
+            row.Click([this, i](auto &&, auto &&) {
                 settings_tab = i;
                 for (uint32_t j = 0; j < SettingsTabs().Children().Size(); ++j)
                 {
@@ -87,8 +199,20 @@ namespace winrt::LookoutMarine::implementation
                 }
                 BuildSettingsPage();
             });
-            strip.Children().Append(tb);
+            list.Children().Append(row);
         }
+    }
+
+    // Open the settings on one section by its id ("connections" from the GPS
+    // pill). A section a plugin never populated falls back to the first one.
+    void MainWindow::OpenSettingsTab(std::string const &id)
+    {
+        ShowSettings();
+        for (int i = 0; i < (int)settings_tabs.size(); ++i)
+            if (settings_tabs[i].id == id)
+                settings_tab = i;
+        BuildSettingsTabs();
+        BuildSettingsPage();
     }
 
     void MainWindow::ScheduleApply()
@@ -113,6 +237,14 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::LoadSettings()
     {
         lk_controller_get_mariner(controller, &pending);
+        // The pane wears the chart's scheme: dusk and night take the dark
+        // palette whatever the OS says — a bright panel has no place on a
+        // night passage. Day follows the app default.
+        bool dark = pending.scheme != 0;
+        SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
+        SettingsPane().Background(Media::SolidColorBrush{
+            dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x24, 0x28 }
+                 : winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
         // The plugin schemas are read here, not at construction: there is no
         // plugin layer until a chart opens. What a plugin DECLARES does not
         // change while the pane is up, so this is the only whole read.
@@ -345,6 +477,27 @@ namespace winrt::LookoutMarine::implementation
                     lk_store_set_raster_enabled(path.c_str(), v ? 1 : 0);
                     lk_controller_raster_set_enabled(controller, path.c_str(), v ? 1 : 0);
                 };
+                auto set_group_enabled = [this](std::vector<std::string> const &files, bool v) {
+                    std::vector<const char *> cps;
+                    for (auto const &p : files)
+                        cps.push_back(p.c_str());
+                    lk_store_set_rasters_enabled(cps.data(), (int)cps.size(), v ? 1 : 0);
+                    for (auto const &p : files)
+                        lk_controller_raster_set_enabled(controller, p.c_str(), v ? 1 : 0);
+                };
+                auto remove_group = [this](std::vector<std::string> const &files) {
+                    std::vector<const char *> cps;
+                    for (auto const &p : files)
+                        cps.push_back(p.c_str());
+                    lk_store_forget_rasters(cps.data(), (int)cps.size());
+                    for (auto const &p : files)
+                    {
+                        lk_controller_raster_set_enabled(controller, p.c_str(), 0);
+                        raster_paths.erase(
+                            std::remove(raster_paths.begin(), raster_paths.end(), p),
+                            raster_paths.end());
+                    }
+                };
                 auto mini_switch = [this](bool is_on, auto &&set) {
                     Controls::ToggleSwitch ts;
                     ts.OnContent(nullptr);
@@ -368,15 +521,15 @@ namespace winrt::LookoutMarine::implementation
                         group_on = group_on || on.count(p) == 0 || on[p];
 
                     Controls::Grid row;
-                    Controls::ColumnDefinition c0, c1, c2;
+                    Controls::ColumnDefinition c0, c1, c2, c3;
                     c0.Width({ 0, GridUnitType::Auto });
                     c1.Width({ 1, GridUnitType::Star });
                     c2.Width({ 0, GridUnitType::Auto });
-                    row.ColumnDefinitions().ReplaceAll({ c0, c1, c2 });
+                    c3.Width({ 0, GridUnitType::Auto });
+                    row.ColumnDefinitions().ReplaceAll({ c0, c1, c2, c3 });
 
-                    auto gts = mini_switch(group_on, [this, set_file_enabled, files](bool v) {
-                        for (auto const &p : files)
-                            set_file_enabled(p, v);
+                    auto gts = mini_switch(group_on, [this, set_group_enabled, files](bool v) {
+                        set_group_enabled(files, v);
                     });
                     row.Children().Append(gts);
 
@@ -398,7 +551,32 @@ namespace winrt::LookoutMarine::implementation
                     count.VerticalAlignment(VerticalAlignment::Center);
                     Controls::Grid::SetColumn(count, 2);
                     row.Children().Append(count);
+
+                    Controls::Button grm;
+                    Controls::FontIcon gminus;
+                    gminus.Glyph(L"\uE738"); // Remove
+                    gminus.FontSize(12);
+                    grm.Content(gminus);
+                    grm.Padding({ 4, 2, 4, 2 });
+                    grm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    grm.BorderThickness({ 0, 0, 0, 0 });
+                    Automation::AutomationProperties::SetName(grm,
+                        L"Remove the whole set. Takes full effect the next time a chart opens.");
+                    grm.Click([this, remove_group, files](auto &&, auto &&) {
+                        remove_group(files);
+                        UpdateReadouts(true);
+                        BuildSettingsPage();
+                    });
+                    Controls::Grid::SetColumn(grm, 3);
+                    row.Children().Append(grm);
                     stack.Children().Append(row);
+
+                    // A baked bundle is hundreds of sheets: no mariner switches
+                    // those one by one, and hundreds of rows stall the pane.
+                    // The group row carries the whole set; files list only when
+                    // the set is small enough to reason about per file.
+                    if (files.size() > 16)
+                        continue;
 
                     for (auto const &p : files)
                     {

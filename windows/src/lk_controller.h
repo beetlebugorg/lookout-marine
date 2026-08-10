@@ -77,6 +77,8 @@ void lk_controller_pan(lk_controller *self, double dx, double dy);
 void lk_controller_zoom_at(lk_controller *self, double dzoom, double x, double y);
 void lk_controller_zoom_centered(lk_controller *self, double dzoom, unsigned w_px, unsigned h_px);
 void lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double x1, double y1);
+/* Geo to logical points (the inverse of geo_at) — anchors chart-pinned chrome. */
+int  lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y);
 void lk_controller_reset_rotation(lk_controller *self);
 void lk_controller_fling_start(lk_controller *self, double vx, double vy);
 int  lk_controller_geo_at(lk_controller *self, double x, double y, double *lon, double *lat);
@@ -135,6 +137,67 @@ char *lk_controller_plugins_json(lk_controller *self);
 /* Push one plugin's settings, applied live. `json` is an object of the keys its
  * schema declares. 1 when the plugin took them. */
 int lk_controller_set_plugin_config(lk_controller *self, const char *id, const char *json);
+
+/* Plugin alerts: {"seq":N,"alerts":[{id,plugin,severity,title,body,raised,
+ * acknowledged}...]} as a malloc'd copy the caller frees, or NULL when
+ * unreadable (no chart, no plugin layer). NULL is not "no alerts": the caller
+ * clears the strip and silences the siren but keeps watching. */
+char *lk_controller_alerts_json(lk_controller *self);
+/* Acknowledge one alert: silences it and takes it off the strip. That alert
+ * only; a second alarm keeps sounding. 1 on success. */
+int lk_controller_alert_ack(lk_controller *self, unsigned long long id);
+
+/* Plugin tables (the AIS Targets list). tables_json lists the declarations;
+ * table_rows answers one dialog's rows ALREADY ORDERED by the core (sort_key
+ * NULL = the declared default); table_open tells the plugin somebody is
+ * looking — call it with 1 on open and 0 on close, or the plugin builds no
+ * rows. Malloc'd copies; NULL when unreadable. */
+char *lk_controller_tables_json(lk_controller *self);
+char *lk_controller_table_rows(lk_controller *self, const char *plugin, const char *key,
+                               const char *sort_key, int ascending);
+void lk_controller_table_open(lk_controller *self, const char *plugin, const char *key, int open);
+
+/* The install surface. inspect returns the consent-sheet JSON for a .lkplug
+ * (malloc'd; NULL when the plugin layer cannot start). install returns NULL
+ * on SUCCESS, else a malloc'd one-sentence reason to show the mariner. */
+char *lk_controller_plugin_inspect(lk_controller *self, const char *path);
+char *lk_controller_plugin_install(lk_controller *self, const char *path);
+int  lk_controller_plugin_uninstall(lk_controller *self, const char *id);
+/* Flip one capability while the plugin runs; the lost call answers -1. */
+int  lk_controller_plugin_grant_set(lk_controller *self, const char *id, const char *cap, int on);
+
+/* Route every opened or dropped file through the plugins first: 1 a plugin
+ * took it, 0 nobody claims it (open it as a chart), -1 claimed but failed.
+ * Charts always answer 0. */
+int lk_controller_open_file(lk_controller *self, const char *path);
+
+/* Own ship: 0 no source (show the fix-it), 1 fix lost, 2 live — lon/lat are
+ * written only for live. A readout shows these or nothing, never the map
+ * centre. */
+int lk_controller_own_ship(lk_controller *self, double *lon, double *lat);
+/* Follow / course-up: 0 off, 1 on, 2 waiting for a fix. THE CORE CANCELS
+ * follow on a pan and course-up on manual rotation — poll every tick, or a
+ * button tracks only its own taps and goes wrong. */
+void lk_controller_follow_set(lk_controller *self, int on);
+int  lk_controller_follow_active(lk_controller *self);
+void lk_controller_course_up_set(lk_controller *self, int on);
+int  lk_controller_course_up_active(lk_controller *self);
+
+/* Overlay objects a plugin drew (vessels, markers). at = hover payload JSON
+ * within ~14 pt (malloc'd, NULL when nothing is there). hit/info fill
+ * lk_overlay_obj with MALLOC'D id and info (info may be NULL) — free both
+ * with lk_controller_overlay_free. info returns 0 once the object is gone;
+ * re-read it every tick, the anchor moves. Logical points. A hit here must
+ * suppress the chart pick report. */
+typedef struct {
+    char *id;
+    char *info;    /* pick payload JSON, or NULL */
+    double lon, lat;
+} lk_overlay_obj;
+char *lk_controller_overlay_at(lk_controller *self, double x_pt, double y_pt);
+int  lk_controller_overlay_hit(lk_controller *self, double x_pt, double y_pt, lk_overlay_obj *out);
+int  lk_controller_overlay_info(lk_controller *self, const char *id, lk_overlay_obj *out);
+void lk_controller_overlay_free(lk_overlay_obj *obj);
 
 /* Raster underlay (see lookout.h). add installs one .mbtiles and returns 1 on
  * success — persistence is the host's job (lk_store_note_raster). The set

@@ -40,18 +40,26 @@ self-contained: the build copies the Windows App SDK runtime next to the exe.
 ### Plugins
 
 Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, and the host
-that runs them is **x64 only** today. `scripts/build-wamr.sh` fills
-`vendor/wamr-dist-windows-x64` and has no ARM64 Windows slot, so
-`-Dplugins=true` on `aarch64-windows-msvc` refuses by design and an ARM64 build
-is a chartplotter with no own ship and no traffic. The archive also has to be
-the **MSVC-ABI** one: the script cross-builds the mingw ABI, and the two do not
-meet. `bash scripts/build-wamr.sh windows-x64 --print-msvc` prints the cmake
-command that builds the right one here.
+that runs them needs a WAMR archive built for this platform. Build it once:
 
-With that archive in place, `build-core.ps1 -Platform x64` passes
-`-Dplugins=true` and normalizes `libvmlib.a` to `vmlib.lib`, which the vcxproj
-links after `lookout_marine.lib`. Without it the script builds a core with no
-host, warns, and removes any stale `vmlib.lib`.
+```powershell
+bash scripts/build-wamr.sh windows-arm64   # or windows-x64
+```
+
+Both targets write the **MSVC-ABI** archive with `zig cc`, into
+`vendor/wamr-dist-windows-arm64` or `-x64`. The ABI matters: the mingw archive
+the cross targets produce does not meet the shipping app, and the headers must
+be compiled with `WASM_API_EXTERN` and `WASM_RUNTIME_API_EXTERN` empty or the
+runtime declares its own API `dllimport` and the app's link ends in three
+unresolved `__imp_` symbols. On a machine without the Windows SDK,
+`bash scripts/build-wamr.sh windows-x64 --print-msvc` prints the cmake command
+to run there instead.
+
+With the archive in place `build-core.ps1` passes `-Dplugins=true` and
+normalizes `libvmlib.a` to `vmlib.lib`, which the vcxproj links after
+`lookout_marine.lib`. Without it the script builds a core with no host, warns,
+and removes any stale `vmlib.lib` — that build is a chartplotter with no own
+ship, no traffic and no instrument input.
 
 The modules travel beside the exe in `$(OutDir)plugins`, and the app loads them
 at every chart open, then the set a mariner installed under
@@ -69,14 +77,27 @@ the last recent, then the repo's bundled test cell.
 Environment variables: `LOOKOUT_OPEN=<chart|dir>` opens at startup.
 `LOOKOUT_VIEW=lon,lat,zoom[,rot]` pins the opening camera. `LOOKOUT_WARP=1`
 forces the software rasterizer. `LOOKOUT_OPEN_SETTINGS=1` opens the mariner
-pane at startup (screenshots). `LOOKOUT_SHOW=pick` (or `pick:0.5x0.85`, a view
-fraction) runs a cursor pick 3 s after the chart opens — the screenshot
-protocol's pick frame.
+settings at startup, and `LOOKOUT_OPEN_SETTINGS=<section>` (`connections`,
+`plugins`, …) opens them on one section (screenshots). `LOOKOUT_SHOW=pick` (or
+`pick:0.5x0.85`, a view fraction) runs a cursor pick 3 s after the chart
+opens — the screenshot protocol's pick frame. `LOOKOUT_NMEA=host:port` seeds
+the NMEA 0183 plugin with one connection, and `LOOKOUT_PLUGINS=<dir>` loads a
+developer copy of a plugin ahead of the bundled set.
 
 Raster charts (see `docs/docs/user-guide/raster-charts.md`): **Ctrl+Shift+I**
 adds `.mbtiles` files (Settings ▸ Charts also takes a folder), **Ctrl+I** steps
 between the sets covering the view, **Ctrl+Shift+H** hides the ENC where a
 picture covers it. The pill at the right of the readouts opens the same list.
+
+Plugins: an alarm a plugin raises shows at the top of the chart and sounds
+until acknowledged. The AIS bubble by the search opens the vessel tables the
+plugins declare. The GPS pill in the readouts names the position source and
+opens Settings at Connections; the north bubble is the follow lock (tap to
+follow own ship, tap again for course up; a pan lets go). A `.lkplug` dropped
+on the chart shows its permissions before anything installs; capability grants
+live in Settings ▸ Plugins. One copy runs per machine (`LOOKOUT_MULTI=1`
+lifts it); `LOOKOUT_CLEAN=1` keeps every plugin on its manifest defaults for
+captures.
 
 ## What's in here
 
@@ -91,8 +112,12 @@ picture covers it. The pill at the right of the readouts opens the same list.
 | `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
 | `ui/MainWindow.Raster.cpp` | The raster pill and its menu, the add flow, the re-install at every open |
 | `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
-| `ui/MainWindow.Settings.cpp` | The mariner pane: the tab strip, tabbed pages, debounced apply |
-| `ui/MainWindow.Plugins.cpp` | The plugin-declared settings sections, the connection list, apply and save |
+| `ui/MainWindow.Settings.cpp` | The mariner settings window: the section list, the pages, debounced apply |
+| `ui/MainWindow.Plugins.cpp` | The plugin-declared settings sections, the connection list, capability grants, apply and save |
+| `ui/MainWindow.Alerts.cpp` | The alert strip and the siren: an alarm sounds and repeats until acknowledged |
+| `ui/MainWindow.Vessels.cpp` | Plugin table windows (AIS Targets): shell-side units, seq-gated reload, reveal on chart |
+| `ui/MainWindow.PluginInstall.cpp` | The .lkplug consent sheet, install, and the dropped-file router |
+| `ui/MainWindow.Overlay.cpp` | The bubble pinned to an overlay object, the hover tip, the GPS pill, the follow lock |
 | `src/lk_plugin_model.h` | The shape the plugin registry takes on this side |
 | `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
 | `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |

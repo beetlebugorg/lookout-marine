@@ -73,7 +73,15 @@ namespace winrt::LookoutMarine::implementation
             return;
         double moved = std::hypot(x - down_x, y - down_y);
         if (moved <= kTapSlopPt)
-            ShowPick(x, y);
+        {
+            // A tap on an overlay symbol pins its bubble and never also opens
+            // the chart pick report; a tap on open water retires the bubble.
+            if (!TryPinOverlayAt(x, y))
+            {
+                CloseOverlayBubble();
+                ShowPick(x, y);
+            }
+        }
         else
             lk_controller_fling_start(controller, vx, vy);
     }
