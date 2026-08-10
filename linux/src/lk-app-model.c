@@ -18,8 +18,6 @@ struct _LkAppModel {
   gboolean preparing_symbols;
   gboolean first_build_done;
 
-  gboolean cursor_valid;
-  double   cursor_lon, cursor_lat;
   double   center_lon, center_lat;
   double   zoom;
   double   rotation_deg;
@@ -30,6 +28,14 @@ struct _LkAppModel {
 
   int view_width, view_height; /* the chart view, in logical points */
 
+  /* What the engine says follow and course up are doing, and what own ship's
+   * position readout may say. The core turns both modes off itself, so these
+   * are READ off it with the other readouts and never tracked from a click. */
+  int      follow;    /* 0 off, 1 following, 2 waiting for a fix */
+  int      course_up; /* 0 off, 1 turning, 2 waiting for a heading */
+  int      fix_state;
+  double   fix_lon, fix_lat;
+
   /* The raster charts the mariner installed, and the state the engine reports
    * for them over the water in view. */
   LkRasterCharts *raster_charts;
@@ -38,6 +44,9 @@ struct _LkAppModel {
   char           *raster_available;
   gboolean        raster_over_chart;
   gboolean        chart_hidden;
+
+  /* The overlay object the mariner pinned, by id. NULL while none is. */
+  char *overlay_pin;
 
   GPtrArray *pick_results;
   gboolean   pick_valid;
@@ -52,9 +61,6 @@ enum {
   PROP_OPEN_ERROR,
   PROP_RECENTS,
   PROP_SHOW_STARTUP_LOADER,
-  PROP_CURSOR_VALID,
-  PROP_CURSOR_LON,
-  PROP_CURSOR_LAT,
   PROP_CENTER_LON,
   PROP_CENTER_LAT,
   PROP_ZOOM,
@@ -65,6 +71,12 @@ enum {
   PROP_BUILDING,
   PROP_VIEW_WIDTH,
   PROP_VIEW_HEIGHT,
+  PROP_FOLLOW,
+  PROP_COURSE_UP,
+  PROP_FIX_STATE,
+  PROP_FIX_LON,
+  PROP_FIX_LAT,
+  PROP_OVERLAY_PIN,
   N_PROPS
 };
 
@@ -93,9 +105,6 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_OPEN_ERROR:          g_value_set_string (value, self->open_error); break;
     case PROP_RECENTS:             g_value_set_boxed (value, self->recents); break;
     case PROP_SHOW_STARTUP_LOADER: g_value_set_boolean (value, lk_app_model_get_show_startup_loader (self)); break;
-    case PROP_CURSOR_VALID:        g_value_set_boolean (value, self->cursor_valid); break;
-    case PROP_CURSOR_LON:          g_value_set_double (value, self->cursor_lon); break;
-    case PROP_CURSOR_LAT:          g_value_set_double (value, self->cursor_lat); break;
     case PROP_CENTER_LON:          g_value_set_double (value, self->center_lon); break;
     case PROP_CENTER_LAT:          g_value_set_double (value, self->center_lat); break;
     case PROP_ZOOM:                g_value_set_double (value, self->zoom); break;
@@ -106,6 +115,12 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
     case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
     case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
+    case PROP_FOLLOW:              g_value_set_int (value, self->follow); break;
+    case PROP_COURSE_UP:           g_value_set_int (value, self->course_up); break;
+    case PROP_FIX_STATE:           g_value_set_int (value, self->fix_state); break;
+    case PROP_FIX_LON:             g_value_set_double (value, self->fix_lon); break;
+    case PROP_FIX_LAT:             g_value_set_double (value, self->fix_lat); break;
+    case PROP_OVERLAY_PIN:         g_value_set_string (value, self->overlay_pin); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
@@ -130,6 +145,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
+  g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
   g_clear_pointer (&self->raster_sets, g_ptr_array_unref);
   g_clear_pointer (&self->raster_available, g_free);
@@ -155,9 +171,6 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_OPEN_ERROR] = g_param_spec_string ("open-error", NULL, NULL, NULL, RO);
   properties[PROP_RECENTS] = g_param_spec_boxed ("recents", NULL, NULL, G_TYPE_STRV, RO);
   properties[PROP_SHOW_STARTUP_LOADER] = g_param_spec_boolean ("show-startup-loader", NULL, NULL, FALSE, RO);
-  properties[PROP_CURSOR_VALID] = g_param_spec_boolean ("cursor-valid", NULL, NULL, FALSE, RO);
-  properties[PROP_CURSOR_LON] = g_param_spec_double ("cursor-lon", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
-  properties[PROP_CURSOR_LAT] = g_param_spec_double ("cursor-lat", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
   properties[PROP_CENTER_LON] = g_param_spec_double ("center-lon", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
   properties[PROP_CENTER_LAT] = g_param_spec_double ("center-lat", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
   properties[PROP_ZOOM] = g_param_spec_double ("zoom", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
@@ -168,6 +181,12 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
   properties[PROP_VIEW_WIDTH] = g_param_spec_int ("view-width", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_VIEW_HEIGHT] = g_param_spec_int ("view-height", NULL, NULL, 0, G_MAXINT, 0, RO);
+  properties[PROP_FOLLOW] = g_param_spec_int ("follow", NULL, NULL, 0, 2, 0, RO);
+  properties[PROP_COURSE_UP] = g_param_spec_int ("course-up", NULL, NULL, 0, 2, 0, RO);
+  properties[PROP_FIX_STATE] = g_param_spec_int ("fix-state", NULL, NULL, 0, 2, 0, RO);
+  properties[PROP_FIX_LON] = g_param_spec_double ("fix-lon", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_FIX_LAT] = g_param_spec_double ("fix-lat", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
+  properties[PROP_OVERLAY_PIN] = g_param_spec_string ("overlay-pin", NULL, NULL, NULL, RO);
 
 #undef RO
 #undef RW
@@ -337,6 +356,13 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
       lk_app_model_open_chart_directory (self, path);
       return;
     }
+
+  /* THE PLUGINS GET FIRST REFUSAL. A manifest claims file types, and a weather
+   * file the mariner opened belongs to the plugin that reads them. A CHART
+   * always answers 0, whatever a manifest claims, and so does a build with no
+   * plugin layer, so one code path serves both. */
+  if (lk_chart_controller_open_file (self->controller, path) != 0)
+    return;
 
   g_auto (GStrv) one = g_new0 (char *, 2);
   one[0] = g_strdup (path);
@@ -984,15 +1010,6 @@ lk_app_model_go_to_coordinate (LkAppModel *self, const char *text)
       }                                                            \
   } G_STMT_END
 
-void
-lk_app_model_set_cursor_geo (LkAppModel *self, gboolean valid, double lon, double lat)
-{
-  g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  NOTIFY_IF_CHANGED (self->cursor_valid, valid, PROP_CURSOR_VALID);
-  NOTIFY_IF_CHANGED (self->cursor_lon, lon, PROP_CURSOR_LON);
-  NOTIFY_IF_CHANGED (self->cursor_lat, lat, PROP_CURSOR_LAT);
-}
 
 void
 lk_app_model_push_readouts (LkAppModel *self,
@@ -1010,6 +1027,73 @@ lk_app_model_push_readouts (LkAppModel *self,
   NOTIFY_IF_CHANGED (self->scale_denominator, scale_denominator, PROP_SCALE_DENOMINATOR);
   NOTIFY_IF_CHANGED (self->overscale, overscale, PROP_OVERSCALE);
   NOTIFY_IF_CHANGED (self->scheme, scheme, PROP_SCHEME);
+
+  /* Follow and course up are read off the engine, never remembered from a
+   * click: the core turns follow off on a pan and course up off on a rotate by
+   * hand, and a control that tracked only its own clicks would lie. */
+  NOTIFY_IF_CHANGED (self->follow, lk_chart_controller_follow_active (self->controller),
+                     PROP_FOLLOW);
+  NOTIFY_IF_CHANGED (self->course_up, lk_chart_controller_course_up_active (self->controller),
+                     PROP_COURSE_UP);
+
+  double lon = 0, lat = 0;
+  int fix = lk_chart_controller_own_ship (self->controller, &lon, &lat);
+  NOTIFY_IF_CHANGED (self->fix_state, fix, PROP_FIX_STATE);
+  /* The coordinates are written only for a live fix, so a lost fix leaves the
+   * last good numbers alone rather than reading zero. */
+  if (fix == LK_FIX_LIVE)
+    {
+      NOTIFY_IF_CHANGED (self->fix_lon, lon, PROP_FIX_LON);
+      NOTIFY_IF_CHANGED (self->fix_lat, lat, PROP_FIX_LAT);
+    }
+}
+
+/* ---- how the chart is oriented ------------------------------------------- */
+
+LkOrientation
+lk_app_model_get_orientation (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), LK_ORIENT_UNLOCKED);
+
+  if (self->follow == 0)
+    return LK_ORIENT_UNLOCKED;
+  if (self->follow == 2)
+    return LK_ORIENT_ARMED; /* on, with no fix to follow yet */
+  return self->course_up == 0 ? LK_ORIENT_NORTH_UP : LK_ORIENT_COURSE_UP;
+}
+
+void
+lk_app_model_cycle_orientation (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (self->follow == 0)
+    lk_chart_controller_follow_set (self->controller, TRUE); /* lock, chart as it lies */
+  else if (self->course_up == 0)
+    lk_chart_controller_course_up_set (self->controller, TRUE); /* turn with own ship */
+  else
+    lk_chart_controller_reset_rotation (self->controller); /* north up, still locked */
+}
+
+int
+lk_app_model_get_fix_state (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), LK_FIX_NONE);
+  return self->fix_state;
+}
+
+gboolean
+lk_app_model_get_fix (LkAppModel *self, double *out_lon, double *out_lat)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  if (self->fix_state != LK_FIX_LIVE)
+    return FALSE;
+  if (out_lon != NULL)
+    *out_lon = self->fix_lon;
+  if (out_lat != NULL)
+    *out_lat = self->fix_lat;
+  return TRUE;
 }
 
 void
@@ -1137,6 +1221,34 @@ lk_app_model_get_pick_results (LkAppModel *self)
   return self->pick_results;
 }
 
+/* ---- the plugin overlay -------------------------------------------------- */
+
+void
+lk_app_model_pin_overlay (LkAppModel *self, const char *id)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (g_strcmp0 (self->overlay_pin, id) == 0)
+    return;
+
+  g_free (self->overlay_pin);
+  self->overlay_pin = g_strdup (id);
+
+  /* One thing under the finger at a time: pinning a plugin's symbol retires
+   * the chart pick report, and the chart pick clears the pin. */
+  if (id != NULL)
+    lk_app_model_clear_pick (self);
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_OVERLAY_PIN]);
+}
+
+const char *
+lk_app_model_get_overlay_pin (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->overlay_pin;
+}
+
 gboolean
 lk_app_model_get_pick_point (LkAppModel *self, double *out_x, double *out_y)
 {
@@ -1173,9 +1285,6 @@ lk_app_model_set_pick_index (LkAppModel *self, guint index)
 
 gboolean    lk_app_model_get_has_chart (LkAppModel *self)         { return self->has_chart; }
 const char *lk_app_model_get_chart_path (LkAppModel *self)        { return self->chart_path; }
-gboolean    lk_app_model_get_cursor_valid (LkAppModel *self)      { return self->cursor_valid; }
-double      lk_app_model_get_cursor_lon (LkAppModel *self)        { return self->cursor_lon; }
-double      lk_app_model_get_cursor_lat (LkAppModel *self)        { return self->cursor_lat; }
 double      lk_app_model_get_center_lon (LkAppModel *self)        { return self->center_lon; }
 double      lk_app_model_get_center_lat (LkAppModel *self)        { return self->center_lat; }
 double      lk_app_model_get_zoom (LkAppModel *self)              { return self->zoom; }

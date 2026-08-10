@@ -46,6 +46,30 @@ void lk_app_model_toggle_text (LkAppModel *self);
 void lk_app_model_toggle_soundings (LkAppModel *self);
 void lk_app_model_toggle_other_category (LkAppModel *self);
 
+/* ---- how the chart is oriented ------------------------------------------ */
+
+/* What the compass bubble shows. The core owns both parts of it: it drops
+ * follow on a pan and course up on a rotate by hand, so this is READ off the
+ * engine and never remembered from a click. */
+typedef enum {
+  LK_ORIENT_UNLOCKED,  /* the chart is the mariner's to move */
+  LK_ORIENT_ARMED,     /* locked to own ship, waiting for a fix */
+  LK_ORIENT_NORTH_UP,  /* locked to own ship, north at the top */
+  LK_ORIENT_COURSE_UP, /* locked to own ship, turning with it */
+} LkOrientation;
+
+LkOrientation lk_app_model_get_orientation (LkAppModel *self);
+
+/* The compass bubble's click. It always locks the chart to own ship, and once
+ * locked it cycles north up and course up. */
+void lk_app_model_cycle_orientation (LkAppModel *self);
+
+/* Own ship's reported position, and how much to believe it. The readout shows
+ * these numbers or it shows none: it never falls back to the view centre, and a
+ * dead-reckoned position is never presented as a reported one. */
+int      lk_app_model_get_fix_state (LkAppModel *self);
+gboolean lk_app_model_get_fix (LkAppModel *self, double *out_lon, double *out_lat);
+
 /* ---- raster charts ------------------------------------------------------ */
 
 /* Install the files the mariner chose, persist the list, and draw what was just
@@ -105,7 +129,6 @@ gboolean lk_scale_parse (const char *text, double *out_denominator);
 
 /* ---- readouts pushed by the controller ---------------------------------- */
 
-void lk_app_model_set_cursor_geo (LkAppModel *self, gboolean valid, double lon, double lat);
 void lk_app_model_push_readouts (LkAppModel *self,
                                  lookout_view view,
                                  double scale_denominator,
@@ -131,6 +154,14 @@ void       lk_app_model_clear_pick (LkAppModel *self);
 GPtrArray *lk_app_model_get_pick_results (LkAppModel *self);
 gboolean   lk_app_model_get_pick_point (LkAppModel *self, double *out_x, double *out_y);
 
+/* ---- the plugin overlay -------------------------------------------------- */
+
+/* The overlay object the mariner clicked, by id, or NULL while none is pinned.
+ * A click that lands on a plugin's symbol pins it and does NOT open the chart
+ * pick report: one thing under the finger at a time. */
+void        lk_app_model_pin_overlay (LkAppModel *self, const char *id);
+const char *lk_app_model_get_overlay_pin (LkAppModel *self);
+
 /* Which object of the pick the report is showing. */
 guint lk_app_model_get_pick_index (LkAppModel *self);
 void  lk_app_model_set_pick_index (LkAppModel *self, guint index);
@@ -139,9 +170,6 @@ void  lk_app_model_set_pick_index (LkAppModel *self, guint index);
 
 gboolean lk_app_model_get_has_chart (LkAppModel *self);
 const char *lk_app_model_get_chart_path (LkAppModel *self);
-gboolean lk_app_model_get_cursor_valid (LkAppModel *self);
-double   lk_app_model_get_cursor_lon (LkAppModel *self);
-double   lk_app_model_get_cursor_lat (LkAppModel *self);
 double   lk_app_model_get_center_lon (LkAppModel *self);
 double   lk_app_model_get_center_lat (LkAppModel *self);
 double   lk_app_model_get_zoom (LkAppModel *self);
