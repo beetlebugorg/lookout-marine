@@ -44,6 +44,14 @@ struct _LkChartView {
 
   /* pinch state */
   double last_zoom_scale;
+
+  /* The chart menu, and the point it was raised at. Every item acts on THIS
+   * point: not the view centre, and not where the pointer drifts to afterwards,
+   * so the coordinates are taken once, when the menu opens, and kept here. */
+  GtkWidget *menu;
+  double     menu_lon, menu_lat;
+  double     menu_x, menu_y;
+  LkMarker  *menu_marker; /* the mark under the press, when there is one */
 };
 
 G_DEFINE_FINAL_TYPE (LkChartView, lk_chart_view, GTK_TYPE_WIDGET)
@@ -266,6 +274,12 @@ lk_chart_view_size_allocate (GtkWidget *widget, int width, int height, int basel
 
   lk_chart_view_sync_surface (self);
 
+  /* A popover parented to a widget is positioned from the widget's own
+   * allocation, and this class does its own allocating. Without this the chart
+   * menu stays where the window used to be after a resize. */
+  if (self->menu != NULL)
+    gtk_popover_present (GTK_POPOVER (self->menu));
+
   if (!self->did_auto_open)
     lk_chart_view_maybe_auto_open (self);
 }
@@ -309,17 +323,184 @@ lk_chart_view_sample_velocity (LkChartView *self, double dx, double dy)
 }
 
 /* The pick, and the point it belongs to. The window puts the mark there and
- * stands the report beside it. */
+ * stands the report beside it.
+ *
+ * A PLUGIN'S SYMBOL ANSWERS FIRST. A click that lands on a vessel pins its
+ * bubble and never opens the chart pick report underneath it: the mariner
+ * clicked the target, not the water it is over. */
 static void
 lk_chart_view_identify_at (LkChartView *self, double x, double y)
+{
+  g_autoptr (LkOverlayObject) object =
+      lk_chart_controller_overlay_hit (self->controller, x, y);
+
+  if (object != NULL)
+    {
+      lk_app_model_pin_overlay (self->model, object->id);
+      return;
+    }
+
+  double lon, lat;
+  if (!lk_chart_controller_geo_at (self->controller, x, y, &lon, &lat))
+    return;
+
+  lk_app_model_pin_overlay (self->model, NULL);
+  lk_app_model_set_pick (self->model, lk_chart_controller_pick (self->controller, lon, lat),
+                         x, y);
+}
+
+/* ---- the chart menu ------------------------------------------------------ */
+
+static void
+lk_chart_view_close_menu (LkChartView *self)
+{
+  if (self->menu != NULL)
+    gtk_popover_popdown (GTK_POPOVER (self->menu));
+}
+
+/* The report for the point the menu was raised at. The report itself is
+ * unchanged; only the way it is raised is new. */
+static void
+lk_chart_menu_pick (GtkButton *button, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  lk_chart_view_close_menu (self);
+  lk_app_model_set_pick (self->model,
+                         lk_chart_controller_pick (self->controller,
+                                                   self->menu_lon, self->menu_lat),
+                         self->menu_x, self->menu_y);
+}
+
+/* THE DROP NEVER WAITS FOR TYPING. The core places the mark and names it in one
+ * call, because a mariner drops a mark one-handed on a moving boat, often to
+ * record something they have just seen. Renaming is a separate, unhurried
+ * action. */
+static void
+lk_chart_menu_drop_marker (GtkButton *button, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  lk_chart_view_close_menu (self);
+  lk_chart_controller_marker_add (self->controller, self->menu_lon, self->menu_lat);
+}
+
+static void
+lk_chart_menu_remove_marker (GtkButton *button, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  lk_chart_view_close_menu (self);
+  if (self->menu_marker != NULL)
+    lk_chart_controller_marker_remove (self->controller, self->menu_marker->id);
+}
+
+/* The point's coordinates in the mariner's own format: the one the readout, the
+ * deck log and the radio all use. This is where the coordinates of a PLACE come
+ * from, which is why the readout never has to guess. */
+static void
+lk_chart_menu_copy_position (GtkButton *button, gpointer user_data)
+{
+  LkChartView *self = user_data;
+  g_autofree char *lat = lk_coord_format_dm (self->menu_lat, TRUE);
+  g_autofree char *lon = lk_coord_format_dm (self->menu_lon, FALSE);
+  g_autofree char *text = g_strdup_printf ("%s %s", lat, lon);
+
+  lk_chart_view_close_menu (self);
+  gdk_clipboard_set_text (gtk_widget_get_clipboard (GTK_WIDGET (self)), text);
+}
+
+/* Return commits. An EMPTY name keeps the old one, which the core decides, so
+ * every shell agrees on what an emptied field means. */
+static void
+lk_chart_menu_rename_committed (GtkEntry *entry, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  if (self->menu_marker != NULL)
+    lk_chart_controller_marker_rename (self->controller, self->menu_marker->id,
+                                       gtk_editable_get_text (GTK_EDITABLE (entry)));
+  lk_chart_view_close_menu (self);
+}
+
+static void
+lk_chart_menu_item (GtkWidget *box, const char *label, GCallback action, gpointer data)
+{
+  GtkWidget *item = gtk_button_new_with_label (label);
+
+  gtk_widget_add_css_class (item, "flat");
+  gtk_button_set_has_frame (GTK_BUTTON (item), FALSE);
+  gtk_widget_set_halign (item, GTK_ALIGN_FILL);
+  gtk_label_set_xalign (GTK_LABEL (gtk_button_get_child (GTK_BUTTON (item))), 0.0);
+  g_signal_connect (item, "clicked", action, data);
+  gtk_box_append (GTK_BOX (box), item);
+}
+
+/* Over a marker the menu offers Rename and Remove IN PLACE OF Drop: a mariner
+ * pressing on a mark is acting on that mark, not adding a second one on top of
+ * it. */
+static void
+lk_chart_view_open_menu (LkChartView *self, double x, double y)
 {
   double lon, lat;
 
   if (!lk_chart_controller_geo_at (self->controller, x, y, &lon, &lat))
     return;
 
-  lk_app_model_set_pick (self->model, lk_chart_controller_pick (self->controller, lon, lat),
-                         x, y);
+  /* One thing at a time over the chart. */
+  lk_app_model_pin_overlay (self->model, NULL);
+
+  self->menu_x = x;
+  self->menu_y = y;
+  self->menu_lon = lon;
+  self->menu_lat = lat;
+  g_clear_pointer (&self->menu_marker, lk_marker_free);
+  self->menu_marker = lk_chart_controller_marker_at (self->controller, x, y);
+
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+
+  if (self->menu_marker != NULL)
+    {
+      /* The field opens with the mark's current name in it. */
+      GtkWidget *entry = gtk_entry_new ();
+
+      gtk_entry_set_placeholder_text (GTK_ENTRY (entry), "Mark name");
+      gtk_editable_set_text (GTK_EDITABLE (entry), self->menu_marker->name);
+      gtk_entry_set_max_length (GTK_ENTRY (entry), 32);
+      gtk_entry_set_activates_default (GTK_ENTRY (entry), FALSE);
+      g_signal_connect (entry, "activate", G_CALLBACK (lk_chart_menu_rename_committed), self);
+      gtk_box_append (GTK_BOX (box), entry);
+
+      lk_chart_menu_item (box, "Remove Mark", G_CALLBACK (lk_chart_menu_remove_marker), self);
+    }
+  else
+    {
+      lk_chart_menu_item (box, "Drop Mark", G_CALLBACK (lk_chart_menu_drop_marker), self);
+    }
+
+  lk_chart_menu_item (box, "Pick Report", G_CALLBACK (lk_chart_menu_pick), self);
+  lk_chart_menu_item (box, "Copy Position", G_CALLBACK (lk_chart_menu_copy_position), self);
+
+  if (self->menu == NULL)
+    {
+      self->menu = gtk_popover_new ();
+      gtk_widget_set_parent (self->menu, GTK_WIDGET (self));
+      gtk_popover_set_has_arrow (GTK_POPOVER (self->menu), FALSE);
+      gtk_popover_set_position (GTK_POPOVER (self->menu), GTK_POS_BOTTOM);
+      gtk_widget_add_css_class (self->menu, "menu");
+    }
+
+  gtk_popover_set_child (GTK_POPOVER (self->menu), box);
+  gtk_popover_set_pointing_to (GTK_POPOVER (self->menu),
+                               &(GdkRectangle){ (int) x, (int) y, 1, 1 });
+  gtk_popover_popup (GTK_POPOVER (self->menu));
+}
+
+static void
+lk_chart_view_menu_pressed (GtkGestureClick *gesture, int n_press, double x, double y,
+                            gpointer user_data)
+{
+  lk_chart_view_open_menu (user_data, x, y);
 }
 
 static void
@@ -412,13 +593,6 @@ lk_chart_view_motion (GtkEventControllerMotion *controller,
       lk_chart_controller_pan (self->controller, dx, dy);
       lk_chart_view_sample_velocity (self, dx, dy);
     }
-  else
-    {
-      /* Hover feeds the cursor readout. */
-      double lon, lat;
-      if (lk_chart_controller_geo_at (self->controller, x, y, &lon, &lat))
-        lk_app_model_set_cursor_geo (self->model, TRUE, lon, lat);
-    }
 
   self->last_x = x;
   self->last_y = y;
@@ -430,7 +604,6 @@ lk_chart_view_leave (GtkEventControllerMotion *controller, gpointer user_data)
   LkChartView *self = user_data;
 
   self->pointer_valid = FALSE;
-  lk_app_model_set_cursor_geo (self->model, FALSE, 0, 0);
 }
 
 static gboolean
@@ -545,6 +718,10 @@ lk_chart_view_dispose (GObject *object)
 
   g_clear_handle_id (&self->auto_open_id, g_source_remove);
   g_clear_pointer (&self->surface, lk_native_surface_free);
+  g_clear_pointer (&self->menu_marker, lk_marker_free);
+  /* A popover parented to a widget has to be unparented before the widget
+     goes, or GTK warns that it is finalising with a child still attached. */
+  g_clear_pointer (&self->menu, gtk_widget_unparent);
 
   G_OBJECT_CLASS (lk_chart_view_parent_class)->dispose (object);
 }
@@ -579,6 +756,13 @@ lk_chart_view_init (LkChartView *self)
   g_signal_connect (click, "pressed", G_CALLBACK (lk_chart_view_pressed), self);
   g_signal_connect (click, "released", G_CALLBACK (lk_chart_view_released), self);
   gtk_widget_add_controller (GTK_WIDGET (self), GTK_EVENT_CONTROLLER (click));
+
+  /* The chart menu, raised at a point on the water. A secondary click is what
+     opens it here, as a right-click does on the other desktop shell. */
+  GtkGesture *menu = gtk_gesture_click_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (menu), GDK_BUTTON_SECONDARY);
+  g_signal_connect (menu, "pressed", G_CALLBACK (lk_chart_view_menu_pressed), self);
+  gtk_widget_add_controller (GTK_WIDGET (self), GTK_EVENT_CONTROLLER (menu));
 
   GtkEventController *motion = gtk_event_controller_motion_new ();
   g_signal_connect (motion, "motion", G_CALLBACK (lk_chart_view_motion), self);

@@ -82,6 +82,8 @@ typedef struct {
   GPtrArray *fields; /* LkPluginField*, owned */
   GPtrArray *lists;  /* LkPluginList*, owned */
   GPtrArray *groups; /* LkPluginGroup*, owned */
+  GPtrArray *caps;   /* LkPluginCapability*, owned */
+  GPtrArray *types;  /* const char *, the file extensions it reads */
 
   GHashTable *values; /* the field key -> double, boxed */
   GHashTable *rows;   /* the list key -> GPtrArray of LkRow* */
@@ -118,6 +120,16 @@ lk_plugin_list_free (gpointer data)
   g_free (list);
 }
 
+/* `cap` and `sentence` borrow from the registry; `hosts` is joined here. */
+static void
+lk_plugin_capability_free (gpointer data)
+{
+  LkPluginCapability *cap = data;
+
+  g_free (cap->hosts);
+  g_free (cap);
+}
+
 static void
 lk_plugin_state_free (gpointer data)
 {
@@ -128,6 +140,8 @@ lk_plugin_state_free (gpointer data)
   g_ptr_array_unref (state->fields);
   g_ptr_array_unref (state->lists);
   g_ptr_array_unref (state->groups);
+  g_ptr_array_unref (state->caps);
+  g_ptr_array_unref (state->types);
   g_hash_table_unref (state->values);
   g_hash_table_unref (state->rows);
   g_free (state);
@@ -398,6 +412,62 @@ lk_plugin_state_read_lists (LkPluginState *state, const LkJson *node)
 
 /* ---- loading and reloading ----------------------------------------------- */
 
+/* What the manifest asked for, in the wording the consent sheet uses, and
+ * whether the mariner has left it granted.
+ *
+ * A GRANT CAN NEVER EXCEED THE MANIFEST. This is the asked-for set with a
+ * switch beside each entry, so revoking one is the only thing the mariner can
+ * do here. The broker answers a revoked call -1 and the plugin keeps running.
+ *
+ * The file types ride along, because that is what an open dialog names in its
+ * prompt when it offers to hand a file to a plugin. */
+static void
+lk_plugin_state_read_caps (LkPluginState *state, const LkJson *node)
+{
+  const LkJson *caps = lk_json_member (node, "capabilities");
+
+  for (guint i = 0; i < lk_json_length (caps); i++)
+    {
+      const LkJson *entry = lk_json_at (caps, i);
+      const char *name = lk_json_member_string (entry, "cap");
+
+      if (name == NULL)
+        continue;
+
+      LkPluginCapability *cap = g_new0 (LkPluginCapability, 1);
+      cap->cap = name;
+      cap->sentence = lk_or_empty (lk_json_member_string (entry, "sentence"));
+      cap->granted = lk_json_member_bool (entry, "granted", TRUE);
+
+      /* net.http and net.ws carry the hosts they asked for. The mariner needs
+       * to read WHERE a plugin talks to, not only that it talks. */
+      const LkJson *hosts = lk_json_member (entry, "hosts");
+      if (lk_json_length (hosts) > 0)
+        {
+          g_autoptr (GString) joined = g_string_new (NULL);
+
+          for (guint h = 0; h < lk_json_length (hosts); h++)
+            {
+              if (joined->len > 0)
+                g_string_append (joined, ", ");
+              g_string_append (joined, lk_json_text (lk_json_at (hosts, h)));
+            }
+          cap->hosts = g_string_free (g_steal_pointer (&joined), FALSE);
+        }
+
+      g_ptr_array_add (state->caps, cap);
+    }
+
+  const LkJson *types = lk_json_member (node, "file_types");
+  for (guint i = 0; i < lk_json_length (types); i++)
+    {
+      const char *type = lk_json_string (lk_json_at (types, i));
+
+      if (type != NULL)
+        g_ptr_array_add (state->types, (gpointer) type);
+    }
+}
+
 static LkPluginState *
 lk_plugin_state_read (const LkJson *node)
 {
@@ -423,12 +493,15 @@ lk_plugin_state_read (const LkJson *node)
   state->fields = g_ptr_array_new_with_free_func (g_free);
   state->lists = g_ptr_array_new_with_free_func (lk_plugin_list_free);
   state->groups = g_ptr_array_new_with_free_func (lk_plugin_group_free);
+  state->caps = g_ptr_array_new_with_free_func (lk_plugin_capability_free);
+  state->types = g_ptr_array_new ();
   state->values = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
   state->rows = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                        (GDestroyNotify) g_ptr_array_unref);
 
   lk_plugin_state_read_fields (state, node);
   lk_plugin_state_read_lists (state, node);
+  lk_plugin_state_read_caps (state, node);
   return state;
 }
 
@@ -1173,4 +1246,92 @@ lk_plugins_status_line (LkPlugins *self, const char *plugin_id, const char **out
       return g_strdup ("Stopped");
     }
   return lk_plugins_line (state->status_tree, "running", out_css_class);
+}
+
+GPtrArray *
+lk_plugins_capabilities (LkPlugins *self, const char *plugin_id)
+{
+  LkPluginState *state = lk_plugins_find (self, plugin_id);
+
+  return state == NULL ? NULL : state->caps;
+}
+
+gboolean
+lk_plugins_set_granted (LkPlugins  *self,
+                        const char *plugin_id,
+                        const char *cap,
+                        gboolean    granted)
+{
+  g_return_val_if_fail (self != NULL, FALSE);
+
+  if (!lk_chart_controller_plugin_grant_set (self->controller, plugin_id, cap, granted))
+    return FALSE;
+
+  /* The core persists the grant beside the plugin's wasm and reads it back at
+   * every load, so nothing is saved here. The cached entry is moved so the
+   * switch and the model agree without a whole reload. */
+  GPtrArray *caps = lk_plugins_capabilities (self, plugin_id);
+  for (guint i = 0; caps != NULL && i < caps->len; i++)
+    {
+      LkPluginCapability *entry = g_ptr_array_index (caps, i);
+
+      if (g_strcmp0 (entry->cap, cap) == 0)
+        entry->granted = granted;
+    }
+  return TRUE;
+}
+
+gboolean
+lk_plugins_is_installed (LkPlugins *self, const char *plugin_id)
+{
+  LkPluginState *state = lk_plugins_find (self, plugin_id);
+
+  return state != NULL && g_strcmp0 (state->origin, "installed") == 0;
+}
+
+char *
+lk_plugins_file_types (LkPlugins *self)
+{
+  g_return_val_if_fail (self != NULL, NULL);
+
+  g_autoptr (GString) joined = g_string_new (NULL);
+
+  for (guint i = 0; i < self->plugins->len; i++)
+    {
+      LkPluginState *state = g_ptr_array_index (self->plugins, i);
+
+      /* A plugin that is not running claims nothing: offering its types would
+       * promise a handover that cannot happen. */
+      if (!state->live)
+        continue;
+
+      for (guint t = 0; t < state->types->len; t++)
+        {
+          if (joined->len > 0)
+            g_string_append (joined, ", ");
+          g_string_append (joined, g_ptr_array_index (state->types, t));
+        }
+    }
+
+  if (joined->len == 0)
+    return NULL;
+  return g_string_free (g_steal_pointer (&joined), FALSE);
+}
+
+char *
+lk_plugins_file_types_for (LkPlugins *self, const char *plugin_id)
+{
+  LkPluginState *state = lk_plugins_find (self, plugin_id);
+
+  if (state == NULL || state->types->len == 0)
+    return NULL;
+
+  g_autoptr (GString) joined = g_string_new (NULL);
+  for (guint t = 0; t < state->types->len; t++)
+    {
+      if (joined->len > 0)
+        g_string_append (joined, ", ");
+      g_string_append (joined, g_ptr_array_index (state->types, t));
+    }
+  return g_string_free (g_steal_pointer (&joined), FALSE);
 }

@@ -1,10 +1,15 @@
 #include "lk-window.h"
 
+#include "lk-alerts.h"
 #include "lk-chart-view.h"
 #include "lk-hud.h"
+#include "lk-overlay-pick.h"
+#include "lk-plugin-install.h"
 #include "lk-pick-report.h"
+#include "lk-plugins.h"
 #include "lk-search.h"
 #include "lk-settings-window.h"
+#include "lk-table-window.h"
 
 #include <math.h>
 
@@ -99,6 +104,61 @@ lk_present_open_chart_dialog (GtkWindow *parent, LkAppModel *model)
   g_return_if_fail (LK_IS_APP_MODEL (model));
 
   lk_open_chart_choice (parent, model);
+}
+
+/* ---- one thing the mariner opened --------------------------------------- */
+
+void
+lk_window_open_path (GtkWindow *parent, LkAppModel *model, const char *path)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (model));
+
+  if (path == NULL)
+    return;
+
+  /* A plugin package goes to consent and never to the chart engine. The
+   * extension is the package's own, so this is routing, not sniffing. */
+  if (lk_plugin_package_path (path))
+    {
+      lk_plugin_install_begin (parent, model, path, NULL, NULL);
+      return;
+    }
+
+  /* A folder is a chart library. Anything else goes to lk_app_model_open_chart,
+   * which offers it to the plugins first and opens it as a chart when none
+   * claims it. */
+  if (g_file_test (path, G_FILE_TEST_IS_DIR))
+    lk_app_model_open_chart_directory (model, path);
+  else
+    lk_app_model_open_chart (model, path);
+}
+
+/* ---- a file dropped on the window --------------------------------------- */
+
+/* Every way in routes the same way, so a dropped weather file reaches the
+ * plugin that reads it and a dropped folder of cells opens as a chart. */
+static gboolean
+lk_window_dropped (GtkDropTarget *target, const GValue *value, double x, double y,
+                   gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  if (!G_VALUE_HOLDS (value, G_TYPE_FILE))
+    return FALSE;
+
+  GFile *file = g_value_get_object (value);
+  g_autofree char *path = file == NULL ? NULL : g_file_get_path (file);
+
+  if (path == NULL)
+    {
+      lk_app_model_set_open_error (self->model,
+                                   "That isn't a local file. The engine reads charts off "
+                                   "the disk and needs a real path.");
+      return FALSE;
+    }
+
+  lk_window_open_path (GTK_WINDOW (self->window), self->model, path);
+  return TRUE;
 }
 
 /* ---- the raster chart pickers ------------------------------------------- */
@@ -218,6 +278,54 @@ lk_action_open (GSimpleAction *action, GVariant *parameter, gpointer user_data)
   lk_present_open_chart_dialog (GTK_WINDOW (self->window), self->model);
 }
 
+/* One FILE, rather than a folder of cells: a single baked chart, a data file a
+ * plugin reads, or a plugin package. GtkFileDialog takes files or folders and
+ * never both, so the two live on separate items, as the two raster pickers do.
+ *
+ * No content-type filter. Naming types would grey out the mariner's own charts
+ * where the system does not know the extension, and the core decides what a
+ * file is anyway. */
+static void
+lk_open_file_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GFile) file = gtk_file_dialog_open_finish (GTK_FILE_DIALOG (source), result, &error);
+
+  if (file == NULL)
+    return; /* cancelled, or an error GTK already surfaced */
+
+  g_autofree char *path = g_file_get_path (file);
+  if (path != NULL)
+    lk_window_open_path (GTK_WINDOW (self->window), self->model, path);
+  else
+    lk_app_model_set_open_error (self->model, "That isn't a local file.");
+}
+
+static void
+lk_action_open_file (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  GtkFileDialog *dialog = gtk_file_dialog_new ();
+
+  /* What the loaded plugins read goes in the title, so the mariner learns that
+   * a weather file is openable here at all. GtkFileDialog carries no message
+   * field, and the registry is read on demand because which plugins are live
+   * changes with every chart open and every install. */
+  g_autoptr (LkPlugins) plugins = lk_plugins_new (lk_app_model_get_controller (self->model));
+  g_autofree char *types = lk_plugins_file_types (plugins);
+  g_autofree char *title =
+      types == NULL ? g_strdup ("Open a Chart or a Plugin")
+                    : g_strdup_printf ("Open a Chart, a Plugin, or a Data File (%s)", types);
+
+  gtk_file_dialog_set_title (dialog, title);
+  gtk_file_dialog_set_modal (dialog, TRUE);
+  gtk_file_dialog_set_accept_label (dialog, "Open");
+
+  gtk_file_dialog_open (dialog, GTK_WINDOW (self->window), NULL, lk_open_file_chosen, self);
+  g_object_unref (dialog);
+}
+
 static void
 lk_action_open_recent (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
@@ -242,6 +350,10 @@ static void
 lk_action_toggle_soundings (GSimpleAction *a, GVariant *p, gpointer d) { lk_app_model_toggle_soundings (((LkWindow *) d)->model); }
 static void
 lk_action_toggle_other (GSimpleAction *a, GVariant *p, gpointer d) { lk_app_model_toggle_other_category (((LkWindow *) d)->model); }
+/* The compass bubble's own click goes straight to the model; this is the
+ * keyboard's way in to the same cycle. */
+static void
+lk_action_follow (GSimpleAction *a, GVariant *p, gpointer d) { lk_app_model_cycle_orientation (((LkWindow *) d)->model); }
 
 /* ---- raster charts ------------------------------------------------------ */
 
@@ -311,22 +423,23 @@ lk_action_search (GSimpleAction *action, GVariant *parameter, gpointer user_data
   gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), open);
 }
 
+/* Escape clears whatever the last click put on the chart, whichever it was. */
 static void
 lk_action_close_pick (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   LkWindow *self = user_data;
 
   lk_app_model_clear_pick (self->model);
+  lk_app_model_pin_overlay (self->model, NULL);
 }
 
 static void
-lk_action_settings (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+lk_window_present_settings (LkWindow *self, const char *section)
 {
-  LkWindow *self = user_data;
-
   if (self->settings_window == NULL)
     {
-      self->settings_window = lk_settings_window_new (self->model, GTK_WINDOW (self->window));
+      self->settings_window =
+          lk_settings_window_new (self->model, GTK_WINDOW (self->window), section);
       g_object_add_weak_pointer (G_OBJECT (self->settings_window),
                                  (gpointer *) &self->settings_window);
     }
@@ -334,8 +447,70 @@ lk_action_settings (GSimpleAction *action, GVariant *parameter, gpointer user_da
   gtk_window_present (GTK_WINDOW (self->settings_window));
 }
 
+/* The panel on its first section. The gear bubble, Ctrl+, and the screenshot
+ * protocol all take this one, and it carries no parameter so all three can
+ * activate it bare. */
+static void
+lk_action_settings (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  lk_window_present_settings (user_data, NULL);
+}
+
+/* The panel on one named section. A FIX-IT NAMES THE SECTION THAT FIXES IT:
+ * the position readout's "Configure GPS" asks for Connections, because that is
+ * where a position source is added. */
+static void
+lk_action_settings_at (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  lk_window_present_settings (user_data, g_variant_get_string (parameter, NULL));
+}
+
+/* ---- the commands bubble ------------------------------------------------ */
+
+/* One table a plugin declared, by "<plugin>/<key>". The declarations are read
+ * when the menu is built, so a plugin installed a moment ago is in it. */
+static void
+lk_action_open_table (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  const char *id = g_variant_get_string (parameter, NULL);
+  g_autoptr (GPtrArray) specs = lk_table_specs (self->model);
+
+  for (guint i = 0; i < specs->len; i++)
+    {
+      const LkTableSpec *spec = g_ptr_array_index (specs, i);
+      g_autofree char *key = g_strdup_printf ("%s/%s", spec->plugin, spec->key);
+
+      if (g_strcmp0 (key, id) == 0)
+        {
+          lk_table_window_present (GTK_WINDOW (self->window), self->model, spec);
+          return;
+        }
+    }
+}
+
+static void
+lk_action_install_plugin (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_plugin_install_choose (GTK_WINDOW (self->window), self->model, NULL, NULL);
+}
+
+static void
+lk_action_full_screen (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  if (gtk_window_is_fullscreen (GTK_WINDOW (self->window)))
+    gtk_window_unfullscreen (GTK_WINDOW (self->window));
+  else
+    gtk_window_fullscreen (GTK_WINDOW (self->window));
+}
+
 static const GActionEntry lk_window_actions[] = {
   { "open",             lk_action_open },
+  { "open-file",        lk_action_open_file },
   { "open-recent",      lk_action_open_recent, "s" },
   { "zoom-in",          lk_action_zoom_in },
   { "zoom-out",         lk_action_zoom_out },
@@ -345,9 +520,11 @@ static const GActionEntry lk_window_actions[] = {
   { "toggle-text",      lk_action_toggle_text },
   { "toggle-soundings", lk_action_toggle_soundings },
   { "toggle-other",     lk_action_toggle_other },
+  { "follow",           lk_action_follow },
   { "search",           lk_action_search },
   { "close-pick",       lk_action_close_pick },
   { "settings",         lk_action_settings },
+  { "settings-at",      lk_action_settings_at, "s" },
   { "set-scheme",       lk_action_set_scheme, "i", "0" },
   { "raster-cycle",     lk_action_raster_cycle },
   /* Stateful, so the pill's list marks the set that is drawn. The state is the
@@ -356,7 +533,163 @@ static const GActionEntry lk_window_actions[] = {
   { "raster-add",       lk_action_raster_add },
   { "raster-add-folder", lk_action_raster_add_folder },
   { "toggle-chart",     lk_action_toggle_chart },
+  { "open-table",       lk_action_open_table, "s" },
+  { "install-plugin",   lk_action_install_plugin },
+  { "full-screen",      lk_action_full_screen },
 };
+
+/* ---- the commands menu -------------------------------------------------- */
+
+/* The Mac takes its menus from the system bar, which stands outside the window.
+ * Linux has no such bar, and a menu bar inside the window would take a strip of
+ * water on every screen of an app whose whole point is the chart. So the
+ * commands hang off a bubble in the same chrome the zoom and the compass live
+ * in, which is the shape the WinUI shell wears and the one the phone shells can
+ * wear too.
+ *
+ * The items are the Mac's, in the Mac's order, saying the Mac's words
+ * (macos/LookoutMarine/Commands.swift).
+ *
+ * The list is BUILT FRESH on every press, because most of it names things that
+ * come and go: the charts opened lately, the raster sets covering THIS view,
+ * and the tables the plugins declare. */
+static GMenuModel *
+lk_window_build_chart_menu (LkWindow *self)
+{
+  GMenu *chart = g_menu_new ();
+  GMenu *scheme = g_menu_new ();
+
+  g_menu_append (scheme, "Day", "win.set-scheme(0)");
+  g_menu_append (scheme, "Dusk", "win.set-scheme(1)");
+  g_menu_append (scheme, "Night", "win.set-scheme(2)");
+  g_menu_append (scheme, "Cycle", "win.cycle-scheme");
+  g_menu_append_submenu (chart, "Colour Scheme", G_MENU_MODEL (scheme));
+
+  /* The raster sets covering THIS view, the drawn one marked, then the way back
+   * to no picture at all. It is the same list the pill opens. */
+  GMenu *raster = g_menu_new ();
+  GPtrArray *sets = lk_app_model_get_raster_sets (self->model);
+  for (guint i = 0; sets != NULL && i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (!set->in_view)
+        continue;
+
+      g_autofree char *action = g_strdup_printf ("win.raster-select(%d)", set->id);
+      g_menu_append (raster, set->name, action);
+    }
+  g_menu_append (raster, "None", "win.raster-select(-1)");
+
+  GMenu *raster_section = g_menu_new ();
+  g_menu_append_submenu (raster_section, "Raster Chart", G_MENU_MODEL (raster));
+  g_menu_append (raster_section, "Next Raster Chart", "win.raster-cycle");
+  g_menu_append (raster_section, "Add Raster Charts…", "win.raster-add");
+  g_menu_append (raster_section, "Add a Folder of Raster Charts…", "win.raster-add-folder");
+  g_menu_append (raster_section,
+                 lk_app_model_get_chart_hidden (self->model) ? "Show ENC Over Raster"
+                                                             : "Hide ENC Over Raster",
+                 "win.toggle-chart");
+  g_menu_append_section (chart, NULL, G_MENU_MODEL (raster_section));
+
+  GMenu *view = g_menu_new ();
+  g_menu_append (view, "Zoom In", "win.zoom-in");
+  g_menu_append (view, "Zoom Out", "win.zoom-out");
+  g_menu_append (view, "Zoom to Fit", "win.zoom-fit");
+  g_menu_append (view, "Rotate to North-Up", "win.north-up");
+  g_menu_append_section (chart, NULL, G_MENU_MODEL (view));
+
+  GMenu *toggles = g_menu_new ();
+  g_menu_append (toggles, "Toggle Text", "win.toggle-text");
+  g_menu_append (toggles, "Toggle Soundings", "win.toggle-soundings");
+  g_menu_append (toggles, "Toggle Other Category", "win.toggle-other");
+  g_menu_append_section (chart, NULL, G_MENU_MODEL (toggles));
+
+  g_object_unref (scheme);
+  g_object_unref (raster);
+  g_object_unref (raster_section);
+  g_object_unref (view);
+  g_object_unref (toggles);
+  return G_MENU_MODEL (chart);
+}
+
+/* One item per table a plugin declared. Every declaration lands here whatever
+ * its own `menu` field says, until there is a second place to put one. */
+static GMenuModel *
+lk_window_build_vessels_menu (LkWindow *self)
+{
+  GMenu *vessels = g_menu_new ();
+  g_autoptr (GPtrArray) specs = lk_table_specs (self->model);
+
+  for (guint i = 0; i < specs->len; i++)
+    {
+      const LkTableSpec *spec = g_ptr_array_index (specs, i);
+      g_autofree char *title = g_strdup_printf ("%s…", spec->title);
+      g_autofree char *id = g_strdup_printf ("%s/%s", spec->plugin, spec->key);
+      g_autoptr (GVariant) target = g_variant_new_string (id);
+      g_autoptr (GMenuItem) item = g_menu_item_new (title, NULL);
+
+      g_menu_item_set_action_and_target_value (item, "win.open-table",
+                                               g_steal_pointer (&target));
+      g_menu_append_item (vessels, item);
+    }
+
+  if (specs->len == 0)
+    {
+      /* A disabled item still says what the menu is for, which an empty menu
+       * does not. There is no action, so it never fires. */
+      g_menu_append (vessels, "No Vessel Tables", NULL);
+    }
+
+  return G_MENU_MODEL (vessels);
+}
+
+static void
+lk_window_fill_menu (GtkMenuButton *button, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  GMenu *menu = g_menu_new ();
+  g_autoptr (GMenuModel) chart = lk_window_build_chart_menu (self);
+  g_autoptr (GMenuModel) vessels = lk_window_build_vessels_menu (self);
+
+  g_menu_append_submenu (menu, "Chart", chart);
+  g_menu_append_submenu (menu, "Vessels", vessels);
+
+  GMenu *files = g_menu_new ();
+  g_menu_append (files, "Open Charts…", "win.open");
+  g_menu_append (files, "Open a File…", "win.open-file");
+
+  GMenu *recents = g_menu_new ();
+  const char *const *paths = lk_app_model_get_recents (self->model);
+  for (gsize i = 0; paths != NULL && paths[i] != NULL; i++)
+    {
+      g_autofree char *name = g_path_get_basename (paths[i]);
+      g_autoptr (GVariant) target = g_variant_new_string (paths[i]);
+      g_autoptr (GMenuItem) item = g_menu_item_new (name, NULL);
+
+      g_menu_item_set_action_and_target_value (item, "win.open-recent",
+                                               g_steal_pointer (&target));
+      g_menu_append_item (recents, item);
+    }
+  g_menu_append_submenu (files, "Open Recent", G_MENU_MODEL (recents));
+  g_menu_append (files, "Install Plugin…", "win.install-plugin");
+  g_menu_append_section (menu, NULL, G_MENU_MODEL (files));
+
+  GMenu *app = g_menu_new ();
+  g_menu_append (app,
+                 gtk_window_is_fullscreen (GTK_WINDOW (self->window)) ? "Leave Full Screen"
+                                                                     : "Full Screen",
+                 "win.full-screen");
+  g_menu_append (app, "Settings…", "win.settings");
+  g_menu_append_section (menu, NULL, G_MENU_MODEL (app));
+
+  gtk_menu_button_set_menu_model (button, G_MENU_MODEL (menu));
+
+  g_object_unref (recents);
+  g_object_unref (files);
+  g_object_unref (app);
+  g_object_unref (menu);
+}
 
 /* ---- model-driven chrome ------------------------------------------------ */
 
@@ -645,14 +978,25 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
    * right, zoom at the bottom right, the distance bar at the bottom left, the
    * readouts at the bottom centre, the build indicator at the top centre. */
 
-  /* Top left: the search bubble reveals the coordinate go-to. */
-  GtkWidget *search = lk_bubble_new ("system-search-symbolic", "Go to coordinate", "win.search");
-  gtk_widget_set_halign (search, GTK_ALIGN_START);
-  gtk_widget_set_valign (search, GTK_ALIGN_START);
-  gtk_widget_set_margin_start (search, LK_CHROME_MARGIN);
-  gtk_widget_set_margin_top (search, LK_CHROME_MARGIN);
-  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), search);
+  /* Top left: the search bubble reveals the coordinate go-to, and the commands
+   * hang off the bubble beside it. */
+  GtkWidget *top_left = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, LK_CHROME_GAP);
+  gtk_box_append (GTK_BOX (top_left),
+                  lk_bubble_new ("system-search-symbolic", "Go to coordinate", "win.search"));
 
+  GtkWidget *commands = lk_bubble_menu_new ("open-menu-symbolic", "Commands", NULL);
+  gtk_menu_button_set_direction (GTK_MENU_BUTTON (commands), GTK_ARROW_DOWN);
+  gtk_menu_button_set_create_popup_func (GTK_MENU_BUTTON (commands), lk_window_fill_menu,
+                                         self, NULL);
+  gtk_box_append (GTK_BOX (top_left), commands);
+
+  gtk_widget_set_halign (top_left, GTK_ALIGN_START);
+  gtk_widget_set_valign (top_left, GTK_ALIGN_START);
+  gtk_widget_set_margin_start (top_left, LK_CHROME_MARGIN);
+  gtk_widget_set_margin_top (top_left, LK_CHROME_MARGIN);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), top_left);
+
+  /* Top right: the compass, which is also the follow lock. */
   GtkWidget *north = lk_north_bubble_new (model);
   gtk_widget_set_margin_end (north, LK_CHROME_MARGIN);
   gtk_widget_set_margin_top (north, LK_CHROME_MARGIN);
@@ -678,6 +1022,14 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_set_margin_top (building, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), building);
 
+  /* Top centre, over the build indicator: what the plugins are alarming about.
+   * It is added after the pill, so an alarm is never underneath it. */
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), lk_alerts_new (model));
+
+  /* The bubble a click on a plugin's symbol pins. It is placed by margins over
+   * the chart, like the pick mark, and it follows its object. */
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), lk_overlay_bubble_new (model));
+
   self->capsule = lk_hud_capsule_new (model);
   gtk_widget_set_margin_bottom (self->capsule, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->capsule);
@@ -688,6 +1040,12 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   gtk_box_append (GTK_BOX (root), self->overlay);
   gtk_window_set_child (GTK_WINDOW (self->window), root);
+
+  /* A chart, a data file a plugin reads, or a plugin package: dropping any of
+   * them on the window does what opening it does. */
+  GtkDropTarget *drop = gtk_drop_target_new (G_TYPE_FILE, GDK_ACTION_COPY);
+  g_signal_connect (drop, "drop", G_CALLBACK (lk_window_dropped), self);
+  gtk_widget_add_controller (self->overlay, GTK_EVENT_CONTROLLER (drop));
 
   g_signal_connect (model, "notify", G_CALLBACK (lk_window_notify), self);
   g_signal_connect (model, "pick-results", G_CALLBACK (lk_window_pick_changed), self);

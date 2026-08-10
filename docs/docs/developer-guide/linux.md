@@ -22,19 +22,60 @@ The layout is the layout of every host:
 
 | Position | Content |
 |---|---|
-| Top left | The search control. It reveals the coordinate go-to. |
-| Top right | The north control. The mark turns with the view. A click sets the chart north-up. |
+| Top left | The search control, and the commands control beside it. |
+| Top right | The compass, which is also the follow lock. |
 | Bottom right | Fit, zoom in, zoom out, the display menu, and the settings control. |
 | Bottom left | The distance bar. |
 | Bottom center | The readouts capsule. |
-| Top center | The build indicator, while the chart fills in. |
+| Top center | The build indicator, and the plugin alerts above it. |
+
+The commands control holds the items that the macOS menu bar holds, in the same
+order and in the same words. Linux has no menu bar outside the window, and a menu
+bar inside it takes a strip of water on every screen. The list is built at each
+press, because most of it names things that come and go: the charts opened
+lately, the raster sets that cover this view, and the tables the plugins declare.
 
 The readouts capsule shows the navigational purpose band, the scale, the zoom, and
-the position. The position is the position of the pointer, or the position of the
-center when the pointer is outside the chart. An amber badge appears beside them
-when the view is finer than the data permits. The scale is also a control: a click
-opens the scale entry, where you type a scale or select a band. A narrow window
-drops the band and takes a smaller type, which is the rule the phone shells use.
+the position of own ship. An amber badge appears beside them when the view is
+finer than the data permits. The scale is also a control: a click opens the scale
+entry, where you type a scale or select a band. A narrow window drops the band and
+takes a smaller type, which is the rule the phone shells use.
+
+## Reading the position of own ship
+
+The position readout carries own ship and nothing else. It does not follow the
+center of the view, and it does not change meaning when the mariner pans away.
+A pan is when a mistaken value is dangerous.
+
+A pill beside the numbers says how much to believe them, and it differs by more
+than its words, so it reads at a glance in bad light:
+
+| State | The pill | The numbers |
+|---|---|---|
+| A fix inside its freshness window | **GPS**, filled | The reported position |
+| A source that stopped answering | **NO GPS**, outlined in red | None |
+| No source of position at all | **Configure GPS**, outlined | None |
+
+The third state carries the fix. A click opens the mariner settings at
+**Connections**, which is where a position source is added.
+
+The coordinates of a PLACE come from the chart menu instead. A secondary click
+on the water opens it, and every item acts on the point under the press.
+
+## Following own ship
+
+The compass is the follow lock. A click always locks the chart to own ship, and
+once locked it cycles north up and course up. The letter names what is up: N, or
+C once the chart turns with the ship. Under N the mark turns with the view and
+points at north; under C the course is up by definition, so the mark stands still.
+
+The bubble carries a ring while follow waits for a fix, and a fill once it has
+one. The two states must be distinct, because one of them means the instrument
+feed is the thing to look at.
+
+The core owns both parts. It drops follow on a pan and course up on a rotation by
+hand, so the shell reads the state off the engine with the other readouts and
+never remembers it from a click.
 
 ## How the pick report is composed
 
@@ -62,9 +103,86 @@ GLib has no JSON reader, and json-glib is not a dependency of GTK. Therefore
 `src/lk-json.c` reads the payload. It is small, and it adds no prerequisite for a
 packager.
 
+## Handling what the plugins put on the chart
+
+A plugin draws vessels and gives each symbol a payload. A click on a symbol pins
+a bubble to it and does not open the chart pick report: the mariner clicked the
+target, not the water under it. The bubble follows the object, refreshes its
+values, and closes itself when the object ages out or its plugin stops.
+
+A plugin raises alerts, and severity is the whole contract. An alarm is audible
+and repeats every ten seconds until somebody acknowledges it. A warning and a
+notice are shown and never sounded. A marine alarm does not time out, and looking
+at it is not acknowledging it. Acknowledging silences one alert and no other: a
+mariner who has seen the vessel crossing ahead has not seen the one astern.
+
+The strip stands at the top center and shows two alerts, then a count. It must
+not cover the water the alarm is about.
+
+The tone is synthesized at run time rather than shipped as an asset, so no
+packager can drop it. GTK plays it through a media stream; where the build has no
+media backend, the window's bell stands in and the log says so once.
+
+A plugin can also declare a TABLE, and the shell puts one window behind
+**Commands ▸ Vessels**. The columns are typed, which is what makes sorting
+honest: distance is metres, speed metres per second, bearing degrees true and
+duration seconds. The plugin sends SI and the shell prints nautical miles, knots
+and degrees. The core sorts within a band and never across one, so an alarmed
+vessel keeps the top line whatever column the mariner sorts by.
+
+## Installing a plugin
+
+A `.lkplug` is a package: a manifest and one wasm module. **Settings ▸ Plugins ▸
+Install Plugin…** takes one, and dropping one on the chart asks the same
+question. The core reads the package without installing it, and the consent sheet
+lists what it will be able to do in the core's own sentences. Nothing touches the
+disk until Install, and Cancel deletes nothing.
+
+Reinstalling an id calls out the delta: what the new package asks for that the
+running copy did not, what it no longer asks for, and whether it is a downgrade.
+The core refuses a package that claims a bundled plugin's id, and the sheet shows
+that reason instead of offering Install.
+
+**Settings ▸ Plugins** manages what is loaded. Each plugin is one row with its
+live status, and the disclosure holds the rest: where the copy came from, a
+switch per capability, and Uninstall for what an install wrote. A grant can never
+exceed the manifest, so a switch only takes something away. The broker checks
+every mediated call, so a revoked capability answers the plugin -1 and the plugin
+keeps running.
+
+## Opening a file a plugin reads
+
+A manifest claims file types, and a weather file the mariner opens belongs to the
+plugin that reads them. Every way in routes the same way: **Ctrl+Shift+O**, a drop
+on the window, and the recent list all offer the file to the plugins before the
+shell treats it as a chart. The core answers which, so the app never matches an
+extension itself. A chart always answers 0, and so does a build with no plugin
+layer, which is why one code path serves both.
+
+## Marking a place
+
+The mariner's own mark is a rock somebody reported, a crab pot, or an anchorage
+to come back to. A secondary click on the water opens the chart menu, and **Drop
+Mark** places it. The drop never waits for typing: the core places the mark and
+names it in one call, because a mariner drops a mark one-handed on a moving boat.
+Over an existing mark the menu offers a rename field and **Remove Mark** in place
+of Drop.
+
+The core owns the marks. It draws them, writes them under the per-user directory
+and reads them back at every open, so they survive a restart and a change of
+chart library. This shell stores nothing.
+
+## Using the mariner panel
+
 The full mariner panel is a separate window. Press **Ctrl+,** to open it. The
 panel is not modal, and the chart stays usable while the panel is open. The panel
 applies each edit after a short delay, and it keeps each value.
+
+The sections stand in a sidebar, as they do on macOS: Display, Depths, Text and
+Charts, then Vessels, Alarms and Connections while a plugin puts something in
+them, then Plugins and Advanced. The list is the navigation, so it carries no
+collapse control. The line under it states the one promise the whole window
+makes: each edit applies at once, and it is kept for the next launch.
 
 ![The mariner settings panel above the chart](../img/linux-settings.webp)
 

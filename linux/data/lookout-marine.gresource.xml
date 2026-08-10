@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The icons the app draws itself.
+
+  The stock icon theme carries nothing marine: no boat, no water, no chart and
+  no bell. These are compiled INTO the binary rather than installed into the
+  hicolor theme, so they resolve the same when the app runs from the build tree
+  and when a package installs it, and no icon theme can shadow them.
+
+  main.c adds this prefix to the icon theme's search path, which is what makes
+  the names below reachable as ordinary icon names.
+-->
+<gresources>
+  <gresource prefix="/org/beetlebug/LookoutMarine/icons/scalable/actions">
+    <file preprocess="xml-stripblanks">lk-display-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-depths-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-charts-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-vessels-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-alarms-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-advanced-symbolic.svg</file>
+  </gresource>
+</gresources>

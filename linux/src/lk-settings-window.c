@@ -1,6 +1,7 @@
 #include "lk-settings-window.h"
 
 #include "lk-mariner.h"
+#include "lk-plugin-install.h"
 #include "lk-plugins.h"
 #include "lk-window.h"
 
@@ -13,6 +14,12 @@
 typedef struct {
   LkAppModel *model;
   LkMariner  *mariner;
+
+  /* The sections, as a sidebar beside the pane they choose. The list IS the
+   * navigation, as it is on the Mac: a row per section, and the pane it names
+   * in the stack. */
+  GtkWidget *sidebar;
+  GtkWidget *stack;
 
   /* The raster chart list, rebuilt whenever the installed set changes. The
    * rebuild runs off an idle: a switch here changes the model, and rebuilding
@@ -136,8 +143,13 @@ lk_row (GtkWidget *section, const char *title, GtkWidget *control)
   return row;
 }
 
+/* One section: a row in the sidebar, and the pane it names in the stack.
+ *
+ * `id` is the CORE's section name (src/plugin/host.zig, `Tab`), so a plugin
+ * and this window mean the same thing by "alarms", and a fix-it elsewhere can
+ * ask for a section by the name the core uses. */
 static GtkWidget *
-lk_page_new (GtkWidget *notebook, const char *title)
+lk_page_new (LkSettings *settings, const char *id, const char *title, const char *icon_name)
 {
   GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 10);
   GtkWidget *scroller = gtk_scrolled_window_new ();
@@ -150,8 +162,60 @@ lk_page_new (GtkWidget *notebook, const char *title)
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), page);
-  gtk_notebook_append_page (GTK_NOTEBOOK (notebook), scroller, gtk_label_new (title));
+  gtk_stack_add_named (GTK_STACK (settings->stack), scroller, id);
+
+  GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
+  GtkWidget *label = gtk_label_new (title);
+  GtkWidget *row = gtk_list_box_row_new ();
+
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_box_append (GTK_BOX (line), icon);
+  gtk_box_append (GTK_BOX (line), label);
+  gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), line);
+  g_object_set_data_full (G_OBJECT (row), "lk-section", g_strdup (id), g_free);
+  gtk_list_box_append (GTK_LIST_BOX (settings->sidebar), row);
+
   return page;
+}
+
+/* The list IS the navigation, so a row always names a pane. */
+static void
+lk_settings_section_selected (GtkListBox *box, GtkListBoxRow *row, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *id = row == NULL ? NULL : g_object_get_data (G_OBJECT (row), "lk-section");
+
+  if (id != NULL)
+    gtk_stack_set_visible_child_name (GTK_STACK (settings->stack), id);
+}
+
+/* Open on one section by name. A name no section carries is ignored, because a
+ * section can be absent: a plugin that never came up takes its section with
+ * it, and a stale request must not leave the window on nothing. */
+static void
+lk_settings_select_section (LkSettings *settings, const char *id)
+{
+  GtkListBoxRow *first = gtk_list_box_get_row_at_index (GTK_LIST_BOX (settings->sidebar), 0);
+  GtkListBoxRow *wanted = NULL;
+
+  for (int i = 0; id != NULL && id[0] != '\0'; i++)
+    {
+      GtkListBoxRow *row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (settings->sidebar), i);
+
+      if (row == NULL)
+        break;
+      if (g_strcmp0 (g_object_get_data (G_OBJECT (row), "lk-section"), id) == 0)
+        {
+          wanted = row;
+          break;
+        }
+    }
+
+  if (wanted == NULL)
+    wanted = first;
+  if (wanted != NULL)
+    gtk_list_box_select_row (GTK_LIST_BOX (settings->sidebar), wanted);
 }
 
 /* ---- generic bindings --------------------------------------------------- */
@@ -497,13 +561,14 @@ lk_band_preview_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, 
 /* ---- pages -------------------------------------------------------------- */
 
 static void
-lk_build_display_page (GtkWidget *notebook, LkSettings *settings)
+lk_build_display_page (LkSettings *settings)
 {
   static const char *schemes[] = { "Day", "Dusk", "Night", NULL };
   static const char *categories[] = { "Base", "Standard", "Other", NULL };
   static const char *soundings[] = { "Follow category", "Always on", "Always off", NULL };
 
-  GtkWidget *page = lk_page_new (notebook, "Display");
+  GtkWidget *page = lk_page_new (settings, "display", "Display",
+                                 "lk-display-symbolic");
   tile57_mariner *m = lk_mariner_raw (settings->mariner);
 
   GtkWidget *scheme_section = lk_section (page, NULL);
@@ -523,12 +588,13 @@ lk_build_display_page (GtkWidget *notebook, LkSettings *settings)
 }
 
 static void
-lk_build_depths_page (GtkWidget *notebook, LkSettings *settings)
+lk_build_depths_page (LkSettings *settings)
 {
   static const char *units[] = { "Meters", "Feet", NULL };
   static const char *shading[] = { "Two shades", "Four shades", NULL };
 
-  GtkWidget *page = lk_page_new (notebook, "Depths");
+  GtkWidget *page = lk_page_new (settings, "depths", "Depths",
+                                 "lk-depths-symbolic");
   tile57_mariner *m = lk_mariner_raw (settings->mariner);
 
   GtkWidget *model_section = lk_section (page, NULL);
@@ -567,11 +633,12 @@ lk_build_depths_page (GtkWidget *notebook, LkSettings *settings)
 }
 
 static void
-lk_build_text_page (GtkWidget *notebook, LkSettings *settings)
+lk_build_text_page (LkSettings *settings)
 {
   static const char *boundaries[] = { "Symbolized", "Plain", NULL };
 
-  GtkWidget *page = lk_page_new (notebook, "Text");
+  GtkWidget *page = lk_page_new (settings, "text", "Text",
+                                 "format-text-rich-symbolic");
   tile57_mariner *m = lk_mariner_raw (settings->mariner);
 
   GtkWidget *text = lk_section (page, "Text");
@@ -810,9 +877,10 @@ lk_settings_raster_changed (LkAppModel *model, gpointer user_data)
 }
 
 static void
-lk_build_charts_page (GtkWidget *notebook, LkSettings *settings)
+lk_build_charts_page (LkSettings *settings)
 {
-  GtkWidget *page = lk_page_new (notebook, "Charts");
+  GtkWidget *page = lk_page_new (settings, "charts", "Charts",
+                                 "lk-charts-symbolic");
 
   GtkWidget *open = lk_section (page, "Open");
   const char *path = lk_app_model_get_chart_path (settings->model);
@@ -902,9 +970,10 @@ lk_date_changed (GtkEditable *editable, gpointer user_data)
 }
 
 static void
-lk_build_advanced_page (GtkWidget *notebook, LkSettings *settings)
+lk_build_advanced_page (LkSettings *settings)
 {
-  GtkWidget *page = lk_page_new (notebook, "Advanced");
+  GtkWidget *page = lk_page_new (settings, "advanced", "Advanced",
+                                 "lk-advanced-symbolic");
   tile57_mariner *m = lk_mariner_raw (settings->mariner);
 
   GtkWidget *safety = lk_section (page, "Safety & Quality");
@@ -1563,35 +1632,170 @@ lk_plugin_fill_tab (GtkWidget *page, LkSettings *settings, const char *tab)
     }
 }
 
-/* The one section that talks ABOUT plugins rather than about the chart: what is
- * loaded, where each copy came from, and what it is doing. */
-static void
-lk_build_plugins_page (GtkWidget *notebook, LkSettings *settings)
-{
-  g_autoptr (GPtrArray) ids = lk_plugins_all (settings->plugins);
+/* ---- the Plugins page ---------------------------------------------------- */
 
-  if (ids->len == 0)
+/* Anything here changes WHICH plugins are loaded, so the whole window is built
+ * again from a fresh registry. Doing it on an idle keeps the rebuild off the
+ * signal that asked for it: a switch or a button is still emitting, and
+ * destroying it inside its own handler is how a settings window crashes. */
+static gboolean
+lk_plugins_reopen_window (gpointer user_data)
+{
+  GtkWindow *window = user_data;
+  LkSettings *settings = g_object_get_data (G_OBJECT (window), "lk-settings");
+  GtkWindow *parent = gtk_window_get_transient_for (window);
+  LkAppModel *model = settings->model;
+  /* The mariner was on Plugins when they installed or removed one, so that is
+   * where the rebuilt window opens. Copied out: the window dies below, and the
+   * settings it carries die with it. */
+  g_autofree char *section =
+      g_strdup (gtk_stack_get_visible_child_name (GTK_STACK (settings->stack)));
+
+  gtk_window_destroy (window);
+  gtk_window_present (GTK_WINDOW (lk_settings_window_new (model, parent, section)));
+  return G_SOURCE_REMOVE;
+}
+
+static void
+lk_plugins_queue_reopen (GtkWidget *any_child)
+{
+  GtkRoot *root = gtk_widget_get_root (any_child);
+
+  if (GTK_IS_WINDOW (root))
+    g_idle_add (lk_plugins_reopen_window, root);
+}
+
+/* The install sheet's callback. It arrives with the model, and the settings
+ * window it was raised from is the widget the closure carries. */
+static void
+lk_plugins_installed (gpointer model, gpointer user_data)
+{
+  lk_plugins_queue_reopen (user_data);
+}
+
+static void
+lk_plugins_install_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+
+  lk_plugin_install_choose (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                            settings->model, lk_plugins_installed, GTK_WIDGET (button));
+}
+
+static void
+lk_plugins_uninstall_answered (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  GtkWidget *button = user_data;
+  LkSettings *settings = g_object_get_data (G_OBJECT (button), "lk-settings");
+  const char *id = g_object_get_data (G_OBJECT (button), "lk-plugin-id");
+  g_autoptr (GError) error = NULL;
+  int chosen = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, &error);
+
+  if (chosen != 1) /* Cancel is 0, Uninstall is 1 */
     return;
 
-  GtkWidget *page = lk_page_new (notebook, "Plugins");
+  if (!lk_chart_controller_plugin_uninstall (lk_app_model_get_controller (settings->model), id))
+    return;
+
+  lk_plugins_queue_reopen (button);
+}
+
+/* Uninstall takes everything the plugin owns: its instance, the objects it
+ * drew, the values it published and the settings it saved. That is not a thing
+ * to do on one click, so it is asked about first. */
+static void
+lk_plugins_uninstall_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *id = g_object_get_data (G_OBJECT (button), "lk-plugin-id");
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  g_autofree char *question = g_strdup_printf ("Uninstall %s?",
+                                               lk_plugins_name (settings->plugins, id));
+  static const char *answers[] = { "Cancel", "Uninstall", NULL };
+
+  GtkAlertDialog *dialog = gtk_alert_dialog_new ("%s", question);
+  const char *detail = "Removes the plugin and everything it drew.";
+  gtk_alert_dialog_set_detail (dialog, detail);
+  gtk_alert_dialog_set_buttons (dialog, answers);
+  gtk_alert_dialog_set_cancel_button (dialog, 0);
+  gtk_alert_dialog_set_default_button (dialog, 0);
+  gtk_alert_dialog_choose (dialog, GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL, NULL,
+                           lk_plugins_uninstall_answered, button);
+  g_object_unref (dialog);
+}
+
+/* A grant goes off and on while the plugin runs. The core persists it beside
+ * the plugin's wasm and reads it back at every load, so nothing is saved here.
+ * A refusal puts the switch back rather than lying about the state. */
+static void
+lk_plugins_grant_toggled (GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  GtkSwitch *sw = GTK_SWITCH (object);
+  const char *id = g_object_get_data (object, "lk-plugin-id");
+  const char *cap = g_object_get_data (object, "lk-plugin-cap");
+
+  if (settings->updating)
+    return;
+
+  if (lk_plugins_set_granted (settings->plugins, id, cap, gtk_switch_get_active (sw)))
+    return;
+
+  settings->updating = TRUE;
+  gtk_switch_set_active (sw, !gtk_switch_get_active (sw));
+  settings->updating = FALSE;
+}
+
+/* The one section that talks ABOUT plugins rather than about the chart: what
+ * the mariner added, what it is doing, what it is allowed to do, and how to add
+ * or remove one.
+ *
+ * ONLY WHAT THE MARINER PUT THERE IS LISTED: installed plugins, and the
+ * developer copies LOOKOUT_PLUGINS brings. THE SHIPPED SET IS THE PRODUCT. Own
+ * ship, AIS, NMEA 0183, Signal K and laylines are how the app works, not
+ * choices somebody made, so they take no consent surface and never appear here.
+ * Their settings are chart settings, filed under the sections they belong to. */
+static void
+lk_build_plugins_page (LkSettings *settings)
+{
+  g_autoptr (GPtrArray) ids = lk_plugins_all (settings->plugins);
+  GtkWidget *page = lk_page_new (settings, "plugins", "Plugins",
+                                 "application-x-addon-symbolic");
   GtkWidget *section = lk_section (page, NULL);
+  guint managed = 0;
 
   for (guint i = 0; i < ids->len; i++)
     {
       const char *id = g_ptr_array_index (ids, i);
       const char *version = lk_plugins_version (settings->plugins, id);
-      GtkWidget *entry = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+      const char *from = lk_plugins_origin (settings->plugins, id);
+
+      if (g_strcmp0 (from, "bundled") == 0)
+        continue;
+      managed++;
+      GtkWidget *summary = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
       GtkWidget *name = gtk_label_new (lk_plugins_name (settings->plugins, id));
       GtkWidget *status = gtk_label_new (NULL);
-      g_autofree char *origin = g_strdup_printf (
-          "%s%s%s", lk_plugins_origin (settings->plugins, id),
-          version[0] != '\0' ? " · " : "", version);
-      GtkWidget *where = gtk_label_new (origin);
+      /* One quiet line saying which copy this is: the version, where it came
+       * from, and what it reads. The same line the macOS row prints. */
+      g_autoptr (GString) about = g_string_new (NULL);
+      if (version[0] != '\0')
+        g_string_append_printf (about, "Version %s · ", version);
+      g_string_append (about, g_strcmp0 (from, "developer") == 0
+                                  ? "developer copy from LOOKOUT_PLUGINS"
+                                  : "installed from a plugin file");
+      g_autofree char *types = lk_plugins_file_types_for (settings->plugins, id);
+      if (types != NULL)
+        g_string_append_printf (about, " · reads %s files you open", types);
+      about->str[0] = g_ascii_toupper (about->str[0]);
+      GtkWidget *where = gtk_label_new (about->str);
 
       gtk_widget_add_css_class (name, "heading");
       gtk_label_set_xalign (GTK_LABEL (name), 0.0);
       gtk_widget_add_css_class (where, "dim-label");
       gtk_widget_add_css_class (where, "caption");
+      gtk_label_set_wrap (GTK_LABEL (where), TRUE);
       gtk_label_set_xalign (GTK_LABEL (where), 0.0);
       gtk_widget_add_css_class (status, "caption");
       gtk_label_set_xalign (GTK_LABEL (status), 0.0);
@@ -1601,16 +1805,89 @@ lk_build_plugins_page (GtkWidget *notebook, LkSettings *settings)
       g_object_set_data_full (G_OBJECT (status), "lk-plugin-id", g_strdup (id), g_free);
       g_ptr_array_add (settings->status_labels, status);
 
-      gtk_widget_set_margin_top (entry, 6);
-      gtk_box_append (GTK_BOX (entry), name);
-      gtk_box_append (GTK_BOX (entry), status);
-      gtk_box_append (GTK_BOX (entry), where);
-      gtk_box_append (GTK_BOX (section), entry);
+      /* AT REST, ONE CALM ROW: the name and what it is doing, and nothing
+       * else. Everything about MANAGING it stands behind the disclosure, so a
+       * mariner reading down the list reads five plugins rather than thirty
+       * switches. The provenance goes in there too: it answers "which copy is
+       * this", which is a question somebody asks once. */
+      GtkWidget *expander = gtk_expander_new (NULL);
+      GtkWidget *body = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+
+      gtk_box_append (GTK_BOX (summary), name);
+      gtk_box_append (GTK_BOX (summary), status);
+      gtk_expander_set_label_widget (GTK_EXPANDER (expander), summary);
+      gtk_widget_set_margin_top (expander, 6);
+      gtk_widget_set_margin_start (body, 6);
+      gtk_widget_set_margin_top (body, 6);
+      gtk_box_append (GTK_BOX (body), where);
+
+      /* What the manifest asked for, one switch each, in the same sentences
+       * the consent sheet used. A grant can never exceed the manifest, so this
+       * list only ever takes something away. */
+      GPtrArray *caps = lk_plugins_capabilities (settings->plugins, id);
+      for (guint c = 0; caps != NULL && c < caps->len; c++)
+        {
+          const LkPluginCapability *cap = g_ptr_array_index (caps, c);
+          GtkWidget *sw = gtk_switch_new ();
+          g_autofree char *title =
+              cap->hosts != NULL ? g_strdup_printf ("%s (%s)", cap->sentence, cap->hosts)
+                                 : g_strdup (cap->sentence);
+
+          gtk_widget_set_valign (sw, GTK_ALIGN_CENTER);
+          gtk_switch_set_active (GTK_SWITCH (sw), cap->granted);
+          g_object_set_data_full (G_OBJECT (sw), "lk-plugin-id", g_strdup (id), g_free);
+          g_object_set_data_full (G_OBJECT (sw), "lk-plugin-cap", g_strdup (cap->cap), g_free);
+          g_signal_connect (sw, "notify::active", G_CALLBACK (lk_plugins_grant_toggled),
+                            settings);
+          lk_row (body, title, sw);
+        }
+
+      /* Uninstall acts only on what install wrote. A bundled copy belongs to
+       * the application and a developer copy to LOOKOUT_PLUGINS, and the core
+       * refuses both, so neither is offered. */
+      if (lk_plugins_is_installed (settings->plugins, id))
+        {
+          GtkWidget *remove = gtk_button_new_with_label ("Uninstall…");
+
+          gtk_widget_add_css_class (remove, "destructive-action");
+          gtk_widget_set_halign (remove, GTK_ALIGN_START);
+          gtk_widget_set_margin_top (remove, 4);
+          g_object_set_data_full (G_OBJECT (remove), "lk-plugin-id", g_strdup (id), g_free);
+          g_object_set_data (G_OBJECT (remove), "lk-settings", settings);
+          g_signal_connect (remove, "clicked", G_CALLBACK (lk_plugins_uninstall_clicked),
+                            settings);
+          gtk_box_append (GTK_BOX (body), remove);
+        }
+
+      gtk_expander_set_child (GTK_EXPANDER (expander), body);
+      gtk_box_append (GTK_BOX (section), expander);
     }
 
+  /* Nothing added is the ordinary state: the shipped set is not listed, so a
+   * mariner who has installed nothing sees this and the button. */
+  if (managed == 0)
+    {
+      GtkWidget *none = gtk_label_new ("No plugins installed.");
+
+      gtk_widget_add_css_class (none, "dim-label");
+      gtk_label_set_wrap (GTK_LABEL (none), TRUE);
+      gtk_label_set_xalign (GTK_LABEL (none), 0.0);
+      gtk_box_append (GTK_BOX (section), none);
+    }
+
+  GtkWidget *install = gtk_button_new_with_label ("Install Plugin…");
+
+  gtk_widget_set_halign (install, GTK_ALIGN_START);
+  gtk_widget_set_margin_top (install, 6);
+  g_signal_connect (install, "clicked", G_CALLBACK (lk_plugins_install_clicked), settings);
+  gtk_box_append (GTK_BOX (section), install);
+
+  /* The same sentence the macOS panel prints under this button. */
   lk_footer (section,
-             "Own ship, AIS, NMEA 0183, Signal K and laylines are plugins. Their "
-             "settings are filed with the chart settings they belong to, not here.");
+             "A plugin file (.lkplug) can also be opened from the file manager or "
+             "dropped on the chart. Nothing is installed before its permissions "
+             "are shown.");
+
   lk_plugin_refresh_status_labels (settings);
 }
 
@@ -1647,7 +1924,7 @@ lk_settings_key_pressed (GtkEventControllerKey *controller,
 }
 
 GtkWidget *
-lk_settings_window_new (LkAppModel *model, GtkWindow *parent)
+lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (model), NULL);
 
@@ -1665,7 +1942,9 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent)
 
   GtkWidget *window = gtk_window_new ();
   gtk_window_set_title (GTK_WINDOW (window), "Mariner Settings");
-  gtk_window_set_default_size (GTK_WINDOW (window), 520, 560);
+  /* Two columns need the room the Mac window takes: 720 by 560. */
+  gtk_window_set_default_size (GTK_WINDOW (window), 760, 580);
+  gtk_widget_set_size_request (window, 640, 480);
   gtk_window_set_transient_for (GTK_WINDOW (window), parent);
   gtk_window_set_destroy_with_parent (GTK_WINDOW (window), TRUE);
   /* A live panel, not a modal: the chart stays usable while it is open. */
@@ -1686,34 +1965,80 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent)
   g_signal_connect_object (model, "raster-changed",
                            G_CALLBACK (lk_settings_raster_changed), window, 0);
 
-  GtkWidget *notebook = gtk_notebook_new ();
-  gtk_window_set_child (GTK_WINDOW (window), notebook);
+  /* A SIDEBAR OF SECTIONS beside the pane it chooses, as on the Mac. It is a
+   * slot list, not a fixed menu: the four core sections, Plugins and Advanced
+   * always exist, and the rest appear only while they hold something. */
+  GtkWidget *split = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *rail = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 
-  lk_build_display_page (notebook, settings);
-  lk_build_depths_page (notebook, settings);
-  lk_build_text_page (notebook, settings);
-  lk_build_charts_page (notebook, settings);
+  settings->sidebar = gtk_list_box_new ();
+  settings->stack = gtk_stack_new ();
+
+  gtk_list_box_set_selection_mode (GTK_LIST_BOX (settings->sidebar), GTK_SELECTION_BROWSE);
+  gtk_widget_add_css_class (settings->sidebar, "navigation-sidebar");
+  gtk_widget_set_vexpand (settings->sidebar, TRUE);
+  g_signal_connect (settings->sidebar, "row-selected",
+                    G_CALLBACK (lk_settings_section_selected), settings);
+
+  gtk_widget_set_hexpand (settings->stack, TRUE);
+  gtk_stack_set_transition_type (GTK_STACK (settings->stack), GTK_STACK_TRANSITION_TYPE_NONE);
+
+  /* The one thing the whole window promises. It stands under the list of
+   * sections rather than repeating itself inside every one of them. */
+  GtkWidget *promise = gtk_label_new ("Applies at once · kept for next launch");
+  gtk_widget_add_css_class (promise, "dim-label");
+  gtk_widget_add_css_class (promise, "caption");
+  gtk_label_set_wrap (GTK_LABEL (promise), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (promise), 0.0);
+  gtk_widget_set_margin_start (promise, 14);
+  gtk_widget_set_margin_end (promise, 14);
+  gtk_widget_set_margin_bottom (promise, 10);
+  gtk_widget_set_margin_top (promise, 6);
+
+  GtkWidget *rail_scroller = gtk_scrolled_window_new ();
+  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (rail_scroller),
+                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (rail_scroller), settings->sidebar);
+  gtk_widget_set_vexpand (rail_scroller, TRUE);
+
+  gtk_box_append (GTK_BOX (rail), rail_scroller);
+  gtk_box_append (GTK_BOX (rail), promise);
+  gtk_widget_set_size_request (rail, 190, -1);
+  gtk_widget_add_css_class (rail, "lk-settings-rail");
+
+  gtk_box_append (GTK_BOX (split), rail);
+  gtk_box_append (GTK_BOX (split), gtk_separator_new (GTK_ORIENTATION_VERTICAL));
+  gtk_box_append (GTK_BOX (split), settings->stack);
+  gtk_window_set_child (GTK_WINDOW (window), split);
+
+  lk_build_display_page (settings);
+  lk_build_depths_page (settings);
+  lk_build_text_page (settings);
+  lk_build_charts_page (settings);
 
   /* Vessels, Alarms and Connections exist only while something puts settings in
    * them, and today that something is a plugin. The section ids are the core's
    * (src/plugin/host.zig, `Tab`), so a plugin and this window mean the same
    * thing by "alarms". Advanced is last: it is where anything unclaimed lands. */
-  static const struct { const char *tab, *title; } plugin_pages[] = {
-    { "vessels", "Vessels" },
-    { "alarms", "Alarms" },
-    { "connections", "Connections" },
+  static const struct { const char *tab, *title, *icon; } plugin_pages[] = {
+    { "vessels", "Vessels", "lk-vessels-symbolic" },
+    { "alarms", "Alarms", "lk-alarms-symbolic" },
+    { "connections", "Connections", "network-wireless-symbolic" },
   };
 
   for (gsize i = 0; i < G_N_ELEMENTS (plugin_pages); i++)
     {
       if (!lk_plugins_tab_populated (settings->plugins, plugin_pages[i].tab))
         continue;
-      lk_plugin_fill_tab (lk_page_new (notebook, plugin_pages[i].title), settings,
-                          plugin_pages[i].tab);
+      lk_plugin_fill_tab (lk_page_new (settings, plugin_pages[i].tab, plugin_pages[i].title,
+                                       plugin_pages[i].icon),
+                          settings, plugin_pages[i].tab);
     }
 
-  lk_build_plugins_page (notebook, settings);
-  lk_build_advanced_page (notebook, settings);
+  lk_build_plugins_page (settings);
+  lk_build_advanced_page (settings);
+
+  lk_settings_select_section (settings, tab);
 
   /* While the window is up, the connection lines move on their own. */
   settings->status_poll_id = g_timeout_add_seconds (1, lk_plugin_status_poll, settings);

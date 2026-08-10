@@ -166,6 +166,158 @@ gboolean lk_chart_controller_set_plugin_config (LkChartController *self,
                                                 const char        *id,
                                                 const char        *json);
 
+/* Plugin alerts, as the JSON lookout_plugin_alerts_json documents. NULL when
+ * the read failed, which is NOT "no alerts": a caller clears its strip and
+ * silences its siren, then keeps watching. Transfer full. */
+char *lk_chart_controller_alerts_json (LkChartController *self);
+
+/* Acknowledge one alert. It stops sounding and stays listed until the condition
+ * clears. It silences THAT alert only. */
+gboolean lk_chart_controller_alert_ack (LkChartController *self, guint64 id);
+
+/* The tables the plugins declare, and one table's rows already in order, as the
+ * JSON lookout_plugin_tables_json and lookout_plugin_table_rows document.
+ * `sort_key` NULL takes the declared sort. Transfer full. */
+char *lk_chart_controller_tables_json (LkChartController *self);
+char *lk_chart_controller_table_rows (LkChartController *self,
+                                      const char        *plugin,
+                                      const char        *key,
+                                      const char        *sort_key,
+                                      gboolean           ascending);
+
+/* Tell the plugin its table is on screen, or is not. A plugin builds rows only
+ * while a table is open, so a dialog nobody opened costs nothing. Call it with
+ * TRUE when the dialog opens and FALSE when it closes. */
+void lk_chart_controller_table_open (LkChartController *self,
+                                     const char        *plugin,
+                                     const char        *key,
+                                     gboolean           open);
+
+/* ---- installing a plugin ------------------------------------------------- */
+
+/* Read a .lkplug without installing it: everything the consent sheet shows, as
+ * the JSON lookout_plugin_inspect documents. A refused package answers
+ * {"error":"…"}, which is a sentence ready to show. Transfer full. */
+char *lk_chart_controller_plugin_inspect (LkChartController *self, const char *path);
+
+/* Install a package the mariner consented to. It loads hot, so the plugin draws
+ * without a restart. NULL on SUCCESS; otherwise one sentence saying why not,
+ * transfer full. */
+char *lk_chart_controller_plugin_install (LkChartController *self, const char *path);
+
+/* Remove an installed plugin and everything it owns. FALSE for an unknown id,
+ * or for a bundled or developer copy, which install never wrote. */
+gboolean lk_chart_controller_plugin_uninstall (LkChartController *self, const char *id);
+
+/* Switch one granted capability on or off while the plugin runs. The broker
+ * answers the plugin -1 for a revoked capability and the plugin keeps running.
+ * FALSE for a capability the manifest never asked for. */
+gboolean lk_chart_controller_plugin_grant_set (LkChartController *self,
+                                               const char        *id,
+                                               const char        *cap,
+                                               gboolean           on);
+
+/* Offer a file to the plugins before the shell treats it as a chart. 1 when a
+ * plugin took it, 0 when none claims the type, -1 when one claims it and the
+ * file could not be given over. A chart always answers 0, so one code path
+ * serves both. */
+int lk_chart_controller_open_file (LkChartController *self, const char *path);
+
+/* ---- own ship, follow and course up -------------------------------------- */
+
+/* Own ship's REPORTED position, and how much to believe it. *out_lon and
+ * *out_lat are written only for LK_FIX_LIVE. A readout shows these numbers or
+ * it shows none: it never falls back to the view centre. */
+typedef enum {
+  LK_FIX_NONE = 0, /* no source of position at all */
+  LK_FIX_LOST = 1, /* a source exists, its fix aged out */
+  LK_FIX_LIVE = 2, /* a fix inside its freshness window */
+} LkFixState;
+
+LkFixState lk_chart_controller_own_ship (LkChartController *self,
+                                         double            *out_lon,
+                                         double            *out_lat);
+
+/* Follow mode and course up: 0 off, 1 working, 2 on and waiting for a fix.
+ *
+ * THE CORE TURNS THESE OFF ITSELF. A pan hands the chart back to the mariner
+ * and cancels follow; a rotate by hand cancels course up. A control that
+ * tracked only its own clicks would go wrong, so the chrome polls the active
+ * state with the other readouts. */
+void lk_chart_controller_follow_set (LkChartController *self, gboolean on);
+int  lk_chart_controller_follow_active (LkChartController *self);
+void lk_chart_controller_course_up_set (LkChartController *self, gboolean on);
+int  lk_chart_controller_course_up_active (LkChartController *self);
+
+/* ---- the plugin overlay -------------------------------------------------- */
+
+/* One object a plugin drew: a vessel, a layline end, anything it gave a
+ * payload. `info` is the pick payload JSON, or NULL when it carries none.
+ * `lon` and `lat` are where the object draws NOW. */
+typedef struct {
+  char  *id;
+  char  *info;
+  double lon, lat;
+} LkOverlayObject;
+
+void lk_overlay_object_free (LkOverlayObject *object);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (LkOverlayObject, lk_overlay_object_free)
+
+/* The overlay symbol nearest a logical point, or NULL when none is within about
+ * 14 pt. A click that hits one must NOT also open the chart pick report.
+ * Transfer full. */
+LkOverlayObject *lk_chart_controller_overlay_hit (LkChartController *self,
+                                                  double             x,
+                                                  double             y);
+
+/* What that object says now, or NULL once it is gone: the target aged out, or
+ * its plugin stopped. A pinned bubble re-reads this every tick to move itself
+ * and refresh its values, and closes itself on NULL. Transfer full. */
+LkOverlayObject *lk_chart_controller_overlay_info (LkChartController *self,
+                                                   const char        *id);
+
+/* Where a geographic point falls on the screen, in logical points. It is the
+ * inverse of lk_chart_controller_geo_at, and it is what pins a bubble to an
+ * object as the chart moves under it. */
+gboolean lk_chart_controller_screen_of (LkChartController *self,
+                                        double lon, double lat,
+                                        double *out_x, double *out_y);
+
+/* ---- the mariner's own marks --------------------------------------------- */
+
+/* A mark on the water: a rock somebody reported, a crab pot, an anchorage to
+ * come back to. The CORE owns them. It draws them, names them, writes them
+ * under the per-user directory, and reads them back at every open, so they
+ * survive a restart and a change of chart library. This shell stores nothing.
+ *
+ * `name` is owned by the struct. */
+typedef struct {
+  guint64 id;
+  double  lon, lat;
+  char   *name;
+} LkMarker;
+
+void lk_marker_free (LkMarker *marker);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (LkMarker, lk_marker_free)
+
+/* Drop a mark at a geographic point. It is placed AND named in one call, so a
+ * mariner on a moving boat never waits to type. 0 when nothing was stored. */
+guint64 lk_chart_controller_marker_add (LkChartController *self, double lon, double lat);
+
+/* The mark nearest a logical point, or NULL when none is within about 14 pt.
+ * This is what decides whether the chart menu offers Drop, or Rename and
+ * Remove. Transfer full. */
+LkMarker *lk_chart_controller_marker_at (LkChartController *self, double x, double y);
+
+/* Rename one mark, up to 32 characters. An EMPTY name keeps the old one: a
+ * field the mariner cleared and left is not a request for a nameless mark. */
+gboolean lk_chart_controller_marker_rename (LkChartController *self,
+                                            guint64            id,
+                                            const char        *name);
+gboolean lk_chart_controller_marker_remove (LkChartController *self, guint64 id);
+
 /* ---- pick --------------------------------------------------------------- */
 
 /* The features a chartplotter should SHOW under a geo point, best first — the

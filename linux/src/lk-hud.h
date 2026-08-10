@@ -53,9 +53,15 @@ GtkWidget *lk_building_pill_new (LkAppModel *model);
 /* Fit, zoom in and zoom out, as a column of bubbles. */
 GtkWidget *lk_zoom_controls_new (LkAppModel *model);
 
-/* The north bubble. The mark turns with the view and a click sets the chart
- * north-up. It is always visible: a mariner reads the chart's orientation from
- * it, so it must not appear only once the chart is already turned. */
+/* The compass bubble, which is also the FOLLOW LOCK, as on every other shell.
+ *
+ * The mark turns with the view, and the letter names what is up: N, or C once
+ * the chart turns with own ship. A click locks the chart to own ship, and once
+ * locked it cycles north up and course up. The bubble carries a ring while
+ * follow waits for a fix, and a fill once it has one.
+ *
+ * It is always visible: a mariner reads the chart's orientation from it, so it
+ * must not appear only once the chart is already turned. */
 GtkWidget *lk_north_bubble_new (LkAppModel *model);
 
 /* One circular chrome control over the chart. `action` may be NULL. */

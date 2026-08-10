@@ -62,6 +62,31 @@ Plugin settings are filed with the chart settings they belong to: an AIS alarm
 lands under **Alarms**, connections under **Connections**. Those sections exist
 only while a plugin puts something in them.
 
+**Settings ▸ Plugins** is where plugins are managed. Each one is a row with its
+live status, and a disclosure holds the rest: where the copy came from, a
+switch per capability in the consent sheet's own words, and **Uninstall** for
+what an install wrote. A grant never exceeds the manifest, so a switch only
+ever takes something away; the plugin keeps running and the calls it lost
+answer -1.
+
+**Install Plugin…** takes a `.lkplug` package. Dropping one on the chart does
+the same thing. The consent sheet reads the package without installing it and
+lists what it will be able to do; nothing touches the disk until Install.
+
+An alarm a plugin raises stands at the top of the chart and sounds until
+somebody acknowledges it. A warning and a notice are shown and never sounded.
+Acknowledging silences one alert and no other.
+
+A plugin that declares a table gets a window: **Commands ▸ Vessels ▸ AIS
+Targets…**. The columns are typed, so the shell prints metres, knots and
+degrees true while the core sorts the numbers. A click on the heading sorts
+within each band, never across one, so an alarmed vessel keeps the top line.
+Activating a row with a position centres the chart on it.
+
+A click on a symbol a plugin drew pins a bubble to it. The bubble follows the
+target, refreshes its values and closes itself when the target is gone. The
+chart pick report does not open for that click.
+
 You need a baked `.pmtiles` chart to see anything. **Ctrl+O**, or **Charts** in the
 mariner settings, picks a folder of cells; on first launch the app probes
 `$LOOKOUT_OPEN`, then the last recent, then
@@ -94,7 +119,11 @@ the first frame, because the engine draws a set as it opens it.
 | File | Role |
 |------|------|
 | `src/main.c` | `GtkApplication` entry, CSS, accelerators |
-| `src/lk-window.c` | The window: titlebar, chart, the floating chrome, actions, open dialog |
+| `src/lk-window.c` | The window: titlebar, chart, the floating chrome, actions, the commands menu, open dialog, file drops |
+| `src/lk-alerts.c` | The plugin alert strip, and the siren behind an alarm |
+| `src/lk-table-window.c` | A plugin's declared table, as a window |
+| `src/lk-plugin-install.c` | The `.lkplug` consent sheet, and the install |
+| `src/lk-overlay-pick.c` | The bubble pinned to a symbol a plugin drew |
 | `src/lk-chart-view.c` | The chart widget: owns the surface, the transparent hole, all input |
 | `src/lk-chart-controller.c` | The one `lookout*` handle; every `lookout_*` call; the render loop |
 | `src/lk-native-surface.c` | The X11 child window / Wayland subsurface the chart presents into |

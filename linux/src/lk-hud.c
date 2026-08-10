@@ -302,6 +302,9 @@ typedef struct {
   GtkWidget  *band_rule;
   GtkWidget  *scale;
   GtkWidget  *zoom;
+  GtkWidget  *fix_pill;  /* the button that says whether to believe the position */
+  GtkWidget  *fix_icon;
+  GtkWidget  *fix_label;
   GtkWidget  *coord;
   GtkWidget  *overscale;
 } LkHudCapsule;
@@ -312,20 +315,56 @@ lk_hud_capsule_free (gpointer data, GClosure *closure)
   g_free (data);
 }
 
+/* OWN SHIP's position, and a pill saying how much to believe it.
+ *
+ * The readout carries own ship and nothing else. It does not follow the view
+ * centre and it does not change meaning when the mariner pans away, because
+ * panning away is exactly when a mistaken value is dangerous. With no fix it
+ * shows NO NUMBERS: a coordinate with no boat behind it is the ambiguity this
+ * removes. The coordinates of a PLACE come from the chart menu, on demand, at
+ * the point the mariner asked about.
+ *
+ * The pill differs by more than its words, so it reads at a glance in bad
+ * light: the colour changes, the icon changes, and the third state carries the
+ * fix-it, because it is the one place the app tells a mariner they have no
+ * position at all. */
 static void
 lk_hud_update_coord (LkHudCapsule *capsule)
 {
-  gboolean cursor = lk_app_model_get_cursor_valid (capsule->model);
-  double lat = cursor ? lk_app_model_get_cursor_lat (capsule->model)
-                      : lk_app_model_get_center_lat (capsule->model);
-  double lon = cursor ? lk_app_model_get_cursor_lon (capsule->model)
-                      : lk_app_model_get_center_lon (capsule->model);
+  static const struct {
+    const char *icon, *text, *css, *tooltip;
+  } pill[] = {
+    { "preferences-system-symbolic", "Configure GPS", "lk-fix-none",
+      "No source of position. Add a gateway or a Signal K server." },
+    { "network-offline-symbolic", "NO GPS", "lk-fix-lost",
+      "The position source stopped answering. Opens the settings." },
+    { "find-location-symbolic", "GPS", "lk-fix-live",
+      "Own ship's reported position. Opens the settings." },
+  };
 
-  g_autofree char *lat_s = lk_coord_format_dm (lat, TRUE);
-  g_autofree char *lon_s = lk_coord_format_dm (lon, FALSE);
-  g_autofree char *text = g_strdup_printf ("%s %s", lat_s, lon_s);
+  int state = lk_app_model_get_fix_state (capsule->model);
+  double lon = 0, lat = 0;
 
-  gtk_label_set_text (GTK_LABEL (capsule->coord), text);
+  gtk_image_set_from_icon_name (GTK_IMAGE (capsule->fix_icon), pill[state].icon);
+  gtk_label_set_text (GTK_LABEL (capsule->fix_label), pill[state].text);
+  gtk_widget_set_tooltip_text (capsule->fix_pill, pill[state].tooltip);
+
+  for (gsize i = 0; i < G_N_ELEMENTS (pill); i++)
+    gtk_widget_remove_css_class (capsule->fix_pill, pill[i].css);
+  gtk_widget_add_css_class (capsule->fix_pill, pill[state].css);
+
+  if (lk_app_model_get_fix (capsule->model, &lon, &lat))
+    {
+      g_autofree char *lat_s = lk_coord_format_dm (lat, TRUE);
+      g_autofree char *lon_s = lk_coord_format_dm (lon, FALSE);
+      g_autofree char *text = g_strdup_printf ("%s %s", lat_s, lon_s);
+
+      gtk_label_set_text (GTK_LABEL (capsule->coord), text);
+      gtk_widget_set_visible (capsule->coord, TRUE);
+      return;
+    }
+
+  gtk_widget_set_visible (capsule->coord, FALSE);
 }
 
 static void
@@ -382,9 +421,8 @@ lk_hud_capsule_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   LkHudCapsule *capsule = user_data;
   const char *name = g_param_spec_get_name (pspec);
 
-  if (g_str_equal (name, "cursor-valid") || g_str_equal (name, "cursor-lon") ||
-      g_str_equal (name, "cursor-lat") || g_str_equal (name, "center-lon") ||
-      g_str_equal (name, "center-lat"))
+  if (g_str_equal (name, "fix-state") || g_str_equal (name, "fix-lon") ||
+      g_str_equal (name, "fix-lat"))
     lk_hud_update_coord (capsule);
   else if (g_str_equal (name, "scale-denominator"))
     lk_hud_update_scale (capsule);
@@ -463,6 +501,26 @@ lk_hud_capsule_new (LkAppModel *model)
   gtk_box_append (GTK_BOX (root), capsule->zoom);
 
   gtk_box_append (GTK_BOX (root), lk_hud_rule ());
+
+  /* The position source, beside the position it qualifies. It is a button in
+   * every state, and it opens the settings, where the connections are. */
+  GtkWidget *pill_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
+  capsule->fix_icon = gtk_image_new ();
+  capsule->fix_label = gtk_label_new ("");
+  gtk_image_set_pixel_size (GTK_IMAGE (capsule->fix_icon), 11);
+  gtk_widget_add_css_class (capsule->fix_label, "caption-heading");
+  gtk_box_append (GTK_BOX (pill_row), capsule->fix_icon);
+  gtk_box_append (GTK_BOX (pill_row), capsule->fix_label);
+
+  capsule->fix_pill = gtk_button_new ();
+  gtk_button_set_child (GTK_BUTTON (capsule->fix_pill), pill_row);
+  gtk_widget_add_css_class (capsule->fix_pill, "lk-fix-pill");
+  gtk_widget_set_valign (capsule->fix_pill, GTK_ALIGN_CENTER);
+  /* A fix-it names the section that fixes it: a position source is added
+   * under Connections, so that is where this opens. */
+  gtk_actionable_set_detailed_action_name (GTK_ACTIONABLE (capsule->fix_pill),
+                                          "win.settings-at::connections");
+  gtk_box_append (GTK_BOX (root), capsule->fix_pill);
 
   capsule->coord = gtk_label_new ("");
   gtk_widget_add_css_class (capsule->coord, "monospace");
@@ -870,29 +928,41 @@ lk_zoom_controls_new (LkAppModel *model)
   return box;
 }
 
-/* ---- the north bubble --------------------------------------------------- */
+/* ---- the compass bubble ------------------------------------------------- */
 
 /* A red pointer over the letter, the pair turned by -rotation so the pointer
- * keeps pointing true north. */
+ * keeps pointing true north.
+ *
+ * The LETTER names what is up. Under N the mark turns with the view and points
+ * at north. Under C the course is up by definition, so the mark stands still. */
 static void
 lk_north_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer user_data)
 {
   LkAppModel *model = user_data;
-  double rotation = lk_app_model_get_rotation (model) * G_PI / 180.0;
+  LkOrientation orientation = lk_app_model_get_orientation (model);
+  gboolean course_up = orientation == LK_ORIENT_COURSE_UP;
+  double rotation = course_up ? 0.0 : lk_app_model_get_rotation (model) * G_PI / 180.0;
   GdkRGBA ink;
 
+  /* The colour comes off the widget, so the CSS class the lock applies carries
+   * both the letter and the pointer with it. */
   gtk_widget_get_color (GTK_WIDGET (area), &ink);
 
   cairo_save (cr);
   cairo_translate (cr, width / 2.0, height / 2.0);
   cairo_rotate (cr, -rotation);
 
-  /* The pointer. */
+  /* The pointer. It is red while the chart is the mariner's to move, and takes
+   * the bubble's own ink once the lock fills the bubble: red on the accent fill
+   * is a colour pair nobody can read. */
   cairo_move_to (cr, 0, -11);
   cairo_line_to (cr, 5, -3);
   cairo_line_to (cr, -5, -3);
   cairo_close_path (cr);
-  cairo_set_source_rgb (cr, 0.898, 0.224, 0.208); /* #E53935 */
+  if (orientation == LK_ORIENT_NORTH_UP || orientation == LK_ORIENT_COURSE_UP)
+    gdk_cairo_set_source_rgba (cr, &ink);
+  else
+    cairo_set_source_rgb (cr, 0.898, 0.224, 0.208); /* #E53935 */
   cairo_fill (cr);
 
   /* The letter, in the interface font. A layout built from the cairo context
@@ -900,7 +970,8 @@ lk_north_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
    * the font the rest of the chrome uses; the widget's own context carries the
    * theme font and the display's scale. Semibold, as in Chrome.swift and
    * Chrome.kt. */
-  g_autoptr (PangoLayout) layout = gtk_widget_create_pango_layout (GTK_WIDGET (area), "N");
+  g_autoptr (PangoLayout) layout =
+      gtk_widget_create_pango_layout (GTK_WIDGET (area), course_up ? "C" : "N");
   g_autoptr (PangoFontDescription) font = pango_font_description_copy (
       pango_context_get_font_description (gtk_widget_get_pango_context (GTK_WIDGET (area))));
   int text_width = 0, text_height = 0;
@@ -915,11 +986,55 @@ lk_north_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
   cairo_restore (cr);
 }
 
+/* The lock, as style classes on the bubble. Armed is a ring: follow is on and
+ * nothing is being followed yet. Locked is a fill. */
+static void
+lk_north_apply_orientation (GtkWidget *button, LkOrientation orientation)
+{
+  static const char *help[] = {
+    "Follow own ship",
+    "Following own ship, waiting for a fix",
+    "Following own ship, north up. Click for course up",
+    "Following own ship, course up. Click for north up",
+  };
+
+  gtk_widget_remove_css_class (button, "lk-mode-armed");
+  gtk_widget_remove_css_class (button, "lk-mode-on");
+
+  if (orientation == LK_ORIENT_ARMED)
+    gtk_widget_add_css_class (button, "lk-mode-armed");
+  else if (orientation != LK_ORIENT_UNLOCKED)
+    gtk_widget_add_css_class (button, "lk-mode-on");
+
+  gtk_widget_set_tooltip_text (button, help[orientation]);
+}
+
 static void
 lk_north_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
-  if (g_str_equal (g_param_spec_get_name (pspec), "rotation"))
-    gtk_widget_queue_draw (user_data);
+  LkAppModel *model = LK_APP_MODEL (object);
+  GtkWidget *button = user_data;
+  const char *name = g_param_spec_get_name (pspec);
+
+  if (g_str_equal (name, "rotation"))
+    {
+      gtk_widget_queue_draw (gtk_button_get_child (GTK_BUTTON (button)));
+      return;
+    }
+
+  /* Follow and course up are read off the engine on every readout push, so the
+   * bubble answers a pan that cancelled follow as well as its own click. */
+  if (g_str_equal (name, "follow") || g_str_equal (name, "course-up"))
+    {
+      lk_north_apply_orientation (button, lk_app_model_get_orientation (model));
+      gtk_widget_queue_draw (gtk_button_get_child (GTK_BUTTON (button)));
+    }
+}
+
+static void
+lk_north_clicked (GtkButton *button, gpointer user_data)
+{
+  lk_app_model_cycle_orientation (user_data);
 }
 
 GtkWidget *
@@ -935,11 +1050,14 @@ lk_north_bubble_new (LkAppModel *model)
   gtk_button_set_child (GTK_BUTTON (button), area);
 
   gtk_widget_add_css_class (button, "lk-bubble");
-  gtk_widget_set_tooltip_text (button, "Reset to north-up");
-  gtk_actionable_set_action_name (GTK_ACTIONABLE (button), "win.north-up");
+  /* The compass IS the follow lock, as on the other shells: a click always
+   * locks the chart to own ship, and once locked it cycles north up and course
+   * up. Ctrl+Up still snaps the chart back to north-up on its own. */
+  g_signal_connect (button, "clicked", G_CALLBACK (lk_north_clicked), model);
+  lk_north_apply_orientation (button, lk_app_model_get_orientation (model));
   gtk_widget_set_halign (button, GTK_ALIGN_END);
   gtk_widget_set_valign (button, GTK_ALIGN_START);
 
-  g_signal_connect (model, "notify", G_CALLBACK (lk_north_notify), area);
+  g_signal_connect_object (model, "notify", G_CALLBACK (lk_north_notify), button, 0);
   return button;
 }
