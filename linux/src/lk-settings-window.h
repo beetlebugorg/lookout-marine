@@ -12,6 +12,11 @@
 
 G_BEGIN_DECLS
 
-GtkWidget *lk_settings_window_new (LkAppModel *model, GtkWindow *parent);
+/* `tab` names the section to open on, by its title ("Connections", "Plugins").
+ * NULL or an empty string opens on the first, which is what the gear bubble
+ * asks for. A fix-it names the section that fixes the thing it is about: the
+ * position readout's "Configure GPS" opens on Connections, because that is
+ * where a position source is added. A name no section carries is ignored. */
+GtkWidget *lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab);
 
 G_END_DECLS

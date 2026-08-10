@@ -42,6 +42,32 @@ static const char *LK_CSS =
     ".lk-capsule.lk-compact { padding: 0 14px; font-size: 90%; }"
     ".lk-capsule separator { background: alpha(@borders, 0.8); }"
     ".lk-amber-dot { background: #f59e0b; border-radius: 999px; }"
+    /* The position source, beside the position it qualifies. A solid pill reads
+     * as a state that is good and settled, an outlined one as a state waiting
+     * on the mariner, and the two bad states carry different colours as well as
+     * different words: the readout has to be legible at a glance in bad light. */
+    ".lk-fix-pill {"
+    "  padding: 2px 7px;"
+    "  min-height: 0;"
+    "  min-width: 0;"
+    "  border: 1px solid transparent;"
+    "  box-shadow: none;"
+    "  border-radius: 8px;"
+    "}"
+    ".lk-fix-pill.lk-fix-live {"
+    "  color: @accent_fg_color;"
+    "  background: @accent_color;"
+    "}"
+    ".lk-fix-pill.lk-fix-lost {"
+    "  color: @error_color;"
+    "  background: alpha(@error_color, 0.16);"
+    "  border-color: alpha(@error_color, 0.55);"
+    "}"
+    ".lk-fix-pill.lk-fix-none {"
+    "  color: @accent_color;"
+    "  background: alpha(@accent_color, 0.16);"
+    "  border-color: alpha(@accent_color, 0.55);"
+    "}"
     ".lk-accent { color: @accent_color; }"
     /* The 1:N readout is a control, but it must read as a readout: no frame
      * until the pointer finds it. */
@@ -97,6 +123,22 @@ static const char *LK_CSS =
     "}"
     ".lk-object-list row:selected { background: alpha(@accent_color, 0.14); }"
     ".lk-object-list row:selected label { color: @accent_color; }"
+    /* The bubble pinned to a plugin's symbol. It is the pick report's panel at
+     * a smaller size: a vessel's name and a handful of values, not a page. */
+    ".lk-overlay-bubble { padding: 8px 10px; border-radius: 10px; }"
+    /* A plugin's table window: a heading row that sorts, and rows the plugin's
+     * own flag column colours. The tint is a wash behind the row, so the
+     * system's selection still reads over it. */
+    ".lk-table-header {"
+    "  padding: 4px 8px;"
+    "  border-bottom: 1px solid alpha(@borders, 0.7);"
+    "}"
+    ".lk-table-heading { padding: 2px 6px; min-height: 0; font-weight: bold; }"
+    ".lk-table-rows row { padding: 3px 8px; }"
+    ".lk-table-flagged.lk-alarm { background: alpha(@error_color, 0.22); }"
+    ".lk-table-flagged.lk-warning { background: alpha(@warning_color, 0.20); }"
+    ".lk-table-rows label.lk-alarm { color: @error_color; font-weight: bold; }"
+    ".lk-table-rows label.lk-warning { color: @warning_color; font-weight: bold; }"
     ".lk-fold { border-radius: 0 0 12px 12px; }"
     ".lk-fold label { color: alpha(currentColor, 0.7); }"
     /* A note the mariner reads before the attributes: INFORM, promoted. */
@@ -112,6 +154,35 @@ static const char *LK_CSS =
     "  padding: 8px;"
     "}"
     ".lk-aux-picture { border-radius: 6px; }"
+    /* The plugin alert strip, at the top centre. It is opaque, like the pick
+     * report: an alarm read through the chart is an alarm somebody misses. The
+     * severity colours are the chrome's own tokens, so the strip follows a
+     * light or a dark desktop and never burns a night-adapted eye. */
+    ".lk-alert-strip {"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 10px;"
+    "  box-shadow: 0 4px 12px alpha(black, 0.22);"
+    "}"
+    ".lk-alert-strip separator { background: alpha(@borders, 0.6); }"
+    /* The bar is the leading edge of a row. It carries the severity, so the
+     * mariner reads which kind of alert it is before reading a word of it. */
+    ".lk-alert-bar.lk-alarm   { background: @error_color; }"
+    ".lk-alert-bar.lk-warning { background: @warning_color; }"
+    ".lk-alert-bar.lk-notice  { background: @accent_color; }"
+    ".lk-alert-strip .lk-alarm   { color: @error_color; }"
+    ".lk-alert-strip .lk-warning { color: @warning_color; }"
+    ".lk-alert-strip .lk-notice  { color: @accent_color; }"
+    /* The first row carries the panel's top corners and the last its bottom
+     * ones, so the severity bar never squares off the strip's edge. */
+    ".lk-alert-strip > box:first-child .lk-alert-bar { border-radius: 10px 0 0 0; }"
+    ".lk-alert-strip > box:last-child .lk-alert-bar { border-radius: 0 0 0 10px; }"
+    ".lk-alert-ack {"
+    "  padding: 3px 10px;"
+    "  min-height: 0;"
+    "  border-radius: 6px;"
+    "  font-size: 90%;"
+    "}"
     ".lk-bubble {"
     "  min-width: 40px;"
     "  min-height: 40px;"
@@ -120,6 +191,32 @@ static const char *LK_CSS =
     "  background: alpha(@theme_bg_color, 0.92);"
     "  border: 1px solid alpha(@borders, 0.5);"
     "  box-shadow: 0 1px 4px alpha(black, 0.2);"
+    "}"
+    /* A menu bubble is a GtkMenuButton, which wraps its own button and draws a
+     * second frame inside the bubble. The bubble is the only frame there is, so
+     * the inner one is taken off and the round shape carries through to it. */
+    "menubutton.lk-bubble > button {"
+    "  min-width: 40px;"
+    "  min-height: 40px;"
+    "  padding: 0;"
+    "  border-radius: 999px;"
+    "  background: none;"
+    "  border: none;"
+    "  box-shadow: none;"
+    "}"
+    "menubutton.lk-bubble > button:hover { background: alpha(currentColor, 0.10); }"
+    /* The compass bubble carries the FOLLOW LOCK. A ring while follow is on
+     * and waiting for a fix, because nothing is being followed yet; a fill
+     * once it has one. The mariner has to be able to tell those apart at a
+     * glance: one of them means the instrument feed is the thing to look at. */
+    ".lk-bubble.lk-mode-armed {"
+    "  color: @accent_color;"
+    "  border: 2px solid @accent_color;"
+    "}"
+    ".lk-bubble.lk-mode-on {"
+    "  background: @accent_color;"
+    "  color: @accent_fg_color;"
+    "  border-color: alpha(@accent_color, 0.7);"
     "}"
     /* The distance bar's label sits directly on the chart, which can be any
      * colour. The shadow in the window's own background colour keeps it
@@ -180,6 +277,13 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
 {
   g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
 
+  /* The app's own icons, compiled into the binary. The settings sections draw
+   * water, a chart, a boat and a bell, and the stock theme carries none of
+   * them. This runs at STARTUP rather than in main: there is no display to ask
+   * for a theme until GTK is up. */
+  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_for_display (gdk_display_get_default ()),
+                                    "/org/beetlebug/LookoutMarine/icons");
+
   gtk_css_provider_load_from_string (provider, LK_CSS);
   gtk_style_context_add_provider_for_display (gdk_display_get_default (),
                                               GTK_STYLE_PROVIDER (provider),
@@ -187,6 +291,7 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
 
   struct { const char *action; const char *accels[3]; } accels[] = {
     { "win.open",             { "<Control>o", NULL } },
+    { "win.open-file",        { "<Control><Shift>o", NULL } },
     { "win.zoom-in",          { "<Control>plus", "<Control>equal", NULL } },
     { "win.zoom-out",         { "<Control>minus", NULL } },
     { "win.zoom-fit",         { "<Control>0", NULL } },

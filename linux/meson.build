@@ -108,6 +108,7 @@ core = custom_target('lookout-core',
 
 sources = files(
   'src/main.c',
+  'src/lk-alerts.c',
   'src/lk-app-model.c',
   'src/lk-chart-controller.c',
   'src/lk-chart-view.c',
@@ -115,17 +116,38 @@ sources = files(
   'src/lk-json.c',
   'src/lk-mariner.c',
   'src/lk-native-surface.c',
+  'src/lk-overlay-pick.c',
   'src/lk-pick-report.c',
+  'src/lk-plugin-install.c',
   'src/lk-plugins.c',
   'src/lk-raster.c',
   'src/lk-search.c',
   'src/lk-settings-window.c',
   'src/lk-store.c',
+  'src/lk-table-window.c',
   'src/lk-window.c',
 )
 
+# ---- the app's own icons -----------------------------------------------------
+#
+# The stock icon theme carries nothing marine, so the settings sections draw
+# their own. They are compiled INTO the binary: an icon installed into hicolor
+# does not resolve when the app runs from the build tree, and one there can be
+# shadowed by whatever theme the desktop is using. main.c puts the resource
+# prefix on the icon theme's search path.
+#
+# glib-compile-resources comes with glib, which gtk4 already requires, so this
+# adds no prerequisite a GTK build did not already have.
+gnome = import('gnome')
+resources = gnome.compile_resources(
+  'lk-resources',
+  'data' / 'lookout-marine.gresource.xml',
+  source_dir: 'data' / 'icons' / 'scalable' / 'actions',
+  c_name: 'lk',
+)
+
 executable('lookout-marine',
-  sources,
+  sources, resources,
   core,
   # lookout.h and tile57.h land in the build dir alongside the archives.
   c_args: c_args + ['-I' + meson.current_build_dir()],
