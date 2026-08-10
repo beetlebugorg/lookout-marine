@@ -616,9 +616,14 @@ pub const Lookout = struct {
     /// prefetch gate — on hardware where a build takes seconds, the single
     /// worker is too precious to spend on a speculative warm.
     last_build_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
-    /// Set by the host on an OS memory warning; tickBuild trims the engine's
-    /// reclaimable caches at the next safe point (no build in flight).
+    /// Set by the host on an OS memory warning; trimmed at the next safe point
+    /// (no build in flight). See serviceTrim for where that point is.
     trim_requested: bool = false,
+    /// True while a host surface is attached and frames can run. False between
+    /// detachSurface and attachSurface, when the engine stands with no view:
+    /// nothing renders, nothing calls tickBuild, and the work tickBuild would
+    /// have done at its next safe point has to be done elsewhere.
+    surface_attached: bool = false,
     /// When the last build FAILED (0 = never): tickBuild backs off rather than
     /// respawning the identical failing build every frame — a hot loop that
     /// keeps the exact pressure that made it fail.
@@ -758,6 +763,7 @@ pub const Lookout = struct {
                 .native_kind = opts.native_kind,
             }),
             .cam = undefined,
+            .surface_attached = opts.want_window or opts.native_handle != null,
             .raster = rasterlayer.Layer.init(alloc),
             .overlay = ov.Store.init(alloc),
             .markers = if (marks.defaultPathAlloc(alloc)) |p| blk: {
@@ -1825,6 +1831,50 @@ pub const Lookout = struct {
         self.markDirty();
     }
 
+    /// Give up the host's surface without closing the chart, for a shell whose
+    /// window can go away while the app lives on. What goes is the GPU surface
+    /// and its swapchain. What stays is everything expensive: the opened cells,
+    /// the composition, the atlas bake, the CPU scene copy and the plugin layer
+    /// with its alerts, so attachSurface brings the view back in milliseconds
+    /// where a reopen takes seconds.
+    ///
+    /// Externally serialized like close: the host must have no other call in
+    /// flight, and must not render again until attachSurface returns.
+    pub fn detachSurface(self: *Lookout) void {
+        if (!self.surface_attached) return;
+        if (@hasDecl(gpu.Gpu, "detachSurface")) self.g.detachSurface();
+        self.surface_attached = false;
+        // The next attach presents a frame even if nothing else moved.
+        self.view_dirty = true;
+        // Detached, tickBuild is the safe point that never arrives: stop the
+        // worker and hand the caches back now, while the memory still matters.
+        self.joinBuild();
+        self.serviceTrim();
+    }
+
+    /// Present on a new host surface after a detach. `kind` and `handle` are
+    /// the pair lookout_open_in_window took; width and height are LOGICAL
+    /// points, as everywhere else.
+    ///
+    /// Errors leave the engine detached rather than half-attached, so a host
+    /// that cannot show a chart without a view can fall back to a reopen.
+    pub fn attachSurface(self: *Lookout, kind: NativeKind, handle: *anyopaque, width: u32, height: u32) !void {
+        if (!@hasDecl(gpu.Gpu, "attachSurface")) return error.SurfaceAttachUnsupported;
+        if (self.surface_attached) return error.SurfaceAlreadyAttached;
+        try self.g.attachSurface(.{
+            .width = width,
+            .height = height,
+            .want_window = false,
+            .want_msaa = self.g.msaa_used,
+            .native_handle = handle,
+            .native_kind = kind,
+        });
+        self.surface_attached = true;
+        // The new window is rarely the old one's size (a rotation while the app
+        // was away), and the camera has to hear about it before the first frame.
+        try self.resize(width, height);
+    }
+
     /// The viewport in LOGICAL (device-independent) px — the single unit the
     /// camera, the portrayal and every mark size are expressed in. The
     /// framebuffer may be 2x that on a HiDPI display; pxToClip maps logical px
@@ -2280,19 +2330,31 @@ pub const Lookout = struct {
     /// OS memory warning: drop what can be rebuilt. Engine caches go at the
     /// next safe point (between builds); the CPU-side scene copy stays (it IS
     /// the picture).
+    ///
+    /// With no surface there is no frame loop and so no next safe point, and a
+    /// warning that frees nothing is exactly why the process then gets killed.
+    /// Detached, nothing is rendering, so the build worker can be waited out
+    /// and the caches handed back here.
     pub fn memoryWarning(self: *Lookout) void {
         self.trim_requested = true;
+        if (self.surface_attached) return;
+        self.joinBuild();
+        self.serviceTrim();
+    }
+
+    /// Hand back the engine's reclaimable caches, if a warning asked for them.
+    /// The caller must have no build in flight: a build reads the caches.
+    fn serviceTrim(self: *Lookout) void {
+        if (!self.trim_requested) return;
+        self.trim_requested = false;
+        cc.tile57_trim_caches();
     }
 
     fn tickBuild(self: *Lookout) void {
         self.ensureAtlases(); // before any worker reads atlas_scale
         self.pollBuild();
         if (self.build_active) return;
-        if (self.trim_requested) {
-            self.trim_requested = false;
-            cc.tile57_trim_caches(); // safe: no build in flight
-            std.debug.print("memory warning: engine caches trimmed\n", .{});
-        }
+        self.serviceTrim();
         if (self.last_fail_ms != 0 and gpu.ticksMs() - self.last_fail_ms < FAIL_BACKOFF_MS) return;
         if (self.dirty or self.needsRebuild()) {
             self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));

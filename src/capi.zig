@@ -138,6 +138,34 @@ export fn lookout_d3d12_swapchain(h: ?*lookout) ?*anyopaque {
     return x.d3d12Swapchain();
 }
 
+/// Give up the host's surface WITHOUT closing the chart, for a shell whose
+/// window comes and goes under it (an Android SurfaceView loses its surface
+/// every time the app backgrounds). The GPU surface and its swapchain go; the
+/// opened cells, the atlas bake, the scene and the plugin layer all stand, so
+/// lookout_attach_surface restores the view in milliseconds where reopening
+/// takes seconds. Also hands back the engine's reclaimable caches if a memory
+/// warning had asked for them, there being no frame left to do it in.
+///
+/// The native handle is free the moment this returns. Externally serialized
+/// like lookout_close: no other call may be in flight, and nothing may render
+/// until a surface is attached again.
+export fn lookout_detach_surface(h: ?*lookout) void {
+    const l = locked(h orelse return);
+    defer l.apiUnlock();
+    l.detachSurface();
+}
+
+/// Present on a new native surface after a detach. `kind` and `native_handle`
+/// are the pair lookout_open_in_window took; width and height are LOGICAL
+/// points. 0 on success, -1 on failure, which leaves the chart detached.
+export fn lookout_attach_surface(h: ?*lookout, kind: c_int, native_handle: ?*anyopaque, width: u32, height: u32) c_int {
+    const l = locked(h orelse return -1);
+    defer l.apiUnlock();
+    const k = nativeKind(kind) orelse return -1;
+    l.attachSurface(k, native_handle orelse return -1, width, height) catch return -1;
+    return 0;
+}
+
 export fn lookout_close(h: ?*lookout) void {
     if (h) |x| cast(x).close();
 }

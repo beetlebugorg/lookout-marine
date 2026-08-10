@@ -10,6 +10,7 @@ import android.view.ScaleGestureDetector;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * The chart view: a SurfaceView the Zig core renders into via Vulkan, with
@@ -29,8 +30,9 @@ public final class LookoutView extends SurfaceView
     private final String[] chartPaths;
     private final float density;
     private final ChartController controller;
-    // Written on the main thread (surfaceChanged/surfaceDestroyed), read on the
-    // render thread — the C ABI's api lock serializes the actual native calls.
+    // Published by the open, on the render thread; cleared by the close in
+    // onDetachedFromWindow, on the main thread once that thread has stopped.
+    // The C ABI's api lock serializes the native calls themselves.
     private volatile Lookout lk;
     private long lastFrameNs;
 
@@ -369,47 +371,98 @@ public final class LookoutView extends SurfaceView
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int wPx, int hPx) {
         final int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
-        if (lk != null) {
-            // Onto the render thread: a resize rebuilds the swapchain, and the
-            // api lock it takes is held for a whole frame — parking the UI
-            // thread here is how a rotation turns into an input-dispatch ANR.
-            onEngine(() -> lk.resize(wPts, hPts));
-            return;
-        }
-        // The open is tens of seconds on a real library — one tile57_chart_open
-        // per cell (7000+), the atlas bake, Vulkan bring-up — and it scales with
-        // the library, so on the UI thread it is an ANR on every launch.
-        // Start the render thread FIRST and open there.
         final Surface surface = holder.getSurface();
-        lastFrameNs = 0;
-        renderThread = new HandlerThread("lookout-render");
-        renderThread.start();
-        final Handler h = new Handler(renderThread.getLooper());
-        engine = h;
+        if (renderThread == null) {
+            // The open is tens of seconds on a real library (one
+            // tile57_chart_open per cell, 7000+, the atlas bake, Vulkan
+            // bring-up) and it scales with the library, so on the UI thread it
+            // is an ANR on every launch. Everything below runs off this thread.
+            renderThread = new HandlerThread("lookout-render");
+            renderThread.start();
+            engine = new Handler(renderThread.getLooper());
+        }
+        final Handler h = engine;
         h.post(() -> {
-            Lookout l = Lookout.openCharts(chartPaths, surface, wPx, hPx, wPts, hPts, true);
-            if (l == null) return;
-            // The surface's own extent lags a rotation, so the engine is TOLD
-            // the scale rather than left to infer it — before the first build.
-            l.setDensity(density);
-            // The symbols and the text are sized for 1x until the engine is
-            // told the display's scale. Without this they draw too small and
-            // their pick geometry with them.
-            l.setDeviceScale(density);
-            // Also before the first build: the mariner's saved settings and the
-            // saved view, or the chart tessellates once at defaults and again
-            // immediately. Safe inline — no frame runs until lk is published.
-            controller.attach(l, h);
-            lk = l; // published LAST: onEngine and doFrame both gate on it
+            Lookout l = lk;
+            if (l != null && l.isAttached()) {
+                // A resize rebuilds the swapchain and the api lock it takes is
+                // held for a whole frame, which is why this is not done on the
+                // UI thread: there a rotation becomes an input-dispatch ANR.
+                l.resize(wPts, hPts);
+                return;
+            }
+            if (l != null && !l.attachSurface(surface, wPts, hPts)) {
+                // The new surface would not offer the format the pipelines were
+                // built for. A slow chart beats no chart, so reopen.
+                android.util.Log.w("lookout", "surface would not attach; reopening the library");
+                controller.detach(l);
+                l.close();
+                lk = null;
+                l = null;
+            }
+            if (l == null) {
+                l = Lookout.openCharts(chartPaths, surface, wPx, hPx, wPts, hPts, true);
+                if (l == null) return;
+                // The surface's own extent lags a rotation, so the engine is
+                // TOLD the scale rather than left to infer it, before the first
+                // build.
+                l.setDensity(density);
+                // The symbols and the text are sized for 1x until the engine is
+                // told the display's scale. Without this they draw too small
+                // and their pick geometry with them.
+                l.setDeviceScale(density);
+                // Also before the first build: the mariner's saved settings and
+                // the saved view, or the chart tessellates once at defaults and
+                // again immediately. Safe inline, no frame runs until lk is
+                // published.
+                controller.attach(l, h);
+                lk = l; // published LAST: onEngine and doFrame both gate on it
+            }
+            lastFrameNs = 0; // a new surface is not a continuation of the old
             // Choreographer is per-thread; this already IS the render thread.
             Choreographer.getInstance().postFrameCallback(this);
         });
     }
 
+    /**
+     * The surface is going, but the engine is not. Android destroys a
+     * SurfaceView's surface every time the app backgrounds, and reopening the
+     * library on the way back costs seconds; only the Vulkan surface and its
+     * swapchain have to go, so the plugins keep running and an alarm nobody has
+     * answered goes on sounding.
+     *
+     * Blocks until the render thread has stopped drawing and let the surface
+     * go, because the platform frees it the moment this returns. Both the frame
+     * callback and the detach run on that one thread, so a single barrier
+     * covers both, and the wait is far shorter than the close this replaced.
+     */
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        // close() must be externally serialized against every other call (the
-        // C ABI contract): stop the render thread first, then close.
+        final Handler h = engine;
+        final Lookout l = lk;
+        if (h == null || l == null) return;
+        final CountDownLatch done = new CountDownLatch(1);
+        h.post(() -> {
+            Choreographer.getInstance().removeFrameCallback(this);
+            l.detachSurface();
+            done.countDown();
+        });
+        try {
+            done.await();
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * The view itself is going: switching chart library replaces it, and so
+     * does the Activity being destroyed. The engine still belongs to this view,
+     * so it closes with it. Externally serialized the way the C ABI asks, by
+     * stopping the render thread first.
+     */
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
         if (renderThread != null) {
             renderThread.quitSafely();
             try {
@@ -420,10 +473,9 @@ public final class LookoutView extends SurfaceView
             renderThread = null;
             engine = null;
         }
-        // The render thread is stopped, so no more native calls are in flight;
-        // drop the controller's reference before the handle dies — passing OUR
-        // handle so a later teardown can't detach the controller from a newer
-        // view's engine (switching library recreates this view).
+        // Nothing is in flight now; drop the controller's reference before the
+        // handle dies, passing OUR handle so a later teardown cannot detach the
+        // controller from a newer view's engine.
         controller.detach(lk);
         if (lk != null) {
             lk.close();
@@ -495,7 +547,9 @@ public final class LookoutView extends SurfaceView
     @Override
     public void doFrame(long frameTimeNanos) {
         Lookout l = lk;
-        if (l == null) return; // surface tearing down: stop rescheduling
+        // No handle, or a handle with no surface to present on: either way stop
+        // rescheduling. surfaceChanged starts the loop again when one arrives.
+        if (l == null || !l.isAttached()) return;
         double dt = lastFrameNs == 0 ? 0.0 : (frameTimeNanos - lastFrameNs) / 1e9;
         lastFrameNs = frameTimeNanos;
         if (dt > 0.1) dt = 0.1; // resumed from pause: don't lurch the ease
