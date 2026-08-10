@@ -1261,6 +1261,67 @@ pub const Gpu = struct {
         }
     }
 
+    /// Drop the presentation surface and everything sized to it, keeping the
+    /// device and every object on it: the pipelines, the render passes, the
+    /// atlases and the scene all stand. renderWindow answers false until
+    /// attachSurface brings a new one.
+    ///
+    /// A VkSurfaceKHR wraps the host's window handle, so the host is free to
+    /// destroy that handle the moment this returns.
+    pub fn detachSurface(self: *Gpu) void {
+        if (self.surface == null) return;
+        _ = vk.vkDeviceWaitIdle(self.device);
+        self.destroySwapchainViews();
+        if (self.swapchain != null) vk.vkDestroySwapchainKHR(self.device, self.swapchain, null);
+        self.swapchain = null;
+        self.releaseMsaa();
+        self.releaseDepth();
+        vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
+        self.surface = null;
+        self.window = null;
+        logInfo("vk: surface detached (device kept)", .{});
+    }
+
+    /// Present on a new host window, on the device already standing: only the
+    /// surface and the swapchain are built. `opts` names the new handle; its
+    /// width/height are ignored, the swapchain adopting the window's own extent.
+    ///
+    /// Fails when the new surface does not offer the color format the render
+    /// pass and every pipeline were built for, because adopting another one
+    /// means rebuilding both. Nothing is attached after a failure, so a caller
+    /// that cannot proceed without a view reopens.
+    pub fn attachSurface(self: *Gpu, opts: Options) !void {
+        self.detachSurface();
+        try self.createSurface(self.instance, opts);
+        errdefer {
+            vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
+            self.surface = null;
+            self.window = null;
+        }
+        if (!self.surfaceHasFormat()) {
+            logErr("vk: reattached surface lost format %d", .{@as(c_int, @intCast(self.color_format))});
+            return error.VulkanFailure;
+        }
+        try self.createSwapchain();
+        self.size_changed_ms = ticksMs();
+        logInfo("vk: surface attached %ux%u (sc=%u)", .{ self.width, self.height, self.sc_count });
+    }
+
+    /// True while this surface still offers the exact format+colorspace pair
+    /// init picked and the render pass was built against.
+    fn surfaceHasFormat(self: *Gpu) bool {
+        var n: u32 = 0;
+        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(self.phys, self.surface, &n, null);
+        if (n == 0) return false;
+        var fmts: [32]vk.VkSurfaceFormatKHR = undefined;
+        if (n > fmts.len) n = fmts.len;
+        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(self.phys, self.surface, &n, &fmts);
+        for (fmts[0..n]) |f| {
+            if (f.format == self.color_format and f.colorSpace == self.color_space) return true;
+        }
+        return false;
+    }
+
     /// Load a vkCreate*SurfaceKHR by name and call it. Loading rather than
     /// linking is what lets this file know about four window systems while
     /// depending on none of their headers or libraries — a driver missing the
@@ -1281,7 +1342,12 @@ pub const Gpu = struct {
     pub fn resize(self: *Gpu, width_pts: u32, height_pts: u32) !void {
         self.host_pt_w = @floatFromInt(width_pts);
         self.host_pt_h = @floatFromInt(height_pts);
-        if (self.surface == null) {
+        // `external_window` separates the two ways surface can be null: a
+        // snapshot-only Gpu, which needs offscreen targets at the new size, and
+        // a host window that has gone away, which needs nothing until one comes
+        // back. Sizing offscreen targets for the second would allocate a
+        // full-screen image per resize for a view nobody can see.
+        if (self.surface == null and !self.external_window) {
             // No swapchain to adopt a size from, so the target IS the host's
             // declared viewport scaled by the density it declared. resize()
             // means POINTS on every path, offscreen included — the texture host

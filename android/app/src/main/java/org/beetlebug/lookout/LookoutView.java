@@ -2,12 +2,9 @@ package org.beetlebug.lookout;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.HandlerThread;
-import android.view.Choreographer;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
-import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
@@ -15,24 +12,25 @@ import android.view.SurfaceView;
  * The chart view: a SurfaceView the Zig core renders into via Vulkan, with
  * platform gesture recognizers driving the camera — one finger pans, pinch
  * zooms about the focal point, double-tap zooms in a level, long-press cycles
- * day/dusk/night. A Choreographer frame callback renders only when the core
- * says something changed (needsRedraw/animating), so an idle chart costs no
- * GPU and no battery.
+ * day/dusk/night.
+ *
+ * It does NOT own the engine. {@link ChartEngine} does, for the whole process,
+ * and this hands it a surface while there is one to hand over: Android destroys
+ * a SurfaceView's surface every time the app backgrounds, and the engine has to
+ * outlive that. What belongs here is the surface, the gestures and the touch
+ * track, and one frame hook that turns that track into the pan the engine
+ * applies before it draws.
  *
  * All camera calls are in LOGICAL points: pixel coordinates divide by the
  * display density before crossing into the core (whose camera unit is dp).
  */
-public final class LookoutView extends SurfaceView
-        implements SurfaceHolder.Callback, Choreographer.FrameCallback {
+public final class LookoutView extends SurfaceView implements SurfaceHolder.Callback {
 
     // Every cell to compose, not one chart: a pushed library is opened whole.
     private final String[] chartPaths;
     private final float density;
     private final ChartController controller;
-    // Written on the main thread (surfaceChanged/surfaceDestroyed), read on the
-    // render thread — the C ABI's api lock serializes the actual native calls.
-    private volatile Lookout lk;
-    private long lastFrameNs;
+    private final ChartEngine engine = ChartEngine.get();
 
     // ---- touch track (input resampling) -------------------------------------
     // Pan is NOT applied when the touch lands. MotionEvents are delivered on the
@@ -75,20 +73,24 @@ public final class LookoutView extends SurfaceView
     private boolean haveLast;
     private final GestureDetector gestures;
     private final ScaleGestureDetector scaler;
-    // Frames run on a dedicated render thread (the C ABI's intended shape:
-    // gestures on main, lookout_render on a render thread). A rebuild after a
-    // zoom re-tessellates for ~a second — on the main thread that froze the UI
-    // ("Skipped N frames"); here it only occupies the render thread, and the
-    // engine tessellation itself runs on a further worker inside the core.
-    private HandlerThread renderThread;
-    // Gestures post here instead of calling in directly: the C ABI's per-handle
-    // lock is held for a whole frame, so a UI-thread call froze for that long.
-    private volatile Handler engine;
 
-    /** Run something on the render thread, or drop it if there is no engine. */
-    private void onEngine(Runnable r) {
-        Handler h = engine;
-        if (h != null && lk != null) h.post(r);
+    /** Something to do to the engine, on the engine's own thread. */
+    private interface EngineTask {
+        void run(Lookout l);
+    }
+
+    /**
+     * Run something on the render thread, or drop it if there is no engine yet.
+     * Gestures post instead of calling in directly: the C ABI's per-handle lock
+     * is held for a whole frame, so a UI-thread call froze for that long.
+     */
+    private void onEngine(EngineTask t) {
+        Handler h = engine.getQueue();
+        if (h == null) return;
+        h.post(() -> {
+            Lookout l = engine.getLookout();
+            if (l != null) t.run(l);
+        });
     }
 
     public LookoutView(Context context, String[] chartPaths, ChartController controller) {
@@ -109,7 +111,7 @@ public final class LookoutView extends SurfaceView
             @Override
             public boolean onDoubleTap(MotionEvent e) {
                 final float x = e.getX() / density, y = e.getY() / density;
-                onEngine(() -> lk.zoomAt(1.0, x, y));
+                onEngine(l -> l.zoomAt(1.0, x, y));
                 return true;
             }
 
@@ -125,7 +127,7 @@ public final class LookoutView extends SurfaceView
              *  logical-unit, so scale before crossing. */
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
-                onEngine(() -> lk.flingStart(vx / density, vy / density));
+                onEngine(l -> l.flingStart(vx / density, vy / density));
                 return true;
             }
 
@@ -142,7 +144,7 @@ public final class LookoutView extends SurfaceView
             public boolean onDown(MotionEvent e) {
                 // A new grab stops any coast, so the chart doesn't slide out
                 // from under the finger that just caught it.
-                onEngine(() -> lk.flingStart(0, 0));
+                onEngine(l -> l.flingStart(0, 0));
                 return true; // claim the stream
             }
         });
@@ -154,7 +156,7 @@ public final class LookoutView extends SurfaceView
                 if (f > 0) {
                     final double dz = Math.log(f) / Math.log(2.0);
                     final float fx = det.getFocusX() / density, fy = det.getFocusY() / density;
-                    onEngine(() -> lk.zoomAt(dz, fx, fy));
+                    onEngine(l -> l.zoomAt(dz, fx, fy));
                 }
                 return true;
             }
@@ -281,7 +283,7 @@ public final class LookoutView extends SurfaceView
             case MotionEvent.ACTION_UP:
                 if (twoTap && e.getEventTime() - twoDownMs < 300) {
                     final float mx = twoMidX / density, my = twoMidY / density;
-                    onEngine(() -> lk.zoomAt(-1.0, mx, my));
+                    onEngine(l -> l.zoomAt(-1.0, mx, my));
                 }
                 twoTap = false;
                 rotating = false;
@@ -329,7 +331,7 @@ public final class LookoutView extends SurfaceView
         final float cx = getWidth() * 0.5f / density, cy = getHeight() * 0.5f / density;
         final double r = Math.toRadians(d);
         // A unit vector before and after the sweep, offset from the centre.
-        onEngine(() -> lk.rotateDrag(cx + 100f, cy,
+        onEngine(l -> l.rotateDrag(cx + 100f, cy,
                 cx + 100f * (float) Math.cos(r), cy + 100f * (float) Math.sin(r)));
     }
 
@@ -338,7 +340,7 @@ public final class LookoutView extends SurfaceView
      *  the Activity's onGenericMotionEvent fallback — scroll events arrive
      *  there instead when the pointer isn't hover-focused on this view. */
     public boolean handleScroll(MotionEvent e) {
-        if (e.getActionMasked() != MotionEvent.ACTION_SCROLL || lk == null) return false;
+        if (e.getActionMasked() != MotionEvent.ACTION_SCROLL || engine.getLookout() == null) return false;
         float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
         if (v == 0) v = e.getAxisValue(MotionEvent.AXIS_SCROLL); // rotary encoders
         android.util.Log.i("lookout", "scroll: src=0x" + Integer.toHexString(e.getSource())
@@ -351,7 +353,7 @@ public final class LookoutView extends SurfaceView
         }
         final double dz = v * 0.5;
         final float zx = x / density, zy = y / density;
-        onEngine(() -> lk.zoomAt(dz, zx, zy));
+        onEngine(l -> l.zoomAt(dz, zx, zy));
         return true;
     }
 
@@ -366,72 +368,32 @@ public final class LookoutView extends SurfaceView
         // dimensions arrive in surfaceChanged
     }
 
+    /**
+     * Hand the surface to the engine. It opens the library on the first one and
+     * starts its frame loop on every one; a size change on a surface it already
+     * holds is a resize.
+     */
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int wPx, int hPx) {
         final int wPts = Math.round(wPx / density), hPts = Math.round(hPx / density);
-        if (lk != null) {
-            // Onto the render thread: a resize rebuilds the swapchain, and the
-            // api lock it takes is held for a whole frame — parking the UI
-            // thread here is how a rotation turns into an input-dispatch ANR.
-            onEngine(() -> lk.resize(wPts, hPts));
-            return;
-        }
-        // The open is tens of seconds on a real library — one tile57_chart_open
-        // per cell (7000+), the atlas bake, Vulkan bring-up — and it scales with
-        // the library, so on the UI thread it is an ANR on every launch.
-        // Start the render thread FIRST and open there.
-        final Surface surface = holder.getSurface();
-        lastFrameNs = 0;
-        renderThread = new HandlerThread("lookout-render");
-        renderThread.start();
-        final Handler h = new Handler(renderThread.getLooper());
-        engine = h;
-        h.post(() -> {
-            Lookout l = Lookout.openCharts(chartPaths, surface, wPx, hPx, wPts, hPts, true);
-            if (l == null) return;
-            // The surface's own extent lags a rotation, so the engine is TOLD
-            // the scale rather than left to infer it — before the first build.
-            l.setDensity(density);
-            // The symbols and the text are sized for 1x until the engine is
-            // told the display's scale. Without this they draw too small and
-            // their pick geometry with them.
-            l.setDeviceScale(density);
-            // Also before the first build: the mariner's saved settings and the
-            // saved view, or the chart tessellates once at defaults and again
-            // immediately. Safe inline — no frame runs until lk is published.
-            controller.attach(l, h);
-            lk = l; // published LAST: onEngine and doFrame both gate on it
-            // Choreographer is per-thread; this already IS the render thread.
-            Choreographer.getInstance().postFrameCallback(this);
-        });
+        engine.attach(holder.getSurface(), chartPaths, controller, density,
+                wPx, hPx, wPts, hPts, this::applyPan);
     }
 
+    /**
+     * Take the surface back. The engine keeps everything else, so returning
+     * from the background costs a swapchain instead of an open of the whole
+     * library, and the plugins go on running with their alerts intact.
+     *
+     * The engine blocks until its render thread has let the surface go, which
+     * this call must do: the platform frees it the moment this returns.
+     */
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        // close() must be externally serialized against every other call (the
-        // C ABI contract): stop the render thread first, then close.
-        if (renderThread != null) {
-            renderThread.quitSafely();
-            try {
-                renderThread.join();
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            renderThread = null;
-            engine = null;
-        }
-        // The render thread is stopped, so no more native calls are in flight;
-        // drop the controller's reference before the handle dies — passing OUR
-        // handle so a later teardown can't detach the controller from a newer
-        // view's engine (switching library recreates this view).
-        controller.detach(lk);
-        if (lk != null) {
-            lk.close();
-            lk = null;
-        }
+        engine.detach();
     }
 
-    // ---- frame loop (render thread) -----------------------------------------
+    // ---- the frame hook (render thread) -------------------------------------
     /**
      * Pan by however far the touch focus travelled between the last frame and
      * this one, read off the track at each frame's own timestamp. Interpolates
@@ -490,23 +452,5 @@ public final class LookoutView extends SurfaceView
         lastFy = y;
         lastEpoch = epoch;
         haveLast = true;
-    }
-
-    @Override
-    public void doFrame(long frameTimeNanos) {
-        Lookout l = lk;
-        if (l == null) return; // surface tearing down: stop rescheduling
-        double dt = lastFrameNs == 0 ? 0.0 : (frameTimeNanos - lastFrameNs) / 1e9;
-        lastFrameNs = frameTimeNanos;
-        if (dt > 0.1) dt = 0.1; // resumed from pause: don't lurch the ease
-        // Before anything reads the camera: this frame's share of the drag.
-        applyPan(l, frameTimeNanos);
-        boolean animating = l.animating();
-        if (animating && dt > 0) l.tickAnim(dt);
-        if (animating || l.needsRedraw()) l.render();
-        // Sample the HUD here rather than on a timer: the readouts describe the
-        // frame that was just presented. The controller throttles the push.
-        controller.onFrameRendered(frameTimeNanos);
-        Choreographer.getInstance().postFrameCallback(this); // this thread's Choreographer
     }
 }

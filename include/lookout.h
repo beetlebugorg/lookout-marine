@@ -86,6 +86,29 @@ lookout *lookout_open_charts_in_window(lookout_native_kind kind, void *native_ha
                                        uint32_t width, uint32_t height, int want_msaa);
 void lookout_close(lookout *h);
 
+/* Give up the host's surface WITHOUT closing the chart, for a shell whose
+ * window comes and goes under it: an Android SurfaceView loses its surface
+ * every time the app backgrounds, and closing there throws away a library that
+ * takes seconds to reopen. The GPU surface and its swapchain go; the opened
+ * cells, the atlas bake, the scene and the plugin layer with its alerts all
+ * stand. The native handle is free the moment this returns.
+ *
+ * Also hands back the engine's reclaimable caches when a memory warning has
+ * asked for them, because there is no frame left to do it in.
+ *
+ * Externally serialized like lookout_close: no other call may be in flight,
+ * and nothing may render until a surface is attached again. */
+void lookout_detach_surface(lookout *h);
+
+/* Present on a new native surface after a detach: `kind` and `native_handle`
+ * are the pair lookout_open_in_window took, width and height are LOGICAL
+ * points. Only the surface and the swapchain are rebuilt. Returns 0, or -1
+ * when the new surface cannot be adopted, which leaves the chart detached so a
+ * host that must have a view can fall back to reopening. */
+int  lookout_attach_surface(lookout *h, lookout_native_kind kind,
+                            void *native_handle,
+                            uint32_t width, uint32_t height);
+
 /* ---- wasm plugins (prototype) ------------------------------------------ */
 /* Load and start the plugins in `dir`: every "<id>.manifest.json" with an
  * "<id>.wasm" beside it, which is the layout `zig build plugins` installs into

@@ -11,9 +11,9 @@ import android.view.Surface;
  * open(), whose widthPx/heightPx describe the Surface itself.
  *
  * Threading: the native side holds an api lock per call, so gestures (main
- * thread) and the frame loop (LookoutView's render thread) may call
- * concurrently. close() is the exception — stop the render thread first
- * (LookoutView.surfaceDestroyed does).
+ * thread) and the frame loop (the render thread) may call concurrently.
+ * close(), attachSurface() and detachSurface() are the exceptions: run them on
+ * the render thread with the frame loop stopped.
  */
 public final class Lookout implements AutoCloseable {
     static {
@@ -62,6 +62,38 @@ public final class Lookout implements AutoCloseable {
             h = 0;
         }
     }
+
+    /**
+     * Give up the Surface without closing the chart. Android destroys a
+     * SurfaceView's surface every time the app backgrounds, and the library
+     * behind it takes seconds to reopen; only the Vulkan surface and swapchain
+     * have to go. Also hands the engine's reclaimable caches back, since no
+     * frame will run to do it.
+     *
+     * Externally serialized like {@link #close}: no other call in flight, and
+     * no rendering until {@link #attachSurface} has answered true.
+     */
+    public void detachSurface() {
+        if (h == 0) return;
+        nDetachSurface(h);
+        attached = false;
+    }
+
+    /**
+     * Present on a new Surface. False when it cannot be adopted, which leaves
+     * the engine detached for the caller to reopen.
+     */
+    public boolean attachSurface(Surface surface, int wPts, int hPts) {
+        if (h == 0) return false;
+        attached = nAttachSurface(h, surface, wPts, hPts);
+        return attached;
+    }
+
+    /** True while a Surface is attached and frames can run. */
+    public boolean isAttached()                  { return attached; }
+
+    /** Written on the render thread beside the calls above, read anywhere. */
+    private volatile boolean attached = true;
 
     public boolean isOpen()                      { return h != 0; }
     /** Logical points (px / density). */
@@ -170,6 +202,8 @@ public final class Lookout implements AutoCloseable {
                                            int widthPts, int heightPts, boolean msaa);
     private static native void nSetCacheDir(String path);
     private static native void nClose(long h);
+    private static native void nDetachSurface(long h);
+    private static native boolean nAttachSurface(long h, Surface surface, int wPts, int hPts);
     private static native void nResize(long h, int wPts, int hPts);
     private static native void nSetDensity(long h, float d);
     private static native void nSetDeviceScale(long h, float scale);

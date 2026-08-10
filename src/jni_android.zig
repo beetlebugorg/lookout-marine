@@ -8,10 +8,11 @@
 //! the camera's own unit. Java divides pixels by DisplayMetrics.density before
 //! crossing; gpu_vk derives pixel_density from surface px / resize() points.
 //!
-//! Threading: gestures call in on the main thread while LookoutView's frame
-//! loop calls nRender/nTickAnim on a dedicated render thread — the C ABI's
-//! api lock serializes them (its documented shape). nClose is externally
-//! serialized: the shell stops the render thread before closing.
+//! Threading: gestures call in on the main thread while the frame loop calls
+//! nRender/nTickAnim on a dedicated render thread, and the C ABI's api lock
+//! serializes them (its documented shape). nClose, nAttachSurface and
+//! nDetachSurface are externally serialized: the shell runs them on the render
+//! thread with the frame loop stopped.
 const std = @import("std");
 
 const j = @cImport({
@@ -29,6 +30,8 @@ const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg
 extern fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_close(h: ?*anyopaque) void;
+extern fn lookout_detach_surface(h: ?*anyopaque) void;
+extern fn lookout_attach_surface(h: ?*anyopaque, kind: c_int, native_handle: ?*anyopaque, width: u32, height: u32) c_int;
 extern fn lookout_set_cache_dir(path: [*:0]const u8) void;
 extern fn lookout_resize(h: ?*anyopaque, width: u32, height: u32) c_int;
 extern fn lookout_fit_chart(h: ?*anyopaque, v: *lookout_view) c_int;
@@ -60,10 +63,12 @@ extern fn lookout_pick_ranked(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.
 const LOOKOUT_NATIVE_ANDROID_WINDOW: c_int = 7;
 
 /// One Java Lookout instance: the engine handle + the ANativeWindow we
-/// acquired from its Surface (released on close).
+/// acquired from its Surface. Null between nDetachSurface and nAttachSurface,
+/// which is the whole time the app is in the background: the engine outlives
+/// the window it draws into.
 const Handle = struct {
     l: *anyopaque,
-    win: *j.ANativeWindow,
+    win: ?*j.ANativeWindow,
 };
 const gpa = std.heap.c_allocator;
 
@@ -164,8 +169,39 @@ export fn Java_org_beetlebug_lookout_Lookout_nClose(env: [*c]j.JNIEnv, cls: j.jc
     _ = cls;
     const h = fromLong(hl) orelse return;
     lookout_close(h.l);
-    j.ANativeWindow_release(h.win);
+    if (h.win) |w| j.ANativeWindow_release(w);
     gpa.destroy(h);
+}
+
+/// void nDetachSurface(long h) -- surfaceDestroyed. Drops the Vulkan surface
+/// and swapchain and leaves the engine standing, so the return from background
+/// costs a swapchain instead of a reopen of the whole library.
+export fn Java_org_beetlebug_lookout_Lookout_nDetachSurface(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_detach_surface(h.l);
+    // After the core, which held the window through its VkSurfaceKHR.
+    if (h.win) |w| {
+        j.ANativeWindow_release(w);
+        h.win = null;
+    }
+}
+
+/// boolean nAttachSurface(long h, Surface surface, int wPts, int hPts) --
+/// surfaceChanged onto a standing engine. False when the surface cannot be
+/// adopted, which leaves the engine detached for the caller to reopen.
+export fn Java_org_beetlebug_lookout_Lookout_nAttachSurface(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, surface: j.jobject, w_pts: j.jint, h_pts: j.jint) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    if (h.win != null) return 0; // still holding one: detach first
+    const win = j.ANativeWindow_fromSurface(env, surface) orelse return 0;
+    if (lookout_attach_surface(h.l, LOOKOUT_NATIVE_ANDROID_WINDOW, win, @intCast(w_pts), @intCast(h_pts)) != 0) {
+        j.ANativeWindow_release(win);
+        return 0;
+    }
+    h.win = win;
+    return 1;
 }
 
 /// Logical points (dp).
