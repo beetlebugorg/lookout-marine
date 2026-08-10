@@ -62,15 +62,18 @@ data class Readouts(
 )
 
 /**
- * The bridge between [LookoutView] (which owns the Surface and the engine
- * handle) and the Compose chrome. The Android analogue of ChartController.swift
+ * The bridge between [ChartEngine] (which owns the handle and the thread it
+ * runs on) and the Compose chrome. The Android analogue of ChartController.swift
  * plus AppModel.
  *
  * Threading: every public entry point is called on the main thread, but the
  * native calls are POSTED to the render thread ([engine]) — the api lock is held
  * for a whole frame, so calling in directly froze the UI for that long. Results
- * that drive Compose state hop back via [main]. LookoutView stops the render
- * thread before close(), so queued work always drains against a live handle.
+ * that drive Compose state hop back via [main]. The engine stops the frame loop
+ * before it closes, so queued work always drains against a live handle.
+ *
+ * It outlives no more than one Activity, while the engine outlives many, so an
+ * engine that is already open binds to a fresh controller through [rebind].
  */
 class ChartController(private val appContext: Context) {
 
@@ -420,11 +423,50 @@ class ChartController(private val appContext: Context) {
     }
 
     /**
+     * Bind a controller to an engine that is ALREADY open, after the Activity
+     * was destroyed and built again over a process that kept running. Every
+     * effect [attach] has on the engine is already in place, so this only
+     * reads: what is missing is this object's own state and the Compose state
+     * behind it.
+     *
+     * MAIN THREAD; the reading is posted to [queue].
+     */
+    fun rebind(l: Lookout, queue: Handler) {
+        lk = l
+        engine = queue
+        queue.post {
+            lastPluginsJson = null // republish into a registry nobody has seen
+            alertSeq = ALERTS_UNREAD
+            lastAlertNs = 0L
+            lastPushed = null
+            lastRaster = null
+            val v = DoubleArray(Lookout.MARINER_LEN)
+            l.getMariner(v)
+            val date = l.getMarinerDate()
+            republish(l)
+            publishAlerts(l)
+            pushRaster(l)
+            main.post { mariner.loadFrom(v, date) }
+        }
+    }
+
+    /**
+     * The surface is going but the engine is not. Persist the pose here: the
+     * periodic save runs off the frame loop, and there are about to be no
+     * frames.
+     *
+     * RENDER THREAD, inside the detach barrier.
+     */
+    fun onSurfaceDetached() {
+        saveView()
+    }
+
+    /**
      * Drop [l]'s handle — but only if it is still the live one. Switching chart
-     * library recreates the SurfaceView, and the outgoing view's
-     * surfaceDestroyed can land AFTER the incoming view has already attached;
-     * clearing unconditionally would leave the controller detached from a live
-     * engine (a frozen HUD, dead settings) until the next surface change.
+     * library closes the engine and opens another; the outgoing close can land
+     * AFTER the incoming open has already attached, and clearing unconditionally
+     * would leave the controller detached from a live engine (a frozen HUD,
+     * dead settings) until the next surface change.
      */
     fun detach(l: Lookout?) {
         if (l != null && lk !== l) return
@@ -517,6 +559,52 @@ class ChartController(private val appContext: Context) {
     // often that existing visit crosses into the core. A second matches the
     // reference shell and is a fifth of the repeat, so an alarm is on screen
     // well before it sounds twice.
+
+    /**
+     * The engine's one visit with no surface, and so no frame loop. A source
+     * plugin keeps receiving while the app is away and can raise a collision
+     * alarm from its own thread with nothing on screen; this is what looks.
+     *
+     * Answers how long until the next visit, or 0 to stop. Nothing held and
+     * nothing being chased means nothing can happen, so the visits end and a
+     * backgrounded plotter with no instruments plugged in wakes for nothing.
+     *
+     * RENDER THREAD.
+     */
+    fun onBackgroundTick(l: Lookout): Long {
+        publishAlerts(l)
+        val c = connections(l)
+        return when {
+            c.live -> BACKGROUND_LIVE_MS
+            c.trying -> BACKGROUND_TRYING_MS
+            else -> 0L
+        }
+    }
+
+    /** What the source plugins' connection rows say between them. */
+    data class Connections(val live: Boolean, val trying: Boolean)
+
+    /**
+     * Read the connection rows out of the plugin registry. `live` is a session
+     * actually open to a gateway; `trying` also covers the ones being dialled,
+     * which is the difference between a boat under way and one whose gateway is
+     * switched off. A paused, address-less or refused row is neither.
+     *
+     * RENDER THREAD: the native call takes the api lock.
+     */
+    fun connections(l: Lookout): Connections {
+        var live = false
+        var trying = false
+        for (p in PluginRegistry.parse(l.pluginsJson()).plugins) {
+            for (s in p.statusItems.values) {
+                when (s.state) {
+                    "connected" -> { live = true; trying = true }
+                    "reconnecting", "unreachable" -> trying = true
+                }
+            }
+        }
+        return Connections(live, trying)
+    }
 
     /**
      * Sample the core's alert list. RENDER THREAD, off the frame loop, like the
@@ -851,6 +939,20 @@ class ChartController(private val appContext: Context) {
 
         /** No `seq` the core reports, so it can stand for "not answered yet". */
         const val ALERTS_UNREAD = -1L
+
+        /**
+         * The background visit's pace with a connection live. Matches the
+         * frame loop's own alert sampling, and is a fifth of the alarm repeat,
+         * so an alarm is heard well before it would have sounded twice.
+         */
+        const val BACKGROUND_LIVE_MS = 1_000L
+
+        /**
+         * The pace while a connection is only being dialled. Nothing can be
+         * received until one answers, so this is watching for the answer and
+         * nothing else.
+         */
+        const val BACKGROUND_TRYING_MS = 5_000L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
         const val SAVE_INTERVAL_NS = 3_000_000_000L

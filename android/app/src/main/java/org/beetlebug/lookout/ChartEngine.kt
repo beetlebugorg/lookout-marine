@@ -1,0 +1,279 @@
+package org.beetlebug.lookout
+
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import android.view.Choreographer
+import android.view.Surface
+import java.util.concurrent.CountDownLatch
+
+/**
+ * The chart engine and the thread it runs on, owned by the PROCESS.
+ *
+ * Android destroys a SurfaceView's surface whenever the app leaves the
+ * foreground. While the engine belonged to the view it went with the surface,
+ * so pressing HOME threw away the opened library, the atlas bake and the whole
+ * plugin layer, and coming back re-ran an open that costs seconds on a real
+ * chart library. It also silenced any alarm nobody had answered, which is the
+ * part that matters at sea.
+ *
+ * So the surface is what comes and goes and the engine is not. A view hands one
+ * over with [attach] and takes it back with [detach]; in between, the engine
+ * stands with no view at all, holding its charts, its scene and its plugins,
+ * while [backgroundTick] keeps sampling the alerts so an alarm raised with
+ * nobody looking still reaches the mariner.
+ *
+ * The FIRST surface is what opens the library, because a Vulkan device built
+ * with no presentation surface cannot grow one: the instance and device
+ * extensions, the render pass and every pipeline are all chosen at open. Every
+ * surface after that one is optional.
+ *
+ * Threading: [queue] is the render thread, and every native call belongs on it.
+ * The lifecycle calls (open, close, attach, detach) are posted there too, which
+ * is the external serialization the C ABI asks for, and the frame loop is
+ * stopped around them.
+ */
+class ChartEngine private constructor() {
+
+    /** What a view contributes to a frame before the engine draws it. */
+    fun interface FrameHook {
+        /** RENDER THREAD, once per frame, before anything reads the camera. */
+        fun onFrame(l: Lookout, frameTimeNanos: Long)
+    }
+
+    /** The render thread's queue, or null before the first surface. */
+    @Volatile
+    var queue: Handler? = null
+        private set
+
+    /** The open handle, or null before the first surface. */
+    @Volatile
+    var lookout: Lookout? = null
+        private set
+
+    private var thread: HandlerThread? = null
+
+    @Volatile private var controller: ChartController? = null
+    @Volatile private var frameHook: FrameHook? = null
+
+    /** The library this engine was opened on. RENDER THREAD. */
+    private var paths: Array<String> = emptyArray()
+    private var lastFrameNs = 0L
+    private var ticking = false
+
+    /**
+     * Give the engine a surface, opening the library on the first one and
+     * starting the frame loop on every one. Returns at once; the work is the
+     * render thread's.
+     *
+     * A different [chartPaths] is a different engine: the scene, the
+     * composition and the plugin layer all belong to the library, so this
+     * closes and opens again rather than pretending.
+     */
+    fun attach(
+        surface: Surface,
+        chartPaths: Array<String>,
+        controller: ChartController,
+        density: Float,
+        wPx: Int,
+        hPx: Int,
+        wPts: Int,
+        hPts: Int,
+        hook: FrameHook,
+    ) {
+        if (thread == null) {
+            // The open is tens of seconds on a real library (one chart open per
+            // cell, 7000+, the atlas bake, Vulkan bring-up), so nothing below
+            // may run on the UI thread.
+            thread = HandlerThread("lookout-render").also { it.start() }
+            queue = Handler(thread!!.looper)
+        }
+        val h = queue ?: return
+        frameHook = hook
+        h.post {
+            var l = lookout
+            if (l != null && !chartPaths.contentEquals(paths)) {
+                closeOn(l)
+                l = null
+            }
+            if (l != null && this.controller !== controller) {
+                // The Activity was destroyed and built again over a process
+                // that kept running. The ENGINE is already set up; only this
+                // new controller's own state is missing.
+                this.controller = controller
+                controller.rebind(l, h)
+            }
+            if (l != null && l.isAttached) {
+                // A resize rebuilds the swapchain and the api lock it takes is
+                // held for a whole frame, which is why this is not done on the
+                // UI thread: there a rotation becomes an input-dispatch ANR.
+                l.resize(wPts, hPts)
+                return@post
+            }
+            if (l != null && !l.attachSurface(surface, wPts, hPts)) {
+                // The new surface would not offer the format the pipelines were
+                // built for. A slow chart beats no chart, so reopen.
+                Log.w(TAG, "surface would not attach; reopening the library")
+                closeOn(l)
+                l = null
+            }
+            if (l == null) {
+                this.controller = controller
+                l = openOn(surface, chartPaths, controller, density, wPx, hPx, wPts, hPts, h)
+                    ?: return@post
+            }
+            stopBackgroundTick()
+            lastFrameNs = 0 // a new surface is not a continuation of the old
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        }
+    }
+
+    /**
+     * Take the surface back, and BLOCK until the render thread has stopped
+     * drawing and given it up: the platform frees the surface the moment
+     * surfaceDestroyed returns.
+     *
+     * The frame loop and the detach both run on that one thread, so a single
+     * barrier covers both. The wait is far shorter than the close this replaced,
+     * which shut down every plugin and closed every cell on the same thread.
+     */
+    fun detach() {
+        val h = queue ?: return
+        val l = lookout ?: return
+        val done = CountDownLatch(1)
+        h.post {
+            Choreographer.getInstance().removeFrameCallback(frameCallback)
+            frameHook = null
+            controller?.onSurfaceDetached()
+            l.detachSurface()
+            startBackgroundTick()
+            done.countDown()
+        }
+        try {
+            done.await()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    /** Hand the engine's reclaimable caches back. Safe on any thread. */
+    fun memoryWarning() {
+        val h = queue ?: return
+        h.post { lookout?.memoryWarning() }
+    }
+
+    // ---- the frame loop (render thread) -------------------------------------
+
+    private val frameCallback = Choreographer.FrameCallback { t -> doFrame(t) }
+
+    private fun doFrame(frameTimeNanos: Long) {
+        val l = lookout ?: return
+        // No surface to present on: stop rescheduling. attach starts it again.
+        if (!l.isAttached) return
+        var dt = if (lastFrameNs == 0L) 0.0 else (frameTimeNanos - lastFrameNs) / 1e9
+        lastFrameNs = frameTimeNanos
+        if (dt > 0.1) dt = 0.1 // resumed from pause: don't lurch the ease
+        // Before anything reads the camera: the view's share of this frame.
+        frameHook?.onFrame(l, frameTimeNanos)
+        val animating = l.animating()
+        if (animating && dt > 0) l.tickAnim(dt)
+        if (animating || l.needsRedraw()) l.render()
+        // Sample the HUD here rather than on a timer: the readouts describe the
+        // frame that was just presented. The controller throttles the push.
+        controller?.onFrameRendered(frameTimeNanos)
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    // ---- the background visit (render thread, no surface) -------------------
+    //
+    // A source plugin keeps receiving while the app is away, and can raise a
+    // collision alarm at any moment from its own thread. With no frame loop
+    // nothing would ever look, so the alarm would arrive silently and wait for
+    // the mariner to come back on their own. This is the one thing that still
+    // wakes with no view, and it does the least it can: sample the alerts.
+    //
+    // The controller sets the pace and ends it. The visit stops the moment no
+    // connection is held or being chased, so a backgrounded plotter with
+    // nothing plugged in wakes for nothing at all.
+
+    private val backgroundTick = object : Runnable {
+        override fun run() {
+            if (!ticking) return
+            val l = lookout ?: return
+            if (l.isAttached) { // the frame loop has it back
+                ticking = false
+                return
+            }
+            val next = controller?.onBackgroundTick(l) ?: 0L
+            if (next <= 0L) {
+                ticking = false
+                return
+            }
+            queue?.postDelayed(this, next)
+        }
+    }
+
+    private fun startBackgroundTick() {
+        if (ticking) return
+        ticking = true
+        queue?.post(backgroundTick)
+    }
+
+    private fun stopBackgroundTick() {
+        ticking = false
+        queue?.removeCallbacks(backgroundTick)
+    }
+
+    // ---- open and close (render thread) -------------------------------------
+
+    private fun openOn(
+        surface: Surface,
+        chartPaths: Array<String>,
+        controller: ChartController,
+        density: Float,
+        wPx: Int,
+        hPx: Int,
+        wPts: Int,
+        hPts: Int,
+        h: Handler,
+    ): Lookout? {
+        val l = Lookout.openCharts(chartPaths, surface, wPx, hPx, wPts, hPts, true) ?: return null
+        // The surface's own extent lags a rotation, so the engine is TOLD the
+        // scale rather than left to infer it, before the first build.
+        l.setDensity(density)
+        // The symbols and the text are sized for 1x until the engine is told
+        // the display's scale. Without this they draw too small and their pick
+        // geometry with them.
+        l.setDeviceScale(density)
+        // Also before the first build: the mariner's saved settings and the
+        // saved view, or the chart tessellates once at defaults and again
+        // immediately. Safe inline, no frame runs until lookout is published.
+        controller.attach(l, h)
+        paths = chartPaths
+        lookout = l // published LAST: the frame loop gates on it
+        return l
+    }
+
+    private fun closeOn(l: Lookout) {
+        stopBackgroundTick()
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        controller?.detach(l)
+        l.close()
+        lookout = null
+        paths = emptyArray()
+    }
+
+    companion object {
+        private const val TAG = "lookout"
+
+        /**
+         * One engine for the process. Not tied to the Activity: the point of
+         * all this is that it outlives one, and an alarm sounding from a
+         * plugin has to outlive one too.
+         */
+        private val instance = ChartEngine()
+
+        @JvmStatic
+        fun get(): ChartEngine = instance
+    }
+}
