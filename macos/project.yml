@@ -87,11 +87,23 @@ targets:
           # discovery, so hand it the sysroot like the iOS script does.
           MAC_SYSROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
           cd "$SRCROOT/.."
+          # The wasm plugin host, before the core that embeds it. Own ship,
+          # AIS, NMEA 0183, Signal K and laylines are all plugins, so a core
+          # built without the host is a chartplotter with no own ship and no
+          # traffic. build-wamr.sh is idempotent: it compares the WAMR_VERSION
+          # stamp in the dist against the release, commit and feature set it
+          # would build now, and returns in a fraction of a second once they
+          # match. The first run clones and builds the pinned WAMR and takes a
+          # few minutes. -Dplugins is passed explicitly below because its
+          # default is off when the archive is absent, which builds a working
+          # app with no plugin host inside it. Explicit turns that into a build
+          # error naming this script.
+          scripts/build-wamr.sh macos
           # One build: the tile57 engine (zig package dependency) + the lookout
           # core, installing liblookout_marine.a, libtile57.a, and both headers
           # into zig-out/. ReleaseFast is the build.zig default; explicit here
           # so the app build states its intent.
-          zig build -Doptimize=ReleaseFast -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT"
+          zig build -Doptimize=ReleaseFast -Dplugins=true -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT"
           # Zig's outputs are deterministic, so an unchanged core hashes
           # identically — used twice below: to skip the repack, and to force
           # Xcode to relink when the core DID change.
@@ -221,9 +233,12 @@ targets:
           echo "zig cores: lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f "$T57/build.zig" ] && git -C "$T57" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')"
           # Versioned at the deployment minimum — see the macOS target's note.
           IOS_MIN="${IPHONEOS_DEPLOYMENT_TARGET:-26.0}"
+          # build.zig picks the WAMR dist directory from the zig target:
+          # vendor/wamr-dist-iossim for the simulator, vendor/wamr-dist-ios for
+          # a device. The two selections must agree.
           case "$PLATFORM_NAME" in
-            iphonesimulator) ZIG_TARGET="aarch64-ios.${IOS_MIN}-simulator" ;;
-            *)               ZIG_TARGET="aarch64-ios.${IOS_MIN}" ;;
+            iphonesimulator) ZIG_TARGET="aarch64-ios.${IOS_MIN}-simulator"; WAMR_TARGET=iossim ;;
+            *)               ZIG_TARGET="aarch64-ios.${IOS_MIN}";           WAMR_TARGET=ios ;;
           esac
           # The iOS SDK sysroot. $SDKROOT is set by Xcode to the active SDK, so
           # this works in the Xcode build env even when the *shell's* xcrun/
@@ -236,7 +251,11 @@ targets:
           # zig-out-$PLATFORM_NAME/ (device and simulator keep separate
           # prefixes). Zig's cache makes unchanged rebuilds ~instant.
           cd "$SRCROOT/.."
+          # The wasm plugin host for this platform, before the core that embeds
+          # it. See the macOS target for why -Dplugins is explicit.
+          scripts/build-wamr.sh "$WAMR_TARGET"
           zig build -Doptimize=ReleaseFast \
+            -Dplugins=true \
             -Dtarget="$ZIG_TARGET" \
             --sysroot "$SYSROOT" \
             -p "zig-out-$PLATFORM_NAME"

@@ -12,6 +12,7 @@ lives at the `sdl-gpu` git tag.)
 - **Xcode** — macOS 14+ / iOS 15+ deployment targets.
 - **Zig 0.16.0** on `PATH` (`brew install zig`).
 - **XcodeGen** to generate the project (`brew install xcodegen`).
+- **CMake** to build the WAMR runtime (`brew install cmake`).
 
 tile57 is NOT a prerequisite: it's a zig package dependency of the core. A
 sibling checkout at `../../tile57` is used when present (dev setups — engine
@@ -27,12 +28,24 @@ open LookoutMarine.xcodeproj
 ```
 
 Pick a target and Run. The pre-build script runs
-`zig build -Doptimize=ReleaseFast`, which builds the tile57 engine + the
-lookout core and installs the archives and headers into `../zig-out*/`
-(per-platform prefixes for iOS device vs simulator); the app links the
-libtool-repacked pair as `liblookoutall.a`. The Zig cores are ReleaseFast in
-every configuration — build the app itself with Xcode's Release configuration
-for a fully non-debug binary.
+`zig build -Doptimize=ReleaseFast -Dplugins=true`, which builds the tile57
+engine + the lookout core and installs the archives and headers into
+`../zig-out*/` (per-platform prefixes for iOS device vs simulator); the app
+links the libtool-repacked pair as `liblookoutall.a`. The Zig cores are
+ReleaseFast in every configuration — build the app itself with Xcode's Release
+configuration for a fully non-debug binary.
+
+Nothing has to be built by hand first. The same phase runs
+`../scripts/build-wamr.sh` for the platform being built, which produces the
+WAMR archive the plugin host links, and a post-build phase runs
+`zig build plugins` and copies the shipped set into `Resources/Plugins`. Both
+are idempotent and cost a fraction of a second once built; the first run clones
+and builds the pinned WAMR and takes a few minutes. `-Dplugins=true` is
+explicit because its default is off when the archive is absent, which builds a
+working app with no plugin host inside it, so no own ship, no AIS and no
+laylines. Ahead-of-time plugin compilation is not part of this build:
+`scripts/build-plugin-aot.sh` needs LLVM, and `load_aot_modules` in
+`src/plugin/host.zig` is false, so nothing reads its output yet.
 
 **No Xcode?** `macos/build-dev.sh [--zig]` builds the same app with just the
 Command Line Tools (swiftc + a hand-rolled bundle). It fills the slot the Xcode
