@@ -616,6 +616,7 @@ final class AppModel: ObservableObject {
     private func beginBake(sourceDir: String, cells: [ScannedCell]) {
         let job = ChartBakeJob()
         bakeJob = job
+        bakeSource = sourceDir
         let total = cells.filter(\.needsPrepare).count
         bake = BakeProgress(done: 0, total: total,
                             name: (sourceDir as NSString).lastPathComponent)
@@ -631,6 +632,16 @@ final class AppModel: ObservableObject {
         ChartBake.run(sourceDir: sourceDir, cells: cells, job: job) { [weak self] outDir in
             guard let self else { return }
             self.bakeJob = nil
+            // The set was taken off the list while its charts were baking. What
+            // came out is already being deleted, so there is nothing to read
+            // back and nothing to put on the list — and reading it back is how
+            // a removed set used to reappear.
+            guard self.bakeSource == sourceDir else {
+                self.bakeSource = nil
+                self.bake = nil
+                return
+            }
+            self.bakeSource = nil
             // The panel stays up across the last read of the folder. Clearing
             // it here drops the window back to the first-run page for as long
             // as that takes, and then the chart arrives: the mariner watches
@@ -665,6 +676,10 @@ final class AppModel: ObservableObject {
     func cancelBake() {
         bakeJob?.cancel()
     }
+
+    /// The folder or archive the running bake is preparing, so that removing
+    /// that set can stop it and disown what it produces.
+    private var bakeSource: String?
 
     /// Switch a set on or off. It stays aboard either way. The library is
     /// composed at open, so this reopens with the new set of charts.
@@ -710,6 +725,16 @@ final class AppModel: ObservableObject {
         // describes every picture it carried. Without this, removing every set
         // leaves "No charts" in the list and a chart still on screen.
         let carried = Set(gone?.rasters.map(\.path) ?? [])
+        // Baking charts for a set that is going away is work on files about to
+        // be deleted, and while it ran the panel went on saying "Importing" over
+        // the removal. Stop it, and disown what it has already produced: the
+        // delete below takes that with the rest.
+        if bakeSource == path {
+            bakeJob?.cancel()
+            bakeJob = nil
+            bake = nil
+            bakeSource = nil
+        }
         chartSets.removeAll { $0.path == path }
         ChartSetStore.remove(path)
         if !carried.isEmpty {
