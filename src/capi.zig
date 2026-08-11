@@ -101,6 +101,8 @@ export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_
 /// EMBED a composed chart LIBRARY into your app's view: like
 /// lookout_open_in_window, but takes MANY baked charts (a directory of cells)
 /// and composes them, presenting into your CAMetalLayer. NULL on error.
+/// n may be 0: a library of raster charts alone opens with no vector chart,
+/// and the host adds the pictures with lookout_raster_add afterwards.
 export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*lookout {
     const list = gpa.alloc([:0]const u8, n) catch return null;
     defer gpa.free(list);
@@ -479,6 +481,48 @@ export fn lookout_atlas_cache_ready() c_int {
 /// HOME apply); Android MUST call it, having no cache path in the environment.
 export fn lookout_set_cache_dir(path: [*:0]const u8) void {
     lk.setCacheRoot(std.mem.span(path));
+}
+
+// ---- the chart library ------------------------------------------------------
+
+/// The last scan's JSON. Held so the pointer the shell reads stays good until
+/// the next scan.
+var scan_json: ?[:0]u8 = null;
+
+/// Add baked charts to the open library. See lookout.h.
+export fn lookout_charts_add(h: ?*lookout, paths: [*]const [*:0]const u8, n: usize) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const list = gpa.alloc([:0]const u8, n) catch return -1;
+    defer gpa.free(list);
+    for (0..n) |i| list[i] = std.mem.span(paths[i]);
+    return @intCast(l.chartsAdd(list));
+}
+
+/// True while the library's ownership partition is being built. See lookout.h.
+export fn lookout_composing(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.loading or l.recomposing) 1 else 0;
+}
+
+/// How many charts the library holds. See lookout.h.
+export fn lookout_charts_count(h: ?*lookout) u32 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return @intCast(l.charts.items.len);
+}
+
+/// Look through `path` for charts. See lookout.h.
+export fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    if (scan_json) |old| gpa.free(old);
+    scan_json = null;
+    var s = lk.scanCharts(gpa, capi_io, std.mem.span(path)) catch return null;
+    defer s.deinit();
+    const json = lk.library.toJson(gpa, &s) catch return null;
+    scan_json = json;
+    if (out_len) |p| p.* = json.len;
+    return json.ptr;
 }
 
 // ---- view ------------------------------------------------------------------

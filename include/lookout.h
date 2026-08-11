@@ -397,6 +397,68 @@ int lookout_atlas_cache_ready(void);
  * apply); Android must call it, having no cache path in its environment. */
 void lookout_set_cache_dir(const char *path);
 
+/* ---- the chart library --------------------------------------------------- */
+
+/* Add baked charts to the OPEN library and compose again. Answers how many
+ * opened, or -1 on error; a chart that will not open is skipped, as at open.
+ *
+ * This is how charts arrive into a running app: a bake finishing, a download
+ * landing, a drive plugged in. The mariner keeps the chart on screen and the
+ * view they were looking at. The composition is rebuilt on a worker thread and
+ * swapped in when it is ready, so the charts already drawn keep drawing until
+ * then; lookout_needs_redraw goes true when the new one lands.
+ *
+ * Adding a chart already in the library opens it twice. The caller knows what
+ * it has; the core does not deduplicate. */
+int lookout_charts_add(lookout *h, const char *const *paths, size_t n);
+
+/* How many charts the library holds. */
+uint32_t lookout_charts_count(lookout *h);
+
+/* 1 while the library's ownership partition is being built, on a worker.
+ *
+ * This is the long wait when a library is large: opening 7,000 archives is
+ * quick, because they are mmap'd rather than read, and then the compositor has
+ * to work out which chart owns each piece of water. A host that shows one
+ * "loading" state for the whole open tells the mariner nothing about which of
+ * the two it is waiting in. */
+int lookout_composing(lookout *h);
+
+/* Look through `path` for charts, and report what is there. `path` is one file
+ * or a directory; a directory is walked to the bottom, because a bake mirrors
+ * the exchange set's tree.
+ *
+ * Call this BEFORE offering a path to the mariner. A chart folder also holds
+ * files that are not charts (CATALOG.031, partition.tpart, the text files a
+ * cell references), and a .pmtiles archive may hold pictures rather than a
+ * chart. Both open in a file panel and neither draws.
+ *
+ * The answer is JSON. `cells` is what this build draws, in path order:
+ *
+ *   {"root":"/Users/x/Charts/ENC_ROOT",
+ *    "sources":12,          cells that must bake before they draw
+ *    "bytes":3691843584,    the bytes of every cell
+ *    "updates":2129,        S-57 update files; each bakes with its base cell
+ *    "other":15623,         files that are not charts
+ *    "refused":1,           archives with a chart name that the engine refused
+ *    "cells":[{"path":"...","name":"US5MD1MC","kind":"baked","band":5,
+ *              "bandName":"Harbor","bytes":1331200,"scale":12000,
+ *              "west":-76.6,"south":38.9,"east":-76.4,"north":39.0}],
+ *    "raster":[{"path":"...","name":"ncds_08.mbtiles","kind":"raster",...}]}
+ *
+ * `kind` is "baked" (draws now) or "source" (an S-57 cell that bakes first).
+ * A cell in `raster` is a picture chart: it belongs to lookout_raster_add, not
+ * here. `scale` and the bounds appear only when the archive carries them.
+ *
+ * Borrowed: valid until the next lookout_scan_charts. *out_len (NULL to
+ * ignore) receives the length. NULL when the path cannot be read. No handle
+ * needed: this runs before anything is open.
+ *
+ * NOT REENTRANT. The answer lives in one buffer that the next call frees, so
+ * two threads scanning at once free each other's answer and both read rubbish.
+ * A host that scans off its main thread must serialize the calls. */
+const char *lookout_scan_charts(const char *path, size_t *out_len);
+
 /* ---- view -------------------------------------------------------------- */
 void lookout_fit_chart(lookout *h, lookout_view *out); /* fit the whole cell */
 void lookout_default_view(lookout *h, lookout_view *out); /* opening view, no saved pose */

@@ -14,6 +14,7 @@ const gpu = @import("gpu.zig");
 const rasterlayer = @import("raster.zig");
 const camera = @import("camera.zig");
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
+pub const library = @import("library.zig"); // what a folder of charts holds
 const atlas = @import("atlas.zig");
 const png = @import("png.zig");
 const ov = @import("overlay.zig");
@@ -573,6 +574,15 @@ pub const Lookout = struct {
     compose_thread: ?std.Thread = null,
     compose_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     compose_result: ?*cc.tile57_compose = null,
+    /// Open with no vector chart: the raster layer is the whole display.
+    /// Nothing tessellates, and every path that reads a cell steps aside.
+    raster_only: bool = false,
+    /// The composition the last one replaced. Closed once the new one is
+    /// adopted: the render thread may still be drawing from it until then.
+    compose_prev: ?*cc.tile57_compose = null,
+    /// A composition is being rebuilt over a library that is already drawing.
+    /// Unlike `loading` this leaves the chart on screen.
+    recomposing: bool = false,
 
     // Coverage of the currently-built (overscanned) scene: rebuild only when the
     // view pans/zooms out of it, so panning within the margin never re-portrays.
@@ -1152,6 +1162,42 @@ pub const Lookout = struct {
         }
     }
 
+    /// Add baked charts to the open library and compose again.
+    ///
+    /// Answers how many opened. A chart that does not open is skipped, as at
+    /// open. The composition is rebuilt on a worker, so the chart on screen
+    /// keeps drawing from the old one until the new one lands: charts arriving
+    /// must never blank the display of the charts already there.
+    pub fn chartsAdd(self: *Lookout, paths: []const [:0]const u8) usize {
+        if (paths.len == 0) return 0;
+        // A build already running was started without these charts. Take it
+        // first, then start one that has them.
+        self.pollCompose(true);
+        // Under the engine lock: a build worker reads `charts` on its own
+        // thread, and appending can reallocate the list out from under it.
+        self.engine_mu.lock();
+        const before = self.charts.items.len;
+        self.openChartPaths(paths);
+        const added = self.charts.items.len - before;
+        self.engine_mu.unlock();
+        if (added == 0) return 0;
+
+        // NOT `loading`. That flag means there is nothing to draw yet, and it
+        // frees the scene and paints the loader pulse over the window. The
+        // charts already open are still drawable, and a mariner adding charts
+        // must not lose the chart under the boat while the rest arrive.
+        self.compose_prev = self.compose;
+        self.recomposing = true;
+        self.compose_done.store(false, .release);
+        self.compose_result = null;
+        self.compose_thread = std.Thread.spawn(.{}, composeWorker, .{self}) catch blk: {
+            self.composeWorker();
+            break :blk null;
+        };
+        self.pollCompose(self.compose_thread == null);
+        return added;
+    }
+
     fn addChartPath(self: *Lookout, path: [:0]const u8) void {
         var err: cc.tile57_error = undefined;
         var chart: ?*cc.tile57_chart = null;
@@ -1218,7 +1264,18 @@ pub const Lookout = struct {
         return handle;
     }
     fn finishOpen(self: *Lookout) !void {
-        if (self.charts.items.len == 0) return error.NoCharts;
+        // A library of raster charts alone is a library. A mariner whose water
+        // the ENC covers badly may carry only photographs of it, and the app
+        // has to open for them. There is no vector scene in that state: the
+        // raster layer draws and the chart layer has nothing to say. The host
+        // adds the pictures after the open, so an empty set is not an error.
+        if (self.charts.items.len == 0) {
+            self.raster_only = true;
+            // There is no scene to tessellate, and that state is current.
+            self.built = true;
+            self.dirty = false;
+            return;
+        }
         // Set an immediate view + zoom clamps from the FIRST cell — no compositor
         // needed — so the window can render right away.
         self.applyZoomAndView();
@@ -1630,18 +1687,34 @@ pub const Lookout = struct {
 
     // Adopt the composed set once its partition build finishes. `block` waits.
     fn pollCompose(self: *Lookout, block: bool) void {
-        if (!self.loading) return;
+        if (!self.loading and !self.recomposing) return;
         if (!block and !self.compose_done.load(.acquire)) return;
         if (self.compose_thread) |t| {
             t.join();
             self.compose_thread = null;
         }
         self.loading = false;
+        self.recomposing = false;
         if (self.compose_result) |c| {
+            // The engine lock, not the API lock. A build worker reads
+            // `compose` on its own thread and holds this lock while tile57
+            // walks it, so the swap and the close of the old one belong
+            // inside it. Closing outside it frees a composition a worker is
+            // in the middle of reading.
+            self.engine_mu.lock();
             self.compose = c;
+            const replaced = self.compose_prev;
+            self.compose_prev = null;
+            if (replaced) |old| cc.tile57_compose_close(old);
+            self.engine_mu.unlock();
+
             self.zl_valid = false; // new partition — the cached per-view max is stale
             self.updateZoomLimits(); // refresh the zoom band; DON'T touch the view
             std.debug.print("composed {d} charts\n", .{self.charts.items.len});
+            // The scene on screen was tessellated from the old composition, so
+            // it holds none of the charts just added. Only a rebuild puts them
+            // on the display.
+            if (replaced != null) self.dirty = true;
         }
         // The loader animated self.g.clear to a dark pulse (see render()); now that
         // we're drawing the chart again, re-derive the live state so the clear goes
@@ -1668,8 +1741,22 @@ pub const Lookout = struct {
         // stays built at the data's max zoom and the MVP magnifies it (same
         // path as a pinch between rebuilds), with the HUD showing an overscale
         // badge (lookout_overscale). S-52 permits overscale WITH indication.
-        self.cam.max_zoom = self.viewMaxZoom() + OVERSCALE_ALLOW;
-        self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
+        const cap = self.viewMaxZoom();
+        self.cam.max_zoom = cap + OVERSCALE_ALLOW;
+        // ZOOMING is capped at the data plus the overscale allowance, above.
+        // PANNING is not, up to a far looser ceiling.
+        //
+        // This ran unconditionally, so crossing into a coarser area changed the
+        // zoom under a mariner who had not asked for it: throw the chart and
+        // the scale moves. The point of the cap is to stop them ending up
+        // magnifying nothing, and the overscale badge already says when they
+        // are past the survey, so panning may leave the scale alone until the
+        // magnification is genuinely useless.
+        self.cam.target_zoom = std.math.clamp(
+            self.cam.target_zoom,
+            self.cam.min_zoom,
+            @max(self.cam.max_zoom, cap + PAN_OVERSCALE_ALLOW),
+        );
     }
 
     /// Deepest servable zoom at the current view centre (tile57_compose_max_zoom_at),
@@ -1704,6 +1791,8 @@ pub const Lookout = struct {
     }
 
     fn zoomRange(self: *Lookout) [2]f64 {
+        // The pictures decide the range when there is no survey to ask.
+        if (self.charts.items.len == 0) return .{ 2, 19 };
         if (self.compose) |c| {
             var m: cc.tile57_compose_meta = undefined;
             cc.tile57_compose_get_meta(c, &m);
@@ -1789,7 +1878,19 @@ pub const Lookout = struct {
         var has_bounds = false;
         var min_zoom: u8 = 0;
         var max_zoom: u8 = 22;
-        {
+        if (self.charts.items.len == 0) {
+            // No survey to frame from, so the pictures decide where to look.
+            // Without this a raster-only library opens wherever the camera
+            // happened to start, which is nowhere near the charts.
+            const b = self.raster.coverage() orelse return .{ .lon = 0, .lat = 0, .zoom = 2 };
+            west = b[0];
+            south = b[1];
+            east = b[2];
+            north = b[3];
+            has_bounds = true;
+            min_zoom = 2;
+            max_zoom = 19;
+        } else {
             // Pick the smallest-area bounded cell as the opening view. Falls back
             // to the first cell's anchor (or the first cell) when none is bounded.
             var best_area: f64 = std.math.floatMax(f64);
@@ -2084,6 +2185,11 @@ pub const Lookout = struct {
     // the next build WOULD use (the target) — comparing against the still-easing
     // camera zoom would re-spawn identical builds all the way through the ease.
     fn needsRebuild(self: *Lookout) bool {
+        // Nothing to rebuild with no vector chart. The coverage a rebuild is
+        // judged against is recorded when a scene is adopted, and a library of
+        // pictures alone never adopts one, so every test below would answer
+        // "yes" forever and the display link would never pause.
+        if (self.charts.items.len == 0) return false;
         if (!self.built) return true;
         if (@abs(self.buildTargetZoom() - self.cov_zoom) > ZOOM_REBUILD) return true;
         const he = self.cam.halfExtents();
@@ -2135,6 +2241,9 @@ pub const Lookout = struct {
     fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
         self.engine_mu.lock();
         defer self.engine_mu.unlock();
+        // Nothing to tessellate with no vector chart. The raster layer draws
+        // on its own, so this is a normal frame, not a failure.
+        if (self.charts.items.len == 0) return false;
         const t0 = gpu.ticksMs();
         const ll = camera.worldToLonLat(job.origin);
         var m0 = job.mariner;
@@ -2263,6 +2372,11 @@ pub const Lookout = struct {
     // Synchronous build (snapshots, and the very first frame so there is
     // something to draw immediately).
     fn buildGpuScene(self: *Lookout) void {
+        if (self.charts.items.len == 0) {
+            self.built = true;
+            self.dirty = false;
+            return;
+        }
         self.ensureAtlases(); // runJob reads atlas_scale for the sprite UVs
         const job = self.jobFor(self.cam.center, self.buildZoom(), false);
         var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
@@ -2296,6 +2410,15 @@ pub const Lookout = struct {
     }
 
     fn spawnBuild(self: *Lookout, job: BuildJob) void {
+        // Nothing to tessellate with no vector chart. Without this the scene
+        // never becomes "built", so needsRedraw never settles, the display
+        // link never pauses, and a library of pictures alone burns a core
+        // doing nothing. Idle has to mean idle.
+        if (self.charts.items.len == 0) {
+            self.built = true;
+            self.dirty = false;
+            return;
+        }
         self.build_job = job;
         self.build_active = true;
         self.build_done.store(false, .release);
@@ -2354,6 +2477,10 @@ pub const Lookout = struct {
     // real rebuild is about to be needed.
     /// Zoom levels the camera may run past the deepest servable data.
     const OVERSCALE_ALLOW = 2.0;
+    /// How far past the data a PAN may leave the view before it eases in. Four
+    /// doublings is 16x magnification: past that the display is a smear and
+    /// easing in is a kindness, short of that it is the mariner's business.
+    const PAN_OVERSCALE_ALLOW = 4.0;
     const PREFETCH_MAX_BUILD_MS = 600;
     const FAIL_BACKOFF_MS = 400;
     /// OS memory warning: drop what can be rebuilt. Engine caches go at the
@@ -2538,7 +2665,7 @@ pub const Lookout = struct {
         self.tickShip();
         if (self.overlayWantsFrame()) return true;
         if (self.followWantsFrame()) return true;
-        return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
+        return self.loading or self.recomposing or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
     }
     pub fn isBuilding(self: *Lookout) bool {
         return self.loading or self.build_active;
@@ -2587,6 +2714,7 @@ pub const Lookout = struct {
         if (self.compose) |c| {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);
         } else {
+            if (self.charts.items.len == 0) return;
             _ = cc.tile57_chart_query(self.charts.items[0], lon, lat, self.cam.zoom, cb, &err);
         }
     }
@@ -2872,6 +3000,36 @@ fn marinerNeedsRebuild(a: Mariner, b: Mariner) bool {
         a.viewing_groups_off != b.viewing_groups_off or a.viewing_groups_off_len != b.viewing_groups_off_len or
         a.scamin_filter_gate != b.scamin_filter_gate or a.show_overscale != b.show_overscale or
         a.text_size_scale != b.text_size_scale or a.sounding_size_scale != b.sounding_size_scale;
+}
+
+// ---- the chart library ------------------------------------------------------
+
+/// tile57's verdict on one baked archive. A picture archive and a foreign
+/// archive both open, so the answer needs the archive's own metadata.
+fn verifyArchive(_: ?*anyopaque, path: [:0]const u8, out: *library.Facts) library.Verdict {
+    var chart: ?*cc.tile57_chart = null;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_chart_open(path.ptr, &chart, &err) != cc.TILE57_OK) return .no;
+    defer cc.tile57_chart_close(chart);
+    var info: cc.tile57_info = undefined;
+    cc.tile57_chart_get_info(chart, &info);
+    if (info.is_raster) return .raster;
+    // A bake embeds the compilation scale and the bands it wrote. An archive
+    // with neither is not one of ours.
+    if (info.bands == 0 and info.native_scale == 0) return .no;
+    out.* = .{
+        .scale = info.native_scale,
+        .bounds = if (info.has_bounds)
+            .{ info.west, info.south, info.east, info.north }
+        else
+            null,
+    };
+    return .chart;
+}
+
+/// Look through `path` for charts this build draws. The caller owns the Scan.
+pub fn scanCharts(alloc: std.mem.Allocator, io: std.Io, path: []const u8) !library.Scan {
+    return library.scan(alloc, io, path, verifyArchive, null);
 }
 
 test {

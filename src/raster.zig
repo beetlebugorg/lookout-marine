@@ -436,6 +436,26 @@ pub const Layer = struct {
         }
     }
 
+    /// The lon/lat box every installed source covers, west, south, east,
+    /// north. Null when nothing is installed. This is what frames the view
+    /// when there is no vector chart to frame from.
+    pub fn coverage(self: *const Layer) ?[4]f64 {
+        var out: ?[4]f64 = null;
+        for (self.sets.items) |*set| {
+            for (set.sources.items) |*src| {
+                const b: [4]f64 = .{ src.info.west, src.info.south, src.info.east, src.info.north };
+                if (b[0] == 0 and b[1] == 0 and b[2] == 0 and b[3] == 0) continue;
+                if (out) |*u| {
+                    u[0] = @min(u[0], b[0]);
+                    u[1] = @min(u[1], b[1]);
+                    u[2] = @max(u[2], b[2]);
+                    u[3] = @max(u[3], b[3]);
+                } else out = b;
+            }
+        }
+        return out;
+    }
+
     /// The world bounds of a set: the union of its enabled sources.
     fn setBounds(self: *const Layer, i: usize) ?Box {
         if (i >= self.sets.items.len) return null;
