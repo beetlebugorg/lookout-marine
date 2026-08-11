@@ -540,14 +540,7 @@ struct ChartWorkPanel: View {
     @State private var open = false
     @State private var cancelling = false
 
-    private var title: String {
-        switch progress.kind {
-        case .removing: return "Removing \(progress.name)"
-        case .finding: return "Finding charts in \(progress.name)"
-        case .importing:
-            return progress.total > 0 ? "Importing \(progress.name)" : "Finding charts in \(progress.name)"
-        }
-    }
+    private var title: String { progress.title }
     /// The detail shows always in the big form, and on request in the small one.
     private var showDetail: Bool { !compact || open }
 

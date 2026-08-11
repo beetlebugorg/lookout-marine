@@ -488,7 +488,13 @@ final class AppModel: ObservableObject {
         // own job, and then Cancel stops only the one the pill happens to
         // hold: the mariner presses stop and the machine keeps working.
         guard bake == nil, !scanning else {
-            emptyPick = "Still working on \(bake?.name ?? scanningName). Wait for it to finish."
+            // The scan at launch has no name to give: it is looking through
+            // everything saved, not one thing the mariner just picked. Without
+            // this the refusal read "Still working on . Wait for it to finish."
+            let busy = bake?.name ?? scanningName
+            emptyPick = busy.isEmpty
+                ? "Still looking through the charts already aboard. Try again in a moment."
+                : "Still working on \(busy). Wait for it to finish."
             return
         }
         scanning = true

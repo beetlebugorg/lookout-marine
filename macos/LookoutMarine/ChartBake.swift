@@ -44,6 +44,18 @@ struct BakeProgress: Equatable {
 
     var fraction: Double { total > 0 ? Double(done) / Double(total) : 0 }
 
+    /// What this work is called, wherever it is shown. One definition: the
+    /// chart window's pill and the Charts panel both read it, and when they
+    /// each had their own, a removal was still headed "Importing".
+    var title: String {
+        switch kind {
+        case .removing: return "Removing \(name)"
+        case .finding: return "Finding charts in \(name)"
+        // A count means the charts have been found and are being converted.
+        case .importing: return total > 0 ? "Importing \(name)" : "Finding charts in \(name)"
+        }
+    }
+
     /// What is left, from the rate so far. Nil until there is enough to say.
     ///
     /// A removal is not timed: it is seconds of disk work, and a countdown on

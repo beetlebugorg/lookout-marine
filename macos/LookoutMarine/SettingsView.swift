@@ -337,7 +337,7 @@ private struct ChartsSections: View {
                 BakeDetail(progress: b, onCancel: { model.cancelBake() }, cancelling: $cancellingBake)
                     .padding(.vertical, 4)
             } header: {
-                Text(b.total > 0 ? "Importing \(b.name)" : "Finding charts in \(b.name)")
+                Text(b.title)
             }
         }
 
