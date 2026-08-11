@@ -298,6 +298,9 @@ final class AppModel: ObservableObject {
         rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
         rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
         chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
+        // Anything a previous run renamed on its way to being deleted.
+        ChartBake.sweepTrash()
+
         // Dev hooks, as $LOOKOUT_OPEN: $LOOKOUT_ADD="<folder or .zip>" adds a
         // chart set at launch and $LOOKOUT_REMOVE="<path>" takes one off,
         // exactly as the Open panel and the Charts list do. Both flows start
