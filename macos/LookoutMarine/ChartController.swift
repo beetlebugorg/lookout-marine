@@ -1030,6 +1030,28 @@ final class ChartController: NSObject {
         guard !sets.isEmpty else { return }
         for s in sets where hidden.contains(s.name) { rasterSetShown(s.id, false) }
         for s in sets where !hidden.contains(s.name) { rasterSetShown(s.id, true) }
+
+        // With no survey open, the imagery IS the chart, and switching a set
+        // off no longer means what it meant when it was said. The mariner hid
+        // it to see the ENC underneath; with the ENC gone, obeying that leaves
+        // them a blank sea and no way to read what they are looking at — so
+        // the set covering this water comes back on. It is named in the pill
+        // and one click from off again, which a blank screen is not.
+        //
+        // What they saved is NOT rewritten. This overrides the choice while
+        // there is no survey to see under; add ENC charts back and the set
+        // they hid is hidden again, which is what they asked for.
+        guard chartCount() == 0 else { return }
+        let here = rasterSets().filter(\.inView)
+        guard !here.isEmpty, !here.contains(where: \.shown), let pick = here.first else { return }
+        rasterSetShown(pick.id, true)
+        lkLog("raster: nothing drawn and no survey aboard — showing \(pick.name)")
+    }
+
+    /// How many vector charts are open. Zero is a library of pictures alone.
+    func chartCount() -> Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_charts_count(h))
     }
 
     /// Turn one raster chart on or off without removing it.
