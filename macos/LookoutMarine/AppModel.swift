@@ -298,17 +298,20 @@ final class AppModel: ObservableObject {
         rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
         rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
         chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
-        // Dev hook, as $LOOKOUT_OPEN: $LOOKOUT_ADD="<folder or .zip>" adds a
-        // chart set at launch, exactly as choosing it in the Open panel does.
-        // Importing is the one flow with no other way in — it starts from a
-        // file picker — so without this it cannot be run except by hand. It
-        // waits for the saved sets, because adding refuses while a scan is
-        // running and the load below starts one.
+        // Dev hooks, as $LOOKOUT_OPEN: $LOOKOUT_ADD="<folder or .zip>" adds a
+        // chart set at launch and $LOOKOUT_REMOVE="<path>" takes one off,
+        // exactly as the Open panel and the Charts list do. Both flows start
+        // from a control in a window, so without these neither can be run
+        // except by hand — and both have gone wrong in ways that only show up
+        // when they are. They wait for the saved sets: adding refuses while a
+        // scan is running, and removing needs the set to be on the list.
         let add = ProcessInfo.processInfo.environment["LOOKOUT_ADD"]
+        let remove = ProcessInfo.processInfo.environment["LOOKOUT_REMOVE"]
         // The panel's list. The open itself does not wait on this: it takes
         // the cheap walk in initialChartPaths and starts drawing.
         loadChartSets { [weak self] in
             if let add { self?.addChartSet(add) }
+            if let remove { self?.removeChartSet(remove) }
         }
     }
 
@@ -689,9 +692,23 @@ final class AppModel: ObservableObject {
     /// by a set the mariner removed is the app hoarding on their disk. A
     /// folder of the mariner's OWN charts is only taken off the list.
     func removeChartSet(_ path: String) {
-        let prepared = chartSets.first { $0.path == path }?.preparedPath
+        let gone = chartSets.first { $0.path == path }
+        let prepared = gone?.preparedPath
+        // The pictures the set carried go with it. syncRasterFromSets keeps a
+        // picture that belongs to no set — that is how the ones added before
+        // sets existed stay aboard — and the moment this set is removed, that
+        // describes every picture it carried. Without this, removing every set
+        // leaves "No charts" in the list and a chart still on screen.
+        let carried = Set(gone?.rasters.map(\.path) ?? [])
         chartSets.removeAll { $0.path == path }
         ChartSetStore.remove(path)
+        if !carried.isEmpty {
+            let kept = rasterPaths.filter { !carried.contains($0) }
+            if kept != rasterPaths {
+                rasterPaths = kept
+                UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+            }
+        }
         syncRasterFromSets()
         if let prepared { ChartBake.deleteDerived(prepared) }
         requestOpen(openPaths)
