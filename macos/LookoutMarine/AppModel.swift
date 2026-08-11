@@ -300,22 +300,9 @@ final class AppModel: ObservableObject {
         chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
-
-        // Dev hooks, as $LOOKOUT_OPEN: $LOOKOUT_ADD="<folder or .zip>" adds a
-        // chart set at launch and $LOOKOUT_REMOVE="<path>" takes one off,
-        // exactly as the Open panel and the Charts list do. Both flows start
-        // from a control in a window, so without these neither can be run
-        // except by hand — and both have gone wrong in ways that only show up
-        // when they are. They wait for the saved sets: adding refuses while a
-        // scan is running, and removing needs the set to be on the list.
-        let add = ProcessInfo.processInfo.environment["LOOKOUT_ADD"]
-        let remove = ProcessInfo.processInfo.environment["LOOKOUT_REMOVE"]
         // The panel's list. The open itself does not wait on this: it takes
         // the cheap walk in initialChartPaths and starts drawing.
-        loadChartSets { [weak self] in
-            if let add { self?.addChartSet(add) }
-            if let remove { self?.removeChartSet(remove) }
-        }
+        loadChartSets()
     }
 
     // MARK: - Opening charts
@@ -621,15 +608,23 @@ final class AppModel: ObservableObject {
         bakeJob = job
         bakeSource = sourceDir
         let total = cells.filter(\.needsPrepare).count
-        bake = BakeProgress(done: 0, total: total,
-                            name: named ?? (sourceDir as NSString).lastPathComponent)
-        job.onProgress = { [weak self] p in
-            guard let self else { return }
+        let title = named ?? (sourceDir as NSString).lastPathComponent
+        bake = BakeProgress(done: 0, total: total, name: title)
+        job.onProgress = { [weak self, weak job] p in
+            // Only the job this model still owns may speak for it. A removed
+            // set cancels its bake, but tile57 stops at the next chart
+            // boundary and goes on reporting until it does — and each report
+            // put the import panel back over the removal.
+            guard let self, let job, self.bakeJob === job else { return }
             // The count moves on tile57's thread once per cell. Keep the total
             // from the scan when tile57 has not counted yet, so the bar never
             // starts at an unknown length.
             var shown = p
             if shown.total == 0 { shown.total = total }
+            // And keep the name chosen here. The job knows the folder it was
+            // given; who made the charts in it is the scan's answer, and every
+            // progress tick would otherwise put the folder name back.
+            shown.name = title
             self.bake = shown
         }
         ChartBake.run(sourceDir: sourceDir, cells: cells, job: job) { [weak self] outDir in
@@ -721,7 +716,12 @@ final class AppModel: ObservableObject {
     /// folder of the mariner's OWN charts is only taken off the list.
     func removeChartSet(_ path: String) {
         let gone = chartSets.first { $0.path == path }
-        let prepared = gone?.preparedPath
+        // A set removed while it was still baking never reached the list, so
+        // there is no scanned preparedPath to read — and the charts already
+        // written would be left on the disk for good. Where its charts would
+        // be is knowable from the path alone; deleting is a no-op when it
+        // holds nothing.
+        let prepared = gone?.preparedPath ?? ChartBake.preparedDirectory(for: path)
         // The pictures the set carried go with it. syncRasterFromSets keeps a
         // picture that belongs to no set — that is how the ones added before
         // sets existed stay aboard — and the moment this set is removed, that

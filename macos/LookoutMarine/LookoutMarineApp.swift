@@ -307,13 +307,27 @@ struct ContentView: View {
                 return !providers.isEmpty
             }
             #endif
-            // Dev hook: LOOKOUT_ADD=PATH adds that folder as a chart set once
+            // Dev hooks: LOOKOUT_ADD=PATH adds that folder as a chart set once
             // the window is up, which is the Add Charts… panel without the
             // panel. Raw cells bake, so this also drives the bake pill.
+            // LOOKOUT_REMOVE=PATH takes one off, as the Charts list does;
+            // "PATH@8" waits eight seconds first, which is the only way to run
+            // the case that matters — a set removed while its own charts are
+            // still baking.
             .onAppear {
-                guard let add = ProcessInfo.processInfo.environment["LOOKOUT_ADD"] else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    model.addChartSet(add)
+                let env = ProcessInfo.processInfo.environment
+                if let add = env["LOOKOUT_ADD"] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        model.addChartSet(add)
+                    }
+                }
+                if let remove = env["LOOKOUT_REMOVE"] {
+                    let parts = remove.split(separator: "@", maxSplits: 1)
+                    let path = String(parts[0])
+                    let after = parts.count > 1 ? (Double(parts[1]) ?? 0) : 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2 + after) {
+                        model.removeChartSet(path)
+                    }
                 }
             }
             // Dev hook for the screenshot protocol: LOOKOUT_SHOW=settings[:tab],
