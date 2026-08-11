@@ -6,7 +6,9 @@
 const std = @import("std");
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
+const library = lk.library;
 const gpuTicksUs = @import("gpu.zig").ticksUs;
+const gpu = @import("gpu.zig");
 
 const DEFAULT_CHART = "/home/claude/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles";
 
@@ -20,6 +22,8 @@ const USAGE =
     \\  --png OUT         day PNG output path (default lookout.png)
     \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
     \\  --raster FILE     a picture chart (.mbtiles) under the chart; repeatable
+    \\  --scan PATH       report what a folder holds, then exit
+    \\  --bake-rasters IN OUT   prepare a folder of BSB/KAP sheets, then exit
     \\  -h, --help        this help
     \\
     \\Writes lookout.png (day), lookout-night.png (palette swap, no
@@ -32,6 +36,89 @@ fn fileExists(path: []const u8) bool {
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
     return true;
+}
+
+/// Drive tile57_bake_rasters over a folder of BSB/KAP sheets, exactly as the
+/// shells do. Isolates the C ABI from the app around it.
+fn bakeRasters(alloc: std.mem.Allocator, in_dir: []const u8, out_dir: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try lk.scanCharts(alloc, io, in_dir);
+    defer s.deinit();
+    var ins: std.ArrayList([:0]const u8) = .empty;
+    defer ins.deinit(alloc);
+    var outs: std.ArrayList([:0]const u8) = .empty;
+    defer outs.deinit(alloc);
+    try std.Io.Dir.cwd().createDirPath(io, out_dir);
+    for (s.raster) |r| {
+        if (r.kind != .raster_source) continue;
+        const stem = std.fs.path.stem(library.baseName(r.path));
+        try ins.append(alloc, r.path);
+        try outs.append(alloc, try std.fmt.allocPrintSentinel(alloc, "{s}/{s}.pmtiles", .{ out_dir, stem }, 0));
+    }
+    std.debug.print("baking {d} sheet(s)\n", .{ins.items.len});
+    const in_ptrs = try alloc.alloc([*:0]const u8, ins.items.len);
+    defer alloc.free(in_ptrs);
+    const out_ptrs = try alloc.alloc([*:0]const u8, outs.items.len);
+    defer alloc.free(out_ptrs);
+    for (ins.items, 0..) |p, k| in_ptrs[k] = p.ptr;
+    for (outs.items, 0..) |p, k| out_ptrs[k] = p.ptr;
+
+    // Names the sheet it is about to read. A sheet that kills the process
+    // leaves its name as the last line, which is how the 0-based palette was
+    // found among 968 of them.
+    const L = struct {
+        var names: []const [:0]const u8 = &.{};
+        fn progress(_: ?*anyopaque, done: u32, total: u32) callconv(.c) bool {
+            if (done < names.len) std.debug.print("  {d}/{d} {s}\n", .{ done, total, library.baseName(names[done]) });
+            return true;
+        }
+    };
+    L.names = ins.items;
+
+    var baked: u32 = 0;
+    var err: cc.tile57_error = undefined;
+    var workers: u32 = @intCast(@max(1, std.Thread.getCpuCount() catch 4));
+    if (std.c.getenv("LOOKOUT_WORKERS")) |w| {
+        workers = std.fmt.parseInt(u32, std.mem.span(w), 10) catch workers;
+    }
+    const st = cc.tile57_bake_rasters(in_ptrs.ptr, out_ptrs.ptr, in_ptrs.len, workers, L.progress, null, null, &baked, &err);
+    std.debug.print("status {d}, baked {d} of {d}, workers {d}\n", .{ st, baked, in_ptrs.len, workers });
+}
+
+/// Print what a folder holds, the way a shell's Add Charts panel reads it.
+/// This is the C ABI's lookout_scan_charts, run from the command line.
+fn scanReport(alloc: std.mem.Allocator, path: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const t0 = gpu.ticksMs();
+    var s = try lk.scanCharts(alloc, io, path);
+    defer s.deinit();
+    const ms = gpu.ticksMs() - t0;
+
+    var bands = [_]usize{0} ** 7;
+    var sources: usize = 0;
+    for (s.cells) |c| {
+        if (c.band <= 6) bands[c.band] += 1;
+        if (c.kind == .source) sources += 1;
+    }
+    std.debug.print("{s}\n  {d} charts in {d} ms\n", .{ s.root, s.cells.len, ms });
+    for (bands[1..], 1..) |n, b| {
+        if (n == 0) continue;
+        std.debug.print("    band {d} {s:<9} {d:>5}\n", .{ b, library.bandName(@intCast(b)), n });
+    }
+    std.debug.print(
+        "  {d:.1} GB   {d} to bake, {d} update files, {d} other files, {d} refused\n",
+        .{
+            @as(f64, @floatFromInt(s.totalBytes())) / (1024.0 * 1024.0 * 1024.0),
+            sources,
+            s.updates,
+            s.other,
+            s.refused,
+        },
+    );
+    if (s.raster.len > 0) {
+        std.debug.print("  {d} picture chart(s), for the raster chart list:\n", .{s.raster.len});
+        for (s.raster) |r| std.debug.print("    {s}\n", .{library.baseName(r.path)});
+    }
 }
 
 fn isDir(path: []const u8) bool {
@@ -124,6 +211,12 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--raster") and i + 1 < args.len) {
             i += 1;
             try rasters.append(alloc, args[i][0.. :0]);
+        } else if (std.mem.eql(u8, a, "--bake-rasters") and i + 2 < args.len) {
+            i += 2;
+            return bakeRasters(alloc, args[i - 1], args[i]);
+        } else if (std.mem.eql(u8, a, "--scan") and i + 1 < args.len) {
+            i += 1;
+            return scanReport(alloc, args[i]);
         } else if (a[0] != '-') {
             chart_path = args[i][0.. :0];
         }

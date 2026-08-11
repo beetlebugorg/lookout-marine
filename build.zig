@@ -514,6 +514,7 @@ pub fn build(b: *std.Build) void {
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
         "src/markers.zig",
+        "src/library.zig",
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
