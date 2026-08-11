@@ -104,7 +104,11 @@ fn scanReport(alloc: std.mem.Allocator, path: []const u8) !void {
         if (c.band <= 6) bands[c.band] += 1;
         if (c.kind == .source) sources += 1;
     }
-    std.debug.print("{s}\n  {d} charts in {d} ms\n", .{ s.root, s.cells.len, ms });
+    if (s.producer) |p| {
+        std.debug.print("{s}\n  {d} charts from {s} in {d} ms\n", .{ s.root, s.cells.len, &p, ms });
+    } else {
+        std.debug.print("{s}\n  {d} charts in {d} ms\n", .{ s.root, s.cells.len, ms });
+    }
     for (bands[1..], 1..) |n, b| {
         if (n == 0) continue;
         std.debug.print("    band {d} {s:<9} {d:>5}\n", .{ b, library.bandName(@intCast(b)), n });

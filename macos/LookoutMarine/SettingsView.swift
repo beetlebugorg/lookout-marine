@@ -391,15 +391,18 @@ private struct ChartSetRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .accessibilityLabel("Draw \(set.name)")
+                .accessibilityLabel("Draw \(set.title)")
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(set.name)
+                    Text(set.title)
                         .fontWeight(.medium)
                         .lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(set.on ? .primary : .secondary)
-                    Text(set.summary)
+                    // Where it came from, under what it is. Two sets from one
+                    // office share a title, so the folder still has to show.
+                    Text(set.title == set.name ? set.summary : "\(set.name) · \(set.summary)")
                         .font(.caption)
+                        .lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -417,7 +420,7 @@ private struct ChartSetRow: View {
                 .help(set.isDerived
                       ? "Remove. The charts this app prepared are deleted; your own cells are untouched."
                       : "Take these charts out of the list. Your files stay where they are.")
-                .accessibilityLabel("Remove \(set.name)")
+                .accessibilityLabel("Remove \(set.title)")
                 .accessibilityHint(set.isDerived
                                    ? "The prepared charts are deleted. Your own cells are untouched."
                                    : "Your files stay where they are.")

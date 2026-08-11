@@ -30,7 +30,7 @@ struct AppCommands: Commands {
                     Text("No charts").foregroundStyle(.secondary)
                 } else {
                     ForEach(model.chartSets) { set in
-                        Toggle(set.name, isOn: Binding(
+                        Toggle(set.title, isOn: Binding(
                             get: { set.on },
                             set: { model.setChartSetOn(set.path, $0) }
                         ))

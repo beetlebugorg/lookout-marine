@@ -526,7 +526,10 @@ final class AppModel: ObservableObject {
                 // S-57 and S-101 cells, and BSB/KAP sheets, are all prepared
                 // the same way and by the same engine call.
                 if set.needsBake > 0 {
-                    self.beginBake(sourceDir: set.path, cells: set.toPrepare)
+                    // By the agency that made them, now that the scan has read
+                    // them and knows. Before it ran, the folder was all there
+                    // was to go on.
+                    self.beginBake(sourceDir: set.path, cells: set.toPrepare, named: set.title)
                     return
                 }
                 self.adopt(set)
@@ -613,13 +616,13 @@ final class AppModel: ObservableObject {
     /// Bake `sourceDir` into the app's own chart directory, then add the
     /// result as the set. The mariner keeps sailing while this runs: it is a
     /// pill in the HUD, not a modal.
-    private func beginBake(sourceDir: String, cells: [ScannedCell]) {
+    private func beginBake(sourceDir: String, cells: [ScannedCell], named: String? = nil) {
         let job = ChartBakeJob()
         bakeJob = job
         bakeSource = sourceDir
         let total = cells.filter(\.needsPrepare).count
         bake = BakeProgress(done: 0, total: total,
-                            name: (sourceDir as NSString).lastPathComponent)
+                            name: named ?? (sourceDir as NSString).lastPathComponent)
         job.onProgress = { [weak self] p in
             guard let self else { return }
             // The count moves on tile57's thread once per cell. Keep the total
@@ -746,7 +749,7 @@ final class AppModel: ObservableObject {
         }
         syncRasterFromSets()
         if let prepared {
-            let name = (path as NSString).lastPathComponent
+            let name = gone?.title ?? (path as NSString).lastPathComponent
             ChartBake.deleteDerived(prepared) { [weak self] p in
                 guard let self else { return }
                 // A removal that is over reports one last time with no name;

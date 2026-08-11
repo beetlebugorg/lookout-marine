@@ -441,6 +441,8 @@ int lookout_composing(lookout *h);
  *    "updates":2129,        S-57 update files; each bakes with its base cell
  *    "other":15623,         files that are not charts
  *    "refused":1,           archives with a chart name that the engine refused
+ *    "producer":"US",       the agency every chart here came from (absent when
+ *                           they disagree, or when none carries a dataset name)
  *    "cells":[{"path":"...","name":"US5MD1MC","kind":"baked","band":5,
  *              "bandName":"Harbor","bytes":1331200,"scale":12000,
  *              "west":-76.6,"south":38.9,"east":-76.4,"north":39.0}],

@@ -72,6 +72,18 @@ pub fn isDatasetName(stem: []const u8) bool {
     return true;
 }
 
+/// The producing agency's code: the first two characters of an S-57 dataset
+/// name, which the standard reserves for it (US5MD12M -> US). Null when the
+/// name is not a dataset name.
+///
+/// This is what lets a library be named by WHO MADE IT rather than by the
+/// folder it arrived in — "All_ENCs.zip" and "ENC_ROOT" say nothing, and the
+/// charts themselves know.
+pub fn producerCode(stem: []const u8) ?[]const u8 {
+    if (!isDatasetName(stem)) return null;
+    return stem[0..2];
+}
+
 /// The usage band an S-57 dataset name carries, or null when the name is not
 /// a dataset name.
 pub fn usageBand(stem: []const u8) ?u8 {
@@ -163,6 +175,10 @@ pub const Scan = struct {
     other: usize,
     /// Files that carry a chart name and that tile57 refused.
     refused: usize,
+    /// The agency every chart here came from, when they all came from one.
+    /// Null when they disagree, or when nothing here carries a dataset name:
+    /// a mixed folder has no one name, and picking one of them would be wrong.
+    producer: ?[2]u8 = null,
 
     pub fn deinit(self: *Scan) void {
         for (self.cells) |c| self.alloc.free(c.path);
@@ -188,6 +204,20 @@ pub const Scan = struct {
         return n;
     }
 };
+
+/// The agency every cell agrees on, or null. A set of charts from two offices
+/// has no single name, and one of the two would be a lie about the rest.
+fn agreedProducer(cells: []const Cell) ?[2]u8 {
+    var found: ?[2]u8 = null;
+    for (cells) |c| {
+        const code = producerCode(c.name) orelse return null;
+        const two: [2]u8 = .{ code[0], code[1] };
+        if (found) |f| {
+            if (!std.mem.eql(u8, &f, &two)) return null;
+        } else found = two;
+    }
+    return found;
+}
 
 /// Walk `root` and name everything under it. `root` is a folder or a single
 /// file. A folder is walked to the bottom, because a bake mirrors the exchange
@@ -241,14 +271,16 @@ pub fn scan(
     std.mem.sort(Cell, cells.items, {}, by_name);
     std.mem.sort(Cell, raster.items, {}, by_name);
 
+    const owned_cells = try cells.toOwnedSlice(alloc);
     return .{
         .alloc = alloc,
         .root = try alloc.dupe(u8, root),
-        .cells = try cells.toOwnedSlice(alloc),
+        .cells = owned_cells,
         .raster = try raster.toOwnedSlice(alloc),
         .updates = counts.updates,
         .other = counts.other,
         .refused = counts.refused,
+        .producer = agreedProducer(owned_cells),
     };
 }
 
@@ -295,14 +327,16 @@ pub fn scanEntries(alloc: std.mem.Allocator, root: []const u8, entries: []const 
     std.mem.sort(Cell, cells.items, {}, by_name);
     std.mem.sort(Cell, raster.items, {}, by_name);
 
+    const owned_cells = try cells.toOwnedSlice(alloc);
     return .{
         .alloc = alloc,
         .root = try alloc.dupe(u8, root),
-        .cells = try cells.toOwnedSlice(alloc),
+        .cells = owned_cells,
         .raster = try raster.toOwnedSlice(alloc),
         .updates = counts.updates,
         .other = counts.other,
         .refused = counts.refused,
+        .producer = agreedProducer(owned_cells),
     };
 }
 
@@ -430,6 +464,12 @@ pub fn toJson(alloc: std.mem.Allocator, s: *const Scan) ![:0]u8 {
     try out.print(alloc, ",\"updates\":{d},\"other\":{d},\"refused\":{d}", .{
         s.updates, s.other, s.refused,
     });
+    // Absent rather than empty when the charts disagree: a host that reads a
+    // producer knows every chart here came from it.
+    if (s.producer) |p| {
+        try out.appendSlice(alloc, ",\"producer\":");
+        try writeJsonString(&out, alloc, &p);
+    }
     try out.print(alloc, ",\"sources\":{d},\"bytes\":{d},\"cells\":[", .{
         s.sourceCount(), s.totalBytes(),
     });
@@ -728,4 +768,48 @@ test "an archive with nothing in it that is a chart" {
     try t.expectEqual(@as(usize, 0), s.cells.len);
     try t.expectEqual(@as(usize, 0), s.raster.len);
     try t.expectEqual(@as(usize, 2), s.other);
+}
+
+test "a library is named by the agency that made it" {
+    const a = t.allocator;
+    // Every NOAA chart carries US in the first two characters: that is the
+    // producer field of an S-57 dataset name, not a guess from the folder.
+    var s = try scanEntries(a, "/Charts/All_ENCs.zip", &.{
+        .{ .name = "ENC_ROOT/US1EEZ3M/US1EEZ3M.000" },
+        .{ .name = "ENC_ROOT/US5MD12M/US5MD12M.000" },
+        .{ .name = "ENC_ROOT/US4MD11M/US4MD11M.pmtiles" },
+    });
+    defer s.deinit();
+    try t.expect(s.producer != null);
+    try t.expectEqualStrings("US", &s.producer.?);
+
+    const json = try toJson(a, &s);
+    defer a.free(json);
+    try t.expect(std.mem.indexOf(u8, json, "\"producer\":\"US\"") != null);
+}
+
+test "charts from two offices have no one name" {
+    const a = t.allocator;
+    var s = try scanEntries(a, "/Charts/mixed", &.{
+        .{ .name = "US5MD12M.000" },
+        .{ .name = "GB5X01SW.000" },
+    });
+    defer s.deinit();
+    try t.expect(s.producer == null);
+
+    // And the field is left out rather than sent empty, so a host cannot read
+    // a blank producer as an agency.
+    const json = try toJson(a, &s);
+    defer a.free(json);
+    try t.expect(std.mem.indexOf(u8, json, "producer") == null);
+}
+
+test "a folder of pictures has no producer to report" {
+    const a = t.allocator;
+    var s = try scanEntries(a, "/Charts/MBTILES", &.{
+        .{ .name = "USA-Atlantic-CMap.mbtiles" },
+        .{ .name = "13205_1.KAP" },
+    });
+    defer s.deinit();
+    try t.expect(s.producer == null);
 }

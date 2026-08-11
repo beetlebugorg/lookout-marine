@@ -63,6 +63,9 @@ struct ChartSet: Identifiable, Hashable {
     /// The folder. It is also the identity: adding the same folder twice
     /// updates the set rather than making a second one.
     let path: String
+    /// The two-character producer code every chart in the set carries, when
+    /// they all carry the same one. From the charts, not the file name.
+    var producer: String?
     /// Where Lookout put what it prepared from this folder, when it prepared
     /// anything. Removing the set deletes this; the folder above is never
     /// touched.
@@ -81,7 +84,44 @@ struct ChartSet: Identifiable, Hashable {
     var on: Bool
 
     var id: String { path }
+    /// What the folder or archive is called. The identity, and the fallback
+    /// name when the charts inside do not agree on who made them.
     var name: String { (path as NSString).lastPathComponent }
+
+    /// What to call this set. The agency that made the charts when they all
+    /// came from one, because "All_ENCs.zip" and "ENC_ROOT" are what a
+    /// download happened to be called and say nothing about what is in it.
+    /// The folder name stays in the line underneath, so two sets from the same
+    /// office are still told apart.
+    var title: String { ChartSet.agency(producer) ?? name }
+
+    /// The hydrographic office a producer code belongs to.
+    ///
+    /// The code is the country's, and for these that is the office a mariner
+    /// would name. An office not listed keeps the folder name rather than
+    /// being given a title invented here: a wrong agency on a chart set is
+    /// worse than a dull one.
+    static func agency(_ code: String?) -> String? {
+        switch code?.uppercased() {
+        case "US": return "NOAA"
+        case "GB": return "UKHO"
+        case "CA": return "CHS"
+        case "AU": return "AHO"
+        case "NZ": return "LINZ"
+        case "NL": return "Netherlands Hydrographic Office"
+        case "DE": return "BSH"
+        case "FR": return "Shom"
+        case "NO": return "Norwegian Hydrographic Service"
+        case "DK": return "Danish Geodata Agency"
+        case "SE": return "Swedish Maritime Administration"
+        case "FI": return "Finnish Transport Agency"
+        case "IE": return "INFOMAR"
+        case "JP": return "Japan Hydrographic Association"
+        case "BR": return "DHN"
+        case "ZA": return "SANHO"
+        default: return nil
+        }
+    }
     /// True when Lookout prepared part of this set. Those files can be made
     /// again, so removing the set deletes them. The mariner's own folder is
     /// never deleted.
@@ -183,9 +223,14 @@ enum ChartScan {
 
             // The archive wins over the file it was made from.
             let readyStems = Set((derived.cells + derived.rasters).map(\.stem))
-            var set = source ?? ChartSet(path: path, preparedPath: nil, cells: [], rasters: [],
+            var set = source ?? ChartSet(path: path, producer: nil, preparedPath: nil,
+                                         cells: [], rasters: [],
                                          updates: 0, other: 0, refused: 0, on: true)
             set.preparedPath = prepared
+            // Whichever half holds the charts knows who made them: a set that
+            // has been imported has them under the prepared directory, and one
+            // that needed no importing has them where the mariner keeps them.
+            set.producer = set.producer ?? derived.producer
             set.cells = derived.cells + set.cells.filter { !readyStems.contains($0.stem) }
             set.rasters = derived.rasters + set.rasters.filter { !readyStems.contains($0.stem) }
             return set
@@ -236,6 +281,7 @@ enum ChartScan {
         }
         return ChartSet(
             path: o["root"] as? String ?? path,
+            producer: o["producer"] as? String,
             preparedPath: nil,
             cells: cells,
             rasters: raster,
