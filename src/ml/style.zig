@@ -33,7 +33,7 @@
 //! host.zig, not a rebuild — see specs/maplibre/concerns.md C9.
 
 const std = @import("std");
-const cc = @import("cabi").c;
+const cc = @import("../c.zig").c;
 const t57 = @import("tile57");
 
 /// The urls the resource provider answers. Kept here rather than in provider.zig

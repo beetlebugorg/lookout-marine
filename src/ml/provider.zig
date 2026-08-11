@@ -32,9 +32,11 @@
 //! fallen behind a pan discards instead of composing tiles nobody wants.
 
 const std = @import("std");
-const cc = @import("cabi").c;
+const cc = @import("../c.zig").c;
 const t57 = @import("tile57");
 const maplibre = @import("maplibre_native_ffi");
+const Lock = @import("../lock.zig").Lock;
+const sleepMs = @import("../lock.zig").sleepMs;
 
 const glyphpbf = t57.sprite.glyphpbf;
 
@@ -67,21 +69,20 @@ pub const Provider = struct {
     /// no compositor and tiles come straight off the archive.
     chart: ?*cc.tile57_chart = null,
     /// Guards `compose`/`chart` against a swap while the worker reads them.
-    src_lock: std.Thread.Mutex = .{},
+    src_lock: Lock = .{},
 
     /// Baked once per (scheme, density) and handed out for the process life.
     sprite_cache: std.ArrayList(SpriteEntry) = .empty,
-    sprite_lock: std.Thread.Mutex = .{},
+    sprite_lock: Lock = .{},
     scheme_now: cc.tile57_scheme = cc.TILE57_SCHEME_DAY,
     catalog_dir: ?[:0]const u8 = null,
 
     /// Glyph ranges are small and re-requested constantly; cache them forever.
     glyph_cache: std.StringHashMapUnmanaged([]u8) = .empty,
-    glyph_lock: std.Thread.Mutex = .{},
+    glyph_lock: Lock = .{},
 
     queue: std.ArrayList(Job) = .empty,
-    queue_lock: std.Thread.Mutex = .{},
-    queue_wake: std.Thread.Condition = .{},
+    queue_lock: Lock = .{},
     worker: ?std.Thread = null,
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -104,9 +105,6 @@ pub const Provider = struct {
 
     pub fn deinit(self: *Provider) void {
         self.stopping.store(true, .release);
-        self.queue_lock.lock();
-        self.queue_wake.broadcast();
-        self.queue_lock.unlock();
         if (self.worker) |w| w.join();
         self.worker = null;
 
@@ -174,7 +172,7 @@ pub const Provider = struct {
         if (!std.mem.startsWith(u8, request.resolved_url, scheme)) return .pass_through;
 
         const ask = parse(request.resolved_url[scheme.len..]) orelse {
-            complete404(h);
+            completeEmpty(h);
             return .handle;
         };
 
@@ -183,7 +181,7 @@ pub const Provider = struct {
             // The url is borrowed for the callback only; the worker needs its
             // own copy of the fontstack name.
             const buf = self.alloc.dupe(u8, ask.glyphs.stack) catch {
-                complete404(h);
+                completeEmpty(h);
                 return .handle;
             };
             job.stack_buf = buf;
@@ -194,15 +192,14 @@ pub const Provider = struct {
         defer self.queue_lock.unlock();
         self.queue.append(self.alloc, job) catch {
             if (job.stack_buf) |b| self.alloc.free(b);
-            complete404(h);
+            completeEmpty(h);
             return .handle;
         };
-        self.queue_wake.signal();
         return .handle;
     }
 
-    fn complete404(h: maplibre.ResourceRequestHandle) void {
-        h.complete(.{ .status = .not_found }) catch {};
+    fn completeEmpty(h: maplibre.ResourceRequestHandle) void {
+        h.complete(.{ .status = .no_content }) catch {};
         h.release();
     }
 
@@ -211,12 +208,13 @@ pub const Provider = struct {
     fn run(self: *Provider) void {
         while (true) {
             self.queue_lock.lock();
-            while (self.queue.items.len == 0) {
-                if (self.stopping.load(.acquire)) {
-                    self.queue_lock.unlock();
-                    return;
-                }
-                self.queue_wake.wait(&self.queue_lock);
+            if (self.queue.items.len == 0) {
+                self.queue_lock.unlock();
+                if (self.stopping.load(.acquire)) return;
+                // Nothing queued. Sleep briefly rather than spin: this thread
+                // exists to keep slow work off MapLibre's, not to burn a core.
+                sleepMs(2);
+                continue;
             }
             const job = self.queue.orderedRemove(0);
             self.queue_lock.unlock();
@@ -246,7 +244,7 @@ pub const Provider = struct {
             // "Nothing here" is not an error for a chart library: most of the
             // world has no cell. A 404 tells MapLibre to stop asking rather
             // than to retry.
-            job.handle.complete(.{ .status = .not_found }) catch {};
+            job.handle.complete(.{ .status = .no_content }) catch {};
         }
 
         // A composed tile is freshly allocated per request; sprite and glyph

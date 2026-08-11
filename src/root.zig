@@ -20,6 +20,11 @@ const png = @import("png.zig");
 const ov = @import("overlay.zig");
 const marks = @import("markers.zig"); // the mariner's own marks on the water
 
+// The MapLibre renderer. Gated so no other backend analyses these files or
+// needs MapLibre headers. See src/ml/ and specs/maplibre/.
+const maplibre_on = @import("build_options").maplibre;
+const mlhost = if (maplibre_on) @import("ml/host.zig") else struct { pub const Host = opaque {}; };
+
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
 
@@ -697,6 +702,9 @@ pub const Lookout = struct {
     /// mariner supplies, drawn beneath the vector chart. Its own cache, worker
     /// and memory ceiling — nothing here touches the scene (see raster.zig).
     raster: rasterlayer.Layer = undefined,
+    /// The MapLibre host, when -Dbackend=maplibre. It owns the surface and
+    /// draws the chart; `g` is still constructed but never presents a frame.
+    ml: ?*mlhost.Host = null,
 
     /// The wasm plugin layer, once something has asked for it (LOOKOUT_PLUGINS
     /// at open, or lookout_plugins_load). Null costs nothing: no threads, no
@@ -798,6 +806,18 @@ pub const Lookout = struct {
                 break :blk marks.Store.open(alloc, p);
             } else marks.Store.init(alloc),
         };
+
+        // -Dbackend=maplibre: MapLibre draws the chart and owns the surface.
+        // `g` above is still built (its device and layer plumbing is what the
+        // shell handed us) but renderWindow is never called, so the two never
+        // contend for a drawable.
+        if (maplibre_on) {
+            const h = try mlhost.Host.open(alloc);
+            self.ml = h;
+            if (opts.native_handle) |nh| if (opts.native_kind == .metal_layer) {
+                try h.attachMetal(nh, opts.width, opts.height, 1.0);
+            };
+        }
         if (dbg) {
             std.debug.print("  gpu.init (Metal device+shaders+pipelines) {d} ms\n", .{gpu.ticksMs() - t});
             t = gpu.ticksMs();
@@ -1263,6 +1283,22 @@ pub const Lookout = struct {
         self.aux.put(self.alloc, k, handle) catch self.alloc.free(k);
         return handle;
     }
+    /// Give the MapLibre host whatever the open produced. Called at the end of
+    /// finishOpen and again after any recompose, because the provider serves
+    /// tiles straight out of the compositor and must never hold a stale one.
+    fn mlSyncLibrary(self: *Lookout) void {
+        if (!maplibre_on) return;
+        const h = self.ml orelse return;
+        const single: ?*cc.tile57_chart = if (self.compose == null and self.charts.items.len == 1)
+            self.charts.items[0]
+        else
+            null;
+        const ll = camera.worldToLonLat(self.cam.center);
+        h.setLibrary(self.compose, single, &.{}, ll.y) catch |e| {
+            std.debug.print("maplibre: setLibrary failed: {s}\n", .{@errorName(e)});
+        };
+    }
+
     fn finishOpen(self: *Lookout) !void {
         // A library of raster charts alone is a library. A mariner whose water
         // the ENC covers badly may carry only photographs of it, and the app
@@ -1301,6 +1337,7 @@ pub const Lookout = struct {
                 };
             }
         }
+        self.mlSyncLibrary();
     }
 
     // ---- plugins ------------------------------------------------------------
@@ -1703,6 +1740,11 @@ pub const Lookout = struct {
             // in the middle of reading.
             self.engine_mu.lock();
             self.compose = c;
+            // The provider serves tiles straight out of the compositor, so it
+            // must hear about every swap — not just the one at open. A chart
+            // added at runtime recomposes here, and without this the MapLibre
+            // path keeps serving from the old compositor (or from none).
+            self.mlSyncLibrary();
             const replaced = self.compose_prev;
             self.compose_prev = null;
             if (replaced) |old| cc.tile57_compose_close(old);
@@ -1943,6 +1985,12 @@ pub const Lookout = struct {
         // stale cursor pivot) on the next frames.
         self.cam.setTarget();
         self.cam.clampY();
+        if (maplibre_on) if (self.ml) |h| h.setView(.{
+            .lon = v.lon,
+            .lat = v.lat,
+            .zoom = v.zoom,
+            .rotation_deg = v.rotation_deg,
+        });
         self.markDirty();
     }
     pub fn view(self: *Lookout) View {
@@ -1952,6 +2000,7 @@ pub const Lookout = struct {
 
     /// Resize the render surface (points; HiDPI density is applied internally).
     pub fn resize(self: *Lookout, width: u32, height: u32) !void {
+        if (maplibre_on) if (self.ml) |h| h.resize(width, height);
         self.host_pt_w = @floatFromInt(width);
         self.host_pt_h = @floatFromInt(height);
         try self.g.resize(width, height);
@@ -1991,6 +2040,15 @@ pub const Lookout = struct {
     pub fn attachSurface(self: *Lookout, kind: NativeKind, handle: *anyopaque, width: u32, height: u32) !void {
         if (!@hasDecl(gpu.Gpu, "attachSurface")) return error.SurfaceAttachUnsupported;
         if (self.surface_attached) return error.SurfaceAlreadyAttached;
+        // The shells hand the layer over HERE, not at open: open runs headless
+        // and the view arrives once the window exists. MapLibre has to take the
+        // layer on this path or it never gets a surface at all.
+        if (maplibre_on) if (self.ml) |h| {
+            try h.attachMetal(handle, width, height, self.g.pixel_density);
+            self.surface_attached = true;
+            try self.resize(width, height);
+            return;
+        };
         try self.g.attachSurface(.{
             .width = width,
             .height = height,
@@ -2627,6 +2685,7 @@ pub const Lookout = struct {
     }
 
     pub fn render(self: *Lookout) !bool {
+        if (maplibre_on) if (self.ml) |h| return h.render();
         self.ensureAtlases();
         if (self.loadingPulse()) return self.g.renderWindow(self.uniforms(), false, false);
         self.syncRasterMode(); // before prepareFrame: it decides what gets built

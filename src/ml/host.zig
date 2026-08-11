@@ -31,7 +31,7 @@
 //! before anyone claims parity. See specs/maplibre/concerns.md C6.
 
 const std = @import("std");
-const cc = @import("cabi").c;
+const cc = @import("../c.zig").c;
 const maplibre = @import("maplibre_native_ffi");
 const provider_mod = @import("provider.zig");
 const style_mod = @import("style.zig");
@@ -78,14 +78,14 @@ pub const Host = struct {
         cc.tile57_mariner_defaults(&m);
 
         var rt = maplibre.RuntimeHandle.create(alloc, .{}, null) catch return Error.RuntimeFailed;
-        errdefer rt.destroy();
+        errdefer rt.close() catch {};
 
         var map = maplibre.MapHandle.create(&rt, .{
             // MLT is the bake default. A map created without this decodes the
             // FastPFOR integer streams as a parse warning and draws nothing.
             .fast_pfor_enabled = true,
         }) catch return Error.MapFailed;
-        errdefer map.destroy();
+        errdefer map.close() catch {};
 
         self.* = .{
             .alloc = alloc,
@@ -111,9 +111,9 @@ pub const Host = struct {
         // worker completes a handle the runtime has already torn down.
         self.runtime.clearResourceProvider() catch {};
         self.provider.deinit();
-        if (self.session) |*s| s.detach();
-        self.map.destroy();
-        self.runtime.destroy();
+        if (self.session) |*s| s.detach() catch {};
+        self.map.close() catch {};
+        self.runtime.close() catch {};
         self.assets.deinit();
         if (self.scamin_owned.len != 0) self.alloc.free(self.scamin_owned);
         self.alloc.destroy(self);
@@ -198,13 +198,15 @@ pub const Host = struct {
     /// Rewrite the SCAMIN clause on every gated layer. This is the one place
     /// that pays MapLibre's re-layout on purpose, a few times per gesture.
     fn writeScaminGate(self: *Host, denom: f64) void {
-        const ids = self.map.listStyleLayerIds(self.alloc) catch return;
+        var ids = self.map.listStyleLayerIds(self.alloc) catch return;
         defer ids.deinit();
 
         var buf: [256]u8 = undefined;
-        for (ids.items()) |id| {
-            const current = self.map.getLayerFilter(self.alloc, id) catch continue;
+        for (ids.items) |id| {
+            var current = (self.map.getLayerFilter(self.alloc, id) catch continue) orelse continue;
             defer current.deinit();
+            // Only the gated layers carry a scamin clause; the rest are left
+            // alone so a rewrite touches the minimum MapLibre must re-lay-out.
             if (std.mem.indexOf(u8, current.value, "\"scamin\"") == null) continue;
 
             const patched = std.fmt.bufPrint(
@@ -219,9 +221,7 @@ pub const Host = struct {
     // ---- the surface and the frame ---------------------------------------
 
     pub fn attachMetal(self: *Host, layer: *anyopaque, w: u32, h: u32, density: f64) Error!void {
-        const reg = maplibre.registerRenderSession(&self.map) catch return Error.SessionFailed;
-        var session = reg.session;
-        session.setMetalSurfaceTarget(.{
+        const session = maplibre.attachMetalSurface(&self.map, .{
             .layer = maplibre.NativePointer.fromPtr(layer),
             .extent = .{ .width = w, .height = h, .scale_factor = density },
         }) catch return Error.SessionFailed;
@@ -245,12 +245,22 @@ pub const Host = struct {
     /// into a property: a still chart issues no frames at all.
     pub fn render(self: *Host) bool {
         const session = &(self.session orelse return false);
+
+        // Drain the runtime's owner-thread queues first: that is what delivers
+        // completed tiles, style loads and sprite images into the map. Without
+        // it the provider answers and nothing ever appears.
+        self.runtime.pump(0) catch {};
+
         const result = session.renderUpdate() catch return false;
         self.dirty = switch (result) {
-            .rendered => |r| r.needs_repaint,
-            else => false,
+            // Drawn, or nothing to draw: either way this frame settled it.
+            .rendered, .no_update => false,
+            // The map has not taken the new size, or the target had no drawable.
+            // Both are "ask again next frame" rather than an error.
+            .size_pending, .target_not_ready => true,
+            .unknown => false,
         };
-        return true;
+        return result == .rendered;
     }
 
     pub fn needsRedraw(self: *const Host) bool {

@@ -63,6 +63,13 @@ targets:
         # the raw archives are never linked directly on ANY platform.
         OTHER_LDFLAGS:
           - "-llookoutall"
+          # MapLibre Native. The dylib, not the static archive: the archive
+          # wants libc++ and asking for it makes Zig build its own, which does
+          # not survive the macOS SDK headers. rpath so the launched app finds
+          # it without an install_name_tool pass.
+          - "-L$(SRCROOT)/../../maplibre-native-ffi/build/macos-arm64-metal/install/lib"
+          - "-lmaplibre-native-c"
+          - "-Wl,-rpath,$(SRCROOT)/../../maplibre-native-ffi/build/macos-arm64-metal/install/lib"
     dependencies:
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
@@ -103,7 +110,14 @@ targets:
           # core, installing liblookout_marine.a, libtile57.a, and both headers
           # into zig-out/. ReleaseFast is the build.zig default; explicit here
           # so the app build states its intent.
-          zig build -Doptimize=ReleaseFast -Dplugins=true -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT"
+          # feat/maplibre: MapLibre Native draws the chart. MLN_PREFIX is a
+          # CMake install of maplibre-native-c (zig build does NOT produce it —
+          # see specs/maplibre/concerns.md C5) and MLN_SRC is the FFI checkout
+          # the Zig binding sources come from.
+          MLN_PREFIX="${MLN_PREFIX:-$SRCROOT/../../maplibre-native-ffi/build/macos-arm64-metal/install}"
+          MLN_SRC="${MLN_SRC:-$SRCROOT/../../maplibre-native-ffi}"
+          zig build -Doptimize=ReleaseFast -Dplugins=true -Dtarget="$ZIG_MAC_TARGET" --sysroot "$MAC_SYSROOT" \
+            -Dbackend=maplibre -Dmaplibre-prefix="$MLN_PREFIX" -Dmaplibre-src="$MLN_SRC"
           # Zig's outputs are deterministic, so an unchanged core hashes
           # identically — used twice below: to skip the repack, and to force
           # Xcode to relink when the core DID change.
