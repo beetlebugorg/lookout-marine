@@ -527,7 +527,12 @@ struct ChartWorkPanel: View {
     @State private var cancelling = false
 
     private var title: String {
-        progress.total > 0 ? "Importing \(progress.name)" : "Finding charts in \(progress.name)"
+        switch progress.kind {
+        case .removing: return "Removing \(progress.name)"
+        case .finding: return "Finding charts in \(progress.name)"
+        case .importing:
+            return progress.total > 0 ? "Importing \(progress.name)" : "Finding charts in \(progress.name)"
+        }
     }
     /// The detail shows always in the big form, and on request in the small one.
     private var showDetail: Bool { !compact || open }
@@ -546,6 +551,15 @@ struct ChartWorkPanel: View {
                             Text("\(progress.done) of \(progress.total)")
                                 .font(.system(size: 12).monospacedDigit())
                                 .foregroundStyle(Chrome.muted)
+                        } else {
+                            // Nothing to count yet. A moving count is what says
+                            // the app is working; with none, the pill is a line
+                            // of text that sits there for seconds and reads as
+                            // a hang, so it spins instead.
+                            ProgressView()
+                                .controlSize(.small)
+                                .scaleEffect(0.7)
+                                .frame(width: 12, height: 12)
                         }
                         Image(systemName: open ? "chevron.up" : "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
@@ -635,8 +649,17 @@ struct BakeDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             VStack(alignment: .leading, spacing: 6) {
-                ProgressView(value: counted ? progress.fraction : 0)
-                    .progressViewStyle(.linear)
+                // Counted or not, the bar has to look like work. A determinate
+                // bar with nothing in it reads as stuck, which is exactly what
+                // the seconds of looking through a big folder looked like.
+                Group {
+                    if counted {
+                        ProgressView(value: progress.fraction)
+                    } else {
+                        ProgressView()
+                    }
+                }
+                .progressViewStyle(.linear)
                 HStack {
                     Text(counted ? "\(Int(progress.fraction * 100))%" : "")
                         .font(.system(size: 11, weight: .medium).monospacedDigit())
@@ -650,29 +673,42 @@ struct BakeDetail: View {
             .frame(width: width)
 
             VStack(alignment: .leading, spacing: 7) {
-                BakeStep(
-                    state: counted ? .done : .running,
-                    label: "Finding charts",
-                    detail: counted ? "\(progress.total) found" : "")
-                BakeStep(
-                    state: !counted ? .waiting : (progress.done < progress.total ? .running : .done),
-                    label: "Importing charts",
-                    detail: counted ? "\(progress.done) of \(progress.total)" : "")
+                if progress.kind == .removing {
+                    BakeStep(
+                        state: counted && progress.done >= progress.total ? .done : .running,
+                        label: "Removing charts",
+                        detail: counted ? "\(progress.done) of \(progress.total)" : "")
+                } else {
+                    BakeStep(
+                        state: counted ? .done : .running,
+                        label: "Finding charts",
+                        detail: counted ? "\(progress.total) found" : "")
+                    BakeStep(
+                        state: !counted ? .waiting : (progress.done < progress.total ? .running : .done),
+                        label: "Importing charts",
+                        detail: counted ? "\(progress.done) of \(progress.total)" : "")
+                }
             }
             .frame(width: width, alignment: .leading)
 
-            Divider().frame(width: width)
+            // No way out of a removal: the set is already off the list and the
+            // charts are already moved aside, so a Cancel here could only stop
+            // the disk being freed — which is not a choice worth offering, and
+            // a button that cannot undo what it appears to undo is a lie.
+            if progress.kind != .removing {
+                Divider().frame(width: width)
 
-            HStack {
-                Spacer(minLength: 0)
-                Button(cancelling ? "Stopping…" : "Cancel") {
-                    cancelling = true
-                    onCancel()
+                HStack {
+                    Spacer(minLength: 0)
+                    Button(cancelling ? "Stopping…" : "Cancel") {
+                        cancelling = true
+                        onCancel()
+                    }
+                    .disabled(cancelling)
+                    .controlSize(.small)
                 }
-                .disabled(cancelling)
-                .controlSize(.small)
+                .frame(width: width)
             }
-            .frame(width: width)
         }
     }
 }

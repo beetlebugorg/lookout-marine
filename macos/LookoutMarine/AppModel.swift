@@ -586,15 +586,22 @@ final class AppModel: ObservableObject {
     /// appears wherever the mariner is looking.
     var chartWork: BakeProgress? {
         if let b = bake { return b }
+        // Freeing the disk after a set is removed. It is not the mariner's
+        // work and they are not waiting on it, but it is the app doing
+        // something to their charts, so it says so.
+        if let r = removing { return r }
         // Only work the mariner started. The scan at launch is bookkeeping for
         // the Charts panel and finishes on its own; showing it puts "Finding
         // charts" over the window on every single launch, before a chart the
         // app already knows how to open.
-        if scanning && scanRequested { return BakeProgress(name: scanningName) }
+        if scanning && scanRequested { return BakeProgress(kind: .finding, name: scanningName) }
         return nil
     }
     /// True while the scan running was asked for by the mariner.
     @Published var scanRequested = false
+
+    /// The charts of a removed set being deleted, while that is happening.
+    @Published var removing: BakeProgress?
 
     /// The work to show in place of the first-run picker: a scan or a bake,
     /// while there is still no chart to draw. Nil once a chart is up, because
@@ -713,7 +720,16 @@ final class AppModel: ObservableObject {
             }
         }
         syncRasterFromSets()
-        if let prepared { ChartBake.deleteDerived(prepared) }
+        if let prepared {
+            let name = (path as NSString).lastPathComponent
+            ChartBake.deleteDerived(prepared) { [weak self] p in
+                guard let self else { return }
+                // A removal that is over reports one last time with no name;
+                // that is what takes the panel away.
+                self.removing = p.name.isEmpty ? nil : BakeProgress(
+                    kind: .removing, done: p.done, total: p.total, name: name, elapsed: p.elapsed)
+            }
+        }
         requestOpen(openPaths)
     }
 

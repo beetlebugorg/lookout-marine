@@ -20,8 +20,19 @@
 
 import Foundation
 
+/// Which piece of work the panel is reporting.
+enum ChartWorkKind: Equatable {
+    /// Looking through a folder or an archive for charts.
+    case finding
+    /// Converting cells and sheets into charts.
+    case importing
+    /// Throwing away the charts made from a set that has been removed.
+    case removing
+}
+
 /// Where a bake has got to.
 struct BakeProgress: Equatable {
+    var kind: ChartWorkKind = .importing
     var done: Int = 0
     var total: Int = 0
     /// The folder being baked.
@@ -34,7 +45,11 @@ struct BakeProgress: Equatable {
     var fraction: Double { total > 0 ? Double(done) / Double(total) : 0 }
 
     /// What is left, from the rate so far. Nil until there is enough to say.
+    ///
+    /// A removal is not timed: it is seconds of disk work, and a countdown on
+    /// something already over by the time it is read is noise.
     var remaining: String? {
+        if kind == .removing { return nil }
         guard done >= 3, total > done, elapsed > 1 else { return nil }
         let perCell = elapsed / Double(done)
         let left = perCell * Double(total - done)
@@ -278,7 +293,7 @@ enum ChartBake {
     /// Delete charts this app prepared. Refuses any path it did not make, so a
     /// mariner's own folder can never be deleted by removing a set.
     @discardableResult
-    static func deleteDerived(_ path: String) -> Bool {
+    static func deleteDerived(_ path: String, progress: ((BakeProgress) -> Void)? = nil) -> Bool {
         guard isDerived(path), path != chartsRoot, let root = chartsRoot else { return false }
         let fm = FileManager.default
         guard fm.fileExists(atPath: path) else { return false }
@@ -297,8 +312,56 @@ enum ChartBake {
             DispatchQueue.global(qos: .utility).async { try? fm.removeItem(atPath: path) }
             return true
         }
-        DispatchQueue.global(qos: .utility).async { try? fm.removeItem(atPath: trash) }
+        DispatchQueue.global(qos: .utility).async { emptyAndRemove(trash, progress: progress) }
         return true
+    }
+
+    /// Delete `dir`, a chart at a time, saying where it has got to.
+    ///
+    /// The count is the mariner's own unit: the bake writes a directory per
+    /// chart, so removing one is a chart gone, and the panel counts the same
+    /// things coming out that it counted going in. Finding them costs one
+    /// listing, not a walk of all 36,000 files.
+    private static func emptyAndRemove(_ dir: String, progress: ((BakeProgress) -> Void)?) {
+        let fm = FileManager.default
+        // Descend past any skeleton the source's own shape left behind — an
+        // archive's charts arrive under ENC_ROOT — so the count is charts and
+        // not the one directory holding them.
+        var level = dir
+        while true {
+            let kids = (try? fm.contentsOfDirectory(atPath: level)) ?? []
+            guard kids.count == 1 else { break }
+            let only = (level as NSString).appendingPathComponent(kids[0])
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: only, isDirectory: &isDir), isDir.boolValue else { break }
+            level = only
+        }
+
+        let charts = (try? fm.contentsOfDirectory(atPath: level)) ?? []
+        let started = Date()
+        var last = Date.distantPast
+        var done = 0
+        func post(_ force: Bool) {
+            let now = Date()
+            guard force || now.timeIntervalSince(last) >= 0.2 else { return }
+            last = now
+            let p = BakeProgress(kind: .removing, done: done, total: charts.count,
+                                 name: (dir as NSString).lastPathComponent,
+                                 elapsed: now.timeIntervalSince(started))
+            DispatchQueue.main.async { progress?(p) }
+        }
+        post(true)
+        for c in charts {
+            try? fm.removeItem(atPath: (level as NSString).appendingPathComponent(c))
+            done += 1
+            post(false)
+        }
+        // Whatever is left: the skeleton above, and anything the listing missed.
+        try? fm.removeItem(atPath: dir)
+        done = charts.count
+        post(true)
+        DispatchQueue.main.async { progress?(BakeProgress(kind: .removing, done: charts.count,
+                                                          total: charts.count, name: "")) }
     }
 
     /// The name a chart directory takes while it is being thrown away. Dotted
