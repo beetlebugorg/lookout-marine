@@ -186,12 +186,22 @@ pub fn build(b: *std.Build) void {
     //   * d3d12: Windows, direct D3D12 into a composition swapchain
     //   * sdl:   the SDL_GPU fallback, `-Dbackend=sdl` anywhere
     // Default by platform; see src/gpu.zig.
-    const Backend = enum { metal, sdl, vk, d3d12 };
+    //   * maplibre: draw the chart with MapLibre Native instead of our own
+    //     pipeline. NOT a transport like the other four — it replaces the whole
+    //     renderer, so it never reaches src/gpu.zig. See src/ml/ and
+    //     specs/maplibre/. It needs a CMake install of maplibre-native-c,
+    //     because unlike tile57 that library is not built from source here.
+    const Backend = enum { metal, sdl, vk, d3d12, maplibre };
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
     const is_windows = target.result.os.tag == .windows;
     const target_android = target.result.abi == .android or target.result.abi == .androideabi;
-    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk | d3d12") orelse
+    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk | d3d12 | maplibre") orelse
         (if (is_apple) Backend.metal else if (target_android) Backend.vk else if (is_windows) Backend.d3d12 else Backend.sdl);
+    const use_maplibre = backend == .maplibre;
+    const maplibre_prefix = b.option([]const u8, "maplibre-prefix", "CMake install prefix of maplibre-native-c (-Dbackend=maplibre)");
+    const maplibre_src = b.option([]const u8, "maplibre-src", "maplibre-native-ffi checkout, for its Zig binding (-Dbackend=maplibre)");
+    if (use_maplibre and (maplibre_prefix == null or maplibre_src == null))
+        @panic("-Dbackend=maplibre needs -Dmaplibre-prefix=<cmake install> and -Dmaplibre-src=<maplibre-native-ffi checkout>");
     const use_sdl = backend == .sdl;
     const use_vk = backend == .vk;
     const use_d3d12 = backend == .d3d12;
@@ -504,6 +514,74 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = test_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    // ---- the MapLibre renderer (src/ml/) ----
+    // A step of its own rather than a branch inside the main lib, because this
+    // backend is not a transport: it replaces the renderer, and it needs a
+    // CMake install of maplibre-native-c that `zig build` does not produce.
+    // `zig build maplibre-test -Dbackend=maplibre -Dmaplibre-prefix=... -Dmaplibre-src=...`
+    if (use_maplibre) {
+        const prefix = maplibre_prefix.?;
+        const src = maplibre_src.?;
+
+        // The binding's src/c.zig does `@import("maplibre_native_c")`, so that
+        // module has to exist under exactly that name.
+        const mln_c = b.addTranslateC(.{
+            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ prefix, "include", "maplibre_native_c.h" }) },
+            .target = target,
+            .optimize = optimize,
+        });
+        mln_c.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "include" }) });
+
+        const mln_mod = b.createModule(.{
+            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ src, "bindings", "zig", "src", "maplibre_native_ffi.zig" }) },
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        mln_mod.addImport("maplibre_native_c", mln_c.createModule());
+
+        // src/ml/ is its own module, so it cannot reach up to src/c.zig by
+        // path. Give it the same cImport of tile57.h under a name instead.
+        const cabi_mod = b.createModule(.{
+            .root_source_file = b.path("src/c.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cfg.apply(cabi_mod, true);
+
+        const ml_mod = b.createModule(.{
+            .root_source_file = b.path("src/ml/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        // cfg.apply ONLY on cabi_mod. It adds the tile57 archive and, on Apple,
+        // metal_shim.m; applying it to both modules links that object twice and
+        // every lkm_* symbol collides.
+        ml_mod.addImport("cabi", cabi_mod);
+        ml_mod.addImport("maplibre_native_ffi", mln_mod);
+        // provider.zig reaches the glyph-PBF encoder as a Zig module: tile57
+        // can encode a MapLibre glyph range but does not expose it on the C
+        // ABI. See specs/maplibre/concerns.md C2.
+        ml_mod.addImport("tile57", tile57_dep.module("tile57"));
+
+        // artifact.json names the libraries and frameworks the STATIC archive
+        // needs. We take the dylib instead: it already carries libc++, and
+        // asking Zig for `c++` makes it build its own libcxx, which does not
+        // survive the macOS SDK headers (INFINITY undeclared, nullability on
+        // basic_string). Same class of clash as the bionic one further up.
+        ml_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "lib" }) });
+        ml_mod.linkSystemLibrary("maplibre-native-c", .{ .preferred_link_mode = .dynamic });
+        ml_mod.linkSystemLibrary("z", .{});
+        for ([_][]const u8{ "CoreFoundation", "CoreGraphics", "CoreText", "Foundation", "ImageIO", "Metal", "QuartzCore" }) |fw|
+            ml_mod.linkFramework(fw, .{});
+
+        const ml_tests = b.addTest(.{ .root_module = ml_mod });
+        const ml_step = b.step("maplibre-test", "Run the MapLibre renderer's unit tests");
+        ml_step.dependOn(&b.addRunArtifact(ml_tests).step);
+    }
 
     // ---- plugin-layer unit tests ----
     // Each file rooted the way its own `zig test <file>` roots it, so what the
