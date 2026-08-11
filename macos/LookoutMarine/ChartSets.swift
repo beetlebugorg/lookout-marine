@@ -1,8 +1,9 @@
 //  ChartSets.swift — the charts aboard, and which of them are drawn.
 //
-//  A SET is a folder the mariner added. It carries every chart under that
-//  folder, however deep: a bake mirrors the exchange set's tree, so a library
-//  is nested rather than flat.
+//  A SET is a folder the mariner added, or one .zip — which is how a chart
+//  agency publishes them. Either way it carries every chart inside, however
+//  deep: a bake mirrors the exchange set's tree, so a library is nested rather
+//  than flat.
 //
 //  The list answers two questions a file picker cannot. What is aboard, and
 //  what am I sailing on right now. A folder goes on the list only after the
@@ -11,7 +12,11 @@
 //
 //  The core does the looking (lookout_scan_charts). It walks the folder, names
 //  every file, and asks tile57 what each archive holds, which is the only way
-//  to tell a chart from a picture archive or a foreign bake.
+//  to tell a chart from a picture archive or a foreign bake. An archive is
+//  read the same way (lookout_scan_zip) but only its listing: 36 ms for the
+//  7,224 charts in NOAA's All_ENCs.zip, against about 3 seconds to walk the
+//  same charts unpacked. Nothing inside one can be verified or drawn until it
+//  has been taken out, which is what `archived` marks.
 
 import Foundation
 
@@ -28,6 +33,9 @@ struct ScannedCell: Identifiable, Hashable {
     let bytes: Int64
     /// The compilation scale the bake embedded, or 0.
     let scale: Int
+    /// True when `path` is a name INSIDE an archive rather than a file. Such a
+    /// chart cannot be opened, whatever it is: it has to come out first.
+    var archived: Bool = false
 
     var id: String { path }
     /// The name without its extension, which is what a prepared archive and
@@ -36,6 +44,10 @@ struct ScannedCell: Identifiable, Hashable {
     /// True when this file must be prepared before it can be drawn: an S-57 or
     /// S-101 cell, or a BSB/KAP sheet.
     var needsBake: Bool { kind == "source" || kind == "raster_source" }
+    /// True when something has to happen before the engine can be handed this.
+    /// Inside an archive that is everything, including a chart that is already
+    /// baked: it still has to be got out.
+    var needsPrepare: Bool { archived || needsBake }
     /// True when this is a picture rather than the survey.
     var isRaster: Bool { kind == "raster" || kind == "raster_source" }
 }
@@ -76,14 +88,14 @@ struct ChartSet: Identifiable, Hashable {
     var isDerived: Bool { preparedPath != nil }
     var bytes: Int64 { (cells + rasters).reduce(0) { $0 + $1.bytes } }
     /// Everything in this set that must be prepared before it draws.
-    var toPrepare: [ScannedCell] { (cells + rasters).filter(\.needsBake) }
+    var toPrepare: [ScannedCell] { (cells + rasters).filter(\.needsPrepare) }
     var needsBake: Int { toPrepare.count }
     /// What is left over after a prepare has already run for this set: files
     /// the engine would not read. Offering to prepare them again says the work
     /// is unfinished when it is as finished as it will get.
     var refusedCount: Int { preparedPath == nil ? 0 : toPrepare.count }
     /// The pictures that are ready to draw now.
-    var rasterPaths: [String] { rasters.filter { !$0.needsBake }.map(\.path) }
+    var rasterPaths: [String] { rasters.filter { !$0.needsPrepare }.map(\.path) }
 
     /// The pictures, grouped the way the chart draws them: by whoever made
     /// them. A folder can hold hundreds of tiles from one survey, and a
@@ -93,15 +105,17 @@ struct ChartSet: Identifiable, Hashable {
     func rasterGroups(label: (String) -> String) -> [(name: String, paths: [String])] {
         var order: [String] = []
         var byName: [String: [String]] = [:]
-        for r in rasters where !r.needsBake {
+        for r in rasters where !r.needsPrepare {
             let n = label(r.path)
             if byName[n] == nil { order.append(n) }
             byName[n, default: []].append(r.path)
         }
         return order.map { ($0, byName[$0] ?? []) }
     }
-    /// The archives that can be handed to the engine now.
-    var openablePaths: [String] { cells.filter { !$0.needsBake }.map(\.path) }
+    /// The archives that can be handed to the engine now. Never a chart still
+    /// inside an archive: that path is an entry name, and there is no file at
+    /// it until it is taken out.
+    var openablePaths: [String] { cells.filter { !$0.needsPrepare }.map(\.path) }
 
     /// "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB".
     var summary: String {
@@ -178,9 +192,17 @@ enum ChartScan {
         }
     }
 
+    /// True for a chart set that arrives as one archive.
+    static func isArchive(_ path: String) -> Bool {
+        (path as NSString).pathExtension.lowercased() == "zip"
+    }
+
     private static func scanLocked(_ path: String) -> ChartSet? {
+        let archive = isArchive(path)
         var len = 0
-        guard let raw = lookout_scan_charts(path, &len), len > 0 else { return nil }
+        guard let raw = archive ? lookout_scan_zip(path, &len) : lookout_scan_charts(path, &len),
+              len > 0
+        else { return nil }
         // Build from the reported length, not as a C string. The core hands
         // back a counted buffer, and reading it to a NUL would run past the
         // end of the answer.
@@ -198,7 +220,8 @@ enum ChartScan {
                 band: c["band"] as? Int ?? 0,
                 bandName: c["bandName"] as? String ?? "",
                 bytes: c["bytes"] as? Int64 ?? Int64(c["bytes"] as? Int ?? 0),
-                scale: c["scale"] as? Int ?? 0
+                scale: c["scale"] as? Int ?? 0,
+                archived: archive
             )
         }
         let raster = (o["raster"] as? [[String: Any]] ?? []).map { c in
@@ -208,7 +231,8 @@ enum ChartScan {
                 kind: c["kind"] as? String ?? "raster",
                 band: 0, bandName: "",
                 bytes: c["bytes"] as? Int64 ?? Int64(c["bytes"] as? Int ?? 0),
-                scale: 0)
+                scale: 0,
+                archived: archive)
         }
         return ChartSet(
             path: o["root"] as? String ?? path,

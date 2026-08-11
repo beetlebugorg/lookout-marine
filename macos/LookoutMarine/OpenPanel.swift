@@ -30,8 +30,8 @@ extension AppModel {
         panel.title = "Open Chart"
         let types = pluginFileTypes()
         panel.message = types.isEmpty
-            ? "Choose a baked .pmtiles chart, or a folder of cells."
-            : "Choose a baked .pmtiles chart, a folder of cells, or a data file: \(types.joined(separator: ", "))."
+            ? "Choose a folder of charts, a chart archive (.zip), or a single chart."
+            : "Choose a folder of charts, a chart archive (.zip), a single chart, or a data file: \(types.joined(separator: ", "))."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -90,6 +90,13 @@ extension AppModel {
             return
         }
         #endif
+        // An archive is a chart SET, not a chart: it holds a library the way a
+        // folder does, and the mariner adds it the same way. This is the shape
+        // a chart agency publishes in — NOAA's whole US library is one .zip.
+        if ChartScan.isArchive(path) {
+            addChartSet(path)
+            return
+        }
         if controller?.openFileForPlugins(path) == true { return }
         openChart(path)
     }

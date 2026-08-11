@@ -525,6 +525,18 @@ export fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) ?[*]const u
     return json.ptr;
 }
 
+/// lookout_scan_charts for a chart set that arrives as one .zip. See lookout.h.
+export fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    if (scan_json) |old| gpa.free(old);
+    scan_json = null;
+    var s = lk.scanZip(gpa, std.mem.span(path)) catch return null;
+    defer s.deinit();
+    const json = lk.library.toJson(gpa, &s) catch return null;
+    scan_json = json;
+    if (out_len) |p| p.* = json.len;
+    return json.ptr;
+}
+
 // ---- view ------------------------------------------------------------------
 export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);

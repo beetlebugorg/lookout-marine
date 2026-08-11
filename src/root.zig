@@ -3032,6 +3032,43 @@ pub fn scanCharts(alloc: std.mem.Allocator, io: std.Io, path: []const u8) !libra
     return library.scan(alloc, io, path, verifyArchive, null);
 }
 
+/// The same, for a chart set that arrives as one .zip. The archive is listed
+/// (its central directory, nothing inflated) and the names are classified by
+/// the same rules a folder's files are, so a host sees one kind of answer
+/// whichever the mariner picked.
+///
+/// Each chart's `path` is its ENTRY NAME. That is what the engine's zip bake
+/// takes back, and it is deliberately not a filesystem path: there is no file
+/// to open until something asks for one.
+pub fn scanZip(alloc: std.mem.Allocator, path: []const u8) !library.Scan {
+    const pz = try alloc.dupeZ(u8, path);
+    defer alloc.free(pz);
+
+    var out: ?[*]u8 = null;
+    var len: usize = 0;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_zip_list(pz, &out, &len, &err) != cc.TILE57_OK) return error.NotAnArchive;
+    const listing = out orelse return error.NotAnArchive;
+    defer cc.tile57_free(listing);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, listing[0..len], .{}) catch
+        return error.NotAnArchive;
+    defer parsed.deinit();
+
+    var entries: std.ArrayList(library.Entry) = .empty;
+    defer entries.deinit(alloc);
+    for (parsed.value.array.items) |item| {
+        const o = item.object;
+        const name = (o.get("name") orelse continue).string;
+        const bytes: u64 = switch (o.get("size") orelse std.json.Value{ .integer = 0 }) {
+            .integer => |i| if (i > 0) @intCast(i) else 0,
+            else => 0,
+        };
+        try entries.append(alloc, .{ .name = name, .bytes = bytes });
+    }
+    return library.scanEntries(alloc, path, entries.items);
+}
+
 test {
     // Collect the pick rules' own tests. Only pickRanked reaches pick.zig, and a
     // test build never analyzes it, so without this the file's tests never run.

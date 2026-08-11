@@ -22,7 +22,7 @@ const USAGE =
     \\  --png OUT         day PNG output path (default lookout.png)
     \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
     \\  --raster FILE     a picture chart (.mbtiles) under the chart; repeatable
-    \\  --scan PATH       report what a folder holds, then exit
+    \\  --scan PATH       report what a folder or .zip holds, then exit
     \\  --bake-rasters IN OUT   prepare a folder of BSB/KAP sheets, then exit
     \\  -h, --help        this help
     \\
@@ -90,7 +90,11 @@ fn bakeRasters(alloc: std.mem.Allocator, in_dir: []const u8, out_dir: []const u8
 fn scanReport(alloc: std.mem.Allocator, path: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const t0 = gpu.ticksMs();
-    var s = try lk.scanCharts(alloc, io, path);
+    // A chart set is a folder or one .zip; the report is the same either way.
+    var s = if (std.mem.endsWith(u8, path, ".zip"))
+        try lk.scanZip(alloc, path)
+    else
+        try lk.scanCharts(alloc, io, path);
     defer s.deinit();
     const ms = gpu.ticksMs() - t0;
 

@@ -223,14 +223,68 @@ pub fn scan(
             if (e.kind == .directory) continue;
             const path = try std.fs.path.joinZ(alloc, &.{ root, e.path });
             errdefer alloc.free(path);
-            try take(alloc, io, path, e.basename, verify, verify_ctx, &cells, &raster, &counts);
+            try take(alloc, path, e.basename, fileSize(io, path), verify, verify_ctx, &cells, &raster, &counts);
         }
     } else |_| {
         // A single file. The open panel takes one archive as readily as a
         // folder of them.
         const path = try alloc.dupeZ(u8, root);
         errdefer alloc.free(path);
-        try take(alloc, io, path, baseName(root), verify, verify_ctx, &cells, &raster, &counts);
+        try take(alloc, path, baseName(root), fileSize(io, path), verify, verify_ctx, &cells, &raster, &counts);
+    }
+
+    const by_name = struct {
+        fn lessThan(_: void, a: Cell, b: Cell) bool {
+            return std.mem.lessThan(u8, a.path, b.path);
+        }
+    }.lessThan;
+    std.mem.sort(Cell, cells.items, {}, by_name);
+    std.mem.sort(Cell, raster.items, {}, by_name);
+
+    return .{
+        .alloc = alloc,
+        .root = try alloc.dupe(u8, root),
+        .cells = try cells.toOwnedSlice(alloc),
+        .raster = try raster.toOwnedSlice(alloc),
+        .updates = counts.updates,
+        .other = counts.other,
+        .refused = counts.refused,
+    };
+}
+
+/// One entry of an archive's listing: the name as stored, and what it weighs
+/// unpacked.
+pub const Entry = struct {
+    name: []const u8,
+    bytes: u64 = 0,
+};
+
+/// `scan` over an ARCHIVE's entry names instead of a folder's files. `root` is
+/// the archive itself, and each Cell's `path` is the ENTRY NAME — which is
+/// what the engine's zip bake takes back, so what this reports can be handed
+/// straight to it.
+///
+/// There is no verify pass. Verifying means opening the archive and asking the
+/// engine what it is, and an entry has no path to open; inside a .zip a name
+/// is the whole answer. So a `.pmtiles` in here is believed rather than
+/// checked, and the refused count is always zero — a foreign archive that a
+/// folder scan would reject is only found when it is read.
+pub fn scanEntries(alloc: std.mem.Allocator, root: []const u8, entries: []const Entry) !Scan {
+    var cells: std.ArrayList(Cell) = .empty;
+    var raster: std.ArrayList(Cell) = .empty;
+    errdefer {
+        for (cells.items) |c| alloc.free(c.path);
+        for (raster.items) |c| alloc.free(c.path);
+        cells.deinit(alloc);
+        raster.deinit(alloc);
+    }
+    var counts = struct { updates: usize = 0, other: usize = 0, refused: usize = 0 }{};
+
+    for (entries) |e| {
+        if (e.name.len == 0 or e.name[e.name.len - 1] == '/') continue;
+        const path = try alloc.dupeZ(u8, e.name);
+        errdefer alloc.free(path);
+        try take(alloc, path, baseName(e.name), e.bytes, null, null, &cells, &raster, &counts);
     }
 
     const by_name = struct {
@@ -256,9 +310,9 @@ pub fn scan(
 /// function from here down: it goes on a list or it is freed.
 fn take(
     alloc: std.mem.Allocator,
-    io: std.Io,
     path: [:0]u8,
     basename: []const u8,
+    bytes: u64,
     verify: ?Verify,
     verify_ctx: ?*anyopaque,
     cells: *std.ArrayList(Cell),
@@ -287,7 +341,7 @@ fn take(
         .name = if (stem) |s| path[name_start .. name_start + s.len] else path[name_start..],
         .kind = kind,
         .band = if (stem) |s| usageBand(s) orelse 0 else 0,
-        .bytes = fileSize(io, path),
+        .bytes = bytes,
     };
 
     if (kind == .raster or kind == .raster_source) {
@@ -618,4 +672,60 @@ test "the JSON carries what a shell needs to draw the list" {
     try t.expectEqualStrings("baked", first.get("kind").?.string);
     try t.expectEqualStrings("Approach", first.get("bandName").?.string);
     try t.expectEqual(@as(i64, 12000), first.get("scale").?.integer);
+}
+
+test "an archive's entries classify by name, like a folder's files" {
+    const a = t.allocator;
+    // The shape NOAA ships: one directory per cell, the cell's referenced text
+    // beside it, the catalogue at the top.
+    var s = try scanEntries(a, "/Charts/All_ENCs.zip", &.{
+        .{ .name = "ENC_ROOT/CATALOG.031", .bytes = 4_000_000 },
+        .{ .name = "ENC_ROOT/README.TXT", .bytes = 900 },
+        .{ .name = "ENC_ROOT/US1EEZ3M/US1EEZ3M.000", .bytes = 60_896 },
+        .{ .name = "ENC_ROOT/US1EEZ3M/US1EEZ3M.001", .bytes = 59_563 },
+        .{ .name = "ENC_ROOT/US1EEZ3M/US1EEZ3M.002", .bytes = 19_958 },
+        .{ .name = "ENC_ROOT/US1EEZ3M/US1EEZ3A.TXT", .bytes = 992 },
+        .{ .name = "ENC_ROOT/US5MD12M/US5MD12M.000", .bytes = 429_900 },
+        .{ .name = "MBTILES/USA-Atlantic.mbtiles", .bytes = 4_015_247_360 },
+        .{ .name = "KAP/13205_1.KAP", .bytes = 3_000_000 },
+        .{ .name = "ENC_ROOT/", .bytes = 0 }, // a directory entry, not a chart
+    });
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 2), s.cells.len); // the two .000 cells
+    try t.expectEqual(@as(usize, 2), s.raster.len); // the KAP sheet and the mbtiles
+    try t.expectEqual(@as(usize, 2), s.updates); // .001 and .002
+    // CATALOG.031, README.TXT and the cell's own .TXT are not charts.
+    try t.expectEqual(@as(usize, 3), s.other);
+    try t.expectEqual(@as(usize, 0), s.refused);
+
+    // A cell's path is the ENTRY NAME, which is what the engine's zip bake
+    // takes back — not a filesystem path that does not exist.
+    try t.expectEqualStrings("ENC_ROOT/US1EEZ3M/US1EEZ3M.000", s.cells[0].path);
+    try t.expectEqualStrings("US1EEZ3M", s.cells[0].name);
+    try t.expectEqual(Kind.source, s.cells[0].kind);
+    try t.expectEqual(@as(u8, 1), s.cells[0].band);
+    try t.expectEqual(@as(u64, 60_896), s.cells[0].bytes);
+
+    // A sheet must be baked; imagery is already drawable and only has to be
+    // got out of the archive. The kinds are what tells the two apart.
+    try t.expectEqualStrings("KAP/13205_1.KAP", s.raster[0].path);
+    try t.expectEqual(Kind.raster_source, s.raster[0].kind);
+    try t.expectEqualStrings("MBTILES/USA-Atlantic.mbtiles", s.raster[1].path);
+    try t.expectEqual(Kind.raster, s.raster[1].kind);
+    // The size comes from the listing: nothing here can stat an entry, and
+    // this one is over 4 GB, which is the whole reason it streams.
+    try t.expectEqual(@as(u64, 4_015_247_360), s.raster[1].bytes);
+}
+
+test "an archive with nothing in it that is a chart" {
+    const a = t.allocator;
+    var s = try scanEntries(a, "/Charts/photos.zip", &.{
+        .{ .name = "holiday/IMG_0001.JPG", .bytes = 2_000_000 },
+        .{ .name = "holiday/notes.txt", .bytes = 40 },
+    });
+    defer s.deinit();
+    try t.expectEqual(@as(usize, 0), s.cells.len);
+    try t.expectEqual(@as(usize, 0), s.raster.len);
+    try t.expectEqual(@as(usize, 2), s.other);
 }

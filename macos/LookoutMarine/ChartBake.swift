@@ -129,16 +129,41 @@ final class ChartBakeJob {
     }
 }
 
-/// Run the cells through the chart bake and the BSB/KAP sheets through the
-/// raster bake, and report as one job.
+/// What has to happen to one chart before the app can draw it.
+private enum Prepare {
+    /// An S-57 or S-101 cell: parse the survey and portray it.
+    case cell
+    /// A BSB/KAP sheet: decode the picture and warp it.
+    case sheet
+    /// Already a chart, and only has to come out of the archive.
+    case lift
+
+    init(_ c: ScannedCell) {
+        if c.kind == "source" { self = .cell } else if c.kind == "raster_source" {
+            self = .sheet
+        } else {
+            self = .lift
+        }
+    }
+}
+
+/// Run each kind of work through the engine call that does it, and report the
+/// lot as one job.
 ///
-/// The two engine calls are separate because the work is: a cell is parsed and
-/// portrayed from the survey, a sheet is decoded and warped from a picture.
-/// The mariner picked one folder, so they see one count.
+/// The calls are separate because the work is: a cell is parsed and portrayed
+/// from the survey, a sheet is decoded and warped from a picture, and imagery
+/// that is already a chart is only lifted out of the archive. The mariner
+/// picked one thing, so they see one count.
+///
+/// `source` is the folder or the archive. From an archive each `in` is an
+/// ENTRY NAME and the engine reads it where it lies — nothing is unzipped, so
+/// importing NOAA's 788 MB All_ENCs.zip never costs the 2.0 GiB of source it
+/// holds.
 private func bakeSplit(
     _ ins: UnsafePointer<UnsafePointer<CChar>?>?,
     _ outs: UnsafePointer<UnsafePointer<CChar>?>?,
     _ ordered: [ScannedCell],
+    _ source: String,
     _ workers: UInt32,
     _ progress: tile57_bake_progress?,
     _ label: tile57_bake_label?,
@@ -146,30 +171,63 @@ private func bakeSplit(
     _ baked: UnsafeMutablePointer<UInt32>?,
     _ err: UnsafeMutablePointer<tile57_error>?
 ) -> tile57_status {
-    // Sorted so cells come first, so one prefix and one suffix.
-    let cellCount = ordered.prefix { !$0.isRaster }.count
-    let rasterCount = ordered.count - cellCount
+    // Sorted by kind, so each is one contiguous run.
+    let cellCount = ordered.prefix { Prepare($0) == .cell }.count
+    let sheetCount = ordered[cellCount...].prefix { Prepare($0) == .sheet }.count
+    let liftCount = ordered.count - cellCount - sheetCount
     var total: UInt32 = 0
 
     let job = ctx.map { Unmanaged<ChartBakeJob>.fromOpaque($0).takeUnretainedValue() }
+    let zip: [CChar]? = ChartScan.isArchive(source) ? source.cString(using: .utf8) : nil
 
-    if cellCount > 0 {
-        job?.beginPhase(offset: 0, jobTotal: ordered.count)
+    func run(_ offset: Int, _ count: Int, _ call: (UnsafePointer<UnsafePointer<CChar>?>?,
+                                                   UnsafePointer<UnsafePointer<CChar>?>?,
+                                                   UnsafeMutablePointer<UInt32>?) -> tile57_status)
+        -> tile57_status
+    {
+        guard count > 0 else { return TILE57_OK }
+        // The engine names and counts from zero for each call; the job puts
+        // them back on the mariner's scale.
+        job?.beginPhase(offset: offset, jobTotal: ordered.count)
         var n: UInt32 = 0
-        let st = tile57_bake_files(ins, outs, cellCount, workers, progress, label, ctx, &n, err)
+        let st = call(ins?.advanced(by: offset), outs?.advanced(by: offset), &n)
         total += n
+        return st
+    }
+
+    var st = run(0, cellCount) { i, o, n in
+        if let zip {
+            return zip.withUnsafeBufferPointer {
+                tile57_bake_zip_charts($0.baseAddress, i, o, cellCount, workers,
+                                       progress, label, ctx, n, err)
+            }
+        }
+        return tile57_bake_files(i, o, cellCount, workers, progress, label, ctx, n, err)
+    }
+    if st != TILE57_OK { baked?.pointee = total; return st }
+
+    st = run(cellCount, sheetCount) { i, o, n in
+        if let zip {
+            return zip.withUnsafeBufferPointer {
+                tile57_bake_zip_rasters($0.baseAddress, i, o, sheetCount, workers,
+                                        progress, label, ctx, n, err)
+            }
+        }
+        return tile57_bake_rasters(i, o, sheetCount, workers, progress, label, ctx, n, err)
+    }
+    if st != TILE57_OK { baked?.pointee = total; return st }
+
+    // Only an archive has anything to lift: in a folder these files are
+    // already where the engine can read them.
+    if let zip {
+        st = run(cellCount + sheetCount, liftCount) { i, o, n in
+            zip.withUnsafeBufferPointer {
+                tile57_zip_extract($0.baseAddress, i, o, liftCount, progress, ctx, n, err)
+            }
+        }
         if st != TILE57_OK { baked?.pointee = total; return st }
     }
-    if rasterCount > 0 {
-        // The engine names and counts from zero for this call; the job puts
-        // both back on the mariner's scale.
-        job?.beginPhase(offset: cellCount, jobTotal: ordered.count)
-        var n: UInt32 = 0
-        let st = tile57_bake_rasters(ins?.advanced(by: cellCount), outs?.advanced(by: cellCount),
-                                     rasterCount, workers, progress, label, ctx, &n, err)
-        total += n
-        if st != TILE57_OK { baked?.pointee = total; return st }
-    }
+
     baked?.pointee = total
     return TILE57_OK
 }
@@ -201,7 +259,12 @@ enum ChartBake {
     /// a read-only disc or a drive that goes away.
     static func preparedDirectory(for sourceDir: String) -> String? {
         guard let root = chartsRoot else { return nil }
-        return (root as NSString).appendingPathComponent((sourceDir as NSString).lastPathComponent)
+        var name = (sourceDir as NSString).lastPathComponent
+        // An archive names its directory without the .zip: what comes out of
+        // All_ENCs.zip is charts, and "All_ENCs.zip/" as a folder full of them
+        // reads like a mistake.
+        if ChartScan.isArchive(sourceDir) { name = (name as NSString).deletingPathExtension }
+        return (root as NSString).appendingPathComponent(name)
     }
 
     /// The same directory, made on disk.
@@ -247,11 +310,19 @@ enum ChartBake {
             completion(nil)
             return false
         }
-        // Coarse first, then by name so a run is repeatable. Raster sheets
-        // last: the survey is what a mariner needs to sail, and a picture is
-        // what they compare it against.
-        let ordered = cells.filter(\.needsBake).sorted {
-            if $0.isRaster != $1.isRaster { return !$0.isRaster }
+        // Coarse first, then by name so a run is repeatable. Sheets after the
+        // survey — that is what a mariner needs to sail, and a picture is what
+        // they compare it against — and anything only being lifted out of an
+        // archive last, because it is the cheapest and the least urgent.
+        let rank = { (c: ScannedCell) -> Int in
+            switch Prepare(c) {
+            case .cell: return 0
+            case .sheet: return 1
+            case .lift: return 2
+            }
+        }
+        let ordered = cells.filter(\.needsPrepare).sorted {
+            if rank($0) != rank($1) { return rank($0) < rank($1) }
             return $0.band == $1.band ? $0.name < $1.name : $0.band < $1.band
         }
         guard !ordered.isEmpty else {
@@ -269,12 +340,30 @@ enum ChartBake {
         // engine only writes when the chart has a directory to hold them:
         // those files are named per exchange set, not per chart, so charts
         // written flat would share one manifest and overwrite each other's.
+        //
+        // From an archive the output MIRRORS the entry's own path, so what
+        // comes out is laid out like what went in and a cell's referenced
+        // text lands beside the right chart. Imagery keeps its own name: an
+        // .mbtiles is a chart already, and renaming it to .pmtiles would be a
+        // lie about what is in the file.
         let outPaths = ordered.map { c -> String in
             let stem = (c.name as NSString).deletingPathExtension
-            let dir = (outDir as NSString).appendingPathComponent(stem)
+            let base = ChartScan.isArchive(sourceDir)
+                ? (outDir as NSString).appendingPathComponent((c.path as NSString).deletingLastPathComponent)
+                : outDir
+            // The chart's own directory — unless the mirrored path IS one
+            // already, which it is for every exchange set, since they put each
+            // cell in a directory of its name. Appending it again would give
+            // US1EEZ3M/US1EEZ3M/US1EEZ3M.pmtiles.
+            let dir = Prepare(c) == .lift || (base as NSString).lastPathComponent == stem
+                ? base
+                : (base as NSString).appendingPathComponent(stem)
             try? FileManager.default.createDirectory(
                 at: URL(fileURLWithPath: dir), withIntermediateDirectories: true)
-            return (dir as NSString).appendingPathComponent("\(stem).pmtiles")
+            let name = Prepare(c) == .lift
+                ? (c.path as NSString).lastPathComponent
+                : "\(stem).pmtiles"
+            return (dir as NSString).appendingPathComponent(name)
         }
         job.outPaths = outPaths
         job.setName((sourceDir as NSString).lastPathComponent)
@@ -293,7 +382,7 @@ enum ChartBake {
 
             var baked: UInt32 = 0
             var err = tile57_error()
-            // Two engine calls, one per kind: a cell is parsed and portrayed,
+            // One engine call per kind of work: a cell is parsed and portrayed,
             // a BSB sheet is decoded and warped. The list is sorted so each
             // kind is one contiguous run.
             let status = cIn.withUnsafeMutableBufferPointer { inBuf in
@@ -301,7 +390,7 @@ enum ChartBake {
                     inBuf.withMemoryRebound(to: UnsafePointer<CChar>?.self) { ins in
                         outBuf.withMemoryRebound(to: UnsafePointer<CChar>?.self) { outs in
                             bakeSplit(
-                                ins.baseAddress, outs.baseAddress, ordered, workers,
+                                ins.baseAddress, outs.baseAddress, ordered, sourceDir, workers,
                                 { ctx, done, total in
                                     guard let ctx else { return true }
                                     let j = Unmanaged<ChartBakeJob>.fromOpaque(ctx).takeUnretainedValue()

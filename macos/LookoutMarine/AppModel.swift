@@ -298,9 +298,18 @@ final class AppModel: ObservableObject {
         rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
         rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
         chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
+        // Dev hook, as $LOOKOUT_OPEN: $LOOKOUT_ADD="<folder or .zip>" adds a
+        // chart set at launch, exactly as choosing it in the Open panel does.
+        // Importing is the one flow with no other way in — it starts from a
+        // file picker — so without this it cannot be run except by hand. It
+        // waits for the saved sets, because adding refuses while a scan is
+        // running and the load below starts one.
+        let add = ProcessInfo.processInfo.environment["LOOKOUT_ADD"]
         // The panel's list. The open itself does not wait on this: it takes
         // the cheap walk in initialChartPaths and starts drawing.
-        loadChartSets()
+        loadChartSets { [weak self] in
+            if let add { self?.addChartSet(add) }
+        }
     }
 
     // MARK: - Opening charts
@@ -594,7 +603,7 @@ final class AppModel: ObservableObject {
     private func beginBake(sourceDir: String, cells: [ScannedCell]) {
         let job = ChartBakeJob()
         bakeJob = job
-        let total = cells.filter(\.needsBake).count
+        let total = cells.filter(\.needsPrepare).count
         bake = BakeProgress(done: 0, total: total,
                             name: (sourceDir as NSString).lastPathComponent)
         job.onProgress = { [weak self] p in

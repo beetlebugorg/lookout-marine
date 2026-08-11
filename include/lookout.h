@@ -459,6 +459,24 @@ int lookout_composing(lookout *h);
  * A host that scans off its main thread must serialize the calls. */
 const char *lookout_scan_charts(const char *path, size_t *out_len);
 
+/* lookout_scan_charts for a chart set that arrives as ONE .zip — the shape a
+ * chart agency publishes: NOAA's All_ENCs.zip is 788 MB holding 2.0 GiB across
+ * 27,680 entries. Only the archive's central directory is read (about 8 ms for
+ * that one); nothing is inflated and nothing is written.
+ *
+ * Same JSON, so a host reads a folder and an archive the same way, with two
+ * differences that follow from there being no files yet:
+ *
+ *   - Each `path` is the ENTRY NAME inside the archive, not a filesystem path.
+ *     That is what the engine's zip bake takes back.
+ *   - Nothing is verified, so "refused" is always 0. Verifying means opening an
+ *     archive and asking the engine what it holds, and an entry cannot be
+ *     opened; inside a .zip the name is the whole answer.
+ *
+ * Shares the one buffer with lookout_scan_charts, and is NOT REENTRANT for the
+ * same reason. */
+const char *lookout_scan_zip(const char *path, size_t *out_len);
+
 /* ---- view -------------------------------------------------------------- */
 void lookout_fit_chart(lookout *h, lookout_view *out); /* fit the whole cell */
 void lookout_default_view(lookout *h, lookout_view *out); /* opening view, no saved pose */
