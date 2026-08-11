@@ -99,12 +99,21 @@ extension View {
     /// The WinUI 3 floating panel style: pick report, empty state, and loader.
     /// A report is opaque: the chart showing through a table of numbers makes
     /// both hard to read.
-    func panelSurface(cornerRadius r: CGFloat = 8, opaque: Bool = false) -> some View {
-        background(opaque ? Chrome.surface : Chrome.panel.opacity(0.95),
-                   in: RoundedRectangle(cornerRadius: r, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
-                .strokeBorder(Chrome.edge, lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+    /// `enabled` false leaves the content bare. A surface says something sits
+    /// OVER something else; a page that fills the window has nothing under it
+    /// to lift away from.
+    @ViewBuilder
+    func panelSurface(cornerRadius r: CGFloat = 8, opaque: Bool = false,
+                      enabled: Bool = true) -> some View {
+        if enabled {
+            background(opaque ? Chrome.surface : Chrome.panel.opacity(0.95),
+                       in: RoundedRectangle(cornerRadius: r, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
+                    .strokeBorder(Chrome.edge, lineWidth: 1))
+                .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        } else {
+            self
+        }
     }
 }
 
@@ -133,9 +142,6 @@ struct ChromeButtonStyle: ButtonStyle {
                 .background(fill, in: Circle())
                 .overlay(Circle().strokeBorder(Chrome.edge.opacity(hovering ? 0.5 : 0.35),
                                                lineWidth: 0.5))
-                .shadow(color: .black.opacity(configuration.isPressed ? 0.10 : 0.18),
-                        radius: configuration.isPressed ? 3 : 5,
-                        y: configuration.isPressed ? 1 : 2)
                 .scaleEffect(configuration.isPressed ? 0.94 : 1)
                 .opacity(isEnabled ? 1 : 0.45)
                 .onHover { hovering = $0 && isEnabled }

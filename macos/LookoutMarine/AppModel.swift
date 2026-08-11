@@ -1,6 +1,6 @@
 //  AppModel.swift — shared, platform-neutral app state.
 //
-//  Single source of truth the SwiftUI chrome binds to: chart open/recents, the
+//  Single source of truth the SwiftUI chrome binds to: the chart sets aboard, the
 //  live HUD readouts the render loop pushes, and the menu/search actions. It
 //  holds a weak reference to the one ChartController (owned by ChartView) and
 //  funnels every command through it. No AppKit/UIKit here — reused as-is on iOS.
@@ -55,7 +55,14 @@ final class AppModel: ObservableObject {
     /// The drawn set's index, or -1.
     @Published var rasterActive = -1
     @Published var chartPath: String?
-    @Published var recents: [String] = []
+    /// The folders of charts aboard, in the order added. A set on this list has
+    /// been looked through and holds charts, so it always opens.
+    @Published var chartSets: [ChartSet] = []
+    /// True while a folder is being looked through. The full NOAA library takes
+    /// about 3 seconds.
+    @Published var scanning = false
+    /// The last folder that held no charts, for the panel to say so.
+    @Published var emptyPick: String?
     @Published var openRequest: OpenRequest?
     @Published var openError: String?
     private var openSeq = 0
@@ -266,7 +273,6 @@ final class AppModel: ObservableObject {
     /// The single chart controller (owned by ChartView; referenced for commands).
     weak var controller: ChartController?
 
-    private let recentsKey = "lookout.recents"
     /// The raster charts the mariner installed. Persisted, because a chart set is a
     /// half-gigabyte download they picked deliberately — asking again every
     /// launch would be its own bug.
@@ -284,7 +290,6 @@ final class AppModel: ObservableObject {
     private let chartHiddenKey = "lookout.chart.hidden"
 
     init() {
-        recents = UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
         // Drop anything that has since been deleted or unplugged, so a stale
         // entry never becomes an error the mariner has to dismiss at every
         // launch.
@@ -293,13 +298,16 @@ final class AppModel: ObservableObject {
         rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
         rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
         chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
+        // The panel's list. The open itself does not wait on this: it takes
+        // the cheap walk in initialChartPaths and starts drawing.
+        loadChartSets()
     }
 
     // MARK: - Opening charts
 
     /// Paths to open on first appearance: $LOOKOUT_OPEN (a chart or a folder of
-    /// cells — dev/CLI convenience), else (iOS) everything in Documents, else
-    /// the last recent, else the demo default.
+    /// cells, for the CLI and the screenshot protocol), else (iOS) everything
+    /// in Documents, else the sets that are switched on, else the demo default.
     func initialChartPaths() -> [String] {
         if let p = ProcessInfo.processInfo.environment["LOOKOUT_OPEN"] {
             let cells = cellPaths(for: p)
@@ -308,19 +316,33 @@ final class AppModel: ObservableObject {
         #if os(iOS)
         // On iOS, Documents IS the chart library (Files.app / Finder-sharing
         // drops and importer copies all land there): compose ALL of it at
-        // launch. This must beat recents — a recent is at most a subset of
-        // Documents, and launching into it would silently hide the rest of
-        // the library (a device that imported a 7k-cell folder would reopen
-        // as exactly one cell).
+        // launch. This must beat the saved sets, which are at most a subset of
+        // Documents; launching into one would silently hide the rest of the
+        // library (a device that imported a 7k-cell folder would reopen as
+        // exactly one cell).
         if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             let dropped = chartPaths(inDirectory: docs.path)
             if !dropped.isEmpty { return dropped }
         }
         #endif
-        if let last = recents.first {
-            let cells = cellPaths(for: last)
-            if !cells.isEmpty { return cells }
+        // The cheap walk, not the scan. Launch must not wait on tile57 opening
+        // every archive (3 seconds over the full NOAA library); the engine
+        // skips a chart it cannot read anyway. The verified scan runs behind
+        // this and fills the Charts panel.
+        let off = ChartSetStore.savedOff()
+        var aboard: [String] = []
+        // The pictures aboard are NOT charts to compose. This walk cannot tell
+        // a raster archive from a vector one without opening it, so it takes
+        // the answer the last scan already worked out: anything installed as a
+        // raster stays out. Opening one as a vector chart composes nonsense.
+        var seen = Set(UserDefaults.standard.stringArray(forKey: rasterKey) ?? [])
+        for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
+            for p in cellPaths(for: dir) where !seen.contains(p) {
+                seen.insert(p)
+                aboard.append(p)
+            }
         }
+        if !aboard.isEmpty { return aboard.sorted() }
         if let def = Self.defaultChartPath { return [def] }
         return []
     }
@@ -351,31 +373,28 @@ final class AppModel: ObservableObject {
         return FileManager.default.fileExists(atPath: p) ? p : nil
     }
 
-    /// Request opening a chart path — a single `.pmtiles` file, or a folder of
-    /// cells (a recent can be either, so this dispatches on what's on disk).
+    /// Request opening a chart path: one `.pmtiles` file, or a folder of cells.
+    /// The path becomes a set, so opening a chart and adding it to the library
+    /// are one act.
     func openChart(_ path: String) {
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else { return }
-        if isDir.boolValue {
-            openChartDirectory(path)
-        } else {
-            requestOpen([path], recent: path)
-        }
+        addChartSet(path)
     }
 
     /// Request opening every `.pmtiles` under a directory (compose a library).
     func openChartDirectory(_ dir: String) {
-        let paths = chartPaths(inDirectory: dir)
-        if !paths.isEmpty { requestOpen(paths, recent: dir) }
+        addChartSet(dir)
     }
 
-    /// `recent` is what the USER opened (the folder for a library, the file for
-    /// a single cell) — recording the first cell of a folder open would make
-    /// the next launch silently reopen one cell instead of the library.
-    private func requestOpen(_ paths: [String], recent: String) {
+    private func requestOpen(_ paths: [String]) {
+        // Nothing left to draw at all. Switching off the last set, or removing
+        // it, has to take the chart off the display: leaving the old one up
+        // says the charts are still aboard when they are not.
+        //
+        // A set of pictures with no survey in it still draws, so the test is
+        // whether anything is aboard, not whether any CELL is.
+        guard !paths.isEmpty || !rasterPaths.isEmpty else { closeChart(); return }
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
-        noteRecent(recent)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
         // runs: flag now, open on the next runloop turn so SwiftUI paints.
         openingCells = paths.count
@@ -394,11 +413,279 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func noteRecent(_ path: String) {
-        recents.removeAll { $0 == path }
-        recents.insert(path, at: 0)
-        if recents.count > 10 { recents = Array(recents.prefix(10)) }
-        UserDefaults.standard.set(recents, forKey: recentsKey)
+    /// Close the chart and go back to the panel that offers to add some.
+    /// The files are untouched; only the display and the engine handle go.
+    func closeChart() {
+        controller?.close()
+        openRequest = nil
+        chartPath = nil
+        hasChart = false
+        firstBuildDone = false
+        isOpening = false
+    }
+
+    // MARK: - The sets aboard
+
+    /// Every chart the switched-on sets carry, ready to hand to the engine.
+    /// Sorted, and with duplicates dropped: two sets may overlap, and the same
+    /// cell twice would be composed twice.
+    var openPaths: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for set in chartSets where set.on {
+            for p in set.openablePaths where !seen.contains(p) {
+                seen.insert(p)
+                out.append(p)
+            }
+        }
+        return out.sorted()
+    }
+
+    /// Look through the folders saved from the last run. The cells are scanned
+    /// again rather than stored, because a folder changes underneath the app.
+    func loadChartSets(completion: (() -> Void)? = nil) {
+        let paths = ChartSetStore.savedPaths()
+        let off = ChartSetStore.savedOff()
+        guard !paths.isEmpty, !scanning else { completion?(); return }
+        scanning = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = paths.compactMap { p -> ChartSet? in
+                // Either kind counts. A folder of pictures is a set.
+                guard var s = ChartScan.scan(p),
+                      !s.cells.isEmpty || !s.rasters.isEmpty else { return nil }
+                s.on = !off.contains(p)
+                return s
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.chartSets = found
+                self.scanning = false
+                self.syncRasterFromSets()
+                // The launch walk cannot see a library of pictures: it looks
+                // for cells, and finds none. Open what the scan found once it
+                // knows, or a mariner carrying only imagery gets the first-run
+                // page every time with their charts sitting on the list.
+                if !self.hasChart && (!self.openPaths.isEmpty || !self.rasterPaths.isEmpty) {
+                    self.requestOpen(self.openPaths)
+                }
+                // The saved list is NOT rewritten here. A folder that did not
+                // answer this time is a drive that is not plugged in, not a
+                // folder the mariner threw away, and writing the shorter list
+                // back would lose their charts for good. Only an explicit add
+                // or remove changes what is saved.
+                completion?()
+            }
+        }
+    }
+
+    /// Look through `path` and put it on the list. A folder with no charts in
+    /// it never joins the list, which is what kept dead entries out of reach
+    /// of the mariner in the first place.
+    func addChartSet(_ path: String) {
+        // One at a time. A second bake started while the first runs gets its
+        // own job, and then Cancel stops only the one the pill happens to
+        // hold: the mariner presses stop and the machine keeps working.
+        guard bake == nil, !scanning else {
+            emptyPick = "Still working on \(bake?.name ?? scanningName). Wait for it to finish."
+            return
+        }
+        scanning = true
+        scanRequested = true
+        scanningName = (path as NSString).lastPathComponent
+        emptyPick = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = ChartScan.scan(path)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.scanning = false
+                // A folder of pictures is a chart folder. There is one list
+                // and one way in, so the test is whether the folder holds
+                // anything Lookout can draw, of either kind.
+                guard let set = found, !set.cells.isEmpty || !set.rasters.isEmpty else {
+                    let name = (path as NSString).lastPathComponent
+                    self.emptyPick = "\(name) holds no charts Lookout can read."
+                    return
+                }
+                // Raw cells cannot be drawn. Bake them first, then take the
+                // baked folder as the set.
+                // S-57 and S-101 cells, and BSB/KAP sheets, are all prepared
+                // the same way and by the same engine call.
+                if set.needsBake > 0 {
+                    self.beginBake(sourceDir: set.path, cells: set.toPrepare)
+                    return
+                }
+                self.adopt(set)
+            }
+        }
+    }
+
+    /// Put a set on the list.
+    ///
+    /// `reopen` is false when the charts are already drawing. A bake hands
+    /// each batch to the open library as it finishes, so by the end there is
+    /// nothing left to open: reopening would tear down a chart that is
+    /// already correct and show the startup loader over it for a moment.
+    private func adopt(_ set: ChartSet, reopen: Bool = true) {
+        chartSets.removeAll { $0.path == set.path }
+        chartSets.append(set)
+        ChartSetStore.add(set.path)
+        syncRasterFromSets()
+        if reopen { requestOpen(openPaths) }
+    }
+
+    /// The pictures the switched-on sets carry, installed as the raster charts.
+    ///
+    /// A set is a folder of charts, and a folder can hold both kinds. The
+    /// mariner adds it once and switches it on once; which of its files are
+    /// the survey and which are photographs is the app's problem, not theirs.
+    private func syncRasterFromSets() {
+        var seen = Set<String>()
+        var wanted: [String] = []
+        for set in chartSets where set.on {
+            for p in set.rasterPaths where !seen.contains(p) {
+                seen.insert(p)
+                wanted.append(p)
+            }
+        }
+        // Anything the mariner added before sets existed stays aboard.
+        for p in rasterPaths where !seen.contains(p) && !ChartBake.isDerived(p) {
+            let inAnySet = chartSets.contains { $0.rasterPaths.contains(p) }
+            if !inAnySet {
+                seen.insert(p)
+                wanted.append(p)
+            }
+        }
+        guard wanted != rasterPaths else { return }
+        rasterPaths = wanted
+        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+    }
+
+    // MARK: - Baking raw cells
+
+    /// The bake running now, if any. The HUD pill watches this.
+    @Published var bake: BakeProgress?
+    private var bakeJob: ChartBakeJob?
+
+    /// Any chart work running now: a scan or a bake. The pill, the first-run
+    /// panel and the Charts settings all read this one value, so the work
+    /// appears wherever the mariner is looking.
+    var chartWork: BakeProgress? {
+        if let b = bake { return b }
+        // Only work the mariner started. The scan at launch is bookkeeping for
+        // the Charts panel and finishes on its own; showing it puts "Finding
+        // charts" over the window on every single launch, before a chart the
+        // app already knows how to open.
+        if scanning && scanRequested { return BakeProgress(name: scanningName) }
+        return nil
+    }
+    /// True while the scan running was asked for by the mariner.
+    @Published var scanRequested = false
+
+    /// The work to show in place of the first-run picker: a scan or a bake,
+    /// while there is still no chart to draw. Nil once a chart is up, because
+    /// from then on the pill carries it and the chart is the thing to look at.
+    var firstRunWork: BakeProgress? { chartWork }
+    /// The folder being looked through, for the first-run text.
+    @Published var scanningName = ""
+
+    /// Bake `sourceDir` into the app's own chart directory, then add the
+    /// result as the set. The mariner keeps sailing while this runs: it is a
+    /// pill in the HUD, not a modal.
+    private func beginBake(sourceDir: String, cells: [ScannedCell]) {
+        let job = ChartBakeJob()
+        bakeJob = job
+        let total = cells.filter(\.needsBake).count
+        bake = BakeProgress(done: 0, total: total,
+                            name: (sourceDir as NSString).lastPathComponent)
+        job.onProgress = { [weak self] p in
+            guard let self else { return }
+            // The count moves on tile57's thread once per cell. Keep the total
+            // from the scan when tile57 has not counted yet, so the bar never
+            // starts at an unknown length.
+            var shown = p
+            if shown.total == 0 { shown.total = total }
+            self.bake = shown
+        }
+        ChartBake.run(sourceDir: sourceDir, cells: cells, job: job) { [weak self] outDir in
+            guard let self else { return }
+            self.bakeJob = nil
+            // The panel stays up across the last read of the folder. Clearing
+            // it here drops the window back to the first-run page for as long
+            // as that takes, and then the chart arrives: the mariner watches
+            // their work apparently undone.
+            self.scanning = true
+            self.scanRequested = true
+            self.bake = nil
+            guard let outDir else {
+                self.scanning = false
+                self.emptyPick = "Could not bake \((sourceDir as NSString).lastPathComponent)."
+                return
+            }
+            // Read the folder again, not the output directory. The set is the
+            // folder the mariner picked; what was prepared is part of it, and
+            // so is everything that needed no preparing.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let whole = ChartScan.scan(sourceDir)
+                DispatchQueue.main.async {
+                    self.scanning = false
+                    self.scanRequested = false
+                    guard let whole, !whole.cells.isEmpty || !whole.rasters.isEmpty else {
+                        self.emptyPick = "Nothing could be prepared from \((sourceDir as NSString).lastPathComponent)."
+                        return
+                    }
+                    self.adopt(whole)
+                }
+            }
+        }
+    }
+
+    /// Stop the bake. What has already been baked is kept and opened.
+    func cancelBake() {
+        bakeJob?.cancel()
+    }
+
+    /// Switch a set on or off. It stays aboard either way. The library is
+    /// composed at open, so this reopens with the new set of charts.
+    func setChartSetOn(_ path: String, _ on: Bool) {
+        guard let i = chartSets.firstIndex(where: { $0.path == path }) else { return }
+        chartSets[i].on = on
+        ChartSetStore.setOff(path, !on)
+        syncRasterFromSets()
+        requestOpen(openPaths)
+    }
+
+    /// The set the mariner asked to remove, held while they are asked whether
+    /// they meant it. Only a set Lookout prepared charts for: taking a folder
+    /// of the mariner's own files off the list deletes nothing, so it needs no
+    /// question.
+    @Published var pendingRemoval: ChartSet?
+
+    /// About how long re-importing a set would take, from what it holds. The
+    /// mariner is deciding whether to throw away work, so the size of that
+    /// work is the fact they need.
+    func rebuildEstimate(_ set: ChartSet) -> String {
+        let n = max(set.cells.count + set.rasters.count, 1)
+        // Measured on this machine over a mixed Chesapeake set: about a fifth
+        // of a second a chart with every core working.
+        let seconds = Double(n) * 0.2
+        if seconds < 60 { return "under a minute" }
+        if seconds < 3600 { return "about \(Int((seconds / 60).rounded())) minutes" }
+        return String(format: "about %.1f hours", seconds / 3600)
+    }
+
+    /// Take a set off the list.
+    ///
+    /// Charts this app prepared are deleted with it: they were made from the
+    /// mariner's cells and can be made again, and a 3 GB library left behind
+    /// by a set the mariner removed is the app hoarding on their disk. A
+    /// folder of the mariner's OWN charts is only taken off the list.
+    func removeChartSet(_ path: String) {
+        let prepared = chartSets.first { $0.path == path }?.preparedPath
+        chartSets.removeAll { $0.path == path }
+        ChartSetStore.remove(path)
+        syncRasterFromSets()
+        if let prepared { ChartBake.deleteDerived(prepared) }
+        requestOpen(openPaths)
     }
 
     /// Show the chart picker: the AppKit open panel on macOS, the document

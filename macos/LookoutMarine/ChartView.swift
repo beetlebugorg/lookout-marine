@@ -336,12 +336,42 @@ struct OverlayLayer: View {
                 }
                 .overlay {
                     if model.showStartupLoader {
-                        StartupLoader(phase: model.loadingPhase)
+                        StartupLoader(phase: model.loadingPhase, cells: model.openingCells)
                             .transition(.opacity)
                     } else if !model.hasChart {
-                        EmptyChartState(model: model).chromeHitRegion("empty-state")
+                        // The Metal layer keeps the last frame it presented, so
+                        // a closed chart stays on screen with nothing drawing
+                        // it. Cover it here rather than hiding the layer: the
+                        // chrome is a subview of that same layer, and hiding it
+                        // takes this panel with it.
+                        Chrome.panel.ignoresSafeArea()
                     }
                 }
+                .overlay {
+                    // The picker asked a question the mariner has answered.
+                    // While the answer is being acted on, the work stands in
+                    // its place.
+                    if !model.showStartupLoader, !model.hasChart, model.chartWork == nil {
+                        EmptyChartState(model: model).chromeHitRegion("empty-state")
+                            .transition(.opacity)
+                    }
+                }
+                // Importing runs for minutes over a big folder, so it never
+                // blocks the chart. ONE panel in both places: centred and open
+                // while there is nothing to look at, then it travels to the top
+                // and closes once charts are drawing. Same view, so the move is
+                // something the eye can follow.
+                .overlay(alignment: model.hasChart ? .top : .center) {
+                    if let b = model.chartWork {
+                        ChartWorkPanel(progress: b, compact: model.hasChart,
+                                       onCancel: { model.cancelBake() })
+                            .padding(.top, model.hasChart ? 10 : 0)
+                            .chromeHitRegion("chart-work")
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.5), value: model.hasChart)
+                .animation(.easeInOut(duration: 0.25), value: model.chartWork == nil)
                 // The overlay hover tooltip, clear of the pointer. Padding,
                 // not an offset, for the reason above. No chrome hit region:
                 // a click over the tip must still pick the chart under it.

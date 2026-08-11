@@ -282,40 +282,63 @@ struct SettingsView: View {
 
 // MARK: - Charts
 
-/// Chart selection: the open library, recents, and the picker. iOS imports via
+/// Chart selection: the sets aboard, and the picker. iOS imports via
 /// the form's OWN file importers (SettingsView attaches them, so they present
 /// over the sheet); macOS uses the shared NSOpenPanel.
 private struct ChartsSections: View {
     @ObservedObject var model: AppModel
+    /// Held here so the Cancel button reads "Stopping…" while tile57 finishes
+    /// the charts already in flight.
+    @State private var cancellingBake = false
 
     var body: some View {
+        // The sets aboard. A set is a folder the mariner added; switching one
+        // off keeps it aboard and takes it out of the chart. Every set here
+        // has been looked through and holds charts, so none of them is a dead
+        // entry the mariner has to discover by clicking it.
         Section {
-            if let p = model.chartPath {
-                Label {
-                    Text(displayName(p)).lineLimit(1).truncationMode(.middle)
-                } icon: {
-                    Image(systemName: "map.fill").foregroundStyle(.tint)
-                }
+            if model.chartSets.isEmpty {
+                Text(model.scanning ? "Finding charts…" : "No charts")
+                    .foregroundStyle(.secondary)
             } else {
-                Text("No chart open").foregroundStyle(.secondary)
-            }
-        } header: { Text("Open") }
-
-        if !model.recents.isEmpty {
-            Section {
-                ForEach(model.recents, id: \.self) { p in
-                    Button {
-                        model.openChart(p)
-                    } label: {
-                        HStack {
-                            Image(systemName: p == model.chartPath ? "checkmark.circle.fill" : "clock")
-                                .foregroundStyle(p == model.chartPath ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                            Text(displayName(p)).lineLimit(1).truncationMode(.middle)
-                                .foregroundStyle(.primary)
-                        }
-                    }
+                ForEach(model.chartSets) { set in
+                    ChartSetRow(model: model, set: set)
                 }
-            } header: { Text("Recent") }
+            }
+            if let msg = model.emptyPick {
+                Label(msg, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: { Text("Charts") }
+        .confirmationDialog(
+            "Remove \(model.pendingRemoval?.name ?? "")?",
+            isPresented: Binding(get: { model.pendingRemoval != nil },
+                                 set: { if !$0 { model.pendingRemoval = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove and delete prepared charts", role: .destructive) {
+                if let s = model.pendingRemoval { model.removeChartSet(s.path) }
+                model.pendingRemoval = nil
+            }
+            Button("Cancel", role: .cancel) { model.pendingRemoval = nil }
+        } message: {
+            if let s = model.pendingRemoval {
+                Text("Lookout deletes the \(s.cells.count + s.rasters.count) charts it prepared from this folder. Your original files are not touched, and you can add the folder again, which takes \(model.rebuildEstimate(s)).")
+            }
+        }
+
+        // The work, where it was started. This window stands over the chart,
+        // so a bake begun here otherwise runs behind it: the mariner presses
+        // Add Charts, nothing in front of them changes, and they press it
+        // again.
+        if let b = model.chartWork {
+            Section {
+                BakeDetail(progress: b, onCancel: { model.cancelBake() }, cancelling: $cancellingBake)
+                    .padding(.vertical, 4)
+            } header: {
+                Text(b.total > 0 ? "Importing \(b.name)" : "Finding charts in \(b.name)")
+            }
         }
 
         Section {
@@ -324,94 +347,126 @@ private struct ChartsSections: View {
             } label: {
                 Label("Add Charts…", systemImage: "plus")
             }
+            .disabled(model.chartWork != nil)
         } footer: {
-            Text("A folder of baked cells opens as one seamless library.").captionFooter()
+            VStack(alignment: .leading, spacing: 3) {
+                Text("A folder joins the chart as one library. Both kinds of chart go in here.").captionFooter()
+                Text("S-57 and S-101 cells (.000 with their updates) · charts Lookout has already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are converted once on the way in. Encrypted S-63 cells are not supported.").captionFooter()
+            }
         }
 
-        // A raster chart is a different KIND of chart, so it gets its own section
-        // rather than a mixed list: one is the survey, the other is a picture of
-        // the water, and a mariner must never lose track of which is which.
-        Section {
-            if model.rasterPaths.isEmpty {
-                Text("No raster charts").foregroundStyle(.secondary)
-            } else {
-                // Grouped by provider, because a set is what the pill cycles and
-                // what covers a piece of water. A mariner turns off Navionics,
-                // not four files that happen to be Navionics.
-                ForEach(model.rasterGroups, id: \.name) { group in
-                    let on = model.rasterGroupOn(group.paths)
-                    HStack {
-                        Toggle("", isOn: Binding(
-                            get: { on },
-                            set: { model.setRasterGroupEnabled(group.paths, $0) }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        Text(group.name)
-                            .fontWeight(.medium)
-                            .foregroundStyle(on ? .primary : .secondary)
-                        Spacer()
-                        Text(group.paths.count == 1 ? "1 file" : "\(group.paths.count) files")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    ForEach(group.paths, id: \.self) { p in
-                        HStack {
-                            Toggle("", isOn: Binding(
-                                get: { !model.rasterOff.contains(p) },
-                                set: { model.setRasterEnabled(p, $0) }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            Text(displayName(p))
-                                .font(.caption)
-                                .lineLimit(1).truncationMode(.middle)
-                                .foregroundStyle(model.rasterOff.contains(p) ? .secondary : .primary)
-                            Spacer()
-                            Button {
-                                model.removeRasterChart(p)
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            // .help is a POINTER tooltip. On touch a bare
-                            // minus circle says nothing at all, so the words
-                            // travel as the button's own label and hint.
-                            .help("Remove. Takes effect the next time a chart opens.")
-                            .accessibilityLabel("Remove \(displayName(p))")
-                            .accessibilityHint("Takes effect the next time a chart opens.")
-                        }
-                        .padding(.leading, 22)
-                    }
-                }
-            }
-            Button {
-                #if os(macOS)
-                model.presentRasterPanel()
-                #else
-                // The form's own importer, not the chart's: the chart's is
-                // attached to the view presenting this sheet and cannot come
-                // up while the sheet is over it.
-                model.showSettingsRasterImporter = true
-                #endif
-            } label: {
-                Label("Add Raster Charts…", systemImage: "plus")
-            }
-        } header: {
-            Text("Raster charts")
-        } footer: {
-            Text("Charts made of pictures: MBTiles of satellite imagery or another "
-                 + "vendor's charts, and BSB/KAP raster nautical charts. The ENC "
-                 + "draws over them and drops its depth and land shading only where "
-                 + "they cover. Switch one off to keep it installed without drawing it.")
-                .captionFooter()
-        }
+        // NO SEPARATE RASTER SECTION. A picture and a survey are different
+        // kinds of chart, and the row says which, but they are not different
+        // kinds of THING TO ADD: they arrive in the same folders and are
+        // switched on the same way. Two lists made the mariner remember which
+        // panel a file had gone into, and a folder holding both could only be
+        // half added.
+        //
+        // Where they still differ is what a switch MEANS. Surveys compose, so
+        // a set is on or off. Only one picture can cover a piece of water, so
+        // the pictures inside a set get a switch each, by whoever made them.
     }
 
     private func displayName(_ path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+}
+
+/// One set: a switch, what it holds, and how deep its detail goes.
+///
+/// The band ladder is the part a mariner reads first. A set that stops at
+/// Coastal will not draw the harbor a passage ends in, and the count per band
+/// says so without opening anything.
+private struct ChartSetRow: View {
+    @ObservedObject var model: AppModel
+    let set: ChartSet
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: Binding(
+                    get: { set.on },
+                    set: { model.setChartSetOn(set.path, $0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .accessibilityLabel("Draw \(set.name)")
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(set.name)
+                        .fontWeight(.medium)
+                        .lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(set.on ? .primary : .secondary)
+                    Text(set.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    // A set Lookout prepared is work that has to be done
+                    // again. Ask. A folder of the mariner's own files is only
+                    // a list entry, so it goes without a question.
+                    if set.isDerived { model.pendingRemoval = set }
+                    else { model.removeChartSet(set.path) }
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(set.isDerived
+                      ? "Remove. The charts this app prepared are deleted; your own cells are untouched."
+                      : "Take these charts out of the list. Your files stay where they are.")
+                .accessibilityLabel("Remove \(set.name)")
+                .accessibilityHint(set.isDerived
+                                   ? "The prepared charts are deleted. Your own cells are untouched."
+                                   : "Your files stay where they are.")
+            }
+
+            HStack(spacing: 4) {
+                ForEach(set.bandCounts, id: \.band) { b in
+                    Text("\(b.name) \(b.count)")
+                        .font(.system(size: 10, weight: .medium))
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, 30)
+            .opacity(set.on ? 1 : 0.5)
+
+            if set.refusedCount > 0 {
+                // Already prepared once; whatever is still unread is unreadable.
+                Label("\(set.refusedCount) file\(set.refusedCount == 1 ? "" : "s") Lookout could not read",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.leading, 30)
+            } else if set.needsBake > 0 {
+                Label("\(set.needsBake) to prepare", systemImage: "clock.arrow.circlepath")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.leading, 30)
+            }
+            // The pictures in this set, by provider. One switch each: a
+            // provider is what covers a piece of water, and a folder of two
+            // hundred tiles from one survey is one decision, not two hundred.
+            ForEach(set.rasterGroups(label: AppModel.providerLabel), id: \.name) { group in
+                HStack(spacing: 8) {
+                    Toggle("", isOn: Binding(
+                        get: { model.rasterGroupOn(group.paths) },
+                        set: { model.setRasterGroupEnabled(group.paths, $0) }
+                    ))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    Image(systemName: "photo").font(.caption2).foregroundStyle(.secondary)
+                    Text(group.name).font(.caption)
+                        .foregroundStyle(model.rasterGroupOn(group.paths) ? .primary : .secondary)
+                    Spacer()
+                    Text(group.paths.count == 1 ? "1 file" : "\(group.paths.count) files")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.leading, 30)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 

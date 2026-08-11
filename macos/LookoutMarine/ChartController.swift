@@ -107,9 +107,10 @@ final class ChartController: NSObject {
     /// Open one or more baked charts into `view` and compose them (a chart
     /// library / a directory of cells). Returns false on failure. Recreates the
     /// handle if one already exists.
+    /// An empty list is not a failure: a set of raster charts alone opens with
+    /// no vector chart, and the pictures are installed below.
     @discardableResult
     func open(charts paths: [String], in view: PlatformView) -> Bool {
-        guard !paths.isEmpty else { return false }
         close()
         self.view = view
         model?.firstBuildDone = false
@@ -144,9 +145,10 @@ final class ChartController: NSObject {
         lkLog("open OK")
         model?.openError = nil
         handle = h
-        chartPath = paths.count == 1
-            ? paths[0]
-            : ((paths[0] as NSString).deletingLastPathComponent)
+        // Empty is legal: a library of pictures alone opens with no cell, and
+        // then there is no chart path to report.
+        chartPath = paths.isEmpty ? nil
+            : (paths.count == 1 ? paths[0] : (paths[0] as NSString).deletingLastPathComponent)
 
         // Re-install the mariner's raster charts. A raster chart is attached to a
         // lookout handle, and `close()` above destroyed the old one, so every
@@ -244,6 +246,28 @@ final class ChartController: NSObject {
     /// to service a pending openRequest as a fallback.
     func attachView(_ v: PlatformView) {
         if view == nil { view = v }
+    }
+
+    /// True once a chart is open, so a caller can tell adding from opening.
+    var hasHandle: Bool { handle != nil }
+
+    /// Add charts to the library that is already open, keeping the view and
+    /// what is drawn. Answers how many opened.
+    ///
+    /// This is not a reopen. The composition is rebuilt on a worker and swapped
+    /// in when ready, so the charts already on screen keep drawing meanwhile.
+    @discardableResult
+    func addCharts(_ paths: [String]) -> Int {
+        guard let h = handle, !paths.isEmpty else { return 0 }
+        var c = paths.map { strdup($0) }
+        defer { c.forEach { free($0) } }
+        let added = c.withUnsafeMutableBufferPointer { buf in
+            buf.withMemoryRebound(to: UnsafePointer<CChar>?.self) { p in
+                lookout_charts_add(h, p.baseAddress, paths.count)
+            }
+        }
+        if added > 0 { kick() }
+        return Int(added)
     }
 
     /// Re-open into the view we already render into (menu/search/panel opens
