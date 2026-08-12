@@ -89,6 +89,116 @@ fun ChartsSection(
     }
 
     RasterChartsSection(controller)
+
+    ChartLinksSection(controller)
+}
+
+/**
+ * Charts added by link: a whole MapLibre style (or a TileJSON) rendered
+ * INSTEAD of the built-in chart — which is just the default entry here. One
+ * is picked at a time: two whole charts cannot share the water.
+ */
+@Composable
+private fun ChartLinksSection(controller: ChartController) {
+    val links = controller.chartLinks
+    val scope = rememberCoroutineScope()
+    var newLink by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    SectionHeader("Chart")
+    Footer(
+        "An online map can be the chart: paste its MapLibre style link, or a " +
+            "TileJSON tile link. Everything it draws comes from its publisher " +
+            "— depths, symbols and warnings included.",
+    )
+
+    ChartPickRow(
+        name = "Lookout chart",
+        detail = "Built from the charts above",
+        picked = links.active == null,
+    ) {
+        links.select(null)
+        controller.pushChartLink()
+    }
+    for (link in links.links) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(modifier = Modifier.weight(1f)) {
+                ChartPickRow(name = link.name, detail = link.url, picked = links.active == link.url) {
+                    links.select(link.url)
+                    controller.pushChartLink()
+                }
+            }
+            TextButton(onClick = {
+                links.remove(link.url)
+                controller.pushChartLink()
+            }) { Text("Remove") }
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        androidx.compose.material3.OutlinedTextField(
+            value = newLink,
+            onValueChange = { newLink = it },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            placeholder = { Text("https://…/style.json") },
+        )
+        if (busy) {
+            CircularProgressIndicator(modifier = Modifier.size(22.dp))
+        } else {
+            TextButton(
+                onClick = {
+                    val raw = newLink
+                    newLink = ""
+                    error = null
+                    busy = true
+                    scope.launch {
+                        val added = withContext(Dispatchers.IO) { links.add(raw) }
+                        busy = false
+                        if (added == null) {
+                            error = "No chart style or tile source at that link."
+                        } else {
+                            controller.pushChartLink()
+                        }
+                    }
+                },
+                enabled = newLink.isNotBlank(),
+            ) { Text("Add") }
+        }
+    }
+    error?.let { Footer(it) }
+}
+
+@Composable
+private fun ChartPickRow(name: String, detail: String, picked: Boolean, pick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = pick)
+            .padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        androidx.compose.material3.RadioButton(selected = picked, onClick = pick)
+        Column {
+            Text(name, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 /**

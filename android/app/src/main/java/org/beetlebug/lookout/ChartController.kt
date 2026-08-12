@@ -264,6 +264,7 @@ class ChartController(private val appContext: Context) {
 
     /** The mariner's installed raster charts, persisted across opens. */
     val rasterCharts = RasterCharts(appContext)
+    val chartLinks = ChartLinks(appContext)
 
     /** What the pill shows. Refreshed every pushed frame: `inView` moves. */
     var raster by mutableStateOf(RasterState())
@@ -302,6 +303,9 @@ class ChartController(private val appContext: Context) {
             else if (!rasterCharts.isEnabled(p)) l.rasterSetEnabled(p, false)
         }
         pushRaster(l)
+        // The picked chart link replays the same way: the choice is attached
+        // to a lookout handle, so every open puts it back.
+        chartLinks.activeStyle()?.let { l.altChartStyle(it) }
         loadPlugins(l)
         val loaded = date
         main.post { mariner.loadFrom(v, loaded) }
@@ -842,6 +846,9 @@ class ChartController(private val appContext: Context) {
     }
 
     fun resetRotation() = onEngine { it.resetRotation() }
+
+    /** Draw the picked chart link, or the built-in chart for null. */
+    fun pushChartLink() = onEngine { it.altChartStyle(chartLinks.activeStyle()) }
 
     fun memoryWarning() = onEngine { it.memoryWarning() }
 

@@ -6,7 +6,7 @@
 //!
 //! Units: every geometry-taking native works in LOGICAL points (Android dp) —
 //! the camera's own unit. Java divides pixels by DisplayMetrics.density before
-//! crossing; gpu_vk derives pixel_density from surface px / resize() points.
+//! crossing; the ml host derives pixel_density from surface px / resize() points.
 //!
 //! Threading: gestures call in on the main thread while the frame loop calls
 //! nRender/nTickAnim on a dedicated render thread, and the C ABI's api lock
@@ -57,6 +57,7 @@ extern fn lookout_fling_start(h: ?*anyopaque, vx: f64, vy: f64) void;
 extern fn lookout_memory_warning(h: ?*anyopaque) void;
 extern fn lookout_get_mariner(h: ?*anyopaque, out: *cc.tile57_mariner) void;
 extern fn lookout_set_mariner(h: ?*anyopaque, m: *const cc.tile57_mariner) void;
+extern fn lookout_alt_chart_style(h: ?*anyopaque, url: ?[*:0]const u8) void;
 extern fn lookout_pick(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
 extern fn lookout_pick_ranked(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
 
@@ -527,6 +528,21 @@ export fn Java_org_beetlebug_lookout_Lookout_nGetMarinerDate(env: [*c]j.JNIEnv, 
 }
 
 /// void nSetMariner(long h, double[] vals, String dateView)
+/// void nAltChartStyle(long h, String url) — choose the chart: a MapLibre
+/// style url (or the style document itself) renders INSTEAD of the built-in
+/// chart; null or empty returns to it. Mirrors the Apple shell's chart links.
+export fn Java_org_beetlebug_lookout_Lookout_nAltChartStyle(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) {
+        lookout_alt_chart_style(h.l, null);
+        return;
+    }
+    const cs = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, cs);
+    lookout_alt_chart_style(h.l, @ptrCast(cs));
+}
+
 export fn Java_org_beetlebug_lookout_Lookout_nSetMariner(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, vals: j.jdoubleArray, date: j.jstring) void {
     _ = cls;
     const h = fromLong(hl) orelse return;

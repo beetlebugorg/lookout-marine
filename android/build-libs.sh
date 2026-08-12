@@ -73,12 +73,21 @@ for abi in $ABIS; do
     # ELF check at the foot of this loop is what catches it. Separate prefixes
     # make the two builds independent instead of racing.
     prefix="$core/zig-out-android-$abi"
-    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" -Dplugins="$plugins" -p "$prefix" )
+    # MapLibre Native draws the chart on this branch. The android install is a
+    # CMake preset build of maplibre-native-ffi (see that repo's presets;
+    # needs cargo + cargo-about for its Rust platform layer).
+    MLN_PREFIX="${MLN_PREFIX:-$core/../maplibre-native-ffi/build/android-${abi/arm64-v8a/arm64}-vulkan/install}"
+    MLN_SRC="${MLN_SRC:-$core/../maplibre-native-ffi}"
+    [ -d "$MLN_PREFIX" ] || { echo "error: no MapLibre android install at $MLN_PREFIX" >&2; exit 1; }
+    ( cd "$core" && zig build -Dtarget="$triple" -Doptimize="$OPT" -Dandroid-ndk="$NDK" -Dplugins="$plugins"         -Dmaplibre-prefix="$MLN_PREFIX" -Dmaplibre-src="$MLN_SRC" -p "$prefix" )
     dest="$here/app/jni/prebuilt/$abi"
     mkdir -p "$dest"
     # On android liblookout doesn't embed tile57 (nested .a breaks ld.lld), so
     # ship both archives; CMake links liblookout then libtile57.
     cp "$prefix/lib/liblookout_marine.a" "$prefix/lib/libtile57.a" "$dest/"
+    # The MapLibre shared library rides along: gradle's CMake links it and
+    # packages it into the APK beside lookout_jni.
+    cp "$MLN_PREFIX/lib/libmaplibre-native-c.so" "$dest/"
     # Same reason for the wasm runtime: off Apple the static core embeds no
     # archive, so libvmlib.a rides along and CMake links it third. A stale copy
     # from an earlier plugins=true build would otherwise linger and link.

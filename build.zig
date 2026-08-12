@@ -339,13 +339,15 @@ pub fn build(b: *std.Build) void {
                 // (INFINITY undeclared, nullability on basic_string). Same
                 // class of clash as the bionic one below.
                 if (link_archives) {
-                    mod.addObjectFile(.{ .cwd_relative = bb.pathJoin(&.{ w.prefix, "lib", "libmaplibre-native-c.dylib" }) });
-                    // The dylib's install name is @rpath-relative; anything
+                    const libname = if (self.apple) "libmaplibre-native-c.dylib" else "libmaplibre-native-c.so";
+                    mod.addObjectFile(.{ .cwd_relative = bb.pathJoin(&.{ w.prefix, "lib", libname }) });
+                    // The library's install name is @rpath-relative; anything
                     // that RUNS from zig-out (the demo, the test binaries)
                     // needs the install's lib dir on its rpath. The Xcode
-                    // app sets its own.
+                    // app sets its own; the Android APK loads from its own
+                    // lib dir.
                     mod.addRPathSpecial(bb.pathJoin(&.{ w.prefix, "lib" }));
-                    for ([_][]const u8{ "CoreFoundation", "CoreGraphics", "CoreText", "Foundation", "ImageIO", "Metal", "QuartzCore" }) |fw|
+                    if (self.apple) for ([_][]const u8{ "CoreFoundation", "CoreGraphics", "CoreText", "Foundation", "ImageIO", "Metal", "QuartzCore" }) |fw|
                         mod.linkFramework(fw, .{});
                 }
             }

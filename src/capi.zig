@@ -1083,5 +1083,5 @@ comptime {
     // the platform too: vk also serves desktop shells, which have no <jni.h>.
     const t = @import("builtin").target;
     const android = t.abi == .android or t.abi == .androideabi;
-    if (@import("build_options").gpu_vk and android) _ = @import("jni_android.zig");
+    if (android) _ = @import("jni_android.zig");
 }

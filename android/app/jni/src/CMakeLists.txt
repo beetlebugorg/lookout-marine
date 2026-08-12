@@ -17,7 +17,10 @@ target_link_libraries(lookout_jni PRIVATE
     ${PREBUILT}/liblookout_marine.a
     -Wl,--no-whole-archive
     ${PREBUILT}/libtile57.a
-    vulkan     # gpu_vk.zig: instance/device/swapchain via the platform loader
+    # MapLibre Native draws the chart on this branch; the core's ml host
+    # bootstraps the Vulkan context it borrows (src/ml/vk_boot.zig).
+    ${PREBUILT}/libmaplibre-native-c.so
+    vulkan     # ml/vk_boot.zig: the instance/device MapLibre's session borrows
     log        # __android_log_*
     android    # ANativeWindow_*
     m)

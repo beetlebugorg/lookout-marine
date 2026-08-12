@@ -186,6 +186,15 @@ public final class Lookout implements AutoCloseable {
         if (h != 0) nSetMariner(h, vals, dateView);
     }
 
+    /**
+     * Choose the chart: a MapLibre style url (or the style document itself)
+     * renders INSTEAD of the built-in chart; null returns to it. Replays per
+     * open like the raster charts — the choice is attached to this handle.
+     */
+    public void altChartStyle(String url) {
+        if (h != 0) nAltChartStyle(h, url);
+    }
+
     // ---- pick --------------------------------------------------------------
 
     /**
@@ -226,6 +235,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
+    private static native void nAltChartStyle(long h, String url);
     private static native String[] nPick(long h, double lon, double lat);
 
     // ---- raster charts ---------------------------------------------------
