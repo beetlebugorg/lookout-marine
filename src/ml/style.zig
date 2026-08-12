@@ -50,7 +50,7 @@ pub const Inputs = struct {
     mariner: cc.tile57_mariner,
     /// The archive's stored tile encoding (tile57_tile_type). MLT archives must
     /// say so or MapLibre decodes them as MVT and draws nothing.
-    tile_encoding: u8 = cc.TILE57_TILE_TYPE_MLT,
+    tile_encoding: u8 = cc.TILE57_TILE_TYPE_MVT,
     minzoom: u32 = 0,
     maxzoom: u32 = 16,
     /// Distinct SCAMIN denominators in the open library, from

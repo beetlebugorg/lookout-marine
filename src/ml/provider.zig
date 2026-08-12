@@ -35,6 +35,7 @@ const std = @import("std");
 const cc = @import("../c.zig").c;
 const t57 = @import("tile57");
 const maplibre = @import("maplibre_native_ffi");
+const mlog = @import("host.zig").mlog;
 const Lock = @import("../lock.zig").Lock;
 const sleepMs = @import("../lock.zig").sleepMs;
 
@@ -85,6 +86,11 @@ pub const Provider = struct {
     queue_lock: Lock = .{},
     worker: ?std.Thread = null,
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Bumped every time a request is answered. The host watches it to know
+    /// that MapLibre has new material and another frame is worth drawing —
+    /// `isFullyLoaded` goes true before the arriving tiles are placed, so on
+    /// its own it parks the render loop and the chart never fills in.
+    served: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     const SpriteEntry = struct {
         pixel_ratio: u8,
@@ -169,7 +175,9 @@ pub const Provider = struct {
 
         // Everything that is not ours goes to MapLibre's own file source, so a
         // style that also names an http basemap still works.
-        if (!std.mem.startsWith(u8, request.resolved_url, scheme)) return .pass_through;
+        if (!std.mem.startsWith(u8, request.resolved_url, scheme)) {
+                return .pass_through;
+        }
 
         const ask = parse(request.resolved_url[scheme.len..]) orelse {
             completeEmpty(h);
@@ -180,7 +188,7 @@ pub const Provider = struct {
         if (ask == .glyphs) {
             // The url is borrowed for the callback only; the worker needs its
             // own copy of the fontstack name.
-            const buf = self.alloc.dupe(u8, ask.glyphs.stack) catch {
+            const buf = percentDecode(self.alloc, ask.glyphs.stack) catch {
                 completeEmpty(h);
                 return .handle;
             };
@@ -206,6 +214,7 @@ pub const Provider = struct {
     // ---- the worker ------------------------------------------------------
 
     fn run(self: *Provider) void {
+        mlog("prov: worker up\n", .{});
         while (true) {
             self.queue_lock.lock();
             if (self.queue.items.len == 0) {
@@ -238,8 +247,11 @@ pub const Provider = struct {
             .glyphs => |g| self.glyphRange(g.stack, g.start),
         };
 
+        _ = self.served.fetchAdd(1, .release);
         if (bytes) |b| {
-            job.handle.complete(.{ .status = .ok, .bytes = b }) catch {};
+            job.handle.complete(.{ .status = .ok, .bytes = b }) catch |e| {
+                mlog("prov: complete FAILED {s}\n", .{@errorName(e)});
+            };
         } else {
             // "Nothing here" is not an error for a chart library: most of the
             // world has no cell. A 404 tells MapLibre to stop asking rather
@@ -270,8 +282,14 @@ pub const Provider = struct {
         else
             return null;
 
-        if (st != cc.TILE57_OK) return null;
-        if (out == null or out_len == 0) return null; // no ground here
+        if (st != cc.TILE57_OK) {
+            mlog("prov: tile {d}/{d}/{d} status {d}\n", .{ z, x, y, st });
+            return null;
+        }
+        if (out == null or out_len == 0) {
+            mlog("prov: tile {d}/{d}/{d} empty\n", .{ z, x, y });
+            return null;
+        }
         return out[0..out_len];
     }
 
@@ -354,6 +372,25 @@ pub const Provider = struct {
     }
 };
 
+/// Decode %XX escapes. MapLibre encodes the space in "Noto Sans Bold".
+fn percentDecode(alloc: std.mem.Allocator, in: []const u8) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(alloc, in.len);
+    errdefer out.deinit(alloc);
+    var i: usize = 0;
+    while (i < in.len) {
+        if (in[i] == '%' and i + 2 < in.len) {
+            if (std.fmt.parseInt(u8, in[i + 1 .. i + 3], 16)) |b| {
+                try out.append(alloc, b);
+                i += 3;
+                continue;
+            } else |_| {}
+        }
+        try out.append(alloc, in[i]);
+        i += 1;
+    }
+    return out.toOwnedSlice(alloc);
+}
+
 // ---- url parsing ---------------------------------------------------------
 
 /// Parse the part after `lookout://`. Returns null for anything unrecognised,
@@ -388,6 +425,10 @@ fn parse(path: []const u8) ?Ask {
     }
 
     if (std.mem.startsWith(u8, path, "glyphs/")) {
+        // MapLibre percent-encodes the fontstack ("Noto%20Sans%20Bold"). The
+        // name has to be decoded before it reaches the encoder, because the
+        // encoder writes it into the pbf as the fontstack's OWN name and the
+        // client matches that against what it asked for.
         const rest = path["glyphs/".len..];
         const slash = std.mem.lastIndexOfScalar(u8, rest, '/') orelse return null;
         const stack = rest[0..slash];
@@ -426,6 +467,17 @@ test "parse: sprite at each density" {
     try std.testing.expectEqual(@as(u8, 2), parse("sprite@2x.json").?.sprite_json.pixel_ratio);
     try std.testing.expectEqual(@as(u8, 2), parse("sprite@2x.png").?.sprite_png.pixel_ratio);
     try std.testing.expect(parse("sprite.gif") == null);
+}
+
+test "percentDecode: the fontstack's space survives the url" {
+    const a = std.testing.allocator;
+    const d = try percentDecode(a, "Noto%20Sans%20Bold");
+    defer a.free(d);
+    try std.testing.expectEqualStrings("Noto Sans Bold", d);
+
+    const plain = try percentDecode(a, "Noto Sans Regular");
+    defer a.free(plain);
+    try std.testing.expectEqualStrings("Noto Sans Regular", plain);
 }
 
 test "parse: a glyph range keeps a fontstack containing spaces" {

@@ -812,7 +812,10 @@ pub const Lookout = struct {
         // shell handed us) but renderWindow is never called, so the two never
         // contend for a drawable.
         if (maplibre_on) {
-            const h = try mlhost.Host.open(alloc);
+            const h = mlhost.Host.open(alloc) catch |e| {
+                mlhost.mlog("ml: Host.open FAILED {s}\n", .{@errorName(e)});
+                return e;
+            };
             self.ml = h;
             if (opts.native_handle) |nh| if (opts.native_kind == .metal_layer) {
                 try h.attachMetal(nh, opts.width, opts.height, 1.0);
@@ -1294,6 +1297,7 @@ pub const Lookout = struct {
         else
             null;
         const ll = camera.worldToLonLat(self.cam.center);
+        mlhost.mlog("ml: setLibrary compose={any} chart={any}\n", .{ self.compose != null, single != null });
         h.setLibrary(self.compose, single, &.{}, ll.y) catch |e| {
             std.debug.print("maplibre: setLibrary failed: {s}\n", .{@errorName(e)});
         };
@@ -2000,7 +2004,13 @@ pub const Lookout = struct {
 
     /// Resize the render surface (points; HiDPI density is applied internally).
     pub fn resize(self: *Lookout, width: u32, height: u32) !void {
-        if (maplibre_on) if (self.ml) |h| h.resize(width, height);
+        if (maplibre_on) if (self.ml) |h| {
+            // The layer's density is not known when the surface is attached —
+            // it lands with the first real resize. MapLibre sizes its drawable
+            // as logical x scale_factor, so a stale 1.0 renders a quarter-sized
+            // frame into a 2x drawable and the chart appears as a sliver.
+            h.resize(width, height, if (self.g.pixel_density > 0) self.g.pixel_density else 1.0);
+        };
         self.host_pt_w = @floatFromInt(width);
         self.host_pt_h = @floatFromInt(height);
         try self.g.resize(width, height);
@@ -2147,6 +2157,13 @@ pub const Lookout = struct {
 
     /// True while the camera is easing a zoom or coasting a fling.
     pub fn animating(self: *Lookout) bool {
+        // MapLibre fills a view in over several frames as tiles, sprites and
+        // glyphs arrive. The shell only runs its frame loop while something is
+        // animating, so a settling map has to say so — otherwise it draws once,
+        // the loop parks, and the chart stays half-empty until the next gesture.
+        if (maplibre_on) if (self.ml) |h| {
+            if (h.needsRedraw()) return true;
+        };
         return self.cam.animating();
     }
 
@@ -2685,7 +2702,19 @@ pub const Lookout = struct {
     }
 
     pub fn render(self: *Lookout) !bool {
-        if (maplibre_on) if (self.ml) |h| return h.render();
+        if (maplibre_on) if (self.ml) |h| {
+            // Push the CURRENT camera, not just the one setView saw: pan, zoom,
+            // rotate and fling all mutate self.cam directly and never call
+            // setView, so reading it here is what makes gestures work at all.
+            const ll = camera.worldToLonLat(self.cam.center);
+            h.setView(.{
+                .lon = ll.x,
+                .lat = ll.y,
+                .zoom = self.cam.zoom,
+                .rotation_deg = self.cam.rotation * 180.0 / std.math.pi,
+            });
+            return h.render();
+        };
         self.ensureAtlases();
         if (self.loadingPulse()) return self.g.renderWindow(self.uniforms(), false, false);
         self.syncRasterMode(); // before prepareFrame: it decides what gets built
@@ -2707,6 +2736,10 @@ pub const Lookout = struct {
 
     /// True while the view needs another frame (state changed, building, loading).
     pub fn needsRedraw(self: *Lookout) bool {
+        // MapLibre owns this answer on its backend: it keeps loading after a
+        // frame is drawn, so only it knows when the view has settled.
+        if (maplibre_on) if (self.ml) |h| return h.needsRedraw();
+
         // The camera lagging the (just-adopted) drawable size counts as dirty:
         // the adopt lands mid-render, AFTER that frame's camera sync, and the
         // host loop may go idle before the next one — without this the resync
