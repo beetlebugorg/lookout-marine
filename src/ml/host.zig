@@ -405,11 +405,22 @@ pub const Host = struct {
         // no sounding runs to answer — a foreign style's missing images are
         // its own business (see queueRunImage's gate).
         if (self.alt_style_url) |url| {
-            self.map.setStyleUrl(self.alloc, url) catch |e| {
-                mlog("ml: setStyleUrl FAILED: {s}\n", .{@errorName(e)});
-                return Error.StyleFailed;
-            };
-            mlog("ml: chart style -> {s}\n", .{url});
+            // The string is a url, or the style document itself (a TileJSON
+            // link arrives as a shell-generated wrapper style — there is no
+            // second url to fetch).
+            if (url.len != 0 and url[0] == '{') {
+                self.map.setStyleJson(self.alloc, url) catch |e| {
+                    mlog("ml: alt setStyleJson FAILED: {s}\n", .{@errorName(e)});
+                    return Error.StyleFailed;
+                };
+                mlog("ml: chart style -> inline document, {d} bytes\n", .{url.len});
+            } else {
+                self.map.setStyleUrl(self.alloc, url) catch |e| {
+                    mlog("ml: setStyleUrl FAILED: {s}\n", .{@errorName(e)});
+                    return Error.StyleFailed;
+                };
+                mlog("ml: chart style -> {s}\n", .{url});
+            }
             self.gate.current = 0;
             self.dropGatedIds();
             self.gated.clearRetainingCapacity();
@@ -1034,8 +1045,9 @@ test "the zoom seam: 256px-world zoom N draws at MapLibre's N-1" {
 }
 
 test "the shipped style is statically gated: nothing to rewrite per gesture" {
-    // The host ships the static zoom-gate: SCAMIN and overscale clauses carry
-    // K/2^zoom and gate themselves at tile load. That means the style must
+    // The host ships the static zoom-gate: SCAMIN and overscale clauses
+    // compare the baked per-feature gate zooms (vz/oz, tile57/3) against
+    // ["zoom"] and gate themselves at tile load. That means the style must
     // contain NO live denominator slots (a slot means setLayerFilter storms
     // are back — the end-of-zoom freeze), and MUST carry the self-gating
     // form. If tile57's clause shapes drift, this is where it shows.
@@ -1059,7 +1071,8 @@ test "the shipped style is statically gated: nothing to rewrite per gesture" {
         for (denom_slots) |slot| {
             if (std.mem.indexOf(u8, fs, slot) != null) slot_hits += 1;
         }
-        if (std.mem.indexOf(u8, fs, "[\"^\",2,[\"zoom\"]]") != null) static_hits += 1;
+        if (std.mem.indexOf(u8, fs, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") != null or
+            std.mem.indexOf(u8, fs, "[\">\",[\"zoom\"],[\"coalesce\",[\"get\",\"oz\"],99]]") != null) static_hits += 1;
     }
     try std.testing.expectEqual(@as(usize, 0), slot_hits);
     try std.testing.expect(static_hits > 100);

@@ -180,36 +180,25 @@ pub fn build(b: *std.Build) void {
     // standardOptimizeOption, which would keep the no-flag default at Debug.)
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse .ReleaseFast;
 
-    // Renderer backend: native everywhere —
-    //   * metal: Apple (macOS / iOS), direct Metal
-    //   * vk:    Android and Linux, direct Vulkan onto the shell's surface
-    //   * d3d12: Windows, direct D3D12 into a composition swapchain
-    //   * sdl:   the SDL_GPU fallback, `-Dbackend=sdl` anywhere
-    // Default by platform; see src/gpu.zig.
-    //   * maplibre: draw the chart with MapLibre Native instead of our own
-    //     pipeline. NOT a transport like the other four — it replaces the whole
-    //     renderer, so it never reaches src/gpu.zig. See src/ml/ and
-    //     specs/maplibre/. It needs a CMake install of maplibre-native-c,
-    //     because unlike tile57 that library is not built from source here.
-    const Backend = enum { metal, sdl, vk, d3d12, maplibre };
+    // MapLibre Native draws the chart. This branch carries no other
+    // renderer — the native Metal/Vulkan/D3D12/SDL pipelines live on main;
+    // here MapLibre replaces the whole renderer (see src/ml/ and
+    // specs/maplibre/). It needs a CMake install of maplibre-native-c,
+    // because unlike tile57 that library is not built from source here.
+    // `-Dbackend=maplibre` is still accepted (and is the only value) so the
+    // shells' build scripts work unchanged across branches.
+    const Backend = enum { maplibre };
+    _ = b.option(Backend, "backend", "renderer backend (this branch: maplibre only)");
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
-    const is_windows = target.result.os.tag == .windows;
-    const target_android = target.result.abi == .android or target.result.abi == .androideabi;
-    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk | d3d12 | maplibre") orelse
-        (if (is_apple) Backend.metal else if (target_android) Backend.vk else if (is_windows) Backend.d3d12 else Backend.sdl);
-    const use_maplibre = backend == .maplibre;
-    const maplibre_prefix = b.option([]const u8, "maplibre-prefix", "CMake install prefix of maplibre-native-c (-Dbackend=maplibre)");
-    const maplibre_src = b.option([]const u8, "maplibre-src", "maplibre-native-ffi checkout, for its Zig binding (-Dbackend=maplibre)");
-    if (use_maplibre and (maplibre_prefix == null or maplibre_src == null))
-        @panic("-Dbackend=maplibre needs -Dmaplibre-prefix=<cmake install> and -Dmaplibre-src=<maplibre-native-ffi checkout>");
-    const use_sdl = backend == .sdl;
-    const use_vk = backend == .vk;
-    const use_d3d12 = backend == .d3d12;
-    // vk serves Android and the desktop shells; Apple stays on metal.
-    if (use_vk and is_apple)
-        @panic("-Dbackend=vk targets Android, Linux and Windows; use metal on Apple");
-    if (use_d3d12 and !is_windows)
-        @panic("-Dbackend=d3d12 targets Windows only");
+    const use_maplibre = true;
+    const maplibre_prefix = b.option([]const u8, "maplibre-prefix", "CMake install prefix of maplibre-native-c");
+    const maplibre_src = b.option([]const u8, "maplibre-src", "maplibre-native-ffi checkout, for its Zig binding");
+    // Missing paths fail the steps that NEED them, not the whole configure:
+    // `zig build plugins` is pure wasm and must keep working flagless.
+    const ml_missing: ?*std.Build.Step = if (maplibre_prefix == null or maplibre_src == null)
+        &b.addFail("this branch draws with MapLibre Native: pass -Dmaplibre-prefix=<cmake install> and -Dmaplibre-src=<maplibre-native-ffi checkout>").step
+    else
+        null;
     // The wasm plugin host (src/plugin/). It builds for any target
     // scripts/build-wamr.sh has an archive for, and it is ON BY DEFAULT ON
     // APPLE ONLY. The Apple app links the runtime through the Xcode project
@@ -238,11 +227,12 @@ pub fn build(b: *std.Build) void {
         "-Dplugins: scripts/build-wamr.sh builds no WAMR archive for this target. It covers macos, ios, iossim, linux-x64, linux-arm64, windows-x64 and android-arm64.";
     const plugins_fail: ?*std.Build.Step = if (plugins_refusal) |msg| &b.addFail(msg).step else null;
     if (plugins_fail) |fail| b.getInstallStep().dependOn(fail);
+    if (ml_missing) |fail| b.getInstallStep().dependOn(fail);
 
     const build_opts = b.addOptions();
-    build_opts.addOption(bool, "gpu_sdl", use_sdl);
-    build_opts.addOption(bool, "gpu_vk", use_vk);
-    build_opts.addOption(bool, "gpu_d3d12", use_d3d12);
+    build_opts.addOption(bool, "gpu_sdl", false);
+    build_opts.addOption(bool, "gpu_vk", false);
+    build_opts.addOption(bool, "gpu_d3d12", false);
     build_opts.addOption(bool, "plugins", plugins);
     // Gates src/ml/ entirely: without it root.zig never analyses those files,
     // so a build on any other backend needs no MapLibre headers at all.
@@ -254,7 +244,6 @@ pub fn build(b: *std.Build) void {
     // (SDL itself is linked by the android gradle/CMake build, not here).
     const android_ndk = b.option([]const u8, "android-ndk", "Android NDK root (for -Dtarget=*-linux-android)");
     const android_api = b.option(u32, "android-api", "Android API level (default 24)") orelse 24;
-    const sdl_include = b.option([]const u8, "sdl-include", "SDL3 include dir for the android sdl backend (e.g. SDL/include)");
     const android_libc: ?std.Build.LazyPath = if (androidTriple(target)) |triple|
         (if (android_ndk) |ndk| androidLibcFile(b, ndk, triple, android_api) else null)
     else
@@ -285,7 +274,7 @@ pub fn build(b: *std.Build) void {
         t57: *std.Build.Module,
         prefix: []const u8,
     };
-    const ml_wire: ?MlWire = if (!use_maplibre) null else blk: {
+    const ml_wire: ?MlWire = if (ml_missing != null) null else blk: {
         const prefix = maplibre_prefix.?;
         // The binding's src/c.zig does `@import("maplibre_native_c")`, so the
         // translate-c module has to exist under exactly that name.
@@ -313,13 +302,8 @@ pub fn build(b: *std.Build) void {
         // vertex/quad/uniform layouts it defines, so it owns them. Two hand-synced
         // copies here — one per shading language — had already drifted.
         tile57_dep: *std.Build.Dependency,
-        use_sdl: bool,
-        use_vk: bool,
-        use_d3d12: bool,
         android: bool,
         apple: bool,
-        windows: bool,
-        sdl_include: ?[]const u8,
         build_opts_mod: *std.Build.Module,
         plugins: bool,
         /// Set by -Dbackend=maplibre: what src/ml/ needs on every module that
@@ -356,6 +340,11 @@ pub fn build(b: *std.Build) void {
                 // class of clash as the bionic one below.
                 if (link_archives) {
                     mod.addObjectFile(.{ .cwd_relative = bb.pathJoin(&.{ w.prefix, "lib", "libmaplibre-native-c.dylib" }) });
+                    // The dylib's install name is @rpath-relative; anything
+                    // that RUNS from zig-out (the demo, the test binaries)
+                    // needs the install's lib dir on its rpath. The Xcode
+                    // app sets its own.
+                    mod.addRPathSpecial(bb.pathJoin(&.{ w.prefix, "lib" }));
                     for ([_][]const u8{ "CoreFoundation", "CoreGraphics", "CoreText", "Foundation", "ImageIO", "Metal", "QuartzCore" }) |fw|
                         mod.linkFramework(fw, .{});
                 }
@@ -401,52 +390,18 @@ pub fn build(b: *std.Build) void {
                 mod.addIncludePath(bb.path(bb.fmt("{s}/include", .{self.wamr_dir})));
                 if (link_archives) mod.addObjectFile(bb.path(bb.fmt("{s}/lib/libvmlib.a", .{self.wamr_dir})));
             }
-            if (self.use_sdl) {
-                if (self.android) {
-                    // Android: the gradle/CMake build links SDL3; here we only need
-                    // its headers so c_sdl.zig's @cInclude("SDL3/SDL.h") resolves.
-                    if (self.sdl_include) |inc| mod.addSystemIncludePath(.{ .cwd_relative = inc });
-                } else {
-                    // Native: pkg-config gives include + link.
-                    mod.linkSystemLibrary("SDL3", .{});
-                }
-            }
-            if (self.use_sdl or self.use_vk) {
-                // Precompiled SPIR-V, embedded (no runtime shader toolchain).
-                // Shared by both Vulkan-flavoured backends: the raw-vk pipeline
-                // layout mirrors SDL_GPU's set numbering (vtx UBO set 1, frag
-                // sampler set 2, frag UBO set 3), so one .spv set serves both.
-                const spv = [_][2][]const u8{
-                    .{ "chart_vert_spv", "shaders/vk/chart.vert.spv" },
-                    .{ "chart_frag_spv", "shaders/vk/chart.frag.spv" },
-                    .{ "sprite_vert_spv", "shaders/vk/sprite.vert.spv" },
-                    .{ "sprite_frag_spv", "shaders/vk/sprite.frag.spv" },
-                    .{ "sdf_frag_spv", "shaders/vk/sdf.frag.spv" },
-                    .{ "pattern_vert_spv", "shaders/vk/pattern.vert.spv" },
-                    .{ "pattern_frag_spv", "shaders/vk/pattern.frag.spv" },
-                };
-                for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = self.tile57_dep.path(e[1]) });
-            }
-            if (self.use_vk and !self.android) {
-                // Vendored headers only (the exe links the loader); Android uses the NDK sysroot.
-                mod.addIncludePath(bb.path("vendor/vulkan/include"));
-            }
-            if (self.use_d3d12) {
-                // The D3D12 transport (COM in C behind a C face). Shader source
-                // compiled by the shim at runtime (D3DCompile).
-                mod.addCSourceFile(.{ .file = bb.path("src/d3d12_shim.c"), .flags = &.{ "-O2", "-fno-sanitize=undefined" } });
-                mod.addAnonymousImport("hlsl_src", .{ .root_source_file = self.tile57_dep.path("shaders/lookout.hlsl") });
-            }
-            if (!self.use_sdl and !self.use_vk and !self.use_d3d12) {
-                // The Metal transport (ObjC behind a C face). Manual
-                // retain/release on purpose — objects live in C structs.
+            if (self.apple) {
+                // The Metal shim survives the backend's removal for one job:
+                // it holds the CAMetalLayer the shell hands over, which the
+                // ml host attaches MapLibre's render session to. Its light
+                // contract claims no device and no pipelines (metal_src is
+                // never compiled — gpu_metal passes null on this branch).
                 mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
-                // Metal shader source, compiled by the shim at runtime.
                 mod.addAnonymousImport("metal_src", .{ .root_source_file = self.tile57_dep.path("shaders/lookout.metal") });
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .ml = ml_wire };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .android = is_android, .apple = is_apple, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .ml = ml_wire };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -505,10 +460,7 @@ pub fn build(b: *std.Build) void {
     });
     cfg.apply(exe_mod, true);
     // An executable resolves the Vulkan loader; the static lib leaves it open.
-    if (use_vk) exe_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
-    if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
-        exe_mod.linkSystemLibrary(l, .{});
-    if (backend == .metal) {
+    if (is_apple) {
         exe_mod.linkFramework("Metal", .{});
         exe_mod.linkFramework("QuartzCore", .{});
         exe_mod.linkFramework("Foundation", .{});
@@ -534,10 +486,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         });
         cfg.apply(dev_mod, true);
-        if (use_vk) dev_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
-        if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
-            dev_mod.linkSystemLibrary(l, .{});
-        if (backend == .metal) {
+        if (is_apple) {
             dev_mod.linkFramework("Metal", .{});
             dev_mod.linkFramework("QuartzCore", .{});
             dev_mod.linkFramework("Foundation", .{});
@@ -564,16 +513,14 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(test_mod, true);
-    if (use_vk) test_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
-    if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
-        test_mod.linkSystemLibrary(l, .{});
-    if (backend == .metal) {
+    if (is_apple) {
         test_mod.linkFramework("Metal", .{});
         test_mod.linkFramework("QuartzCore", .{});
         test_mod.linkFramework("Foundation", .{});
     }
     const tests = b.addTest(.{ .root_module = test_mod });
     const test_step = b.step("test", "Run unit tests");
+    if (ml_missing) |fail| test_step.dependOn(fail);
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     // ---- the MapLibre renderer's unit tests ----
@@ -1008,6 +955,10 @@ pub fn build(b: *std.Build) void {
         "src/camera.zig",
         "src/pick.zig",
         "src/raster.zig",
+        // The MapLibre renderer, reached through root.zig's test block.
+        "src/ml/host.zig",
+        "src/ml/style.zig",
+        "src/ml/provider.zig",
         // The host test module's root, and the plugin layer under it. The
         // host's and the broker's parts are reached through the comptime block
         // in host.zig and broker.zig.

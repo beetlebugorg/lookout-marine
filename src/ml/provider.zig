@@ -921,12 +921,12 @@ test "parse: the palette and style generation ride the sprite url" {
     // host stamps scheme + generation (style.zig spriteUrlFor + -gN).
     const d = parse("sprite-day-g3@2x.json").?.sprite_json;
     try std.testing.expectEqual(@as(u8, 2), d.pixel_ratio);
-    try std.testing.expectEqual(cc.TILE57_SCHEME_DAY, d.scheme);
+    try std.testing.expectEqual(@as(@TypeOf(d.scheme), @intCast(cc.TILE57_SCHEME_DAY)), d.scheme);
     const k = parse("sprite-dusk-g12@2x.png").?.sprite_png;
-    try std.testing.expectEqual(cc.TILE57_SCHEME_DUSK, k.scheme);
+    try std.testing.expectEqual(@as(@TypeOf(d.scheme), @intCast(cc.TILE57_SCHEME_DUSK)), k.scheme);
     const n = parse("sprite-night-g1.json").?.sprite_json;
     try std.testing.expectEqual(@as(u8, 1), n.pixel_ratio);
-    try std.testing.expectEqual(cc.TILE57_SCHEME_NIGHT, n.scheme);
+    try std.testing.expectEqual(@as(@TypeOf(d.scheme), @intCast(cc.TILE57_SCHEME_NIGHT)), n.scheme);
     // Different generations resolve to the same ask.
     const g9 = parse("sprite-night-g9.json").?.sprite_json;
     try std.testing.expectEqual(n.scheme, g9.scheme);

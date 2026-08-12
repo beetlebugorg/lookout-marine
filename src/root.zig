@@ -3281,6 +3281,12 @@ test {
     // The camera's own round trips. root.zig calls two of its functions, which
     // is not enough to collect the file's tests.
     _ = camera;
+    // The MapLibre renderer's own tests: the style build, the SCAMIN gate
+    // driver, the provider's url parsing, the host's filter splicing. This
+    // branch draws with nothing else, so they run with the core's.
+    _ = mlhost;
+    _ = @import("ml/style.zig");
+    _ = @import("ml/provider.zig");
 }
 
 test "camera roundtrip" {
