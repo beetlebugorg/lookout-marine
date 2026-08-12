@@ -303,6 +303,7 @@ final class AppModel: ObservableObject {
         // The panel's list. The open itself does not wait on this: it takes
         // the cheap walk in initialChartPaths and starts drawing.
         loadChartSets()
+        loadChartLinks()
     }
 
     // MARK: - Opening charts
@@ -792,6 +793,99 @@ final class AppModel: ObservableObject {
 
     // MARK: - Commands (menu / buttons)
 
+    // MARK: - Chart links (an online map AS the chart)
+
+    /// One chart added by link: a MapLibre style url. Picking it renders that
+    /// style INSTEAD of the built-in chart — Lookout's own chart is just the
+    /// default entry in the same list.
+    struct ChartLink: Codable, Identifiable, Hashable {
+        var url: String
+        var name: String
+        var id: String { url }
+    }
+
+    @Published var chartLinks: [ChartLink] = []
+    /// The picked link's url; nil draws the built-in chart.
+    @Published var activeChartLink: String? = nil
+    @Published var chartLinkBusy = false
+    @Published var chartLinkError: String? = nil
+
+    private static let chartLinksKey = "lookout.chartlinks"
+    private static let chartLinkActiveKey = "lookout.chartlinks.active"
+
+    func loadChartLinks() {
+        if let data = UserDefaults.standard.data(forKey: Self.chartLinksKey),
+           let links = try? JSONDecoder().decode([ChartLink].self, from: data) {
+            chartLinks = links
+        }
+        let active = UserDefaults.standard.string(forKey: Self.chartLinkActiveKey)
+        activeChartLink = chartLinks.contains { $0.url == active } ? active : nil
+    }
+
+    private func saveChartLinks() {
+        if let data = try? JSONEncoder().encode(chartLinks) {
+            UserDefaults.standard.set(data, forKey: Self.chartLinksKey)
+        }
+        UserDefaults.standard.set(activeChartLink, forKey: Self.chartLinkActiveKey)
+    }
+
+    func pushChartLink() {
+        controller?.setAltChartStyle(activeChartLink)
+    }
+
+    /// Add a chart by its style link. The link is read once here — a dead or
+    /// non-style link is refused NOW, at the form, not discovered later as a
+    /// blank chart. The new chart is picked immediately: adding it is the
+    /// request to sail on it.
+    func addChartLink(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        chartLinkError = nil
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            chartLinkError = "That isn't a link."
+            return
+        }
+        if chartLinks.contains(where: { $0.url == trimmed }) {
+            selectChartLink(trimmed)
+            return
+        }
+        chartLinkBusy = true
+        Task { [weak self] in
+            var name: String? = nil
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                if let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   obj["layers"] != nil, obj["version"] != nil {
+                    let n = obj["name"] as? String
+                    name = (n?.isEmpty == false ? n : nil) ?? url.host ?? trimmed
+                }
+            } catch {}
+            await MainActor.run {
+                guard let self else { return }
+                self.chartLinkBusy = false
+                guard let name else {
+                    self.chartLinkError = "No chart style at that link."
+                    return
+                }
+                self.chartLinks.append(.init(url: trimmed, name: name))
+                self.selectChartLink(trimmed)
+            }
+        }
+    }
+
+    func removeChartLink(_ url: String) {
+        chartLinks.removeAll { $0.url == url }
+        if activeChartLink == url { activeChartLink = nil }
+        saveChartLinks()
+        pushChartLink()
+    }
+
+    func selectChartLink(_ url: String?) {
+        activeChartLink = url
+        saveChartLinks()
+        pushChartLink()
+    }
+
     func zoomIn()   { controller?.zoomCentered(+1.0) }
     func zoomOut()  { controller?.zoomCentered(-1.0) }
     func zoomToFit(){ controller?.fitChart() }
@@ -806,13 +900,25 @@ final class AppModel: ObservableObject {
         return courseUpState == 0 ? .northUp : .courseUp
     }
 
-    /// The compass bubble's tap. It always locks the chart to own ship, and
-    /// once locked it cycles north up and course up.
+    /// The compass bubble's tap. A hand-rotated chart straightens first,
+    /// WHATEVER the lock state — that tap means "north up", and spending it
+    /// on arming follow or course up (both invisible without a fix) read as
+    /// the button doing nothing: rotate by hand under an armed lock and the
+    /// old cycle burned taps on states nothing on screen reflects. Course up
+    /// only earns a tap when there is a live fix to turn with, and the
+    /// rotation gate reads the controller live — the model's readout is
+    /// 10 Hz-throttled, so a barely-rotated chart could misread as straight
+    /// and send the tap to the invisible branch. Course-up's own rotation is
+    /// not "hand-rotated": that state cycles below.
     func cycleOrientation() {
         guard let c = controller else { return }
+        if c.rotationNow != 0, courseUpState == 0 {
+            c.resetRotation()          // straighten; the mariner asked for north
+            return
+        }
         if followState == 0 {
             c.setFollow(true)          // lock, leaving the chart as it lies
-        } else if courseUpState == 0 {
+        } else if courseUpState == 0, fixState == .live {
             c.setCourseUp(true)        // turn with own ship
         } else {
             c.resetRotation()          // back to north up, still locked

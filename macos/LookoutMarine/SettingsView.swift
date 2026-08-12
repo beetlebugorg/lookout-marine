@@ -290,8 +290,49 @@ private struct ChartsSections: View {
     /// Held here so the Cancel button reads "Stopping…" while tile57 finishes
     /// the charts already in flight.
     @State private var cancellingBake = false
+    @State private var newChartLink = ""
 
     var body: some View {
+        // Which chart is DRAWN. Lookout's own chart — built from the sets
+        // below — is the default entry; a link added here is an alternative
+        // chart, rendered instead of it. One is picked at a time: two whole
+        // charts cannot share the water.
+        Section {
+            chartPickRow(name: "Lookout chart", detail: "Built from your chart sets below",
+                         picked: model.activeChartLink == nil) { model.selectChartLink(nil) }
+            ForEach(model.chartLinks) { link in
+                HStack(spacing: 8) {
+                    chartPickRow(name: link.name, detail: link.url,
+                                 picked: model.activeChartLink == link.url) { model.selectChartLink(link.url) }
+                    Spacer(minLength: 4)
+                    Button { model.removeChartLink(link.url) } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Remove \(link.name)")
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("https://…/style.json", text: $newChartLink)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .onSubmit { submitChartLink() }
+                if model.chartLinkBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Add") { submitChartLink() }
+                        .disabled(newChartLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            if let e = model.chartLinkError {
+                Label(e, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: { Text("Chart") } footer: {
+            Text("An online map can be the chart: paste its MapLibre style link. Everything it draws comes from its own publisher — depths, symbols and warnings included.").captionFooter()
+        }
         // The sets aboard. A set is a folder the mariner added; switching one
         // off keeps it aboard and takes it out of the chart. Every set here
         // has been looked through and holds charts, so none of them is a dead
@@ -369,6 +410,32 @@ private struct ChartsSections: View {
 
     private func displayName(_ path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+
+    private func submitChartLink() {
+        let raw = newChartLink
+        newChartLink = ""
+        model.addChartLink(raw)
+    }
+
+    @ViewBuilder
+    private func chartPickRow(name: String, detail: String, picked: Bool, pick: @escaping () -> Void) -> some View {
+        Button(action: pick) {
+            HStack(spacing: 8) {
+                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(picked ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).fontWeight(.medium).lineLimit(1)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

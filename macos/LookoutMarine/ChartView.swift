@@ -489,6 +489,7 @@ struct ChartView: NSViewRepresentable {
         v.model = model
         controller.model = model
         model.controller = controller
+        model.pushChartLink()
         v.installOverlay(OverlayLayer(model: model))
         return v
     }

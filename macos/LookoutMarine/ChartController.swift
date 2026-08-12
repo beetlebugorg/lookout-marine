@@ -170,6 +170,9 @@ final class ChartController: NSObject {
         // does anything where a picture covers, so it is safe to put back before
         // knowing whether one does.
         if model?.chartHiddenSaved == true { setChartHidden(true) }
+        // The picked chart. Like the raster charts above, the choice is
+        // attached to a lookout handle, so every open replays it.
+        if let alt = model?.activeChartLink { setAltChartStyle(alt) }
 
         // Reopen where we left off. With nothing saved the opening view is the
         // engine's own (lookout_default_view) — the same policy every host gets,
@@ -574,6 +577,28 @@ final class ChartController: NSObject {
         guard let h = handle else { return }
         lookout_reset_rotation(h)
         kick(); pushReadouts()
+    }
+
+    /// Choose the chart: a MapLibre style url renders INSTEAD of the
+    /// built-in chart; nil returns to it. The core copies the string.
+    func setAltChartStyle(_ url: String?) {
+        guard let h = handle else { return }
+        if let u = url, !u.isEmpty {
+            u.withCString { lookout_alt_chart_style(h, $0) }
+        } else {
+            lookout_alt_chart_style(h, nil)
+        }
+        kick()
+    }
+
+    /// The camera's rotation as the core holds it RIGHT NOW. The model's
+    /// `rotationDeg` readout is throttled to 10 Hz; anything deciding what a
+    /// tap means must not race it.
+    var rotationNow: Double {
+        guard let h = handle else { return 0 }
+        var v = lookout_view()
+        lookout_get_view(h, &v)
+        return v.rotation_deg
     }
 
     func flingStart(vx: Double, vy: Double) {
@@ -1133,6 +1158,7 @@ final class ChartController: NSObject {
     // MARK: - Push live readouts to the UI
 
     private var lastReadoutsAt: TimeInterval = 0
+    private var lastRasterReadoutsAt: TimeInterval = 0
     private var lastViewSavedAt: TimeInterval = 0
     private func pushReadouts() {
         guard let model, let h = handle else { return }
@@ -1146,20 +1172,29 @@ final class ChartController: NSObject {
         lastReadoutsAt = now
         var v = lookout_view()
         lookout_get_view(h, &v)
-        let over = rasterOverChart()
-        if model.rasterInView != over { model.rasterInView = over }
-        let hidden = chartHidden()
-        if model.chartHidden != hidden { model.chartHidden = hidden }
-        let avail = rasterAvailableName()
-        if model.rasterAvailable != avail { model.rasterAvailable = avail }
-        let sets = rasterSets()
-        if model.rasterSets.map(\.id) != sets.map(\.id)
-            || model.rasterSets.map(\.inView) != sets.map(\.inView)
-            || model.rasterSets.map(\.shown) != sets.map(\.shown) { model.rasterSets = sets }
-        let ai = rasterActiveIndex()
-        if model.rasterActive != ai { model.rasterActive = ai }
-        let active = rasterName()
-        if model.rasterName != active { model.rasterName = active }
+        // The raster readouts are the expensive ones: coversView and
+        // availableName walk every sheet's coverage polygons under the API
+        // lock, and at 10Hz on a loaded CMAP session they queued
+        // lookout_render behind them — a visible mid-zoom freeze. Coverage
+        // changes at pan speed, not frame speed: poll at 1Hz, never while a
+        // gesture is animating.
+        if lookout_animating(h) == 0, now - lastRasterReadoutsAt >= 1.0 {
+            lastRasterReadoutsAt = now
+            let over = rasterOverChart()
+            if model.rasterInView != over { model.rasterInView = over }
+            let hidden = chartHidden()
+            if model.chartHidden != hidden { model.chartHidden = hidden }
+            let avail = rasterAvailableName()
+            if model.rasterAvailable != avail { model.rasterAvailable = avail }
+            let sets = rasterSets()
+            if model.rasterSets.map(\.id) != sets.map(\.id)
+                || model.rasterSets.map(\.inView) != sets.map(\.inView)
+                || model.rasterSets.map(\.shown) != sets.map(\.shown) { model.rasterSets = sets }
+            let ai = rasterActiveIndex()
+            if model.rasterActive != ai { model.rasterActive = ai }
+            let active = rasterName()
+            if model.rasterName != active { model.rasterName = active }
+        }
         // The core turns follow off itself on a pan; polling here is what makes
         // the lock button follow the core instead of its own last tap.
         let follow = followState
