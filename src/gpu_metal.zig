@@ -9,7 +9,117 @@
 //! shader in metal_shim.m itself (both compiled at runtime).
 const std = @import("std");
 const cc = @import("c.zig").c;
-const mc = @import("c_metal.zig").c;
+const builtin = @import("builtin");
+const is_apple = builtin.os.tag == .macos or builtin.os.tag == .ios;
+
+// Off Apple there is no Metal shim to link (this branch draws with
+// MapLibre; the holder role needs no GPU at all there). Same-named stubs
+// keep every dormant native-path call site compiling without emitting a
+// single lkm_ reference — the Android link found 19 of them dangling.
+const mc = if (is_apple) @import("c_metal.zig").c else struct {
+    pub const LKM_ERR_LEN = 256;
+    pub const LKM_PIPE_CHART: c_int = 0;
+    pub const LKM_PIPE_SPRITE: c_int = 1;
+    pub const LKM_PIPE_SDF: c_int = 2;
+    pub const LKM_PIPE_PATTERN: c_int = 3;
+    pub const LKM_PIPE_OVERLAY: c_int = 4;
+    pub const LKM_PIPE_COUNT: c_int = 5;
+    pub const lkm_ctx = opaque {};
+    pub const lkm_frame = opaque {};
+    pub const lkm_buf = opaque {};
+    pub const lkm_tex = opaque {};
+    pub fn lkm_create(layer: ?*anyopaque, msl: ?[*:0]const u8, want_msaa: c_int, msaa_out: ?*c_int, err: ?[*]u8) callconv(.c) ?*lkm_ctx {
+        _ = layer;
+        _ = msl;
+        _ = want_msaa;
+        _ = msaa_out;
+        _ = err;
+        return null;
+    }
+    pub fn lkm_destroy(c: ?*lkm_ctx) callconv(.c) void {
+        _ = c;
+    }
+    pub fn lkm_layer_sync(c: ?*lkm_ctx, w: ?*u32, h: ?*u32) callconv(.c) void {
+        _ = c;
+        _ = w;
+        _ = h;
+    }
+    pub fn lkm_new_buffer(c: ?*lkm_ctx, bytes: ?*const anyopaque, len: usize) callconv(.c) ?*lkm_buf {
+        _ = c;
+        _ = bytes;
+        _ = len;
+        return null;
+    }
+    pub fn lkm_free_buffer(b: ?*lkm_buf) callconv(.c) void {
+        _ = b;
+    }
+    pub fn lkm_new_texture_rgba(c: ?*lkm_ctx, rgba: ?*const anyopaque, w: u32, h: u32) callconv(.c) ?*lkm_tex {
+        _ = c;
+        _ = rgba;
+        _ = w;
+        _ = h;
+        return null;
+    }
+    pub fn lkm_free_texture(t: ?*lkm_tex) callconv(.c) void {
+        _ = t;
+    }
+    pub fn lkm_begin_frame(c: ?*lkm_ctx, clear: [*c]const f32) callconv(.c) ?*lkm_frame {
+        _ = c;
+        _ = clear;
+        return null;
+    }
+    pub fn lkm_begin_offscreen(c: ?*lkm_ctx, w: u32, h: u32, clear: [*c]const f32) callconv(.c) ?*lkm_frame {
+        _ = c;
+        _ = w;
+        _ = h;
+        _ = clear;
+        return null;
+    }
+    pub fn lkm_set_pipeline(f: ?*lkm_frame, which: c_int) callconv(.c) void {
+        _ = f;
+        _ = which;
+    }
+    pub fn lkm_set_depth_mode(f: ?*lkm_frame, opq: c_int) callconv(.c) void {
+        _ = f;
+        _ = opq;
+    }
+    pub fn lkm_bind_vbuf(f: ?*lkm_frame, b: ?*lkm_buf) callconv(.c) void {
+        _ = f;
+        _ = b;
+    }
+    pub fn lkm_bind_texture(f: ?*lkm_frame, t: ?*lkm_tex) callconv(.c) void {
+        _ = f;
+        _ = t;
+    }
+    pub fn lkm_set_uniforms(f: ?*lkm_frame, bytes: ?*const anyopaque, len: usize) callconv(.c) void {
+        _ = f;
+        _ = bytes;
+        _ = len;
+    }
+    pub fn lkm_draw(f: ?*lkm_frame, first: u32, count: u32) callconv(.c) void {
+        _ = f;
+        _ = first;
+        _ = count;
+    }
+    pub fn lkm_draw_indexed(f: ?*lkm_frame, ib: ?*lkm_buf, first: u32, count: u32) callconv(.c) void {
+        _ = f;
+        _ = ib;
+        _ = first;
+        _ = count;
+    }
+    pub fn lkm_end_frame(f: ?*lkm_frame) callconv(.c) void {
+        _ = f;
+    }
+    pub fn lkm_end_offscreen_read(f: ?*lkm_frame, out: ?*anyopaque) callconv(.c) c_int {
+        _ = f;
+        _ = out;
+        return -1;
+    }
+    pub fn lkm_last_gpu_ms(c: ?*lkm_ctx) callconv(.c) f64 {
+        _ = c;
+        return 0;
+    }
+};
 const png = @import("png.zig");
 const ov = @import("overlay.zig");
 const msl_source = @embedFile("metal_src");
