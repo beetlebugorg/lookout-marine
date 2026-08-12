@@ -35,6 +35,9 @@ const cc = @import("../c.zig").c;
 const maplibre = @import("maplibre_native_ffi");
 const provider_mod = @import("provider.zig");
 const style_mod = @import("style.zig");
+const builtin = @import("builtin");
+const is_android = builtin.abi == .android or builtin.abi == .androideabi;
+const vkboot = if (is_android) @import("vk_boot.zig") else struct {};
 const sleepMs = @import("../lock.zig").sleepMs;
 const WakeEvent = @import("../lock.zig").WakeEvent;
 const nowMs = @import("../lock.zig").nowMs;
@@ -137,6 +140,9 @@ pub const Host = struct {
     rwake_ev: WakeEvent = .{},
     rstop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     pending_layer: ?*anyopaque = null,
+    /// Android only: the Vulkan context MapLibre's session borrows (see
+    /// vk_boot.zig). Torn down after the session detaches.
+    vk_boot: (if (is_android) ?vkboot.Boot else void) = if (is_android) null else {},
     pending_w: u32 = 0,
     pending_h: u32 = 0,
     applied_w: u32 = 0,
@@ -303,13 +309,39 @@ pub const Host = struct {
             return Error.RuntimeFailed;
         };
 
-        const session = maplibre.attachMetalSurface(&self.map, .{
+        // Apple attaches straight to the CAMetalLayer; Android stands a
+        // Vulkan context up over the ANativeWindow first (vk_boot.zig) and
+        // hands MapLibre the pieces — it builds its swapchain over them.
+        const extent: maplibre.RenderTargetExtent = .{
+            .width = self.pending_w,
+            .height = self.pending_h,
+            .scale_factor = self.density,
+        };
+        const session = if (comptime is_android) blk: {
+            var boot = vkboot.init(layer) catch {
+                mlog("ml: vulkan bootstrap FAILED\n", .{});
+                return Error.SessionFailed;
+            };
+            errdefer boot.deinit();
+            const sess = maplibre.attachVulkanSurface(&self.map, .{
+                .extent = extent,
+                .context = .{
+                    .instance = maplibre.NativePointer.fromPtr(@ptrCast(boot.instance)),
+                    .physical_device = maplibre.NativePointer.fromPtr(@ptrCast(boot.phys)),
+                    .device = maplibre.NativePointer.fromPtr(@ptrCast(boot.device)),
+                    .graphics_queue = maplibre.NativePointer.fromPtr(@ptrCast(boot.queue)),
+                    .graphics_queue_family_index = boot.family,
+                },
+                .surface = maplibre.NativePointer.fromPtr(@ptrCast(boot.surface)),
+            }) catch |e| {
+                mlog("ml: attachVulkanSurface FAILED {s}\n", .{@errorName(e)});
+                return Error.SessionFailed;
+            };
+            self.vk_boot = boot;
+            break :blk sess;
+        } else maplibre.attachMetalSurface(&self.map, .{
             .layer = maplibre.NativePointer.fromPtr(layer),
-            .extent = .{
-                .width = self.pending_w,
-                .height = self.pending_h,
-                .scale_factor = self.density,
-            },
+            .extent = extent,
         }) catch |e| {
             mlog("ml: attachMetalSurface FAILED {s}\n", .{@errorName(e)});
             return Error.SessionFailed;
@@ -352,6 +384,10 @@ pub const Host = struct {
         self.runtime.clearResourceProvider() catch {};
         self.provider.deinit();
         if (self.session) |*s| s.detach() catch {};
+        if (comptime is_android) if (self.vk_boot) |*boot| {
+            boot.deinit();
+            self.vk_boot = null;
+        };
         self.map.close() catch {};
         self.runtime.close() catch {};
         self.dropGatedIds();
@@ -937,6 +973,14 @@ pub const Host = struct {
             defer ev.deinit();
             switch (ev.payload) {
                 .style_image_missing => |p| if (p.image_id.len != 0) self.queueRunImage(p.image_id),
+                else => {},
+            }
+            // A failed load or a render error otherwise vanishes without a
+            // trace — a source that never yields tiles (the bathymetry hunt)
+            // looks identical to open ocean. Name it.
+            switch (ev.event_type) {
+                .map_loading_failed => mlog("mln EVENT loading_failed code={d}: {s}\n", .{ ev.code, ev.message }),
+                .map_render_error => mlog("mln EVENT render_error code={d}: {s}\n", .{ ev.code, ev.message }),
                 else => {},
             }
         }
