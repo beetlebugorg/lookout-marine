@@ -225,9 +225,23 @@ targets:
           - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include"
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
+        # MapLibre Native, per SDK: the simulator and device installs are
+        # separate CMake preset builds of maplibre-native-ffi.
+        MLN_INSTALL: "$(SRCROOT)/../../maplibre-native-ffi/build/ios-simulator-arm64-metal/install"
+        "MLN_INSTALL[sdk=iphoneos*]": "$(SRCROOT)/../../maplibre-native-ffi/build/ios-arm64-metal/install"
         # The merged, libtool-repacked Zig cores (see the pre-build script).
         OTHER_LDFLAGS:
           - "-llookoutall"
+          # The STATIC MapLibre archive: Xcode's clang++ does this link (so
+          # libc++ is its problem, not zig's — the macOS target's dylib
+          # rationale doesn't apply), and static means no embed-and-sign
+          # dance in the bundle.
+          - "$(MLN_INSTALL)/lib/libmaplibre-native-c.a"
+          - "-lc++"
+          # What the static archive leans on from the SDK (the macOS dylib
+          # linked these itself).
+          - "-lz"
+          - "-lsqlite3"
     dependencies:
       - sdk: UIKit.framework
       - sdk: Metal.framework
@@ -268,10 +282,21 @@ targets:
           # The wasm plugin host for this platform, before the core that embeds
           # it. See the macOS target for why -Dplugins is explicit.
           scripts/build-wamr.sh "$WAMR_TARGET"
+          # feat/maplibre: MapLibre Native draws the chart on iOS too. The
+          # install prefix is per SDK (simulator and device are separate
+          # CMake preset builds); see the macOS target's note for what
+          # MLN_PREFIX/MLN_SRC are.
+          case "$PLATFORM_NAME" in
+            iphonesimulator) MLN_DIR="ios-simulator-arm64-metal" ;;
+            *)               MLN_DIR="ios-arm64-metal" ;;
+          esac
+          MLN_PREFIX="${MLN_PREFIX:-$SRCROOT/../../maplibre-native-ffi/build/$MLN_DIR/install}"
+          MLN_SRC="${MLN_SRC:-$SRCROOT/../../maplibre-native-ffi}"
           zig build -Doptimize=ReleaseFast \
             -Dplugins=true \
             -Dtarget="$ZIG_TARGET" \
             --sysroot "$SYSROOT" \
+            -Dbackend=maplibre -Dmaplibre-prefix="$MLN_PREFIX" -Dmaplibre-src="$MLN_SRC" \
             -p "zig-out-$PLATFORM_NAME"
           # Zig's outputs are deterministic, so an unchanged core hashes
           # identically — used twice below: to skip the repack, and to force

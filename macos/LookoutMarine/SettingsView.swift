@@ -331,7 +331,7 @@ private struct ChartsSections: View {
                     .foregroundStyle(.secondary)
             }
         } header: { Text("Chart") } footer: {
-            Text("An online map can be the chart: paste its MapLibre style link. Everything it draws comes from its own publisher — depths, symbols and warnings included.").captionFooter()
+            Text("An online map can be the chart: paste its MapLibre style link, or a TileJSON tile link. A style draws exactly what its publisher styled; bare tiles get a plain generated look. Either way the content comes from its publisher — depths, symbols and warnings included.").captionFooter()
         }
         // The sets aboard. A set is a folder the mariner added; switching one
         // off keeps it aboard and takes it out of the chart. Every set here

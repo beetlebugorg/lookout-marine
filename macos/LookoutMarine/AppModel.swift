@@ -801,6 +801,10 @@ final class AppModel: ObservableObject {
     struct ChartLink: Codable, Identifiable, Hashable {
         var url: String
         var name: String
+        /// For a TileJSON link: the wrapper style generated at add time (the
+        /// tiles need a style to draw, and a tile source doesn't bring one).
+        /// nil for a real style link — the url is handed over as-is.
+        var doc: String? = nil
         var id: String { url }
     }
 
@@ -830,7 +834,12 @@ final class AppModel: ObservableObject {
     }
 
     func pushChartLink() {
-        controller?.setAltChartStyle(activeChartLink)
+        guard let active = activeChartLink else {
+            controller?.setAltChartStyle(nil)
+            return
+        }
+        let link = chartLinks.first { $0.url == active }
+        controller?.setAltChartStyle(link?.doc ?? active)
     }
 
     /// Add a chart by its style link. The link is read once here — a dead or
@@ -852,25 +861,124 @@ final class AppModel: ObservableObject {
         chartLinkBusy = true
         Task { [weak self] in
             var name: String? = nil
+            var doc: String? = nil
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                if let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   obj["layers"] != nil, obj["version"] != nil {
+                if let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     let n = obj["name"] as? String
-                    name = (n?.isEmpty == false ? n : nil) ?? url.host ?? trimmed
+                    if obj["layers"] != nil, obj["version"] != nil {
+                        // A whole MapLibre style: hand the url over as-is.
+                        name = (n?.isEmpty == false ? n : nil) ?? url.host ?? trimmed
+                    } else if obj["tiles"] != nil || obj["tilejson"] != nil {
+                        // A TileJSON: tiles with no style of their own. A
+                        // publisher shipping a TileJSON almost always ships
+                        // the style beside it — probe for the sibling
+                        // style.json first, because that is the look the
+                        // mariner pasted this link expecting. Only a truly
+                        // style-less source gets the generated wrapper.
+                        if let sibling = await Self.siblingStyle(of: url) {
+                            // The entry becomes the style link it will draw.
+                            await MainActor.run { [weak self] in
+                                self?.finishAddChartLink(url: sibling.url, name: sibling.name, doc: nil)
+                            }
+                            return
+                        }
+                        name = (n?.isEmpty == false ? n : nil) ?? url.host ?? trimmed
+                        doc = Self.tileJSONWrapperStyle(link: trimmed, tilejson: obj)
+                    }
                 }
             } catch {}
             await MainActor.run {
                 guard let self else { return }
-                self.chartLinkBusy = false
                 guard let name else {
-                    self.chartLinkError = "No chart style at that link."
+                    self.chartLinkBusy = false
+                    self.chartLinkError = "No chart style or tile source at that link."
                     return
                 }
-                self.chartLinks.append(.init(url: trimmed, name: name))
-                self.selectChartLink(trimmed)
+                self.finishAddChartLink(url: trimmed, name: name, doc: doc)
             }
         }
+    }
+
+    private func finishAddChartLink(url: String, name: String, doc: String?) {
+        chartLinkBusy = false
+        if !chartLinks.contains(where: { $0.url == url }) {
+            chartLinks.append(.init(url: url, name: name, doc: doc))
+        }
+        selectChartLink(url)
+    }
+
+    /// The style.json living beside a TileJSON, when the publisher shipped
+    /// one. Returns its url and name only if it parses as a MapLibre style.
+    private static func siblingStyle(of tilejsonURL: URL) async -> (url: String, name: String)? {
+        let candidate = tilejsonURL.deletingLastPathComponent().appendingPathComponent("style.json")
+        guard candidate.absoluteString != tilejsonURL.absoluteString else { return nil }
+        guard let (data, resp) = try? await URLSession.shared.data(from: candidate),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["layers"] != nil, obj["version"] != nil else { return nil }
+        let n = obj["name"] as? String
+        return (candidate.absoluteString, (n?.isEmpty == false ? n! : (candidate.host ?? candidate.absoluteString)))
+    }
+
+    /// A style for a bare tile source. Raster tiles draw as imagery. Vector
+    /// tiles draw each advertised layer in a legible generic scheme — water
+    /// fills, contour lines, point marks — honest geometry, not the
+    /// publisher's portrayal (a tile source doesn't carry one).
+    private static func tileJSONWrapperStyle(link: String, tilejson: [String: Any]) -> String {
+        let vectorLayers = tilejson["vector_layers"] as? [[String: Any]] ?? []
+        var layers: [[String: Any]] = [
+            ["id": "bg", "type": "background", "paint": ["background-color": "#c9e2f0"]],
+        ]
+        var source: [String: Any] = ["url": link]
+        if vectorLayers.isEmpty {
+            source["type"] = "raster"
+            layers.append(["id": "tiles", "type": "raster", "source": "tiles"])
+        } else {
+            source["type"] = "vector"
+            // Familiar marine layers get a chart-like look; anything else a
+            // distinct deterministic hue. Either way this is honest geometry,
+            // not the publisher's portrayal.
+            let hues = [210.0, 30.0, 120.0, 275.0, 0.0, 165.0, 55.0, 320.0]
+            for (i, vl) in vectorLayers.enumerated() {
+                guard let lid = vl["id"] as? String else { continue }
+                let low = lid.lowercased()
+                var fill = "hsla(\(hues[i % hues.count]),55%,62%,0.35)"
+                var line = "hsl(\(hues[i % hues.count]),60%,38%)"
+                var point = "hsl(\(hues[i % hues.count]),65%,40%)"
+                var pointRadius = 2.5
+                if low.contains("depare") || low.contains("depth") || low.contains("bathy") {
+                    fill = "hsla(205,60%,70%,0.5)"; line = "hsl(205,45%,55%)"; point = "hsl(205,45%,45%)"
+                } else if low.contains("contour") {
+                    fill = "hsla(205,30%,60%,0.15)"; line = "hsl(205,35%,55%)"; point = "hsl(205,35%,45%)"
+                } else if low.contains("sound") {
+                    point = "hsl(210,25%,35%)"; pointRadius = 1.5
+                    fill = "hsla(210,25%,55%,0.2)"; line = "hsl(210,25%,55%)"
+                } else if low.contains("land") || low.contains("coast") {
+                    fill = "hsla(45,45%,70%,0.9)"; line = "hsl(45,30%,40%)"; point = "hsl(45,30%,40%)"
+                }
+                layers.append(["id": "\(lid)-fill", "type": "fill", "source": "tiles",
+                               "source-layer": lid,
+                               "filter": ["==", ["geometry-type"], "Polygon"],
+                               "paint": ["fill-color": fill]])
+                layers.append(["id": "\(lid)-line", "type": "line", "source": "tiles",
+                               "source-layer": lid,
+                               "filter": ["==", ["geometry-type"], "LineString"],
+                               "paint": ["line-color": line, "line-width": 1.0]])
+                layers.append(["id": "\(lid)-pt", "type": "circle", "source": "tiles",
+                               "source-layer": lid,
+                               "filter": ["==", ["geometry-type"], "Point"],
+                               "paint": ["circle-radius": pointRadius, "circle-color": point]])
+            }
+        }
+        let style: [String: Any] = [
+            "version": 8,
+            "name": (tilejson["name"] as? String) ?? "Tiles",
+            "sources": ["tiles": source],
+            "layers": layers,
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: style)) ?? Data()
+        return String(data: data, encoding: .utf8) ?? "{}"
     }
 
     func removeChartLink(_ url: String) {
