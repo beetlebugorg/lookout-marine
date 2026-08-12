@@ -632,6 +632,16 @@ export fn lookout_set_mariner(h: ?*lookout, m: *const cc.tile57_mariner) void {
     l.setMariner(m.*);
 }
 
+/// Choose the chart on the MapLibre backend: `url` names a MapLibre style
+/// the map renders INSTEAD of the built-in tile57 chart (which is just the
+/// default). NULL or empty returns to the built-in. No-op on the GPU
+/// backend. The bytes are copied.
+export fn lookout_alt_chart_style(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setAltChartStyle(if (url) |u| std.mem.span(u) else "");
+}
+
 // ---- build + render --------------------------------------------------------
 export fn lookout_build(h: ?*lookout) c_int {
     const l = locked(h);

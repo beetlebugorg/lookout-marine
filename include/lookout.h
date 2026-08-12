@@ -760,6 +760,11 @@ void lookout_get_mariner(lookout *h, tile57_mariner *out);
  * rebuild, done lazily on the next render. */
 void lookout_set_mariner(lookout *h, const tile57_mariner *m);
 
+/* Choose the chart on the MapLibre backend: `url` names a MapLibre style the
+ * map renders INSTEAD of the built-in chart (which is just the default
+ * entry). NULL or empty returns to the built-in. No-op on the GPU backend. */
+void lookout_alt_chart_style(lookout *h, const char *url);
+
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */
 int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=headless) */

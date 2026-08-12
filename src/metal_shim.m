@@ -185,6 +185,17 @@ lkm_ctx *lkm_create(void *metal_layer, const char *msl_source, int want_msaa,
                     int *msaa_out, char err[LKM_ERR_LEN]) {
     lkm_ctx *c = calloc(1, sizeof(*c));
     if (!c) return NULL;
+    // msl_source == NULL is the LIGHT contract: another renderer (the MapLibre
+    // backend) draws the chart, and this context exists only so
+    // lkm_layer_sync can measure the layer's pixel density. NOTHING Metal is
+    // created — no device (the MTLCompiler run crashed a launch), no queue,
+    // and the layer is NOT claimed: configuring device/pixelFormat under the
+    // real renderer means two drivers on one CAMetalLayer.
+    if (!msl_source) {
+        c->layer = (CAMetalLayer *)metal_layer; // host-owned; not retained
+        if (msaa_out) *msaa_out = 0;
+        return c;
+    }
     int ok = 0;
     @autoreleasepool {
         do {

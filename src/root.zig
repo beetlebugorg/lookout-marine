@@ -23,7 +23,9 @@ const marks = @import("markers.zig"); // the mariner's own marks on the water
 // The MapLibre renderer. Gated so no other backend analyses these files or
 // needs MapLibre headers. See src/ml/ and specs/maplibre/.
 const maplibre_on = @import("build_options").maplibre;
-const mlhost = if (maplibre_on) @import("ml/host.zig") else struct { pub const Host = opaque {}; };
+const mlhost = if (maplibre_on) @import("ml/host.zig") else struct {
+    pub const Host = opaque {};
+};
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
@@ -130,9 +132,21 @@ pub fn atlasCacheDir(alloc: std.mem.Allocator) ?[]u8 {
 pub fn atlasCacheReady(alloc: std.mem.Allocator) bool {
     const dir = atlasCacheDir(alloc) orelse return false;
     defer alloc.free(dir);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    if (maplibre_on) {
+        // This backend's one-time bake is the MLN sprite sheet, not the GPU
+        // glyph atlas — it never builds glyph.png, and checking for that made
+        // the "preparing chart symbols" panel show on every launch forever.
+        for ([_][]const u8{ "sprite-mln3-day@2x.json", "sprite-mln3-day@1x.json" }) |n| {
+            const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, n }) catch continue;
+            defer alloc.free(path);
+            std.Io.Dir.cwd().access(io, path, .{}) catch continue;
+            return true;
+        }
+        return false;
+    }
     const path = std.fmt.allocPrint(alloc, "{s}/glyph.png", .{dir}) catch return false;
     defer alloc.free(path);
-    const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
     return true;
 }
@@ -817,6 +831,11 @@ pub const Lookout = struct {
                 return e;
             };
             self.ml = h;
+            // Baked sprite sheets persist here (engine-version-keyed, same as
+            // the GPU atlases): the first launch bakes, every later launch
+            // loads in milliseconds and the chart appears without the loader
+            // lingering on the sprite rasterization.
+            h.provider.setDiskCacheDir(atlasCacheDir(alloc));
             if (opts.native_handle) |nh| if (opts.native_kind == .metal_layer) {
                 try h.attachMetal(nh, opts.width, opts.height, 1.0);
             };
@@ -1298,7 +1317,38 @@ pub const Lookout = struct {
             null;
         const ll = camera.worldToLonLat(self.cam.center);
         mlhost.mlog("ml: setLibrary compose={any} chart={any}\n", .{ self.compose != null, single != null });
-        h.setLibrary(self.compose, single, &.{}, ll.y) catch |e| {
+        // The SCAMIN denominators across the open library. The gate only
+        // rewrites its filter when the zoom crosses one of these, so an empty
+        // list means decluttering freezes at the open-time zoom forever.
+        var denoms = std.ArrayList(i32).empty;
+        defer denoms.deinit(self.alloc);
+        for (self.charts.items) |ch| {
+            var list: [*c]i32 = null;
+            var n: usize = 0;
+            var err: cc.tile57_error = undefined;
+            if (cc.tile57_chart_scamin(ch, &list, &n, &err) != cc.TILE57_OK) continue;
+            defer if (list != null) cc.tile57_free(list);
+            outer: for (list[0..n]) |d| {
+                for (denoms.items) |have| if (have == d) continue :outer;
+                denoms.append(self.alloc, d) catch break;
+            }
+        }
+        // Prime the host's mariner BEFORE the style build setLibrary triggers,
+        // so the first chart on screen already wears the user's settings.
+        h.mariner = self.mlMariner();
+        h.scheme = h.mariner.scheme;
+        // The stored tile encoding, from the first cell — one bake, one
+        // encoding, library-wide. setLibrary can only read it off a single
+        // chart; on the COMPOSE path nothing else would set it, the style
+        // would omit the "mlt" hint, and MapLibre would push every library
+        // tile through its MVT protobuf parser — "unknown pbf field type"
+        // on all of them, and no cell ever draws.
+        if (self.charts.items.len > 0) {
+            var info: cc.tile57_info = std.mem.zeroes(cc.tile57_info);
+            cc.tile57_chart_get_info(self.charts.items[0], &info);
+            if (info.tile_type != 0) h.tile_encoding = info.tile_type;
+        }
+        h.setLibrary(self.compose, single, denoms.items, ll.y) catch |e| {
             std.debug.print("maplibre: setLibrary failed: {s}\n", .{@errorName(e)});
         };
     }
@@ -2189,6 +2239,16 @@ pub const Lookout = struct {
     /// the engine emits (contours, units, dates, viewing groups, point/boundary
     /// style, overscale, extra size scales…) marks the scene for a rebuild, done
     /// lazily on the next render.
+    /// Choose the chart on the MapLibre backend: a style url the mariner
+    /// added renders INSTEAD of the built-in tile57 chart — ours is just
+    /// the default entry. Empty returns to the built-in. The GPU backend
+    /// has no alternative charts and ignores this.
+    pub fn setAltChartStyle(self: *Lookout, url: []const u8) void {
+        if (maplibre_on) if (self.ml) |h| {
+            h.setAltStyleUrl(url) catch {};
+        };
+    }
+
     pub fn setMariner(self: *Lookout, m: Mariner) void {
         // A scheme change or any geometry-affecting field needs a fresh scene;
         // category / text / sounding / size changes apply live (see deriveLive).
@@ -2196,6 +2256,32 @@ pub const Lookout = struct {
         if (self.mariner.scheme != m.scheme or marinerNeedsRebuild(self.mariner, m)) self.dirty = true;
         self.mariner = m;
         self.deriveLive();
+        self.mlSyncMariner();
+    }
+
+    /// The mariner the MapLibre style build wants: the user's REAL settings.
+    /// buildMarinerFrom() forces the live-gated axes permissive because the GPU
+    /// shader re-gates them per frame; MapLibre has no such shader — the style
+    /// filter IS the gate — so the permissive build would show everything
+    /// forever. size_scale rides the style for the same reason, and
+    /// device_scale stays 1.0 because MapLibre applies the display density
+    /// itself (MapOptions.scale_factor).
+    fn mlMariner(self: *Lookout) cc.tile57_mariner {
+        var m = self.mariner;
+        m.size_scale = self.render_size_scale;
+        m.device_scale = 1.0;
+        return m;
+    }
+
+    /// Push every mariner change to the MapLibre host — scheme included, which
+    /// is what makes day/dusk/night and the whole settings window work on this
+    /// backend. Without this the host renders its open-time defaults forever.
+    fn mlSyncMariner(self: *Lookout) void {
+        if (!maplibre_on) return;
+        const h = self.ml orelse return;
+        h.setMariner(self.mlMariner()) catch |e| {
+            std.debug.print("maplibre: setMariner failed: {s}\n", .{@errorName(e)});
+        };
     }
 
     fn deriveLive(self: *Lookout) void {
@@ -2703,6 +2789,14 @@ pub const Lookout = struct {
 
     pub fn render(self: *Lookout) !bool {
         if (maplibre_on) if (self.ml) |h| {
+            // The library composition lands on a worker thread; the GPU path
+            // adopts it in loadingPulse, which this branch never reaches.
+            // Poll it here or a multi-cell open never finishes: `loading`
+            // stays true, the shell's startup loader shows "drawing the
+            // first scene" forever at idle CPU, and the provider serves 404s
+            // because the compositor was never handed over (mlSyncLibrary
+            // runs from pollCompose's adopt).
+            if (self.loading) self.pollCompose(false);
             // Push the CURRENT camera, not just the one setView saw: pan, zoom,
             // rotate and fling all mutate self.cam directly and never call
             // setView, so reading it here is what makes gestures work at all.
@@ -2713,6 +2807,9 @@ pub const Lookout = struct {
                 .zoom = self.cam.zoom,
                 .rotation_deg = self.cam.rotation * 180.0 / std.math.pi,
             });
+            // Pose delivered; the host tracks its own drawing progress from
+            // here. Leaving this set would mean never idling again.
+            self.view_dirty = false;
             return h.render();
         };
         self.ensureAtlases();
@@ -2737,8 +2834,14 @@ pub const Lookout = struct {
     /// True while the view needs another frame (state changed, building, loading).
     pub fn needsRedraw(self: *Lookout) bool {
         // MapLibre owns this answer on its backend: it keeps loading after a
-        // frame is drawn, so only it knows when the view has settled.
-        if (maplibre_on) if (self.ml) |h| return h.needsRedraw();
+        // frame is drawn, so only it knows when the view has settled. EXCEPT
+        // for the pose: a gesture mutates self.cam directly and the host only
+        // hears about it when render() pushes it — view_dirty is the "pose
+        // not yet pushed" signal, and without it a drag sits frozen until
+        // mouse-up (the fling is what finally forced a frame). `loading` also
+        // counts: render() is what polls the compose on this backend, so the
+        // shell must keep calling it while the composition is in flight.
+        if (maplibre_on) if (self.ml) |h| return self.loading or self.view_dirty or h.needsRedraw();
 
         // The camera lagging the (just-adopted) drawable size counts as dirty:
         // the adopt lands mid-render, AFTER that frame's camera sync, and the
@@ -3038,6 +3141,7 @@ pub const Lookout = struct {
         self.dirty = true; // a new palette is a fresh scene (colours are per-range)
         self.applyRasterTint();
         self.deriveLive();
+        self.mlSyncMariner();
     }
     pub fn toggleText(self: *Lookout) void {
         const on = self.mariner.text_names or self.mariner.show_light_descriptions or self.mariner.text_other;
@@ -3045,14 +3149,17 @@ pub const Lookout = struct {
         self.mariner.show_light_descriptions = !on;
         self.mariner.text_other = !on;
         self.deriveLive();
+        self.mlSyncMariner();
     }
     pub fn toggleSoundings(self: *Lookout) void {
         self.mariner.soundings = if (self.sound_on) 2 else 1;
         self.deriveLive();
+        self.mlSyncMariner();
     }
     pub fn toggleOtherCategory(self: *Lookout) void {
         self.mariner.display_other = !self.mariner.display_other;
         self.deriveLive();
+        self.mlSyncMariner();
     }
     /// Flip depth labels/soundings between metres and feet. Portrayal-affecting
     /// (the engine swaps the sounding glyph + SAFCON01 unit), so it re-portrays.
@@ -3063,16 +3170,19 @@ pub const Lookout = struct {
             cc.TILE57_DEPTH_FEET;
         self.dirty = true; // sym_s vs sym_s_ft, metres vs feet contour labels
         self.markDirty();
+        self.mlSyncMariner();
     }
     pub fn nudgeSafetyContour(self: *Lookout, delta: f64) void {
         self.mariner.safety_contour = std.math.clamp(self.mariner.safety_contour + delta, 0, 200);
         self.dirty = true; // geometry-affecting -> fresh scene
         self.markDirty();
+        self.mlSyncMariner();
     }
     pub fn adjustSize(self: *Lookout, factor: f32) void {
         self.render_size_scale *= factor;
         self.dirty = true; // sizes are baked into the geometry
         self.markDirty();
+        self.mlSyncMariner();
     }
 };
 

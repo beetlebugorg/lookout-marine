@@ -150,7 +150,11 @@ pub const Gpu = struct {
         var err: [mc.LKM_ERR_LEN]u8 = undefined;
         err[0] = 0;
         var msaa_out: c_int = 0;
-        const ctx = mc.lkm_create(layer, msl_source, @intFromBool(opts.want_msaa), &msaa_out, &err) orelse {
+        // On the MapLibre backend this context only measures the layer's
+        // density; a null shader source selects lkm_create's light contract
+        // (no pipeline compile, layer left unclaimed for the real renderer).
+        const src: ?[*:0]const u8 = if (@import("build_options").maplibre) null else msl_source;
+        const ctx = mc.lkm_create(layer, src, @intFromBool(opts.want_msaa), &msaa_out, &err) orelse {
             std.debug.print("Metal init failed: {s}\n", .{std.mem.sliceTo(&err, 0)});
             return error.MetalFailure;
         };

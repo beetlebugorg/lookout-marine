@@ -39,8 +39,20 @@ const t57 = @import("tile57");
 /// The urls the resource provider answers. Kept here rather than in provider.zig
 /// so the template and the parser cannot drift apart silently.
 pub const tiles_url = "lookout://tile/{z}/{x}/{y}";
-pub const sprite_url = "lookout://sprite";
+pub const sprite_url = "lookout://sprite"; // legacy shape; served as the day sheet
 pub const glyphs_url = "lookout://glyphs/{fontstack}/{range}.pbf";
+
+/// The sprite url carries the SCHEME. One url for all three palettes let
+/// MapLibre serve a cached day sheet into a night style — whether the symbols
+/// (and the sprite-drawn soundings) changed with the scheme depended on cache
+/// timing. A distinct url per palette makes the fetch honest.
+pub fn spriteUrlFor(scheme: cc.tile57_scheme) [:0]const u8 {
+    return switch (scheme) {
+        cc.TILE57_SCHEME_DUSK => "lookout://sprite-dusk",
+        cc.TILE57_SCHEME_NIGHT => "lookout://sprite-night",
+        else => "lookout://sprite-day",
+    };
+}
 
 pub const Error = error{ TemplateFailed, BuildFailed, AssetsFailed, OutOfMemory };
 
@@ -63,6 +75,9 @@ pub const Inputs = struct {
     scamin_lat: f64 = 0,
     /// Band filter, or empty for all bands.
     bands: []const i32 = &.{},
+    /// Stamped into the sprite url (?g=N) so each style load fetches a
+    /// generation-unique sprite resource. See host.zig style_gen.
+    sprite_generation: u32 = 0,
 };
 
 /// The catalogue assets the style references. Baked once and reused: they do
@@ -109,10 +124,18 @@ pub fn build(inputs: Inputs, assets: *const Assets) Error!Style {
     var tmpl_len: usize = 0;
     var err: cc.tile57_error = undefined;
 
+    // MapLibre appends "@2x.json"/".png" to this base, so the generation is a
+    // path suffix, not a query string.
+    var sprite_buf: [96]u8 = undefined;
+    const sprite_with_gen = std.fmt.bufPrintZ(&sprite_buf, "{s}-g{d}", .{
+        spriteUrlFor(inputs.scheme),
+        inputs.sprite_generation,
+    }) catch return Error.TemplateFailed;
+
     if (cc.tile57_style_template(
         inputs.scheme,
         tiles_url,
-        sprite_url,
+        sprite_with_gen,
         glyphs_url,
         inputs.minzoom,
         inputs.maxzoom,
@@ -134,12 +157,20 @@ pub fn build(inputs: Inputs, assets: *const Assets) Error!Style {
     // template. The BUILD resolves every colour token from `m.scheme`, so a
     // template built for night and a mariner left on day yields a day chart.
     //
-    // `scamin_filter_gate`: selects the one-layer-per-type exact gate over the
-    // per-value buckets. Passing a SCAMIN manifest as well would select buckets
-    // and silently undo it, so the manifest goes in as null.
+    // `scamin_filter_gate`: OFF, deliberately, after measuring the ON cost.
+    // The filter-gate is fractionally exact, but exactness is bought with a
+    // setLayerFilter over every gated layer at each denominator crossing —
+    // and each of those re-lays-out every loaded tile. On a real gesture that
+    // was a freeze right as the zoom settled. The static zoom-gate
+    // (K/2^zoom inside the filter) costs nothing at gesture time: a tile
+    // gates itself when it loads. Its thresholds snap to integer zooms —
+    // the approximation every web chart client makes, and the whole reason
+    // tile57 still offers the exact mode for hosts that want it.
+    // The SCAMIN manifest stays null either way: passing one selects the
+    // 107-layer per-value bucket mode.
     var m = inputs.mariner;
     m.scheme = inputs.scheme;
-    m.scamin_filter_gate = true;
+    m.scamin_filter_gate = false;
 
     if (cc.tile57_style_build(
         @ptrCast(tmpl),
@@ -300,7 +331,7 @@ test "build produces a style naming our source urls" {
 
     try std.testing.expect(style.json.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, style.json, "lookout://tile/") != null);
-    try std.testing.expect(std.mem.indexOf(u8, style.json, "lookout://sprite") != null);
+    try std.testing.expect(std.mem.indexOf(u8, style.json, "lookout://sprite-day") != null);
     try std.testing.expect(std.mem.indexOf(u8, style.json, "lookout://glyphs/") != null);
 }
 
