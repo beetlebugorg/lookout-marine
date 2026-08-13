@@ -631,6 +631,13 @@ final class ChartController: NSObject {
         kick()
     }
 
+    /// True while a scene rebuild is outstanding, or tiles it needs are still
+    /// being composed. What "the chart has finished" means.
+    var stillBuilding: Bool {
+        guard let h = handle else { return false }
+        return lookout_is_building(h) != 0
+    }
+
     /// End of a $LOOKOUT_GESTURE_BENCH run: write the profile and quit, so a
     /// run is one command with a file at the end of it.
     func finishGestureBench() {
@@ -923,6 +930,12 @@ final class ChartController: NSObject {
     }
 
     /// View point (top-left origin) for a chart lon/lat.
+    /// The middle of the chart view, in points.
+    var viewCentrePt: CGPoint {
+        guard let v = view else { return .zero }
+        return CGPoint(x: v.bounds.midX, y: v.bounds.midY)
+    }
+
     func screenPoint(forGeoLon lon: Double, lat: Double) -> CGPoint {
         guard let h = handle else { return .zero }
         var x: Float = 0, y: Float = 0
@@ -1404,7 +1417,26 @@ final class FrameProfiler: @unchecked Sendable {
 /// same run twice.
 @MainActor
 final class GestureBench {
-    private enum Phase { case settle, pan, rest, zoom, rest2, flickPan, rest3, flickZoom, cursor, done }
+    private enum Phase { case settle, pan, rest, zoom, fill, rest2, flickPan, rest3, flickZoom, cursor, tour, done }
+
+    /// The tour: at each stop, zoom all the way in, then all the way out, then
+    /// pan (at the wide zoom) to the next coast. It crosses the whole library,
+    /// every zoom level, and the band handoffs between them, which is the run
+    /// that finds what a single sweep at one place never does.
+    private struct Stop { let lon: Double; let lat: Double; let name: String }
+    private let tourStops = [
+        Stop(lon: -76.44, lat: 38.956, name: "Chesapeake"),
+        Stop(lon: -122.44, lat: 37.80, name: "San Francisco"),
+        Stop(lon: -70.90, lat: 42.35, name: "Boston"),
+        Stop(lon: -81.78, lat: 24.55, name: "Key West"),
+        Stop(lon: -87.56, lat: 41.89, name: "Chicago"),
+    ]
+    private var tourStop = 0
+    private enum Leg { case zoomIn, zoomOut, panTo }
+    private var leg: Leg = .zoomIn
+    private var legStart: CFTimeInterval = 0
+    private var lastZoom: Double = -1
+    private var legStall = 0
     private var phase: Phase = .settle
     private var frames = 0
     private let doPan: Bool
@@ -1416,10 +1448,12 @@ final class GestureBench {
     private let zoomFrames = 480
 
     private let doCursor: Bool
+    private let doTour: Bool
     /// The point a cursor-anchored zoom must hold still, deliberately well off
     /// centre so a zoom that quietly falls back to centre-anchored shows up.
     private var anchorPt = CGPoint(x: 320, y: 200)
     private var anchorGeo: (lon: Double, lat: Double)?
+    private var fillStart: CFTimeInterval = 0
     private(set) var anchorDriftM: Double = 0
 
     init(spec: String) {
@@ -1427,13 +1461,77 @@ final class GestureBench {
         doPan = (s == "1" || s == "pan" || s == "both")
         doZoom = (s == "1" || s == "zoom" || s == "both")
         doCursor = (s == "1" || s == "both" || s == "cursor")
+        doTour = (s == "tour")
+    }
+
+    /// One tick of the tour. Each leg runs until the camera stops responding
+    /// (the zoom clamped, or the pan arrived), then reports how long it took
+    /// and how long the chart went on working after it.
+    private func stepTour(_ c: ChartController) {
+        let v = c.currentView
+        switch leg {
+        case .zoomIn, .zoomOut:
+            let dz = leg == .zoomIn ? 0.35 : -0.35
+            c.zoomCentered(dz)
+            // Clamped when the zoom stops moving for a few frames running.
+            if abs(v.zoom - lastZoom) < 0.001 { legStall += 1 } else { legStall = 0 }
+            lastZoom = v.zoom
+            // z18 is as deep as the survey goes; past it the chart is only
+            // magnified, so a test that runs on to z21 is measuring overscale
+            // rather than the chart.
+            let atLimit = leg == .zoomIn && v.zoom >= 18.0
+            if legStall >= 8 || atLimit || frames > 1200 {
+                report(c, "\(leg == .zoomIn ? "zoom in " : "zoom out")@\(tourStops[tourStop].name) -> z\(String(format: "%.1f", v.zoom))")
+                if leg == .zoomIn { beginLeg(.zoomOut) } else {
+                    if tourStop + 1 < tourStops.count { tourStop += 1; beginLeg(.panTo) }
+                    else { phase = .done; frames = 0 }
+                }
+            }
+        case .panTo:
+            // Steer by where the destination actually IS on screen, both axes
+            // at once. Testing longitude alone stopped the pan the moment the
+            // meridian matched and left the latitude wherever it had got to,
+            // which put "Key West" and "Chicago" in the middle of the country.
+            let want = tourStops[tourStop]
+            let p = c.screenPoint(forGeoLon: want.lon, lat: want.lat)
+            let centre = c.viewCentrePt
+            var dx = centre.x - p.x
+            var dy = centre.y - p.y
+            let dist = (dx * dx + dy * dy).squareRoot()
+            if dist < 24 || frames > 2400 {
+                report(c, "pan -> \(want.name)")
+                beginLeg(.zoomIn)
+                return
+            }
+            // Brisk but not a jump, so the pan is a real gesture over real
+            // ground rather than a teleport the tile path never sees.
+            let step = min(dist, 160)
+            dx = dx / dist * step
+            dy = dy / dist * step
+            c.pan(dxPt: dx, dyPt: dy)
+        }
+    }
+
+    private func beginLeg(_ l: Leg) {
+        leg = l; frames = 0; legStall = 0; lastZoom = -1
+        legStart = CACurrentMediaTime()
+    }
+
+    private func report(_ c: ChartController, _ what: String) {
+        let ms = (CACurrentMediaTime() - legStart) * 1000
+        lkLog(String(format: "tour: %@ in %.0f ms (%d frames)", what, ms, frames))
     }
 
     func step(_ c: ChartController) {
         frames += 1
         switch phase {
         case .settle:
+            // Wait for the chart to be OPEN and settled, not just for a frame
+            // count: a chart library takes tens of seconds to compose, and a
+            // bench that starts on frame 120 measures the loading screen.
+            if c.model?.firstBuildDone != true || c.stillBuilding { frames = 0; return }
             if frames >= settleFrames {
+                if doTour { beginLeg(.zoomIn); phase = .tour; return }
                 phase = doPan ? .pan : (doZoom ? .zoom : (doCursor ? .cursor : .done))
                 frames = 0
             }
@@ -1451,9 +1549,19 @@ final class GestureBench {
             // compositor is asked for a fresh set and every resident tile is
             // re-laid-out. A shallow pinch inside one level measures almost
             // nothing by comparison.
-            let dz = frames <= zoomFrames / 2 ? -0.05 : 0.05
-            c.zoomCentered(dz)
-            if frames >= zoomFrames { phase = .rest2; frames = 0 }
+            // Zoom IN only: every level needs tiles the view has never
+            // held, which is the case that waits on the compositor.
+            c.zoomCentered(0.05)
+            if frames >= zoomFrames { phase = .fill; frames = 0; fillStart = CACurrentMediaTime() }
+        case .fill:
+            // How long the chart takes to FINISH after the gesture stops: the
+            // tiles a zoom asked for still have to be composed and tessellated,
+            // and that wait is what reads as "it fills in ages later".
+            if !c.stillBuilding || frames > 900 {
+                let ms = (CACurrentMediaTime() - fillStart) * 1000
+                lkLog(String(format: "fill after zoom: %.0f ms (%d frames)", ms, frames))
+                phase = .rest2; frames = 0
+            }
         case .rest2:
             if frames >= 60 { phase = .flickPan; frames = 0 }
         case .flickPan:
@@ -1493,6 +1601,8 @@ final class GestureBench {
                 }
                 phase = .done; frames = 0
             }
+        case .tour:
+            stepTour(c)
         case .done:
             if frames == 30 {
                 c.finishGestureBench()

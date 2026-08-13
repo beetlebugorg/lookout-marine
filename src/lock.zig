@@ -58,6 +58,78 @@ else
         }
     };
 
+/// A readers-writer lock over `Lock`, for state that is read by several worker
+/// threads at once and replaced only rarely.
+///
+/// It exists for the tile compositor. Composing a tile only READS it (the
+/// ownership partition is immutable and the archive readers guard their own
+/// lazy state), so any number of workers may compose at once; what must be
+/// excluded is the handful of operations that replace the thing being read —
+/// opening charts into the list, swapping and closing a composition, trimming
+/// the engine's caches, and a pick. Holding one exclusive lock across a compose
+/// made four workers behave as one, and a view's worth of tiles arrived one
+/// after another.
+///
+/// Hand-rolled, like `Lock` above and for the same reason: Zig 0.16 has no
+/// std.Thread.RwLock outside an Io, and a zeroed pthread_rwlock_t is not a
+/// valid initializer on Darwin (unlike pthread_mutex_t), so it would need a
+/// real init call and a matching destroy.
+///
+/// Writers take priority: once one is waiting, no further reader may enter, so
+/// a steady stream of tiles cannot starve a close. The wait is a 1 ms poll
+/// rather than a condition variable, which is the same trade the tile workers
+/// already make; writers here are rare and readers never wait on each other.
+pub const RwLock = struct {
+    mu: Lock = .{},
+    readers: u32 = 0,
+    writer: bool = false,
+    writer_waiting: bool = false,
+
+    pub fn lockShared(self: *RwLock) void {
+        while (true) {
+            self.mu.lock();
+            if (!self.writer and !self.writer_waiting) {
+                self.readers += 1;
+                self.mu.unlock();
+                return;
+            }
+            self.mu.unlock();
+            sleepMs(1);
+        }
+    }
+
+    pub fn unlockShared(self: *RwLock) void {
+        self.mu.lock();
+        self.readers -= 1;
+        self.mu.unlock();
+    }
+
+    /// Exclusive. Named `lock`/`unlock` so an exclusive user reads exactly as
+    /// it did when this was a plain Lock.
+    pub fn lock(self: *RwLock) void {
+        self.mu.lock();
+        self.writer_waiting = true;
+        self.mu.unlock();
+        while (true) {
+            self.mu.lock();
+            if (!self.writer and self.readers == 0) {
+                self.writer = true;
+                self.writer_waiting = false;
+                self.mu.unlock();
+                return;
+            }
+            self.mu.unlock();
+            sleepMs(1);
+        }
+    }
+
+    pub fn unlock(self: *RwLock) void {
+        self.mu.lock();
+        self.writer = false;
+        self.mu.unlock();
+    }
+};
+
 /// Sleep the calling thread, for a worker with nothing to do. Zig 0.16's
 /// std.Thread.sleep is behind the same Io as its mutex, so this goes straight to
 /// the platform: usleep on POSIX, Sleep on Windows.

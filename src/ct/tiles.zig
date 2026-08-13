@@ -16,17 +16,70 @@
 //! still lands.
 //!
 //! The compose path is safe to run concurrently: the ownership partition is
-//! read-only and the pmtiles readers lock their own lazy directory state. It
-//! still runs under the caller's engine lock, because everything else that
-//! touches the compositor (a pick, a rebuild, a close) has to be excluded.
+//! read-only and the pmtiles readers lock their own lazy directory state. So a
+//! worker takes the caller's engine lock SHARED, and the pool composes in
+//! parallel. What the lock still excludes is the handful of operations that
+//! replace what is being read — opening charts, swapping and closing a
+//! composition, trimming the engine's caches, a pick — and those take it
+//! exclusively.
 
 const std = @import("std");
 const cc = @import("../c.zig").c;
 const ct = @import("charttable");
 const Lock = @import("../lock.zig").Lock;
+const RwLock = @import("../lock.zig").RwLock;
 const sleepMs = @import("../lock.zig").sleepMs;
 
 const Request = ct.provider.Request;
+const clock = @import("../clock.zig");
+
+/// $LOOKOUT_TILE_PROF=<path>: what the compose pool actually achieved.
+///
+/// Wall time against summed compose time is the whole question for the pool:
+/// equal means the workers ran one at a time, and a ratio near the worker count
+/// means they ran together.
+const Stats = struct {
+    mu: Lock = .{},
+    on: bool = false,
+    checked: bool = false,
+    path: []const u8 = "",
+    n: usize = 0,
+    compose_us: i64 = 0,
+    wait_us: i64 = 0,
+    first_us: i64 = 0,
+    last_us: i64 = 0,
+
+    fn add(self: *Stats, wait_us: i64, compose_us: i64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (!self.checked) {
+            self.checked = true;
+            if (std.c.getenv("LOOKOUT_TILE_PROF")) |p| {
+                self.path = std.mem.span(p);
+                self.on = true;
+            }
+        }
+        if (!self.on) return;
+        const now = clock.ticksUs();
+        if (self.n == 0) self.first_us = now - compose_us - wait_us;
+        self.n += 1;
+        self.compose_us += compose_us;
+        self.wait_us += wait_us;
+        self.last_us = now;
+        if (self.n % 16 != 0) return;
+        const wall = self.last_us - self.first_us;
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrint(
+            &buf,
+            "tiles {d}\nwall_ms {d}\ncompose_ms {d}\nlockwait_ms {d}\nparallelism {d:.2}\n",
+            .{ self.n, @divTrunc(wall, 1000), @divTrunc(self.compose_us, 1000), @divTrunc(self.wait_us, 1000), if (wall > 0) @as(f64, @floatFromInt(self.compose_us)) / @as(f64, @floatFromInt(wall)) else 0 },
+        ) catch return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.path, .data = line }) catch {};
+    }
+};
+
+var stats: Stats = .{};
 
 /// How many compose workers. One per view level was the difference, on the
 /// maplibre branch, between a zoom-out filling in over several seconds and
@@ -42,7 +95,7 @@ pub const Tiles = struct {
     /// workers run (a library recompose), which is why they are read under
     /// `mu` on every job rather than captured once.
     compose: ?*cc.tile57_compose = null,
-    engine_mu: *Lock,
+    engine_mu: *RwLock,
 
     mu: Lock = .{},
     queue: std.ArrayListUnmanaged(Request) = .empty,
@@ -55,7 +108,7 @@ pub const Tiles = struct {
     /// Asks drained from charttable, reused so a frame allocates nothing new.
     asks: std.ArrayListUnmanaged(Request) = .empty,
 
-    pub fn init(alloc: std.mem.Allocator, engine_mu: *Lock) Tiles {
+    pub fn init(alloc: std.mem.Allocator, engine_mu: *RwLock) Tiles {
         return .{
             .alloc = alloc,
             .provider = ct.provider.Provider.init(alloc),
@@ -159,9 +212,16 @@ pub const Tiles = struct {
         var len: usize = 0;
         var owned: bool = false;
         var err: cc.tile57_error = undefined;
-        self.engine_mu.lock();
+        // SHARED: composing only reads the compositor, so every worker composes
+        // at once. Held exclusively, the four workers served a view's tiles one
+        // after another, which is what a zoom waited on.
+        const t0 = clock.ticksUs();
+        self.engine_mu.lockShared();
+        const t1 = clock.ticksUs();
         const st = cc.tile57_compose_tile(compose, job.z, job.x, job.y, &bytes, &len, &owned, &err);
-        self.engine_mu.unlock();
+        const t2 = clock.ticksUs();
+        self.engine_mu.unlockShared();
+        stats.add(t1 - t0, t2 - t1);
 
         if (st != cc.TILE57_OK) {
             self.provider.respond(job.id, "", .failed);
@@ -187,7 +247,7 @@ pub const Tiles = struct {
 test "tiles: an ask with no composition is answered, not dropped" {
     // A parked tile that is never answered is a hole in the chart forever, so
     // even the degenerate case has to produce an answer.
-    var engine_mu: Lock = .{};
+    var engine_mu: RwLock = .{};
     var t = Tiles.init(std.testing.allocator, &engine_mu);
     defer t.deinit();
 
@@ -204,7 +264,7 @@ test "tiles: an ask with no composition is answered, not dropped" {
 }
 
 test "tiles: pump moves every ask onto the queue" {
-    var engine_mu: Lock = .{};
+    var engine_mu: RwLock = .{};
     var t = Tiles.init(std.testing.allocator, &engine_mu);
     defer t.deinit();
 

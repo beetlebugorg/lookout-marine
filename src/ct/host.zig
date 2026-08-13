@@ -32,7 +32,7 @@ const ct = @import("charttable");
 const cstyle = @import("style.zig");
 const ctiles = @import("tiles.zig");
 const cprovided = @import("provided.zig");
-const Lock = @import("../lock.zig").Lock;
+const RwLock = @import("../lock.zig").RwLock;
 const clock = @import("../clock.zig");
 
 pub const Map = ct.map_object.Map;
@@ -102,7 +102,7 @@ pub const Host = struct {
         src: ct.cache.PmtilesSource,
     };
 
-    pub fn init(alloc: std.mem.Allocator, engine_mu: *Lock, opts: Options) Error!Host {
+    pub fn init(alloc: std.mem.Allocator, engine_mu: *RwLock, opts: Options) Error!Host {
         var h = Host{
             .alloc = alloc,
             .m = Map.init(alloc, .{}),

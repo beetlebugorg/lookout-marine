@@ -157,6 +157,7 @@ pub const OpenOptions = struct {
 pub const NativeKind = cthost.NativeKind;
 
 const Lock = @import("lock.zig").Lock;
+const RwLock = @import("lock.zig").RwLock;
 
 /// Everything the plugin layer needs from the core, in one heap allocation:
 /// the vessel store, the AIS store, the broker that implements the ABI over
@@ -651,7 +652,7 @@ pub const Lookout = struct {
     // engine call; a tap during a slow build waits rather than corrupting.
     // os_unfair_lock (kernel-blocking, not a spin) because Zig 0.16 puts
     // std's mutex behind an Io, which this layer does not take.
-    engine_mu: Lock = .{},
+    engine_mu: RwLock = .{},
     // viewMaxZoom cache (see there).
     zl_valid: bool = false,
     zl_center: camera.Vec2 = .{ .x = 0, .y = 0 },
