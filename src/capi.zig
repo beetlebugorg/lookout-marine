@@ -702,6 +702,47 @@ export fn lookout_aux_file(h: ?*lookout, cell: [*:0]const u8, name: [*:0]const u
 }
 
 // ---- convenience live toggles ----------------------------------------------
+/// Draw a host-supplied style instead of lookout's portrayal. See lookout.h.
+export fn lookout_alt_chart_style_json(h: ?*lookout, json: ?[*]const u8, len: usize) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const bytes: ?[]const u8 = if (json != null and len != 0) json.?[0..len] else null;
+    l.setAltStyle(bytes) catch return 0;
+    return 1;
+}
+
+export fn lookout_alt_chart_style_active(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.altStyleActive()) 1 else 0;
+}
+
+/// Where an alt style's tiles are asked for. See lookout.h.
+export fn lookout_set_tile_provider(h: ?*lookout, cb: ?lk.Lookout.TileRequestFn, user: ?*anyopaque) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setTileProvider(cb, user);
+}
+
+/// Answer one tile request, from any thread. See lookout.h.
+///
+/// The ONLY handle-taking export that does not hold the api lock, and
+/// deliberately: the host answers from whatever thread its networking
+/// finished on, and that thread must not queue behind a frame in flight. The
+/// switchboard underneath has its own lock and is written for it — and it is
+/// also why this is the one call a tile-request callback may make re-entrantly,
+/// since that callback runs with the api lock already held.
+export fn lookout_tile_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
+    if (h == null) return;
+    const st: lk.Lookout.TileStatus = switch (status) {
+        0 => .ok,
+        1 => .empty,
+        else => .failed,
+    };
+    const slice: []const u8 = if (st == .ok and bytes != null) bytes.?[0..len] else &.{};
+    cast(h).respondTile(req_id, slice, st);
+}
+
 /// Open a raster chart (satellite imagery or another picture chart the mariner
 /// supplied) and add it beneath the vector chart. See lookout.h.
 export fn lookout_raster_add(h: ?*lookout, path: ?[*:0]const u8) c_int {

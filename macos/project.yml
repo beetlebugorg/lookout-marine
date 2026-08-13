@@ -63,6 +63,11 @@ targets:
         # the raw archives are never linked directly on ANY platform.
         OTHER_LDFLAGS:
           - "-llookoutall"
+          # zlib, for the libpng the core is built against (-Dlibpng). The
+          # zig archive carries libpng's objects with their zlib symbols still
+          # undefined, so the resolve happens HERE, at the app link. Both
+          # platforms ship libz, so this is a stock system library.
+          - "-lz"
     dependencies:
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
@@ -214,6 +219,11 @@ targets:
         # The merged, libtool-repacked Zig cores (see the pre-build script).
         OTHER_LDFLAGS:
           - "-llookoutall"
+          # zlib, for the libpng the core is built against (-Dlibpng). The
+          # zig archive carries libpng's objects with their zlib symbols still
+          # undefined, so the resolve happens HERE, at the app link. Both
+          # platforms ship libz, so this is a stock system library.
+          - "-lz"
     dependencies:
       - sdk: UIKit.framework
       - sdk: Metal.framework

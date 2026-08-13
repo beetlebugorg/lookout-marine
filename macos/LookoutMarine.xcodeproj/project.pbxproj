@@ -22,6 +22,7 @@
 		3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231885FFFF86BB739D2D973D /* SettingsWindow.swift */; };
 		3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
 		40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
+		42B735FC5CA64B8F05069313 /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
 		4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
 		4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
@@ -31,6 +32,7 @@
 		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
 		5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
+		6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
@@ -90,6 +92,7 @@
 		231885FFFF86BB739D2D973D /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 		2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
+		4417D066BB41E317736749E5 /* AltChartStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AltChartStyle.swift; sourceTree = "<group>"; };
 		44DE7634B8D1E8049164F21C /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
 		51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -171,6 +174,7 @@
 		07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */ = {
 			isa = PBXGroup;
 			children = (
+				4417D066BB41E317736749E5 /* AltChartStyle.swift */,
 				867B3D3BE969AB708C6FD1A6 /* AppModel.swift */,
 				8AE67031882048136AC3C4B2 /* Assets.xcassets */,
 				ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */,
@@ -441,6 +445,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				42B735FC5CA64B8F05069313 /* AltChartStyle.swift in Sources */,
 				B884496C571D0C49742E3299 /* AppModel.swift in Sources */,
 				B1243028D1D1B63F902164E1 /* ChartBake.swift in Sources */,
 				794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */,
@@ -471,6 +476,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */,
 				6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */,
 				AF99BCFEF525D5291F010508 /* ChartBake.swift in Sources */,
 				BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */,
@@ -561,6 +567,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"-llookoutall",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios";
 				PRODUCT_NAME = LookoutMarine;
@@ -735,6 +742,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"-llookoutall",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine";
 				PRODUCT_NAME = LookoutMarine;
@@ -768,6 +776,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"-llookoutall",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios";
 				PRODUCT_NAME = LookoutMarine;
@@ -804,6 +813,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"-llookoutall",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine";
 				PRODUCT_NAME = LookoutMarine;

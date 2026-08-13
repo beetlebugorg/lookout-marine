@@ -516,6 +516,53 @@ void lookout_set_pixel_density(lookout *h, float density);
 /* Open a raster chart (.mbtiles today) and add it to its set. 1 on success, 0
  * when the file will not open — a bad chart never takes the app down, so a host
  * importing a folder keeps going. */
+/* Draw a style the HOST supplies instead of lookout's own portrayal: paste a
+ * MapLibre style and the chart becomes whatever its publisher styled. `json`
+ * NULL (or len 0) restores lookout's chart.
+ *
+ * The bytes are copied. The host fetches the style itself, so a link is
+ * resolved with the host's own networking, and the tiles the style names are
+ * served back through lookout_set_tile_provider.
+ *
+ * While a style is set, the mariner's display settings do not shape the chart.
+ * They build lookout's portrayal, and this is not it. */
+int lookout_alt_chart_style_json(lookout *h, const char *json, size_t len);
+
+/* Is a host-supplied style the one being drawn? */
+int lookout_alt_chart_style_active(lookout *h);
+
+/* One tile an alt style's source wants, which only the host can fetch.
+ *
+ * lookout does not do any networking. The shell already fetched the style,
+ * with whatever proxy, API key or certificate rules the publisher needs, so it
+ * is the one that can resolve `source` against that style's tile url template
+ * and fetch z/x/y.
+ *
+ * Answer with lookout_tile_respond, from any thread, whenever the bytes
+ * arrive. The tile is parked, not spinning, and a SLOW answer is never
+ * mistaken for a missing tile — so taking a second over a bad connection
+ * costs nothing but the wait.
+ *
+ * Called on the render thread with lookout's lock held. Do not call back into
+ * lookout from it except lookout_tile_respond; start the fetch and return. */
+typedef void (*lookout_tile_request)(void *user, const char *source,
+                                     uint64_t req_id, int z, int x, int y);
+
+/* Set (or clear, with NULL) the callback above. With no callback set, every
+ * tile an alt style asks for is failed rather than left waiting: a tile nobody
+ * will ever answer is a hole in the chart that never fills. */
+void lookout_set_tile_provider(lookout *h, lookout_tile_request cb, void *user);
+
+/* Answer one request. `status` is 0 for bytes, 1 for "no tile there", 2 for
+ * "I tried and failed". Only 0 reads `bytes`, which is copied before this
+ * returns, so the host may free its buffer immediately. 1 and 2 are both
+ * remembered, so a 404 or a dead server is not re-asked every frame.
+ *
+ * Safe from any thread, and it does not take lookout's lock — a tile landing
+ * never waits on a frame. An unknown or already-answered id is ignored. */
+void lookout_tile_respond(lookout *h, uint64_t req_id, const void *bytes,
+                          size_t len, int status);
+
 int lookout_raster_add(lookout *h, const char *path);
 
 /* Step to the next raster chart set COVERING THE SAME WATER, or to "no picture"

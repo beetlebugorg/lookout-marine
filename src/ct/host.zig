@@ -31,7 +31,9 @@ const cc = @import("../c.zig").c;
 const ct = @import("charttable");
 const cstyle = @import("style.zig");
 const ctiles = @import("tiles.zig");
+const cprovided = @import("provided.zig");
 const Lock = @import("../lock.zig").Lock;
+const clock = @import("../clock.zig");
 
 pub const Map = ct.map_object.Map;
 pub const Camera = ct.camera.Camera;
@@ -70,8 +72,16 @@ pub const Host = struct {
 
     /// Composed chart sets. Idle (no workers, no queue) until a set binds.
     tiles: ctiles.Tiles,
+    /// The sources an alt style names, served by the host. Empty until one is
+    /// set — lookout's own chart never goes through here.
+    provided: cprovided.Provided,
     /// The single-chart path: charttable reads the archive itself.
     archive: ?*Archive = null,
+
+    /// The last frame's three spans, µs — see `render`. Always kept.
+    prof_update_us: i64 = 0,
+    prof_upload_us: i64 = 0,
+    prof_present_us: i64 = 0,
     bound: bool = false,
 
     style: cstyle.Style = .{},
@@ -97,6 +107,7 @@ pub const Host = struct {
             .alloc = alloc,
             .m = Map.init(alloc, .{}),
             .tiles = ctiles.Tiles.init(alloc, engine_mu),
+            .provided = cprovided.Provided.init(alloc),
         };
         errdefer h.deinit();
         // Always: a device with no layer still renders, offscreen, which is
@@ -111,6 +122,9 @@ pub const Host = struct {
         if (self.g) |*g| g.deinit();
         self.g = null;
         self.m.deinit();
+        // AFTER the map: its cache workers call fetch on these providers from
+        // their own threads, and m.deinit is what stops them.
+        self.provided.deinit();
         self.style.deinit();
         if (self.sprite) |*s| s.deinit();
         if (self.glyph_atlas) |*a| a.deinit();
@@ -160,16 +174,20 @@ pub const Host = struct {
         return self.g != null;
     }
 
+    /// Resize in LOGICAL POINTS, which is also the camera's unit: density
+    /// lives in the projection and is applied once, there. Handing the camera
+    /// the pixel size instead would scale the whole world by the density.
     pub fn resize(self: *Host, width_pt: u32, height_pt: u32) void {
         const g = if (self.g) |*g| g else return;
         g.resize(width_pt, height_pt);
-        self.m.setViewport(@floatFromInt(g.width), @floatFromInt(g.height));
+        self.m.setViewport(@floatFromInt(width_pt), @floatFromInt(height_pt));
     }
 
+    /// The viewport in points does not move when the density does — only the
+    /// framebuffer behind it does.
     pub fn setPixelDensity(self: *Host, d: f32) void {
         const g = if (self.g) |*g| g else return;
         g.setPixelDensity(d);
-        self.m.setViewport(@floatFromInt(g.width), @floatFromInt(g.height));
     }
 
     pub fn pixelDensity(self: *const Host) f32 {
@@ -198,6 +216,54 @@ pub const Host = struct {
         // A new style re-lays-out everything, so nothing the GPU holds is
         // current.
         self.uploaded = .{};
+    }
+
+    /// Set a style the host supplies instead of the engine's. The bytes are
+    /// borrowed for the call.
+    pub fn setStyleJson(self: *Host, json: []const u8) Error!void {
+        self.m.setStyleJson(json) catch return Error.StyleFailed;
+        self.style.deinit();
+        self.reportDiagnostics();
+        try self.bindProvidedSources();
+        self.uploaded = .{};
+    }
+
+    /// Give every source the current style names somewhere to come from: the
+    /// host, through ct/provided.zig.
+    ///
+    /// AFTER the parse, always. bindProvider reads the source's own
+    /// declaration out of the style — its encoding, its zoom band, and for a
+    /// raster source its tile size — and a provider that has not been told
+    /// where the data stops sends the map asking for tiles that can only ever
+    /// be answered "no tile there", forever.
+    fn bindProvidedSources(self: *Host) Error!void {
+        const st = self.m.style orelse return;
+        for (st.sources.keys()) |name| {
+            if (!hostServes(name)) continue;
+            const s = self.provided.source(name) catch return Error.OutOfMemory;
+            _ = self.m.bindProvider(name, &s.provider) catch return Error.SourceFailed;
+        }
+    }
+
+    /// Whether a style source name is the HOST's to serve. The mariner's chart
+    /// is not: it is already bound to the archive or the compositor, and that
+    /// binding is the one that draws the survey. A publisher's style that
+    /// happens to name a source "chart" means its own, but ours is the one
+    /// that must win.
+    fn hostServes(name: []const u8) bool {
+        return !std.mem.eql(u8, name, cstyle.source_name);
+    }
+
+    /// Where a provided source's tiles are asked for. Null stops the asking:
+    /// every outstanding tile is then failed rather than parked, because a
+    /// tile nobody will answer is a hole in the chart that never fills.
+    pub fn setTileProvider(self: *Host, cb: ?cprovided.RequestFn, user: ?*anyopaque) void {
+        self.provided.setCallback(cb, user);
+    }
+
+    /// The host's answer to one ask. Safe from any thread — see provided.zig.
+    pub fn respondTile(self: *Host, req_id: u64, bytes: []const u8, status: cprovided.Status) void {
+        self.provided.respond(req_id, bytes, status);
     }
 
     /// Every degradation the style parse recorded. Silence is the goal: this
@@ -271,6 +337,11 @@ pub const Host = struct {
     /// keeps no atlas of its own.
     pub fn setSprite(self: *Host, index_json: []const u8, png_bytes: []const u8, ratio: f32, scheme: cc.tile57_scheme) bool {
         self.m.waitForBuild(); // a build in flight is reading the atlases
+        // The sheet's index states the real pixelRatio per cell — tile57 writes
+        // the bake scale into it (1 at a 1x bake, 2 at 2x) — so charttable
+        // already draws each cell at its authored logical size. Do NOT correct
+        // for the density here as well; that halves every symbol on a Retina
+        // display.
         var loaded = ct.sprite.Sprite.load(self.alloc, index_json, png_bytes) catch return false;
         if (self.sprite) |*s| s.deinit();
         self.sprite = loaded;
@@ -328,7 +399,12 @@ pub const Host = struct {
                 self.alloc.free(owned);
                 continue;
             };
+            const before = if (self.sprite) |*s| s.count() else 0;
             self.renderSymbolRun(name);
+            if (std.c.getenv("LOOKOUT_SYMBOL_PROBE") != null) {
+                const after = if (self.sprite) |*s| s.count() else 0;
+                std.debug.print("symbol: {s} — {s}\n", .{ name, if (after > before) "rendered" else "NOT AVAILABLE" });
+            }
         }
     }
 
@@ -458,6 +534,7 @@ pub const Host = struct {
     pub fn update(self: *Host) void {
         _ = self.m.update() catch {};
         self.tiles.pump();
+        self.provided.pump();
         self.serveMissingImages();
     }
 
@@ -474,12 +551,25 @@ pub const Host = struct {
     }
 
     /// Draw into the attached surface. Answers whether a frame reached it.
+    ///
+    /// The three spans are timed unconditionally (a clock read is tens of
+    /// nanoseconds against a frame of milliseconds), because which of them the
+    /// caller holds a lock across decides whether the host's frame loop stalls:
+    /// `present` blocks on the swapchain's drawable, and anything waiting on the
+    /// same lock waits out a whole vsync through no fault of its own.
     pub fn render(self: *Host) bool {
         const g = if (self.g) |*g| g else return false;
+        const t0 = clock.ticksUs();
         self.update();
         self.syncAtlases();
+        const t1 = clock.ticksUs();
         _ = self.m.uploadIfChanged(g, &self.uploaded) catch return false;
+        const t2 = clock.ticksUs();
         const drew = g.renderWindow(self.m.uniforms());
+        const t3 = clock.ticksUs();
+        self.prof_update_us = t1 - t0;
+        self.prof_upload_us = t2 - t1;
+        self.prof_present_us = t3 - t2;
         if (drew) self.m.markDrawn();
         return drew;
     }
@@ -510,4 +600,31 @@ test "zoom converts one level, both ways" {
     try std.testing.expectEqual(@as(f64, 14.0), toCt(15.0));
     try std.testing.expectEqual(@as(f64, 15.0), fromCt(14.0));
     try std.testing.expectEqual(@as(f64, 12.5), fromCt(toCt(12.5)));
+}
+
+test "an alt style's sources go to the host, and the mariner's chart does not" {
+    // Against a real parse, because the whole binding rests on what the style
+    // module calls a source and in what order.
+    const json =
+        \\{"version":8,
+        \\ "sources":{
+        \\   "chart":{"type":"vector","tiles":["lookout://chart/{z}/{x}/{y}"]},
+        \\   "basemap":{"type":"vector","tiles":["https://x/{z}/{x}/{y}.pbf"],"maxzoom":14},
+        \\   "satellite":{"type":"raster","tiles":["https://y/{z}/{x}/{y}.jpg"],"tileSize":256}
+        \\ },
+        \\ "layers":[]}
+    ;
+    var st = try ct.style.parse(std.testing.allocator, json);
+    defer st.deinit();
+
+    var served: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer served.deinit(std.testing.allocator);
+    for (st.sources.keys()) |name| {
+        if (!Host.hostServes(name)) continue;
+        try served.append(std.testing.allocator, name);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), served.items.len);
+    try std.testing.expectEqualStrings("basemap", served.items[0]);
+    try std.testing.expectEqualStrings("satellite", served.items[1]);
 }

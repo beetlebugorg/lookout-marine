@@ -96,6 +96,26 @@ final class ChartController: NSObject {
     /// at ~half the link rate exactly during interaction.
     private let renderGate = DispatchSemaphore(value: 1)
 
+    /// $LOOKOUT_FRAME_PROF=<path>: one CSV row per display-link tick, so the
+    /// INTERACTIVE path can be measured on the app. The offscreen harnesses
+    /// (--bench, --sweep) render from a settled camera with tiles resident and
+    /// cannot show what a moving camera costs, which is the whole of what
+    /// "pan/zoom feels bad" turned out to be.
+    ///
+    /// Columns: ms since start, tick gap ms, whether the tick dispatched a
+    /// render, whether the gate was shut (the frame was DROPPED), the render's
+    /// own ms, and whether a build was outstanding.
+    private var frameProf: FrameProfiler?
+
+    /// $LOOKOUT_GESTURE_BENCH=pan|zoom|both: drive a scripted gesture through
+    /// the same entry points a finger uses, so a run is repeatable and needs
+    /// no one at the trackpad. Writes the frame profile above and quits.
+    private var gestureBench: GestureBench?
+
+    /// Serves an alt chart style's tiles. Idle — no callback installed on the
+    /// core, nothing fetched — until a style is set. See AltChartStyle.swift.
+    private let altTiles = AltChartTiles()
+
     // MARK: - Lifecycle
 
     /// Open (or re-open) a single baked `.pmtiles` chart into `view`.
@@ -145,6 +165,10 @@ final class ChartController: NSObject {
         lkLog("open OK")
         model?.openError = nil
         handle = h
+        // The tile door, before anything can ask through it. A style set on the
+        // old handle does not survive — the model pushes it back below, the
+        // same way the raster charts are replayed.
+        altTiles.attach(to: h)
         // Empty is legal: a library of pictures alone opens with no cell, and
         // then there is no chart path to report.
         chartPath = paths.isEmpty ? nil
@@ -170,6 +194,9 @@ final class ChartController: NSObject {
         // does anything where a picture covers, so it is safe to put back before
         // knowing whether one does.
         if model?.chartHiddenSaved == true { setChartHidden(true) }
+        // A linked chart, if one was picked. Its style is re-fetched, so this
+        // lands a moment later than the rest of the replay.
+        model?.chartDidOpen()
 
         // Reopen where we left off. With nothing saved the opening view is the
         // engine's own (lookout_default_view) — the same policy every host gets,
@@ -194,6 +221,15 @@ final class ChartController: NSObject {
             } else {
                 lkLog("ignoring malformed LOOKOUT_VIEW '\(spec)' (want lon,lat,zoom[,rot])")
             }
+        }
+
+        // Dev hooks for the interactive-path profile. Both off unless
+        // asked for; see FrameProfiler / GestureBench at the end of this file.
+        if let p = ProcessInfo.processInfo.environment["LOOKOUT_FRAME_PROF"], !p.isEmpty {
+            frameProf = FrameProfiler(path: p)
+        }
+        if let spec = ProcessInfo.processInfo.environment["LOOKOUT_GESTURE_BENCH"], !spec.isEmpty {
+            gestureBench = GestureBench(spec: spec)
         }
 
         // HiDPI physical sizing: the engine reads pixel density from the swapchain,
@@ -287,6 +323,10 @@ final class ChartController: NSObject {
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
+        // Before the barrier: this clears the core's callback and cancels the
+        // fetches still out, so nothing can answer into a handle that is about
+        // to be destroyed.
+        altTiles.detach()
         let h = handle
         handle = nil
         renderQueue.sync {}
@@ -449,6 +489,26 @@ final class ChartController: NSObject {
 
     private func step(_ link: CADisplayLink) {
         guard let h = handle else { return }
+
+        // Claim the render slot BEFORE touching the core. Every lookout_* call
+        // takes the engine's api lock, and a render holds it for its whole
+        // span — including the present, which blocks on the swapchain drawable
+        // (measured: 0.2 ms typical, 73 ms at p99). A tick that cannot render
+        // anyway must not go and wait on that lock: doing so stalled the main
+        // thread, and with it the display link and every queued gesture, for
+        // the length of someone else's frame.
+        //
+        // Skipping is safe for the animation: `dt` is measured from the last
+        // tick that RAN, so the next one advances by the whole elapsed time
+        // rather than losing it.
+        guard renderGate.wait(timeout: .now()) == .success else {
+            frameProf?.tick(gap: link.timestamp - lastTimestamp, dispatched: false,
+                            dropped: true, building: true, zoom: 0)
+            return
+        }
+        var slotHeld = true
+        defer { if slotHeld { renderGate.signal() } }
+
         let now = link.timestamp
         var dt = lastTimestamp == 0 ? 0 : now - lastTimestamp
         lastTimestamp = now
@@ -460,15 +520,28 @@ final class ChartController: NSObject {
         let building = lookout_is_building(h) != 0
         if model?.isBuilding != building { model?.isBuilding = building }
 
+        gestureBench?.step(self)
+
+        var zoomNow: Double = 0
+        if frameProf != nil {
+            var v = lookout_view()
+            lookout_get_view(h, &v)
+            zoomNow = v.zoom
+        }
+
         if animating || lookout_needs_redraw(h) != 0 {
-            if renderGate.wait(timeout: .now()) == .success {
-                renderQueue.async { [weak self] in
-                    _ = lookout_render(h)
-                    self?.renderGate.signal()
-                    DispatchQueue.main.async {
-                        self?.syncGeoChrome()
-                        self?.pushReadouts()
-                    }
+            let prof = frameProf
+            prof?.tick(gap: dt, dispatched: true, dropped: false, building: building, zoom: zoomNow)
+            // The slot passes to the render; it signals the gate when done.
+            slotHeld = false
+            renderQueue.async { [weak self] in
+                let t0 = CACurrentMediaTime()
+                _ = lookout_render(h)
+                prof?.rendered(ms: (CACurrentMediaTime() - t0) * 1000)
+                self?.renderGate.signal()
+                DispatchQueue.main.async {
+                    self?.syncGeoChrome()
+                    self?.pushReadouts()
                 }
             }
             idleTicks = 0
@@ -485,7 +558,9 @@ final class ChartController: NSObject {
             // rendered — retire the startup loader.
             if model?.firstBuildDone == false { model?.firstBuildDone = true }
             idleTicks += 1
-            if idleTicks > 2 {
+            // A gesture bench drives from this tick, so pausing would strand it
+            // in whatever phase it had reached.
+            if idleTicks > 2 && gestureBench == nil {
                 link.isPaused = true
                 startIdlePoll()
             }
@@ -554,6 +629,19 @@ final class ChartController: NSObject {
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))
         retireChartChrome()
         kick()
+    }
+
+    /// End of a $LOOKOUT_GESTURE_BENCH run: write the profile and quit, so a
+    /// run is one command with a file at the end of it.
+    func finishGestureBench() {
+        gestureBench = nil
+        frameProf?.write()
+        frameProf = nil
+        #if canImport(AppKit)
+        NSApplication.shared.terminate(nil)
+        #else
+        exit(0)
+        #endif
     }
 
     /// Center-anchored zoom (menu / buttons).
@@ -982,6 +1070,34 @@ final class ChartController: NSObject {
     /// Hide or show the vector chart. The picture beneath it stays.
     func toggleChart()        { guard let h = handle else { return }; lookout_toggle_chart(h); kick(); pushReadouts() }
     func setChartHidden(_ hidden: Bool) { guard let h = handle else { return }; lookout_set_chart_hidden(h, hidden ? 1 : 0) }
+
+    /// Draw a publisher's style instead of Lookout's own chart, or nil to go
+    /// back to it. The style's sources are installed FIRST: the core starts
+    /// asking for tiles as soon as it has the style, and a source it asks
+    /// about before this knows where to fetch it is answered "failed" and
+    /// remembered as such.
+    func setAltChartStyle(_ style: AltChartStyle?) {
+        guard let h = handle else { return }
+        altTiles.setSources(style?.sources ?? [:])
+        if let style {
+            lkLog("alt style: \(style.json.utf8.count) B, source(s): \(style.sources.keys.sorted().joined(separator: ", "))")
+            let ok = style.json.withCString { p in
+                lookout_alt_chart_style_json(h, p, strlen(p))
+            }
+            if ok == 0 { lkLog("alt style: the core refused it") }
+        } else {
+            lkLog("alt style: cleared, back to the Lookout chart")
+            lookout_alt_chart_style_json(h, nil, 0)
+        }
+        kick()
+        pushReadouts()
+    }
+
+    /// Is a publisher's style the one being drawn?
+    var altChartStyleActive: Bool {
+        guard let h = handle else { return false }
+        return lookout_alt_chart_style_active(h) != 0
+    }
     func chartHidden() -> Bool { guard let h = handle else { return false }; return lookout_chart_hidden(h) != 0 }
     /// Every set, with whether it is in view and whether it is drawn. This is
     /// what the pill's menu is built from — a mariner has to see what they
@@ -1216,4 +1332,171 @@ private func withCStrings<R>(_ strings: [String], _ body: ([UnsafePointer<CChar>
     let dups: [UnsafeMutablePointer<CChar>?] = strings.map { strdup($0) }
     defer { dups.forEach { free($0) } }
     return body(dups.map { UnsafePointer($0) })
+}
+
+// MARK: - Interactive-path profiling
+//
+// The offscreen harnesses measure a settled camera with its tiles resident:
+// 5.68 ms a frame, rebuilds at a 6 ms median. Neither reproduces what a
+// MOVING camera costs, which is the whole of the complaint. These two run in
+// the app, on the real display link, through the real gesture entry points.
+
+/// One row per display-link tick, written as CSV at the end of the run.
+final class FrameProfiler: @unchecked Sendable {
+    struct Row {
+        var t: Double // ms since the first tick
+        var gap: Double // ms since the previous tick — the FELT frame rate
+        var dispatched: Bool
+        var dropped: Bool // the render gate was shut: this slot was skipped
+        var building: Bool
+        var zoom: Double // so cost can be read against the LEVEL, not the clock
+        var renderMs: Double = -1 // filled in when the render returns
+    }
+
+    private let path: String
+    private let lock = NSLock()
+    private var rows: [Row] = []
+    private var t0: Double = 0
+    /// Index of the row whose render is in flight. One at a time, by the gate.
+    private var pending: Int?
+
+    init(path: String) {
+        self.path = path
+        rows.reserveCapacity(8192)
+    }
+
+    func tick(gap: Double, dispatched: Bool, dropped: Bool, building: Bool, zoom: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = CACurrentMediaTime()
+        if t0 == 0 { t0 = now }
+        rows.append(.init(t: (now - t0) * 1000, gap: gap * 1000,
+                          dispatched: dispatched, dropped: dropped, building: building,
+                          zoom: zoom))
+        if dispatched { pending = rows.count - 1 }
+    }
+
+    /// Called on the render queue when lookout_render returns.
+    func rendered(ms: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let i = pending, i < rows.count { rows[i].renderMs = ms }
+        pending = nil
+    }
+
+    func write() {
+        lock.lock()
+        let snapshot = rows
+        lock.unlock()
+        var out = "t_ms,gap_ms,dispatched,dropped,building,zoom,render_ms\n"
+        for r in snapshot {
+            out += String(format: "%.2f,%.2f,%d,%d,%d,%.4f,%.3f\n",
+                          r.t, r.gap, r.dispatched ? 1 : 0, r.dropped ? 1 : 0,
+                          r.building ? 1 : 0, r.zoom, r.renderMs)
+        }
+        try? out.write(toFile: path, atomically: true, encoding: .utf8)
+        lkLog("frame profile: \(snapshot.count) ticks -> \(path)")
+    }
+}
+
+/// A scripted pan/zoom through the controller's own entry points, so the
+/// interactive path can be measured without anyone at the trackpad — and the
+/// same run twice.
+@MainActor
+final class GestureBench {
+    private enum Phase { case settle, pan, rest, zoom, rest2, flickPan, rest3, flickZoom, cursor, done }
+    private var phase: Phase = .settle
+    private var frames = 0
+    private let doPan: Bool
+    private let doZoom: Bool
+    /// Long enough for the first build and its tiles to land.
+    private let settleFrames = 120
+    private let panFrames = 240
+    /// 240 out + 240 back at 0.05 a frame = six levels each way.
+    private let zoomFrames = 480
+
+    private let doCursor: Bool
+    /// The point a cursor-anchored zoom must hold still, deliberately well off
+    /// centre so a zoom that quietly falls back to centre-anchored shows up.
+    private var anchorPt = CGPoint(x: 320, y: 200)
+    private var anchorGeo: (lon: Double, lat: Double)?
+    private(set) var anchorDriftM: Double = 0
+
+    init(spec: String) {
+        let s = spec.lowercased()
+        doPan = (s == "1" || s == "pan" || s == "both")
+        doZoom = (s == "1" || s == "zoom" || s == "both")
+        doCursor = (s == "1" || s == "both" || s == "cursor")
+    }
+
+    func step(_ c: ChartController) {
+        frames += 1
+        switch phase {
+        case .settle:
+            if frames >= settleFrames {
+                phase = doPan ? .pan : (doZoom ? .zoom : (doCursor ? .cursor : .done))
+                frames = 0
+            }
+        case .pan:
+            // A steady drag: 8 pt a frame is a brisk but ordinary finger, and
+            // it keeps crossing into new tiles, which is the case the settled
+            // benchmarks cannot produce.
+            c.pan(dxPt: -8, dyPt: -3)
+            if frames >= panFrames { phase = .rest; frames = 0 }
+        case .rest:
+            if frames >= 60 { phase = doZoom ? .zoom : .done; frames = 0 }
+        case .zoom:
+            // Out six whole zoom levels and back in. Crossing LEVELS is where
+            // the work is: each one changes which tiles cover the view, so the
+            // compositor is asked for a fresh set and every resident tile is
+            // re-laid-out. A shallow pinch inside one level measures almost
+            // nothing by comparison.
+            let dz = frames <= zoomFrames / 2 ? -0.05 : 0.05
+            c.zoomCentered(dz)
+            if frames >= zoomFrames { phase = .rest2; frames = 0 }
+        case .rest2:
+            if frames >= 60 { phase = .flickPan; frames = 0 }
+        case .flickPan:
+            // A FLICK, not a drag: a short hard throw and then let go. The
+            // coast afterwards runs on tickAnim, which is the path a held drag
+            // never enters — and the one that was rebuilding the style per
+            // frame. Three throws, so the coasts are measured, not just one.
+            if frames % 90 == 1 {
+                c.flingStart(vx: -2600, vy: -900)
+            }
+            if frames >= 270 { phase = .rest3; frames = 0 }
+        case .rest3:
+            if frames >= 60 { phase = .flickZoom; frames = 0 }
+        case .flickZoom:
+            // A snap zoom: one big step, eased by the camera. Same coast path.
+            if frames % 60 == 1 {
+                c.zoomCentered(frames < 180 ? -1.0 : 1.0)
+            }
+            if frames >= 360 { phase = doCursor ? .cursor : .done; frames = 0 }
+        case .cursor:
+            // Zoom-to-cursor is a CONTRACT, not a feel: the world point under
+            // the pointer must not move while the zoom eases. Record the geo
+            // under the anchor, wheel in and back out at that point, and
+            // measure how far it drifted. Anything past a few metres at harbor
+            // scale means the anchor is being lost — which reads to a mariner
+            // as "it zooms to the middle, not to where I'm pointing".
+            if frames == 1 { anchorGeo = c.geo(atPoint: anchorPt) }
+            if frames % 3 == 1 { c.zoom(frames <= 180 ? 0.15 : -0.15, atPt: anchorPt) }
+            if frames >= 360 {
+                if let want = anchorGeo, let got = c.geo(atPoint: anchorPt) {
+                    // Metres on the ground, at this latitude.
+                    let dLat = (got.lat - want.lat) * 111_320
+                    let dLon = (got.lon - want.lon) * 111_320 * cos(want.lat * .pi / 180)
+                    anchorDriftM = (dLat * dLat + dLon * dLon).squareRoot()
+                    lkLog(String(format: "cursor anchor drift: %.1f m (want %.6f,%.6f got %.6f,%.6f)",
+                                 anchorDriftM, want.lon, want.lat, got.lon, got.lat))
+                }
+                phase = .done; frames = 0
+            }
+        case .done:
+            if frames == 30 {
+                c.finishGestureBench()
+            }
+        }
+    }
 }

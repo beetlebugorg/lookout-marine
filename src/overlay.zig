@@ -2180,7 +2180,7 @@ fn absAt(fr: Frame, i: usize) camera.Vec2 {
 }
 
 test "geo matches camera.zig and known mercator values" {
-    // Hand-computed web-mercator for Annapolis harbour and the origin.
+    // Hand-computed web-mercator for Annapolis harbor and the origin.
     const a = geo(.{ -76.4767, 38.9763 });
     try t.expectApproxEqAbs(@as(f64, 0.28756472222222224), a.x, 1e-15);
     try t.expectApproxEqAbs(@as(f64, 0.38226387137161233), a.y, 1e-15);
@@ -2333,7 +2333,7 @@ test "a dashed line keeps its width and dashes at every angle, zoom and density"
             const fr = try s.buildIfNeeded(zoom, 0, .day, null);
             const quads = fr.verts.len / 6;
             try t.expect(quads >= 8);
-            // The vertices are SMALL: a harbour-sized overlay measured from its
+            // The vertices are SMALL: a harbor-sized overlay measured from its
             // own origin, not the prime meridian. This is what buys the
             // precision the widths below depend on.
             for (fr.verts) |v| try t.expect(@abs(v.x) < 0.01 and @abs(v.y) < 0.01);

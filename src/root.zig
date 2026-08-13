@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const cthost = @import("ct/host.zig"); // the renderer, behind one struct
 const cstyle = @import("ct/style.zig");
+const ctprovided = @import("ct/provided.zig");
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 pub const library = @import("library.zig"); // what a folder of charts holds
@@ -538,6 +539,61 @@ const Follow = struct {
     }
 };
 
+/// Per-frame phase timings for $LOOKOUT_PHASE_PROF. Rows accumulate in a fixed
+/// buffer and the whole file is rewritten every `flush_every` frames, because
+/// nothing tells a renderer when the run has ended — an .app has no stderr to
+/// stream to and no natural place to close a file.
+pub const FrameProf = struct {
+    pub const Row = struct {
+        prepare_us: i64,
+        style_us: i64,
+        trim_us: i64,
+        overlay_us: i64,
+        ct_us: i64,
+        /// ct_us split three ways (ct/host.zig render): the map/tile pump, the
+        /// GPU upload of a changed scene, and the encode+present that blocks on
+        /// the swapchain's drawable.
+        ct_update_us: i64,
+        ct_upload_us: i64,
+        ct_present_us: i64,
+    };
+    const cap = 4096;
+    const flush_every = 60;
+
+    path: []const u8,
+    rows: [cap]Row = undefined,
+    n: usize = 0,
+    since_flush: usize = 0,
+
+    pub fn record(self: *FrameProf, row: Row) void {
+        if (self.n < cap) {
+            self.rows[self.n] = row;
+            self.n += 1;
+        }
+        self.since_flush += 1;
+        if (self.since_flush >= flush_every) {
+            self.since_flush = 0;
+            self.write();
+        }
+    }
+
+    pub fn write(self: *FrameProf) void {
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(std.heap.c_allocator);
+        buf.appendSlice(std.heap.c_allocator, "prepare_us,style_us,trim_us,overlay_us,ct_us,ct_update_us,ct_upload_us,ct_present_us\n") catch return;
+        var line: [192]u8 = undefined;
+        for (self.rows[0..self.n]) |r| {
+            const s = std.fmt.bufPrint(&line, "{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
+                r.prepare_us,   r.style_us,     r.trim_us,       r.overlay_us, r.ct_us,
+                r.ct_update_us, r.ct_upload_us, r.ct_present_us,
+            }) catch continue;
+            buf.appendSlice(std.heap.c_allocator, s) catch return;
+        }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.path, .data = buf.items }) catch {};
+    }
+};
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -576,6 +632,12 @@ pub const Lookout = struct {
 
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
     last_change_ms: i64 = 0, // when the view last moved
+    /// When a frame last went out for own ship's own motion (see SHIP_FRAME_MS).
+    last_ship_frame_ms: i64 = 0,
+    /// A style the host supplied, drawn instead of the engine's portrayal.
+    /// Null means the chart is lookout's own. While one is set, the mariner's
+    /// display settings do not shape the chart: it is the publisher's.
+    alt_style: ?[]u8 = null,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -670,6 +732,15 @@ pub const Lookout = struct {
     /// The physical size multiplier for symbols and text (S-52 sizes are in
     /// millimetres). Uniform-only in charttable, so it never rebuilds a style.
     render_size_scale: f32 = 1.0,
+
+    /// $LOOKOUT_PHASE_PROF=<path>: per-frame phase timings, written as CSV.
+    /// Null unless asked for, and every probe is behind `if (prof)`.
+    frame_prof: ?FrameProf = null,
+    prof_checked: bool = false,
+    /// The SCAMIN latitude the current style was built at. See STYLE_LAT_DRIFT.
+    style_lat: f64 = 0,
+    /// ensureStyle's own microseconds, handed up from prepareFrame.
+    prof_style_us: i64 = 0,
 
     // ---- lifecycle ----------------------------------------------------------
     /// Open ONE baked chart (.pmtiles).
@@ -904,8 +975,11 @@ pub const Lookout = struct {
         // retried on every frame that follows.
         self.sprite_scheme = scheme;
         self.sprite_density = density;
-        var keybuf: [32]u8 = undefined;
-        const key = std.fmt.bufPrint(&keybuf, "sprite-{s}@{d:.2}", .{ schemeName(scheme), density }) catch "sprite-day@x";
+        // "sprite-mln-", not "sprite-": the GPU-path atlas cached under
+        // `sprite-<scheme>@<density>` is baked at 8 px/mm, this sheet at 2.83.
+        // Sharing the key draws every symbol 2.8x too large.
+        var keybuf: [40]u8 = undefined;
+        const key = std.fmt.bufPrint(&keybuf, "sprite-mln-{s}@{d:.2}", .{ schemeName(scheme), density }) catch "sprite-mln-day@x";
         var pn: [40]u8 = undefined;
         var jn: [40]u8 = undefined;
         var sn: [40]u8 = undefined;
@@ -1569,6 +1643,11 @@ pub const Lookout = struct {
         // to the archives, and builds one in memory if there is none. Where that
         // file lives, and whether it is reusable, is the engine's business.
         if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, &c, &err) == cc.TILE57_OK and c != null) {
+            // charttable follows the style spec's 512 px world tile, while
+            // S-101 lays its linestyle figures out in 256-px-per-tile space.
+            // The composed tiles' linestyle rhythms are restated in ours. The
+            // same seam ct/host.zig's toCt converts.
+            cc.tile57_compose_set_px_per_tile(c, 512);
             self.compose_result = c;
         } else {
             std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
@@ -1736,6 +1815,7 @@ pub const Lookout = struct {
         // read the compositor, and its deinit is what stops them.
         self.ct.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
+        if (self.alt_style) |s| self.alloc.free(s);
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
@@ -1770,10 +1850,10 @@ pub const Lookout = struct {
     /// For a library we fit the MOST DETAILED cell (smallest bounds area), not
     /// the first alphabetically: a US ENC's first cell is usually a tiny-scale
     /// EEZ overview (e.g. US1EEZ1M) that opens as an empty ocean rectangle. A
-    /// harbour/approach cell lands the user on actual chart content instead.
+    /// harbor/approach cell lands the user on actual chart content instead.
     /// The pose a host should open with when it has nothing saved. fitChart
     /// alone lands on the smallest bounded CELL, which in a 2500-cell library
-    /// is an arbitrary harbour; keep that centre but pull back to an overview.
+    /// is an arbitrary harbor; keep that centre but pull back to an overview.
     /// Hosts persist the pose themselves (each has its own store) — this is
     /// the one piece of the policy worth having in a single place.
     const DEFAULT_VIEW_ZOOM = 5.0;
@@ -2006,9 +2086,23 @@ pub const Lookout = struct {
     }
 
     /// Advance camera animations by `dt` seconds; call each frame while animating.
+    ///
+    /// This does NOT touch the style. It used to call deriveLive() "to refresh
+    /// the SCAMIN / display-scale gates", which sets `style_dirty` — so an
+    /// eased zoom or a coasting fling rebuilt the whole style and re-laid-out
+    /// every resident tile, sixty times a second. Measured on the app over a
+    /// six-level zoom sweep, that was 17.3 ms of a 20 ms frame, against 2.5 ms
+    /// for the render itself.
+    ///
+    /// The premise was wrong: nothing in the style depends on the camera's
+    /// ZOOM. SCAMIN is carried as one bucket layer per denominator with a
+    /// native fractional minzoom, which the layout bakes into each vertex's
+    /// zoom window and the shader gates against a uniform — which is exactly
+    /// why buckets were chosen over a filter gate that WOULD have needed a
+    /// rebuild at each crossing. The one camera-dependent style input is
+    /// scaminLat, and `styleLatMoved` handles that.
     pub fn tickAnim(self: *Lookout, dt: f64) void {
         self.cam.tick(dt);
-        self.deriveLive(); // zoom moved: refresh SCAMIN / display-scale gates
         self.markDirty();
     }
 
@@ -2077,6 +2171,40 @@ pub const Lookout = struct {
         self.api_mu.unlock();
     }
 
+    /// Draw a host-supplied style instead of the engine's portrayal, or null
+    /// for lookout's own chart. The bytes are copied.
+    pub fn setAltStyle(self: *Lookout, json: ?[]const u8) !void {
+        if (self.alt_style) |old| self.alloc.free(old);
+        self.alt_style = null;
+        if (json) |j| self.alt_style = try self.alloc.dupe(u8, j);
+        self.style_dirty = true;
+        self.markDirty();
+    }
+
+    pub fn altStyleActive(self: *const Lookout) bool {
+        return self.alt_style != null;
+    }
+
+    pub const TileRequestFn = ctprovided.RequestFn;
+    pub const TileStatus = ctprovided.Status;
+
+    /// Where an alt style's tiles are asked for. The host resolves the url
+    /// from the style it fetched and answers with `respondTile`. See
+    /// ct/provided.zig for why the fetching lives up there.
+    pub fn setTileProvider(self: *Lookout, cb: ?TileRequestFn, user: ?*anyopaque) void {
+        self.ct.setTileProvider(cb, user);
+    }
+
+    /// The host's answer to one ask, from any thread.
+    ///
+    /// No markDirty: the tile is still WANTED by the map until it decodes, so
+    /// the frame loop is already running and will pick the bytes up on its
+    /// next pass. Reaching for the dirty flag from a network thread would be
+    /// touching render state without the lock for no gain.
+    pub fn respondTile(self: *Lookout, req_id: u64, bytes: []const u8, status: TileStatus) void {
+        self.ct.respondTile(req_id, bytes, status);
+    }
+
     /// Rebuild the style and hand it to charttable, if the mariner moved.
     ///
     /// This is the whole cost of a mariner change on this renderer: the tiles
@@ -2086,8 +2214,20 @@ pub const Lookout = struct {
     fn ensureStyle(self: *Lookout) void {
         if (!self.style_dirty) return;
         self.style_dirty = false;
+        // Stamped for BOTH paths, before the alt-style return: it is what stops
+        // styleLatMoved re-dirtying the style every frame, and an alt style is
+        // pushed through the same flag.
+        self.style_lat = self.scaminLat();
+        if (self.alt_style) |j| {
+            self.ct.setStyleJson(j) catch |e| {
+                std.debug.print("alt style: {s}\n", .{@errorName(e)});
+            };
+            return;
+        }
         var m = buildMarinerFrom(self.mariner, self.mariner.scheme);
-        m.size_scale = self.render_size_scale;
+        // size_scale is the style's physical calibration and ct/style.zig owns
+        // it. The mariner's own multiplier goes to the renderer's uniform
+        // below, so changing it never rebuilds the style.
         m.device_scale = 1.0; // the camera is in LOGICAL px; density lives in the projection
         self.ct.setStyle(.{
             .mariner = m,
@@ -2137,14 +2277,48 @@ pub const Lookout = struct {
     /// Build whatever the current view needs, and wait for it. The frame loop
     /// never calls this — charttable rebuilds on its own worker — but a
     /// snapshot has to have the picture before it reads the pixels.
+    /// How long `build` will wait for the renderer to go idle, in 2 ms polls.
+    /// A ceiling, not a budget: reaching it means something never settled, and
+    /// the frame goes out with whatever HAS landed rather than hanging.
+    const BUILD_SPIN_MAX: u32 = 5000;
+
     pub fn build(self: *Lookout) !void {
         self.ensureAtlases();
         self.ensureStyle();
         self.ct.update();
+        const t0 = clock.ticksMs();
         var spins: u32 = 0;
-        while (!self.ct.idle() and spins < 5000) : (spins += 1) {
+        while (!self.ct.idle() and spins < BUILD_SPIN_MAX) : (spins += 1) {
             self.ct.update();
             @import("lock.zig").sleepMs(2);
+        }
+        // $LOOKOUT_TIMING=1: say how long that took and, crucially, WHICH WAY
+        // it ended. Hitting the ceiling is a stall, not slow work, and the two
+        // are indistinguishable from the outside — both just show the mariner
+        // a spinner (concerns C17).
+        if (std.c.getenv("LOOKOUT_TIMING") != null) {
+            std.debug.print("timing: build {d} ms, {d} spins{s}\n", .{
+                clock.ticksMs() - t0,
+                spins,
+                if (spins >= BUILD_SPIN_MAX) " — HIT THE CEILING, never went idle" else "",
+            });
+            // WHICH condition held it open. "Not idle" is six different bugs
+            // and they are not distinguishable from the outside.
+            if (spins >= BUILD_SPIN_MAX) {
+                const m = &self.ct.m;
+                std.debug.print(
+                    "timing:   building={} dirty={} partial={} animating={} needsRebuild={} pendingWanted={d} tilesBusy={}\n",
+                    .{
+                        m.building,           m.dirty,
+                        m.partial,            m.cam.animating(),
+                        m.needsRebuild(),     m.pendingWanted(),
+                        self.ct.tiles.busy(),
+                    },
+                );
+                std.debug.print("timing:   camZoom={d:.3} buildZoom={d:.3} covZoom={d:.3}\n", .{
+                    m.cam.zoom, m.buildZoom(), m.cov_zoom,
+                });
+            }
         }
     }
 
@@ -2170,20 +2344,83 @@ pub const Lookout = struct {
         // panning into a coarser area lowers the per-view max and eases the zoom in.
         self.updateZoomLimits();
         self.ensureAtlases();
+        if (self.styleLatMoved()) self.style_dirty = true;
+        const ts = if (self.frame_prof != null) clock.ticksUs() else 0;
         self.ensureStyle();
+        self.prof_style_us = if (self.frame_prof != null) clock.ticksUs() - ts else 0;
+    }
+
+    /// How far the SCAMIN latitude may drift before the style is stale.
+    ///
+    /// SCAMIN cutoffs are latitude-dependent, so the built style is only right
+    /// for the latitude it was built at. Over a COMPOSED library that is the
+    /// library centre and never moves; with a single chart open it follows the
+    /// view, which is why this exists at all. A degree changes cos(lat) by well
+    /// under a percent at any working latitude — far less than the gap between
+    /// adjacent SCAMIN denominators — so this fires when a mariner has genuinely
+    /// travelled, not while they pan around a harbor.
+    const STYLE_LAT_DRIFT = 1.0;
+
+    fn styleLatMoved(self: *Lookout) bool {
+        return @abs(self.scaminLat() - self.style_lat) > STYLE_LAT_DRIFT;
     }
 
     pub fn render(self: *Lookout) !bool {
         if (self.loadingPulse()) return false;
+        // $LOOKOUT_PHASE_PROF splits the frame into its four phases. The
+        // offscreen harnesses measure a settled camera and report 5.68 ms; the
+        // app under a moving camera measures 18 ms median, and this says which
+        // phase the difference is in. Read once, here, because a host creates
+        // the handle through several entry points and this is the one they all
+        // reach.
+        if (!self.prof_checked) {
+            self.prof_checked = true;
+            if (std.c.getenv("LOOKOUT_PHASE_PROF")) |p| {
+                self.frame_prof = .{ .path = std.mem.span(p) };
+            }
+        }
+        const prof = self.frame_prof != null;
+        const t0 = if (prof) clock.ticksUs() else 0;
         self.prepareFrame();
+        const t1 = if (prof) clock.ticksUs() else 0;
         self.serviceTrim();
+        const t2 = if (prof) clock.ticksUs() else 0;
         self.updateOverlay();
+        const t3 = if (prof) clock.ticksUs() else 0;
         const ok = self.ct.render();
+        if (self.frame_prof) |*p| p.record(.{
+            .prepare_us = t1 - t0,
+            .style_us = self.prof_style_us,
+            .trim_us = t2 - t1,
+            .overlay_us = t3 - t2,
+            .ct_us = clock.ticksUs() - t3,
+            .ct_update_us = self.ct.prof_update_us,
+            .ct_upload_us = self.ct.prof_upload_us,
+            .ct_present_us = self.ct.prof_present_us,
+        });
         // A SKIPPED frame (swapchain saturated) must not clear the flag: the
         // pending content still needs a successful present.
-        if (ok) self.view_dirty = false;
+        if (ok) {
+            self.view_dirty = false;
+            // Own ship is drawn in EVERY frame, whatever raised it, so any
+            // frame that lands restarts the ship clock (see SHIP_FRAME_MS).
+            // Stamping only the ship's own frames would let a panning gesture
+            // and the boat interleave into double the frames.
+            self.last_ship_frame_ms = clock.ticksMs();
+        }
         return ok;
     }
+
+    /// How often own ship's own motion is allowed to raise a frame. 10 Hz is
+    /// what a chartplotter shows and is far more than the mariner can see: at
+    /// 6 knots the boat covers 0.3 m in 100 ms, which is under a pixel at any
+    /// harbor scale. Drawing it at display rate instead cost 11% of a core
+    /// for motion nobody could perceive.
+    ///
+    /// This gates the BOAT only. A gesture, a landing tile, a style change and
+    /// a resize are all still immediate — those are the mariner's own actions
+    /// and any delay in them is felt at once.
+    const SHIP_FRAME_MS: i64 = 100;
 
     /// True while the view needs another frame (state changed, building, loading).
     pub fn needsRedraw(self: *Lookout) bool {
@@ -2193,15 +2430,18 @@ pub const Lookout = struct {
         // (and the rebuild it forces) would never run.
         const lw, const lh = self.logicalSize();
         if (self.cam.vw != lw or self.cam.vh != lh) return true;
-        // A plugin can post geometry at any moment, from its own thread, with
-        // no gesture behind it.
-        // Own ship's display position walks between fixes: the symbol moves,
-        // and while following the chart slides under it. No gesture behind it.
-        self.tickShip();
-        if (self.overlayWantsFrame()) return true;
-        if (self.followWantsFrame()) return true;
+        // Everything the mariner did, and everything the renderer owes: no gate.
         if (self.loading or self.recomposing or self.view_dirty or self.style_dirty) return true;
-        return self.ct.needsRedraw();
+        if (self.ct.needsRedraw()) return true;
+        // What the BOAT did. Own ship's display position walks between fixes,
+        // a plugin can post geometry from its own thread, and under follow the
+        // chart slides beneath the boat — none of it with a gesture behind it,
+        // and all of it paced rather than drawn as fast as the display allows.
+        self.tickShip();
+        if (self.overlayWantsFrame() or self.followWantsFrame()) {
+            return clock.ticksMs() - self.last_ship_frame_ms >= SHIP_FRAME_MS;
+        }
+        return false;
     }
 
     pub fn isBuilding(self: *Lookout) bool {
@@ -2589,6 +2829,7 @@ test {
     // builder and the composed-tile provider carry their tests.
     _ = cstyle;
     _ = @import("ct/tiles.zig");
+    _ = ctprovided;
     _ = cthost;
 }
 

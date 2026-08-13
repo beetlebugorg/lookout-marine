@@ -78,6 +78,13 @@ struct SettingsView: View {
                     if case .success(let urls) = result { model.importRasterCharts(urls) }
                 }
             )
+            // A third importer, so a third background node — see above.
+            .background(
+                Color.clear.fileImporter(isPresented: $model.showSettingsStyleImporter,
+                              allowedContentTypes: [.item]) { result in
+                    if case .success(let url) = result { model.importChartStyle(url) }
+                }
+            )
             #endif
     }
 
@@ -290,8 +297,89 @@ private struct ChartsSections: View {
     /// Held here so the Cancel button reads "Stopping…" while tile57 finishes
     /// the charts already in flight.
     @State private var cancellingBake = false
+    @State private var newChartLink = ""
 
     var body: some View {
+        // Which chart is DRAWN. Lookout's own chart — built from the sets
+        // below — is the default entry; a link added here is an alternative
+        // chart, rendered instead of it. One is picked at a time: two whole
+        // charts cannot share the water.
+        Section {
+            chartPickRow(name: "Lookout chart", detail: "Built from your chart sets below",
+                         picked: model.activeChartLink == nil) { model.selectChartLink(nil) }
+            ForEach(model.chartLinks) { link in
+                HStack(spacing: 8) {
+                    chartPickRow(name: link.name, detail: link.url,
+                                 picked: model.activeChartLink == link.url) { model.selectChartLink(link.url) }
+                    Spacer(minLength: 4)
+                    // Only a chart holding a FROZEN document has anything to
+                    // refresh: a tile link, whose wrapper style was generated
+                    // here from what the publisher served the day it was
+                    // added, and a style file, whose text was read then. A
+                    // style link is fetched fresh on every push and has
+                    // nothing to re-read.
+                    if link.doc != nil {
+                        Button { model.refreshChartLink(link.url) } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .disabled(model.chartLinkBusy)
+                        .help("Read this chart again — its tile urls, zooms and credit")
+                        .accessibilityLabel("Refresh \(link.name)")
+                    }
+                    Button { model.removeChartLink(link.url) } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Remove \(link.name)")
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("https://…/style.json", text: $newChartLink)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .onSubmit { submitChartLink() }
+                if model.chartLinkBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Add") { submitChartLink() }
+                        .disabled(newChartLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                    // A style can also be a file the mariner already has —
+                    // saved from a publisher, or written themselves. Same
+                    // chart either way, so it goes in the same list rather
+                    // than a section of its own.
+                    Button { model.addChartStyleFile() } label: {
+                        Image(systemName: "folder")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Add a style file from this device")
+                    .accessibilityLabel("Add a chart style file")
+                }
+            }
+            if let e = model.chartLinkError {
+                Label(e, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: { Text("Chart") } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("An online map can be the chart: paste its MapLibre style link, or a TileJSON tile link. A style you already have on this device can be added with the folder button. A style draws exactly what its publisher styled; bare tiles get a plain generated look. Either way the content comes from whoever made it — depths, symbols and warnings included.")
+                // Said only while one is picked, because that is when the rest
+                // of this window stops working and the mariner is owed a
+                // reason. Every other pane — colours, depths, symbols, text —
+                // shapes Lookout's own chart; a linked chart is drawn the way
+                // its publisher styled it and nothing here reaches inside it.
+                if model.activeChartLink != nil {
+                    Text("While a linked chart is picked, the display, depth and symbol settings do not shape it — you are seeing its publisher's own portrayal.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
         // The sets aboard. A set is a folder the mariner added; switching one
         // off keeps it aboard and takes it out of the chart. Every set here
         // has been looked through and holds charts, so none of them is a dead
@@ -369,6 +457,32 @@ private struct ChartsSections: View {
 
     private func displayName(_ path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+
+    private func submitChartLink() {
+        let raw = newChartLink
+        newChartLink = ""
+        model.addChartLink(raw)
+    }
+
+    @ViewBuilder
+    private func chartPickRow(name: String, detail: String, picked: Bool, pick: @escaping () -> Void) -> some View {
+        Button(action: pick) {
+            HStack(spacing: 8) {
+                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(picked ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).fontWeight(.medium).lineLimit(1)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

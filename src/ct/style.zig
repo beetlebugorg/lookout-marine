@@ -40,6 +40,23 @@ pub const tiles_url = source_name ++ "/{z}/{x}/{y}";
 pub const sprite_url = "lookout://sprite";
 pub const glyphs_url = "lookout://glyphs/{fontstack}/{range}.pbf";
 
+/// The style's sizes are ALREADY in drawn pixels, so this stays 1.0.
+///
+/// Checked by dumping a built style (LOOKOUT_STYLE_DUMP) rather than reasoned
+/// about, because reasoning about it got the wrong answer twice:
+///
+///   icon-size   ["*", s, 1]                       -- 1 = sample the cell 1:1
+///   line-width  ["*", s, ["get", "width_px"]]     -- the tile's own px
+///   text-size   ["*", s, 10]                      -- px
+///
+/// `s` is this multiplier. The sheet states a real pixelRatio per cell (1 at a
+/// 1x bake, 2 at 2x), so a cell already draws at its authored logical size and
+/// nothing here has to correct for density. Anything other than 1.0 scales
+/// symbols, labels AND line widths together, which is only ever right if the
+/// whole chart is meant to be drawn larger — the mariner's own size control,
+/// which rides charttable's uniform instead and costs no style rebuild.
+pub const PHYSICAL_SIZE_SCALE: f64 = 1.0;
+
 pub const Error = error{ TemplateFailed, BuildFailed, ColortablesFailed };
 
 /// Everything the style depends on. A change to any field means a rebuild.
@@ -104,6 +121,11 @@ pub fn build(inputs: Inputs) Error!Style {
     // colour token from `m.scheme`. A template built for night with a mariner
     // left on day yields a day chart.
     var m = inputs.mariner;
+    // The catalogue-to-physical calibration (see PHYSICAL_SIZE_SCALE). The
+    // mariner's OWN size multiplier does not belong here — it rides
+    // charttable's uniform, where it costs no style rebuild — so this field
+    // carries the calibration alone and is not the caller's to set.
+    m.size_scale = PHYSICAL_SIZE_SCALE;
 
     var out: [*c]u8 = null;
     var out_len: usize = 0;
@@ -122,6 +144,15 @@ pub fn build(inputs: Inputs) Error!Style {
         &out_len,
         &err,
     ) != cc.TILE57_OK) return Error.BuildFailed;
+
+    // LOOKOUT_STYLE_DUMP=<path>: write the built style out. The sizes in it
+    // (icon-size, line-width, text-size) are the only way to see what unit the
+    // engine is speaking, and guessing at that is what made the symbols wrong
+    // twice.
+    if (std.c.getenv("LOOKOUT_STYLE_DUMP")) |p| {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = std.mem.span(p), .data = out[0..out_len] }) catch {};
+    }
 
     return .{ .json = out[0..out_len] };
 }

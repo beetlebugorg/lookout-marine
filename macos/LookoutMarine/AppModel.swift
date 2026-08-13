@@ -248,6 +248,7 @@ final class AppModel: ObservableObject {
     /// never got that treatment and simply did nothing.
     @Published var showSettingsImporter = false
     @Published var showSettingsRasterImporter = false
+    @Published var showSettingsStyleImporter = false
     @Published var showSettings = false
     /// Which settings section shows, by its core name — "display", "depths",
     /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
@@ -303,6 +304,31 @@ final class AppModel: ObservableObject {
         // The panel's list. The open itself does not wait on this: it takes
         // the cheap walk in initialChartPaths and starts drawing.
         loadChartSets()
+        // Which chart the mariner last sailed on. Only read here — pushing it
+        // needs a handle, which chartDidOpen has and this does not.
+        loadChartLinks()
+    }
+
+    /// A chart handle has just been created. An alt style does not survive the
+    /// old one — the style, its sources and the tile callback all belong to a
+    /// handle — so a linked chart is put back the same way the raster charts
+    /// are replayed above it.
+    func chartDidOpen() {
+        // Dev hook, mirroring $LOOKOUT_OPEN: a style url or a path to a style
+        // file draws as the chart at launch. The alt-style path otherwise
+        // needs a form, a paste and a click, which no screenshot run can do.
+        if let spec = ProcessInfo.processInfo.environment["LOOKOUT_CHART_LINK"],
+           !spec.isEmpty {
+            lkLog("alt style: $LOOKOUT_CHART_LINK=\(spec)")
+            if spec.hasPrefix("/") {
+                importChartStyle(URL(fileURLWithPath: spec))
+            } else {
+                addChartLink(spec)
+            }
+            return
+        }
+        guard activeChartLink != nil else { return }
+        pushChartLink()
     }
 
     // MARK: - Opening charts
@@ -788,6 +814,355 @@ final class AppModel: ObservableObject {
         #else
         presentOpenPanel()
         #endif
+    }
+
+    // MARK: - Chart links (an online map AS the chart)
+
+    /// One chart added by link: a MapLibre style url. Picking it renders that
+    /// style INSTEAD of the built-in chart — Lookout's own chart is just the
+    /// default entry in the same list.
+    struct ChartLink: Codable, Identifiable, Hashable {
+        var url: String
+        var name: String
+        /// For a TileJSON link: the wrapper style generated at add time (the
+        /// tiles need a style to draw, and a tile source doesn't bring one).
+        /// nil for a real style link — that one is fetched fresh each time.
+        var doc: String? = nil
+        var id: String { url }
+    }
+
+    @Published var chartLinks: [ChartLink] = []
+    /// The picked link's url; nil draws the built-in chart.
+    @Published var activeChartLink: String? = nil
+    @Published var chartLinkBusy = false
+    @Published var chartLinkError: String? = nil
+
+    private static let chartLinksKey = "lookout.chartlinks"
+    private static let chartLinkActiveKey = "lookout.chartlinks.active"
+
+    func loadChartLinks() {
+        if let data = UserDefaults.standard.data(forKey: Self.chartLinksKey),
+           let links = try? JSONDecoder().decode([ChartLink].self, from: data) {
+            chartLinks = links
+        }
+        let active = UserDefaults.standard.string(forKey: Self.chartLinkActiveKey)
+        activeChartLink = chartLinks.contains { $0.url == active } ? active : nil
+    }
+
+    private func saveChartLinks() {
+        if let data = try? JSONEncoder().encode(chartLinks) {
+            UserDefaults.standard.set(data, forKey: Self.chartLinksKey)
+        }
+        UserDefaults.standard.set(activeChartLink, forKey: Self.chartLinkActiveKey)
+    }
+
+    /// Draw whatever is picked now.
+    ///
+    /// Unlike the MapLibre shell this was ported from, the STYLE IS FETCHED
+    /// HERE: lookout takes JSON, not a url, and serves the tiles back through
+    /// this app's own networking (see AltChartStyle.swift). So a style link is
+    /// re-read on every push — which is also what keeps a publisher's edits
+    /// showing up without a refresh.
+    func pushChartLink() {
+        guard let active = activeChartLink else {
+            controller?.setAltChartStyle(nil)
+            return
+        }
+        let link = chartLinks.first { $0.url == active }
+        // A tile link carries the wrapper generated when it was added; a style
+        // link is the publisher's own document and is fetched.
+        if let doc = link?.doc {
+            Task { [weak self] in
+                let resolved = await AltChartStyle.resolve(json: doc)
+                await MainActor.run { self?.applyAltStyle(resolved, for: active) }
+            }
+            return
+        }
+        Task { [weak self] in
+            let resolved = await Self.fetchStyle(active)
+            await MainActor.run { self?.applyAltStyle(resolved, for: active) }
+        }
+    }
+
+    /// Hand a resolved style to the chart, or say why not.
+    ///
+    /// `for` guards the race the mariner can actually cause: picking a second
+    /// chart while the first is still being fetched. Without it the slower
+    /// fetch wins whenever it lands last, and the chart is not the one with
+    /// the tick beside it.
+    private func applyAltStyle(_ style: AltChartStyle?, for url: String) {
+        guard activeChartLink == url else { return }
+        guard let style else {
+            chartLinkError = "That chart didn't answer. Showing the Lookout chart."
+            activeChartLink = nil
+            saveChartLinks()
+            controller?.setAltChartStyle(nil)
+            return
+        }
+        chartLinkError = nil
+        controller?.setAltChartStyle(style)
+    }
+
+    private static func fetchStyle(_ link: String) async -> AltChartStyle? {
+        guard let url = URL(string: link),
+              let data = try? await load(url),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return await AltChartStyle.resolve(json: text)
+    }
+
+    /// A style document, from the network or from disk. URLSession does not
+    /// answer file urls, and a mariner's own style.json is a real way to get a
+    /// chart aboard — offline, or one they wrote themselves.
+    private static func load(_ url: URL) async throws -> Data {
+        if url.isFileURL {
+            // The sandbox hands access over with the pick, and takes it back
+            // when the scope closes. Harmless where no scope is held.
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            return try Data(contentsOf: url)
+        }
+        let (data, resp) = try await URLSession.shared.data(from: url)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return data
+    }
+
+    /// Add a chart style the mariner has on disk. macOS opens a panel; iOS
+    /// raises the form's own importer.
+    func addChartStyleFile() {
+        #if os(iOS)
+        showSettingsStyleImporter = true
+        #else
+        presentChartStylePanel()
+        #endif
+    }
+
+    /// A style file the mariner picked. Read and checked here, like a link:
+    /// a file that is not a MapLibre style is refused at the form.
+    func importChartStyle(_ url: URL) {
+        chartLinkError = nil
+        chartLinkBusy = true
+        Task { [weak self] in
+            let found = await Self.probeChartLink(url)
+            await MainActor.run {
+                guard let self else { return }
+                guard let found else {
+                    self.chartLinkBusy = false
+                    self.chartLinkError = "That file isn't a MapLibre style."
+                    return
+                }
+                self.finishAddChartLink(url: found.url, name: found.name, doc: found.doc)
+            }
+        }
+    }
+
+    /// Add a chart by its style link. The link is read once here — a dead or
+    /// non-style link is refused NOW, at the form, not discovered later as a
+    /// blank chart. The new chart is picked immediately: adding it is the
+    /// request to sail on it.
+    func addChartLink(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        chartLinkError = nil
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            chartLinkError = "That isn't a link."
+            return
+        }
+        if chartLinks.contains(where: { $0.url == trimmed }) {
+            selectChartLink(trimmed)
+            return
+        }
+        chartLinkBusy = true
+        Task { [weak self] in
+            let found = await Self.probeChartLink(url)
+            await MainActor.run {
+                guard let self else { return }
+                guard let found else {
+                    self.chartLinkBusy = false
+                    self.chartLinkError = "No chart style or tile source at that link."
+                    return
+                }
+                self.finishAddChartLink(url: found.url, name: found.name, doc: found.doc)
+            }
+        }
+    }
+
+    /// Read a link and work out what chart it is: a whole MapLibre style (keep
+    /// the url and fetch it each time), or a TileJSON — tiles with no style of
+    /// their own.
+    ///
+    /// A publisher shipping a TileJSON almost always ships the style beside it,
+    /// so the sibling `style.json` is probed first: that is the look the
+    /// mariner pasted the link expecting. Only a truly style-less source gets
+    /// the generated wrapper.
+    ///
+    /// Shared by add and refresh, so the two can never disagree about what a
+    /// link means.
+    private static func probeChartLink(_ url: URL) async -> (url: String, name: String, doc: String?)? {
+        let raw = url.absoluteString
+        do {
+            let data = try await load(url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            // A style off the disk has to carry its TEXT, not its path: the
+            // path may not be readable next launch (a sandbox grants access to
+            // what the mariner picked, for as long as they are in the app),
+            // and a chart that stops working on relaunch is worse than one
+            // that cannot be refreshed.
+            if url.isFileURL {
+                guard obj["layers"] != nil, obj["version"] != nil else { return nil }
+                let n = obj["name"] as? String
+                let named = (n?.isEmpty == false ? n! : url.deletingPathExtension().lastPathComponent)
+                return (raw, named, String(data: data, encoding: .utf8))
+            }
+            let n = obj["name"] as? String
+            let named = (n?.isEmpty == false ? n! : (url.host ?? raw))
+            if obj["layers"] != nil, obj["version"] != nil {
+                return (raw, named, nil)
+            }
+            if obj["tiles"] != nil || obj["tilejson"] != nil {
+                if let sibling = await siblingStyle(of: url) {
+                    // The entry becomes the style link it will draw.
+                    return (sibling.url, sibling.name, nil)
+                }
+                return (raw, named, tileJSONWrapperStyle(link: raw, tilejson: obj))
+            }
+        } catch {}
+        return nil
+    }
+
+    /// Re-read a linked chart and rebuild what was frozen when it was added.
+    ///
+    /// A style link needs nothing: it is fetched fresh on every push. A
+    /// TileJSON link does — its wrapper style was GENERATED here from the tile
+    /// urls, zoom range and attribution the publisher served that day, so when
+    /// they move their tiles or extend their zooms, that wrapper is the one
+    /// thing left in the app still describing the old service. The only cure
+    /// used to be remove-and-re-add, which also throws away the mariner's pick.
+    ///
+    /// A link that does not answer leaves the chart exactly as it was: a lost
+    /// connection must not cost the mariner the chart they are sailing on.
+    func refreshChartLink(_ url: String) {
+        guard chartLinks.contains(where: { $0.url == url }), let parsed = URL(string: url) else { return }
+        chartLinkError = nil
+        chartLinkBusy = true
+        let wasPicked = activeChartLink == url
+        Task { [weak self] in
+            let found = await Self.probeChartLink(parsed)
+            await MainActor.run {
+                guard let self else { return }
+                self.chartLinkBusy = false
+                guard let found else {
+                    self.chartLinkError = "That link didn't answer. The chart is unchanged."
+                    return
+                }
+                guard let i = self.chartLinks.firstIndex(where: { $0.url == url }) else { return }
+                self.chartLinks[i] = .init(url: found.url, name: found.name, doc: found.doc)
+                if wasPicked {
+                    // Redraw on the refreshed document. selectChartLink would
+                    // no-op on an unchanged url and leave the old wrapper up.
+                    self.activeChartLink = found.url
+                    self.saveChartLinks()
+                    self.pushChartLink()
+                } else {
+                    self.saveChartLinks()
+                }
+            }
+        }
+    }
+
+    private func finishAddChartLink(url: String, name: String, doc: String?) {
+        chartLinkBusy = false
+        if !chartLinks.contains(where: { $0.url == url }) {
+            chartLinks.append(.init(url: url, name: name, doc: doc))
+        }
+        selectChartLink(url)
+    }
+
+    /// The style.json living beside a TileJSON, when the publisher shipped
+    /// one. Returns its url and name only if it parses as a MapLibre style.
+    private static func siblingStyle(of tilejsonURL: URL) async -> (url: String, name: String)? {
+        let candidate = tilejsonURL.deletingLastPathComponent().appendingPathComponent("style.json")
+        guard candidate.absoluteString != tilejsonURL.absoluteString else { return nil }
+        guard let (data, resp) = try? await URLSession.shared.data(from: candidate),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["layers"] != nil, obj["version"] != nil else { return nil }
+        let n = obj["name"] as? String
+        return (candidate.absoluteString, (n?.isEmpty == false ? n! : (candidate.host ?? candidate.absoluteString)))
+    }
+
+    /// A style for a bare tile source. Raster tiles draw as imagery. Vector
+    /// tiles draw each advertised layer in a legible generic scheme — water
+    /// fills, contour lines, point marks — honest geometry, not the
+    /// publisher's portrayal (a tile source doesn't carry one).
+    private static func tileJSONWrapperStyle(link: String, tilejson: [String: Any]) -> String {
+        let vectorLayers = tilejson["vector_layers"] as? [[String: Any]] ?? []
+        var layers: [[String: Any]] = [
+            ["id": "bg", "type": "background", "paint": ["background-color": "#c9e2f0"]],
+        ]
+        var source: [String: Any] = ["url": link]
+        if vectorLayers.isEmpty {
+            source["type"] = "raster"
+            layers.append(["id": "tiles", "type": "raster", "source": "tiles"])
+        } else {
+            source["type"] = "vector"
+            // Familiar marine layers get a chart-like look; anything else a
+            // distinct deterministic hue. Either way this is honest geometry,
+            // not the publisher's portrayal.
+            let hues = [210.0, 30.0, 120.0, 275.0, 0.0, 165.0, 55.0, 320.0]
+            for (i, vl) in vectorLayers.enumerated() {
+                guard let lid = vl["id"] as? String else { continue }
+                let low = lid.lowercased()
+                var fill = "hsla(\(hues[i % hues.count]),55%,62%,0.35)"
+                var line = "hsl(\(hues[i % hues.count]),60%,38%)"
+                var point = "hsl(\(hues[i % hues.count]),65%,40%)"
+                var pointRadius = 2.5
+                if low.contains("depare") || low.contains("depth") || low.contains("bathy") {
+                    fill = "hsla(205,60%,70%,0.5)"; line = "hsl(205,45%,55%)"; point = "hsl(205,45%,45%)"
+                } else if low.contains("contour") {
+                    fill = "hsla(205,30%,60%,0.15)"; line = "hsl(205,35%,55%)"; point = "hsl(205,35%,45%)"
+                } else if low.contains("sound") {
+                    point = "hsl(210,25%,35%)"; pointRadius = 1.5
+                    fill = "hsla(210,25%,55%,0.2)"; line = "hsl(210,25%,55%)"
+                } else if low.contains("land") || low.contains("coast") {
+                    fill = "hsla(45,45%,70%,0.9)"; line = "hsl(45,30%,40%)"; point = "hsl(45,30%,40%)"
+                }
+                layers.append(["id": "\(lid)-fill", "type": "fill", "source": "tiles",
+                               "source-layer": lid,
+                               "filter": ["==", ["geometry-type"], "Polygon"],
+                               "paint": ["fill-color": fill]])
+                layers.append(["id": "\(lid)-line", "type": "line", "source": "tiles",
+                               "source-layer": lid,
+                               "filter": ["==", ["geometry-type"], "LineString"],
+                               "paint": ["line-color": line, "line-width": 1.0]])
+                layers.append(["id": "\(lid)-pt", "type": "circle", "source": "tiles",
+                               "source-layer": lid,
+                               "filter": ["==", ["geometry-type"], "Point"],
+                               "paint": ["circle-radius": pointRadius, "circle-color": point]])
+            }
+        }
+        let style: [String: Any] = [
+            "version": 8,
+            "name": (tilejson["name"] as? String) ?? "Tiles",
+            "sources": ["tiles": source],
+            "layers": layers,
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: style)) ?? Data()
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    func removeChartLink(_ url: String) {
+        chartLinks.removeAll { $0.url == url }
+        if activeChartLink == url { activeChartLink = nil }
+        saveChartLinks()
+        pushChartLink()
+    }
+
+    func selectChartLink(_ url: String?) {
+        activeChartLink = url
+        saveChartLinks()
+        pushChartLink()
     }
 
     // MARK: - Commands (menu / buttons)
@@ -1300,7 +1675,7 @@ final class AppModel: ObservableObject {
         guard let controller, let coord = CoordinateParser.parse(searchText) else { return false }
         let cur = controller.currentView
         // Keep the current zoom & rotation; a fresh chart-less view uses a sensible
-        // harbour-ish zoom.
+        // harbor-ish zoom.
         let zoom = cur.zoom > 0 ? cur.zoom : 12
         controller.setView(lookout_view(lon: coord.lon, lat: coord.lat,
                                         zoom: zoom, rotation_deg: cur.rotation_deg))

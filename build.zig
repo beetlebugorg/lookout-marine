@@ -249,10 +249,31 @@ pub fn build(b: *std.Build) void {
     const tile57_lib = tile57_dep.builder.named_lazy_paths.get("libtile57_a") orelse return;
     const tile57_inc = tile57_dep.path("include");
 
+    // System image codecs, handed to charttable.
+    //
+    // WebP is not a nicety here: elevation tiles are commonly served as WebP
+    // (Open Waters' seascape DEM is), and without libwebp those tiles fetch
+    // fine, fail to decode, and the hillshade and colour-relief layers built
+    // from them simply never appear — with nothing said anywhere. libpng
+    // likewise reads the PNG shapes charttable's own reader declines
+    // (interlaced, 16-bit).
+    //
+    // Default ON, unlike charttable's own build, where they default off so an
+    // embedder is never forced into a system dependency. Lookout HAS an
+    // embedder — this repo's Apple app — and it would rather have the codecs
+    // than a chart with a hole in it. `-Dwebp=false -Dlibpng=false` builds
+    // without them on a host that has neither.
+    const use_webp = b.option(bool, "webp", "Decode WebP tiles with libwebp") orelse true;
+    const use_libpng = b.option(bool, "libpng", "Decode PNG with libpng") orelse true;
+
     // The renderer, as a Zig module: `@import("charttable")`. It carries its
     // own Metal shim and frameworks, so nothing here declares them.
-    const charttable_mod = b.dependency("charttable", .{ .target = target, .optimize = optimize })
-        .module("charttable");
+    const charttable_mod = b.dependency("charttable", .{
+        .target = target,
+        .optimize = optimize,
+        .webp = use_webp,
+        .libpng = use_libpng,
+    }).module("charttable");
 
     const Cfg = struct {
         b: *std.Build,
@@ -847,6 +868,7 @@ pub fn build(b: *std.Build) void {
         "src/ct/host.zig",
         "src/ct/style.zig",
         "src/ct/tiles.zig",
+        "src/ct/provided.zig",
         // The host test module's root, and the plugin layer under it. The
         // host's and the broker's parts are reached through the comptime block
         // in host.zig and broker.zig.

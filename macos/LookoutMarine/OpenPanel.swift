@@ -69,6 +69,23 @@ extension AppModel {
         addRasterCharts(picked)
     }
 
+    /// Present the panel for a chart style file. One file, no folders: a style
+    /// is a document, not a library.
+    ///
+    /// No content-type restriction, for the same reason as the panels above —
+    /// a .json filter would grey out a style the mariner saved without the
+    /// extension, and what the file actually IS is checked on the way in.
+    func presentChartStylePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        panel.title = "Add Chart Style"
+        panel.message = "Choose a MapLibre style file (style.json). The chart is then drawn the way that style says."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importChartStyle(url)
+    }
 }
 #endif
 
