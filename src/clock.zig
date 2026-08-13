@@ -1,4 +1,5 @@
-//! The wall clock, in milliseconds since the Unix epoch.
+//! The clocks: the wall clock in milliseconds since the Unix epoch, and the
+//! monotonic tick the frame loop measures itself against.
 //!
 //! Zig 0.16 has no `std.time.milliTimestamp`, so this reads the platform clock
 //! directly. It lives here rather than in the plugin host because a build with
@@ -26,4 +27,20 @@ pub fn wallMs() i64 {
         if (std.c.clock_gettime(.REALTIME, &ts) != 0) return 0;
         return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
     }
+}
+
+/// Monotonic milliseconds from an arbitrary epoch. What every timer in the
+/// core counts against: an animation, a fade, a backoff. Never the wall clock,
+/// which steps when the system clock is set.
+pub fn ticksMs() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
+/// Monotonic microseconds — frame-cost timing needs sub-ms resolution.
+pub fn ticksUs() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }

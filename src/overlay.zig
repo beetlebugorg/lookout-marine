@@ -45,7 +45,7 @@
 //! the chart shader does, and it works unchanged in the relative frame: a whole
 //! world width is 1.0 in both.
 const std = @import("std");
-const camera = @import("camera.zig");
+const camera = @import("charttable").camera;
 const lock = @import("lock.zig");
 
 /// The canvas budget refusals' one log line (spec rule 7). Quiet under the
@@ -2034,11 +2034,20 @@ pub fn geo(lonlat: [2]f64) camera.Vec2 {
     return camera.lonLatToWorld(lonlat[0], lonlat[1]);
 }
 
-/// World units per screen POINT at `zoom` — 256 px per tile, the reciprocal of
+/// World units per screen POINT at `zoom` — the reciprocal of
 /// camera.worldToPx (whose vw/vh are logical points, so this is too).
+///
+/// The world tile is 512 px, the style spec's convention and the renderer's.
+/// This has to be the camera's own number: it is what turns a plugin's screen
+/// sizes into the world units the frame is built in, and half of it draws
+/// every line at twice its width.
 pub fn worldPerPt(zoom: f64) f64 {
-    return 1.0 / (256.0 * std.math.pow(f64, 2.0, zoom));
+    return 1.0 / (WORLD_PX_Z0 * std.math.pow(f64, 2.0, zoom));
 }
+
+/// Pixels across the world at zoom 0. Kept here rather than reached for
+/// through the camera so the tests can name it.
+pub const WORLD_PX_Z0: f64 = 512.0;
 
 /// The own-ship symbol's length in world units: the greater of true scale and
 /// the 6 mm floor, times the plugin's own `scale`. Both candidates are
@@ -2588,9 +2597,11 @@ test "the own-ship hull is a ship, at true scale once that is legible" {
     try t.expectEqual(floor15 * 0.5, ownshipLenWorld(lat, worldPerPt(16.0), 1));
     try t.expectEqual(truth, ownshipLenWorld(lat, worldPerPt(20.0), 1));
     try t.expectEqual(truth, ownshipLenWorld(lat, worldPerPt(21.0), 1)); // ground-fixed
-    // The crossover: the zoom at which 12 m first covers the floor.
-    const crossover = std.math.log2(OWNSHIP_MIN_LEN_PT / (256.0 * truth));
-    try t.expectApproxEqAbs(@as(f64, 18.0), crossover, 0.1);
+    // The crossover: the zoom at which 12 m first covers the floor. One level
+    // lower than it used to be, because the world tile is 512 px now and each
+    // zoom number therefore names twice the scale it named against 256.
+    const crossover = std.math.log2(OWNSHIP_MIN_LEN_PT / (WORLD_PX_Z0 * truth));
+    try t.expectApproxEqAbs(@as(f64, 17.0), crossover, 0.1);
     try t.expectEqual(truth * 2.0, ownshipLenWorld(lat, worldPerPt(20.0), 2));
 
     // The built triangles follow that rule, to the f32 vertex grid. Vertices

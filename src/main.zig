@@ -7,8 +7,8 @@ const std = @import("std");
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
 const library = lk.library;
-const gpuTicksUs = @import("gpu.zig").ticksUs;
-const gpu = @import("gpu.zig");
+const gpuTicksUs = @import("clock.zig").ticksUs;
+const clock = @import("clock.zig");
 
 const DEFAULT_CHART = "/home/claude/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles";
 
@@ -89,14 +89,14 @@ fn bakeRasters(alloc: std.mem.Allocator, in_dir: []const u8, out_dir: []const u8
 /// This is the C ABI's lookout_scan_charts, run from the command line.
 fn scanReport(alloc: std.mem.Allocator, path: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
-    const t0 = gpu.ticksMs();
+    const t0 = clock.ticksMs();
     // A chart set is a folder or one .zip; the report is the same either way.
     var s = if (std.mem.endsWith(u8, path, ".zip"))
         try lk.scanZip(alloc, path)
     else
         try lk.scanCharts(alloc, io, path);
     defer s.deinit();
-    const ms = gpu.ticksMs() - t0;
+    const ms = clock.ticksMs() - t0;
 
     var bands = [_]usize{0} ** 7;
     var sources: usize = 0;
@@ -273,7 +273,7 @@ pub fn main(init: std.process.Init) !void {
     // eyeball. (NODATA = the clear colour; sampled as a 5x5 majority.)
     for (args) |a2| {
         if (std.mem.eql(u8, a2, "--zoomscan")) {
-            const px_n: usize = @as(usize, l.g.width) * l.g.height * 4;
+            const px_n: usize = @as(usize, l.ct.width()) * l.ct.height() * 4;
             const buf = try alloc.alloc(u8, px_n);
             defer alloc.free(buf);
             var zz: f64 = 4.0;
@@ -281,15 +281,15 @@ pub fn main(init: std.process.Init) !void {
                 l.setView(.{ .lon = v.lon, .lat = v.lat, .zoom = zz });
                 try l.snapshotRgba(buf);
                 var nodata_ct: u32 = 0;
-                const cx = l.g.width / 2;
-                const cy = l.g.height / 2;
+                const cx = l.ct.width() / 2;
+                const cy = l.ct.height() / 2;
                 var dy: i32 = -2;
                 while (dy <= 2) : (dy += 1) {
                     var dx: i32 = -2;
                     while (dx <= 2) : (dx += 1) {
                         const xx: usize = @intCast(@as(i32, @intCast(cx)) + dx);
                         const yy: usize = @intCast(@as(i32, @intCast(cy)) + dy);
-                        const o = (yy * l.g.width + xx) * 4;
+                        const o = (yy * l.ct.width() + xx) * 4;
                         const r = buf[o];
                         const g = buf[o + 1];
                         const b = buf[o + 2];
@@ -355,7 +355,7 @@ pub fn main(init: std.process.Init) !void {
     // is an upper bound on frame cost, comparable across encoder changes.
     for (args) |a2| {
         if (std.mem.eql(u8, a2, "--bench")) {
-            const px_n: usize = @as(usize, l.g.width) * l.g.height * 4;
+            const px_n: usize = @as(usize, l.ct.width()) * l.ct.height() * 4;
             const buf = try alloc.alloc(u8, px_n);
             defer alloc.free(buf);
             try l.snapshotRgba(buf); // build + warm
@@ -380,8 +380,8 @@ pub fn main(init: std.process.Init) !void {
     // camera demo: zoom 2 levels via the MVP only, no rebuild
     m.scheme = cc.TILE57_SCHEME_DAY;
     l.setMariner(m);
-    l.zoomAt(2.0, @as(f32, @floatFromInt(l.g.width)) * 0.5, @as(f32, @floatFromInt(l.g.height)) * 0.5);
+    l.zoomAt(2.0, @as(f32, @floatFromInt(l.ct.width())) * 0.5, @as(f32, @floatFromInt(l.ct.height())) * 0.5);
     try l.snapshotPng("lookout-zoom.png");
     std.debug.print("wrote lookout-zoom.png (zoomed via MVP only, no re-tessellation)\n", .{});
-    std.debug.print("MSAA: {s}\n", .{if (l.g.msaa_used) "4x" else "off (unsupported)"});
+    std.debug.print("MSAA: {s}\n", .{if (l.ct.g) |g| (if (g.msaa_used) "4x" else "off (unsupported)") else "no surface"});
 }

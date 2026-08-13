@@ -16,6 +16,10 @@
             .lazy = true,
         },
         .tile57_local = .{ .path = "../tile57", .lazy = true },
+        // charttable draws the chart: it holds the style, the tile sources, the
+        // tessellators and the GPU. A sibling checkout while the two move
+        // together; it takes the pinned git form once its ABI settles.
+        .charttable = .{ .path = "../charttable" },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "shaders", "vendor", "include" },
 }

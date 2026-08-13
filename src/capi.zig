@@ -135,9 +135,11 @@ fn nativeKind(kind: c_int) ?lk.NativeKind {
 
 /// The core-owned IDXGISwapChain* for the host's SwapChainPanel
 /// (LOOKOUT_NATIVE_D3D12_PANEL only; NULL on any other kind or backend).
+/// Always NULL while charttable's only backend is Metal — the export stays so
+/// the WinUI3 shell still links against this header.
 export fn lookout_d3d12_swapchain(h: ?*lookout) ?*anyopaque {
-    const x = cast(h orelse return null);
-    return x.d3d12Swapchain();
+    _ = h;
+    return null;
 }
 
 /// Give up the host's surface WITHOUT closing the chart, for a shell whose
@@ -1069,9 +1071,6 @@ export fn lookout_marker_remove(h: ?*lookout, id: u64) c_int {
 comptime {
     _ = lookout_open;
     // The Android Java shell's JNI natives ride in the same archive on vk
-    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout). Gate on
-    // the platform too: vk also serves desktop shells, which have no <jni.h>.
-    const t = @import("builtin").target;
-    const android = t.abi == .android or t.abi == .androideabi;
-    if (@import("build_options").gpu_vk and android) _ = @import("jni_android.zig");
+    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout). The
+    // Android shell comes back when charttable has a Vulkan backend.
 }
