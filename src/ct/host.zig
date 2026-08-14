@@ -136,6 +136,9 @@ pub const Host = struct {
 
     pub fn deinit(self: *Host) void {
         self.tiles.deinit();
+        // Before the device goes: joins any build whose worker is staging
+        // GPU buffers on it, and frees the staged scene.
+        self.m.setStagingGpu(null);
         // Under gpu_mu: a present that slipped past the host's own teardown
         // barrier is still holding the surface, and destroying it out from
         // under the encoder is a crash the lock is cheaper than.
@@ -167,6 +170,11 @@ pub const Host = struct {
     // ---- surface ------------------------------------------------------------
 
     pub fn attachSurface(self: *Host, opts: Options) Error!void {
+        // Before gpu_mu (leaf lock) and before the old device goes: the
+        // build worker may be inside makeScene on it. The NEW device is
+        // registered lazily by update(); init calls this on a Host the
+        // caller then MOVES, so a pointer taken here would dangle.
+        self.m.setStagingGpu(null);
         self.gpu_mu.lock();
         defer self.gpu_mu.unlock();
         if (self.g) |*g| {
@@ -188,6 +196,7 @@ pub const Host = struct {
     }
 
     pub fn detachSurface(self: *Host) void {
+        self.m.setStagingGpu(null);
         self.gpu_mu.lock();
         defer self.gpu_mu.unlock();
         if (self.g) |*g| g.deinit();
@@ -604,6 +613,13 @@ pub const Host = struct {
     /// One frame of map work: hand the workers their asks, take whatever
     /// landed, rebuild if the view left the built coverage.
     pub fn update(self: *Host) void {
+        // Registered here, not at attach: init builds the Host in a local the
+        // caller moves, so the surface's address is only stable once calls
+        // arrive through the moved-in copy. One pointer compare when nothing
+        // changed. With this set, the build worker copies each scene into GPU
+        // buffers off-thread and the landing in renderPrepare is a pointer
+        // swap instead of a buffer upload.
+        self.m.setStagingGpu(if (self.g) |*g| g else null);
         self.tick = self.m.update() catch .{};
         const t0 = clock.ticksUs();
         self.tiles.pump();
