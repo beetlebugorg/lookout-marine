@@ -638,6 +638,12 @@ final class ChartController: NSObject {
         return lookout_is_building(h) != 0
     }
 
+    /// True while the camera is easing a zoom or coasting a fling.
+    var isAnimating: Bool {
+        guard let h = handle else { return false }
+        return lookout_animating(h) != 0
+    }
+
     /// End of a $LOOKOUT_GESTURE_BENCH run: write the profile and quit, so a
     /// run is one command with a file at the end of it.
     func finishGestureBench() {
@@ -1432,6 +1438,9 @@ final class GestureBench {
         Stop(lon: -87.56, lat: 41.89, name: "Chicago"),
     ]
     private var tourStop = 0
+    /// Flick-and-settle bookkeeping (see .flickPan).
+    private var flicksDone = 0
+    private var quiet = 0
     private enum Leg { case zoomIn, zoomOut, panTo }
     private var leg: Leg = .zoomIn
     private var legStart: CFTimeInterval = 0
@@ -1536,10 +1545,11 @@ final class GestureBench {
                 frames = 0
             }
         case .pan:
-            // A steady drag: 8 pt a frame is a brisk but ordinary finger, and
-            // it keeps crossing into new tiles, which is the case the settled
-            // benchmarks cannot produce.
-            c.pan(dxPt: -8, dyPt: -3)
+            // A steady drag: 4 pt a frame is an ordinary finger, and it keeps
+            // crossing into new tiles, which is the case the settled
+            // benchmarks cannot produce. (8 pt was a race, not a pan — the
+            // gentler drag is the cadence the complaint describes.)
+            c.pan(dxPt: -4, dyPt: -1.5)
             if frames >= panFrames { phase = .rest; frames = 0 }
         case .rest:
             if frames >= 60 { phase = doZoom ? .zoom : .done; frames = 0 }
@@ -1565,14 +1575,39 @@ final class GestureBench {
         case .rest2:
             if frames >= 60 { phase = .flickPan; frames = 0 }
         case .flickPan:
-            // A FLICK, not a drag: a short hard throw and then let go. The
-            // coast afterwards runs on tickAnim, which is the path a held drag
-            // never enters — and the one that was rebuilding the style per
-            // frame. Three throws, so the coasts are measured, not just one.
-            if frames % 90 == 1 {
-                c.flingStart(vx: -2600, vy: -900)
+            // A FLICK, then wait for the chart to SETTLE — coast ended, build
+            // landed, three quarters of a second of quiet — then flick again.
+            // That is the cadence of a real hand, and the settle boundary is
+            // the path a fixed spacing never ran: each throw used to land in
+            // the previous coast, so the first-frame-after-idle work was
+            // measured zero times. Three throws, coasts and settles both.
+            //
+            // Thrown into water that NEEDS tiles. The pan and zoom phases
+            // warmed everything around the start view, and a coast over
+            // resident tiles measures nothing about supply — so this jumps to
+            // a coast the run has not touched, lets it build, and every throw
+            // after that keeps entering cold water.
+            if frames == 1 {
+                var v = c.currentView
+                v.lon = -76.61
+                v.lat = 39.27 // Baltimore approaches, untouched by the run
+                c.setView(v)
+                return
             }
-            if frames >= 270 { phase = .rest3; frames = 0 }
+            let settled = !c.isAnimating && !c.stillBuilding
+            quiet = settled ? quiet + 1 : 0
+            if flicksDone < 3 {
+                if quiet >= 45 { // the first throw waits for the jump to build
+                    c.flingStart(vx: -2600, vy: -900)
+                    flicksDone += 1
+                    quiet = 0
+                }
+            } else if quiet >= 45 || frames >= 1800 {
+                flicksDone = 0
+                quiet = 0
+                phase = .rest3
+                frames = 0
+            }
         case .rest3:
             if frames >= 60 { phase = .flickZoom; frames = 0 }
         case .flickZoom:
