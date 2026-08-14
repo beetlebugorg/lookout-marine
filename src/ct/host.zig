@@ -32,6 +32,7 @@ const ct = @import("charttable");
 const cstyle = @import("style.zig");
 const ctiles = @import("tiles.zig");
 const cprovided = @import("provided.zig");
+const Lock = @import("../lock.zig").Lock;
 const RwLock = @import("../lock.zig").RwLock;
 const clock = @import("../clock.zig");
 
@@ -78,10 +79,26 @@ pub const Host = struct {
     /// The single-chart path: charttable reads the archive itself.
     archive: ?*Archive = null,
 
-    /// The last frame's three spans, µs — see `render`. Always kept.
+    /// The last frame's three spans, µs — see `renderPrepare` / `renderPresent`.
+    /// Always kept.
     prof_update_us: i64 = 0,
     prof_upload_us: i64 = 0,
     prof_present_us: i64 = 0,
+    /// What the last `update` tick spent its time on, from the map itself.
+    tick: ct.map_object.Tick = .{},
+    /// The rest of the update span, µs: the tile/provider pumps, the
+    /// missing-symbol batch, and the atlas sync (whole-sheet uploads live
+    /// there). What the map's own tick cannot see.
+    prof_pump_us: i64 = 0,
+    prof_serve_us: i64 = 0,
+    prof_atlas_us: i64 = 0,
+    /// Guards the GPU surface against the one true concurrency the ABI
+    /// allows: the render thread presenting WITHOUT the api lock (see
+    /// renderPresent) while the input thread resizes, re-attaches or detaches
+    /// the surface. Everything else that touches `g` runs on the render
+    /// thread, already sequenced against its own present. Leaf lock: nothing
+    /// is acquired while it is held.
+    gpu_mu: Lock = .{},
     bound: bool = false,
 
     style: cstyle.Style = .{},
@@ -119,8 +136,13 @@ pub const Host = struct {
 
     pub fn deinit(self: *Host) void {
         self.tiles.deinit();
+        // Under gpu_mu: a present that slipped past the host's own teardown
+        // barrier is still holding the surface, and destroying it out from
+        // under the encoder is a crash the lock is cheaper than.
+        self.gpu_mu.lock();
         if (self.g) |*g| g.deinit();
         self.g = null;
+        self.gpu_mu.unlock();
         self.m.deinit();
         // AFTER the map: its cache workers call fetch on these providers from
         // their own threads, and m.deinit is what stops them.
@@ -145,6 +167,8 @@ pub const Host = struct {
     // ---- surface ------------------------------------------------------------
 
     pub fn attachSurface(self: *Host, opts: Options) Error!void {
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
         if (self.g) |*g| {
             g.deinit();
             self.g = null;
@@ -164,6 +188,8 @@ pub const Host = struct {
     }
 
     pub fn detachSurface(self: *Host) void {
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
         if (self.g) |*g| g.deinit();
         self.g = null;
         self.uploaded = .{};
@@ -178,14 +204,20 @@ pub const Host = struct {
     /// lives in the projection and is applied once, there. Handing the camera
     /// the pixel size instead would scale the whole world by the density.
     pub fn resize(self: *Host, width_pt: u32, height_pt: u32) void {
-        const g = if (self.g) |*g| g else return;
-        g.resize(width_pt, height_pt);
+        {
+            self.gpu_mu.lock();
+            defer self.gpu_mu.unlock();
+            const g = if (self.g) |*g| g else return;
+            g.resize(width_pt, height_pt);
+        }
         self.m.setViewport(@floatFromInt(width_pt), @floatFromInt(height_pt));
     }
 
     /// The viewport in points does not move when the density does — only the
     /// framebuffer behind it does.
     pub fn setPixelDensity(self: *Host, d: f32) void {
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
         const g = if (self.g) |*g| g else return;
         g.setPixelDensity(d);
     }
@@ -385,13 +417,30 @@ pub const Host = struct {
         self.reported.clearRetainingCapacity();
     }
 
+    /// How long one frame may spend rasterizing missing symbol runs. The rest
+    /// of the list waits for the next frame — those symbols are not on screen
+    /// either way, and a burst served whole was a felt hitch (a new harbor
+    /// brings dozens of sounding runs at once).
+    const SYMBOL_BUDGET_US: i64 = 4000;
+
     /// Answer the images the scene could not resolve. A chart library carries
     /// more distinct symbol runs than any prebaked sheet can enumerate (every
     /// sounding is its own run), so tile57 renders exactly the ones the
     /// display asks for, once each.
+    ///
+    /// Never while a build is in flight, and one asset swap per frame, not
+    /// per image. The build worker reads the sprite, so adding a cell
+    /// mid-build is a race — and setAssets guards it with waitForBuild, which
+    /// JOINS the build on this thread. Serving a burst image-by-image
+    /// therefore pulled the whole "off-thread" build back into the frame,
+    /// once per symbol: measured 15-30 ms frames at every new harbor of the
+    /// tour, none of it in the map's own tick (concerns C18).
     fn serveMissingImages(self: *Host) void {
         const b = self.m.scene() orelse return;
         if (b.missing_images.len == 0) return;
+        if (self.m.buildInFlight()) return;
+        const t0 = clock.ticksUs();
+        var added = false;
         for (b.missing_images) |name| {
             if (self.reported.contains(name)) continue;
             const owned = self.alloc.dupe(u8, name) catch continue;
@@ -400,17 +449,32 @@ pub const Host = struct {
                 continue;
             };
             const before = if (self.sprite) |*s| s.count() else 0;
-            self.renderSymbolRun(name);
+            const after = self.renderSymbolRun(name);
+            if (after > before) added = true;
             if (std.c.getenv("LOOKOUT_SYMBOL_PROBE") != null) {
-                const after = if (self.sprite) |*s| s.count() else 0;
                 std.debug.print("symbol: {s} — {s}\n", .{ name, if (after > before) "rendered" else "NOT AVAILABLE" });
             }
+            if (clock.ticksUs() - t0 > SYMBOL_BUDGET_US) break;
         }
+        // One swap for the whole batch: setAssets invalidates every cached
+        // bucket (an icon that was missing may now resolve), so doing it per
+        // image re-tessellated the resident set once per symbol.
+        if (added) self.applyAssets();
     }
 
-    fn renderSymbolRun(self: *Host, name: []const u8) void {
+    /// Rasterize one symbol run into the sprite. Answers the sprite's cell
+    /// count so the caller can tell whether anything landed. The caller owns
+    /// the asset swap: no build may be in flight (the sheet is mutated in
+    /// place, and the build worker reads it), and applyAssets runs once per
+    /// batch, after this. The GPU scene is deliberately NOT invalidated here:
+    /// the swap dirties the map, the rebuild bumps the scene generation, and
+    /// the upload follows from that — resetting `uploaded` as well re-sent
+    /// the entire unchanged scene to the GPU for every new symbol (a 19 ms
+    /// frame doing nothing).
+    fn renderSymbolRun(self: *Host, name: []const u8) usize {
+        const have = if (self.sprite) |*s| s.count() else 0;
         var buf: [256]u8 = undefined;
-        const run = std.fmt.bufPrintZ(&buf, "{s}", .{name}) catch return;
+        const run = std.fmt.bufPrintZ(&buf, "{s}", .{name}) catch return have;
         var rgba: [*c]u8 = null;
         var w: u32 = 0;
         var h: u32 = 0;
@@ -424,23 +488,31 @@ pub const Host = struct {
             &w,
             &h,
             &err,
-        ) != cc.TILE57_OK or rgba == null or w == 0 or h == 0) return;
+        ) != cc.TILE57_OK or rgba == null or w == 0 or h == 0) return have;
         defer cc.tile57_free(rgba);
         if (self.sprite == null) {
-            self.sprite = ct.sprite.Sprite.initEmpty(self.alloc, 512) catch return;
+            self.sprite = ct.sprite.Sprite.initEmpty(self.alloc, 512) catch return have;
         }
         const n = @as(usize, w) * h * 4;
-        self.sprite.?.addImage(name, rgba[0..n], w, h, self.asset_ratio) catch return;
-        self.applyAssets();
-        self.uploaded = .{};
+        self.sprite.?.addImage(name, rgba[0..n], w, h, self.asset_ratio) catch return have;
         self.sprite_uploaded = 0;
+        return self.sprite.?.count();
     }
 
     fn syncAtlases(self: *Host) void {
         const g = if (self.g) |*gg| gg else return;
         if (self.sprite) |*sp| {
             if (self.sprite_uploaded != sp.generation) {
-                g.uploadSpriteAtlas(sp.rgba, sp.width, sp.height) catch return;
+                // Only the rows the batch touched, when the resident texture
+                // still has the sheet's shape. The full sheet at library
+                // scale measured 20-64 ms a send, once per missing-symbol
+                // batch of the tour; the band is a few dozen rows.
+                const banded = if (sp.dirtyRows()) |band|
+                    g.updateSpriteAtlasRows(sp.rgba, sp.width, sp.height, band[0], band[1] - band[0])
+                else
+                    false;
+                if (!banded) g.uploadSpriteAtlas(sp.rgba, sp.width, sp.height) catch return;
+                sp.clearDirty();
                 self.sprite_uploaded = sp.generation;
             }
         }
@@ -532,10 +604,14 @@ pub const Host = struct {
     /// One frame of map work: hand the workers their asks, take whatever
     /// landed, rebuild if the view left the built coverage.
     pub fn update(self: *Host) void {
-        _ = self.m.update() catch {};
+        self.tick = self.m.update() catch .{};
+        const t0 = clock.ticksUs();
         self.tiles.pump();
         self.provided.pump();
+        const t1 = clock.ticksUs();
         self.serveMissingImages();
+        self.prof_pump_us = t1 - t0;
+        self.prof_serve_us = clock.ticksUs() - t1;
     }
 
     pub fn needsRedraw(self: *Host) bool {
@@ -550,34 +626,60 @@ pub const Host = struct {
         return self.m.pendingWanted();
     }
 
-    /// Draw into the attached surface. Answers whether a frame reached it.
+    /// The frame, in two halves, so the caller can drop its api lock for the
+    /// half that blocks.
     ///
-    /// The three spans are timed unconditionally (a clock read is tens of
+    /// `renderPrepare` is everything that reads or writes MAP state — adopting
+    /// builds, tile pumps, atlas and scene uploads, the uniforms — and runs
+    /// under the api lock like any other entry. `renderPresent` only encodes
+    /// and presents what was prepared, and the api lock is deliberately NOT
+    /// held across it: the present blocks on the swapchain's drawable
+    /// (measured 0.2 ms typical, ~400 ms worst on a wedged GPU), and any
+    /// gesture or per-tick query queued behind the lock would freeze the
+    /// host's input thread for exactly that long. See root.zig render().
+    ///
+    /// The spans are timed unconditionally (a clock read is tens of
     /// nanoseconds against a frame of milliseconds), because which of them the
-    /// caller holds a lock across decides whether the host's frame loop stalls:
-    /// `present` blocks on the swapchain's drawable, and anything waiting on the
-    /// same lock waits out a whole vsync through no fault of its own.
-    pub fn render(self: *Host) bool {
-        const g = if (self.g) |*g| g else return false;
+    /// caller holds a lock across is the whole question.
+    pub fn renderPrepare(self: *Host) ?Uniforms {
+        if (self.g == null) return null;
         const t0 = clock.ticksUs();
         self.update();
+        const ta = clock.ticksUs();
         self.syncAtlases();
         const t1 = clock.ticksUs();
-        _ = self.m.uploadIfChanged(g, &self.uploaded) catch return false;
+        self.prof_atlas_us = t1 - ta;
+        _ = self.m.uploadIfChanged(&self.g.?, &self.uploaded) catch return null;
         const t2 = clock.ticksUs();
-        const drew = g.renderWindow(self.m.uniforms());
-        const t3 = clock.ticksUs();
         self.prof_update_us = t1 - t0;
         self.prof_upload_us = t2 - t1;
-        self.prof_present_us = t3 - t2;
-        if (drew) self.m.markDrawn();
+        return self.m.uniforms();
+    }
+
+    /// Present the prepared frame. Safe without the api lock: it touches only
+    /// the surface, under gpu_mu, so a resize or detach landing mid-present
+    /// waits for the drawable instead of racing it. The map is not touched —
+    /// the caller re-takes its lock and marks the captured view drawn.
+    pub fn renderPresent(self: *Host, u: Uniforms) bool {
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
+        const g = if (self.g) |*g| g else return false;
+        const t0 = clock.ticksUs();
+        const drew = g.renderWindow(u);
+        self.prof_present_us = clock.ticksUs() - t0;
         return drew;
     }
 
     /// Render offscreen. The caller owns the returned pixels.
+    ///
+    /// Under gpu_mu from the atlas sync on: this can arrive on the input
+    /// thread while the render thread is presenting without the api lock, and
+    /// uploadIfChanged frees the scene buffers that present is encoding.
     pub fn snapshotRgba(self: *Host) ![]u8 {
-        const g = if (self.g) |*g| g else return Error.SurfaceFailed;
         self.update();
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
+        const g = if (self.g) |*g| g else return Error.SurfaceFailed;
         self.syncAtlases();
         _ = try self.m.uploadIfChanged(g, &self.uploaded);
         return g.renderOffscreen(self.alloc, self.m.uniforms());

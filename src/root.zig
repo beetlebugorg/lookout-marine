@@ -551,12 +551,25 @@ pub const FrameProf = struct {
         trim_us: i64,
         overlay_us: i64,
         ct_us: i64,
-        /// ct_us split three ways (ct/host.zig render): the map/tile pump, the
-        /// GPU upload of a changed scene, and the encode+present that blocks on
-        /// the swapchain's drawable.
+        /// ct_us split three ways (ct/host.zig renderPrepare/renderPresent):
+        /// the map/tile pump, the GPU upload of a changed scene, and the
+        /// encode+present that blocks on the swapchain's drawable.
         ct_update_us: i64,
         ct_upload_us: i64,
         ct_present_us: i64,
+        /// ct_update_us split further, from charttable's own tick: adopting a
+        /// finished build, cache adoption/eviction, choosing the wanted set,
+        /// the zoom-only paint refill, and starting a build.
+        ct_finish_us: i64,
+        ct_cache_us: i64,
+        ct_want_us: i64,
+        ct_refill_us: i64,
+        ct_start_us: i64,
+        /// The host's own share of the update span: the tile/provider pumps,
+        /// the missing-symbol batch, and the atlas sync.
+        ct_pump_us: i64,
+        ct_serve_us: i64,
+        ct_atlas_us: i64,
     };
     const cap = 4096;
     const flush_every = 60;
@@ -581,12 +594,14 @@ pub const FrameProf = struct {
     pub fn write(self: *FrameProf) void {
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(std.heap.c_allocator);
-        buf.appendSlice(std.heap.c_allocator, "prepare_us,style_us,trim_us,overlay_us,ct_us,ct_update_us,ct_upload_us,ct_present_us\n") catch return;
-        var line: [192]u8 = undefined;
+        buf.appendSlice(std.heap.c_allocator, "prepare_us,style_us,trim_us,overlay_us,ct_us,ct_update_us,ct_upload_us,ct_present_us,ct_finish_us,ct_cache_us,ct_want_us,ct_refill_us,ct_start_us,ct_pump_us,ct_serve_us,ct_atlas_us\n") catch return;
+        var line: [320]u8 = undefined;
         for (self.rows[0..self.n]) |r| {
-            const s = std.fmt.bufPrint(&line, "{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
-                r.prepare_us,   r.style_us,     r.trim_us,       r.overlay_us, r.ct_us,
-                r.ct_update_us, r.ct_upload_us, r.ct_present_us,
+            const s = std.fmt.bufPrint(&line, "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
+                r.prepare_us,   r.style_us,     r.trim_us,       r.overlay_us,  r.ct_us,
+                r.ct_update_us, r.ct_upload_us, r.ct_present_us, r.ct_finish_us, r.ct_cache_us,
+                r.ct_want_us,   r.ct_refill_us, r.ct_start_us,   r.ct_pump_us,  r.ct_serve_us,
+                r.ct_atlas_us,
             }) catch continue;
             buf.appendSlice(std.heap.c_allocator, s) catch return;
         }
@@ -2388,7 +2403,37 @@ pub const Lookout = struct {
         const t2 = if (prof) clock.ticksUs() else 0;
         self.updateOverlay();
         const t3 = if (prof) clock.ticksUs() else 0;
-        const ok = self.ct.render();
+        // The frame in two halves, with the api lock DROPPED around the second.
+        // The present blocks on the swapchain's drawable — 0.2 ms typical, and
+        // ~400 ms was measured on a wedged GPU — and every gesture and per-tick
+        // query the host makes takes this lock, so holding it across the block
+        // froze the input thread for exactly that long (concerns C18). The
+        // prepared half is all the map work; the present touches only the
+        // surface, under the host's gpu lock.
+        var ok = false;
+        if (self.ct.renderPrepare()) |uniforms| {
+            // Captured while the lock is held: what this frame actually shows.
+            // A gesture landing mid-present moves the camera, and marking THAT
+            // view drawn would swallow its frame.
+            const shows = self.ct.m.drawnView();
+            const was_dirty = self.view_dirty;
+            self.view_dirty = false;
+            self.apiUnlock();
+            ok = self.ct.renderPresent(uniforms);
+            self.apiLock();
+            if (ok) {
+                self.ct.m.markDrawnAs(shows);
+                // Own ship is drawn in EVERY frame, whatever raised it, so any
+                // frame that lands restarts the ship clock (see SHIP_FRAME_MS).
+                // Stamping only the ship's own frames would let a panning
+                // gesture and the boat interleave into double the frames.
+                self.last_ship_frame_ms = clock.ticksMs();
+            } else if (was_dirty) {
+                // A SKIPPED frame (swapchain saturated) must not clear the
+                // flag: the pending content still needs a successful present.
+                self.view_dirty = true;
+            }
+        }
         if (self.frame_prof) |*p| p.record(.{
             .prepare_us = t1 - t0,
             .style_us = self.prof_style_us,
@@ -2398,17 +2443,15 @@ pub const Lookout = struct {
             .ct_update_us = self.ct.prof_update_us,
             .ct_upload_us = self.ct.prof_upload_us,
             .ct_present_us = self.ct.prof_present_us,
+            .ct_finish_us = self.ct.tick.finish_us,
+            .ct_cache_us = self.ct.tick.cache_us,
+            .ct_want_us = self.ct.tick.want_us,
+            .ct_refill_us = self.ct.tick.refill_us,
+            .ct_start_us = self.ct.tick.start_us,
+            .ct_pump_us = self.ct.prof_pump_us,
+            .ct_serve_us = self.ct.prof_serve_us,
+            .ct_atlas_us = self.ct.prof_atlas_us,
         });
-        // A SKIPPED frame (swapchain saturated) must not clear the flag: the
-        // pending content still needs a successful present.
-        if (ok) {
-            self.view_dirty = false;
-            // Own ship is drawn in EVERY frame, whatever raised it, so any
-            // frame that lands restarts the ship clock (see SHIP_FRAME_MS).
-            // Stamping only the ship's own frames would let a panning gesture
-            // and the boat interleave into double the frames.
-            self.last_ship_frame_ms = clock.ticksMs();
-        }
         return ok;
     }
 
