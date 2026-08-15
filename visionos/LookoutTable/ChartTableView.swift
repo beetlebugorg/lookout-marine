@@ -89,7 +89,7 @@ struct ChartTableView: View {
     private func lay(_ root: Entity, in proxy: GeometryProxy3D, content: RealityViewContent) {
         let box = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
         root.position = [0, box.min.y + 0.01, 0]
-        model.setVolumeWidth(box.extents.x)
+        model.setVolumeSize(width: box.extents.x, depth: box.extents.z)
     }
 
     // MARK: - A hand on the chart

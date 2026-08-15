@@ -84,6 +84,8 @@ final class TableModel {
     // MARK: - The frame
 
     func tick(_ dt: TimeInterval, now: TimeInterval) {
+        // The sheet follows the volume whether or not a chart is open.
+        commitPendingWidth(now: now)
         guard ready else { return }
         engine.tick(dt)
         engine.renderFrame()
@@ -246,21 +248,44 @@ final class TableModel {
         setSheetWidth(committed)
     }
 
-    /// The volume the sheet lies in, in meters. A sheet wider than its volume
-    /// is clipped by the system, so the volume's own width is the ceiling on
-    /// resizing, whatever SheetMetrics would otherwise allow.
+    /// The volume the sheet lies in, in meters. The volume is the table, so
+    /// the sheet fills it and follows it when the mariner resizes it.
     private(set) var volumeWidth: Float = SheetMetrics.maxWidth
+    private(set) var volumeDepth: Float = SheetMetrics.maxWidth * SheetMetrics.aspect
 
-    func setVolumeWidth(_ w: Float) {
-        guard w > 0.1, abs(w - volumeWidth) > 0.001 else { return }
-        volumeWidth = w
-        if sheet.width > maxSheetWidth { setSheetWidth(maxSheetWidth) }
+    /// A resize in progress. Growing the sheet live would rebuild its meshes
+    /// and its whole texture on every frame of the drag, so the drag only
+    /// scales the transform and the real size is taken once it settles.
+    private var pendingWidth: Float?
+    private var pendingWidthAt: TimeInterval = 0
+
+    func setVolumeSize(width: Float, depth: Float) {
+        guard width > 0.1, depth > 0.1 else { return }
+        guard abs(width - volumeWidth) > 0.005 || abs(depth - volumeDepth) > 0.005 else { return }
+        volumeWidth = width
+        volumeDepth = depth
+        let target = maxSheetWidth
+        guard abs(target - sheet.width) > 0.005 else { return }
+        pendingWidth = target
+        pendingWidthAt = Date.timeIntervalSinceReferenceDate
+        sheet.root.scale = .init(repeating: target / sheet.width)
     }
 
-    /// The widest sheet this volume holds, with the margin the system leaves
-    /// around a volume's contents.
+    /// The largest sheet this volume holds. A sheet is wider than it is deep,
+    /// so a tall narrow volume is limited by its width and a shallow wide one
+    /// by its depth. The system leaves a little room around a volume's
+    /// contents, hence the 2%.
     var maxSheetWidth: Float {
-        min(SheetMetrics.maxWidth, volumeWidth * 0.98)
+        min(SheetMetrics.maxWidth,
+            min(volumeWidth * 0.98, volumeDepth * 0.98 / SheetMetrics.aspect))
+    }
+
+    /// Take the size a settled volume resize asked for.
+    private func commitPendingWidth(now: TimeInterval) {
+        guard let target = pendingWidth, now - pendingWidthAt > 0.25 else { return }
+        pendingWidth = nil
+        sheet.root.scale = .one
+        setSheetWidth(target)
     }
 
     func setSheetWidth(_ w: Float) {
