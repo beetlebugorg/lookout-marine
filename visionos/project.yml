@@ -1,0 +1,144 @@
+# XcodeGen spec for Lookout Table (visionOS).
+#
+# The chart table is its own app, not a mode of the chartplotter: the sheet,
+# the hands and the traffic standing off the paper have no counterpart on a
+# screen, and the chartplotter's chrome has none in a volume. It links the same
+# core as every other shell.
+#
+# Generate the project with:
+#
+#     brew install xcodegen           # once
+#     cd visionos && xcodegen generate
+#     open LookoutTable.xcodeproj
+#
+# Or run visionos/build.sh, which generates and builds in one step.
+
+name: LookoutTable
+
+options:
+  bundleIdPrefix: org.beetlebug
+  deploymentTarget:
+    visionOS: "26.0"
+  createIntermediateGroups: true
+
+targets:
+  LookoutTable:
+    type: application
+    platform: visionOS
+    sources:
+      - path: LookoutTable
+      # The sample cell, so a fresh install draws something. Gitignored and
+      # copied in by build.sh from the machine's chart library.
+      - path: Charts
+        optional: true
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: LookoutTable
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-table
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LookoutTable/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutTable/Bridging-Header.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # The Zig cores are built arm64-only, for the device and the Apple
+        # Silicon simulator alike.
+        ARCHS: arm64
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
+        # The merged, libtool-repacked Zig cores (see the pre-build script).
+        OTHER_LDFLAGS:
+          - "-llookoutall"
+          # zlib, for the libpng the core is built against. The zig archive
+          # carries libpng's objects with their zlib symbols still undefined,
+          # so the resolve happens here, at the app link.
+          - "-lz"
+    dependencies:
+      - sdk: RealityKit.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+    preBuildScripts:
+      - name: Build Zig cores for visionOS (lookout + tile57 dependency)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          # Provenance: the build log states exactly which sources these cores
+          # came from. tile57 is a zig package dependency: a sibling checkout
+          # when present, else the zon pin.
+          T57="$SRCROOT/../../tile57"
+          echo "zig cores: lookout=$(git -C "$SRCROOT/.." rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f "$T57/build.zig" ] && git -C "$T57" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')"
+          XROS_MIN="${XROS_DEPLOYMENT_TARGET:-26.0}"
+          # build.zig picks the WAMR dist and the codec archives from the zig
+          # target: vendor/*-visionossim for the simulator, vendor/*-visionos
+          # for a device. All three selections must agree.
+          case "$PLATFORM_NAME" in
+            xrsimulator) ZIG_TARGET="aarch64-visionos.${XROS_MIN}-simulator"; SUFFIX=visionossim ;;
+            *)           ZIG_TARGET="aarch64-visionos.${XROS_MIN}";           SUFFIX=visionos ;;
+          esac
+          # $SDKROOT is set by Xcode to the active SDK, so this works even when
+          # the shell's xcrun points at the Command Line Tools, which carry no
+          # visionOS SDK.
+          SYSROOT="${SDKROOT:-$(xcrun --sdk "$PLATFORM_NAME" --show-sdk-path)}"
+
+          cd "$SRCROOT/.."
+          # The wasm plugin host and the image codecs, before the core that
+          # embeds them. Own ship, AIS, NMEA 0183, Signal K and laylines are
+          # all plugins, so a core built without the host is a chart with no
+          # traffic. Both scripts are idempotent and return at once when their
+          # archives already match.
+          scripts/build-wamr.sh "$SUFFIX"
+          scripts/build-codecs.sh "$SUFFIX"
+          zig build -Doptimize=ReleaseFast \
+            -Dplugins=true \
+            -Dtarget="$ZIG_TARGET" \
+            --sysroot "$SYSROOT" \
+            -p "zig-out-$PLATFORM_NAME"
+          CORE_HASH=$(cat "zig-out-$PLATFORM_NAME/lib/liblookout_marine.a" "zig-out-$PLATFORM_NAME/lib/libtile57.a" | /usr/bin/shasum | cut -d' ' -f1)
+
+          # ld64 and libtool both reject zig-emitted archive members ("64-bit
+          # mach-o not 8-byte aligned"), so the raw archives are never linked
+          # directly: extract to loose objects (zig also records mode-0
+          # permissions, hence the chmod) and repack. Skipped when unchanged.
+          REPACK_STAMP="zig-out-$PLATFORM_NAME/lib/.liblookoutall.stamp"
+          if [ "$(cat "$REPACK_STAMP" 2>/dev/null)" != "$CORE_HASH" ] \
+             || [ ! -f "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" ]; then
+            REPACK="zig-out-$PLATFORM_NAME/repack"
+            rm -rf "$REPACK"; mkdir -p "$REPACK/lookout" "$REPACK/tile57"
+            (cd "$REPACK/lookout" && ar x ../../lib/liblookout_marine.a)
+            (cd "$REPACK/tile57"  && ar x ../../lib/libtile57.a)
+            chmod 644 "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o
+            xcrun -sdk "$PLATFORM_NAME" libtool -static \
+              -o "zig-out-$PLATFORM_NAME/lib/liblookoutall.a" \
+              "$REPACK"/lookout/*.o "$REPACK"/tile57/*.o 2>/dev/null
+            echo "$CORE_HASH" > "$REPACK_STAMP"
+          fi
+
+          # Xcode does not track libraries fed in through OTHER_LDFLAGS, so a
+          # rebuilt core would never relink the app. Force the link when the
+          # core changed by removing the previous executable.
+          LINK_STAMP="$TARGET_BUILD_DIR/.zigcore.stamp"
+          if [ "$(cat "$LINK_STAMP" 2>/dev/null)" != "$CORE_HASH" ]; then
+            mkdir -p "$TARGET_BUILD_DIR"
+            echo "$CORE_HASH" > "$LINK_STAMP"
+            rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
+          fi
+    postBuildScripts:
+      - name: Bundle the core plugins into Resources/Plugins
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          # The modules are wasm, so one build serves every platform.
+          zig build plugins
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins"
+          mkdir -p "$DEST"
+          rsync -a --delete zig-out/plugins-bundled/ "$DEST/"
+          echo "bundled plugins: $(ls "$DEST" | grep -c '\.wasm$') module(s)"
