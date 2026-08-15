@@ -686,6 +686,25 @@ pub const Host = struct {
         return drew;
     }
 
+    /// Present the prepared frame into a texture the host owns. Same locking
+    /// as renderPresent. `done` runs on Metal's completion thread once the
+    /// pixels exist, which is when the host may show them.
+    pub fn renderPresentTexture(
+        self: *Host,
+        u: Uniforms,
+        tex: ?*anyopaque,
+        done: ?*const fn (?*anyopaque) callconv(.c) void,
+        user: ?*anyopaque,
+    ) bool {
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
+        const g = if (self.g) |*g| g else return false;
+        const t0 = clock.ticksUs();
+        const drew = g.renderTexture(u, tex, done, user);
+        self.prof_present_us = clock.ticksUs() - t0;
+        return drew;
+    }
+
     /// Render offscreen. The caller owns the returned pixels.
     ///
     /// Under gpu_mu from the atlas sync on: this can arrive on the input

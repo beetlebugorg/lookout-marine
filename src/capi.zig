@@ -647,6 +647,22 @@ export fn lookout_render(h: ?*lookout) c_int {
     const ok = l.render() catch return -1;
     return if (ok) 1 else 0;
 }
+/// One frame into a texture the host owns, for a host with no surface of its
+/// own. `tex` is an id<MTLTexture> of pixel format BGRA8Unorm carrying the
+/// render-target usage, and it sets the frame's pixel size. `done` runs on
+/// Metal's completion thread once the pixels exist; a RealityKit host presents
+/// its drawable there.
+export fn lookout_render_texture(
+    h: ?*lookout,
+    tex: ?*anyopaque,
+    done: ?*const fn (?*anyopaque) callconv(.c) void,
+    user: ?*anyopaque,
+) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ok = l.renderTo(.{ .texture = .{ .tex = tex, .done = done, .user = user } }) catch return -1;
+    return if (ok) 1 else 0;
+}
 /// 1 if a redraw is needed (view/state changed, a build is filling in, or the
 /// view left coverage). When 0 the chart is static — your loop can block on
 /// events and use no CPU. Call lookout_render only when this is 1.

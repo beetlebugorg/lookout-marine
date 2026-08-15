@@ -2381,7 +2381,25 @@ pub const Lookout = struct {
         return @abs(self.scaminLat() - self.style_lat) > STYLE_LAT_DRIFT;
     }
 
+    /// Where a frame goes. `.surface` presents into the native surface the
+    /// host attached. `.texture` renders into a texture the host owns and
+    /// keeps, which is how a 3D host that has no swapchain of its own takes
+    /// the chart: RealityKit hands over a drawable's texture, and `done` runs
+    /// on Metal's completion thread when the pixels exist.
+    pub const RenderTarget = union(enum) {
+        surface,
+        texture: struct {
+            tex: ?*anyopaque,
+            done: ?*const fn (?*anyopaque) callconv(.c) void = null,
+            user: ?*anyopaque = null,
+        },
+    };
+
     pub fn render(self: *Lookout) !bool {
+        return self.renderTo(.surface);
+    }
+
+    pub fn renderTo(self: *Lookout, target: RenderTarget) !bool {
         if (self.loadingPulse()) return false;
         // $LOOKOUT_PHASE_PROF splits the frame into its four phases. The
         // offscreen harnesses measure a settled camera and report 5.68 ms; the
@@ -2419,7 +2437,10 @@ pub const Lookout = struct {
             const was_dirty = self.view_dirty;
             self.view_dirty = false;
             self.apiUnlock();
-            ok = self.ct.renderPresent(uniforms);
+            ok = switch (target) {
+                .surface => self.ct.renderPresent(uniforms),
+                .texture => |t| self.ct.renderPresentTexture(uniforms, t.tex, t.done, t.user),
+            };
             self.apiLock();
             if (ok) {
                 self.ct.m.markDrawnAs(shows);

@@ -810,6 +810,17 @@ void lookout_set_mariner(lookout *h, const tile57_mariner *m);
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */
 int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=headless) */
+/* One frame into a texture the host owns, for a host that has no surface of
+ * its own to present into. `tex` is an id<MTLTexture> of pixel format
+ * BGRA8Unorm carrying MTLTextureUsageRenderTarget, and its size is the frame's
+ * pixel size, so keep it in step with lookout_resize and the pixel density.
+ * `done` (NULL to ignore) runs on Metal's completion thread once the pixels
+ * exist, not on the calling thread. A RealityKit host opens with
+ * LOOKOUT_NATIVE_NONE, takes a drawable from a TextureResource.DrawableQueue
+ * each frame, passes drawable.texture here, and presents the drawable from the
+ * callback. Returns 1 when the frame was recorded, 0 when the texture cannot
+ * be a render target. */
+int lookout_render_texture(lookout *h, void *tex, void (*done)(void *user), void *user);
 /* 1 if a redraw is needed (view/state changed, a build is filling in, or the
  * view left coverage). When 0 the chart is static — block on events, no CPU.
  * Render on demand: call lookout_render only when this returns 1. */
