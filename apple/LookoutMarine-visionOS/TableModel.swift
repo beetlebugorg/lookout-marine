@@ -291,12 +291,30 @@ final class TableModel {
 
     private var chartDragLast: SIMD3<Float>?
     private var chartDragLastAt: TimeInterval = 0
+
+    /// Where the gesture in hand began. A start this far from the remembered
+    /// one is a different gesture, which is the only signal a cancelled
+    /// gesture leaves behind.
+    private static let newGesture: Float = 0.001
+    private var chartDragStart: SIMD3<Float>?
+    private var chartZoomAt: SIMD3<Float>?
     private var chartDragVelocity: SIMD2<Double> = .zero
     private var chartZoomLast: Double = 1
     private var chartZoomAnchor: SIMD2<Float> = [0.5, 0.5]
     private var chartRotateStart: Double = 0
 
-    func chartDragChanged(to p: SIMD3<Float>, at time: TimeInterval) {
+    /// A hand on the chart, given both where the gesture began and where it is
+    /// now. The start names the gesture: the system cancels a gesture whenever
+    /// the hands leave its view, and a cancelled gesture never ends, so the
+    /// next one would otherwise arrive with the last one's last point still
+    /// held. The first delta would then be the distance between two unrelated
+    /// hand positions, which at 2000 points per meter throws the chart clear
+    /// across the ocean.
+    func chartDragChanged(from start: SIMD3<Float>, to p: SIMD3<Float>, at time: TimeInterval) {
+        if chartDragStart == nil || distance(chartDragStart!, start) > TableModel.newGesture {
+            chartDragStart = start
+            chartDragLast = nil
+        }
         defer { chartDragLast = p; chartDragLastAt = time }
         guard let last = chartDragLast else {
             // A hand on the chart stops any coast, the way a hand on a paper
@@ -326,6 +344,7 @@ final class TableModel {
     /// how a paper chart pushed across a table behaves.
     func chartDragEnded() {
         chartDragLast = nil
+        chartDragStart = nil
         let v = chartDragVelocity
         let speed = (v.x * v.x + v.y * v.y).squareRoot()
         if speed > TableModel.flingFloor {
@@ -338,9 +357,17 @@ final class TableModel {
     /// second, so it is the same number a pointer platform would use.
     private static let flingFloor: Double = 120
 
+    /// `anchor` is where the pinch began, so it also names the gesture. A
+    /// cancelled pinch never ends either, and the next one opens at a
+    /// magnification of 1 against the last one's: the step is then the whole
+    /// difference between two gestures, four zoom levels at a time, taken
+    /// about an anchor the hands are nowhere near.
     func chartZoomChanged(_ magnification: Double, anchor: SIMD3<Float>) {
-        if chartZoomLast == 1 {
+        if chartZoomAt == nil || distance(chartZoomAt!, anchor) > TableModel.newGesture {
+            chartZoomAt = anchor
             chartZoomAnchor = sheet.fraction(at: anchor)
+            chartZoomLast = 1
+            chartHands = .undecided
         }
         let step = log2(magnification / chartZoomLast) * TableModel.zoomGain
         chartZoomLast = magnification
@@ -362,6 +389,7 @@ final class TableModel {
 
     func chartZoomEnded() {
         chartZoomLast = 1
+        chartZoomAt = nil
         chartHands = .undecided
     }
 
@@ -564,6 +592,16 @@ final class TableModel {
     /// drafting slope, and near upright for a chart read from across the room.
     static let tiltSteps: [Float] = [0, 15, 30, 50]
 
+    /// The steepest angle this volume can hold. A sheet tilted by an angle
+    /// stands its own depth times that angle's sine above the table, and a
+    /// volume clips whatever crosses its bounds, so a steeper sheet would have
+    /// its far edge cut off.
+    var maxTiltDegrees: Float {
+        let headroom = max(volumeHeight - 0.02, 0)
+        guard sheet.depth > 0 else { return 0 }
+        return asin(min(1, headroom / sheet.depth)) * 180 / .pi
+    }
+
     func stepTilt() {
         let fits = TableModel.tiltSteps.filter { $0 <= maxTiltDegrees + 0.5 }
         let next = fits.first { $0 > tiltDegrees + 0.5 }
@@ -588,6 +626,7 @@ final class TableModel {
         let radians = tiltDegrees * .pi / 180
         let tilt = simd_quatf(angle: radians, axis: SIMD3<Float>(1, 0, 0))
         sheet.root.orientation = yaw * tilt
+        sheet.root.position = floorPosition + SIMD3<Float>(0, sheet.depth / 2 * sin(radians), 0)
     }
 
     // MARK: - A tap on the chart
@@ -601,16 +640,6 @@ final class TableModel {
     func tapChart(at p: SIMD3<Float>) {
         let f = sheet.fraction(at: p)
         guard sheet.onSheet(f), let geo = engine.geoFor(fraction: f) else { return }
-    /// The steepest angle this volume can hold. A sheet tilted by an angle
-    /// stands its own depth times that angle's sine above the table, and a
-    /// volume clips whatever crosses its bounds, so a steeper sheet would have
-    /// its far edge cut off.
-    var maxTiltDegrees: Float {
-        let headroom = max(volumeHeight - 0.02, 0)
-        guard sheet.depth > 0 else { return 0 }
-        return asin(min(1, headroom / sheet.depth)) * 180 / .pi
-    }
-
         let found = engine.pick(lon: geo.lon, lat: geo.lat)
         picks = found
         pickIndex = 0
@@ -626,7 +655,6 @@ final class TableModel {
         pickIndex = 0
         pickCard.hide()
     }
-        sheet.root.position = floorPosition + SIMD3<Float>(0, sheet.depth / 2 * sin(radians), 0)
 
     // MARK: - Controls
 

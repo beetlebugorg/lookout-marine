@@ -125,6 +125,7 @@ struct ChartTableView: View {
             .targetedToEntity(where: .has(ChartFaceTag.self))
             .onChanged { v in
                 model.chartDragChanged(
+                    from: v.convert(v.startLocation3D, from: .local, to: model.sheet.root),
                     to: v.convert(v.location3D, from: .local, to: model.sheet.root),
                     at: v.gestureValue.time.timeIntervalSinceReferenceDate)
             }
