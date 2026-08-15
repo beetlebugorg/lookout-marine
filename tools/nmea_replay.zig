@@ -1,6 +1,7 @@
 //! Serve a recorded NMEA 0183 log over TCP, the way a boat's gateway does.
 //!
-//!   zig run -lc tools/nmea_replay.zig -- [--port 10110] [--rate 1] [--once] [LOG]
+//!   zig run -lc tools/nmea_replay.zig -- [--port 10110] [--rate 1] [--once]
+//!                                        [--host 127.0.0.1] [LOG]
 //!
 //! The log defaults to test/annapolis.nmea and the port to 10110, which is what
 //! the nmea0183 plugin dials unless the mariner says otherwise. Point a
@@ -33,6 +34,9 @@ const Args = struct {
     port: u16 = 10110,
     rate: f64 = 1.0,
     once: bool = false,
+    /// The address to bind, in host byte order. Loopback unless --host says
+    /// otherwise.
+    host: u32 = 0x7f00_0001,
 };
 
 /// One second of the log: every sentence from one RMC up to the next.
@@ -103,6 +107,9 @@ fn parseArgs(argv: []const []const u8) !Args {
         } else if (std.mem.eql(u8, arg, "--rate") and i + 1 < argv.len) {
             i += 1;
             a.rate = try std.fmt.parseFloat(f64, argv[i]);
+        } else if (std.mem.eql(u8, arg, "--host") and i + 1 < argv.len) {
+            i += 1;
+            a.host = try parseHost(argv[i]);
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             a.path = arg;
         }
@@ -110,9 +117,11 @@ fn parseArgs(argv: []const []const u8) !Args {
     return a;
 }
 
-/// Bind 127.0.0.1 only. A replay feed is for this machine, and a log served to
-/// the network is a boat's instruments impersonated on somebody else's screen.
-fn listenLoopback(port: u16) !std.c.fd_t {
+/// Bind 127.0.0.1 unless told otherwise. A replay feed is for this machine,
+/// and a log served to the network is a boat's instruments impersonated on
+/// somebody else's screen. A headset or a phone cannot reach this machine's
+/// loopback, so testing on one takes `--host any` and the machine's address.
+fn listen(host: u32, port: u16) !std.c.fd_t {
     const s = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
     if (s < 0) return error.SocketFailed;
     errdefer _ = std.c.close(s);
@@ -120,11 +129,25 @@ fn listenLoopback(port: u16) !std.c.fd_t {
     _ = std.c.setsockopt(s, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, &yes, @sizeOf(c_int));
     var addr = std.c.sockaddr.in{
         .port = std.mem.nativeToBig(u16, port),
-        .addr = std.mem.nativeToBig(u32, 0x7f00_0001),
+        .addr = std.mem.nativeToBig(u32, host),
     };
     if (std.c.bind(s, @ptrCast(&addr), @sizeOf(@TypeOf(addr))) != 0) return error.BindFailed;
     if (std.c.listen(s, 4) != 0) return error.ListenFailed;
     return s;
+}
+
+/// A dotted quad, or "any" for every interface, in host byte order.
+fn parseHost(text: []const u8) !u32 {
+    if (std.mem.eql(u8, text, "any")) return 0;
+    var out: u32 = 0;
+    var parts = std.mem.splitScalar(u8, text, '.');
+    var n: usize = 0;
+    while (parts.next()) |part| : (n += 1) {
+        if (n == 4) return error.BadHost;
+        out = (out << 8) | try std.fmt.parseInt(u8, part, 10);
+    }
+    if (n != 4) return error.BadHost;
+    return out;
 }
 
 /// The port actually bound. Port 0 asks the system for a free one, which is
@@ -166,15 +189,28 @@ pub fn main(init: std.process.Init) !void {
         .once = a.once,
     };
 
-    const srv = try listenLoopback(a.port);
+    const srv = try listen(a.host, a.port);
     defer _ = std.c.close(srv);
 
     var buf: [512]u8 = undefined;
     var out = std.Io.File.stdout().writer(init.io, &buf);
     try out.interface.print(
-        "serving {s}, {d} group(s) at {d}x on 127.0.0.1:{d}. Ctrl-C to stop.\n",
-        .{ a.path, groups.len, a.rate, boundPort(srv) },
+        "serving {s}, {d} group(s) at {d}x on {d}.{d}.{d}.{d}:{d}. Ctrl-C to stop.\n",
+        .{
+            a.path,                groups.len,
+            a.rate,                (a.host >> 24) & 0xff,
+            (a.host >> 16) & 0xff, (a.host >> 8) & 0xff,
+            a.host & 0xff,         boundPort(srv),
+        },
     );
+    // Anything but loopback puts a recording on the network, where another
+    // machine can take it for a boat's own instruments.
+    if (a.host != 0x7f00_0001) {
+        try out.interface.print(
+            "this log is on the network, not just this machine. It is a recording, not a boat.\n",
+            .{},
+        );
+    }
     try out.interface.flush();
 
     while (true) {
