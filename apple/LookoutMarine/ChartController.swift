@@ -944,7 +944,6 @@ final class ChartController: NSObject {
 
     // MARK: - Plugin tables
 
-    #if os(macOS)
     /// Every table the loaded plugins declare. The shell builds a menu item
     /// and a window per declaration and knows nothing about the plugins.
     func tableSpecs() -> [PluginTableSpec] {
@@ -982,11 +981,8 @@ final class ChartController: NSObject {
         return (top["seq"] as? Int ?? 0, rows)
     }
 
-    #endif
-
     // The alert bridge is cross-platform: an iPad mariner hears the plugins
-    // too. The declared-table queries above are macOS-only (they feed NSWindow
-    // dialogs), so the guard closes before these and reopens after.
+    // too.
 
     /// Every alert the plugins have raised, already ordered: what nobody has
     /// answered first, then the loudest, then the oldest. `seq` moves when the
@@ -1010,7 +1006,6 @@ final class ChartController: NSObject {
         return lookout_plugin_alert_ack(h, id) == 0
     }
 
-    #if os(macOS)
     /// Tell the plugin its table is on screen, or is not.
     func setTableOpen(plugin: String, key: String, _ open: Bool) {
         guard let h = handle else { return }
@@ -1019,6 +1014,8 @@ final class ChartController: NSObject {
         }
         kick()
     }
+
+    #if os(macOS)
 
     /// Put a place at the centre of the chart and hand back whatever plugin
     /// object draws there, for the bubble. Follow is switched off first: a
@@ -1641,7 +1638,7 @@ final class GestureBench {
 
 /// The settings form reads and writes the chart through these. Both protocols
 /// are the whole of what it asks for, so the same form serves every app.
-extension ChartController: MarinerSettingsHost, PluginSettingsHost {}
+extension ChartController: MarinerSettingsHost, PluginSettingsHost, PluginTableHost {}
 
 /// The alert watch reads and answers alarms through this.
 extension ChartController: AlertHost {}

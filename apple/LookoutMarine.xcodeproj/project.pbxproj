@@ -36,8 +36,10 @@
 		4C4022915885B10AA22AA8D5 /* ChartTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */; };
 		4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
 		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
+		4EAAB9271B43ED57E89CB0C5 /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9556AB15997797EE862A05EA /* PluginTableModel.swift */; };
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
+		57378738FDB27CD3D2D7283F /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9556AB15997797EE862A05EA /* PluginTableModel.swift */; };
 		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
 		5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
@@ -55,6 +57,7 @@
 		7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
 		7F31972EABF2BAEA6A401CD5 /* AlertWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */; };
 		8862EE1956820306F0BEF5E9 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */; };
+		90C79F0BE83FB59039B890BF /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 164DA2408F09AB7A9DA21D6B /* PluginTableView.swift */; };
 		91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
@@ -78,6 +81,7 @@
 		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
+		C8C54E89875A8EB9DA570076 /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9556AB15997797EE862A05EA /* PluginTableModel.swift */; };
 		C9F199C0DAD77677281937AD /* PickDecoded.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938C50DC1CD27497AA2AE816 /* PickDecoded.swift */; };
 		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
 		CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
@@ -123,6 +127,7 @@
 		0ACD979758E1C7A0557028AA /* MarinerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettings.swift; sourceTree = "<group>"; };
 		0F176FB9274EC3AD3BBD8386 /* ChartSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSheet.swift; sourceTree = "<group>"; };
 		10B668C8717144E00D603812 /* LookoutMarine-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		164DA2408F09AB7A9DA21D6B /* PluginTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableView.swift; sourceTree = "<group>"; };
 		20D84589BE7C5E2663EC72ED /* OwnShip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnShip.swift; sourceTree = "<group>"; };
 		21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlerts.swift; sourceTree = "<group>"; };
 		227014335EDED16C77E34822 /* MarinerSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSections.swift; sourceTree = "<group>"; };
@@ -155,6 +160,7 @@
 		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertWatch.swift; sourceTree = "<group>"; };
 		938C50DC1CD27497AA2AE816 /* PickDecoded.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickDecoded.swift; sourceTree = "<group>"; };
+		9556AB15997797EE862A05EA /* PluginTableModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableModel.swift; sourceTree = "<group>"; };
 		9691E45FAC1F310677953B5A /* AISRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISRows.swift; sourceTree = "<group>"; };
 		9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -269,6 +275,7 @@
 				80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */,
 				08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */,
 				5B39D8DB2792CC7520B0F19D /* PluginTable.swift */,
+				9556AB15997797EE862A05EA /* PluginTableModel.swift */,
 				D26F78CDEC3CDA7C0807297F /* SearchField.swift */,
 				51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */,
 				08B62D296D34C231163DF7C2 /* SettingsView.swift */,
@@ -295,6 +302,7 @@
 				CD44A08FEB31F35A253E7342 /* LookoutMarineApp.swift */,
 				20D84589BE7C5E2663EC72ED /* OwnShip.swift */,
 				C17BF1C13BA2C8D28C156211 /* PickReportView.swift */,
+				164DA2408F09AB7A9DA21D6B /* PluginTableView.swift */,
 				E8E07550C7397F450575CA9D /* Readouts.swift */,
 				4AF7A344221893D606499AC7 /* Seabed.swift */,
 				E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */,
@@ -644,6 +652,7 @@
 				A2480AA1E94033ABBF9B678F /* PluginInstall.swift in Sources */,
 				A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */,
 				5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */,
+				57378738FDB27CD3D2D7283F /* PluginTableModel.swift in Sources */,
 				3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */,
 				0B3C1DDDBE36EC375F1CA997 /* SettingsRows.swift in Sources */,
 				5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */,
@@ -678,6 +687,7 @@
 				15BC02BD89536FECE4FD9DA8 /* PluginInstall.swift in Sources */,
 				22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */,
 				4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */,
+				4EAAB9271B43ED57E89CB0C5 /* PluginTableModel.swift in Sources */,
 				4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */,
 				041CE190E86B6C6013B5D705 /* SettingsRows.swift in Sources */,
 				FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */,
@@ -709,6 +719,8 @@
 				653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */,
 				B4249E18A6DC4E7D507DEDB2 /* PluginAlerts.swift in Sources */,
 				E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */,
+				C8C54E89875A8EB9DA570076 /* PluginTableModel.swift in Sources */,
+				90C79F0BE83FB59039B890BF /* PluginTableView.swift in Sources */,
 				5FCDF96DB1801BB8DD88D600 /* Readouts.swift in Sources */,
 				37EB7CF70D59783121BBB0CF /* Seabed.swift in Sources */,
 				28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */,

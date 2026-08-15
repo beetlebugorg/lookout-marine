@@ -54,6 +54,7 @@ xcrun swiftc -O \
     apple/LookoutMarine-visionOS/Readouts.swift \
     apple/LookoutMarine/PluginAlerts.swift \
     apple/LookoutMarine/PickDecoded.swift \
+    apple/LookoutMarine/PluginTableModel.swift \
     apple/LookoutMarine/Chrome.swift \
     apple/LookoutMarine-visionOS/Log.swift \
     apple/tests/main.swift \

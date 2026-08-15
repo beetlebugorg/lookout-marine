@@ -259,6 +259,12 @@ private struct ChartTableControls: View {
             }
             .disabled(!model.ready)
             Button {
+                openWindow(id: LookoutMarineVisionApp.tablesWindow)
+            } label: {
+                Label("What the plugins are tracking", systemImage: "tablecells")
+            }
+            .disabled(!model.ready)
+            Button {
                 openWindow(id: LookoutMarineVisionApp.settingsWindow)
             } label: {
                 Label("Settings", systemImage: "gearshape")

@@ -181,6 +181,9 @@ targets:
       - path: LookoutMarine/Chrome.swift
       - path: LookoutMarine/PluginAlerts.swift
       - path: LookoutMarine/AlertWatch.swift
+      # A plugin's declared table: the columns, the rows, and the units they
+      # read in. The Mac draws it with AppKit and the headset with SwiftUI.
+      - path: LookoutMarine/PluginTableModel.swift
       # The sample cell, so a fresh install draws something. Gitignored and
       # copied in by build-visionos.sh from the machine's chart library.
       - path: Charts

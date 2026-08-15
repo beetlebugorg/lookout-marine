@@ -520,6 +520,53 @@ if let depthSeen {
     check(false, "no DRVAL1 in any payload: a relief has nothing to build from")
 }
 
+// MARK: - The roster
+
+// The table the AIS plugin declares, read the way the roster window reads it:
+// the declaration, then the rows, formatted in the mariner's units by the same
+// code the Mac's table uses.
+section("the roster")
+var len = 0
+var specs: [PluginTableSpec] = []
+if let raw = lookout_plugin_tables_json(h, &len), len > 0,
+   let top = try? JSONSerialization.jsonObject(with: Data(bytes: raw, count: len)) as? [String: Any],
+   let list = top["tables"] as? [[String: Any]] {
+    specs = list.compactMap { PluginTableSpec($0) }
+}
+print("  declared: " + specs.map { "\($0.title) [\($0.columns.count) columns]" }.joined(separator: ", "))
+check(!specs.isEmpty, "a plugin declares a table")
+
+if let spec = specs.first {
+    _ = lookout_plugin_table_open(h, spec.plugin, spec.key, 1)
+    Thread.sleep(forTimeInterval: 1.0)
+    var rlen = 0
+    var rows: [PluginTableRow] = []
+    if let raw = spec.plugin.withCString({ p in spec.key.withCString { k in
+            spec.sortKey.withCString { s in
+                lookout_plugin_table_rows(h, p, k, s, spec.sortAscending ? 1 : 0, &rlen)
+            } } }),
+       rlen > 0,
+       let top = try? JSONSerialization.jsonObject(with: Data(bytes: raw, count: rlen)) as? [String: Any],
+       let list = top["rows"] as? [[String: Any]] {
+        rows = list.compactMap { PluginTableRow($0, columns: spec.columns.count) }
+    }
+    if rows.isEmpty {
+        print("  no rows: the NMEA replay is not running, so nothing is being tracked")
+    } else {
+        for row in rows.prefix(3) {
+            let line = spec.columns.enumerated()
+                .map { PluginTableFormat.text(row.cell($0.offset), $0.element.type) }
+                .joined(separator: "  ")
+            print("  \(line)")
+        }
+        check(true, "the roster carries \(rows.count) row(s), formatted for the mariner")
+        // The plugin's own order comes first: an alarmed row holds the top
+        // whatever the sort.
+        check(rows.first!.band <= rows.last!.band, "the plugin's bands hold their order")
+    }
+    _ = lookout_plugin_table_open(h, spec.plugin, spec.key, 0)
+}
+
 // MARK: - The readouts
 
 // What a HUD shows: where the boat is, and what it is doing. The position

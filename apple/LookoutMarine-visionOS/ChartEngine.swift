@@ -461,7 +461,9 @@ final class ChartEngine {
     // MARK: - Plugin data
 
     /// The rows of a plugin table, as JSON. The AIS plugin's "targets" table
-    /// carries one row per vessel with its position, name and approach.
+    /// carries one row per vessel with its position, name and approach. The
+    /// traffic on the sheet reads this raw; the roster window reads it through
+    /// PluginTableHost below.
     func tableRows(plugin: String, key: String) -> Data? {
         guard let h = handle else { return nil }
         var len = 0
@@ -474,6 +476,42 @@ final class ChartEngine {
     func setTableOpen(plugin: String, key: String, open: Bool) {
         guard let h = handle else { return }
         _ = lookout_plugin_table_open(h, plugin, key, open ? 1 : 0)
+    }
+
+    // MARK: - The tables a plugin declares
+
+    func tableSpecs() -> [PluginTableSpec] {
+        guard let h = handle else { return [] }
+        var len = 0
+        guard let raw = lookout_plugin_tables_json(h, &len), len > 0 else { return [] }
+        // Borrowed until the next plugin query, so decode before anything else
+        // runs.
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["tables"] as? [[String: Any]] else { return [] }
+        return list.compactMap { PluginTableSpec($0) }
+    }
+
+    func tableRows(plugin: String, key: String, sortKey: String, ascending: Bool, columns: Int)
+        -> (seq: Int, rows: [PluginTableRow])? {
+        guard let h = handle else { return nil }
+        var len = 0
+        let raw = plugin.withCString { p in
+            key.withCString { k in
+                sortKey.withCString { s in
+                    lookout_plugin_table_rows(h, p, k, s, ascending ? 1 : 0, &len)
+                }
+            }
+        }
+        guard let raw, len > 0 else { return nil }
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["rows"] as? [[String: Any]] else { return nil }
+        return (top["seq"] as? Int ?? 0, list.compactMap { PluginTableRow($0, columns: columns) })
+    }
+
+    func setTableOpen(plugin: String, key: String, _ open: Bool) {
+        setTableOpen(plugin: plugin, key: key, open: open)
     }
 
     /// What an overlay object says now: where it draws and its payload. The
@@ -530,4 +568,4 @@ extension Array where Element == String {
 }
 
 /// The settings form reads and writes the chart through these.
-extension ChartEngine: MarinerSettingsHost, PluginSettingsHost, AlertHost {}
+extension ChartEngine: MarinerSettingsHost, PluginSettingsHost, AlertHost, PluginTableHost {}

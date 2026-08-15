@@ -42,7 +42,16 @@ struct LookoutMarineVisionApp: App {
         }
         .windowStyle(.plain)
         .defaultSize(width: 900, height: 700)
+
+        // What the plugins are tracking, as the roster they declare. The
+        // flags on the sheet say where the traffic is; this says what it is.
+        WindowGroup(id: LookoutMarineVisionApp.tablesWindow) {
+            PluginTableView(model: model)
+        }
+        .windowStyle(.plain)
+        .defaultSize(width: 760, height: 560)
     }
 
     static let settingsWindow = "settings"
+    static let tablesWindow = "tables"
 }
