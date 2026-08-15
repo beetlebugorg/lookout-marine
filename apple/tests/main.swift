@@ -26,6 +26,32 @@ import RealityKit
 
 // MARK: - A tiny harness
 
+/// Collects what one pick answers. A class, because the callback is a C
+/// function pointer and carries only an opaque pointer across.
+final class PickBox {
+    var items: [PickFeature] = []
+}
+
+/// The pick the app runs, as raw features.
+func enginePick(_ h: OpaquePointer, _ lon: Double, _ lat: Double) -> [PickFeature] {
+    let box = PickBox()
+    var cb = tile57_query_cb(
+        ctx: Unmanaged.passUnretained(box).toOpaque(),
+        feature: { c, cls, clsLen, s57, s57Len, chart, chartLen in
+            guard let c else { return }
+            let box = Unmanaged<PickBox>.fromOpaque(c).takeUnretainedValue()
+            func str(_ p: UnsafePointer<CChar>?, _ n: Int) -> String {
+                guard let p, n > 0 else { return "" }
+                return String(decoding: UnsafeRawBufferPointer(start: p, count: n), as: UTF8.self)
+            }
+            box.items.append(PickFeature(cls: str(cls, clsLen),
+                                         chart: str(chart, chartLen),
+                                         s57: str(s57, s57Len)))
+        })
+    lookout_pick_ranked(h, lon, lat, &cb)
+    return box.items
+}
+
 var failures = 0
 var checks = 0
 
@@ -419,6 +445,46 @@ check(AISRows.heading(payload: #"{"title":"X","rows":[["MMSI","1"],["COG","124°
       "course stands in when no heading is reported")
 check(AISRows.heading(payload: #"{"title":"X","rows":[["MMSI","1"]]}"#) == nil,
       "a target that reports neither answers nothing")
+
+// MARK: - Depth as a field
+
+// A relief under the sheet needs depth on a grid, and the ABI has no depth
+// field: it answers per picked position. So the question is what one pick
+// costs and whether its payload carries a number a mesh could use.
+section("depth as a field")
+var lo = 0.0, la = 0.0
+lookout_screen_to_geo(h, Float(ptW) / 2, Float(ptH) / 2, &lo, &la)
+var depthSeen: String?
+var picks = 0
+let t0 = Date()
+for row in 0..<8 {
+    for col in 0..<8 {
+        var plon = 0.0, plat = 0.0
+        lookout_screen_to_geo(h,
+                              Float(ptW) * (Float(col) + 0.5) / 8,
+                              Float(ptH) * (Float(row) + 0.5) / 8,
+                              &plon, &plat)
+        for f in enginePick(h, plon, plat) {
+            picks += 1
+            guard depthSeen == nil else { continue }
+            // A depth area states the range it covers. That is the number a
+            // relief would be built from.
+            if f.cls == "DEPARE" || f.cls == "DRGARE", let d = f.s57.range(of: "DRVAL1") {
+                let end = f.s57.index(d.lowerBound, offsetBy: 40, limitedBy: f.s57.endIndex)
+                depthSeen = String(f.s57[d.lowerBound..<(end ?? f.s57.endIndex)])
+            }
+        }
+    }
+}
+let ms = Date().timeIntervalSince(t0) * 1000
+print(String(format: "  64 positions, %d features, %.1f ms (%.2f ms each)", picks, ms, ms / 64))
+check(picks > 0, "a grid of positions answers with features")
+if let depthSeen {
+    print("  depth in the payload: \(depthSeen)")
+    check(true, "a depth area states its range, so a relief has values to use")
+} else {
+    check(false, "no DRVAL1 in any payload: a relief has nothing to build from")
+}
 
 // MARK: - The alarms
 

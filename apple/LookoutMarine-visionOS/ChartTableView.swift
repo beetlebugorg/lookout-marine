@@ -231,9 +231,16 @@ private struct ChartTableControls: View {
             }
             .disabled(!model.ready)
             Button {
+                model.stepTilt()
+            } label: {
+                Label("Tilt the table", systemImage: model.tiltDegrees > 0
+                      ? "rectangle.portrait.rotate"
+                      : "rectangle.rotate")
+            }
+            Button {
                 model.levelSheet()
             } label: {
-                Label("Square the sheet", systemImage: "square.grid.2x2")
+                Label("Lay it flat and square", systemImage: "square.grid.2x2")
             }
             .disabled(!model.ready)
             Button {

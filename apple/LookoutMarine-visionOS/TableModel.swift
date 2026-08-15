@@ -375,17 +375,52 @@ final class TableModel {
         let claimed = sheetHands == .rotate
         guard claim(&sheetHands, as: .rotate, past: abs(radians) > TableModel.rotateDeadZone) else { return }
         if !claimed {
-            sheetRotateStart = sheet.root.orientation
+            sheetRotateStart = yaw
             sheetRotateOrigin = radians
         }
-        let start = sheetRotateStart ?? sheet.root.orientation
-        sheet.root.orientation = start * simd_quatf(angle: Float(radians - sheetRotateOrigin), axis: [0, 1, 0])
+        let start = sheetRotateStart ?? yaw
+        yaw = start * simd_quatf(angle: Float(radians - sheetRotateOrigin), axis: [0, 1, 0])
+        applyPose()
     }
 
     func sheetRotateEnded() {
         sheetRotateStart = nil
         sheetRotateOrigin = 0
         sheetHands = .undecided
+    }
+
+    // MARK: - The sheet's pose
+
+    /// The sheet lies flat by default, as a chart on a table does. Tilting the
+    /// far edge up stands it towards the mariner, the way a drafting table or
+    /// a chart table's own sloped top does, which is easier to read across
+    /// without leaning over it.
+    ///
+    /// Yaw and tilt are held apart and composed here. Kept as one quaternion
+    /// they would fight: turning a tilted sheet about the world's up axis
+    /// swings it through the table rather than turning it on its own surface.
+    private var yaw = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    private(set) var tiltDegrees: Float = 0
+
+    /// The angles the tilt control steps through. Flat, a reading slope, a
+    /// drafting slope, and near upright for a chart read from across the room.
+    static let tiltSteps: [Float] = [0, 15, 30, 50]
+
+    func stepTilt() {
+        let next = TableModel.tiltSteps.first { $0 > tiltDegrees + 0.5 }
+        setTilt(next ?? 0)
+    }
+
+    func setTilt(_ degrees: Float) {
+        tiltDegrees = min(max(degrees, 0), 80)
+        applyPose()
+    }
+
+    /// Yaw about the room's up axis, then tilt about the sheet's own near edge,
+    /// so the far edge is what rises.
+    private func applyPose() {
+        let tilt = simd_quatf(angle: tiltDegrees * .pi / 180, axis: SIMD3<Float>(1, 0, 0))
+        sheet.root.orientation = yaw * tilt
     }
 
     // MARK: - A tap on the chart
@@ -432,6 +467,8 @@ final class TableModel {
     }
 
     func levelSheet() {
-        sheet.root.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
+        yaw = simd_quatf(angle: 0, axis: [0, 1, 0])
+        tiltDegrees = 0
+        applyPose()
     }
 }
