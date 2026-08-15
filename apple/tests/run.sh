@@ -7,7 +7,8 @@
 # chain underneath it on the Mac: the RealityKit drawable queue, the core's
 # texture render path, the geo-to-sheet mapping and the AIS decoder the app
 # ships. It compiles apple/LookoutMarine-visionOS/AISRows.swift, so the decoder under
-# test is the one that ships.
+# test is the one that ships. PluginAlerts comes along so the alarm the AIS
+# plugin raises is decoded here by the same reader the apps use.
 #
 # Traffic needs a feed. With none, the AIS section checks the decoder against
 # the ABI's own documented example instead:
@@ -49,6 +50,9 @@ xcrun swiftc -O \
     -import-objc-header apple/LookoutMarine-visionOS/Bridging-Header.h \
     -I zig-out/include \
     apple/LookoutMarine-visionOS/AISRows.swift \
+    apple/LookoutMarine/PluginAlerts.swift \
+    apple/LookoutMarine/Chrome.swift \
+    apple/LookoutMarine-visionOS/Log.swift \
     apple/tests/main.swift \
     "$repack/liblookoutall.a" \
     -lz \

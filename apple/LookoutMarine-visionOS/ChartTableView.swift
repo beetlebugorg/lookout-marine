@@ -12,6 +12,13 @@ import SwiftUI
 struct ChartTableView: View {
     let model: TableModel
     @State private var choosingCharts = false
+    /// The alert watch publishes; the banner over the table is built from it.
+    @ObservedObject private var alerts: AlertWatch
+
+    init(model: TableModel) {
+        self.model = model
+        self.alerts = model.alerts
+    }
 
     var body: some View {
         GeometryReader3D { proxy in
@@ -64,6 +71,17 @@ struct ChartTableView: View {
                     .padding(32)
                     .glassBackgroundEffect()
                 }
+            }
+        }
+        // Above the far edge, facing the mariner: an alarm has to be seen from
+        // wherever they are standing, and it must not lie over the water it is
+        // about.
+        .ornament(attachmentAnchor: .scene(.top)) {
+            if !alerts.alerts.isEmpty {
+                AlertBanner(alerts: alerts.alerts) { alerts.acknowledge($0) }
+                    .frame(maxWidth: AlertBanner.maxWidth)
+                    .padding(12)
+                    .glassBackgroundEffect()
             }
         }
         // The near edge of the table. The volume's bottom is the floor the

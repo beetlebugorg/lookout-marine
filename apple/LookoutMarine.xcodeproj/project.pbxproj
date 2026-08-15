@@ -46,9 +46,11 @@
 		6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
+		71EA32F9D090521AE54E59D6 /* US5MD1MC.pmtiles in Resources */ = {isa = PBXBuildFile; fileRef = C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */; };
 		741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
 		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
+		7F31972EABF2BAEA6A401CD5 /* AlertWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */; };
 		8862EE1956820306F0BEF5E9 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */; };
 		91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
@@ -64,6 +66,7 @@
 		AF99BCFEF525D5291F010508 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE7634B8D1E8049164F21C /* ChartBake.swift */; };
 		B0C9CED213E42A7EC31B5EB1 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
 		B1243028D1D1B63F902164E1 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE7634B8D1E8049164F21C /* ChartBake.swift */; };
+		B4249E18A6DC4E7D507DEDB2 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */; };
 		B74DAD33F52BB26AA7AA1D6C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		BBD244E30F8F8CA10B219DAB /* PickDecoded.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938C50DC1CD27497AA2AE816 /* PickDecoded.swift */; };
@@ -76,7 +79,9 @@
 		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
 		CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
 		D020623372094D2911F7FD7F /* MarinerSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227014335EDED16C77E34822 /* MarinerSections.swift */; };
+		D176B525964AF68362180AD2 /* AlertWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */; };
 		D3A82191350619AF27200EF4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
+		D3C9EDF041C3DB7F10C184B4 /* AlertWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */; };
 		D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		D95FCA469BFB008CE727CFD2 /* MarinerSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227014335EDED16C77E34822 /* MarinerSections.swift */; };
 		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
@@ -84,6 +89,7 @@
 		DE7488B0D16B988AAA2DEAF3 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
 		DF1E1575E3BC273FCEA4A30E /* TableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */; };
 		E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
+		E61B9503386E0ABA58B6BEAF /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
 		E64003666647657D54AE2A68 /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
 		E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		E88374AC97201A82AABB83C2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
@@ -142,6 +148,7 @@
 		87C49C5ED2DF88A1B3E0A2F8 /* ChartLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLibrary.swift; sourceTree = "<group>"; };
 		8AE67031882048136AC3C4B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertWatch.swift; sourceTree = "<group>"; };
 		938C50DC1CD27497AA2AE816 /* PickDecoded.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickDecoded.swift; sourceTree = "<group>"; };
 		9691E45FAC1F310677953B5A /* AISRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISRows.swift; sourceTree = "<group>"; };
 		9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
@@ -149,6 +156,7 @@
 		A57FE65303362F648D2D13FF /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A79681EADC27E70A6BB144FE /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
 		B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartTableView.swift; sourceTree = "<group>"; };
+		C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */ = {isa = PBXFileReference; path = US5MD1MC.pmtiles; sourceTree = "<group>"; };
 		C17BF1C13BA2C8D28C156211 /* PickReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReportView.swift; sourceTree = "<group>"; };
 		C30C216F6C0285110D3B2A87 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
 		CC176DEF0F2C30D02AAA23AD /* AISTraffic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISTraffic.swift; sourceTree = "<group>"; };
@@ -218,6 +226,7 @@
 		066E288701BD08B9A8DA8053 = {
 			isa = PBXGroup;
 			children = (
+				CD4FAE3E28281B9C951CDA4C /* Charts */,
 				07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */,
 				ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */,
 				199D03F5A92A931696942775 /* LookoutMarine-visionOS */,
@@ -229,6 +238,7 @@
 		07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */ = {
 			isa = PBXGroup;
 			children = (
+				93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */,
 				4417D066BB41E317736749E5 /* AltChartStyle.swift */,
 				867B3D3BE969AB708C6FD1A6 /* AppModel.swift */,
 				8AE67031882048136AC3C4B2 /* Assets.xcassets */,
@@ -308,6 +318,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		CD4FAE3E28281B9C951CDA4C /* Charts */ = {
+			isa = PBXGroup;
+			children = (
+				C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */,
+			);
+			path = Charts;
+			sourceTree = "<group>";
+		};
 		ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -344,6 +362,7 @@
 			buildPhases = (
 				CDD8EEB796DD7921B5A2107E /* Build the zig cores (lookout + tile57 dependency) */,
 				B26CB3FD87E39BF4B1C75EAD /* Sources */,
+				746DB68575C9ABE06BC443B2 /* Resources */,
 				252F361AD7A10AC0E79BCD4C /* Frameworks */,
 				AFCDF7C5E356E0FCBA54FB9E /* Bundle the core plugins into Resources/Plugins */,
 			);
@@ -452,6 +471,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		746DB68575C9ABE06BC443B2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				71EA32F9D090521AE54E59D6 /* US5MD1MC.pmtiles in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -587,6 +614,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D3C9EDF041C3DB7F10C184B4 /* AlertWatch.swift in Sources */,
 				42B735FC5CA64B8F05069313 /* AltChartStyle.swift in Sources */,
 				B884496C571D0C49742E3299 /* AppModel.swift in Sources */,
 				B1243028D1D1B63F902164E1 /* ChartBake.swift in Sources */,
@@ -620,6 +648,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7F31972EABF2BAEA6A401CD5 /* AlertWatch.swift in Sources */,
 				6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */,
 				6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */,
 				AF99BCFEF525D5291F010508 /* ChartBake.swift in Sources */,
@@ -655,10 +684,12 @@
 			files = (
 				5EDC1114355DA539A388C6C7 /* AISRows.swift in Sources */,
 				4AFE0107998631BC8A80C3BD /* AISTraffic.swift in Sources */,
+				D176B525964AF68362180AD2 /* AlertWatch.swift in Sources */,
 				29CB1F37867F87193EF62FE0 /* ChartEngine.swift in Sources */,
 				436C6D46BB4C43BEC5F00D06 /* ChartLibrary.swift in Sources */,
 				5EEDE95CAAAD509154C0E2A5 /* ChartSheet.swift in Sources */,
 				4C4022915885B10AA22AA8D5 /* ChartTableView.swift in Sources */,
+				E61B9503386E0ABA58B6BEAF /* Chrome.swift in Sources */,
 				A0B3F0E23FB9A4ACBB46836B /* Log.swift in Sources */,
 				A8CCCA8E68A32C8744F4EF4E /* LookoutMarineApp.swift in Sources */,
 				9E4DE2C59FB562D959E93877 /* MarinerSections.swift in Sources */,
@@ -666,6 +697,7 @@
 				4767147B03551B28D77C6E50 /* OwnShip.swift in Sources */,
 				DBF21148428E64B8967824EC /* PickDecoded.swift in Sources */,
 				653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */,
+				B4249E18A6DC4E7D507DEDB2 /* PluginAlerts.swift in Sources */,
 				E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */,
 				28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */,
 				DF1E1575E3BC273FCEA4A30E /* TableModel.swift in Sources */,

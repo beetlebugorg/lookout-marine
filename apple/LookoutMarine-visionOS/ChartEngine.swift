@@ -372,6 +372,26 @@ final class ChartEngine {
         return lookout_plugin_uninstall(h, id) == 0
     }
 
+    /// Every alarm the plugins have raised, with the sequence the core stamps
+    /// on the set. A collision alarm arrives here.
+    func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let raw = lookout_plugin_alerts_json(h, &len), len > 0 else { return nil }
+        // Borrowed until the next plugin query, so decode before anything else
+        // runs.
+        let data = Data(bytes: raw, count: len)
+        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = top["alerts"] as? [[String: Any]] else { return nil }
+        return (top["seq"] as? Int ?? 0, list.compactMap { PluginAlert($0) })
+    }
+
+    @discardableResult
+    func acknowledgeAlert(_ id: UInt64) -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugin_alert_ack(h, id) == 0
+    }
+
     // MARK: - Plugin data
 
     /// The rows of a plugin table, as JSON. The AIS plugin's "targets" table
@@ -438,4 +458,4 @@ extension Array where Element == String {
 }
 
 /// The settings form reads and writes the chart through these.
-extension ChartEngine: MarinerSettingsHost, PluginSettingsHost {}
+extension ChartEngine: MarinerSettingsHost, PluginSettingsHost, AlertHost {}

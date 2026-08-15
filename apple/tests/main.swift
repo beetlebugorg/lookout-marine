@@ -420,6 +420,39 @@ check(AISRows.heading(payload: #"{"title":"X","rows":[["MMSI","1"],["COG","124°
 check(AISRows.heading(payload: #"{"title":"X","rows":[["MMSI","1"]]}"#) == nil,
       "a target that reports neither answers nothing")
 
+// MARK: - The alarms
+
+// The AIS plugin raises a CPA alarm for one target in the recorded scene, so
+// with the replay running the whole chain is exercised: the plugin raises it,
+// the core lists it, and the watch's own decoder reads it.
+section("alarms")
+var alertSeq = -1
+var raised: [String] = []
+let alarmDeadline = Date().addingTimeInterval(20)
+while Date() < alarmDeadline {
+    var len = 0
+    if let raw = lookout_plugin_alerts_json(h, &len), len > 0 {
+        let data = Data(bytes: raw, count: len)
+        if let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            alertSeq = top["seq"] as? Int ?? -1
+            let list = (top["alerts"] as? [[String: Any]]) ?? []
+            let decoded = list.compactMap { PluginAlert($0) }
+            if !decoded.isEmpty {
+                raised = decoded.map { "\($0.severity.rawValue): \($0.title)" }
+                break
+            }
+        }
+    }
+    Thread.sleep(forTimeInterval: 0.5)
+}
+check(alertSeq >= 0, "the core answers with an alert set (seq \(alertSeq))")
+if raised.isEmpty {
+    print("  no alarm raised: the NMEA replay is not running, so nothing is closing")
+} else {
+    for r in raised { print("  \(r)") }
+    check(true, "an alarm reached the app: \(raised.count) raised")
+}
+
 lookout_close(h)
 
 section("")

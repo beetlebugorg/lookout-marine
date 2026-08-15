@@ -22,6 +22,11 @@ final class TableModel {
     let ownShip = OwnShip()
     let pickCard = PickCard()
 
+    /// The alarms the plugins raise. A collision alarm has to reach the
+    /// mariner whatever they are looking at, so the watch runs for as long as
+    /// the chart is open.
+    let alerts = AlertWatch()
+
     /// What the mariner is told when there is no chart, and while one opens.
     var status = "Opening the chart"
     var ready = false
@@ -56,6 +61,7 @@ final class TableModel {
         // Opening a second library replaces the first. The plugin layer, the
         // traffic and the card all belong to the handle that is going away.
         if engine.handle != nil {
+            alerts.stop()
             traffic.close(engine: engine)
             traffic.clear()
             pickCard.hide()
@@ -77,6 +83,7 @@ final class TableModel {
         sheet.overlays.addChild(ownShip.root)
         sheet.overlays.addChild(pickCard.root)
         engine.fitChart()
+        alerts.start(host: engine)
         ready = true
         status = ""
     }
