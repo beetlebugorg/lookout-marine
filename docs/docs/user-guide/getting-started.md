@@ -28,8 +28,8 @@ Then clone the repository and build the Mac app:
 ```sh
 git clone https://github.com/beetlebugorg/lookout-marine.git
 cd lookout-marine/macos && xcodegen generate && cd ..
-macos/build.sh mac Release
-open macos/build-mac/Build/Products/Release/LookoutMarine.app
+apple/build.sh mac Release
+open apple/build/Build/Products/Release/LookoutMarine.app
 ```
 
 The first build compiles the chart engine as well as the app, so give it a few

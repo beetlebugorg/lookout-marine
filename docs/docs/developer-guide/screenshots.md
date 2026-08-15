@@ -88,7 +88,7 @@ desktop takes 1120 x 720.
 open -n --env LOOKOUT_OPEN=<chart|folder> \
         --env LOOKOUT_VIEW=-76.482,38.976,13.7 \
         --env LOOKOUT_WINDOW=1400x900 \
-        macos/build-mac/Build/Products/Debug/LookoutMarine.app
+        apple/build/Build/Products/Debug/LookoutMarine.app
 # one window only, no shadow, written to the specified file name
 screencapture -o -l"$(GetWindowID LookoutMarine)" docs/docs/img/macos-day.webp
 ```
@@ -135,11 +135,11 @@ phone read as devices beside the desktop windows. The `-raw` file keeps the
 capture; the plain name holds the framed image.
 
 ```sh
-swift macos/frame-device.swift docs/docs/img/ipad-day-raw.webp \
+swift apple/frame-device.swift docs/docs/img/ipad-day-raw.webp \
   docs/docs/img/ipad-day.webp 60 150 90 1        # bezel, body radius, screen radius, camera
-swift macos/frame-device.swift docs/docs/img/iphone-day-raw.webp \
+swift apple/frame-device.swift docs/docs/img/iphone-day-raw.webp \
   docs/docs/img/iphone-day.webp 45 210 165 0     # the phone camera is in the screen
-swift macos/frame-device.swift docs/docs/img/android-day-raw.webp \
+swift apple/frame-device.swift docs/docs/img/android-day-raw.webp \
   docs/docs/img/android-day.webp 60 150 90 1     # the tablet frame serves Android too
 ```
 

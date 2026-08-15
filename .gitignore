@@ -12,15 +12,15 @@ zig-pkg/
 # from them. These are sources for the build, not build output — a clone
 # without them cannot produce an app with an icon.
 !assets/brand/*.png
-!macos/LookoutMarine/Assets.xcassets/**/*.png
-!macos/LookoutMarine-iOS/Assets.xcassets/**/*.png
+!apple/LookoutMarine/Assets.xcassets/**/*.png
+!apple/LookoutMarine-iOS/Assets.xcassets/**/*.png
 !linux/data/icons/**/*.png
 !android/app/src/main/res/mipmap-*/*.png
 .DS_Store
-# Xcode / xcodegen derived data — never tracked. build-mac holds every product
-# (macOS and the iOS simulator alike); the glob also catches older trees.
-macos/build*/
-macos/DerivedData/
+# Xcode / xcodegen derived data and the generated project — never tracked.
+# apple/build holds every product, for all three platforms.
+apple/build*/
+apple/DerivedData/
 # One developer's window positions, breakpoints and last-run scheme. Opening
 # the project writes these, so they appear whoever builds.
 **/xcuserdata/
@@ -51,8 +51,6 @@ vendor/libpng/
 vendor/libwebp/
 vendor/codecs-*/
 
-# The visionOS app's generated project, its derived data, and the sample chart
-# build.sh copies in from the machine's library.
-visionos/LookoutTable.xcodeproj/
-visionos/build-xros/
-visionos/Charts/
+# The sample chart build.sh copies in from the machine's library, for the
+# visionOS app to fall back to. Charts are data, not source.
+apple/Charts/

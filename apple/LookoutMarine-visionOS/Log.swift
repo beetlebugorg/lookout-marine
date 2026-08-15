@@ -3,14 +3,14 @@
 //  in the device log:
 //
 //      xcrun simctl spawn booted log show --last 5m \
-//        --predicate 'processImagePath CONTAINS "LookoutTable"'
+//        --predicate 'processImagePath CONTAINS "LookoutMarine"'
 //
 
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "org.beetlebug.lookout-table", category: "table")
+private let logger = Logger(subsystem: "org.beetlebug.lookout-marine-visionos", category: "table")
 
 func lkLog(_ message: String) {
-    logger.log("lookout-table: \(message, privacy: .public)")
+    logger.log("lookout: \(message, privacy: .public)")
 }

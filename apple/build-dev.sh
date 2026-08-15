@@ -3,25 +3,25 @@
 # .app bundle (Command Line Tools are enough). Repacks the Zig archives through
 # libtool (ld64 alignment). Rendering is direct Metal.
 #
-#   macos/build-dev.sh [--zig]     # --zig rebuilds WAMR + the Zig cores first
-#   -> macos/build-mac/Build/Products/Debug/LookoutMarine.app
+#   apple/build-dev.sh [--zig]     # --zig rebuilds WAMR + the Zig cores first
+#   -> apple/build/Build/Products/Debug/LookoutMarine.app
 #
 # tile57 is a zig package dependency (sibling ../tile57 checkout if present,
 # else fetched per ../build.zig.zon) — `zig build` installs both archives and
 # headers into zig-out/.
 #
 # The bundle lands in the SAME slot build.sh fills,
-# macos/build-mac/Build/Products/Debug/LookoutMarine.app. One app path on disk
+# apple/build/Build/Products/Debug/LookoutMarine.app. One app path on disk
 # is the point: a bundle in a second directory goes stale silently and gets
 # launched by mistake months later. Whichever script ran last owns that path,
 # and xcodebuild rebuilds the product when it finds one it did not write.
 # Overridable: OUT (the directory that holds the bundle).
 set -e
 REPO="${0:A:h:h}"
-OUT="${OUT:-$REPO/macos/build-mac/Build/Products/Debug}"
+OUT="${OUT:-$REPO/apple/build/Build/Products/Debug}"
 # Intermediates (repacked archives, the bare executable) stay out of the
 # products directory, beside Xcode's own.
-WORK="$REPO/macos/build-mac/Build/Intermediates.noindex/build-dev"
+WORK="$REPO/apple/build/Build/Intermediates.noindex/build-dev"
 SDK=$(xcrun --show-sdk-path)
 mkdir -p "$OUT" "$WORK"
 cd "$REPO"
@@ -63,13 +63,13 @@ xcrun libtool -static -o "$WORK/liblookoutall.a" \
 echo "==> swiftc app"
 xcrun swiftc -swift-version 5 -sdk "$SDK" -target arm64-apple-macosx26.0 \
   -O \
-  -import-objc-header macos/LookoutMarine/Bridging-Header.h \
+  -import-objc-header apple/LookoutMarine/Bridging-Header.h \
   -I zig-out/include \
   -L "$WORK" \
   -llookoutall \
   -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework UniformTypeIdentifiers \
-  -o "$WORK/LookoutMarine" macos/LookoutMarine/*.swift 2>&1 \
+  -o "$WORK/LookoutMarine" apple/LookoutMarine/*.swift 2>&1 \
   | grep -v "was built for newer\|not an allowed client of it" || true
 
 echo "==> bundle"
@@ -105,5 +105,5 @@ mkdir -p "$APP/Contents/Resources/Plugins"
 rsync -a --delete zig-out/plugins-bundled/ "$APP/Contents/Resources/Plugins/"
 echo "==> bundled $(ls "$APP/Contents/Resources/Plugins" | grep -c '\.wasm$') module(s)"
 
-codesign --force --sign - --entitlements macos/LookoutMarine/LookoutMarine.entitlements "$APP" 2>/dev/null || true
+codesign --force --sign - --entitlements apple/LookoutMarine/LookoutMarine.entitlements "$APP" 2>/dev/null || true
 echo "==> built $APP"

@@ -1,5 +1,5 @@
 /* Geometry, elevation and motion. Every number is a literal from
-   windows/ui/MainWindow.xaml or macos/LookoutMarine/Chrome.swift. They are not
+   windows/ui/MainWindow.xaml or apple/LookoutMarine/Chrome.swift. They are not
    a 4/8 grid and they are not rounded here. */
 
 :root {

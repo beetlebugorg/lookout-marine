@@ -5,7 +5,7 @@
 #
 # One target per run, each into its own dist directory:
 #
-#   visionos     vendor/codecs-visionos/      arm64 Vision Pro
+#   visionos     vendor/codecs-apple/      arm64 Vision Pro
 #   visionossim  vendor/codecs-visionossim/   arm64 visionOS simulator
 #   ios          vendor/codecs-ios/           arm64 device
 #   iossim       vendor/codecs-iossim/        arm64 simulator

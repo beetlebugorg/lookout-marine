@@ -336,7 +336,7 @@ Two environment variables are the whole install story for now.
 ```sh
 export LOOKOUT_PLUGINS=/path/to/lookout-marine/zig-out/plugins
 export LOOKOUT_NMEA=127.0.0.1:10110
-open macos/build-mac/Build/Products/Debug/LookoutMarine.app   # or Run from Xcode
+open apple/build/Build/Products/Debug/LookoutMarine.app   # or Run from Xcode
 ```
 
 [The macOS page](../macos.md) covers building that app if you do not have it

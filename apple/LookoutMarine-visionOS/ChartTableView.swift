@@ -51,7 +51,7 @@ struct ChartTableView: View {
                 // leaving a row of controls that answer to nothing.
                 if !model.ready {
                     VStack(spacing: 16) {
-                        Text("Lookout Table")
+                        Text("Lookout Marine")
                             .font(.title)
                         Text(model.status)
                             .font(.body)
@@ -219,7 +219,7 @@ private struct ChartTableControls: View {
             }
             .disabled(!model.ready)
             Button {
-                openWindow(id: LookoutTableApp.settingsWindow)
+                openWindow(id: LookoutMarineVisionApp.settingsWindow)
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Run the chart table's macOS harness.
 #
-#     visionos/tests/run.sh [chart.pmtiles]
+#     apple/tests/run.sh [chart.pmtiles]
 #
 # The visionOS app cannot be launched on this machine, so this exercises the
 # chain underneath it on the Mac: the RealityKit drawable queue, the core's
 # texture render path, the geo-to-sheet mapping and the AIS decoder the app
-# ships. It compiles visionos/LookoutTable/AISRows.swift, so the decoder under
+# ships. It compiles apple/LookoutMarine-visionOS/AISRows.swift, so the decoder under
 # test is the one that ships.
 #
 # Traffic needs a feed. With none, the AIS section checks the decoder against
@@ -46,10 +46,10 @@ xcrun libtool -static -o "$repack/liblookoutall.a" "$repack"/lookout/*.o "$repac
 
 out="zig-out/table-smoke"
 xcrun swiftc -O \
-    -import-objc-header visionos/LookoutTable/Bridging-Header.h \
+    -import-objc-header apple/LookoutMarine-visionOS/Bridging-Header.h \
     -I zig-out/include \
-    visionos/LookoutTable/AISRows.swift \
-    visionos/tests/main.swift \
+    apple/LookoutMarine-visionOS/AISRows.swift \
+    apple/tests/main.swift \
     "$repack/liblookoutall.a" \
     -lz \
     -framework RealityKit -framework Metal -framework CoreGraphics -framework Foundation \

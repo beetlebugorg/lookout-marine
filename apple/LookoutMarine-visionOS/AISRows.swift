@@ -2,7 +2,7 @@
 //  The AIS plugin's table and overlay payload, read.
 //
 //  Foundation only, and no RealityKit: this is the part of the traffic layer
-//  that can be run and checked away from a headset, and visionos/tests does
+//  that can be run and checked away from a headset, and apple/tests does
 //  exactly that against the plugin's real output.
 //
 //  The shapes both come from the core's ABI:
@@ -36,10 +36,14 @@ struct AISRow: Equatable {
     /// What the flag over this target says. Name on the first line, then
     /// speed, and the approach when the plugin has called this one a threat.
     ///
-    /// Speed is rounded to half a knot and the approach to ten seconds. The
-    /// label's text mesh is rebuilt whenever these words change, so a vessel
-    /// reporting 6.21 then 6.19 knots would otherwise rebuild it every few
-    /// seconds for a difference nobody can read.
+    /// Speed is rounded to half a knot and the time to the closest approach to
+    /// a minute. The label's text mesh is rebuilt whenever these words change,
+    /// so a vessel reporting 6.21 then 6.19 knots would otherwise rebuild it
+    /// every few seconds for a difference nobody can read.
+    ///
+    /// The approach DISTANCE is not rounded. It is the number the alarm is
+    /// about, and rounding it to tens would turn a four meter miss into "0 m",
+    /// which reads as a collision that has already happened.
     var flagLabel: String {
         var lines = [name]
         if let sog = sogMps, sog > 0.05 {
@@ -49,8 +53,7 @@ struct AISRow: Equatable {
             lines.append("stopped")
         }
         if alarm, let cpa = cpaM, let tcpa = tcpaS {
-            let minutes = (tcpa / 60).rounded()
-            lines.append(String(format: "CPA %.0f m in %.0f min", (cpa / 10).rounded() * 10, minutes))
+            lines.append(String(format: "CPA %.0f m in %.0f min", cpa, (tcpa / 60).rounded()))
         }
         return lines.joined(separator: "\n")
     }

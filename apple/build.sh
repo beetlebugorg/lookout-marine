@@ -1,13 +1,13 @@
 #!/bin/zsh
-# Build the app with Xcode into macos/build-mac/, not into the shared
-# DerivedData directory. `rm -rf macos/build-mac` is a full clean.
+# Build the app with Xcode into apple/build/, not into the shared DerivedData
+# directory. `rm -rf apple/build` is a full clean.
 #
-#   macos/build.sh [mac|ios|both] [Debug|Release]
+#   apple/build.sh [mac|ios|visionos|visionos-device|all] [Debug|Release]
 #
 # This builds everything the app needs, from nothing: the target's WAMR runtime
 # (scripts/build-wamr.sh), the Zig cores with the wasm plugin host linked in,
 # and the shipped plugin set into Resources/Plugins. That work lives in the
-# target's script phases, in macos/project.yml, so a build from Xcode.app is
+# target's script phases, in apple/project.yml, so a build from Xcode.app is
 # the same build as this one. Only zig, cmake and Xcode are needed; the first
 # run clones and builds the pinned WAMR and takes a few minutes.
 #
@@ -37,10 +37,24 @@ fi
 REPO="${0:A:h:h}"
 TARGET="${1:-mac}"
 CONFIG="${2:-Debug}"
-DERIVED="$REPO/macos/build-mac"
-PROJECT="$REPO/macos/LookoutMarine.xcodeproj"
+DERIVED="$REPO/apple/build"
+PROJECT="$REPO/apple/LookoutMarine.xcodeproj"
 
-[[ -d "$PROJECT" ]] || { echo "no project: run 'cd macos && xcodegen generate'" >&2; exit 1 }
+# The project is generated, so an edit to project.yml is always applied.
+if command -v xcodegen >/dev/null 2>&1; then
+  (cd "$REPO/apple" && xcodegen generate --quiet)
+elif [[ ! -d "$PROJECT" ]]; then
+  echo "no project and no xcodegen: brew install xcodegen" >&2
+  exit 1
+fi
+
+# The sample cell the visionOS app falls back to when it is given no charts.
+# Copied rather than tracked: charts are data, not source.
+SAMPLE="$HOME/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+if [[ -f "$SAMPLE" && ! -f "$REPO/apple/Charts/US5MD1MC.pmtiles" ]]; then
+  mkdir -p "$REPO/apple/Charts"
+  cp "$SAMPLE" "$REPO/apple/Charts/US5MD1MC.pmtiles"
+fi
 
 build() {
   echo "==> $1 ($CONFIG)"
@@ -49,11 +63,16 @@ build() {
 }
 
 case "$TARGET" in
-  mac)  build LookoutMarine 'platform=macOS' ;;
-  ios)  build LookoutMarine-iOS 'generic/platform=iOS Simulator' ;;
-  both) build LookoutMarine 'platform=macOS'
-        build LookoutMarine-iOS 'generic/platform=iOS Simulator' ;;
-  *)    echo "usage: ${0:t} [mac|ios|both] [Debug|Release]" >&2; exit 2 ;;
+  mac)      build LookoutMarine 'platform=macOS' ;;
+  ios)      build LookoutMarine-iOS 'generic/platform=iOS Simulator' ;;
+  visionos) build LookoutMarine-visionOS 'generic/platform=visionOS Simulator' ;;
+  visionos-device) build LookoutMarine-visionOS 'generic/platform=visionOS' ;;
+  both)     build LookoutMarine 'platform=macOS'
+            build LookoutMarine-iOS 'generic/platform=iOS Simulator' ;;
+  all)      build LookoutMarine 'platform=macOS'
+            build LookoutMarine-iOS 'generic/platform=iOS Simulator'
+            build LookoutMarine-visionOS 'generic/platform=visionOS Simulator' ;;
+  *) echo "usage: ${0:t} [mac|ios|visionos|visionos-device|both|all] [Debug|Release]" >&2; exit 2 ;;
 esac
 
 echo "==> products in $DERIVED/Build/Products/"

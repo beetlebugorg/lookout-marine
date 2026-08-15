@@ -1,0 +1,240 @@
+# XcodeGen spec for Lookout Marine on every Apple platform: macOS, iOS/iPadOS
+# and visionOS. One app, three shells over one core.
+#
+# Why XcodeGen: it declares the whole target — build settings, the Zig
+# run-script phase, header/library search paths, framework links, bridging
+# header — in this reviewable file instead of a fragile hand-written .pbxproj.
+# Generate the project with:
+#
+#     brew install xcodegen         # once
+#     cd apple && xcodegen generate # writes LookoutMarine.xcodeproj
+#     open LookoutMarine.xcodeproj
+#
+# The three targets share the two build scripts, build-core.sh and
+# bundle-plugins.sh, which read Xcode's own PLATFORM_NAME and need no
+# per-target arguments.
+#
+# The only other tool needed is Zig: the pre-build script runs `zig build`,
+# which builds the lookout core AND the tile57 engine (a zig package
+# dependency — a sibling ../tile57 checkout if present, else fetched
+# automatically per the pin in ../build.zig.zon) and installs the archives +
+# headers into ../zig-out*/ for the app target to link.
+
+name: LookoutMarine
+
+options:
+  bundleIdPrefix: org.beetlebug
+  deploymentTarget:
+    macOS: "26.0"
+    iOS: "26.0"
+    visionOS: "26.0"
+  createIntermediateGroups: true
+
+targets:
+  LookoutMarine:
+    type: application
+    platform: macOS
+    sources:
+      - path: LookoutMarine
+    settings:
+      base:
+        PRODUCT_NAME: LookoutMarine
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LookoutMarine/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LookoutMarine/LookoutMarine.entitlements
+        CODE_SIGN_STYLE: Automatic
+        # LookoutMarine/Assets.xcassets/AppIcon.appiconset — the squircle-masked
+        # macOS master at the ten sizes iconutil wants. actool compiles it into
+        # Assets.car AND writes AppIcon.icns into Resources, which is what
+        # CFBundleIconFile in Info.plist names.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        # The Zig cores are built arm64-only (Apple Silicon) — without this a
+        # Release build tries a universal binary and the x86_64 slice fails.
+        ARCHS: arm64
+        # Let the Zig build phase run without the user-script sandbox blocking it.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # lookout.h + tile57.h, both installed by `zig build`.
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out/lib"
+        # The merged, libtool-repacked Zig cores (see the pre-build script) —
+        # ld64 rejects zig-emitted archive members ("not 8-byte aligned"), so
+        # the raw archives are never linked directly on ANY platform.
+        OTHER_LDFLAGS:
+          - "-llookoutall"
+          # zlib, for the libpng the core is built against (-Dlibpng). The
+          # zig archive carries libpng's objects with their zlib symbols still
+          # undefined, so the resolve happens HERE, at the app link. Both
+          # platforms ship libz, so this is a stock system library.
+          - "-lz"
+    dependencies:
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+      - sdk: UniformTypeIdentifiers.framework
+    preBuildScripts:
+      - name: Build the zig cores (lookout + tile57 dependency)
+        basedOnDependencyAnalysis: false
+        script: '"$SRCROOT/build-core.sh"'
+    postBuildScripts:
+      - name: Bundle the core plugins into Resources/Plugins
+        basedOnDependencyAnalysis: false
+        script: '"$SRCROOT/bundle-plugins.sh"'
+  # ---- iOS / iPadOS ----------------------------------------------------------
+  # Same Swift sources; the chart renders via Metal into ChartUIView's own
+  # CAMetalLayer (the plain-UIKit input window), with the SwiftUI chrome in a
+  # PassThroughWindow above. No dependency beyond this repo: the pre-build
+  # script cross-builds the zig cores (tile57 included, as a package
+  # dependency) per platform into ../zig-out-$PLATFORM_NAME/.
+  LookoutMarine-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: LookoutMarine
+        excludes:
+          - "Info.plist"
+          - "LookoutMarine.entitlements"
+          # The macOS icon catalog: its AppIcon is drawn on Apple's *macOS*
+          # grid (inset + squircle-masked) and its images carry the "mac"
+          # idiom, so it must not reach this target — iOS gets its own AppIcon
+          # in LookoutMarine-iOS/Assets.xcassets.
+          - "Assets.xcassets"
+      # The launch screen background color (UILaunchScreen/UIColorName) and the
+      # 1024 AppIcon.
+      - path: LookoutMarine-iOS/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_NAME: LookoutMarine
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-ios
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LookoutMarine-iOS/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        # LookoutMarine-iOS/Assets.xcassets/AppIcon.appiconset — one 1024
+        # square with no alpha channel, per Apple's single-size iOS slot. iOS
+        # applies the corner mask itself.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # The Zig cores are built arm64-only (Apple Silicon simulators + all
+        # supported devices) — don't ask ld for x86_64.
+        ARCHS: arm64
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
+        # The merged, libtool-repacked Zig cores (see the pre-build script).
+        OTHER_LDFLAGS:
+          - "-llookoutall"
+          # zlib, for the libpng the core is built against (-Dlibpng). The
+          # zig archive carries libpng's objects with their zlib symbols still
+          # undefined, so the resolve happens HERE, at the app link. Both
+          # platforms ship libz, so this is a stock system library.
+          - "-lz"
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+      - sdk: UniformTypeIdentifiers.framework
+    preBuildScripts:
+      - name: Build the zig cores (lookout + tile57 dependency)
+        basedOnDependencyAnalysis: false
+        script: '"$SRCROOT/build-core.sh"'
+    postBuildScripts:
+      - name: Bundle the core plugins into Resources/Plugins
+        basedOnDependencyAnalysis: false
+        script: '"$SRCROOT/bundle-plugins.sh"'
+
+  # ---- visionOS ---------------------------------------------------------------
+  # The chart as a sheet of paper on a real table. The renderer draws into a
+  # RealityKit texture rather than a layer, and the hands do what a pointer
+  # does elsewhere, so this target carries its own shell. Everything above the
+  # renderer is shared with the other two: the settings form, the plugin
+  # schema, the pick report.
+  LookoutMarine-visionOS:
+    type: application
+    platform: visionOS
+    sources:
+      - path: LookoutMarine-visionOS
+      # Shared with the Mac and iOS apps. Each of these reaches no further
+      # than the chart handle, through the host protocols they declare, which
+      # is what lets three apps show the same controls and the same readings.
+      - path: LookoutMarine/MarinerSettings.swift
+      - path: LookoutMarine/MarinerSections.swift
+      - path: LookoutMarine/SettingsRows.swift
+      - path: LookoutMarine/PluginSettings.swift
+      - path: LookoutMarine/PickDecoded.swift
+      # The sample cell, so a fresh install draws something. Gitignored and
+      # copied in by build-visionos.sh from the machine's chart library.
+      - path: Charts
+        optional: true
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: LookoutMarine
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-visionos
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LookoutMarine-visionOS/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine-visionOS/Bridging-Header.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ARCHS: arm64
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib"
+        OTHER_LDFLAGS:
+          - "-llookoutall"
+          - "-lz"
+    dependencies:
+      - sdk: RealityKit.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+    preBuildScripts:
+      - name: Build the zig cores (lookout + tile57 dependency)
+        basedOnDependencyAnalysis: false
+        script: '"$SRCROOT/build-core.sh"'
+    postBuildScripts:
+      - name: Bundle the core plugins into Resources/Plugins
+        basedOnDependencyAnalysis: false
+        script: '"$SRCROOT/bundle-plugins.sh"'
+
+  # Touch-delivery smoke test (XCUITest): pinch must move the zoom readout.
+  # Run: xcodebuild test -scheme LookoutMarine-iOS -destination 'platform=iOS Simulator,...'
+  LookoutMarine-iOS-UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LookoutMarine-iOS/UITests
+    dependencies:
+      - target: LookoutMarine-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-ios-uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: LookoutMarine-iOS
+
+schemes:
+  LookoutMarine-iOS:
+    build:
+      targets:
+        LookoutMarine-iOS: all
+    test:
+      targets:
+        - LookoutMarine-iOS-UITests

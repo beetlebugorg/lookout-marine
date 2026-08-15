@@ -4,7 +4,7 @@
 //  so a phone frame and a tablet frame read as devices next to the desktop
 //  windows. The screenshot protocol (docs/docs/screenshots.md) states the sizes.
 //
-//  swift macos/frame-device.swift <in.png> <out.png> <bezel> <bodyRadius> \
+//  swift apple/frame-device.swift <in.png> <out.png> <bezel> <bodyRadius> \
 //        <screenRadius> [camera:0|1]
 
 import AppKit

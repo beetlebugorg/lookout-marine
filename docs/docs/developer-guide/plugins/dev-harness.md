@@ -249,7 +249,7 @@ port is enough:
 
 ```sh
 LOOKOUT_PLUGINS=$PWD/zig-out/plugins LOOKOUT_NMEA=127.0.0.1:10110 \
-    open macos/build-mac/Build/Products/Debug/LookoutMarine.app
+    open apple/build/Build/Products/Debug/LookoutMarine.app
 ```
 
 Everything the plugin layer prints goes to stderr. `open` detaches from your
@@ -257,7 +257,7 @@ terminal, so capture it with `open --stderr /tmp/lookout.log ...` and tail the
 file, or launch the binary directly and keep it in the terminal:
 
 ```bash
-macos/build-mac/Build/Products/Debug/LookoutMarine.app/Contents/MacOS/LookoutMarine
+apple/build/Build/Products/Debug/LookoutMarine.app/Contents/MacOS/LookoutMarine
 ```
 
 The Windows app is a Windows-subsystem binary with no console attached, so

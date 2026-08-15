@@ -14,17 +14,25 @@
 		0B3C1DDDBE36EC375F1CA997 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */; };
 		0B449CF57106605B212E94E1 /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		0BC91B15C4652260E6898412 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
+		0DA6ACA9A0F17896A25E501E /* TableSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 431A74445447AA1F2909DF6A /* TableSettingsView.swift */; };
 		0FC697E6E69C983F38573E8D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
 		15BC02BD89536FECE4FD9DA8 /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */; };
 		22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
 		23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
+		28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */; };
 		299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
+		29CB1F37867F87193EF62FE0 /* ChartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93494B787207D29B6E118FD /* ChartEngine.swift */; };
 		3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231885FFFF86BB739D2D973D /* SettingsWindow.swift */; };
 		3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
 		40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
+		42A3DD9FD5D8C818354CACB6 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		42B735FC5CA64B8F05069313 /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
+		436C6D46BB4C43BEC5F00D06 /* ChartLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C49C5ED2DF88A1B3E0A2F8 /* ChartLibrary.swift */; };
 		4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
+		4767147B03551B28D77C6E50 /* OwnShip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20D84589BE7C5E2663EC72ED /* OwnShip.swift */; };
 		4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
+		4AFE0107998631BC8A80C3BD /* AISTraffic.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC176DEF0F2C30D02AAA23AD /* AISTraffic.swift */; };
+		4C4022915885B10AA22AA8D5 /* ChartTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */; };
 		4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
 		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
@@ -32,6 +40,9 @@
 		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
 		5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
+		5EDC1114355DA539A388C6C7 /* AISRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9691E45FAC1F310677953B5A /* AISRows.swift */; };
+		5EEDE95CAAAD509154C0E2A5 /* ChartSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F176FB9274EC3AD3BBD8386 /* ChartSheet.swift */; };
+		653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17BF1C13BA2C8D28C156211 /* PickReportView.swift */; };
 		6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
@@ -42,14 +53,21 @@
 		91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
+		93E81FA3CE31250248FDC85C /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6D17DBA004144D3FA63E8762 /* RealityKit.framework */; };
+		9E4DE2C59FB562D959E93877 /* MarinerSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227014335EDED16C77E34822 /* MarinerSections.swift */; };
+		A0B3F0E23FB9A4ACBB46836B /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = E42D96745CB1ECBA4B954253 /* Log.swift */; };
 		A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
 		A2167318FA9028D99B57EAAF /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
 		A2480AA1E94033ABBF9B678F /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */; };
+		A8CCCA8E68A32C8744F4EF4E /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD44A08FEB31F35A253E7342 /* LookoutMarineApp.swift */; };
 		ACCC72997FE812CF6DE1467F /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */; };
 		AF99BCFEF525D5291F010508 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE7634B8D1E8049164F21C /* ChartBake.swift */; };
+		B0C9CED213E42A7EC31B5EB1 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
 		B1243028D1D1B63F902164E1 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE7634B8D1E8049164F21C /* ChartBake.swift */; };
+		B74DAD33F52BB26AA7AA1D6C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		BBD244E30F8F8CA10B219DAB /* PickDecoded.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938C50DC1CD27497AA2AE816 /* PickDecoded.swift */; };
+		BC54FEF869248CC5F789A8BE /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
 		BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
 		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
@@ -62,7 +80,10 @@
 		D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		D95FCA469BFB008CE727CFD2 /* MarinerSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227014335EDED16C77E34822 /* MarinerSections.swift */; };
 		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
+		DBF21148428E64B8967824EC /* PickDecoded.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938C50DC1CD27497AA2AE816 /* PickDecoded.swift */; };
 		DE7488B0D16B988AAA2DEAF3 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
+		DF1E1575E3BC273FCEA4A30E /* TableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */; };
+		E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
 		E64003666647657D54AE2A68 /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
 		E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		E88374AC97201A82AABB83C2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
@@ -91,14 +112,18 @@
 		08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginSettings.swift; sourceTree = "<group>"; };
 		08B62D296D34C231163DF7C2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0ACD979758E1C7A0557028AA /* MarinerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettings.swift; sourceTree = "<group>"; };
+		0F176FB9274EC3AD3BBD8386 /* ChartSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSheet.swift; sourceTree = "<group>"; };
 		10B668C8717144E00D603812 /* LookoutMarine-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		20D84589BE7C5E2663EC72ED /* OwnShip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnShip.swift; sourceTree = "<group>"; };
 		21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlerts.swift; sourceTree = "<group>"; };
 		227014335EDED16C77E34822 /* MarinerSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSections.swift; sourceTree = "<group>"; };
 		231885FFFF86BB739D2D973D /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 		2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
+		431A74445447AA1F2909DF6A /* TableSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableSettingsView.swift; sourceTree = "<group>"; };
 		4417D066BB41E317736749E5 /* AltChartStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AltChartStyle.swift; sourceTree = "<group>"; };
 		44DE7634B8D1E8049164F21C /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
+		4C886CFA5BF1D5ED45BA18C8 /* LookoutMarine-visionOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-visionOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		59E5805049B75D0B7A5BA9C5 /* PickReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReport.swift; sourceTree = "<group>"; };
@@ -107,21 +132,33 @@
 		64750619C04C6E8FC58ADF3C /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
 		684AE423C6C360B8C64E8187 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
+		6D17DBA004144D3FA63E8762 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginInstall.swift; sourceTree = "<group>"; };
 		83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOS-UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		867B3D3BE969AB708C6FD1A6 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		87C49C5ED2DF88A1B3E0A2F8 /* ChartLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLibrary.swift; sourceTree = "<group>"; };
 		8AE67031882048136AC3C4B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		938C50DC1CD27497AA2AE816 /* PickDecoded.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickDecoded.swift; sourceTree = "<group>"; };
+		9691E45FAC1F310677953B5A /* AISRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISRows.swift; sourceTree = "<group>"; };
 		9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		A57FE65303362F648D2D13FF /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A79681EADC27E70A6BB144FE /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
+		B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartTableView.swift; sourceTree = "<group>"; };
+		C17BF1C13BA2C8D28C156211 /* PickReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReportView.swift; sourceTree = "<group>"; };
 		C30C216F6C0285110D3B2A87 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
+		CC176DEF0F2C30D02AAA23AD /* AISTraffic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISTraffic.swift; sourceTree = "<group>"; };
+		CD44A08FEB31F35A253E7342 /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
 		D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
 		D26F78CDEC3CDA7C0807297F /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
+		D93494B787207D29B6E118FD /* ChartEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartEngine.swift; sourceTree = "<group>"; };
+		E23141A7B6CD0C9D1C2A89CA /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
+		E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableModel.swift; sourceTree = "<group>"; };
+		E42D96745CB1ECBA4B954253 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
 		EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -139,6 +176,17 @@
 				E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */,
 				93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */,
 				FD9CA492CC32E134017339D9 /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		252F361AD7A10AC0E79BCD4C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				93E81FA3CE31250248FDC85C /* RealityKit.framework in Frameworks */,
+				42A3DD9FD5D8C818354CACB6 /* Metal.framework in Frameworks */,
+				B74DAD33F52BB26AA7AA1D6C /* QuartzCore.framework in Frameworks */,
+				B0C9CED213E42A7EC31B5EB1 /* CoreGraphics.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,6 +220,7 @@
 			children = (
 				07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */,
 				ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */,
+				199D03F5A92A931696942775 /* LookoutMarine-visionOS */,
 				87EF150269B4560D22106C89 /* Frameworks */,
 				CCC54782152F8720212B3D54 /* Products */,
 			);
@@ -214,12 +263,34 @@
 			path = LookoutMarine;
 			sourceTree = "<group>";
 		};
+		199D03F5A92A931696942775 /* LookoutMarine-visionOS */ = {
+			isa = PBXGroup;
+			children = (
+				9691E45FAC1F310677953B5A /* AISRows.swift */,
+				CC176DEF0F2C30D02AAA23AD /* AISTraffic.swift */,
+				E23141A7B6CD0C9D1C2A89CA /* Bridging-Header.h */,
+				D93494B787207D29B6E118FD /* ChartEngine.swift */,
+				87C49C5ED2DF88A1B3E0A2F8 /* ChartLibrary.swift */,
+				0F176FB9274EC3AD3BBD8386 /* ChartSheet.swift */,
+				B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */,
+				A57FE65303362F648D2D13FF /* Info.plist */,
+				E42D96745CB1ECBA4B954253 /* Log.swift */,
+				CD44A08FEB31F35A253E7342 /* LookoutMarineApp.swift */,
+				20D84589BE7C5E2663EC72ED /* OwnShip.swift */,
+				C17BF1C13BA2C8D28C156211 /* PickReportView.swift */,
+				E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */,
+				431A74445447AA1F2909DF6A /* TableSettingsView.swift */,
+			);
+			path = "LookoutMarine-visionOS";
+			sourceTree = "<group>";
+		};
 		87EF150269B4560D22106C89 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
 				7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */,
 				8FB061C18A2E1449AB1D30F1 /* Metal.framework */,
 				2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */,
+				6D17DBA004144D3FA63E8762 /* RealityKit.framework */,
 				9D5D7B15F4286B70544A80B2 /* UIKit.framework */,
 				063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */,
 			);
@@ -231,6 +302,7 @@
 			children = (
 				83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */,
 				10B668C8717144E00D603812 /* LookoutMarine-iOS.app */,
+				4C886CFA5BF1D5ED45BA18C8 /* LookoutMarine-visionOS.app */,
 				F025332072E90FBEB0445CEB /* LookoutMarine.app */,
 			);
 			name = Products;
@@ -266,11 +338,31 @@
 			productReference = 83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		7EC83AAAF60FC76EC23D2701 /* LookoutMarine-visionOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F9FE0A17A8B2846528F3AD1F /* Build configuration list for PBXNativeTarget "LookoutMarine-visionOS" */;
+			buildPhases = (
+				CDD8EEB796DD7921B5A2107E /* Build the zig cores (lookout + tile57 dependency) */,
+				B26CB3FD87E39BF4B1C75EAD /* Sources */,
+				252F361AD7A10AC0E79BCD4C /* Frameworks */,
+				AFCDF7C5E356E0FCBA54FB9E /* Bundle the core plugins into Resources/Plugins */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "LookoutMarine-visionOS";
+			packageProductDependencies = (
+			);
+			productName = "LookoutMarine-visionOS";
+			productReference = 4C886CFA5BF1D5ED45BA18C8 /* LookoutMarine-visionOS.app */;
+			productType = "com.apple.product-type.application";
+		};
 		98D5486F698D955D344F0F65 /* LookoutMarine */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 9C3ECF9BD93BBA14B99E5413 /* Build configuration list for PBXNativeTarget "LookoutMarine" */;
 			buildPhases = (
-				2F202FBCF2E8CB63456827BF /* Build Zig cores (lookout + tile57 dependency) */,
+				12C901C2FDEDBCF055D8FE42 /* Build the zig cores (lookout + tile57 dependency) */,
 				71524DC6FB6E9C34F9DB5322 /* Sources */,
 				EECEEC5E294F330C56C3B684 /* Resources */,
 				0CBF278F6CFCF0D8A5C98A7B /* Frameworks */,
@@ -291,7 +383,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 06DB6226127DD37ADC6C301A /* Build configuration list for PBXNativeTarget "LookoutMarine-iOS" */;
 			buildPhases = (
-				F3C4878024157D990E02A19B /* Build Zig cores for iOS (lookout + tile57 dependency) */,
+				B6511484AEE96D3C9CA44250 /* Build the zig cores (lookout + tile57 dependency) */,
 				95BC3126A20103FF3F84572E /* Sources */,
 				399642D64F4512B029E5E115 /* Resources */,
 				DE9DB18C055E956FBC2E37C4 /* Frameworks */,
@@ -321,6 +413,9 @@
 						ProvisioningStyle = Automatic;
 						TestTargetID = ABAEBDCFCC218F9164521159;
 					};
+					7EC83AAAF60FC76EC23D2701 = {
+						ProvisioningStyle = Automatic;
+					};
 					98D5486F698D955D344F0F65 = {
 						ProvisioningStyle = Automatic;
 					};
@@ -345,6 +440,7 @@
 			targets = (
 				98D5486F698D955D344F0F65 /* LookoutMarine */,
 				ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */,
+				7EC83AAAF60FC76EC23D2701 /* LookoutMarine-visionOS */,
 				7DC91D64E44F15978302A618 /* LookoutMarine-iOS-UITests */,
 			);
 		};
@@ -370,6 +466,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		12C901C2FDEDBCF055D8FE42 /* Build the zig cores (lookout + tile57 dependency) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build the zig cores (lookout + tile57 dependency)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/build-core.sh\"";
+		};
 		22013F4BAE00C650342E4EEB /* Bundle the core plugins into Resources/Plugins */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -387,26 +502,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/..\"\n# zig-out/plugins-bundled holds the shipped set and nothing else;\n# zig-out/plugins is the dev working set and may carry examples and\n# a developer's own modules beside it. The wasm is target-neutral,\n# so this needs no -Dtarget and builds nothing native.\nzig build plugins\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins\"\nmkdir -p \"$DEST\"\n# --delete so a plugin dropped from the shipped set leaves the app\n# instead of lingering in an incremental build.\nrsync -a --delete zig-out/plugins-bundled/ \"$DEST/\"\necho \"bundled plugins: $(ls \"$DEST\" | grep -c '\\.wasm$') module(s) in $DEST\"\n";
-		};
-		2F202FBCF2E8CB63456827BF /* Build Zig cores (lookout + tile57 dependency) */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Build Zig cores (lookout + tile57 dependency)";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n# Provenance: the build log states exactly which sources these cores\n# came from — never infer it again. tile57 is a zig package\n# dependency: a sibling checkout when present, else the zon pin.\nT57=\"$SRCROOT/../../tile57\"\necho \"zig cores: lookout=$(git -C \"$SRCROOT/..\" rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f \"$T57/build.zig\" ] && git -C \"$T57\" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')\"\n# Version the target at the DEPLOYMENT minimum: an unversioned native\n# build stamps objects with the build machine's OS and ld warns\n# \"built for newer macOS version than being linked\" on every object.\nZIG_MAC_TARGET=\"$(uname -m | sed s/arm64/aarch64/)-macos.${MACOSX_DEPLOYMENT_TARGET:-26.0}\"\n# An explicit -Dtarget makes zig a CROSS build: no automatic SDK\n# discovery, so hand it the sysroot like the iOS script does.\nMAC_SYSROOT=\"${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}\"\ncd \"$SRCROOT/..\"\n# The wasm plugin host, before the core that embeds it. Own ship,\n# AIS, NMEA 0183, Signal K and laylines are all plugins, so a core\n# built without the host is a chartplotter with no own ship and no\n# traffic. build-wamr.sh is idempotent: it compares the WAMR_VERSION\n# stamp in the dist against the release, commit and feature set it\n# would build now, and returns in a fraction of a second once they\n# match. The first run clones and builds the pinned WAMR and takes a\n# few minutes. -Dplugins is passed explicitly below because its\n# default is off when the archive is absent, which builds a working\n# app with no plugin host inside it. Explicit turns that into a build\n# error naming this script.\nscripts/build-wamr.sh macos\n# One build: the tile57 engine (zig package dependency) + the lookout\n# core, installing liblookout_marine.a, libtile57.a, and both headers\n# into zig-out/. ReleaseFast is the build.zig default; explicit here\n# so the app build states its intent.\nzig build -Doptimize=ReleaseFast -Dplugins=true -Dtarget=\"$ZIG_MAC_TARGET\" --sysroot \"$MAC_SYSROOT\"\n# Zig's outputs are deterministic, so an unchanged core hashes\n# identically — used twice below: to skip the repack, and to force\n# Xcode to relink when the core DID change.\nCORE_HASH=$(cat \"zig-out/lib/liblookout_marine.a\" \"zig-out/lib/libtile57.a\" | /usr/bin/shasum | cut -d' ' -f1)\n\n# ld64 AND libtool both drop/reject zig-emitted archive members\n# (\"64-bit mach-o not 8-byte aligned\"), so the raw archives are never\n# linked directly: extract to loose objects (no offset-alignment\n# problem; zig also records mode-0 permissions, hence the chmod) and\n# repack, exactly like the iOS target. Skipped when unchanged.\nREPACK_STAMP=\"zig-out/lib/.liblookoutall.stamp\"\nif [ \"$(cat \"$REPACK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ] \\\n   || [ ! -f \"zig-out/lib/liblookoutall.a\" ]; then\n  REPACK=\"zig-out/repack\"\n  rm -rf \"$REPACK\"; mkdir -p \"$REPACK/lookout\" \"$REPACK/tile57\"\n  (cd \"$REPACK/lookout\" && ar x ../../lib/liblookout_marine.a)\n  (cd \"$REPACK/tile57\"  && ar x ../../lib/libtile57.a)\n  chmod 644 \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o\n  xcrun -sdk macosx libtool -static \\\n    -o \"zig-out/lib/liblookoutall.a\" \\\n    \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o 2>/dev/null\n  echo \"$CORE_HASH\" > \"$REPACK_STAMP\"\nfi\n\n# Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so\n# a rebuilt Zig core would never RELINK the app (stale core in the\n# bundle). Force the link when the core changed by removing the\n# previous executable (link-only cost). The stamp lives in\n# TARGET_BUILD_DIR: per configuration, like the executable it guards.\nLINK_STAMP=\"$TARGET_BUILD_DIR/.zigcore.stamp\"\nif [ \"$(cat \"$LINK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ]; then\n  mkdir -p \"$TARGET_BUILD_DIR\"\n  echo \"$CORE_HASH\" > \"$LINK_STAMP\"\n  rm -f \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\nfi\n";
+			shellScript = "\"$SRCROOT/bundle-plugins.sh\"";
 		};
 		A8E767BAB8808948D8A85425 /* Bundle the core plugins into Resources/Plugins */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -425,9 +521,9 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/..\"\nzig build plugins\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins\"\nmkdir -p \"$DEST\"\nrsync -a --delete zig-out/plugins-bundled/ \"$DEST/\"\n";
+			shellScript = "\"$SRCROOT/bundle-plugins.sh\"";
 		};
-		F3C4878024157D990E02A19B /* Build Zig cores for iOS (lookout + tile57 dependency) */ = {
+		AFCDF7C5E356E0FCBA54FB9E /* Bundle the core plugins into Resources/Plugins */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -437,14 +533,52 @@
 			);
 			inputPaths = (
 			);
-			name = "Build Zig cores for iOS (lookout + tile57 dependency)";
+			name = "Bundle the core plugins into Resources/Plugins";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n# Provenance: the build log states exactly which sources these cores\n# came from — never infer it again. tile57 is a zig package\n# dependency: a sibling checkout when present, else the zon pin.\nT57=\"$SRCROOT/../../tile57\"\necho \"zig cores: lookout=$(git -C \"$SRCROOT/..\" rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f \"$T57/build.zig\" ] && git -C \"$T57\" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')\"\n# Versioned at the deployment minimum — see the macOS target's note.\nIOS_MIN=\"${IPHONEOS_DEPLOYMENT_TARGET:-26.0}\"\n# build.zig picks the WAMR dist directory from the zig target:\n# vendor/wamr-dist-iossim for the simulator, vendor/wamr-dist-ios for\n# a device. The two selections must agree.\ncase \"$PLATFORM_NAME\" in\n  iphonesimulator) ZIG_TARGET=\"aarch64-ios.${IOS_MIN}-simulator\"; WAMR_TARGET=iossim ;;\n  *)               ZIG_TARGET=\"aarch64-ios.${IOS_MIN}\";           WAMR_TARGET=ios ;;\nesac\n# The iOS SDK sysroot. $SDKROOT is set by Xcode to the active SDK, so\n# this works in the Xcode build env even when the *shell's* xcrun/\n# xcode-select points at the Command Line Tools (which have no iOS SDK\n# -> an empty --sysroot). Fall back to xcrun for non-Xcode invocations.\nSYSROOT=\"${SDKROOT:-$(xcrun --sdk \"$PLATFORM_NAME\" --show-sdk-path)}\"\n\n# One cross-build: the tile57 engine (zig package dependency) + the\n# lookout core, installing both archives + headers into\n# zig-out-$PLATFORM_NAME/ (device and simulator keep separate\n# prefixes). Zig's cache makes unchanged rebuilds ~instant.\ncd \"$SRCROOT/..\"\n# The wasm plugin host for this platform, before the core that embeds\n# it. See the macOS target for why -Dplugins is explicit.\nscripts/build-wamr.sh \"$WAMR_TARGET\"\n# libpng and libwebp, cross-built: a device has no package manager,\n# and Homebrew's copies are host-platform objects. Idempotent, like\n# the WAMR script above.\nscripts/build-codecs.sh \"$WAMR_TARGET\"\nzig build -Doptimize=ReleaseFast \\\n  -Dplugins=true \\\n  -Dtarget=\"$ZIG_TARGET\" \\\n  --sysroot \"$SYSROOT\" \\\n  -p \"zig-out-$PLATFORM_NAME\"\n# Zig's outputs are deterministic, so an unchanged core hashes\n# identically — used twice below: to skip the repack, and to force\n# Xcode to relink when the core DID change.\nCORE_HASH=$(cat \"zig-out-$PLATFORM_NAME/lib/liblookout_marine.a\" \"zig-out-$PLATFORM_NAME/lib/libtile57.a\" | /usr/bin/shasum | cut -d' ' -f1)\n\n# ld64 AND libtool both drop zig-emitted archive members (\"64-bit\n# mach-o not 8-byte aligned\"), so feeding the archives to libtool\n# silently loses every symbol. Extract the members to loose object\n# files (which have no offset-alignment problem; zig also records\n# mode-0 permissions, hence the chmod) and repack from those.\n# Skipped when the archives are byte-identical to the last repack.\nREPACK_STAMP=\"zig-out-$PLATFORM_NAME/lib/.liblookoutall.stamp\"\nif [ \"$(cat \"$REPACK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ] \\\n   || [ ! -f \"zig-out-$PLATFORM_NAME/lib/liblookoutall.a\" ]; then\n  REPACK=\"zig-out-$PLATFORM_NAME/repack\"\n  rm -rf \"$REPACK\"; mkdir -p \"$REPACK/lookout\" \"$REPACK/tile57\"\n  (cd \"$REPACK/lookout\" && ar x ../../lib/liblookout_marine.a)\n  (cd \"$REPACK/tile57\"  && ar x ../../lib/libtile57.a)\n  chmod 644 \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o\n  xcrun -sdk \"$PLATFORM_NAME\" libtool -static \\\n    -o \"zig-out-$PLATFORM_NAME/lib/liblookoutall.a\" \\\n    \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o 2>/dev/null\n  echo \"$CORE_HASH\" > \"$REPACK_STAMP\"\nfi\n\n# Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so\n# a rebuilt Zig core would never RELINK the app (stale core in the\n# bundle). Force the link when the core changed by removing the\n# previous executable (link-only cost). The stamp lives in\n# TARGET_BUILD_DIR: per configuration/platform, like the executable\n# it guards.\nLINK_STAMP=\"$TARGET_BUILD_DIR/.zigcore.stamp\"\nif [ \"$(cat \"$LINK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ]; then\n  mkdir -p \"$TARGET_BUILD_DIR\"\n  echo \"$CORE_HASH\" > \"$LINK_STAMP\"\n  rm -f \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\nfi\n";
+			shellScript = "\"$SRCROOT/bundle-plugins.sh\"";
+		};
+		B6511484AEE96D3C9CA44250 /* Build the zig cores (lookout + tile57 dependency) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build the zig cores (lookout + tile57 dependency)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/build-core.sh\"";
+		};
+		CDD8EEB796DD7921B5A2107E /* Build the zig cores (lookout + tile57 dependency) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build the zig cores (lookout + tile57 dependency)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/build-core.sh\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -512,6 +646,30 @@
 				3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */,
 				0B449CF57106605B212E94E1 /* ViewState.swift in Sources */,
 				06B5BBB30960E8F05B6C8866 /* ZoomControls.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B26CB3FD87E39BF4B1C75EAD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5EDC1114355DA539A388C6C7 /* AISRows.swift in Sources */,
+				4AFE0107998631BC8A80C3BD /* AISTraffic.swift in Sources */,
+				29CB1F37867F87193EF62FE0 /* ChartEngine.swift in Sources */,
+				436C6D46BB4C43BEC5F00D06 /* ChartLibrary.swift in Sources */,
+				5EEDE95CAAAD509154C0E2A5 /* ChartSheet.swift in Sources */,
+				4C4022915885B10AA22AA8D5 /* ChartTableView.swift in Sources */,
+				A0B3F0E23FB9A4ACBB46836B /* Log.swift in Sources */,
+				A8CCCA8E68A32C8744F4EF4E /* LookoutMarineApp.swift in Sources */,
+				9E4DE2C59FB562D959E93877 /* MarinerSections.swift in Sources */,
+				BC54FEF869248CC5F789A8BE /* MarinerSettings.swift in Sources */,
+				4767147B03551B28D77C6E50 /* OwnShip.swift in Sources */,
+				DBF21148428E64B8967824EC /* PickDecoded.swift in Sources */,
+				653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */,
+				E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */,
+				28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */,
+				DF1E1575E3BC273FCEA4A30E /* TableModel.swift in Sources */,
+				0DA6ACA9A0F17896A25E501E /* TableSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -587,6 +745,40 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		5A69BBB902734D2289CFDEDA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include",
+				);
+				INFOPLIST_FILE = "LookoutMarine-visionOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"-llookoutall",
+					"-lz",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-visionos";
+				PRODUCT_NAME = LookoutMarine;
+				SDKROOT = xros;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine-visionOS/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
 			};
 			name = Release;
 		};
@@ -669,6 +861,41 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		7C11C373314ACB9C093F13E4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include",
+				);
+				INFOPLIST_FILE = "LookoutMarine-visionOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/lib",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"-llookoutall",
+					"-lz",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-visionos";
+				PRODUCT_NAME = LookoutMarine;
+				SDKROOT = xros;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine-visionOS/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
 			};
 			name = Debug;
 		};
@@ -725,6 +952,7 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
+				XROS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Release;
 		};
@@ -870,6 +1098,15 @@
 			buildConfigurations = (
 				6645E525B9E3871201EA361B /* Debug */,
 				346A6E641061E902C34B07D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F9FE0A17A8B2846528F3AD1F /* Build configuration list for PBXNativeTarget "LookoutMarine-visionOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C11C373314ACB9C093F13E4 /* Debug */,
+				5A69BBB902734D2289CFDEDA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

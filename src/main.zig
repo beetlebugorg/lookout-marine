@@ -2,7 +2,7 @@
 //!   lookout <chart.pmtiles> [--png OUT] [--lon L --lat L --zoom Z]
 //! Renders day + night PNGs (night proves palette swap needs no
 //! re-tessellation) and a zoomed frame, then exits. The interactive host is
-//! the macOS app (macos/) — the demo is the headless render/parity tool.
+//! the macOS app (apple/) — the demo is the headless render/parity tool.
 const std = @import("std");
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
@@ -28,7 +28,7 @@ const USAGE =
     \\
     \\Writes lookout.png (day), lookout-night.png (palette swap, no
     \\re-tessellation) and lookout-zoom.png (MVP zoom, no re-tessellation),
-    \\then exits. The interactive host is the macOS app (macos/).
+    \\then exits. The interactive host is the macOS app (apple/).
     \\
 ;
 

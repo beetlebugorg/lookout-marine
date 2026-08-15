@@ -111,9 +111,9 @@ pre-build phase runs `zig build`. That step gets the chart engine and installs
 everything the app links against, so you pre-build nothing. Use the Release
 configuration of Xcode for a non-debug app.
 
-If you have no Xcode, `macos/build-dev.sh --zig` builds the Mac app with the Command
+If you have no Xcode, `apple/build-dev.sh --zig` builds the Mac app with the Command
 Line Tools. It writes the same bundle every other build writes,
-`macos/build-mac/Build/Products/Debug/LookoutMarine.app`.
+`apple/build/Build/Products/Debug/LookoutMarine.app`.
 
 On Linux — refer to [linux/README.md](linux/README.md):
 
@@ -132,7 +132,7 @@ draw a frame, the core then writes one uniform block. The vertex shader applies 
 camera, the palette, the display-category gates and the SCAMIN limits. This is the
 reason that a pan and a scheme change never tessellate the chart again.
 
-The **app shells** are each native above that one core. `macos/` is SwiftUI, and the
+The **app shells** are each native above that one core. `apple/` is SwiftUI, and the
 Mac and iOS targets share the Swift sources. `android/` is a Java shell above a
 `SurfaceView`. `linux/` is GTK4 in C, and it presents Vulkan into a subsurface below a
 transparent hole in the window, so the chrome floats above the chart. `windows/` is
@@ -148,7 +148,7 @@ the build gets the commit that `build.zig.zon` specifies and compiles `libtile57
 from source.
 
 For more detail, refer to [the architecture](docs/docs/developer-guide/architecture.md),
-[the Linux host](docs/docs/developer-guide/linux.md), `macos/README.md` and
+[the Linux host](docs/docs/developer-guide/linux.md), `apple/README.md` and
 `android/README.md`.
 
 [tile57]: https://github.com/beetlebugorg/tile57
@@ -237,7 +237,7 @@ src/gpu_d3d12.zig          the Direct3D 12 transport (with src/d3d12_shim.{h,c})
 src/atlas.zig, src/png.zig sprite and SDF atlas load; PNG encode
 src/capi.zig, src/main.zig the C ABI wrapper; the headless demo
 docs/                      architecture, host notes, the screenshot protocol
-macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
+apple/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
 android/                   the Java shell (Vulkan into a SurfaceView)
 linux/                     the GTK4 app (Vulkan into a subsurface), meson
 windows/                   the WinUI 3 app (D3D12 into a SwapChainPanel)

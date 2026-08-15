@@ -548,7 +548,7 @@ static const GActionEntry lk_window_actions[] = {
  * wear too.
  *
  * The items are the Mac's, in the Mac's order, saying the Mac's words
- * (macos/LookoutMarine/Commands.swift).
+ * (apple/LookoutMarine/Commands.swift).
  *
  * The list is BUILT FRESH on every press, because most of it names things that
  * come and go: the charts opened lately, the raster sets covering THIS view,

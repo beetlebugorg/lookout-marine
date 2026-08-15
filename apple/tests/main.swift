@@ -16,7 +16,7 @@
 //  It compiles the app's AISRows.swift, so the decoder under test is the one
 //  that ships.
 //
-//      visionos/tests/run.sh [chart.pmtiles]
+//      apple/tests/run.sh [chart.pmtiles]
 //
 
 import CoreGraphics
@@ -362,8 +362,8 @@ if rows.isEmpty {
         check(abs(rows[0].lon + 76.46) < 1e-9 && abs(rows[0].lat - 38.97) < 1e-9, "at is [lon, lat]")
         check(rows[0].sogMps == 6.2 && rows[0].cpaM == 124 && rows[0].tcpaS == 585, "speed and approach")
         check(rows[0].alarm, "the alarm flag is read")
-        check(rows[0].flagLabel.contains("12.1 kn"), "speed reaches the flag in knots")
-        check(rows[0].flagLabel.contains("CPA 124 m in 10 min"), "an alarmed flag carries the approach")
+        check(rows[0].flagLabel.contains("12.0 kn"), "speed reaches the flag, rounded to half a knot")
+        check(rows[0].flagLabel.contains("CPA 124 m in 10 min"), "an alarmed flag carries the approach unrounded")
         check(rows[1].name == "993672000" && rows[1].sogMps == nil, "a nameless, speechless row falls back")
         check(rows[1].isAid, "a 99x MMSI is an aid to navigation")
     }

@@ -38,7 +38,7 @@ enum ChartLibrary {
         }
         // Whatever charts the build put in the bundle, which is one sample cell
         // by default and is however many cells were dropped into
-        // visionos/Charts before the build.
+        // apple/Charts before the build.
         if let resources = Bundle.main.resourceURL {
             let paths = expand(resources.path)
             if !paths.isEmpty {

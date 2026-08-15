@@ -1,5 +1,5 @@
 //
-//  Lookout Table: the chart as a sheet of paper on a real table.
+//  Lookout Marine: the chart as a sheet of paper on a real table.
 //
 //  The app is one volume. A volume is placed in the room by the person wearing
 //  the headset, it holds its size and position between launches, and it snaps
@@ -10,7 +10,7 @@ import RealityKit
 import SwiftUI
 
 @main
-struct LookoutTableApp: App {
+struct LookoutMarineVisionApp: App {
     init() {
         // The components the sheet and its traffic tag entities with. A
         // component must be registered before any entity carries it.
@@ -37,7 +37,7 @@ struct LookoutTableApp: App {
         // A plain window beside the table, because a form is a flat thing and
         // reaching into the volume to read one would put a hand over the
         // chart.
-        WindowGroup(id: LookoutTableApp.settingsWindow) {
+        WindowGroup(id: LookoutMarineVisionApp.settingsWindow) {
             TableSettingsView(model: model)
         }
         .windowStyle(.plain)
