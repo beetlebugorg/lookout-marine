@@ -201,17 +201,22 @@ final class TableModel {
     /// doubles the content, which is one level. Two hands in the air start
     /// about 300 mm apart and comfortably reach about a metre, so one honest
     /// pinch is only some 1.7 doublings. A chart runs from an approach to a
-    /// berth over five or six levels, and at a gain of one that is four
-    /// pinches. This spends a comfortable pinch on about four levels.
-    private static let zoomGain: Double = 2.5
+    /// berth over five or six levels, so a gain of one spends four pinches
+    /// crossing it. This spends one pinch on nearly seven levels, which is the
+    /// whole useful range of a chart library.
+    private static let zoomGain: Double = 4.0
 
     func chartZoomEnded() {
         chartZoomLast = 1
     }
 
+    /// The chart turns with the hands. A pair of hands turning clockwise seen
+    /// from above turns about -Y in the scene, and the same turn is a POSITIVE
+    /// course-up rotation, so the sign flips on the way to the engine. The
+    /// sheet needs no such flip: it takes the hands' own rotation unchanged.
     func chartRotateChanged(_ radians: Double) {
         if chartRotateStart == 0 { chartRotateStart = engine.rotationDegrees }
-        engine.setRotation(degrees: chartRotateStart + radians * 180 / .pi)
+        engine.setRotation(degrees: chartRotateStart - radians * 180 / .pi)
     }
 
     func chartRotateEnded() {

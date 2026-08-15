@@ -55,9 +55,12 @@ struct ChartTableView: View {
                 }
             }
         }
-        // The front face, not the bottom: a volume's bottom is the floor the
-        // sheet lies on, so an ornament anchored there sits inside the table.
-        .ornament(attachmentAnchor: .scene(.front)) {
+        // The near edge of the table. The volume's bottom is the floor the
+        // sheet lies on, so an ornament there sits inside the paper; its front
+        // is at the mariner's eye height, which puts the controls in the way
+        // of the chart. The corner between them is where a control strip on a
+        // real table would be.
+        .ornament(attachmentAnchor: .scene(.bottomFront)) {
             ChartTableControls(model: model, choosingCharts: $choosingCharts)
         }
         // A chart the system hands over: a .pmtiles AirDropped or opened from
