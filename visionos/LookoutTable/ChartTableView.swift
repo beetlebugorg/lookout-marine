@@ -35,11 +35,23 @@ struct ChartTableView: View {
             .simultaneousGesture(sheetResize)
             .simultaneousGesture(sheetRotate)
             .overlay(alignment: .center) {
-                if !model.status.isEmpty {
-                    Text(model.status)
-                        .font(.title3)
-                        .padding(24)
-                        .glassBackgroundEffect()
+                // With no chart there is nothing on the table and nothing to
+                // do but find one, so the app asks for it outright rather than
+                // leaving a row of controls that answer to nothing.
+                if !model.ready {
+                    VStack(spacing: 16) {
+                        Text("Lookout Table")
+                            .font(.title)
+                        Text(model.status)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+                        Button("Choose Charts") { choosingCharts = true }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(32)
+                    .glassBackgroundEffect()
                 }
             }
         }
@@ -168,26 +180,28 @@ private struct ChartTableControls: View {
             } label: {
                 Label("Day, dusk, night", systemImage: "circle.lefthalf.filled")
             }
+            .disabled(!model.ready)
             Button {
                 model.fitChart()
             } label: {
                 Label("Whole chart", systemImage: "arrow.up.left.and.arrow.down.right")
             }
+            .disabled(!model.ready)
             Button {
                 model.followOwnShip()
             } label: {
                 Label("Own ship", systemImage: "location.fill")
             }
+            .disabled(!model.ready)
             Button {
                 model.levelSheet()
             } label: {
                 Label("Square the sheet", systemImage: "square.grid.2x2")
             }
+            .disabled(!model.ready)
         }
         .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(12)
         .glassBackgroundEffect()
     }
 }
