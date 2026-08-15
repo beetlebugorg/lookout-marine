@@ -43,6 +43,7 @@
 		5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
 		5EDC1114355DA539A388C6C7 /* AISRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9691E45FAC1F310677953B5A /* AISRows.swift */; };
 		5EEDE95CAAAD509154C0E2A5 /* ChartSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F176FB9274EC3AD3BBD8386 /* ChartSheet.swift */; };
+		5FCDF96DB1801BB8DD88D600 /* Readouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E07550C7397F450575CA9D /* Readouts.swift */; };
 		653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17BF1C13BA2C8D28C156211 /* PickReportView.swift */; };
 		6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
@@ -171,6 +172,7 @@
 		E23141A7B6CD0C9D1C2A89CA /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableModel.swift; sourceTree = "<group>"; };
 		E42D96745CB1ECBA4B954253 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
+		E8E07550C7397F450575CA9D /* Readouts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Readouts.swift; sourceTree = "<group>"; };
 		EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -293,6 +295,7 @@
 				CD44A08FEB31F35A253E7342 /* LookoutMarineApp.swift */,
 				20D84589BE7C5E2663EC72ED /* OwnShip.swift */,
 				C17BF1C13BA2C8D28C156211 /* PickReportView.swift */,
+				E8E07550C7397F450575CA9D /* Readouts.swift */,
 				4AF7A344221893D606499AC7 /* Seabed.swift */,
 				E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */,
 				431A74445447AA1F2909DF6A /* TableSettingsView.swift */,
@@ -706,6 +709,7 @@
 				653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */,
 				B4249E18A6DC4E7D507DEDB2 /* PluginAlerts.swift in Sources */,
 				E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */,
+				5FCDF96DB1801BB8DD88D600 /* Readouts.swift in Sources */,
 				37EB7CF70D59783121BBB0CF /* Seabed.swift in Sources */,
 				28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */,
 				DF1E1575E3BC273FCEA4A30E /* TableModel.swift in Sources */,

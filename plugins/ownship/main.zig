@@ -18,6 +18,7 @@
 //! position for the symbol. Heading, course and speed are optional. A missing
 //! one takes its own object off the chart. The rest of the scene stands.
 
+const std = @import("std");
 const lk = @import("lk2");
 const cfg = @import("config.zig");
 const trk = @import("track.zig");
@@ -96,7 +97,17 @@ pub fn draw(c: *lk.Chart) void {
     const rot = compass orelse course;
     const speed = inputs.speed.fresh() orelse 0;
 
-    c.symbol("ownship", .ownship, boat, .{ .color = .ownship, .rot_deg = rot orelse 0, .anchor = .ownship });
+    // What the boat is doing, on the symbol itself. A shell reads it back
+    // through the overlay and shows it as a readout, so the numbers a mariner
+    // steers by come from the same place the boat is drawn from.
+    var pick: Pick = .{};
+    pick.own(compass, course, speed);
+    c.symbol("ownship", .ownship, boat, .{
+        .color = .ownship,
+        .rot_deg = rot orelse 0,
+        .anchor = .ownship,
+        .pick = .{ .title = "Own ship", .rows = pick.rows() },
+    });
     if (rot) |r| c.line("hdg", &.{ boat, boat.destination(r, heading_line_m) }, hdg_style);
     // The vector is as long as the boat travels in the set time, so it grows
     // and shrinks with the speed and says how far ahead the mariner is looking.
@@ -139,3 +150,34 @@ fn rotationSource(compass: ?f64, course: ?f64) []const u8 {
     if (course != null) return "heading from GPS course";
     return "no heading";
 }
+
+/// What a hover over the boat says, and what a shell reads for its readouts.
+/// Fixed buffers, and it lives only as long as the `c.symbol` call it is
+/// passed to: the library serializes the rows there and then.
+///
+/// UNITS. These are display strings in knots and degrees, formatted here, the
+/// same way the AIS plugin formats a target's.
+const Pick = struct {
+    buf: [3][40]u8 = undefined,
+    store: [3][2][]const u8 = undefined,
+    n: usize = 0,
+
+    fn add(self: *Pick, key: []const u8, comptime fmt: []const u8, args: anytype) void {
+        if (self.n == self.buf.len) return;
+        const v = std.fmt.bufPrint(&self.buf[self.n], fmt, args) catch return;
+        self.store[self.n] = .{ key, v };
+        self.n += 1;
+    }
+
+    /// Speed, course and heading, each only when its sensor answered. A value
+    /// nobody sent is left out rather than sent as a zero.
+    fn own(self: *Pick, heading: ?f64, course: ?f64, speed: ?f64) void {
+        if (speed) |s| self.add("SOG", "{d:.1} kn", .{lk.knots(s)});
+        if (course) |c| self.add("COG", "{d:.0}\u{00b0}", .{c});
+        if (heading) |h| self.add("HDG", "{d:.0}\u{00b0}", .{h});
+    }
+
+    fn rows(self: *const Pick) []const [2][]const u8 {
+        return self.store[0..self.n];
+    }
+};

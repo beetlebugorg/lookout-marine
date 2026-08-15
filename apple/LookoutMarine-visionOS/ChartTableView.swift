@@ -206,6 +206,15 @@ private struct ChartTableControls: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        VStack(spacing: 10) {
+            if model.ready { ReadoutRow(readouts: model.readouts) }
+            controls
+        }
+        .padding(12)
+        .glassBackgroundEffect()
+    }
+
+    private var controls: some View {
         HStack(spacing: 18) {
             Button {
                 choosingCharts = true
@@ -256,7 +265,38 @@ private struct ChartTableControls: View {
             }
         }
         .labelStyle(.iconOnly)
-        .padding(12)
-        .glassBackgroundEffect()
+    }
+}
+
+/// The boat's instruments, on one line under the controls. A value nobody is
+/// sending is left out rather than shown as a dash: an empty row says the
+/// sensor is quiet, and a dash reads as a reading of nothing.
+private struct ReadoutRow: View {
+    let readouts: Readouts
+
+    var body: some View {
+        HStack(spacing: 20) {
+            if readouts.hasFix {
+                Text(readouts.position).font(.body.monospacedDigit())
+            } else {
+                Text("No fix").foregroundStyle(.secondary)
+            }
+            if !readouts.sog.isEmpty { value("SOG", readouts.sog) }
+            if !readouts.cog.isEmpty { value("COG", readouts.cog) }
+            if !readouts.heading.isEmpty { value("HDG", readouts.heading) }
+            if !readouts.scale.isEmpty {
+                value("Scale", readouts.scale)
+                    .foregroundStyle(readouts.overscaled ? Color.orange : Color.primary)
+            }
+        }
+        .font(.body)
+        .padding(.horizontal, 8)
+    }
+
+    private func value(_ label: String, _ text: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(text).monospacedDigit()
+        }
     }
 }

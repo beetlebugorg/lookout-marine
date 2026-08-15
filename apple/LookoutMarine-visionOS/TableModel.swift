@@ -31,6 +31,12 @@ final class TableModel {
     /// it costs a second of picks, and a chart table is a chart first.
     let seabed = Seabed()
 
+    /// What a chart table's instruments say: where the boat is, what it is
+    /// doing, and what the chart under it is showing. Read a few times a
+    /// second, which is faster than any of it changes.
+    var readouts: Readouts = .init()
+    private var lastReadoutAt: TimeInterval = 0
+
     /// What the mariner is told when there is no chart, and while one opens.
     var status = "Opening the chart"
     var ready = false
@@ -105,6 +111,10 @@ final class TableModel {
         ownShip.update(engine: engine, sheet: sheet)
         pickCard.update(engine: engine, sheet: sheet)
         resampleSeabedIfStale(now: now)
+        if now - lastReadoutAt > 0.4 {
+            lastReadoutAt = now
+            readouts = makeReadouts()
+        }
         if now - lastTitleAt > 0.5 {
             lastTitleAt = now
             sheet.setTitle(titleLine())
@@ -113,6 +123,25 @@ final class TableModel {
             sheet.setScale(groundPerSheetMeter: groundPerSheetMeter())
             sheet.setNorth(rotationDegrees: engine.rotationDegrees)
         }
+    }
+
+    /// The instruments, read off the chart and off own ship's own overlay.
+    private func makeReadouts() -> Readouts {
+        var r = Readouts()
+        let d = engine.scaleDenominator
+        if d > 0 { r.scale = "1:\(ChartLibrary.thousands(Int(d.rounded())))" }
+        r.overscaled = engine.overscale > 1.05
+        guard let ship = engine.ownShipReadout() else { return r }
+        r.position = Readouts.latLon(lon: ship.lon, lat: ship.lat)
+        for (key, value) in ship.rows {
+            switch key {
+            case "SOG": r.sog = value
+            case "COG": r.cog = value
+            case "HDG": r.heading = value
+            default: continue
+            }
+        }
+        return r
     }
 
     /// How many meters of sea one meter of paper covers, measured across the

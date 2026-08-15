@@ -520,6 +520,34 @@ if let depthSeen {
     check(false, "no DRVAL1 in any payload: a relief has nothing to build from")
 }
 
+// MARK: - The readouts
+
+// What a HUD shows: where the boat is, and what it is doing. The position
+// comes from the core; the rest rides own ship's own overlay payload, which is
+// the only place a shell can read it.
+section("readouts")
+var shipLon = 0.0, shipLat = 0.0
+let hasFix = lookout_own_ship(h, &shipLon, &shipLat) == 1
+print(String(format: "  fix: %@  %.5f, %.5f", hasFix ? "yes" : "no", shipLon, shipLat))
+check(lookout_scale_denominator(h) > 0, "the chart states its scale")
+
+var ship = lookout_overlay_obj()
+let shipID = "org.beetlebug.ownship/ownship"
+if lookout_overlay_info(h, shipID, &ship) == 1, let p = ship.info, ship.info_len > 0 {
+    let payload = String(decoding: UnsafeRawBufferPointer(start: p, count: ship.info_len), as: UTF8.self)
+    print("  own ship says: \(payload.prefix(160))")
+    check(payload.contains("SOG") || payload.contains("COG"),
+          "own ship publishes what it is doing, for a readout to show")
+} else if hasFix {
+    check(false, "own ship draws but publishes nothing to read")
+} else {
+    print("  no own ship: the NMEA replay is not running, so there is no fix")
+}
+
+// The row the mariner reads, formatted the way a log is written.
+check(!Readouts.latLon(lon: -76.4767, lat: 38.9763).isEmpty, "a position formats for a readout")
+print("  as shown: \(Readouts.latLon(lon: -76.4767, lat: 38.9763))")
+
 // MARK: - The alarms
 
 // The AIS plugin raises a CPA alarm for one target in the recorded scene, so

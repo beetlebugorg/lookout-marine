@@ -317,6 +317,38 @@ final class ChartEngine {
         lookout_cycle_scheme(h)
     }
 
+    /// What the boat is and what it is doing, for the readouts.
+    ///
+    /// Own ship's own overlay object answers both: where it draws now, and the
+    /// payload the plugin publishes on it. lookout_own_ship can still be
+    /// answering no while the boat is drawn, so the overlay is what is read.
+    func ownShipReadout() -> (lon: Double, lat: Double, rows: [(String, String)])? {
+        guard let h = handle else { return nil }
+        var obj = lookout_overlay_obj()
+        guard lookout_overlay_info(h, ChartEngine.ownShipOverlayID, &obj) == 1 else { return nil }
+        var rows: [(String, String)] = []
+        if let p = obj.info, obj.info_len > 0 {
+            let payload = String(decoding: UnsafeRawBufferPointer(start: p, count: obj.info_len), as: UTF8.self)
+            if let data = payload.data(using: .utf8),
+               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let list = root["rows"] as? [[String]] {
+                rows = list.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+            }
+        }
+        return (obj.lon, obj.lat, rows)
+    }
+
+    /// The overlay object the own ship plugin draws the boat as. The core
+    /// namespaces an object by the plugin that drew it.
+    static let ownShipOverlayID = "org.beetlebug.ownship/ownship"
+
+    /// How far the chart is drawn past the scale its data supports. Above 1
+    /// the mariner is magnifying a chart rather than reading a finer one.
+    var overscale: Double {
+        guard let h = handle else { return 1 }
+        return lookout_overscale(h)
+    }
+
     /// Own ship's position, when a plugin is publishing one.
     var ownShip: (lon: Double, lat: Double)? {
         guard let h = handle else { return nil }

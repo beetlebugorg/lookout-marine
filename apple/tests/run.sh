@@ -51,6 +51,7 @@ xcrun swiftc -O \
     -I zig-out/include \
     apple/LookoutMarine-visionOS/AISRows.swift \
     apple/LookoutMarine-visionOS/DepthField.swift \
+    apple/LookoutMarine-visionOS/Readouts.swift \
     apple/LookoutMarine/PluginAlerts.swift \
     apple/LookoutMarine/PickDecoded.swift \
     apple/LookoutMarine/Chrome.swift \
