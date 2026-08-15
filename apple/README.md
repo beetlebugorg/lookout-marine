@@ -184,10 +184,13 @@ incremental.
 
 The app looks for baked `.pmtiles` charts in this order:
 
-1. `$LOOKOUT_CHARTS`, a file or a directory (a development convenience).
-2. The app's own Documents folder, which the Files app shows and a mariner can
+1. The folder the mariner chose, remembered across launches.
+2. `$LOOKOUT_CHARTS`, a file or a directory (a development convenience).
+3. The app's own Documents folder, which the Files app shows and a mariner can
    copy charts into.
-3. The sample cell in the bundle, so a fresh install draws something.
+
+Nothing is bundled, so a fresh install has no charts until it is given some:
+open a folder from the Files app, or AirDrop a `.pmtiles` cell to the headset.
 
 A directory is walked for every `.pmtiles` under it, however many that is. A
 whole ENC_ROOT is thousands of cells; tile57 memory-maps them rather than

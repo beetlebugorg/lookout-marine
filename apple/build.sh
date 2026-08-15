@@ -48,14 +48,6 @@ elif [[ ! -d "$PROJECT" ]]; then
   exit 1
 fi
 
-# The sample cell the visionOS app falls back to when it is given no charts.
-# Copied rather than tracked: charts are data, not source.
-SAMPLE="$HOME/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
-if [[ -f "$SAMPLE" && ! -f "$REPO/apple/Charts/US5MD1MC.pmtiles" ]]; then
-  mkdir -p "$REPO/apple/Charts"
-  cp "$SAMPLE" "$REPO/apple/Charts/US5MD1MC.pmtiles"
-fi
-
 build() {
   echo "==> $1 ($CONFIG)"
   xcodebuild -project "$PROJECT" -scheme "$1" -configuration "$CONFIG" \

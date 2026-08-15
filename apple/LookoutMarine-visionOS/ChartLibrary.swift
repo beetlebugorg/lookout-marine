@@ -2,10 +2,11 @@
 //  Where the charts are.
 //
 //  A headset has no home directory a mariner can reach, so charts arrive in
-//  the app's own Documents folder, which the Files app shows. A build for the
+//  the app's own Documents folder, which the Files app shows, or from the
+//  folder they pick out of the Files app, which is remembered. A build for the
 //  simulator can also be pointed at the machine's chart library with
-//  LOOKOUT_CHARTS, and the bundle carries one cell so a fresh install has
-//  something to draw.
+//  LOOKOUT_CHARTS. Nothing travels in the bundle: charts are the mariner's own
+//  data, and a fresh install draws nothing until it is given some.
 //
 
 import Foundation
@@ -36,16 +37,7 @@ enum ChartLibrary {
                 return paths
             }
         }
-        // Whatever charts the build put in the bundle, which is one sample cell
-        // by default and is however many cells were dropped into
-        // apple/Charts before the build.
-        if let resources = Bundle.main.resourceURL {
-            let paths = expand(resources.path)
-            if !paths.isEmpty {
-                lkLog("charts: \(paths.count) from the bundle")
-                return paths
-            }
-        }
+        lkLog("no charts: none chosen, and none in Documents")
         return []
     }
 

@@ -50,7 +50,6 @@
 		6933BF417CA5E62DA1304F4B /* AltChartStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4417D066BB41E317736749E5 /* AltChartStyle.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
-		71EA32F9D090521AE54E59D6 /* US5MD1MC.pmtiles in Resources */ = {isa = PBXBuildFile; fileRef = C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */; };
 		741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
 		792CE1AB477847126FB4B5E6 /* DepthField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C34741C01C227A0250B01B4 /* DepthField.swift */; };
 		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
@@ -167,7 +166,6 @@
 		A57FE65303362F648D2D13FF /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A79681EADC27E70A6BB144FE /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
 		B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartTableView.swift; sourceTree = "<group>"; };
-		C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */ = {isa = PBXFileReference; path = US5MD1MC.pmtiles; sourceTree = "<group>"; };
 		C17BF1C13BA2C8D28C156211 /* PickReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReportView.swift; sourceTree = "<group>"; };
 		C30C216F6C0285110D3B2A87 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
 		CC176DEF0F2C30D02AAA23AD /* AISTraffic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISTraffic.swift; sourceTree = "<group>"; };
@@ -238,7 +236,6 @@
 		066E288701BD08B9A8DA8053 = {
 			isa = PBXGroup;
 			children = (
-				CD4FAE3E28281B9C951CDA4C /* Charts */,
 				07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */,
 				ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */,
 				199D03F5A92A931696942775 /* LookoutMarine-visionOS */,
@@ -335,14 +332,6 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		CD4FAE3E28281B9C951CDA4C /* Charts */ = {
-			isa = PBXGroup;
-			children = (
-				C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */,
-			);
-			path = Charts;
-			sourceTree = "<group>";
-		};
 		ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -379,7 +368,6 @@
 			buildPhases = (
 				CDD8EEB796DD7921B5A2107E /* Build the zig cores (lookout + tile57 dependency) */,
 				B26CB3FD87E39BF4B1C75EAD /* Sources */,
-				746DB68575C9ABE06BC443B2 /* Resources */,
 				252F361AD7A10AC0E79BCD4C /* Frameworks */,
 				AFCDF7C5E356E0FCBA54FB9E /* Bundle the core plugins into Resources/Plugins */,
 			);
@@ -488,14 +476,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		746DB68575C9ABE06BC443B2 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				71EA32F9D090521AE54E59D6 /* US5MD1MC.pmtiles in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

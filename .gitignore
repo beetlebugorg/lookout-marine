@@ -51,6 +51,3 @@ vendor/libpng/
 vendor/libwebp/
 vendor/codecs-*/
 
-# The sample chart build.sh copies in from the machine's library, for the
-# visionOS app to fall back to. Charts are data, not source.
-apple/Charts/
