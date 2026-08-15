@@ -154,7 +154,7 @@ final class TableModel {
         engine.renderFrame()
         traffic.update(engine: engine, sheet: sheet, now: now)
         ownShip.update(engine: engine, sheet: sheet)
-        pickCard.update(engine: engine, sheet: sheet)
+        pickCard.update(engine: engine, sheet: sheet, ceiling: ceilingAboveSheet)
         resampleSeabedIfStale(now: now)
         if now - lastReadoutAt > 0.4 {
             lastReadoutAt = now
@@ -611,6 +611,19 @@ final class TableModel {
     func setTilt(_ degrees: Float) {
         tiltDegrees = min(max(degrees, 0), maxTiltDegrees)
         applyPose()
+    }
+
+    /// How high the tilt lifts the sheet off the volume's floor.
+    var sheetLift: Float { sheet.depth / 2 * sin(tiltDegrees * .pi / 180) }
+
+    /// The room above the paper before the volume's top clips, in meters.
+    /// Everything standing on the sheet is held inside this.
+    var ceilingAboveSheet: Float { max(volumeHeight - 0.02 - sheetLift, 0.05) }
+
+    /// How tall a panel standing on the sheet may be, in points. The pick
+    /// report is a form, so it is sized in the units SwiftUI laid it out in.
+    var panelPoints: CGFloat {
+        CGFloat(max(ceilingAboveSheet - PickCard.clearance, 0.12) * PickCard.pointsPerMeter)
     }
 
     /// Yaw about the room's up axis, then tilt so the far edge rises.

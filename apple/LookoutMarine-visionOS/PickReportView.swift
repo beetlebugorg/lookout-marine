@@ -13,6 +13,10 @@ struct PickReportView: View {
     let picks: [PickDecoded]
     @Binding var index: Int
     let onClose: () -> Void
+    /// What the volume can hold above the paper. The report is a tall form and
+    /// the volume clips it, so the rows give up the room rather than the
+    /// header and its close control.
+    let maxHeight: CGFloat
 
     private var pick: PickDecoded? {
         picks.indices.contains(index) ? picks[index] : picks.first
@@ -48,6 +52,7 @@ struct PickReportView: View {
         }
         .padding(20)
         .frame(width: 460)
+        .frame(maxHeight: maxHeight, alignment: .top)
         .glassBackgroundEffect()
     }
 

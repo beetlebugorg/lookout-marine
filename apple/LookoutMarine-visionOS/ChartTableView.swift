@@ -48,7 +48,8 @@ struct ChartTableView: View {
                 Attachment(id: ChartTableView.pickAttachment) {
                     PickReportView(picks: model.picks,
                                    index: Bindable(model).pickIndex,
-                                   onClose: { model.closePick() })
+                                   onClose: { model.closePick() },
+                                   maxHeight: model.panelPoints)
                 }
                 Attachment(id: ChartTableView.cardAttachment) {
                     TableCard(model: model, choosingCharts: $choosingCharts)

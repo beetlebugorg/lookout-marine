@@ -83,7 +83,11 @@ final class PickCard {
 
     /// How far the bottom of the panel floats above the sheet. Enough to clear
     /// a flag standing over a vessel at the same spot.
-    private static let clearance: Float = 0.07
+    static let clearance: Float = 0.07
+
+    /// Points per meter for a SwiftUI attachment: the view is laid out in
+    /// points and stood in the scene at this scale.
+    static let pointsPerMeter: Float = 1360
 
     func show(lon: Double, lat: Double) {
         self.lon = lon
@@ -97,7 +101,9 @@ final class PickCard {
 
     var isShowing: Bool { root.isEnabled }
 
-    func update(engine: ChartEngine, sheet: ChartSheet) {
+    /// `ceiling` is the room above the paper before the volume's top clips,
+    /// in meters.
+    func update(engine: ChartEngine, sheet: ChartSheet, ceiling: Float) {
         guard root.isEnabled else { return }
         guard let f = engine.fractionFor(lon: lon, lat: lat), sheet.onSheet(f) else {
             root.isEnabled = false
@@ -106,9 +112,13 @@ final class PickCard {
         root.position = sheet.position(fraction: f, height: 0)
         // The attachment is laid out by SwiftUI, so its height is only known
         // once it exists, and it changes with the report it holds.
+        //
+        // The panel carries its close control and its paging along its top
+        // edge, so the top is the end that has to stay inside the volume. A
+        // panel with no room to stand at its clearance is lowered instead.
         if let panel = mount.children.first {
             let h = panel.visualBounds(relativeTo: mount).extents.y
-            if h > 0 { setLift(PickCard.clearance + h / 2) }
+            if h > 0 { setLift(min(PickCard.clearance + h / 2, ceiling - h / 2)) }
         }
     }
 
