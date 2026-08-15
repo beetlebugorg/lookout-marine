@@ -78,20 +78,23 @@ WAMR_FEATURES="interp+aot+wasi"
 # level android/app/build.gradle declares as minSdk and build.zig defaults to.
 MACOS_MIN="13.0"
 IOS_MIN="15.0"
+# 1.0 is the visionOS floor. The app builds at a higher minimum and links an
+# object built for an older one, the same rule as iOS above.
+VISIONOS_MIN="1.0"
 ANDROID_API="24"
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 src="$root/vendor/wamr"
 
-usage="usage: ${BASH_SOURCE[0]##*/} [macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64|apple|all|wamrc] [--print-msvc]"
+usage="usage: ${BASH_SOURCE[0]##*/} [macos|ios|iossim|visionos|visionossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64|apple|all|wamrc] [--print-msvc]"
 target="${1:-macos}"
 case "$target" in
-    macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64) targets=("$target") ;;
-    apple) targets=(macos ios iossim) ;;
+    macos|ios|iossim|visionos|visionossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64) targets=("$target") ;;
+    apple) targets=(macos ios iossim visionos visionossim) ;;
     # wamrc is NOT in `all`: it is a build-machine tool, it needs LLVM, and
     # nothing that ships contains it. windows-arm64 is not in `all` either:
     # it builds only on the ARM64 Windows machine (see WINDOWS above).
-    all)   targets=(macos ios iossim linux-x64 linux-arm64 windows-x64 android-arm64) ;;
+    all)   targets=(macos ios iossim visionos visionossim linux-x64 linux-arm64 windows-x64 android-arm64) ;;
     wamrc) targets=(wamrc) ;;
     *) echo "$usage" >&2; exit 2 ;;
 esac
@@ -239,7 +242,7 @@ done
 # The Apple SDKs are macOS-only. The cross targets are not: they need zig.
 for t in "${targets[@]}"; do
     case "$t" in
-        macos|ios|iossim)
+        macos|ios|iossim|visionos|visionossim)
             [ "$(uname -s)" = "Darwin" ] ||
                 { echo "build-wamr.sh: target $t needs the Apple SDKs; this host is $(uname -s)" >&2; exit 1; }
             ;;
@@ -618,6 +621,28 @@ build_one() {
                 -DWAMR_BUILD_TARGET=AARCH64
             )
             label="$sdk arm64, min $IOS_MIN"
+            ;;
+        visionos|visionossim)
+            need_xcode
+            # CMAKE_SYSTEM_NAME=visionOS needs cmake 3.28 or newer. It drives
+            # clang with -target arm64-apple-xros<min>[-simulator], picked from
+            # the sysroot below. Device and simulator are separate mach-o
+            # platforms, hence two dists. WAMR ships no visionOS platform layer
+            # and needs none: the darwin layer is pthreads and mmap, which xros
+            # has, so WAMR_BUILD_PLATFORM=darwin covers every Apple target.
+            if [ "$t" = visionos ]; then
+                dist="$root/vendor/wamr-dist-visionos"; sdk="xros"
+            else
+                dist="$root/vendor/wamr-dist-visionossim"; sdk="xrsimulator"
+            fi
+            platform_flags=(
+                -DCMAKE_SYSTEM_NAME=visionOS
+                -DCMAKE_OSX_SYSROOT="$sdk"
+                -DCMAKE_OSX_ARCHITECTURES=arm64
+                -DCMAKE_OSX_DEPLOYMENT_TARGET="$VISIONOS_MIN"
+                -DWAMR_BUILD_TARGET=AARCH64
+            )
+            label="$sdk arm64, min $VISIONOS_MIN"
             ;;
         linux-x64)
             dist="$root/vendor/wamr-dist-linux-x64"

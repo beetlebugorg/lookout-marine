@@ -31,6 +31,12 @@ fn wamrDist(target: std.Build.ResolvedTarget) ?WamrDist {
             WamrDist{ .dir = "vendor/wamr-dist-iossim", .mode = "iossim" }
         else
             WamrDist{ .dir = "vendor/wamr-dist-ios", .mode = "ios" },
+        // visionOS: device and simulator are separate mach-o platforms whose
+        // objects do not interchange, so two archives, exactly as iOS.
+        .visionos => if (t.abi == .simulator)
+            WamrDist{ .dir = "vendor/wamr-dist-visionossim", .mode = "visionossim" }
+        else
+            WamrDist{ .dir = "vendor/wamr-dist-visionos", .mode = "visionos" },
         // Android is os.tag .linux with an android abi, and bionic is not
         // glibc, so it takes its own archive.
         .linux => if (android) switch (t.cpu.arch) {
@@ -186,9 +192,12 @@ pub fn build(b: *std.Build) void {
     // Metal is charttable's only backend today, so this branch builds for
     // Apple alone. Vulkan, SDL and D3D12 come back when charttable ports them
     // — its shaders/vk is already written against the same scene contract.
-    const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
+    const is_apple = switch (target.result.os.tag) {
+        .macos, .ios, .visionos => true,
+        else => false,
+    };
     if (!is_apple)
-        @panic("this branch draws with charttable, whose only backend is Metal: build for macOS or iOS");
+        @panic("this branch draws with charttable, whose only backend is Metal: build for macOS, iOS or visionOS");
     // The wasm plugin host (src/plugin/). It builds for any target
     // scripts/build-wamr.sh has an archive for, and it is ON BY DEFAULT ON
     // APPLE ONLY. The Apple app links the runtime through the Xcode project
@@ -259,12 +268,34 @@ pub fn build(b: *std.Build) void {
     // (interlaced, 16-bit).
     //
     // Default ON, unlike charttable's own build, where they default off so an
-    // embedder is never forced into a system dependency. Lookout HAS an
-    // embedder — this repo's Apple app — and it would rather have the codecs
+    // embedder is never forced into a system dependency. Lookout has an
+    // embedder, this repo's Apple app, and it would rather have the codecs
     // than a chart with a hole in it. `-Dwebp=false -Dlibpng=false` builds
     // without them on a host that has neither.
     const use_webp = b.option(bool, "webp", "Decode WebP tiles with libwebp") orelse true;
     const use_libpng = b.option(bool, "libpng", "Decode PNG with libpng") orelse true;
+
+    // macOS takes both from Homebrew. An iOS or visionOS device has no package
+    // manager, and the Homebrew archives are host-platform objects, so those
+    // targets link the static archives scripts/build-codecs.sh cross-builds
+    // into vendor/codecs-<target>/. Without the directory charttable falls back
+    // to pkg-config, which answers with /opt/homebrew paths that do not resolve
+    // inside the SDK sysroot.
+    const codec_dir: ?[]const u8 = switch (target.result.os.tag) {
+        .visionos => if (target.result.abi == .simulator) "vendor/codecs-visionossim" else "vendor/codecs-visionos",
+        .ios => if (target.result.abi == .simulator) "vendor/codecs-iossim" else "vendor/codecs-ios",
+        else => null,
+    };
+    if (codec_dir) |dir| {
+        if ((use_webp and !haveFile(b, b.fmt("{s}/lib/libwebp.a", .{dir}))) or
+            (use_libpng and !haveFile(b, b.fmt("{s}/lib/libpng16.a", .{dir}))))
+        {
+            b.getInstallStep().dependOn(&b.addFail(b.fmt(
+                "{s} has no codec archives. Run `scripts/build-codecs.sh {s}` first, or build with -Dwebp=false -Dlibpng=false.",
+                .{ dir, std.fs.path.basename(dir)["codecs-".len..] },
+            )).step);
+        }
+    }
 
     // The renderer, as a Zig module: `@import("charttable")`. It carries its
     // own Metal shim and frameworks, so nothing here declares them.
@@ -273,6 +304,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .webp = use_webp,
         .libpng = use_libpng,
+        .@"codec-dir" = if (codec_dir) |d| b.pathFromRoot(d) else @as([]const u8, ""),
     }).module("charttable");
 
     const Cfg = struct {
@@ -342,10 +374,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
-        // iOS: std.debug's stack-trace machinery references
-        // _dyld_get_image_header_containing_address, which iOS' libdyld doesn't
-        // export — strip so the panic path never pulls it in.
-        .strip = target.result.os.tag == .ios,
+        // iOS and visionOS: std.debug's stack-trace machinery references
+        // _dyld_get_image_header_containing_address, which those libdylds do
+        // not export. Strip so the panic path never pulls it in.
+        .strip = target.result.os.tag == .ios or target.result.os.tag == .visionos,
     });
     cfg.apply(lib_mod, is_apple);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
@@ -378,9 +410,10 @@ pub fn build(b: *std.Build) void {
     // no plugin host.
     if (plugins_fail) |fail| lib_step.dependOn(fail);
 
-    // ---- the demo executable + tests (host platforms only: an iOS cross-build
-    // `-Dtarget=aarch64-ios` produces just the static libs for the app to link) ----
-    const cross_only = target.result.os.tag == .ios or
+    // ---- the demo executable + tests (host platforms only: an iOS or visionOS
+    // cross-build `-Dtarget=aarch64-ios`, `-Dtarget=aarch64-visionos` produces
+    // just the static libs for the app to link) ----
+    const cross_only = target.result.os.tag == .ios or target.result.os.tag == .visionos or
         target.result.abi == .android or target.result.abi == .androideabi;
     if (cross_only) return;
 

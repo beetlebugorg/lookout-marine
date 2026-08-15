@@ -43,3 +43,16 @@ test/annapolis.nmea
 
 # Claude Code agent worktrees / session data
 .claude/
+
+# Codecs: the pinned libpng and libwebp clones and the archives
+# scripts/build-codecs.sh cross-builds from them, one dist per Apple device
+# platform. Source, not artifacts.
+vendor/libpng/
+vendor/libwebp/
+vendor/codecs-*/
+
+# The visionOS app's generated project, its derived data, and the sample chart
+# build.sh copies in from the machine's library.
+visionos/LookoutTable.xcodeproj/
+visionos/build-xros/
+visionos/Charts/
