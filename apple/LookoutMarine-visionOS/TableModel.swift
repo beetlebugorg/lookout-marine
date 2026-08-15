@@ -27,6 +27,10 @@ final class TableModel {
     /// the chart is open.
     let alerts = AlertWatch()
 
+    /// The water under the paper. Off until the mariner asks for it: sampling
+    /// it costs a second of picks, and a chart table is a chart first.
+    let seabed = Seabed()
+
     /// What the mariner is told when there is no chart, and while one opens.
     var status = "Opening the chart"
     var ready = false
@@ -79,6 +83,7 @@ final class TableModel {
             return
         }
         sheet.setChartTexture(texture)
+        sheet.root.addChild(seabed.root)
         sheet.overlays.addChild(traffic.root)
         sheet.overlays.addChild(ownShip.root)
         sheet.overlays.addChild(pickCard.root)
@@ -99,6 +104,7 @@ final class TableModel {
         traffic.update(engine: engine, sheet: sheet, now: now)
         ownShip.update(engine: engine, sheet: sheet)
         pickCard.update(engine: engine, sheet: sheet)
+        resampleSeabedIfStale(now: now)
         if now - lastTitleAt > 0.5 {
             lastTitleAt = now
             sheet.setTitle(titleLine())
@@ -150,6 +156,59 @@ final class TableModel {
         f.numberStyle = .decimal
         let n = f.string(from: NSNumber(value: Int(d.rounded()))) ?? "\(Int(d))"
         return "\(engine.chartName)     1:\(n)"
+    }
+
+    // MARK: - The water under the paper
+
+    private var samplingSeabed = false
+    private var seabedSettledAt: TimeInterval = 0
+
+    /// How the seabed is sampled. 40 by 30 is 1200 picks, which is about a
+    /// second of work, and it resolves a harbor's channel and its banks. A
+    /// finer grid costs its area and shows the same shape.
+    private static let seabedColumns = 40
+    private static let seabedRows = 30
+
+    /// The view has to hold still before the sample starts: panning through a
+    /// harbor would otherwise start a second of work on every frame.
+    private static let seabedSettle: TimeInterval = 0.4
+
+    func toggleSeabed() {
+        seabed.setShowing(!seabed.isShowing)
+        if seabed.isShowing { seabedSettledAt = 0 }
+    }
+
+    /// Sample again when the view has moved away from what the slab was built
+    /// for. The sampling runs off the main actor, because every node is a pick
+    /// and a thousand of them would drop a second of frames.
+    private func resampleSeabedIfStale(now: TimeInterval) {
+        guard seabed.isShowing, !samplingSeabed else { return }
+        let v = engine.view
+        let span = engine.spanDegrees
+        if let field = seabed.field, field.matches(lon: v.lon, lat: v.lat, zoom: v.zoom, spanDegrees: span) {
+            seabedSettledAt = 0
+            return
+        }
+        if seabedSettledAt == 0 {
+            seabedSettledAt = now
+            return
+        }
+        guard now - seabedSettledAt > TableModel.seabedSettle else { return }
+        seabedSettledAt = 0
+        samplingSeabed = true
+        let columns = TableModel.seabedColumns
+        let rows = TableModel.seabedRows
+        Task.detached(priority: .utility) { [engine, seabed, sheet] in
+            let field = await MainActor.run { engine.sampleDepths(columns: columns, rows: rows) }
+            await MainActor.run {
+                if let field {
+                    seabed.rebuild(field: field,
+                                   face: SheetMetrics.faceSize(sheet: sheet.size),
+                                   thickness: SheetMetrics.thickness)
+                }
+                self.samplingSeabed = false
+            }
+        }
     }
 
     // MARK: - A hand on the chart

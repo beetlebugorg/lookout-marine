@@ -231,6 +231,12 @@ private struct ChartTableControls: View {
             }
             .disabled(!model.ready)
             Button {
+                model.toggleSeabed()
+            } label: {
+                Label("The water under the chart", systemImage: "water.waves")
+            }
+            .disabled(!model.ready)
+            Button {
                 model.stepTilt()
             } label: {
                 Label("Tilt the table", systemImage: model.tiltDegrees > 0

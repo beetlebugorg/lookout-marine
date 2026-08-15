@@ -392,6 +392,40 @@ final class ChartEngine {
         return lookout_plugin_alert_ack(h, id) == 0
     }
 
+    /// Read a depth at every node of a grid over the chart face.
+    ///
+    /// One node costs about a millisecond, so a grid costs most of a second
+    /// and cannot run on the frame. The caller hands this to a worker; every
+    /// call here is a pick, which the core takes under its own lock.
+    func sampleDepths(columns: Int, rows: Int) -> DepthField? {
+        guard handle != nil else { return nil }
+        var depths: [Float?] = []
+        depths.reserveCapacity(columns * rows)
+        for r in 0..<rows {
+            for c in 0..<columns {
+                // The middle of each cell, so the edges of the face are inside
+                // the grid rather than on it.
+                let f = SIMD2<Float>((Float(c) + 0.5) / Float(columns),
+                                     (Float(r) + 0.5) / Float(rows))
+                guard let geo = geoFor(fraction: f) else {
+                    depths.append(nil)
+                    continue
+                }
+                depths.append(DepthField.depth(from: pickFeatures(lon: geo.lon, lat: geo.lat)))
+            }
+        }
+        let v = view
+        return DepthField(columns: columns, rows: rows, depths: depths,
+                          lon: v.lon, lat: v.lat, zoom: v.zoom).filled()
+    }
+
+    /// How much ground the face covers, in degrees of longitude. The grid is
+    /// resampled when the view has moved a fraction of this.
+    var spanDegrees: Double {
+        guard let a = geoFor(fraction: [0, 0.5]), let b = geoFor(fraction: [1, 0.5]) else { return 0 }
+        return abs(b.lon - a.lon)
+    }
+
     // MARK: - Plugin data
 
     /// The rows of a plugin table, as JSON. The AIS plugin's "targets" table
@@ -423,9 +457,9 @@ final class ChartEngine {
         return (obj.lon, obj.lat, payload)
     }
 
-    /// What the chart reports at a position, best first. The core decides what
-    /// a pick reports and in what order, so every shell shows the same thing.
-    func pick(lon: Double, lat: Double) -> [PickDecoded] {
+    /// The features a pick answers with, undecoded. The seabed sampler reads
+    /// depth attributes straight out of these.
+    func pickFeatures(lon: Double, lat: Double) -> [PickFeature] {
         guard let h = handle else { return [] }
         var found: [PickFeature] = []
         withUnsafeMutablePointer(to: &found) { ctx in
@@ -444,7 +478,13 @@ final class ChartEngine {
                 })
             lookout_pick_ranked(h, lon, lat, &cb)
         }
-        return found.map(PickDecoded.init)
+        return found
+    }
+
+    /// What the chart reports at a position, best first. The core decides what
+    /// a pick reports and in what order, so every shell shows the same thing.
+    func pick(lon: Double, lat: Double) -> [PickDecoded] {
+        pickFeatures(lon: lon, lat: lat).map(PickDecoded.init)
     }
 }
 

@@ -22,6 +22,7 @@
 		28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */; };
 		299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
 		29CB1F37867F87193EF62FE0 /* ChartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93494B787207D29B6E118FD /* ChartEngine.swift */; };
+		37EB7CF70D59783121BBB0CF /* Seabed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF7A344221893D606499AC7 /* Seabed.swift */; };
 		3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231885FFFF86BB739D2D973D /* SettingsWindow.swift */; };
 		3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
 		40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
@@ -48,6 +49,7 @@
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
 		71EA32F9D090521AE54E59D6 /* US5MD1MC.pmtiles in Resources */ = {isa = PBXBuildFile; fileRef = C0AFD2A7363A62E3D7BA211B /* US5MD1MC.pmtiles */; };
 		741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
+		792CE1AB477847126FB4B5E6 /* DepthField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C34741C01C227A0250B01B4 /* DepthField.swift */; };
 		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
 		7F31972EABF2BAEA6A401CD5 /* AlertWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93839C4A4EDC35354A5B5BC4 /* AlertWatch.swift */; };
@@ -129,6 +131,7 @@
 		431A74445447AA1F2909DF6A /* TableSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableSettingsView.swift; sourceTree = "<group>"; };
 		4417D066BB41E317736749E5 /* AltChartStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AltChartStyle.swift; sourceTree = "<group>"; };
 		44DE7634B8D1E8049164F21C /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
+		4AF7A344221893D606499AC7 /* Seabed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Seabed.swift; sourceTree = "<group>"; };
 		4C886CFA5BF1D5ED45BA18C8 /* LookoutMarine-visionOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-visionOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -141,6 +144,7 @@
 		6D17DBA004144D3FA63E8762 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
+		7C34741C01C227A0250B01B4 /* DepthField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthField.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginInstall.swift; sourceTree = "<group>"; };
 		83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOS-UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -283,11 +287,13 @@
 				87C49C5ED2DF88A1B3E0A2F8 /* ChartLibrary.swift */,
 				0F176FB9274EC3AD3BBD8386 /* ChartSheet.swift */,
 				B5FD7CDD79BF2FAD6167C2CC /* ChartTableView.swift */,
+				7C34741C01C227A0250B01B4 /* DepthField.swift */,
 				A57FE65303362F648D2D13FF /* Info.plist */,
 				E42D96745CB1ECBA4B954253 /* Log.swift */,
 				CD44A08FEB31F35A253E7342 /* LookoutMarineApp.swift */,
 				20D84589BE7C5E2663EC72ED /* OwnShip.swift */,
 				C17BF1C13BA2C8D28C156211 /* PickReportView.swift */,
+				4AF7A344221893D606499AC7 /* Seabed.swift */,
 				E257B6AEC0D5E6EFF2E1C664 /* TableModel.swift */,
 				431A74445447AA1F2909DF6A /* TableSettingsView.swift */,
 			);
@@ -690,6 +696,7 @@
 				5EEDE95CAAAD509154C0E2A5 /* ChartSheet.swift in Sources */,
 				4C4022915885B10AA22AA8D5 /* ChartTableView.swift in Sources */,
 				E61B9503386E0ABA58B6BEAF /* Chrome.swift in Sources */,
+				792CE1AB477847126FB4B5E6 /* DepthField.swift in Sources */,
 				A0B3F0E23FB9A4ACBB46836B /* Log.swift in Sources */,
 				A8CCCA8E68A32C8744F4EF4E /* LookoutMarineApp.swift in Sources */,
 				9E4DE2C59FB562D959E93877 /* MarinerSections.swift in Sources */,
@@ -699,6 +706,7 @@
 				653CE95330DF23E664DEF928 /* PickReportView.swift in Sources */,
 				B4249E18A6DC4E7D507DEDB2 /* PluginAlerts.swift in Sources */,
 				E3DD122E6F0A0982478C6803 /* PluginSettings.swift in Sources */,
+				37EB7CF70D59783121BBB0CF /* Seabed.swift in Sources */,
 				28789E88E2D8BAF2C249A8EB /* SettingsRows.swift in Sources */,
 				DF1E1575E3BC273FCEA4A30E /* TableModel.swift in Sources */,
 				0DA6ACA9A0F17896A25E501E /* TableSettingsView.swift in Sources */,

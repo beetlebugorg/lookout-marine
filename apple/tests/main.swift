@@ -479,6 +479,40 @@ for row in 0..<8 {
 let ms = Date().timeIntervalSince(t0) * 1000
 print(String(format: "  64 positions, %d features, %.1f ms (%.2f ms each)", picks, ms, ms / 64))
 check(picks > 0, "a grid of positions answers with features")
+
+// The field the block is built from, at the size the app samples. What the
+// grid finds is worth printing: a sparse field and an absent one look the
+// same in a count.
+let gridCols = 40, gridRows = 30
+let fieldStart = Date()
+var grid: [Float?] = []
+var classes: [String: Int] = [:]
+for r in 0..<gridRows {
+    for c in 0..<gridCols {
+        var plon = 0.0, plat = 0.0
+        lookout_screen_to_geo(h,
+                              Float(ptW) * (Float(c) + 0.5) / Float(gridCols),
+                              Float(ptH) * (Float(r) + 0.5) / Float(gridRows),
+                              &plon, &plat)
+        let features = enginePick(h, plon, plat)
+        if r % 3 == 0, c % 3 == 0 {
+            for f in features { classes[f.cls, default: 0] += 1 }
+        }
+        grid.append(DepthField.depth(from: features))
+    }
+}
+let fieldMs = Date().timeIntervalSince(fieldStart) * 1000
+print("  classes: " + classes.sorted { $0.value > $1.value }
+        .prefix(8).map { "\($0.key) \($0.value)" }.joined(separator: ", "))
+let rawField = DepthField(columns: gridCols, rows: gridRows, depths: grid, lon: 0, lat: 0, zoom: 0)
+let filledField = rawField.filled()
+print(String(format: "  %dx%d field in %.0f ms: %d of %d nodes answered, %d after filling, deepest %.1f m",
+             gridCols, gridRows, fieldMs, rawField.known, grid.count,
+             filledField.known, filledField.deepest))
+check(rawField.known > 0, "the chart answers with depth somewhere on the sheet")
+check(filledField.known == grid.count, "filling leaves no hole in the block")
+check(filledField.deepest > 0, "the field has relief to show")
+check(fieldMs < 5000, "a field is sampled inside a few seconds")
 if let depthSeen {
     print("  depth in the payload: \(depthSeen)")
     check(true, "a depth area states its range, so a relief has values to use")

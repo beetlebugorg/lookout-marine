@@ -50,6 +50,7 @@ xcrun swiftc -O \
     -import-objc-header apple/LookoutMarine-visionOS/Bridging-Header.h \
     -I zig-out/include \
     apple/LookoutMarine-visionOS/AISRows.swift \
+    apple/LookoutMarine-visionOS/DepthField.swift \
     apple/LookoutMarine/PluginAlerts.swift \
     apple/LookoutMarine/PickDecoded.swift \
     apple/LookoutMarine/Chrome.swift \
