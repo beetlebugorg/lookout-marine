@@ -100,6 +100,9 @@ final class ChartEngine {
         handle = nil
         queue = nil
         texture = nil
+        // The counts belong to the handle that is going away. Kept, they would
+        // read as readers the next chart's plugins never heard from.
+        tableReaders.removeAll()
     }
 
     /// The plugin set that travels in the bundle: own ship, AIS, NMEA 0183,
@@ -505,10 +508,25 @@ final class ChartEngine {
 
     /// Tell a plugin its table is being read. A plugin builds rows only while
     /// one is open.
+    ///
+    /// Counted, because two parts of the app read the same table: the traffic
+    /// standing on the sheet reads the AIS roster for as long as the chart is
+    /// open, and the roster window reads whichever table the mariner picked.
+    /// Closing is the end of one reader, not of all of them. Uncounted, the
+    /// roster window closing took the AIS table away from the traffic, which
+    /// then had no rows and put nothing on the sheet.
     func setTableOpen(plugin: String, key: String, open: Bool) {
         guard let h = handle else { return }
-        _ = lookout_plugin_table_open(h, plugin, key, open ? 1 : 0)
+        let id = "\(plugin)\u{1}\(key)"
+        let was = tableReaders[id] ?? 0
+        let now = max(0, was + (open ? 1 : -1))
+        tableReaders[id] = now
+        guard (was == 0) != (now == 0) else { return }
+        _ = lookout_plugin_table_open(h, plugin, key, now > 0 ? 1 : 0)
     }
+
+    /// How many readers each table has, by plugin and key.
+    private var tableReaders: [String: Int] = [:]
 
     // MARK: - The tables a plugin declares
 
