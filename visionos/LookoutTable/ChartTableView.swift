@@ -11,6 +11,7 @@ import SwiftUI
 
 struct ChartTableView: View {
     @State private var model = TableModel()
+    @State private var choosingCharts = false
 
     var body: some View {
         GeometryReader3D { proxy in
@@ -43,7 +44,22 @@ struct ChartTableView: View {
             }
         }
         .ornament(attachmentAnchor: .scene(.bottom)) {
-            ChartTableControls(model: model)
+            ChartTableControls(model: model, choosingCharts: $choosingCharts)
+        }
+        // A folder of cells or a single .pmtiles. The folder is walked, and
+        // whichever is chosen is remembered for the next launch.
+        .fileImporter(
+            isPresented: $choosingCharts,
+            allowedContentTypes: [.folder, .data],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { model.openPicked(url) }
+            case .failure(let error):
+                model.status = "That folder could not be opened."
+                lkLog("chart picker: \(error)")
+            }
         }
     }
 
@@ -132,9 +148,15 @@ struct ChartTableView: View {
 /// The few controls a chart table needs. Everything else is done with hands.
 private struct ChartTableControls: View {
     let model: TableModel
+    @Binding var choosingCharts: Bool
 
     var body: some View {
         HStack(spacing: 18) {
+            Button {
+                choosingCharts = true
+            } label: {
+                Label("Charts", systemImage: "folder")
+            }
             Button {
                 model.cycleScheme()
             } label: {

@@ -34,9 +34,33 @@ final class TableModel {
     func open() {
         let charts = ChartLibrary.find()
         guard !charts.isEmpty else {
-            status = "No chart. Put a .pmtiles chart in this app's Documents folder."
+            status = "No chart. Choose a folder of charts, or put one in this app's Documents folder."
             lkLog("no charts found")
             return
+        }
+        open(charts: charts)
+    }
+
+    /// Open the folder or file a picker returned, and remember it for the next
+    /// launch. A folder is walked for .pmtiles.
+    func openPicked(_ url: URL) {
+        let charts = ChartLibrary.adopt(url)
+        guard !charts.isEmpty else {
+            status = "No .pmtiles charts in \(url.lastPathComponent)."
+            return
+        }
+        open(charts: charts)
+    }
+
+    private func open(charts: [String]) {
+        // Opening a second library replaces the first. The plugin layer, the
+        // traffic and the card all belong to the handle that is going away.
+        if engine.handle != nil {
+            traffic.close(engine: engine)
+            traffic.clear()
+            pickCard.hide()
+            ready = false
+            engine.close()
         }
         let w = sheet.width
         let ok = engine.open(

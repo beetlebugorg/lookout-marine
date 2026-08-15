@@ -77,6 +77,14 @@ final class AISTraffic {
         opened = false
     }
 
+    /// Take every target off the table. A new chart library brings a new
+    /// plugin layer, and these vessels belong to the old one.
+    func clear() {
+        for (_, v) in vessels { v.root.removeFromParent() }
+        vessels.removeAll()
+        lastRosterAt = 0
+    }
+
     /// How often the roster is re-read. AIS position reports arrive every few
     /// seconds for a vessel under way, so three times a second is already
     /// faster than the data changes.

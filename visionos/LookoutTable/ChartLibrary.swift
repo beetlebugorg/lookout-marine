@@ -13,6 +13,14 @@ import Foundation
 enum ChartLibrary {
     /// Baked charts, best source first. Every path is a .pmtiles file.
     static func find() -> [String] {
+        if let chosen = resolveChosen() {
+            let paths = expand(chosen.path)
+            if !paths.isEmpty {
+                lkLog("charts: \(paths.count) from the chosen folder \(chosen.lastPathComponent)")
+                return paths
+            }
+            lkLog("the chosen folder \(chosen.lastPathComponent) holds no .pmtiles")
+        }
         if let env = ProcessInfo.processInfo.environment["LOOKOUT_CHARTS"], !env.isEmpty {
             let paths = expand(env)
             if !paths.isEmpty {
@@ -37,6 +45,74 @@ enum ChartLibrary {
 
     static var documents: URL? {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    }
+
+    // MARK: - The folder the mariner chose
+
+    /// A folder or a file picked out of the Files app lives outside this app's
+    /// container. Reaching it needs a security-scoped bookmark, kept here so
+    /// the same charts come back on the next launch, and access held open for
+    /// as long as a chart is open: the engine memory-maps every cell and reads
+    /// from it as the mariner pans.
+    private static let bookmarkKey = "lookout.chartFolderBookmark"
+    private static var scoped: URL?
+
+    /// Adopt what a picker returned. Answers the .pmtiles paths under it, or an
+    /// empty list when it holds none, in which case nothing is remembered.
+    static func adopt(_ url: URL) -> [String] {
+        guard url.startAccessingSecurityScopedResource() else {
+            lkLog("no access to \(url.lastPathComponent)")
+            return []
+        }
+        let paths = expand(url.path)
+        guard !paths.isEmpty else {
+            url.stopAccessingSecurityScopedResource()
+            return []
+        }
+        releaseScope()
+        scoped = url
+        do {
+            let data = try url.bookmarkData()
+            UserDefaults.standard.set(data, forKey: bookmarkKey)
+        } catch {
+            // The charts still open; they just will not come back by
+            // themselves next launch.
+            lkLog("no bookmark for \(url.lastPathComponent): \(error)")
+        }
+        lkLog("charts: \(paths.count) chosen from \(url.lastPathComponent)")
+        return paths
+    }
+
+    /// The remembered folder, with access started, or nil when there is none,
+    /// it has moved, or it can no longer be reached.
+    private static func resolveChosen() -> URL? {
+        if let already = scoped { return already }
+        guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data,
+                                 bookmarkDataIsStale: &stale),
+              url.startAccessingSecurityScopedResource()
+        else {
+            lkLog("the remembered chart folder is out of reach")
+            UserDefaults.standard.removeObject(forKey: bookmarkKey)
+            return nil
+        }
+        if stale, let fresh = try? url.bookmarkData() {
+            UserDefaults.standard.set(fresh, forKey: bookmarkKey)
+        }
+        scoped = url
+        return url
+    }
+
+    /// Give the remembered folder back and open the app's own again.
+    static func forget() {
+        releaseScope()
+        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+    }
+
+    private static func releaseScope() {
+        scoped?.stopAccessingSecurityScopedResource()
+        scoped = nil
     }
 
     /// Every .pmtiles under a path: the file itself when it is one, else the
