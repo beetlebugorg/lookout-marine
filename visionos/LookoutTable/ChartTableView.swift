@@ -46,6 +46,12 @@ struct ChartTableView: View {
         .ornament(attachmentAnchor: .scene(.bottom)) {
             ChartTableControls(model: model, choosingCharts: $choosingCharts)
         }
+        // A chart the system hands over: a .pmtiles AirDropped or opened from
+        // Files, or a folder of them. It is adopted the same way the picker's
+        // answer is.
+        .onOpenURL { url in
+            model.openPicked(url)
+        }
         // A folder of cells or a single .pmtiles. The folder is walked, and
         // whichever is chosen is remembered for the next launch.
         .fileImporter(

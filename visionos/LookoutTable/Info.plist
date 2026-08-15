@@ -33,6 +33,60 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- PMTiles is Protomaps' format and has no registered type, so the app
+	     imports a declaration for it rather than exporting one. Without this,
+	     nothing on the device claims a .pmtiles file: AirDrop offers no app to
+	     receive it and Files has nowhere local to put it. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.protomaps.pmtiles</string>
+			<key>UTTypeDescription</key>
+			<string>PMTiles chart</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>pmtiles</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Chart</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.protomaps.pmtiles</string>
+			</array>
+		</dict>
+		<!-- A chart library is a directory of cells, so the app takes a folder
+		     as readily as a file. Alternate rank: it reads a folder, it does
+		     not own the idea of one. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Chart folder</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.folder</string>
+			</array>
+		</dict>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -36,9 +36,15 @@ enum ChartLibrary {
                 return paths
             }
         }
-        if let bundled = Bundle.main.url(forResource: "US5MD1MC", withExtension: "pmtiles") {
-            lkLog("charts: the bundled sample cell")
-            return [bundled.path]
+        // Whatever charts the build put in the bundle, which is one sample cell
+        // by default and is however many cells were dropped into
+        // visionos/Charts before the build.
+        if let resources = Bundle.main.resourceURL {
+            let paths = expand(resources.path)
+            if !paths.isEmpty {
+                lkLog("charts: \(paths.count) from the bundle")
+                return paths
+            }
         }
         return []
     }
@@ -57,29 +63,38 @@ enum ChartLibrary {
     private static let bookmarkKey = "lookout.chartFolderBookmark"
     private static var scoped: URL?
 
-    /// Adopt what a picker returned. Answers the .pmtiles paths under it, or an
-    /// empty list when it holds none, in which case nothing is remembered.
+    /// Adopt a folder or a file, from the picker or from whatever the system
+    /// handed the app. Answers the .pmtiles paths under it, or an empty list
+    /// when it holds none, in which case nothing is remembered.
+    ///
+    /// A URL from the Files app lives outside this app and needs its scope
+    /// started. One the system copied into the app's own Inbox does not, and
+    /// says so by refusing the call, so a refusal is not a failure here.
     static func adopt(_ url: URL) -> [String] {
-        guard url.startAccessingSecurityScopedResource() else {
-            lkLog("no access to \(url.lastPathComponent)")
-            return []
-        }
+        let outside = url.startAccessingSecurityScopedResource()
         let paths = expand(url.path)
         guard !paths.isEmpty else {
-            url.stopAccessingSecurityScopedResource()
+            if outside { url.stopAccessingSecurityScopedResource() }
+            lkLog("no .pmtiles in \(url.lastPathComponent)")
             return []
         }
         releaseScope()
-        scoped = url
-        do {
-            let data = try url.bookmarkData()
-            UserDefaults.standard.set(data, forKey: bookmarkKey)
-        } catch {
-            // The charts still open; they just will not come back by
-            // themselves next launch.
-            lkLog("no bookmark for \(url.lastPathComponent): \(error)")
+        if outside {
+            scoped = url
+            do {
+                let data = try url.bookmarkData()
+                UserDefaults.standard.set(data, forKey: bookmarkKey)
+            } catch {
+                // The charts still open; they just will not come back by
+                // themselves next launch.
+                lkLog("no bookmark for \(url.lastPathComponent): \(error)")
+            }
+        } else {
+            // Inside the container already, so it is found again by the
+            // ordinary search and needs no bookmark.
+            UserDefaults.standard.removeObject(forKey: bookmarkKey)
         }
-        lkLog("charts: \(paths.count) chosen from \(url.lastPathComponent)")
+        lkLog("charts: \(paths.count) from \(url.lastPathComponent)")
         return paths
     }
 
