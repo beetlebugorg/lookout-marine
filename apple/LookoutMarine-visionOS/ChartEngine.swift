@@ -349,6 +349,38 @@ final class ChartEngine {
         return lookout_overscale(h)
     }
 
+    // MARK: - Following the boat
+
+    /// What follow is doing: off, following, or on and waiting for a fix.
+    enum Following: Int { case off = 0, following = 1, waiting = 2 }
+
+    var following: Following {
+        guard let h = handle else { return .off }
+        return Following(rawValue: Int(lookout_follow_active(h))) ?? .off
+    }
+
+    /// Hold own ship on the sheet and move the chart under it. The core turns
+    /// this off itself when the mariner pans, so a control reads the state
+    /// back rather than remembering its own taps.
+    func setFollowing(_ on: Bool) {
+        guard let h = handle else { return }
+        lookout_follow_set(h, on ? 1 : 0)
+    }
+
+    /// What course up is doing: off, turning with the boat, or waiting for a
+    /// heading.
+    var courseUp: Following {
+        guard let h = handle else { return .off }
+        return Following(rawValue: Int(lookout_course_up_active(h))) ?? .off
+    }
+
+    /// Turn the chart so the boat's heading points up the sheet, and keep
+    /// turning it as the boat turns.
+    func setCourseUp(_ on: Bool) {
+        guard let h = handle else { return }
+        lookout_course_up_set(h, on ? 1 : 0)
+    }
+
     /// Own ship's position, when a plugin is publishing one.
     var ownShip: (lon: Double, lat: Double)? {
         guard let h = handle else { return nil }

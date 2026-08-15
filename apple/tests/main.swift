@@ -595,6 +595,28 @@ if lookout_overlay_info(h, shipID, &ship) == 1, let p = ship.info, ship.info_len
 check(!Readouts.latLon(lon: -76.4767, lat: 38.9763).isEmpty, "a position formats for a readout")
 print("  as shown: \(Readouts.latLon(lon: -76.4767, lat: 38.9763))")
 
+// MARK: - Following the boat
+
+// The two automatic modes. What matters is that they report honestly: a
+// control reads the state back, because the core turns follow off on a pan.
+section("follow and course up")
+check(lookout_follow_active(h) == 0, "follow starts off")
+lookout_follow_set(h, 1)
+let followState = lookout_follow_active(h)
+print("  follow on: state \(followState) (1 following, 2 waiting for a fix)")
+check(followState != 0, "follow reports on after it is set")
+// A pan hands the chart back to the mariner, and the core is what does it.
+lookout_pan_logical(h, 40, 40)
+check(lookout_follow_active(h) == 0, "a pan turns follow off in the core")
+
+check(lookout_course_up_active(h) == 0, "course up starts off")
+lookout_course_up_set(h, 1)
+let courseState = lookout_course_up_active(h)
+print("  course up on: state \(courseState) (1 turning, 2 waiting for a heading)")
+check(courseState != 0, "course up reports on after it is set")
+lookout_course_up_set(h, 0)
+check(lookout_course_up_active(h) == 0, "course up goes off when asked")
+
 // MARK: - The alarms
 
 // The AIS plugin raises a CPA alarm for one target in the recorded scene, so

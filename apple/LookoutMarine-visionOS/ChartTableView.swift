@@ -234,11 +234,21 @@ private struct ChartTableControls: View {
             }
             .disabled(!model.ready)
             Button {
-                model.followOwnShip()
+                model.toggleFollow()
             } label: {
-                Label("Own ship", systemImage: "location.fill")
+                Label("Follow own ship", systemImage: model.following == .off
+                      ? "location" : "location.fill")
             }
             .disabled(!model.ready)
+            .tint(tint(model.following))
+            Button {
+                model.toggleCourseUp()
+            } label: {
+                Label("Course up", systemImage: model.courseUp == .off
+                      ? "safari" : "safari.fill")
+            }
+            .disabled(!model.ready)
+            .tint(tint(model.courseUp))
             Button {
                 model.toggleSeabed()
             } label: {
@@ -271,6 +281,17 @@ private struct ChartTableControls: View {
             }
         }
         .labelStyle(.iconOnly)
+    }
+
+    /// On and working, on and waiting for the sensor, or off. A mode waiting
+    /// for a fix is not the same as one that is off, and a mariner reaching
+    /// for it deserves to see which.
+    private func tint(_ state: ChartEngine.Following) -> Color {
+        switch state {
+        case .off: return .primary
+        case .following: return .accentColor
+        case .waiting: return .orange
+        }
     }
 }
 

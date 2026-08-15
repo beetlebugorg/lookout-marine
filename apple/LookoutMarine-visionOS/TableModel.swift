@@ -35,6 +35,13 @@ final class TableModel {
     /// doing, and what the chart under it is showing. Read a few times a
     /// second, which is faster than any of it changes.
     var readouts: Readouts = .init()
+
+    /// What the two automatic modes are doing. Read back from the core every
+    /// tick, never remembered: the core turns follow off on a pan and course
+    /// up off on a hand turn, and a control that tracked only its own taps
+    /// would go wrong.
+    var following: ChartEngine.Following = .off
+    var courseUp: ChartEngine.Following = .off
     private var lastReadoutAt: TimeInterval = 0
 
     /// What the mariner is told when there is no chart, and while one opens.
@@ -114,6 +121,8 @@ final class TableModel {
         if now - lastReadoutAt > 0.4 {
             lastReadoutAt = now
             readouts = makeReadouts()
+            following = engine.following
+            courseUp = engine.courseUp
         }
         if now - lastTitleAt > 0.5 {
             lastTitleAt = now
@@ -326,6 +335,12 @@ final class TableModel {
         let claimed = chartHands == .rotate
         guard claim(&chartHands, as: .rotate, past: abs(radians) > TableModel.rotateDeadZone) else { return }
         if !claimed {
+            // A hand on the chart takes it back from course up. The core does
+            // this for its own rotate call; this one writes the view directly,
+            // so it says so itself, and the two would otherwise fight for the
+            // rotation every frame.
+            engine.setCourseUp(false)
+            courseUp = .off
             // Start from where the hands crossed into a turn, so the chart
             // does not jump by the dead zone the moment it takes over.
             chartRotateOrigin = radians
@@ -549,12 +564,25 @@ final class TableModel {
         engine.fitChart()
     }
 
-    func followOwnShip() {
-        guard let s = engine.ownShip else { return }
-        engine.setView(lon: s.lon, lat: s.lat, zoom: engine.view.zoom)
+    /// Hold the boat on the sheet, or hand the chart back. A pan turns it off
+    /// again, which the core does for us.
+    func toggleFollow() {
+        engine.setFollowing(following == .off)
+        following = engine.following
+    }
+
+    /// Turn the chart so the boat's heading is up the sheet.
+    func toggleCourseUp() {
+        engine.setCourseUp(courseUp == .off)
+        courseUp = engine.courseUp
     }
 
     func levelSheet() {
+        // North up is the mariner asking for north up, which course up cannot
+        // survive.
+        engine.setCourseUp(false)
+        courseUp = .off
+        engine.setRotation(degrees: 0)
         yaw = simd_quatf(angle: 0, axis: [0, 1, 0])
         tiltDegrees = 0
         applyPose()
