@@ -15,17 +15,28 @@ struct ChartTableView: View {
 
     var body: some View {
         GeometryReader3D { proxy in
-            RealityView { content in
+            RealityView { content, attachments in
                 model.open()
                 content.add(model.sheet.root)
                 lay(model.sheet.root, in: proxy, content: content)
+                // The pick report is a real form, so it hangs off the card's
+                // mount as an attachment rather than being drawn into a mesh.
+                if let report = attachments.entity(for: ChartTableView.pickAttachment) {
+                    model.pickCard.mount.addChild(report)
+                }
                 // One tick per rendered frame. The chart only records a frame
                 // when it owes one, so a still chart costs a redraw check.
                 _ = content.subscribe(to: SceneEvents.Update.self) { event in
                     model.tick(event.deltaTime, now: Date.timeIntervalSinceReferenceDate)
                 }
-            } update: { content in
+            } update: { content, _ in
                 lay(model.sheet.root, in: proxy, content: content)
+            } attachments: {
+                Attachment(id: ChartTableView.pickAttachment) {
+                    PickReportView(picks: model.picks,
+                                   index: Bindable(model).pickIndex,
+                                   onClose: { model.closePick() })
+                }
             }
             .gesture(chartDrag)
             .simultaneousGesture(chartZoom)
@@ -85,6 +96,8 @@ struct ChartTableView: View {
             }
         }
     }
+
+    static let pickAttachment = "pick-report"
 
     /// Lay the sheet flat on the floor of the volume, where a chart on a table
     /// sits, and tell the model how much room it has. The volume can be

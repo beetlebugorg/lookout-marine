@@ -45,28 +45,27 @@ final class OwnShip {
     }
 }
 
-/// What the chart holds where the mariner tapped, on a card floating over the
-/// spot with a line down to it. The card stays put on the chart, so panning
-/// the chart carries it along and it leaves the sheet when its feature does.
+/// Where a pick's report hangs: an anchor over the tapped position with a thin
+/// stem down to it. The panel itself is a SwiftUI attachment the view hands
+/// over, so the report is a real form and not text drawn into a mesh. The
+/// anchor holds its place in chart coordinates, so panning carries it along
+/// and it hides when its feature leaves the sheet.
 @MainActor
 final class PickCard {
     let root = Entity()
-    private let panel = Entity()
-    private let text = ModelEntity()
-    private let backing = ModelEntity()
+    /// Where the view parents its attachment. It floats above the spot, clear
+    /// of the traffic standing on the sheet.
+    let mount = Entity()
     private let stem = ModelEntity()
 
-    private var lon = 0.0
-    private var lat = 0.0
+    private(set) var lon = 0.0
+    private(set) var lat = 0.0
 
     init() {
         root.name = "pick-card"
         root.addChild(stem)
-        root.addChild(panel)
-        panel.addChild(backing)
-        panel.addChild(text)
-        panel.components.set(BillboardComponent())
-        panel.position = [0, PickCard.height, 0]
+        root.addChild(mount)
+        mount.position = [0, PickCard.height, 0]
 
         var stemMat = UnlitMaterial(color: UIColor(white: 1, alpha: 0.55))
         stemMat.blending = .transparent(opacity: .init(floatLiteral: 1))
@@ -77,25 +76,20 @@ final class PickCard {
         root.isEnabled = false
     }
 
-    private static let height: Float = 0.09
+    /// High enough to clear a flag over a vessel at the same spot.
+    private static let height: Float = 0.14
 
-    /// Show the report. An empty pick closes the card: a tap on open water
-    /// means the mariner is done reading, not that the card should stay.
-    func show(features: [PickFeature], lon: Double, lat: Double) {
-        guard !features.isEmpty else {
-            root.isEnabled = false
-            return
-        }
+    func show(lon: Double, lat: Double) {
         self.lon = lon
         self.lat = lat
-        let lines = features.prefix(4).map(\.headline)
-        setText(lines.joined(separator: "\n"))
         root.isEnabled = true
     }
 
     func hide() {
         root.isEnabled = false
     }
+
+    var isShowing: Bool { root.isEnabled }
 
     func update(engine: ChartEngine, sheet: ChartSheet) {
         guard root.isEnabled else { return }
@@ -104,29 +98,5 @@ final class PickCard {
             return
         }
         root.position = sheet.position(fraction: f, height: 0)
-    }
-
-    private func setText(_ s: String) {
-        let mesh = MeshResource.generateText(
-            s,
-            extrusionDepth: 0.0002,
-            font: .systemFont(ofSize: 0.010, weight: .regular),
-            containerFrame: .zero,
-            alignment: .left,
-            lineBreakMode: .byWordWrapping)
-        var ink = UnlitMaterial()
-        ink.color = .init(tint: .white)
-        text.model = ModelComponent(mesh: mesh, materials: [ink])
-        let b = mesh.bounds
-        text.position = [-b.center.x, -b.center.y, 0.0006]
-
-        var panelMat = UnlitMaterial(color: UIColor(white: 0.06, alpha: 0.82))
-        panelMat.blending = .transparent(opacity: .init(floatLiteral: 1))
-        let pad: Float = 0.006
-        backing.model = ModelComponent(
-            mesh: .generatePlane(width: b.extents.x + pad * 2,
-                                 height: b.extents.y + pad * 2,
-                                 cornerRadius: 0.004),
-            materials: [panelMat])
     }
 }

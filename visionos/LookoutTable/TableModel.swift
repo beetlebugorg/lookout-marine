@@ -65,8 +65,8 @@ final class TableModel {
         let w = sheet.width
         let ok = engine.open(
             paths: charts,
-            pixels: SheetMetrics.pixels(sheetWidth: w),
-            points: SheetMetrics.points(sheetWidth: w),
+            pixels: SheetMetrics.pixels(sheet: sheet.size),
+            points: SheetMetrics.points(sheet: sheet.size),
             density: SheetMetrics.density)
         guard ok, let texture = engine.texture else {
             status = "The chart could not be opened."
@@ -85,7 +85,7 @@ final class TableModel {
 
     func tick(_ dt: TimeInterval, now: TimeInterval) {
         // The sheet follows the volume whether or not a chart is open.
-        commitPendingWidth(now: now)
+        commitPendingSize(now: now)
         guard ready else { return }
         engine.tick(dt)
         engine.renderFrame()
@@ -95,6 +95,8 @@ final class TableModel {
         if now - lastTitleAt > 0.5 {
             lastTitleAt = now
             sheet.setTitle(titleLine())
+            sheet.setNote(engine.chartNote)
+            sheet.setLegend(soundingsLegend())
             sheet.setScale(groundPerSheetMeter: groundPerSheetMeter())
             sheet.setNorth(rotationDegrees: engine.rotationDegrees)
         }
@@ -109,7 +111,7 @@ final class TableModel {
               let b = engine.geoFor(fraction: [0.75, 0.5])
         else { return 0 }
         let ground = TableModel.distanceMeters(a, b)
-        let paper = Double(SheetMetrics.faceSize(sheetWidth: sheet.width).x) * 0.5
+        let paper = Double(SheetMetrics.faceSize(sheet: sheet.size).x) * 0.5
         guard paper > 0 else { return 0 }
         return ground / paper
     }
@@ -123,6 +125,15 @@ final class TableModel {
         let s = sin(dLat / 2) * sin(dLat / 2)
             + cos(a.lat * p) * cos(b.lat * p) * sin(dLon / 2) * sin(dLon / 2)
         return 2 * r * atan2(s.squareRoot(), (1 - s).squareRoot())
+    }
+
+    /// What a printed chart says first, because reading a sounding in the
+    /// wrong unit is how a boat goes aground. It follows the mariner's own
+    /// depth setting.
+    private func soundingsLegend() -> String {
+        engine.getMariner().depth_unit == TILE57_DEPTH_FEET
+            ? "SOUNDINGS IN FEET"
+            : "SOUNDINGS IN METERS"
     }
 
     private func titleLine() -> String {
@@ -286,7 +297,7 @@ final class TableModel {
     func sheetResizeChanged(_ magnification: Double) {
         guard claim(&sheetHands, as: .zoom, past: abs(log2(magnification)) > TableModel.zoomDeadZone) else { return }
         let m = Float(magnification)
-        let target = min(max(sheet.width * m, SheetMetrics.minWidth), maxSheetWidth)
+        let target = min(max(sheet.width * m, SheetMetrics.minWidth), SheetMetrics.maxWidth)
         sheet.root.scale = .init(repeating: target / sheet.width)
     }
 
@@ -305,44 +316,49 @@ final class TableModel {
     /// A resize in progress. Growing the sheet live would rebuild its meshes
     /// and its whole texture on every frame of the drag, so the drag only
     /// scales the transform and the real size is taken once it settles.
-    private var pendingWidth: Float?
-    private var pendingWidthAt: TimeInterval = 0
+    private var pendingSize: SIMD2<Float>?
+    private var pendingSizeAt: TimeInterval = 0
 
     func setVolumeSize(width: Float, depth: Float) {
         guard width > 0.1, depth > 0.1 else { return }
         guard abs(width - volumeWidth) > 0.005 || abs(depth - volumeDepth) > 0.005 else { return }
         volumeWidth = width
         volumeDepth = depth
-        let target = maxSheetWidth
-        guard abs(target - sheet.width) > 0.005 else { return }
-        pendingWidth = target
-        pendingWidthAt = Date.timeIntervalSinceReferenceDate
-        sheet.root.scale = .init(repeating: target / sheet.width)
+        let target = sheetFillingFloor
+        guard length(target - sheet.size) > 0.005 else { return }
+        pendingSize = target
+        pendingSizeAt = Date.timeIntervalSinceReferenceDate
+        sheet.root.scale = .init(repeating: target.x / sheet.width)
     }
 
-    /// The largest sheet this volume holds. A sheet is wider than it is deep,
-    /// so a tall narrow volume is limited by its width and a shallow wide one
-    /// by its depth. The system leaves a little room around a volume's
-    /// contents, hence the 2%.
-    var maxSheetWidth: Float {
-        min(SheetMetrics.maxWidth,
-            min(volumeWidth * 0.98, volumeDepth * 0.98 / SheetMetrics.aspect))
+    /// The sheet that covers the volume's floor. The volume IS the table, so
+    /// the paper takes its shape rather than a printed chart's, and only the
+    /// width is held to what a sheet may be. The system leaves a little room
+    /// around a volume's contents, hence the 2%.
+    var sheetFillingFloor: SIMD2<Float> {
+        let w = min(max(volumeWidth * 0.98, SheetMetrics.minWidth), SheetMetrics.maxWidth)
+        return SIMD2<Float>(w, volumeDepth * 0.98)
     }
 
     /// Take the size a settled volume resize asked for.
-    private func commitPendingWidth(now: TimeInterval) {
-        guard let target = pendingWidth, now - pendingWidthAt > 0.25 else { return }
-        pendingWidth = nil
+    private func commitPendingSize(now: TimeInterval) {
+        guard let target = pendingSize, now - pendingSizeAt > 0.25 else { return }
+        pendingSize = nil
         sheet.root.scale = .one
-        setSheetWidth(target)
+        setSheetSize(target)
     }
 
     func setSheetWidth(_ w: Float) {
-        sheet.setWidth(min(w, maxSheetWidth))
+        let scale = w / sheet.width
+        setSheetSize(SIMD2<Float>(w, sheet.depth * scale))
+    }
+
+    func setSheetSize(_ s: SIMD2<Float>) {
+        sheet.setSize(s)
         guard ready else { return }
         engine.resize(
-            points: SheetMetrics.points(sheetWidth: sheet.width),
-            pixels: SheetMetrics.pixels(sheetWidth: sheet.width),
+            points: SheetMetrics.points(sheet: sheet.size),
+            pixels: SheetMetrics.pixels(sheet: sheet.size),
             density: SheetMetrics.density)
         if let t = engine.texture { sheet.setChartTexture(t) }
         engine.renderFrame(force: true)
@@ -367,13 +383,29 @@ final class TableModel {
 
     // MARK: - A tap on the chart
 
-    /// Report what the chart holds where the mariner tapped, on a card that
-    /// floats over the spot.
+    /// What the chart holds where the mariner tapped, on a panel that floats
+    /// over the spot. A tap on open water closes the panel: the mariner is
+    /// done reading, and a card nobody asked for is in the way.
+    var picks: [PickDecoded] = []
+    var pickIndex = 0
+
     func tapChart(at p: SIMD3<Float>) {
         let f = sheet.fraction(at: p)
         guard sheet.onSheet(f), let geo = engine.geoFor(fraction: f) else { return }
-        let features = engine.pick(lon: geo.lon, lat: geo.lat)
-        pickCard.show(features: features, lon: geo.lon, lat: geo.lat)
+        let found = engine.pick(lon: geo.lon, lat: geo.lat)
+        picks = found
+        pickIndex = 0
+        if found.isEmpty {
+            pickCard.hide()
+        } else {
+            pickCard.show(lon: geo.lon, lat: geo.lat)
+        }
+    }
+
+    func closePick() {
+        picks = []
+        pickIndex = 0
+        pickCard.hide()
     }
 
     // MARK: - Controls

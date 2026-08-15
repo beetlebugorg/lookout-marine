@@ -35,6 +35,8 @@ targets:
       - path: ../macos/LookoutMarine/MarinerSections.swift
       - path: ../macos/LookoutMarine/SettingsRows.swift
       - path: ../macos/LookoutMarine/PluginSettings.swift
+      # The pick report is decoded once, the same way for every app.
+      - path: ../macos/LookoutMarine/PickDecoded.swift
       # The sample cell, so a fresh install draws something. Gitignored and
       # copied in by build.sh from the machine's chart library.
       - path: Charts

@@ -14,59 +14,6 @@ import SwiftUI
 /// emits {"report":…,"s57":…} per feature, the decoded page beside the raw
 /// payload — and this parses it. Nothing here decides what a mariner reads;
 /// tile57_s57_report does, once, for every shell.
-struct PickDecoded {
-    struct ReportRow: Identifiable {
-        let label: String
-        let value: String
-        let depth: Int
-        let file: Bool
-        let picture: Bool
-        var id: String { "\(depth)/\(label)/\(value)" }
-    }
-
-    /// Why the body has nothing to read, when it does not.
-    enum EmptyKind { case noAttributes, sourceOnly }
-
-    let feature: PickFeature
-    let title: String
-    let subtitle: String?
-    let chip: String
-    let notes: [String]
-    let reportRows: [ReportRow]
-    let footnote: String
-    let empty: EmptyKind?
-    /// The payload as the cell states it, for the fold and the clipboard.
-    let rawRows: [S57.Row]
-
-    init(_ feature: PickFeature) {
-        self.feature = feature
-        let root = (try? JSONSerialization.jsonObject(with: Data(feature.s57.utf8)))
-            as? [String: Any]
-        let report = root?["report"] as? [String: Any]
-        // A payload without the envelope is a raw object — the core's
-        // fallback when a compose fails. The fold still shows everything.
-        let raw = report != nil ? root?["s57"] : root as Any?
-        title = report?["title"] as? String ?? feature.cls
-        subtitle = report?["subtitle"] as? String
-        chip = report?["chip"] as? String ?? feature.cls
-        notes = report?["notes"] as? [String] ?? []
-        reportRows = ((report?["rows"] as? [[String: Any]]) ?? []).map { r in
-            ReportRow(label: r["label"] as? String ?? "",
-                      value: r["value"] as? String ?? "",
-                      depth: r["depth"] as? Int ?? 0,
-                      file: r["file"] as? Bool ?? false,
-                      picture: r["picture"] as? Bool ?? false)
-        }
-        footnote = report?["footnote"] as? String ?? feature.chart
-        empty = switch report?["empty"] as? String {
-        case "none": .noAttributes
-        case "source": .sourceOnly
-        default: nil
-        }
-        rawRows = S57.rows(of: raw)
-    }
-}
-
 /// The copy control and the close control. Which object shows is the list's
 /// business — the pick set is always in sight, as a column or as chips, so
 /// there is no blind pager.

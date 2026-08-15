@@ -59,27 +59,29 @@ enum SheetMetrics {
     static let minWidth: Float = 0.35
     static let maxWidth: Float = 1.8
 
-    /// A chart sheet is wider than it is deep, as printed charts are.
+    /// The shape a sheet takes when nothing else decides, which is the shape
+    /// a printed chart has: wider than it is deep.
     static let aspect: Float = 0.72
 
-    /// Sheet width to chart face size, in meters.
-    static func faceSize(sheetWidth w: Float) -> SIMD2<Float> {
-        let margin = w * marginFraction
-        return SIMD2<Float>(w - 2 * margin, w * aspect - 2 * margin)
+    /// The printed chart inside a sheet of this size, in meters. The margin is
+    /// the same width all the way round, taken from the sheet's width.
+    static func faceSize(sheet: SIMD2<Float>) -> SIMD2<Float> {
+        let margin = sheet.x * marginFraction
+        return SIMD2<Float>(sheet.x - 2 * margin, sheet.y - 2 * margin)
     }
 
     /// The chart's logical viewport for a sheet of this width, in whole even
     /// points so that points times the density is a whole number of pixels.
     /// A texture whose aspect differs from the viewport's stretches the chart.
-    static func points(sheetWidth w: Float) -> SIMD2<Float> {
-        let f = faceSize(sheetWidth: w)
+    static func points(sheet: SIMD2<Float>) -> SIMD2<Float> {
+        let f = faceSize(sheet: sheet)
         func even(_ v: Float) -> Float { max(64, (v / 2).rounded() * 2) }
         return SIMD2<Float>(even(f.x * pointsPerMeter), even(f.y * pointsPerMeter))
     }
 
     /// The texture size for a sheet of this width.
-    static func pixels(sheetWidth w: Float) -> SIMD2<Int> {
-        let p = points(sheetWidth: w)
+    static func pixels(sheet: SIMD2<Float>) -> SIMD2<Int> {
+        let p = points(sheet: sheet)
         return SIMD2<Int>(Int(p.x * density), Int(p.y * density))
     }
 }
@@ -91,14 +93,20 @@ final class ChartSheet {
     let face = ModelEntity()
     let overlays = Entity()
     private let titleBlock = ModelEntity()
+    private let noteBlock = ModelEntity()
+    private let legendBlock = ModelEntity()
     private let scaleBar = ModelEntity()
     private let scaleLabel = ModelEntity()
     private let northArrow = ModelEntity()
     private let northLabel = ModelEntity()
 
-    /// The sheet's width in meters. Setting it rebuilds the meshes; the chart
-    /// texture is rebuilt by the owner, which knows the engine.
-    private(set) var width: Float = 0.9
+    /// The sheet's size in meters, laid flat: x across, y from the far edge to
+    /// the near one. Setting it rebuilds the meshes; the chart texture is
+    /// rebuilt by the owner, which knows the engine.
+    private(set) var size: SIMD2<Float> = .init(0.9, 0.9 * SheetMetrics.aspect)
+
+    var width: Float { size.x }
+    var depth: Float { size.y }
 
     init() {
         root.name = "sheet"
@@ -109,6 +117,8 @@ final class ChartSheet {
         root.addChild(face)
         root.addChild(overlays)
         root.addChild(titleBlock)
+        root.addChild(noteBlock)
+        root.addChild(legendBlock)
         root.addChild(scaleBar)
         root.addChild(scaleLabel)
         root.addChild(northArrow)
@@ -133,9 +143,8 @@ final class ChartSheet {
 
     /// Rebuild the meshes for the current width.
     func rebuild() {
-        let depth = width * SheetMetrics.aspect
         let t = SheetMetrics.thickness
-        let f = SheetMetrics.faceSize(sheetWidth: width)
+        let f = SheetMetrics.faceSize(sheet: size)
 
         paper.model = ModelComponent(
             mesh: .generateBox(width: width, height: t, depth: depth),
@@ -155,10 +164,17 @@ final class ChartSheet {
         ])
     }
 
-    /// Set the sheet's width, clamped to what a table can hold.
-    func setWidth(_ w: Float) {
-        width = min(max(w, SheetMetrics.minWidth), SheetMetrics.maxWidth)
+    /// Set the sheet's size, clamped to what a table can hold. The depth
+    /// keeps the width's proportion when it is not given.
+    func setSize(_ s: SIMD2<Float>) {
+        let w = min(max(s.x, SheetMetrics.minWidth), SheetMetrics.maxWidth)
+        let d = max(s.y, SheetMetrics.minWidth * SheetMetrics.aspect)
+        size = SIMD2<Float>(w, d)
         rebuild()
+    }
+
+    func setWidth(_ w: Float) {
+        setSize(SIMD2<Float>(w, w * SheetMetrics.aspect))
     }
 
     /// Show the chart texture on the face.
@@ -183,34 +199,80 @@ final class ChartSheet {
     // MARK: - The title block
 
     private var titleText = ""
+    private var noteText = ""
+    private var legendText = ""
 
-    /// Print the chart's name and scale on the bottom margin, the way a paper
-    /// chart carries them. Regenerating the text mesh is not free, so it only
-    /// runs when the words change.
+    /// The chart's name, on the bottom margin at the left, where a printed
+    /// chart carries its title. Regenerating a text mesh is not free, so each
+    /// of these runs only when its words change.
     func setTitle(_ text: String) {
         guard text != titleText else { return }
         titleText = text
-        let height = width * SheetMetrics.marginFraction * 0.42
-        let mesh = MeshResource.generateText(
-            text,
-            extrusionDepth: 0.0001,
-            font: .systemFont(ofSize: CGFloat(height), weight: .medium),
-            containerFrame: .zero,
-            alignment: .left,
-            lineBreakMode: .byTruncatingTail)
-        var ink = UnlitMaterial()
-        ink.color = .init(tint: UIColor(white: 0.22, alpha: 1))
-        titleBlock.model = ModelComponent(mesh: mesh, materials: [ink])
+        let margin = width * SheetMetrics.marginFraction
+        titleBlock.model = ChartSheet.inkText(text, size: margin * 0.42, weight: .medium)
         // Text is generated standing up in the XY plane; lay it flat on the
         // margin, reading from the near edge.
-        titleBlock.orientation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
-        let depth = width * SheetMetrics.aspect
-        let margin = width * SheetMetrics.marginFraction
+        titleBlock.orientation = ChartSheet.flat
         titleBlock.position = [
             -width / 2 + margin * 0.6,
             SheetMetrics.thickness / 2 + SheetMetrics.faceLift,
-            depth / 2 - margin * 0.30,
+            size.y / 2 - margin * 0.52,
         ]
+    }
+
+    /// Who made the charts and at what band, under the title. A printed chart
+    /// names its agency in the title block, and a mariner reading a quilt of
+    /// cells wants to know whose they are.
+    func setNote(_ text: String) {
+        guard text != noteText else { return }
+        noteText = text
+        let margin = width * SheetMetrics.marginFraction
+        noteBlock.model = ChartSheet.inkText(text, size: margin * 0.28, weight: .regular,
+                                             white: 0.42)
+        noteBlock.orientation = ChartSheet.flat
+        noteBlock.position = [
+            -width / 2 + margin * 0.6,
+            SheetMetrics.thickness / 2 + SheetMetrics.faceLift,
+            size.y / 2 - margin * 0.18,
+        ]
+    }
+
+    /// The units the depths are in, across the middle of the bottom margin. It
+    /// is the first thing a printed chart says, because reading a sounding in
+    /// the wrong unit is how a boat goes aground.
+    func setLegend(_ text: String) {
+        guard text != legendText else { return }
+        legendText = text
+        let margin = width * SheetMetrics.marginFraction
+        let mesh = ChartSheet.textMesh(text, size: margin * 0.32, weight: .semibold)
+        var ink = UnlitMaterial()
+        ink.color = .init(tint: UIColor(white: 0.22, alpha: 1))
+        legendBlock.model = ModelComponent(mesh: mesh, materials: [ink])
+        legendBlock.orientation = ChartSheet.flat
+        legendBlock.position = [
+            -mesh.bounds.extents.x / 2,
+            SheetMetrics.thickness / 2 + SheetMetrics.faceLift,
+            size.y / 2 - margin * 0.35,
+        ]
+    }
+
+    /// Lying flat on the paper, read from the near edge.
+    private static let flat = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(1, 0, 0))
+
+    private static func textMesh(_ text: String, size: Float, weight: UIFont.Weight) -> MeshResource {
+        .generateText(text,
+                      extrusionDepth: 0.0001,
+                      font: .systemFont(ofSize: CGFloat(size), weight: weight),
+                      containerFrame: .zero,
+                      alignment: .left,
+                      lineBreakMode: .byTruncatingTail)
+    }
+
+    private static func inkText(_ text: String, size: Float, weight: UIFont.Weight,
+                                white: CGFloat = 0.22) -> ModelComponent {
+        var ink = UnlitMaterial()
+        ink.color = .init(tint: UIColor(white: white, alpha: 1))
+        return ModelComponent(mesh: textMesh(text, size: size, weight: weight), materials: [ink])
     }
 
     // MARK: - The scale bar and the north arrow
@@ -230,7 +292,7 @@ final class ChartSheet {
         }
         scaleBar.isEnabled = true
         scaleLabel.isEnabled = true
-        let face = SheetMetrics.faceSize(sheetWidth: width)
+        let face = SheetMetrics.faceSize(sheet: size)
         // The bar wants to be a round number of miles about a quarter of the
         // sheet wide. Walk the choices and take the last one that fits.
         let want = Double(face.x) * 0.25 * groundPerSheetMeter
@@ -247,7 +309,7 @@ final class ChartSheet {
         scaleBar.model = ModelComponent(
             mesh: .generatePlane(width: length, depth: thickness),
             materials: [ink])
-        let depth = width * SheetMetrics.aspect
+        let depth = size.y
         let margin = width * SheetMetrics.marginFraction
         let y = SheetMetrics.thickness / 2 + SheetMetrics.faceLift
         scaleBar.position = [width / 2 - margin * 0.6 - length / 2, y, depth / 2 - margin * 0.55]
@@ -281,7 +343,7 @@ final class ChartSheet {
     /// the chart is lying.
     func setNorth(rotationDegrees: Double) {
         let margin = width * SheetMetrics.marginFraction
-        let depth = width * SheetMetrics.aspect
+        let depth = size.y
         let y = SheetMetrics.thickness / 2 + SheetMetrics.faceLift
         if northArrow.model == nil {
             var ink = UnlitMaterial()
@@ -312,7 +374,7 @@ final class ChartSheet {
     /// Where a chart fraction (0,0 top left to 1,1 bottom right) lands in the
     /// sheet's own space, at a given height above the paper.
     func position(fraction f: SIMD2<Float>, height: Float = 0) -> SIMD3<Float> {
-        let size = SheetMetrics.faceSize(sheetWidth: width)
+        let size = SheetMetrics.faceSize(sheet: size)
         return SIMD3<Float>(
             (f.x - 0.5) * size.x,
             SheetMetrics.thickness / 2 + SheetMetrics.faceLift + height,
@@ -321,7 +383,7 @@ final class ChartSheet {
 
     /// The reverse: what chart fraction a point in the sheet's space is over.
     func fraction(at p: SIMD3<Float>) -> SIMD2<Float> {
-        let size = SheetMetrics.faceSize(sheetWidth: width)
+        let size = SheetMetrics.faceSize(sheet: size)
         return SIMD2<Float>(p.x / size.x + 0.5, p.z / size.y + 0.5)
     }
 

@@ -53,6 +53,67 @@ enum ChartLibrary {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
     }
 
+    // MARK: - What the margin says about the charts
+
+    /// The agency and the scale band, the way a printed chart names them in
+    /// its title block. The core's own scan answers both: a producer code
+    /// every cell agrees on, and each cell's band and native scale.
+    static func describe(_ paths: [String]) -> String {
+        guard let first = paths.first else { return "" }
+        // One file describes itself; a set is described by the folder holding
+        // it, which is what carries the producer they share.
+        let target = paths.count == 1 ? first : URL(fileURLWithPath: first).deletingLastPathComponent().path
+        var len = 0
+        guard let s = lookout_scan_charts(target, &len), len > 0,
+              let data = String(decoding: UnsafeRawBufferPointer(start: s, count: len), as: UTF8.self)
+                .data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return "" }
+
+        var parts: [String] = []
+        if let producer = root["producer"] as? String, !producer.isEmpty {
+            parts.append(agency(producer))
+        }
+        let cells = (root["cells"] as? [[String: Any]]) ?? []
+        if paths.count == 1, let cell = cells.first {
+            if let band = cell["bandName"] as? String, !band.isEmpty { parts.append(band) }
+            if let scale = cell["scale"] as? Double, scale > 0 {
+                parts.append("native 1:\(thousands(Int(scale)))")
+            }
+        } else if !cells.isEmpty {
+            parts.append("\(cells.count) cells")
+            let bands = Set(cells.compactMap { $0["bandName"] as? String }).sorted()
+            if bands.count == 1, let only = bands.first { parts.append(only) }
+        }
+        return parts.joined(separator: "   ")
+    }
+
+    /// A dataset's producer code as the agency a mariner knows. An unknown
+    /// code passes through: it is what the chart itself says.
+    private static func agency(_ code: String) -> String {
+        switch code.uppercased() {
+        case "US": return "NOAA"
+        case "GB": return "UKHO"
+        case "CA": return "CHS"
+        case "AU": return "AHO"
+        case "NZ": return "LINZ"
+        case "NL": return "NLHO"
+        case "DE": return "BSH"
+        case "FR": return "Shom"
+        case "NO": return "NHS"
+        case "SE": return "SMA"
+        case "DK": return "DGA"
+        case "JP": return "JHA"
+        default: return code.uppercased()
+        }
+    }
+
+    static func thousands(_ n: Int) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        return f.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+
     // MARK: - The folder the mariner chose
 
     /// A folder or a file picked out of the Files app lives outside this app's

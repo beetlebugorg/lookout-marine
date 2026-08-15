@@ -48,6 +48,9 @@ final class ChartEngine {
 
     private(set) var chartName = ""
 
+    /// Who made the charts and at what band, for the margin's title block.
+    private(set) var chartNote = ""
+
     // MARK: - Lifecycle
 
     /// Open a chart library and build the drawable queue for a sheet of the
@@ -81,6 +84,7 @@ final class ChartEngine {
         }
         lookout_set_pixel_density(h, density)
         chartName = URL(fileURLWithPath: paths[0]).deletingPathExtension().lastPathComponent
+        chartNote = ChartLibrary.describe(paths)
 
         guard makeQueue(pixels: pixels) else {
             close()
@@ -401,7 +405,7 @@ final class ChartEngine {
 
     /// What the chart reports at a position, best first. The core decides what
     /// a pick reports and in what order, so every shell shows the same thing.
-    func pick(lon: Double, lat: Double) -> [PickFeature] {
+    func pick(lon: Double, lat: Double) -> [PickDecoded] {
         guard let h = handle else { return [] }
         var found: [PickFeature] = []
         withUnsafeMutablePointer(to: &found) { ctx in
@@ -420,29 +424,7 @@ final class ChartEngine {
                 })
             lookout_pick_ranked(h, lon, lat, &cb)
         }
-        return found
-    }
-}
-
-/// One feature of a pick, as the query callback delivers it: the object class,
-/// the cell it came from, and its attributes as JSON.
-struct PickFeature {
-    let cls: String
-    let chart: String
-    let s57: String
-
-    /// The one line worth floating over the chart: the report's title, or the
-    /// object class when the payload carries no report.
-    var headline: String {
-        guard let data = s57.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return cls }
-        if let report = root["report"] as? [String: Any] {
-            let title = report["title"] as? String ?? cls
-            if let sub = report["subtitle"] as? String, !sub.isEmpty { return "\(title)  \(sub)" }
-            return title
-        }
-        return cls
+        return found.map(PickDecoded.init)
     }
 }
 
