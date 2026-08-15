@@ -298,11 +298,22 @@ struct PluginGroup: Identifiable {
     var id: String { "\(pluginID)/\(tab)/\(title)" }
 }
 
+/// What a settings form needs from the chart to read and write plugin state.
+/// Each app has its own chart controller, and this is the whole of what this
+/// file asks of one, so the same settings UI serves all of them.
+@MainActor
+protocol PluginSettingsHost: AnyObject {
+    func pluginsJSON() -> String?
+    @discardableResult func setPluginConfig(_ id: String, _ json: String) -> Bool
+    @discardableResult func setPluginGrant(_ id: String, _ cap: String, _ on: Bool) -> Bool
+    @discardableResult func uninstallPlugin(_ id: String) -> Bool
+}
+
 @MainActor
 final class PluginSettings: ObservableObject {
     @Published var plugins: [PluginInfo] = []
 
-    private weak var controller: ChartController?
+    private weak var controller: (any PluginSettingsHost)?
     private var applyCancellable: AnyCancellable?
     private var pollCancellable: AnyCancellable?
     /// Fires on an EDIT, never on a status poll: applying must be caused by
@@ -322,7 +333,7 @@ final class PluginSettings: ObservableObject {
     // MARK: - Binding
 
     /// Load the schemas from the live chart, then auto-apply and save edits.
-    func bind(to controller: ChartController?) {
+    func bind(to controller: (any PluginSettingsHost)?) {
         self.controller = controller
         if let fresh = readRegistry() { plugins = fresh }
         guard applyCancellable == nil else { return }
@@ -604,7 +615,7 @@ final class PluginSettings: ObservableObject {
     /// Push the saved settings into the plugins that just came up. Called once
     /// per chart open, after the plugin layer exists. A saved key the schema no
     /// longer declares is ignored by the core.
-    static func applySaved(to controller: ChartController) {
+    static func applySaved(to controller: any PluginSettingsHost) {
         // LOOKOUT_CLEAN leaves every plugin on its manifest defaults and on the
         // connection the host seeded, ignoring what this machine has saved.
         // The screenshot protocol needs it: a saved connection list points at

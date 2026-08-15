@@ -264,6 +264,10 @@ targets:
           # The wasm plugin host for this platform, before the core that embeds
           # it. See the macOS target for why -Dplugins is explicit.
           scripts/build-wamr.sh "$WAMR_TARGET"
+          # libpng and libwebp, cross-built: a device has no package manager,
+          # and Homebrew's copies are host-platform objects. Idempotent, like
+          # the WAMR script above.
+          scripts/build-codecs.sh "$WAMR_TARGET"
           zig build -Doptimize=ReleaseFast \
             -Dplugins=true \
             -Dtarget="$ZIG_TARGET" \

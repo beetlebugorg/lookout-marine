@@ -1645,3 +1645,7 @@ final class GestureBench {
         }
     }
 }
+
+/// The settings form reads and writes the chart through these. Both protocols
+/// are the whole of what it asks for, so the same form serves every app.
+extension ChartController: MarinerSettingsHost, PluginSettingsHost {}

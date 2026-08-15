@@ -64,11 +64,20 @@ enum MarinerSoundings: Int, CaseIterable, Identifiable {
     }
 }
 
+/// What a settings form needs from the chart to read and write the mariner's
+/// own state. Each app has its own chart controller, and this is the whole of
+/// what this file asks of one, so the same settings UI serves all of them.
+@MainActor
+protocol MarinerSettingsHost: AnyObject {
+    func getMariner() -> tile57_mariner
+    func setMariner(_ m: tile57_mariner)
+}
+
 @MainActor
 final class MarinerSettings: ObservableObject {
     /// The engine's struct verbatim; edited fields are overlaid in `toMariner()`.
     private var raw = tile57_mariner()
-    private weak var controller: ChartController?
+    private weak var controller: (any MarinerSettingsHost)?
     private var applyCancellable: AnyCancellable?
 
     // Color scheme — live
@@ -119,7 +128,7 @@ final class MarinerSettings: ObservableObject {
     /// (debounced so text/slider drags don't thrash the engine). Call on appear.
     /// Every applied edit is also SAVED — settings survive relaunch (restored
     /// by ChartController at open via applySavedOverlay).
-    func bind(to controller: ChartController?) {
+    func bind(to controller: (any MarinerSettingsHost)?) {
         applyCancellable = nil                       // don't echo the load below
         self.controller = controller
         load(from: controller?.getMariner() ?? defaultMariner())

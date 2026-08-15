@@ -14,6 +14,29 @@ import SwiftUI
 // MARK: - Headings and rows
 
 /// A section heading, with the keystroke that does the same job on the chart.
+struct SettingsSection: Identifiable {
+    let id: String
+    let label: String
+    let icon: String
+    let core: Bool
+
+    /// Every section, in the order the sidebar shows them. Advanced is last:
+    /// it is where anything unclaimed lands.
+    static let all: [SettingsSection] = [
+        .init(id: "display", label: "Display", icon: "paintpalette", core: true),
+        .init(id: "depths", label: "Depths", icon: "water.waves", core: true),
+        .init(id: "text", label: "Text", icon: "textformat", core: true),
+        .init(id: "charts", label: "Charts", icon: "map", core: true),
+        .init(id: "vessels", label: "Vessels", icon: "ferry", core: false),
+        .init(id: "alarms", label: "Alarms", icon: "bell", core: false),
+        .init(id: "connections", label: "Connections", icon: "antenna.radiowaves.left.and.right", core: false),
+        // Plugins is the one section that talks ABOUT plugins: install,
+        // grants, uninstall. It is the app's own, not a slot a schema fills.
+        .init(id: "plugins", label: "Plugins", icon: "puzzlepiece.extension", core: true),
+        .init(id: "advanced", label: "Advanced", icon: "slider.horizontal.3", core: true),
+    ]
+}
+
 struct SectionHead: View {
     let title: String
     var hint: String?
