@@ -191,6 +191,7 @@ final class TableModel {
         }
         let step = log2(magnification / chartZoomLast) * TableModel.zoomGain
         chartZoomLast = magnification
+        guard claim(&chartHands, as: .zoom, past: abs(log2(magnification)) > TableModel.zoomDeadZone) else { return }
         guard step.isFinite, step != 0 else { return }
         engine.zoom(step, atFraction: chartZoomAnchor)
     }
@@ -208,6 +209,7 @@ final class TableModel {
 
     func chartZoomEnded() {
         chartZoomLast = 1
+        chartHands = .undecided
     }
 
     /// The chart turns with the hands. A pair of hands turning clockwise seen
@@ -215,13 +217,53 @@ final class TableModel {
     /// course-up rotation, so the sign flips on the way to the engine. The
     /// sheet needs no such flip: it takes the hands' own rotation unchanged.
     func chartRotateChanged(_ radians: Double) {
-        if chartRotateStart == 0 { chartRotateStart = engine.rotationDegrees }
-        engine.setRotation(degrees: chartRotateStart - radians * 180 / .pi)
+        let claimed = chartHands == .rotate
+        guard claim(&chartHands, as: .rotate, past: abs(radians) > TableModel.rotateDeadZone) else { return }
+        if !claimed {
+            // Start from where the hands crossed into a turn, so the chart
+            // does not jump by the dead zone the moment it takes over.
+            chartRotateOrigin = radians
+            chartRotateStart = engine.rotationDegrees
+        }
+        engine.setRotation(degrees: chartRotateStart - (radians - chartRotateOrigin) * 180 / .pi)
     }
 
     func chartRotateEnded() {
         chartRotateStart = 0
+        chartRotateOrigin = 0
+        chartHands = .undecided
     }
+
+    // MARK: - Which gesture a pair of hands is making
+
+    /// Two hands moving apart are never perfectly parallel, and two hands
+    /// turning are never perfectly still, so the system reports a magnify and
+    /// a rotate at once. The first to pass its own threshold takes the hands,
+    /// and the other stays out until they let go. Without this every zoom
+    /// leaves the chart askew.
+    enum Hands { case undecided, zoom, rotate }
+
+    private var chartHands: Hands = .undecided
+    private var sheetHands: Hands = .undecided
+    private var chartRotateOrigin: Double = 0
+    private var sheetRotateOrigin: Double = 0
+
+    /// True while `what` may act: it already holds the hands, or nothing does
+    /// and it has just passed its threshold.
+    private func claim(_ hands: inout Hands, as what: Hands, past: Bool) -> Bool {
+        if hands == what { return true }
+        guard hands == .undecided, past else { return false }
+        hands = what
+        return true
+    }
+
+    /// How far the hands must turn before a turn is meant. Twelve degrees is
+    /// past what a pinch strays into and well short of a deliberate turn.
+    private static let rotateDeadZone = 12.0 * .pi / 180
+
+    /// How far apart they must move before a zoom is meant, as log2 of the
+    /// magnification: a tenth of a level, which is a few centimeters.
+    private static let zoomDeadZone = 0.10
 
     // MARK: - A hand on the margin
 
@@ -242,12 +284,14 @@ final class TableModel {
     /// The chart's texture and viewport are rebuilt once, at the end, because
     /// rebuilding a texture every frame of a pinch would stutter.
     func sheetResizeChanged(_ magnification: Double) {
+        guard claim(&sheetHands, as: .zoom, past: abs(log2(magnification)) > TableModel.zoomDeadZone) else { return }
         let m = Float(magnification)
         let target = min(max(sheet.width * m, SheetMetrics.minWidth), maxSheetWidth)
         sheet.root.scale = .init(repeating: target / sheet.width)
     }
 
     func sheetResizeEnded() {
+        sheetHands = .undecided
         let committed = sheet.width * sheet.root.scale.x
         sheet.root.scale = .one
         setSheetWidth(committed)
@@ -305,13 +349,20 @@ final class TableModel {
     }
 
     func sheetRotateChanged(_ radians: Double) {
+        let claimed = sheetHands == .rotate
+        guard claim(&sheetHands, as: .rotate, past: abs(radians) > TableModel.rotateDeadZone) else { return }
+        if !claimed {
+            sheetRotateStart = sheet.root.orientation
+            sheetRotateOrigin = radians
+        }
         let start = sheetRotateStart ?? sheet.root.orientation
-        sheetRotateStart = start
-        sheet.root.orientation = start * simd_quatf(angle: Float(radians), axis: [0, 1, 0])
+        sheet.root.orientation = start * simd_quatf(angle: Float(radians - sheetRotateOrigin), axis: [0, 1, 0])
     }
 
     func sheetRotateEnded() {
         sheetRotateStart = nil
+        sheetRotateOrigin = 0
+        sheetHands = .undecided
     }
 
     // MARK: - A tap on the chart
