@@ -23,9 +23,14 @@ struct ChartTableView: View {
     var body: some View {
         GeometryReader3D { proxy in
             RealityView { content, attachments in
-                model.open()
                 content.add(model.sheet.root)
                 lay(model.sheet.root, in: proxy, content: content)
+                // The blank sheet is the table, and it is there from the first
+                // frame. The card standing on it says what the table is
+                // waiting for.
+                if let card = attachments.entity(for: ChartTableView.cardAttachment) {
+                    model.cardMount.addChild(card)
+                }
                 // The pick report is a real form, so it hangs off the card's
                 // mount as an attachment rather than being drawn into a mesh.
                 if let report = attachments.entity(for: ChartTableView.pickAttachment) {
@@ -38,11 +43,15 @@ struct ChartTableView: View {
                 }
             } update: { content, _ in
                 lay(model.sheet.root, in: proxy, content: content)
+                model.cardMount.isEnabled = !model.ready
             } attachments: {
                 Attachment(id: ChartTableView.pickAttachment) {
                     PickReportView(picks: model.picks,
                                    index: Bindable(model).pickIndex,
                                    onClose: { model.closePick() })
+                }
+                Attachment(id: ChartTableView.cardAttachment) {
+                    TableCard(model: model, choosingCharts: $choosingCharts)
                 }
             }
             .gesture(chartDrag)
@@ -52,27 +61,10 @@ struct ChartTableView: View {
             .simultaneousGesture(sheetDrag)
             .simultaneousGesture(sheetResize)
             .simultaneousGesture(sheetRotate)
-            .overlay(alignment: .center) {
-                // With no chart there is nothing on the table and nothing to
-                // do but find one, so the app asks for it outright rather than
-                // leaving a row of controls that answer to nothing.
-                if !model.ready {
-                    VStack(spacing: 16) {
-                        Text("Lookout Marine")
-                            .font(.title)
-                        Text(model.status)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 420)
-                        Button("Choose Charts") { choosingCharts = true }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .padding(32)
-                    .glassBackgroundEffect()
-                }
-            }
         }
+        // Opening runs after the first frame, so the table and its card are
+        // drawn before the scan takes the actor.
+        .task { await model.openAtLaunch() }
         // Above the far edge, facing the mariner: an alarm has to be seen from
         // wherever they are standing, and it must not lie over the water it is
         // about.
@@ -109,13 +101,14 @@ struct ChartTableView: View {
             case .success(let urls):
                 if let url = urls.first { model.openPicked(url) }
             case .failure(let error):
-                model.status = "That folder could not be opened."
+                model.stage = .failed("That folder could not be opened.")
                 lkLog("chart picker: \(error)")
             }
         }
     }
 
     static let pickAttachment = "pick-report"
+    static let cardAttachment = "table-card"
 
     /// Lay the sheet flat on the floor of the volume, where a chart on a table
     /// sits, and tell the model how much room it has. The volume can be
@@ -199,6 +192,57 @@ struct ChartTableView: View {
     }
 }
 
+/// The card standing on the paper until a chart is drawn on it. It says what
+/// the table is doing while a chart opens, and on a headset holding none it
+/// says how one gets aboard: there is no home directory here to drop a file
+/// into, and this app reads baked charts only.
+private struct TableCard: View {
+    let model: TableModel
+    @Binding var choosingCharts: Bool
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text("Lookout Marine")
+                .font(.title2)
+            switch model.stage {
+            case .opening:
+                Text("Opening the chart")
+                    .foregroundStyle(.secondary)
+            case .noCharts:
+                Text("This table has no chart yet.")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("AirDrop a .pmtiles chart from a Mac.")
+                    Text("Or copy one into the Lookout Marine folder in the Files app.")
+                    Text("Or choose a folder of charts here.")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                chooseButton
+                Text("Lookout on the Mac bakes S-57 cells into .pmtiles charts.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            case .failed(let why):
+                Text(why)
+                    .foregroundStyle(.secondary)
+                chooseButton
+            case .ready:
+                EmptyView()
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 420)
+        .padding(28)
+        .glassBackgroundEffect()
+    }
+
+    private var chooseButton: some View {
+        Button("Choose Charts") { choosingCharts = true }
+            .buttonStyle(.borderedProminent)
+    }
+}
+
 /// The few controls a chart table needs. Everything else is done with hands.
 private struct ChartTableControls: View {
     let model: TableModel
@@ -214,6 +258,10 @@ private struct ChartTableControls: View {
         .glassBackgroundEffect()
     }
 
+    /// Charts and settings answer whatever the table holds. Every other
+    /// control acts on a chart, so before one is open they are not shown at
+    /// all: a strip of dead buttons is noise on a table that is asking for a
+    /// chart.
     private var controls: some View {
         HStack(spacing: 18) {
             Button {
@@ -221,59 +269,7 @@ private struct ChartTableControls: View {
             } label: {
                 Label("Charts", systemImage: "folder")
             }
-            Button {
-                model.cycleScheme()
-            } label: {
-                Label("Day, dusk, night", systemImage: "circle.lefthalf.filled")
-            }
-            .disabled(!model.ready)
-            Button {
-                model.fitChart()
-            } label: {
-                Label("Whole chart", systemImage: "arrow.up.left.and.arrow.down.right")
-            }
-            .disabled(!model.ready)
-            Button {
-                model.toggleFollow()
-            } label: {
-                Label("Follow own ship", systemImage: model.following == .off
-                      ? "location" : "location.fill")
-            }
-            .disabled(!model.ready)
-            .tint(tint(model.following))
-            Button {
-                model.toggleCourseUp()
-            } label: {
-                Label("Course up", systemImage: model.courseUp == .off
-                      ? "safari" : "safari.fill")
-            }
-            .disabled(!model.ready)
-            .tint(tint(model.courseUp))
-            Button {
-                model.toggleSeabed()
-            } label: {
-                Label("The water under the chart", systemImage: "water.waves")
-            }
-            .disabled(!model.ready)
-            Button {
-                model.stepTilt()
-            } label: {
-                Label("Tilt the table", systemImage: model.tiltDegrees > 0
-                      ? "rectangle.portrait.rotate"
-                      : "rectangle.rotate")
-            }
-            Button {
-                model.levelSheet()
-            } label: {
-                Label("Lay it flat and square", systemImage: "square.grid.2x2")
-            }
-            .disabled(!model.ready)
-            Button {
-                openWindow(id: LookoutMarineVisionApp.tablesWindow)
-            } label: {
-                Label("What the plugins are tracking", systemImage: "tablecells")
-            }
-            .disabled(!model.ready)
+            if model.ready { chartControls }
             Button {
                 openWindow(id: LookoutMarineVisionApp.settingsWindow)
             } label: {
@@ -281,6 +277,56 @@ private struct ChartTableControls: View {
             }
         }
         .labelStyle(.iconOnly)
+    }
+
+    @ViewBuilder
+    private var chartControls: some View {
+        Button {
+            model.cycleScheme()
+        } label: {
+            Label("Day, dusk, night", systemImage: "circle.lefthalf.filled")
+        }
+        Button {
+            model.fitChart()
+        } label: {
+            Label("Whole chart", systemImage: "arrow.up.left.and.arrow.down.right")
+        }
+        Button {
+            model.toggleFollow()
+        } label: {
+            Label("Follow own ship", systemImage: model.following == .off
+                  ? "location" : "location.fill")
+        }
+        .tint(tint(model.following))
+        Button {
+            model.toggleCourseUp()
+        } label: {
+            Label("Course up", systemImage: model.courseUp == .off
+                  ? "safari" : "safari.fill")
+        }
+        .tint(tint(model.courseUp))
+        Button {
+            model.toggleSeabed()
+        } label: {
+            Label("The water under the chart", systemImage: "water.waves")
+        }
+        Button {
+            model.stepTilt()
+        } label: {
+            Label("Tilt the table", systemImage: model.tiltDegrees > 0
+                  ? "rectangle.portrait.rotate"
+                  : "rectangle.rotate")
+        }
+        Button {
+            model.levelSheet()
+        } label: {
+            Label("Lay it flat and square", systemImage: "square.grid.2x2")
+        }
+        Button {
+            openWindow(id: LookoutMarineVisionApp.tablesWindow)
+        } label: {
+            Label("What the plugins are tracking", systemImage: "tablecells")
+        }
     }
 
     /// On and working, on and waiting for the sensor, or off. A mode waiting

@@ -44,19 +44,58 @@ final class TableModel {
     var courseUp: ChartEngine.Following = .off
     private var lastReadoutAt: TimeInterval = 0
 
-    /// What the mariner is told when there is no chart, and while one opens.
-    var status = "Opening the chart"
-    var ready = false
+    /// Where the table is between launch and a drawn chart. The card above the
+    /// paper reads this, and so do the controls that need a chart.
+    var stage: Stage = .opening
+
+    enum Stage {
+        /// A chart library is being scanned and opened.
+        case opening
+        /// The headset holds no charts. A fresh install starts here.
+        case noCharts
+        /// Charts were found and did not open.
+        case failed(String)
+        case ready
+    }
+
+    var ready: Bool {
+        if case .ready = stage { return true }
+        return false
+    }
+
+    /// Where the card above the paper hangs. It turns to face whoever is
+    /// reading it, the way the pick report does, and it is lifted clear of the
+    /// paper so it reads as a card standing on the table.
+    let cardMount = Entity()
 
     /// The chart name and scale printed on the margin.
     private var lastTitleAt: TimeInterval = 0
 
+    init() {
+        cardMount.name = "table-card"
+        cardMount.position = [0, TableModel.cardLift, 0]
+        cardMount.components.set(BillboardComponent())
+        sheet.root.addChild(cardMount)
+    }
+
+    /// How far the middle of the card floats above the paper.
+    private static let cardLift: Float = 0.12
+
     // MARK: - Opening
+
+    /// Open whatever the headset holds, one frame after the table is drawn.
+    /// The chart scan and the open both run on this actor and block it, so the
+    /// card has to reach the screen before either starts or the first thing a
+    /// mariner sees is a stalled empty volume.
+    func openAtLaunch() async {
+        try? await Task.sleep(for: .milliseconds(24))
+        open()
+    }
 
     func open() {
         let charts = ChartLibrary.find()
         guard !charts.isEmpty else {
-            status = "No chart. Choose a folder of charts, or put one in this app's Documents folder."
+            stage = .noCharts
             lkLog("no charts found")
             return
         }
@@ -68,7 +107,7 @@ final class TableModel {
     func openPicked(_ url: URL) {
         let charts = ChartLibrary.adopt(url)
         guard !charts.isEmpty else {
-            status = "No .pmtiles charts in \(url.lastPathComponent)."
+            stage = .failed("No .pmtiles charts in \(url.lastPathComponent).")
             return
         }
         open(charts: charts)
@@ -82,9 +121,9 @@ final class TableModel {
             traffic.close(engine: engine)
             traffic.clear()
             pickCard.hide()
-            ready = false
             engine.close()
         }
+        stage = .opening
         let w = sheet.width
         let ok = engine.open(
             paths: charts,
@@ -92,7 +131,7 @@ final class TableModel {
             points: SheetMetrics.points(sheet: sheet.size),
             density: SheetMetrics.density)
         guard ok, let texture = engine.texture else {
-            status = "The chart could not be opened."
+            stage = .failed("The chart could not be opened.")
             return
         }
         sheet.setChartTexture(texture)
@@ -102,8 +141,7 @@ final class TableModel {
         sheet.overlays.addChild(pickCard.root)
         engine.fitChart()
         alerts.start(host: engine)
-        ready = true
-        status = ""
+        stage = .ready
     }
 
     // MARK: - The frame
