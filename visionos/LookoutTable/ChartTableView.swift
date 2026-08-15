@@ -10,7 +10,7 @@ import RealityKit
 import SwiftUI
 
 struct ChartTableView: View {
-    @State private var model = TableModel()
+    let model: TableModel
     @State private var choosingCharts = false
 
     var body: some View {
@@ -169,6 +169,7 @@ struct ChartTableView: View {
 private struct ChartTableControls: View {
     let model: TableModel
     @Binding var choosingCharts: Bool
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 18) {
@@ -201,6 +202,11 @@ private struct ChartTableControls: View {
                 Label("Square the sheet", systemImage: "square.grid.2x2")
             }
             .disabled(!model.ready)
+            Button {
+                openWindow(id: LookoutTableApp.settingsWindow)
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
         }
         .labelStyle(.iconOnly)
         .padding(12)

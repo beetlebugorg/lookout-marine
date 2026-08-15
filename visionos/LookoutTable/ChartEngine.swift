@@ -322,6 +322,52 @@ final class ChartEngine {
         return (lon, lat)
     }
 
+    // MARK: - What the settings form drives
+
+    /// The mariner's full S-52 state, as the engine holds it.
+    func getMariner() -> tile57_mariner {
+        var m = tile57_mariner()
+        guard let h = handle else {
+            lookout_mariner_defaults(&m)
+            return m
+        }
+        lookout_get_mariner(h, &m)
+        return m
+    }
+
+    func setMariner(_ m: tile57_mariner) {
+        guard let h = handle else { return }
+        var v = m
+        lookout_set_mariner(h, &v)
+        renderFrame(force: true)
+    }
+
+    /// Every loaded plugin with its settings schema and the values in force.
+    func pluginsJSON() -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let s = lookout_plugins_json(h, &len), len > 0 else { return nil }
+        return String(decoding: UnsafeRawBufferPointer(start: s, count: len), as: UTF8.self)
+    }
+
+    @discardableResult
+    func setPluginConfig(_ id: String, _ json: String) -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugin_config_set(h, id, json) == 0
+    }
+
+    @discardableResult
+    func setPluginGrant(_ id: String, _ cap: String, _ on: Bool) -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugin_grant_set(h, id, cap, on ? 1 : 0) == 0
+    }
+
+    @discardableResult
+    func uninstallPlugin(_ id: String) -> Bool {
+        guard let h = handle else { return false }
+        return lookout_plugin_uninstall(h, id) == 0
+    }
+
     // MARK: - Plugin data
 
     /// The rows of a plugin table, as JSON. The AIS plugin's "targets" table
@@ -408,3 +454,6 @@ extension Array where Element == String {
         return body(cs.map { UnsafePointer($0) })
     }
 }
+
+/// The settings form reads and writes the chart through these.
+extension ChartEngine: MarinerSettingsHost, PluginSettingsHost {}

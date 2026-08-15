@@ -27,6 +27,14 @@ targets:
     platform: visionOS
     sources:
       - path: LookoutTable
+      # The settings form is the chartplotter's own, so a control added there
+      # appears here too. These four files reach no further than the chart
+      # handle, through MarinerSettingsHost and PluginSettingsHost, which is
+      # what lets three apps share them.
+      - path: ../macos/LookoutMarine/MarinerSettings.swift
+      - path: ../macos/LookoutMarine/MarinerSections.swift
+      - path: ../macos/LookoutMarine/SettingsRows.swift
+      - path: ../macos/LookoutMarine/PluginSettings.swift
       # The sample cell, so a fresh install draws something. Gitignored and
       # copied in by build.sh from the machine's chart library.
       - path: Charts

@@ -19,9 +19,12 @@ struct LookoutTableApp: App {
         TargetPositionComponent.registerComponent()
     }
 
+    /// One chart, shared by the table and the settings window that edits it.
+    @State private var model = TableModel()
+
     var body: some SwiftUI.Scene {
         WindowGroup(id: "chart-table") {
-            ChartTableView()
+            ChartTableView(model: model)
         }
         .windowStyle(.volumetric)
         // A sheet a meter across with room above it for the traffic and the
@@ -30,5 +33,16 @@ struct LookoutTableApp: App {
         // Gravity aligned: the sheet lies flat however the volume is turned,
         // and the flags above it stand up.
         .volumeWorldAlignment(.gravityAligned)
+
+        // A plain window beside the table, because a form is a flat thing and
+        // reaching into the volume to read one would put a hand over the
+        // chart.
+        WindowGroup(id: LookoutTableApp.settingsWindow) {
+            TableSettingsView(model: model)
+        }
+        .windowStyle(.plain)
+        .defaultSize(width: 900, height: 700)
     }
+
+    static let settingsWindow = "settings"
 }
