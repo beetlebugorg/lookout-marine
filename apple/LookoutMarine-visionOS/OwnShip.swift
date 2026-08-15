@@ -53,8 +53,9 @@ final class OwnShip {
 @MainActor
 final class PickCard {
     let root = Entity()
-    /// Where the view parents its attachment. It floats above the spot, clear
-    /// of the traffic standing on the sheet.
+    /// Where the view parents its attachment. A SwiftUI attachment is centered
+    /// on the entity it hangs from, so this is lifted by half the panel's own
+    /// height and the panel ends up entirely above the paper.
     let mount = Entity()
     private let stem = ModelEntity()
 
@@ -65,19 +66,24 @@ final class PickCard {
         root.name = "pick-card"
         root.addChild(stem)
         root.addChild(mount)
-        mount.position = [0, PickCard.height, 0]
+        // The panel turns to face whoever is reading it. A report is text, and
+        // text seen edge on from the far side of the table is no report.
+        mount.components.set(BillboardComponent())
 
         var stemMat = UnlitMaterial(color: UIColor(white: 1, alpha: 0.55))
         stemMat.blending = .transparent(opacity: .init(floatLiteral: 1))
+        // A unit cylinder, scaled to reach whatever height the panel settles
+        // at. Its own origin is its middle, so it is positioned at half.
         stem.model = ModelComponent(
-            mesh: .generateCylinder(height: PickCard.height, radius: 0.0006),
+            mesh: .generateCylinder(height: 1, radius: 0.0006),
             materials: [stemMat])
-        stem.position = [0, PickCard.height / 2, 0]
+        setLift(PickCard.clearance)
         root.isEnabled = false
     }
 
-    /// High enough to clear a flag over a vessel at the same spot.
-    private static let height: Float = 0.14
+    /// How far the bottom of the panel floats above the sheet. Enough to clear
+    /// a flag standing over a vessel at the same spot.
+    private static let clearance: Float = 0.07
 
     func show(lon: Double, lat: Double) {
         self.lon = lon
@@ -98,5 +104,19 @@ final class PickCard {
             return
         }
         root.position = sheet.position(fraction: f, height: 0)
+        // The attachment is laid out by SwiftUI, so its height is only known
+        // once it exists, and it changes with the report it holds.
+        if let panel = mount.children.first {
+            let h = panel.visualBounds(relativeTo: mount).extents.y
+            if h > 0 { setLift(PickCard.clearance + h / 2) }
+        }
+    }
+
+    /// Put the panel's middle at `y`, and run the stem from the paper up to it.
+    private func setLift(_ y: Float) {
+        guard abs(mount.position.y - y) > 0.001 else { return }
+        mount.position = [0, y, 0]
+        stem.scale = [1, y, 1]
+        stem.position = [0, y / 2, 0]
     }
 }
