@@ -467,7 +467,24 @@ final class TableModel {
     private var pendingSize: SIMD2<Float>?
     private var pendingSizeAt: TimeInterval = 0
 
-    func setVolumeSize(width: Float, depth: Float) {
+    /// How tall the volume is, and where its floor is. The sheet lies on that
+    /// floor, and a tilt is answered inside that height.
+    private(set) var volumeHeight: Float = 0.45
+    private var floorPosition: SIMD3<Float> = .zero
+
+    /// Take the volume the system is giving the app. Called on every layout,
+    /// so it owns where the sheet sits as well as how big it is.
+    func setVolume(floor: SIMD3<Float>, size: SIMD3<Float>) {
+        floorPosition = floor
+        volumeHeight = size.y
+        // A volume the mariner made shorter can no longer hold the angle the
+        // sheet is at.
+        if tiltDegrees > maxTiltDegrees { tiltDegrees = maxTiltDegrees }
+        applyPose()
+        setVolumeSize(width: size.x, depth: size.z)
+    }
+
+    private func setVolumeSize(width: Float, depth: Float) {
         guard width > 0.1, depth > 0.1 else { return }
         guard abs(width - volumeWidth) > 0.005 || abs(depth - volumeDepth) > 0.005 else { return }
         volumeWidth = width
@@ -548,19 +565,28 @@ final class TableModel {
     static let tiltSteps: [Float] = [0, 15, 30, 50]
 
     func stepTilt() {
-        let next = TableModel.tiltSteps.first { $0 > tiltDegrees + 0.5 }
+        let fits = TableModel.tiltSteps.filter { $0 <= maxTiltDegrees + 0.5 }
+        let next = fits.first { $0 > tiltDegrees + 0.5 }
         setTilt(next ?? 0)
     }
 
     func setTilt(_ degrees: Float) {
-        tiltDegrees = min(max(degrees, 0), 80)
+        tiltDegrees = min(max(degrees, 0), maxTiltDegrees)
         applyPose()
     }
 
-    /// Yaw about the room's up axis, then tilt about the sheet's own near edge,
-    /// so the far edge is what rises.
+    /// Yaw about the room's up axis, then tilt so the far edge rises.
+    ///
+    /// The turn itself is about the sheet's middle, which would put the near
+    /// half below the table it lies on, so the sheet is lifted by half the
+    /// height the tilt gives it. The near edge then stays down on the table
+    /// and the far edge carries the whole rise. Turning about the middle also
+    /// keeps the sheet's footprint inside the volume, which pivoting on the
+    /// near edge would not: that slides the sheet towards the mariner and out
+    /// through the volume's front face.
     private func applyPose() {
-        let tilt = simd_quatf(angle: tiltDegrees * .pi / 180, axis: SIMD3<Float>(1, 0, 0))
+        let radians = tiltDegrees * .pi / 180
+        let tilt = simd_quatf(angle: radians, axis: SIMD3<Float>(1, 0, 0))
         sheet.root.orientation = yaw * tilt
     }
 
@@ -575,6 +601,16 @@ final class TableModel {
     func tapChart(at p: SIMD3<Float>) {
         let f = sheet.fraction(at: p)
         guard sheet.onSheet(f), let geo = engine.geoFor(fraction: f) else { return }
+    /// The steepest angle this volume can hold. A sheet tilted by an angle
+    /// stands its own depth times that angle's sine above the table, and a
+    /// volume clips whatever crosses its bounds, so a steeper sheet would have
+    /// its far edge cut off.
+    var maxTiltDegrees: Float {
+        let headroom = max(volumeHeight - 0.02, 0)
+        guard sheet.depth > 0 else { return 0 }
+        return asin(min(1, headroom / sheet.depth)) * 180 / .pi
+    }
+
         let found = engine.pick(lon: geo.lon, lat: geo.lat)
         picks = found
         pickIndex = 0
@@ -590,6 +626,7 @@ final class TableModel {
         pickIndex = 0
         pickCard.hide()
     }
+        sheet.root.position = floorPosition + SIMD3<Float>(0, sheet.depth / 2 * sin(radians), 0)
 
     // MARK: - Controls
 

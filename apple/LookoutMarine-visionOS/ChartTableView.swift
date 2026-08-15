@@ -115,8 +115,7 @@ struct ChartTableView: View {
     /// resized, so this runs on every update.
     private func lay(_ root: Entity, in proxy: GeometryProxy3D, content: RealityViewContent) {
         let box = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
-        root.position = [0, box.min.y + 0.01, 0]
-        model.setVolumeSize(width: box.extents.x, depth: box.extents.z)
+        model.setVolume(floor: [0, box.min.y + 0.01, 0], size: box.extents)
     }
 
     // MARK: - A hand on the chart
