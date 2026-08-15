@@ -56,8 +56,9 @@ The app looks for baked `.pmtiles` charts in this order:
    copy charts into.
 3. The sample cell in the bundle, so a fresh install draws something.
 
-A directory is walked for `.pmtiles` up to 400 cells, which is a working set
-rather than a whole ENC_ROOT.
+A directory is walked for every `.pmtiles` under it, however many that is. A
+whole ENC_ROOT is thousands of cells; tile57 memory-maps them rather than
+holding them resident, which is what makes that affordable.
 
 ## Traffic
 

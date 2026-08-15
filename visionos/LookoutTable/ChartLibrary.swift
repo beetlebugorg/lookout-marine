@@ -208,16 +208,7 @@ enum ChartLibrary {
         var found: [String] = []
         for case let url as URL in walker where url.pathExtension == "pmtiles" {
             found.append(url.path)
-            // A whole ENC_ROOT is thousands of cells and opening every one of
-            // them is a minute of work a table does not need. The library
-            // composes what it is given, so give it a working set.
-            if found.count >= maxCells { break }
         }
         return found.sorted()
     }
-
-    /// How many cells one table opens. A harbor and its approaches is a
-    /// handful of cells; the cap is what keeps a dropped ENC_ROOT from
-    /// stalling the open.
-    static let maxCells = 400
 }
