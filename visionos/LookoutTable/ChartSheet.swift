@@ -353,9 +353,16 @@ extension MeshResource {
             ?? .generatePlane(width: w, depth: length)
     }
 
-    /// A flat rectangle in the XZ plane, facing up, with the chart texture
-    /// mapped corner to corner: u runs east with +X, v runs south with +Z, so
-    /// the chart's top left pixel lands at the sheet's north-west corner.
+    /// A flat rectangle in the XZ plane, facing up, carrying the chart.
+    ///
+    /// The chart's north lands at the sheet's far edge (-Z) and its west at
+    /// the near-left (-X), which is where the overlay positions put traffic
+    /// and own ship as well. Reaching that takes v=1 at the far edge, not v=0:
+    /// the row the renderer draws chart north into is the row this samples
+    /// last. Mapping it the other way shows the chart mirrored top to bottom,
+    /// which reads as text seen from behind the paper, and leaves every
+    /// overlay on the wrong side of the chart it belongs to.
+    ///
     /// Generated rather than taken from generatePlane so the mapping is stated
     /// here and cannot drift.
     static func chartFace(width: Float, depth: Float) -> MeshResource {
@@ -367,7 +374,7 @@ extension MeshResource {
         ])
         d.normals = MeshBuffers.Normals([[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]])
         d.textureCoordinates = MeshBuffers.TextureCoordinates([
-            [0, 0], [1, 0], [1, 1], [0, 1],
+            [0, 1], [1, 1], [1, 0], [0, 0],
         ])
         d.primitives = .triangles([0, 2, 1, 0, 3, 2])
         return (try? MeshResource.generate(from: [d])) ?? .generatePlane(width: width, depth: depth)

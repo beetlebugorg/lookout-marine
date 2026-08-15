@@ -187,12 +187,21 @@ final class TableModel {
         if chartZoomLast == 1 {
             chartZoomAnchor = sheet.fraction(at: anchor)
         }
-        // Pinching apart doubles the magnification, which is one zoom level.
-        let step = log2(magnification / chartZoomLast)
+        let step = log2(magnification / chartZoomLast) * TableModel.zoomGain
         chartZoomLast = magnification
         guard step.isFinite, step != 0 else { return }
         engine.zoom(step, atFraction: chartZoomAnchor)
     }
+
+    /// Zoom levels per doubling of the hands' distance apart.
+    ///
+    /// A pinch on glass can run the length of the screen, and doubling it
+    /// doubles the content, which is one level. Two hands in the air start
+    /// about 300 mm apart and comfortably reach about a metre, so one honest
+    /// pinch is only some 1.7 doublings. A chart runs from an approach to a
+    /// berth over five or six levels, and at a gain of one that is four
+    /// pinches. This spends a comfortable pinch on about four levels.
+    private static let zoomGain: Double = 2.5
 
     func chartZoomEnded() {
         chartZoomLast = 1

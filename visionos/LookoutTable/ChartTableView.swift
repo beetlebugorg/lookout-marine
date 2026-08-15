@@ -55,7 +55,9 @@ struct ChartTableView: View {
                 }
             }
         }
-        .ornament(attachmentAnchor: .scene(.bottom)) {
+        // The front face, not the bottom: a volume's bottom is the floor the
+        // sheet lies on, so an ornament anchored there sits inside the table.
+        .ornament(attachmentAnchor: .scene(.front)) {
             ChartTableControls(model: model, choosingCharts: $choosingCharts)
         }
         // A chart the system hands over: a .pmtiles AirDropped or opened from
