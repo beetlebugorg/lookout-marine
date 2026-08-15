@@ -574,7 +574,9 @@ if let spec = specs.first {
 // the only place a shell can read it.
 section("readouts")
 var shipLon = 0.0, shipLat = 0.0
-let hasFix = lookout_own_ship(h, &shipLon, &shipLat) == 1
+// 2 is a live fix, and the only state the core writes a position for. 1 is a
+// source whose fix aged out, which carries no coordinate.
+let hasFix = lookout_own_ship(h, &shipLon, &shipLat) == 2
 print(String(format: "  fix: %@  %.5f, %.5f", hasFix ? "yes" : "no", shipLon, shipLat))
 check(lookout_scale_denominator(h) > 0, "the chart states its scale")
 

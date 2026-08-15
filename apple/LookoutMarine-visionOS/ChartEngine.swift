@@ -384,12 +384,19 @@ final class ChartEngine {
         lookout_course_up_set(h, on ? 1 : 0)
     }
 
-    /// Own ship's position, when a plugin is publishing one.
+    /// What the core will say about own ship's position: no source of position
+    /// at all, a source whose fix aged out or was lost, or a fix inside its
+    /// freshness window. A position is written for `live` and for nothing
+    /// else, so any other state carries no coordinate.
+    enum FixState: Int { case none = 0, lost = 1, live = 2 }
+
+    /// Own ship's position, when a plugin is publishing a live fix.
     var ownShip: (lon: Double, lat: Double)? {
         guard let h = handle else { return nil }
         var lon = 0.0
         var lat = 0.0
-        guard lookout_own_ship(h, &lon, &lat) == 1 else { return nil }
+        let state = FixState(rawValue: Int(lookout_own_ship(h, &lon, &lat))) ?? .none
+        guard state == .live else { return nil }
         return (lon, lat)
     }
 
