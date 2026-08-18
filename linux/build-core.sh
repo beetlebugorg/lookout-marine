@@ -33,9 +33,10 @@ else
   set --
 fi
 
+# No -Dbackend: charttable picks Metal on Apple and Vulkan everywhere else,
+# off the target, so there is nothing for this build to select.
 zig build lib \
   --build-file "$core_root/build.zig" \
-  -Dbackend=vk \
   -Doptimize="$optimize" \
   "$@" \
   --prefix "$prefix"

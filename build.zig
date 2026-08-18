@@ -183,12 +183,10 @@ pub fn build(b: *std.Build) void {
     // charttable draws the chart. It owns the style, the tile sources, the
     // tessellators and the GPU; src/ct/ drives it and the host keeps only what
     // is above the renderer (the library, picks, overlays, the plugin layer).
-    // Metal is charttable's only backend today, so this branch builds for
-    // Apple alone. Vulkan, SDL and D3D12 come back when charttable ports them
-    // — its shaders/vk is already written against the same scene contract.
+    // charttable picks its backend off the target: Metal on Apple, Vulkan
+    // everywhere else (charttable src/gpu/gpu.zig). Nothing to select here —
+    // the shells link the loader their platform uses.
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
-    if (!is_apple)
-        @panic("this branch draws with charttable, whose only backend is Metal: build for macOS or iOS");
     // The wasm plugin host (src/plugin/). It builds for any target
     // scripts/build-wamr.sh has an archive for, and it is ON BY DEFAULT ON
     // APPLE ONLY. The Apple app links the runtime through the Xcode project
