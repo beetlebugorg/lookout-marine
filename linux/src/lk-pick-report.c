@@ -966,7 +966,10 @@ lk_pick_report_new (LkAppModel *model, int width, int room)
   /* Half the free area is the card's share. A pick report is something the
    * mariner reads beside the chart, not instead of it, so a content-rich
    * object scrolls rather than growing over the view. */
-  card->ceiling = MAX (LK_PICK_MIN_HEIGHT, room / 2);
+  /* The minimum is a wish, not a floor: on a small panel the free area can be
+   * shorter than it, and a card taller than the room it was given hangs off
+   * the screen. The room always wins. */
+  card->ceiling = MIN (room, MAX (LK_PICK_MIN_HEIGHT, room / 2));
 
   GtkWidget *root = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   guint index = MIN (lk_app_model_get_pick_index (model), results->len - 1);

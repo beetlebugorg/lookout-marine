@@ -17,6 +17,17 @@
  * light or a dark desktop. Plain GTK lacks libadwaita's @window_bg_color, so
  * these mix against @theme_bg_color. */
 static const char *LK_CSS =
+    /* The accent, pinned. @accent_color is a libadwaita name, and where it
+     * resolves at all under plain GTK it comes back pale; the chrome uses it
+     * as a FILL under @accent_fg_color text, so the readouts came out white on
+     * near-white. A chartplotter is read in sunlight, so the accent is stated
+     * here instead of inherited: dark enough to carry white text, and to be
+     * read as text itself on the capsule. */
+    "@define-color accent_color #0a5bb5;"
+    "@define-color accent_fg_color #ffffff;"
+    /* Adwaita dims by opacity, which on the capsule's own light fill leaves the
+     * secondary readouts at about 1:1. They are secondary, not decorative. */
+    ".lk-capsule .dim-label { opacity: 1.0; color: #5f6b76; }"
     /* The chart window is transparent where the chart-view widget paints nothing,
      * so the below subsurface shows through and the chrome floats over it. */
     ".lk-chart-window { background: transparent; }"
