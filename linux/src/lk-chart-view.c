@@ -20,6 +20,11 @@ static const GdkRGBA LK_NODATA_COLOR = { 0.576f, 0.682f, 0.733f, 1.0f };
 #define LK_TOUCH_SLOP       22.0
 /* Below this the coast is jitter, not a throw. Pixels per second. */
 #define LK_TOUCH_FLING_MIN  120.0
+/* Two taps this close together, in time and in place, are one gesture. The
+   window has to outlast the stitch window below, because a tap cannot be
+   answered until it is known not to be the first half of a double tap. */
+#define LK_TOUCH_DOUBLE_MS  350
+#define LK_TOUCH_DOUBLE_PX  48.0
 
 /* Rotation stays inert until the fingers turn past this, so an incidental twist
  * during a pinch doesn't spin the chart. */
@@ -52,6 +57,7 @@ struct _LkChartView {
   double   touch_moved;            /* path length since the first contact */
   gint64   touch_us;               /* when that point was seen */
   gboolean touch_taken;            /* a long press already answered for it */
+  gboolean touch_was_tap;          /* the last contact ended without moving */
   guint    touch_settle_id;
   guint    touch_press_id;
 
@@ -626,6 +632,7 @@ lk_chart_view_touch_settle (gpointer user_data)
   LkChartView *self = user_data;
 
   self->touch_settle_id = 0;
+  self->touch_was_tap = FALSE;
 
   if (self->touch_taken)
     self->touch_taken = FALSE;
@@ -674,12 +681,39 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
     {
     case GDK_TOUCH_BEGIN:
       {
-        gboolean same_finger =
-            self->touch_us != 0 &&
-            (now - self->touch_us) < LK_TOUCH_STITCH_MS * 1000 &&
-            hypot (x - self->touch_x, y - self->touch_y) < LK_TOUCH_STITCH_PX;
+        gint64 since = self->touch_us == 0 ? G_MAXINT64 : now - self->touch_us;
+        double moved_since = hypot (x - self->touch_x, y - self->touch_y);
+
+        /* Coming down again soon and nearby means one of two things, and which
+           one depends on what the LAST contact was. After a tap it is the
+           second half of a double tap. After a drag it is the same finger, which
+           this panel drops mid-stroke, coming back to carry on. */
+        gboolean double_tap = self->touch_was_tap &&
+                              since < LK_TOUCH_DOUBLE_MS * 1000 &&
+                              moved_since < LK_TOUCH_DOUBLE_PX;
+        gboolean same_finger = !self->touch_was_tap &&
+                               since < LK_TOUCH_STITCH_MS * 1000 &&
+                               moved_since < LK_TOUCH_STITCH_PX;
 
         g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+
+        if (double_tap)
+          {
+            /* The first tap never got to identify anything: its settle was
+               still pending, and cancelling it above is what makes the double
+               tap read as one gesture rather than a pick and then a zoom. */
+            g_clear_handle_id (&self->touch_press_id, g_source_remove);
+            lk_chart_controller_fling_start (self->controller, 0, 0);
+            lk_chart_controller_zoom_at (self->controller, 1.0, x, y);
+
+            self->touch_was_tap = FALSE;
+            self->touch_taken = TRUE; /* this contact has had its answer */
+            self->touch_moved = 0;
+            self->touch_x = x;
+            self->touch_y = y;
+            self->touch_us = now;
+            return GDK_EVENT_STOP;
+          }
 
         if (!same_finger)
           {
@@ -734,10 +768,16 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
       self->touch_x = x;
       self->touch_y = y;
       self->touch_us = now;
+      /* A contact already answered (a long press, or the zoom half of a double
+         tap) must not arm another one, or a third touch would zoom again. */
+      self->touch_was_tap = !self->touch_taken && self->touch_moved <= LK_TOUCH_SLOP;
       g_clear_handle_id (&self->touch_press_id, g_source_remove);
       g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+      /* A tap waits out the double-tap window before it identifies anything;
+         a drag only has to outlast this panel's dropouts. */
       self->touch_settle_id =
-          g_timeout_add (LK_TOUCH_STITCH_MS, lk_chart_view_touch_settle, self);
+          g_timeout_add (self->touch_was_tap ? LK_TOUCH_DOUBLE_MS : LK_TOUCH_STITCH_MS,
+                         lk_chart_view_touch_settle, self);
       return GDK_EVENT_STOP;
 
     default:
