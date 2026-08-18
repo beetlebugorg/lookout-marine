@@ -7,6 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "lk-app-model.h"
+#include "lk-chart-bake.h"
 #include "lk-window.h"
 
 #define LK_APP_ID "org.beetlebug.LookoutMarine"
@@ -333,6 +334,11 @@ main (int argc, char *argv[])
    * from the .desktop file matched to the surface's app_id and never asks for
    * this; X11 does, and without it the window carries no icon at all. */
   gtk_window_set_default_icon_name (LK_APP_ID);
+
+  /* Throw away what a previous run renamed but did not finish deleting.
+     Without this, quitting mid-delete leaves gigabytes on the disk that
+     nothing will ever mention again. */
+  lk_chart_bake_sweep_trash ();
 
   g_autoptr (GtkApplication) app =
       gtk_application_new (LK_APP_ID, G_APPLICATION_DEFAULT_FLAGS);
