@@ -753,9 +753,14 @@ lk_window_update_overlays (LkWindow *self)
 {
   gboolean loading = lk_app_model_get_show_startup_loader (self->model);
   gboolean has_chart = lk_app_model_get_has_chart (self->model);
+  gboolean baking = lk_app_model_get_baking (self->model);
 
-  gtk_widget_set_visible (self->loader, loading);
-  gtk_widget_set_visible (self->empty_state, !loading && !has_chart);
+  gtk_widget_set_visible (self->loader, loading && !baking);
+  /* Nothing is open DURING a bake either, but "No chart open" beside a card
+     offering to open one is the wrong thing to say while the app is already
+     busy preparing the charts the mariner just picked. The import pill is the
+     status; this stays out of its way until there is a decision to make. */
+  gtk_widget_set_visible (self->empty_state, !loading && !has_chart && !baking);
   /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
    * with nothing to report. */
   gtk_widget_set_visible (self->capsule, has_chart);
@@ -898,7 +903,8 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   LkWindow *self = user_data;
   const char *name = g_param_spec_get_name (pspec);
 
-  if (g_str_equal (name, "show-startup-loader") || g_str_equal (name, "has-chart"))
+  if (g_str_equal (name, "show-startup-loader") || g_str_equal (name, "has-chart") ||
+      g_str_equal (name, "baking"))
     lk_window_update_overlays (self);
   else if (g_str_equal (name, "view-width") || g_str_equal (name, "view-height"))
     lk_window_queue_place_pick (self);
