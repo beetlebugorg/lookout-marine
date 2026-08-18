@@ -14,6 +14,11 @@ GtkWidget *lk_window_new (GtkApplication *app, LkAppModel *model);
 /* The Open Chart picker. Selects a FOLDER of baked cells; the engine validates. */
 void lk_present_open_chart_dialog (GtkWindow *parent, LkAppModel *model);
 
+/* The Open Chart picker for an exchange set that arrives as one .zip, which is
+ * how a chart agency publishes one. Separate from the folder picker because
+ * GtkFileDialog chooses folders or files, never both. */
+void lk_present_open_archive_dialog (GtkWindow *parent, LkAppModel *model);
+
 /* One thing the mariner opened, routed the way every shell routes it: a plugin
  * package goes to the consent sheet, a folder is a chart library, and anything
  * else is offered to the plugins before it is treated as a chart. The core

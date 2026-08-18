@@ -656,6 +656,16 @@ lk_build_text_page (LkSettings *settings)
 }
 
 static void
+lk_charts_archive_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+
+  lk_present_open_archive_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                                  settings->model);
+}
+
+static void
 lk_charts_open_clicked (GtkButton *button, gpointer user_data)
 {
   LkSettings *settings = user_data;
@@ -919,11 +929,22 @@ lk_build_charts_page (LkSettings *settings)
     }
 
   GtkWidget *add = lk_section (page, NULL);
-  GtkWidget *button = gtk_button_new_with_label ("Add Charts…");
-  gtk_widget_set_halign (button, GTK_ALIGN_START);
+  GtkWidget *add_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *button = gtk_button_new_with_label ("Add Folder…");
+  GtkWidget *archive = gtk_button_new_with_label ("Add Archive…");
+
   g_signal_connect (button, "clicked", G_CALLBACK (lk_charts_open_clicked), settings);
-  gtk_box_append (GTK_BOX (add), button);
-  lk_footer (add, "A folder of baked cells opens as one seamless library.");
+  g_signal_connect (archive, "clicked", G_CALLBACK (lk_charts_archive_clicked), settings);
+  gtk_box_append (GTK_BOX (add_buttons), button);
+  gtk_box_append (GTK_BOX (add_buttons), archive);
+  gtk_widget_set_halign (add_buttons, GTK_ALIGN_START);
+  gtk_box_append (GTK_BOX (add), add_buttons);
+  lk_footer (add,
+             "A folder of cells, or the .zip a chart agency publishes, opens as one "
+             "seamless library. Cells that arrive as raw S-57 survey data are prepared "
+             "first, coarse charts before harbour detail, so a passage is covered even "
+             "if the import is stopped part way. An archive is read where it lies: "
+             "nothing is unpacked.");
 
   /* A raster chart is a different KIND of chart, so it gets its own section
    * rather than a mixed list: one is the survey, the other is a picture of the

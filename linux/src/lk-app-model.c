@@ -12,6 +12,11 @@ struct _LkAppModel {
   gboolean has_chart;
   char    *chart_path;
   char    *open_error;
+  /* The set being prepared, and where it has got to. */
+  LkChartBake   *bake;
+  char          *pending_open_source;
+  LkBakeProgress bake_progress;
+  gboolean       baking;
   GStrv    recents;
 
   gboolean is_opening;
@@ -69,6 +74,7 @@ enum {
   PROP_SCALE_DENOMINATOR,
   PROP_SCHEME,
   PROP_BUILDING,
+  PROP_BAKING,
   PROP_VIEW_WIDTH,
   PROP_VIEW_HEIGHT,
   PROP_FOLLOW,
@@ -113,6 +119,7 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCALE_DENOMINATOR:   g_value_set_double (value, self->scale_denominator); break;
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
+    case PROP_BAKING:              g_value_set_boolean (value, self->baking); break;
     case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
     case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
     case PROP_FOLLOW:              g_value_set_int (value, self->follow); break;
@@ -144,6 +151,9 @@ lk_app_model_dispose (GObject *object)
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
+  g_clear_pointer (&self->pending_open_source, g_free);
+  g_free (self->bake_progress.name);
+  g_free (self->bake_progress.cell);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -179,6 +189,7 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_SCALE_DENOMINATOR] = g_param_spec_double ("scale-denominator", NULL, NULL, 0, G_MAXDOUBLE, 0, RO);
   properties[PROP_SCHEME] = g_param_spec_int ("scheme", NULL, NULL, 0, 2, 0, RO);
   properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
+  properties[PROP_BAKING] = g_param_spec_boolean ("baking", NULL, NULL, FALSE, RO);
   properties[PROP_VIEW_WIDTH] = g_param_spec_int ("view-width", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_VIEW_HEIGHT] = g_param_spec_int ("view-height", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_FOLLOW] = g_param_spec_int ("follow", NULL, NULL, 0, 2, 0, RO);
@@ -287,9 +298,32 @@ lk_cell_paths_for (const char *target)
   if (g_file_test (target, G_FILE_TEST_IS_DIR))
     return lk_app_model_chart_paths_in_dir (target);
 
+  /* An archive is a chart SET, not a chart: handing it to the engine gets it
+     read as a PMTiles file and refused. Answering empty sends it down the
+     prepare road instead, which is where it belongs. */
+  if (lk_chart_scan_is_archive (target))
+    return g_new0 (char *, 1);
+
   char **one = g_new0 (char *, 2);
   one[0] = g_strdup (target);
   return one;
+}
+
+/* The path the app would open on its own: what the mariner last had, or what
+ * the environment points at. Returned whether or not anything in it can be
+ * drawn yet, because a folder of raw cells is a perfectly good answer that
+ * happens to need baking first. Free with g_free. */
+char *
+lk_app_model_initial_source (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+
+  const char *env = g_getenv ("LOOKOUT_OPEN");
+  if (env != NULL)
+    return g_strdup (env);
+  if (self->recents != NULL && self->recents[0] != NULL)
+    return g_strdup (self->recents[0]);
+  return NULL;
 }
 
 char **
@@ -364,9 +398,88 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
   if (lk_chart_controller_open_file (self->controller, path) != 0)
     return;
 
+  /* An exchange set as an agency publishes it is one .zip. It is a chart set
+     the same as a folder is, so it takes the same road: scanned, baked, and
+     opened. Nothing is unpacked on the way. */
+  if (lk_chart_scan_is_archive (path))
+    {
+      lk_app_model_open_chart_directory (self, path);
+      return;
+    }
+
   g_auto (GStrv) one = g_new0 (char *, 2);
   one[0] = g_strdup (path);
   lk_app_model_request_open (self, one, path);
+}
+
+/* Open whatever is ready in `dir`, plus anything a bake has already put in
+ * that set's prepared directory. A set can hold both: cells that arrived baked
+ * and cells this app made. */
+static void
+lk_app_model_open_prepared (LkAppModel *self, const char *source)
+{
+  g_autoptr (GPtrArray) all = g_ptr_array_new_with_free_func (g_free);
+  g_auto (GStrv) ready = lk_app_model_chart_paths_in_dir (source);
+
+  for (guint i = 0; ready != NULL && ready[i] != NULL; i++)
+    g_ptr_array_add (all, g_strdup (ready[i]));
+
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  if (prepared != NULL && g_file_test (prepared, G_FILE_TEST_IS_DIR))
+    {
+      g_auto (GStrv) made = lk_app_model_chart_paths_in_dir (prepared);
+      for (guint i = 0; made != NULL && made[i] != NULL; i++)
+        g_ptr_array_add (all, g_strdup (made[i]));
+    }
+
+  if (all->len == 0)
+    {
+      lk_app_model_set_open_error (self, "That folder contains no charts this app can draw.");
+      return;
+    }
+
+  g_ptr_array_add (all, NULL);
+  lk_app_model_request_open (self, (char **) all->pdata, source);
+}
+
+static void
+lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data)
+{
+  LkAppModel *self = user_data;
+
+  g_free (self->bake_progress.name);
+  g_free (self->bake_progress.cell);
+  self->bake_progress = *progress;
+  self->bake_progress.name = g_strdup (progress->name);
+  self->bake_progress.cell = g_strdup (progress->cell);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+}
+
+static void
+lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
+{
+  LkAppModel *self = user_data;
+  g_autofree char *source = g_strdup (self->bake_progress.name);
+
+  self->bake = NULL;
+  self->baking = FALSE;
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+
+  if (out_dir == NULL && baked == 0)
+    {
+      lk_app_model_set_open_error (self, "Those charts could not be prepared.");
+      return;
+    }
+
+  /* THE CHART OPENS ONCE, AT THE END. Handing each batch over as it finished
+     put a chart on screen sooner and cost about half the machine: every batch
+     rebuilt the ownership partition over a growing library and re-tessellated,
+     against a bake that only gets half the cores to begin with. */
+  if (self->pending_open_source != NULL)
+    {
+      g_autofree char *src = g_steal_pointer (&self->pending_open_source);
+      lk_app_model_open_prepared (self, src);
+    }
 }
 
 void
@@ -374,11 +487,30 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
-  g_auto (GStrv) paths = lk_app_model_chart_paths_in_dir (dir);
-  if (g_strv_length (paths) > 0)
-    lk_app_model_request_open (self, paths, dir);
-  else
-    lk_app_model_set_open_error (self, "That folder contains no baked .pmtiles cells.");
+  /* Ask the engine what is actually there before offering it: a chart folder
+     also holds files that are not charts, and raw cells do not draw until they
+     are baked. */
+  g_autoptr (LkChartSet) set = lk_chart_scan (dir);
+
+  if (set != NULL && set->sources > 0 && !self->baking)
+    {
+      g_free (self->pending_open_source);
+      self->pending_open_source = g_strdup (dir);
+
+      self->bake = lk_chart_bake_start (dir, set,
+                                        lk_app_model_bake_progress,
+                                        lk_app_model_bake_done, self);
+      if (self->bake != NULL)
+        {
+          self->baking = TRUE;
+          lk_app_model_set_open_error (self, NULL);
+          g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+          return;
+        }
+      g_clear_pointer (&self->pending_open_source, g_free);
+    }
+
+  lk_app_model_open_prepared (self, dir);
 }
 
 const char *const *
@@ -1293,6 +1425,22 @@ double      lk_app_model_get_overscale (LkAppModel *self)         { return self-
 double      lk_app_model_get_scale_denominator (LkAppModel *self) { return self->scale_denominator; }
 int         lk_app_model_get_scheme (LkAppModel *self)            { return self->scheme; }
 gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
+gboolean    lk_app_model_get_baking (LkAppModel *self)            { return self->baking; }
+
+const LkBakeProgress *
+lk_app_model_get_bake_progress (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->baking ? &self->bake_progress : NULL;
+}
+
+void
+lk_app_model_cancel_bake (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  if (self->bake != NULL)
+    lk_chart_bake_cancel (self->bake);
+}
 int         lk_app_model_get_view_width (LkAppModel *self)        { return self->view_width; }
 int         lk_app_model_get_view_height (LkAppModel *self)       { return self->view_height; }
 

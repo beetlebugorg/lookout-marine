@@ -3,6 +3,8 @@
  * through it. Readouts are GObject properties the HUD tracks via notify::. */
 #pragma once
 
+#include "lk-chart-bake.h"
+
 #include <gtk/gtk.h>
 
 #include "lk-chart-controller.h"
@@ -21,6 +23,9 @@ LkChartController *lk_app_model_get_controller (LkAppModel *self);
 /* Paths to open on first appearance: $LOOKOUT_OPEN, else last recent, else the
  * demo default. Transfer full strv; empty when nothing is available. */
 char **lk_app_model_initial_chart_paths (LkAppModel *self);
+
+/* The path the app would open on its own, drawable or not. Free with g_free. */
+char *lk_app_model_initial_source (LkAppModel *self);
 
 /* Every baked cell under a directory, sorted. */
 char **lk_app_model_chart_paths_in_dir (const char *dir);
@@ -135,6 +140,21 @@ void lk_app_model_push_readouts (LkAppModel *self,
                                  double overscale,
                                  int scheme);
 void lk_app_model_set_building (LkAppModel *self, gboolean building);
+
+/* ---- preparing charts ---------------------------------------------------- */
+/* A folder or a .zip of raw S-57 cells has to be baked before it can be drawn.
+ * The open path does that itself, so a mariner picks the charts an agency
+ * published and the app deals with what that means. */
+
+/* Where the bake has got to, or NULL when nothing is being prepared. */
+const LkBakeProgress *lk_app_model_get_bake_progress (LkAppModel *self);
+
+/* True while a set is being prepared. */
+gboolean lk_app_model_get_baking (LkAppModel *self);
+
+/* Ask the running bake to stop. What already landed stays: it is a usable
+ * library, just a smaller one. */
+void lk_app_model_cancel_bake (LkAppModel *self);
 /* The chart view's size in logical points, pushed on every allocation. */
 void lk_app_model_set_view_size (LkAppModel *self, int width, int height);
 void lk_app_model_set_first_build_done (LkAppModel *self, gboolean done);

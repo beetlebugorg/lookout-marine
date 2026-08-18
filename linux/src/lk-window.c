@@ -161,6 +161,51 @@ lk_window_dropped (GtkDropTarget *target, const GValue *value, double x, double 
   return TRUE;
 }
 
+/* An exchange set arrives as one .zip as often as a folder: that is the shape a
+ * chart agency publishes. GtkFileDialog picks folders or files, never both, so
+ * the two are separate ways in rather than one that does both. Nothing is
+ * unpacked — the engine bakes each cell where it lies inside the archive. */
+static void
+lk_open_archive_finished (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  LkAppModel *model = user_data;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GFile) file = gtk_file_dialog_open_finish (GTK_FILE_DIALOG (source), result, &error);
+
+  if (file == NULL)
+    return; /* cancelled, or an error GTK already surfaced */
+
+  g_autofree char *path = g_file_get_path (file);
+  if (path != NULL)
+    lk_app_model_open_chart (model, path);
+  else
+    lk_app_model_set_open_error (model,
+                                 "That isn't a local file. The engine reads charts off "
+                                 "the disk and needs a real path.");
+}
+
+void
+lk_present_open_archive_dialog (GtkWindow *parent, LkAppModel *model)
+{
+  GtkFileDialog *dialog = gtk_file_dialog_new ();
+  g_autoptr (GListStore) filters = g_list_store_new (GTK_TYPE_FILE_FILTER);
+  GtkFileFilter *filter = gtk_file_filter_new ();
+
+  gtk_file_filter_set_name (filter, "Chart exchange set (.zip)");
+  gtk_file_filter_add_pattern (filter, "*.zip");
+  gtk_file_filter_add_pattern (filter, "*.ZIP");
+  g_list_store_append (filters, filter);
+  g_object_unref (filter);
+
+  gtk_file_dialog_set_title (dialog, "Open Chart Archive");
+  gtk_file_dialog_set_modal (dialog, TRUE);
+  gtk_file_dialog_set_accept_label (dialog, "Open");
+  gtk_file_dialog_set_filters (dialog, G_LIST_MODEL (filters));
+
+  gtk_file_dialog_open (dialog, parent, NULL, lk_open_archive_finished, model);
+  g_object_unref (dialog);
+}
+
 /* ---- the raster chart pickers ------------------------------------------- */
 
 static void
@@ -324,6 +369,14 @@ lk_action_open_file (GSimpleAction *action, GVariant *parameter, gpointer user_d
 
   gtk_file_dialog_open (dialog, GTK_WINDOW (self->window), NULL, lk_open_file_chosen, self);
   g_object_unref (dialog);
+}
+
+static void
+lk_action_open_archive (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_present_open_archive_dialog (GTK_WINDOW (self->window), self->model);
 }
 
 static void
@@ -510,6 +563,7 @@ lk_action_full_screen (GSimpleAction *action, GVariant *parameter, gpointer user
 
 static const GActionEntry lk_window_actions[] = {
   { "open",             lk_action_open },
+  { "open-archive",     lk_action_open_archive },
   { "open-file",        lk_action_open_file },
   { "open-recent",      lk_action_open_recent, "s" },
   { "zoom-in",          lk_action_zoom_in },
@@ -656,7 +710,8 @@ lk_window_fill_menu (GtkMenuButton *button, gpointer user_data)
   g_menu_append_submenu (menu, "Vessels", vessels);
 
   GMenu *files = g_menu_new ();
-  g_menu_append (files, "Open Charts…", "win.open");
+  g_menu_append (files, "Open Chart Folder…", "win.open");
+  g_menu_append (files, "Open Chart Archive…", "win.open-archive");
   g_menu_append (files, "Open a File…", "win.open-file");
 
   GMenu *recents = g_menu_new ();
@@ -888,8 +943,12 @@ lk_window_build_empty_state (void)
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   GtkWidget *icon = gtk_image_new_from_icon_name ("mark-location-symbolic");
   GtkWidget *title = gtk_label_new ("No chart open");
-  GtkWidget *body = gtk_label_new ("Open a folder of baked chart cells to get started.");
-  GtkWidget *button = gtk_button_new_with_label ("Open Charts…");
+  GtkWidget *body = gtk_label_new ("Open a folder of chart cells, or the .zip an agency "
+                                   "published, to get started. Raw cells are prepared on "
+                                   "the way in.");
+  GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *button = gtk_button_new_with_label ("Open Folder…");
+  GtkWidget *archive = gtk_button_new_with_label ("Open Archive…");
 
   gtk_image_set_pixel_size (GTK_IMAGE (icon), 48);
   gtk_widget_add_css_class (icon, "dim-label");
@@ -903,11 +962,16 @@ lk_window_build_empty_state (void)
   gtk_widget_add_css_class (button, "pill");
   gtk_widget_set_halign (button, GTK_ALIGN_CENTER);
   gtk_actionable_set_action_name (GTK_ACTIONABLE (button), "win.open");
+  gtk_widget_add_css_class (archive, "pill");
+  gtk_actionable_set_action_name (GTK_ACTIONABLE (archive), "win.open-archive");
+  gtk_widget_set_halign (buttons, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (buttons), button);
+  gtk_box_append (GTK_BOX (buttons), archive);
 
   gtk_box_append (GTK_BOX (box), icon);
   gtk_box_append (GTK_BOX (box), title);
   gtk_box_append (GTK_BOX (box), body);
-  gtk_box_append (GTK_BOX (box), button);
+  gtk_box_append (GTK_BOX (box), buttons);
 
   gtk_widget_add_css_class (box, "lk-card");
   gtk_widget_set_halign (box, GTK_ALIGN_CENTER);
@@ -1019,8 +1083,13 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->scale_bar);
 
   GtkWidget *building = lk_building_pill_new (model);
+  GtkWidget *baking = lk_bake_pill_new (model);
   gtk_widget_set_margin_top (building, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), building);
+  /* Preparing charts stands where the build indicator does. The two never run
+     at once: nothing is drawn until the bake it is waiting on has finished. */
+  gtk_widget_set_margin_top (baking, LK_CHROME_MARGIN);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), baking);
 
   /* Top centre, over the build indicator: what the plugins are alarming about.
    * It is added after the pill, so an alarm is never underneath it. */

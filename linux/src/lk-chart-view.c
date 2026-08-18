@@ -154,7 +154,17 @@ lk_chart_view_do_auto_open (gpointer user_data)
     {
       g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
       if (paths != NULL && g_strv_length (paths) > 0)
-        lk_chart_controller_open (self->controller, (const char *const *) paths, GTK_WIDGET (self));
+        {
+          lk_chart_controller_open (self->controller, (const char *const *) paths, GTK_WIDGET (self));
+        }
+      else
+        {
+          /* Nothing here draws yet. It may still be charts: an exchange set as
+             an agency publishes it is raw cells, which bake first. */
+          g_autofree char *source = lk_app_model_initial_source (self->model);
+          if (source != NULL)
+            lk_app_model_open_chart_directory (self->model, source);
+        }
     }
 
   lk_app_model_set_opening (self->model, FALSE, FALSE);
@@ -180,7 +190,11 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
   lk_chart_view_get_point_size (self, &width, &height);
 
   g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
-  if (paths == NULL || g_strv_length (paths) == 0)
+  /* Nothing baked is not nothing to do: the path may be an exchange set of raw
+     cells, which the open below scans and bakes. Only a path with neither
+     stops here. */
+  g_autofree char *source = lk_app_model_initial_source (self->model);
+  if ((paths == NULL || g_strv_length (paths) == 0) && source == NULL)
     return;
 
   self->did_auto_open = TRUE;
