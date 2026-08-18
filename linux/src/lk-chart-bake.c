@@ -339,8 +339,6 @@ lk_bake_out_path (const LkChartBake *bake, const LkScannedCell *cell)
                              ? g_strdup (base)
                              : g_build_filename (base, stem, NULL);
 
-  g_mkdir_with_parents (dir, 0755);
-
   g_autofree char *leaf = NULL;
   if (prepare == LK_PREPARE_LIFT)
     leaf = g_path_get_basename (cell->path);
@@ -503,6 +501,22 @@ lk_bake_worker (gpointer data)
   return NULL;
 }
 
+static void
+lk_chart_bake_free (LkChartBake *bake)
+{
+  if (bake == NULL)
+    return;
+  g_clear_pointer (&bake->in_paths, g_ptr_array_unref);
+  g_clear_pointer (&bake->out_paths, g_ptr_array_unref);
+  g_clear_pointer (&bake->labels, g_ptr_array_unref);
+  g_free (bake->source);
+  g_free (bake->out_dir);
+  g_free (bake->name);
+  g_free (bake->last_cell);
+  g_mutex_clear (&bake->lock);
+  g_free (bake);
+}
+
 LkChartBake *
 lk_chart_bake_start (const char        *source,
                      const LkChartSet  *set,
@@ -547,9 +561,21 @@ lk_chart_bake_start (const char        *source,
     {
       const LkScannedCell *cell = g_ptr_array_index (ordered, i);
       LkPrepare prepare = lk_prepare_for (cell);
+      g_autofree char *out = lk_bake_out_path (bake, cell);
+
+      /* Already made. A source always reports its cells as needing preparing —
+         a .zip of raw cells says so however many times it is opened — so
+         without this every reopen bakes the whole set again. Re-importing one
+         chart must not re-bake the rest. */
+      if (g_file_test (out, G_FILE_TEST_EXISTS))
+        continue;
+
+      /* Only now is the chart's own directory worth making. */
+      g_autofree char *dir = g_path_get_dirname (out);
+      g_mkdir_with_parents (dir, 0755);
 
       g_ptr_array_add (bake->in_paths, g_strdup (cell->path));
-      g_ptr_array_add (bake->out_paths, lk_bake_out_path (bake, cell));
+      g_ptr_array_add (bake->out_paths, g_steal_pointer (&out));
       g_ptr_array_add (bake->labels, g_strdup (cell->name));
 
       switch (prepare)
@@ -559,6 +585,14 @@ lk_chart_bake_start (const char        *source,
         case LK_PREPARE_LIFT:  bake->lift_count++;  break;
         }
     }
+
+  if (bake->in_paths->len == 0)
+    {
+      /* Every cell was prepared already: the caller opens what is there. */
+      lk_chart_bake_free (bake);
+      return NULL;
+    }
+  bake->job_total = (int) bake->in_paths->len;
 
   bake->thread = g_thread_new ("lk-chart-bake", lk_bake_worker, bake);
   return bake;
