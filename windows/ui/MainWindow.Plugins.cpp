@@ -511,18 +511,11 @@ namespace winrt::LookoutMarine::implementation
         plugin_poll_timer = DispatcherTimer{};
         plugin_poll_timer.Interval(std::chrono::seconds(1));
         plugin_poll_timer.Tick([this](auto &&, auto &&) {
-            // Asked BEFORE the read, not after: a refresh that is thrown away
-            // has already moved the model, and the next tick would see nothing
-            // new and never show the line at all.
-            auto root = Content() != nullptr ? Content().XamlRoot() : nullptr;
-            if (root != nullptr)
-            {
-                auto focused = Input::FocusManager::GetFocusedElement(root);
-                if (focused != nullptr && focused.try_as<Controls::TextBox>() != nullptr)
-                    return;
-            }
+            // In place, never a page rebuild: updating a status TextBlock
+            // disturbs no focus and no expander, so a mariner typing an
+            // address keeps their field while the line beside it moves.
             if (RefreshPluginStatus())
-                BuildSettingsPage();
+                UpdatePluginStatusUi();
         });
         plugin_poll_timer.Start();
     }
@@ -603,25 +596,15 @@ namespace winrt::LookoutMarine::implementation
         Controls::TextBlock status_tb;
         status_tb.FontSize(11);
         {
-            JsonValue st{ nullptr };
-            if (!p.status.empty() && JsonValue::TryParse(Wide(p.status), st) &&
-                st.ValueType() == JsonValueType::Object)
+            std::string line, state;
+            if (PluginItemStatusLine(p, row_id, &line, &state))
             {
-                for (auto const &item : Arr(st.GetObject(), L"items"))
-                {
-                    if (item.ValueType() != JsonValueType::Object)
-                        continue;
-                    JsonObject io = item.GetObject();
-                    if (Str(io, L"id") != row_id)
-                        continue;
-                    std::string state;
-                    status_tb.Text(Wide(Line(io, &state)));
-                    status_tb.Foreground(Media::SolidColorBrush{ StateColor(state) });
-                    break;
-                }
+                status_tb.Text(Wide(line));
+                status_tb.Foreground(Media::SolidColorBrush{ StateColor(state) });
             }
         }
         summary.Children().Append(status_tb);
+        plugin_status_ui.push_back({ p.id, row_id, status_tb, Shapes::Ellipse{ nullptr } });
 
         Controls::Expander expander;
         expander.Header(summary);
@@ -928,6 +911,60 @@ namespace winrt::LookoutMarine::implementation
         return line;
     }
 
+    // What the plugin says about one list row, found by the id the shell
+    // minted. False when the status names no such item.
+    bool MainWindow::PluginItemStatusLine(lkw::PluginInfo const &p, std::string const &row_id,
+                                          std::string *line_out, std::string *state_out)
+    {
+        JsonValue st{ nullptr };
+        if (p.status.empty() || !JsonValue::TryParse(Wide(p.status), st) ||
+            st.ValueType() != JsonValueType::Object)
+            return false;
+        for (auto const &item : Arr(st.GetObject(), L"items"))
+        {
+            if (item.ValueType() != JsonValueType::Object)
+                continue;
+            JsonObject io = item.GetObject();
+            if (Str(io, L"id") != row_id)
+                continue;
+            std::string state;
+            *line_out = Line(io, &state);
+            *state_out = state;
+            return true;
+        }
+        return false;
+    }
+
+    // The registered status texts and dots, updated in place. The status
+    // moves once a second while data flows; rebuilding the page for that
+    // flickered every control and reset the expanders.
+    void MainWindow::UpdatePluginStatusUi()
+    {
+        for (auto &ui : plugin_status_ui)
+        {
+            lkw::PluginInfo *p = FindPlugin(ui.plugin_id);
+            if (p == nullptr || ui.text == nullptr)
+                continue;
+            std::string line, state;
+            if (ui.row_id.empty())
+            {
+                line = PluginStatusLine(*p, &state);
+                if (p->origin == "developer")
+                    line += " · developer copy";
+            }
+            else if (!PluginItemStatusLine(*p, ui.row_id, &line, &state))
+            {
+                continue;
+            }
+            auto text = Wide(line);
+            if (ui.text.Text() != text)
+                ui.text.Text(text);
+            ui.text.Foreground(Media::SolidColorBrush{ StateColor(state) });
+            if (ui.dot != nullptr)
+                ui.dot.Fill(Media::SolidColorBrush{ StateColor(state) });
+        }
+    }
+
     // The one section that talks ABOUT plugins rather than about the chart:
     // what is installed, what each copy may do, and the way to add or remove
     // one. The plugins that ship with the app are not here — their settings
@@ -988,6 +1025,7 @@ namespace winrt::LookoutMarine::implementation
             status.Foreground(Media::SolidColorBrush{ StateColor(state) });
             status.Margin({ 16, 0, 0, 0 });
             header.Children().Append(status);
+            plugin_status_ui.push_back({ p->id, "", status, dot });
 
             Controls::StackPanel body;
             body.Spacing(8);

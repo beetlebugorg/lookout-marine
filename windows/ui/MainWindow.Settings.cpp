@@ -259,6 +259,8 @@ namespace winrt::LookoutMarine::implementation
 
         auto stack = SettingsContent();
         stack.Children().Clear();
+        // The controls the status poll updates in place died with that Clear.
+        plugin_status_ui.clear();
 
         const double ft = 3.28084;
         bool feet = pending.depth_unit == 1;

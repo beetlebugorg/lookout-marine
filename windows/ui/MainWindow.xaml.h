@@ -56,6 +56,10 @@ namespace winrt::LookoutMarine::implementation
         static void ApplyWindowIcon(HWND hwnd);
         Microsoft::UI::Xaml::XamlRoot DialogRoot(); // the window a dialog belongs to
         void BuildSettingsPage(); // rebuilds the rows for the selected tab
+        /* Refresh the registered status texts and dots in place. The status
+         * moves once a second while data flows; rebuilding the page for that
+         * flickers every control and resets the expanders. */
+        void UpdatePluginStatusUi();
         void ScheduleApply();     // 60 ms debounce, then set + save
         // wasm plugin settings (MainWindow.Plugins.cpp)
         bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
@@ -74,6 +78,8 @@ namespace winrt::LookoutMarine::implementation
         std::string PluginConfigJson(lkw::PluginInfo const &p);
         void SchedulePluginApply();
         lkw::PluginInfo *FindPlugin(std::string const &id);
+        bool PluginItemStatusLine(lkw::PluginInfo const &p, std::string const &row_id,
+                                  std::string *line_out, std::string *state_out);
         lkw::PluginCell *FindCell(std::string const &plugin_id, std::string const &list_key,
                                   std::string const &row_id, std::string const &key);
         void SetPluginValue(std::string const &plugin_id, std::string const &key, double v);
@@ -274,6 +280,17 @@ namespace winrt::LookoutMarine::implementation
         std::vector<lkw::PluginInfo> plugins;
         Microsoft::UI::Xaml::DispatcherTimer plugin_apply_timer{ nullptr };
         Microsoft::UI::Xaml::DispatcherTimer plugin_poll_timer{ nullptr };
+        // The live status texts on the built page, updated in place by the
+        // poll. row_id empty = the plugin's own header line (with its dot).
+        // Cleared and re-registered by every BuildSettingsPage.
+        struct PluginStatusUi
+        {
+            std::string plugin_id;
+            std::string row_id;
+            Microsoft::UI::Xaml::Controls::TextBlock text{ nullptr };
+            Microsoft::UI::Xaml::Shapes::Ellipse dot{ nullptr };
+        };
+        std::vector<PluginStatusUi> plugin_status_ui;
 
         // gesture state (logical points)
         bool dragging{ false }, rotating{ false };
