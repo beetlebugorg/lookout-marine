@@ -97,9 +97,13 @@ namespace lkw
         BakeJob(BakeJob const &) = delete;
         BakeJob &operator=(BakeJob const &) = delete;
 
-        /* Bake every source cell under `source` into `out_dir`. False when there
-         * is nothing to bake, in which case no thread starts. */
-        bool Start(ScanResult const &scan, std::string const &source, std::string const &out_dir);
+        /* Bake every source under `source`: cells into `out_dir`, BSB/KAP
+         * sheets into `raster_out_dir` — separate roots, because the vector
+         * open globs the chart library for .pmtiles and a picture archive it
+         * swallowed would join the composed chart library. False when there is
+         * nothing to bake, in which case no thread starts. */
+        bool Start(ScanResult const &scan, std::string const &source, std::string const &out_dir,
+                   std::string const &raster_out_dir);
 
         /* Ask the bake to stop. tile57 stops at the next chart boundary, so this
          * lands within roughly one cell's bake time, not instantly. What already
@@ -108,8 +112,12 @@ namespace lkw
 
         BakeProgress Snapshot() const;
         bool Running() const { return running_.load(); }
-        /* Every archive that finished. Valid once Running() is false. */
+        /* Every VECTOR chart archive that finished — what the open takes.
+         * Valid once Running() is false. */
         std::vector<std::string> Finished() const;
+        /* Every baked raster sheet — these belong to the raster underlay
+         * (lookout_raster_add), never to the vector open. */
+        std::vector<std::string> FinishedRasters() const;
 
         /* tile57 calls these from its workers; public only so the C callbacks
          * can reach them. */
@@ -123,6 +131,7 @@ namespace lkw
         BakeProgress p_;
         std::vector<std::string> out_paths_;
         std::vector<std::string> finished_;
+        std::vector<std::string> finished_rasters_;
         /* Where the phase now running starts in out_paths_, and the whole job's
          * count: the engine is called once per kind and counts from zero each
          * time, while the mariner is watching one job. */

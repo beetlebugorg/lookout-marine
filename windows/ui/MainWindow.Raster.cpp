@@ -168,10 +168,24 @@ namespace winrt::LookoutMarine::implementation
         if (paths.empty() || !lk_controller_is_open(controller))
             return;
 
+        /* A BSB/KAP sheet is a picture of a chart, not a chart the engine can
+         * serve tiles from: it bakes first (decode and warp, tile57), and the
+         * baked output comes back through this function. Ready files carry on
+         * below in the same call — picking a mixed folder must add what can be
+         * added and bake the rest, not fail half of it. */
+        std::vector<std::string> ready;
+        std::vector<std::string> sources;
+        for (auto const &p : paths)
+            (lkw::IsRasterSource(p) ? sources : ready).push_back(p);
+        if (!sources.empty())
+            BakeRasterSources(sources);
+        if (ready.empty())
+            return;
+
         std::vector<std::string> failed;
         std::vector<std::string> added;
         std::string last_added;
-        for (auto const &p : paths)
+        for (auto const &p : ready)
         {
             if (std::find(raster_paths.begin(), raster_paths.end(), p) != raster_paths.end())
                 continue;
@@ -227,7 +241,7 @@ namespace winrt::LookoutMarine::implementation
         else if (!failed.empty())
         {
             std::string msg = "Couldn't open " + std::to_string(failed.size()) + " of " +
-                              std::to_string(paths.size()) + " files:";
+                              std::to_string(ready.size()) + " files:";
             for (auto const &f : failed)
                 msg += "\n" + f;
             ShowRasterError(winrt::to_hstring(msg));
@@ -244,6 +258,9 @@ namespace winrt::LookoutMarine::implementation
         // would be worse than letting it say no.
         picker.FileTypeFilter().Append(L".mbtiles");
         picker.FileTypeFilter().Append(L".pmtiles");
+        // A paper chart as scanned: bakes on the way in (tile57_bake_rasters).
+        picker.FileTypeFilter().Append(L".kap");
+        picker.FileTypeFilter().Append(L".bsb");
         picker.FileTypeFilter().Append(L"*");
         auto files = co_await picker.PickMultipleFilesAsync();
         if (files == nullptr || files.Size() == 0)
@@ -266,7 +283,7 @@ namespace winrt::LookoutMarine::implementation
         auto paths = lkw::CollectRasterCharts(winrt::to_string(folder.Path()));
         if (paths.empty())
         {
-            ShowRasterError(L"No raster charts (.mbtiles or baked .pmtiles) in that folder.");
+            ShowRasterError(L"No raster charts (.mbtiles, baked .pmtiles, or BSB/KAP sheets) in that folder.");
             co_return;
         }
         AddRasterPaths(paths);

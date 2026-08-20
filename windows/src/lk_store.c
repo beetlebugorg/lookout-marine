@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shlobj.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,11 +105,28 @@ lk_store_load_view(lookout_view *out)
 {
     if (out == NULL)
         return 0;
+    out->lat = 0;
+    out->zoom = 0;
+    out->rotation_deg = 0;
     if (!get_double(LK_GROUP_VIEW, "lon", &out->lon))
         return 0;
     get_double(LK_GROUP_VIEW, "lat", &out->lat);
     get_double(LK_GROUP_VIEW, "zoom", &out->zoom);
     get_double(LK_GROUP_VIEW, "rotation_deg", &out->rotation_deg);
+    /* A view a broken session saved must not brick every later launch: an
+     * instance that opened 0 charts once wrote its fit-of-nothing pose
+     * (zoom=22), restoring z22 collapsed the camera to the world corner —
+     * 2^22 tiles overruns f32 world coordinates — and the NEXT session
+     * re-saved that corner (lat 85.0509, the Mercator edge) as its own pose.
+     * So the envelope is what a marine chart can contain, not what the
+     * projection can express: no chart lies above ~84°, and chart detail ends
+     * well before z16. Anything outside is rejected and the open fits the
+     * chart. (Lon keeps the full ±180: the Aleutians cross the dateline.) */
+    if (!isfinite(out->lon) || out->lon < -180.0 || out->lon > 180.0 ||
+        !isfinite(out->lat) || out->lat < -84.0 || out->lat > 84.0 ||
+        !isfinite(out->zoom) || out->zoom < 0.0 || out->zoom > 16.0 ||
+        !isfinite(out->rotation_deg))
+        return 0;
     return 1;
 }
 

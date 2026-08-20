@@ -200,6 +200,15 @@ namespace winrt::LookoutMarine::implementation
             {
                 std::string path = list[i];
                 std::string name = std::filesystem::path(path).filename().string();
+                // The library's own entry gets the office's name when that is
+                // what is open ("NOAA") — its directory name ("Charts") says
+                // nothing. A label never carries a path separator; a path
+                // fallback in open_chart_label does.
+                if (path == lkw::ChartLibraryDir())
+                    name = (!open_chart_label.empty() &&
+                            open_chart_label.find_first_of("\\/") == std::string::npos)
+                               ? open_chart_label
+                               : "Chart Library";
                 recents.Items().Append(MenuItem(winrt::to_hstring(name.empty() ? path : name), L"",
                                                 [this, path] { OpenPaths(lkw::CellsFor(path), path); }));
             }

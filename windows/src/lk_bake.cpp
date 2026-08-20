@@ -171,6 +171,12 @@ namespace lkw
         return finished_;
     }
 
+    std::vector<std::string> BakeJob::FinishedRasters() const
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        return finished_rasters_;
+    }
+
     bool BakeJob::OnProgress(unsigned done, unsigned total)
     {
         {
@@ -188,11 +194,18 @@ namespace lkw
         size_t i = (size_t)index + offset_;
         if (i >= out_paths_.size())
             return;
-        finished_.push_back(out_paths_[i]);
+        /* ordered_ and out_paths_ run in step, so the kind rides on the index:
+         * a baked sheet is a picture for the raster underlay, never a chart
+         * for the vector open. */
+        if (ordered_[i].kind == "raster_source")
+            finished_rasters_.push_back(out_paths_[i]);
+        else
+            finished_.push_back(out_paths_[i]);
         p_.cell = std::filesystem::path(out_paths_[i]).stem().string();
     }
 
-    bool BakeJob::Start(ScanResult const &scan, std::string const &source, std::string const &out_dir)
+    bool BakeJob::Start(ScanResult const &scan, std::string const &source, std::string const &out_dir,
+                        std::string const &raster_out_dir)
     {
         ordered_.clear();
         for (auto const &c : scan.cells)
@@ -227,7 +240,7 @@ namespace lkw
         for (auto const &c : ordered_)
         {
             std::filesystem::path stem = std::filesystem::path(c.name).stem();
-            std::filesystem::path base = out_dir;
+            std::filesystem::path base = (c.kind == "raster_source") ? raster_out_dir : out_dir;
             if (zip)
             {
                 std::filesystem::path rel = std::filesystem::path(c.path).parent_path();
@@ -247,6 +260,7 @@ namespace lkw
             p_.name = std::filesystem::path(source).filename().string();
             p_.total = (unsigned)ordered_.size();
             finished_.clear();
+            finished_rasters_.clear();
         }
         job_total_ = (unsigned)ordered_.size();
         offset_ = 0;

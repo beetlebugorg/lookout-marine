@@ -98,8 +98,12 @@ namespace winrt::LookoutMarine::implementation
         void RenderLoop();
         void UpdateReadouts(bool force);
         void UpdateScaleBar(double denom);
-        void OpenPaths(std::vector<std::string> const &paths, std::string const &recent);
-        void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent);
+        // `label` is what Settings ▸ Charts calls the set ("NOAA"); the recent
+        // stays a path. Empty falls back to the recent, then the first cell.
+        void OpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                       std::string const &label = {});
+        void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                         std::string const &label = {});
         // startup loader (MainWindow.Loader.cpp)
         void ShowStartupLoader(size_t cells);
         void SetLoaderTessellating();
@@ -110,6 +114,12 @@ namespace winrt::LookoutMarine::implementation
         // chart import: scan, bake what is raw, then open (MainWindow.Bake.cpp)
         fire_and_forget PickChartArchive();
         void ImportCharts(std::string const &path);
+        /* Bake picked BSB/KAP sheets into the raster library, then add them to
+         * the raster underlay. The same BakeJob and panel as a chart import. */
+        void BakeRasterSources(std::vector<std::string> const &sources);
+        /* Baked sheets join the underlay: noted for the coming open, or added
+         * to the chart on screen when no open follows. */
+        void AdoptBakedRasters(std::vector<std::string> const &rasters, bool opening);
         void TickBake();
         static std::string BakeOutputDir();
         void SubmitSearch();
@@ -235,6 +245,7 @@ namespace winrt::LookoutMarine::implementation
         std::unique_ptr<lkw::BakeJob> bake_job;
         Microsoft::UI::Xaml::DispatcherTimer bake_timer{ nullptr };
         std::string bake_source;
+        bool bake_rasters_only{ false }; // this job is the raster add flow's
         bool bake_cancel_wired{ false };
         bool loader_waiting{ false };    // loader up, waiting on the first build
         bool loader_saw_building{ false };

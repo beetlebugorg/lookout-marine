@@ -9,6 +9,7 @@
 
 #include "lk_bake.h"
 #include "lk_paths.h"
+#include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -57,22 +58,34 @@ namespace winrt::LookoutMarine::implementation
         }
 
         /* Nothing raw: these are charts already, so open them and skip the bake
-         * entirely. */
+         * entirely. Ready pictures (.mbtiles, baked sheets) go to the raster
+         * underlay, never to the vector open, which has no use for them. */
         if (scan.sources == 0)
         {
             BakePanel().Visibility(Visibility::Collapsed);
             std::vector<std::string> baked;
+            std::vector<std::string> pictures;
             for (auto const &c : scan.cells)
-                if (!c.NeedsPrepare())
-                    baked.push_back(c.path);
-            if (baked.empty())
+            {
+                if (c.NeedsPrepare())
+                    continue;
+                (c.kind == "raster" ? pictures : baked).push_back(c.path);
+            }
+            if (baked.empty() && pictures.empty())
                 baked = lkw::CellsFor(path);
-            OpenPaths(baked, path);
+            AdoptBakedRasters(pictures, !baked.empty());
+            OpenPaths(baked, path, lkw::AgencyForCells(baked));
             return;
         }
 
         bake_job = std::make_unique<lkw::BakeJob>();
-        if (!bake_job->Start(scan, path, BakeOutputDir()))
+        bake_rasters_only = false;
+        /* Sheets bake beside the charts but into their own root, named after
+         * the source so they group into one set (Rasters\<name>\...). */
+        std::string raster_out =
+            (std::filesystem::path(lkw::RasterLibraryDir()) /
+             std::filesystem::path(path).stem()).string();
+        if (!bake_job->Start(scan, path, BakeOutputDir(), raster_out))
         {
             bake_job.reset();
             BakePanel().Visibility(Visibility::Collapsed);
@@ -135,17 +148,106 @@ namespace winrt::LookoutMarine::implementation
         /* Done, or stopped. What landed is a library either way: every archive
          * written is complete, and a later import resumes from them. */
         bake_timer.Stop();
-        auto finished = bake_job->Finished();
+        auto rasters = bake_job->FinishedRasters();
         bake_job.reset();
         BakePanel().Visibility(Visibility::Collapsed);
 
-        /* Open the whole set at once. Handing each batch over as it finished put
-         * a chart up sooner and cost about half the machine, rebuilding the
-         * ownership partition over a growing library every time. */
-        if (finished.empty())
-            finished = lkw::CollectCells(BakeOutputDir());
-        if (!finished.empty())
-            OpenPaths(finished, bake_source);
+        /* Open the whole LIBRARY at once, not this import's output alone: an
+         * import adds to what earlier imports baked, a resume skips what is
+         * already there, and a restart reopens the same whole set. Opening it
+         * once at the end (rather than batch by batch) is deliberate — each
+         * handover rebuilt the ownership partition over a growing library.
+         *
+         * The recent is the library too, never the source: the source is what
+         * the charts were baked FROM, and reopening it hands the vector open a
+         * file it can only skip. The label is the office whose charts these
+         * are — "All_ENCs.zip" is what a download happened to be called. */
+        auto charts = bake_rasters_only ? std::vector<std::string>{}
+                                        : lkw::CollectCells(BakeOutputDir());
+        AdoptBakedRasters(rasters, !charts.empty());
+        if (!charts.empty())
+            OpenPaths(charts, lkw::ChartLibraryDir(), lkw::AgencyForCells(charts));
+    }
+
+    /* Baked sheets join the raster underlay. When a vector open is about to
+     * happen they only need noting — the open re-installs the stored list
+     * (InstallStoredRasters) on the new handle. With no open coming they are
+     * added to the chart on screen right away. */
+    void MainWindow::AdoptBakedRasters(std::vector<std::string> const &rasters, bool opening)
+    {
+        if (rasters.empty())
+            return;
+        if (!opening)
+        {
+            AddRasterPaths(rasters);
+            return;
+        }
+        std::vector<const char *> cps;
+        for (auto const &p : rasters)
+            cps.push_back(p.c_str());
+        lk_store_note_rasters(cps.data(), (int)cps.size());
+    }
+
+    /* The raster add flow's bake: sheets the mariner picked by hand, no scan.
+     * The same job and panel as a chart import; the finish path above sees a
+     * raster-only job and routes the output to the underlay. */
+    void MainWindow::BakeRasterSources(std::vector<std::string> const &sources)
+    {
+        if (sources.empty() || bake_job != nullptr)
+            return;
+
+        lkw::ScanResult scan;
+        scan.ok = true;
+        for (auto const &p : sources)
+        {
+            lkw::ScannedCell c;
+            c.path = p;
+            c.name = std::filesystem::path(p).filename().string();
+            c.kind = "raster_source";
+            scan.cells.push_back(std::move(c));
+        }
+
+        /* Group under the sheets' own folder name, so a set of 968 KAPs is
+         * one entry in the pill, named for the folder they came in. */
+        std::string folder = std::filesystem::path(sources.front()).parent_path().filename().string();
+        if (folder.empty())
+            folder = "Raster charts";
+        std::string raster_out = (std::filesystem::path(lkw::RasterLibraryDir()) / folder).string();
+
+        bake_job = std::make_unique<lkw::BakeJob>();
+        bake_rasters_only = true;
+        if (!bake_job->Start(scan, folder, BakeOutputDir(), raster_out))
+        {
+            bake_job.reset();
+            return;
+        }
+        bake_source.clear();
+
+        if (!bake_cancel_wired)
+        {
+            bake_cancel_wired = true;
+            BakeCancel().Click([this](auto &&, auto &&) {
+                if (bake_job != nullptr)
+                {
+                    bake_job->Cancel();
+                    BakeEta().Text(L"Stopping after the cells already started…");
+                }
+            });
+        }
+
+        BakeTitle().Text(winrt::to_hstring("Importing " + folder));
+        BakeCount().Text(L"");
+        BakeEta().Text(L"");
+        BakeBar().IsIndeterminate(false);
+        BakePanel().Visibility(Visibility::Visible);
+
+        if (bake_timer == nullptr)
+        {
+            bake_timer = DispatcherTimer{};
+            bake_timer.Interval(std::chrono::milliseconds(200));
+            bake_timer.Tick([this](auto &&, auto &&) { TickBake(); });
+        }
+        bake_timer.Start();
     }
 
     /* An exchange set as a chart agency publishes it: one .zip. Nothing is

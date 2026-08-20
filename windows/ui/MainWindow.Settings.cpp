@@ -412,6 +412,13 @@ namespace winrt::LookoutMarine::implementation
             {
                 std::string path = recents[i];
                 std::string name = std::filesystem::path(path).filename().string();
+                // Same naming as the Open Recent menu: the library's entry is
+                // the office whose charts are open, never "Charts".
+                if (path == lkw::ChartLibraryDir())
+                    name = (!open_chart_label.empty() &&
+                            open_chart_label.find_first_of("\\/") == std::string::npos)
+                               ? open_chart_label
+                               : "Chart Library";
                 Controls::Button b;
                 b.Content(winrt::box_value(winrt::to_hstring(name.empty() ? path : name)));
                 b.HorizontalAlignment(HorizontalAlignment::Stretch);

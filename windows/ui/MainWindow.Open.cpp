@@ -42,20 +42,24 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
-        auto paths = lkw::InitialPaths();
+        std::string source;
+        auto paths = lkw::InitialPaths(&source);
         if (paths.empty())
         {
             EmptyState().Visibility(Visibility::Visible);
             return;
         }
-        OpenPaths(paths, {});
+        // Name the set by who made the charts ("NOAA"), not by where the bake
+        // happened to put them ("Charts").
+        OpenPaths(paths, source, lkw::AgencyForCells(paths));
     }
 
     // The open itself is synchronous on the UI thread (the core mmaps and
     // builds its device), so the loader is shown first and the real open is
     // deferred one timer tick — XAML gets a frame to paint the loader card
     // before the thread blocks.
-    void MainWindow::OpenPaths(std::vector<std::string> const &paths, std::string const &recent)
+    void MainWindow::OpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                               std::string const &label)
     {
         if (paths.empty() || controller == nullptr || open_pending)
             return;
@@ -64,21 +68,23 @@ namespace winrt::LookoutMarine::implementation
 
         Microsoft::UI::Xaml::DispatcherTimer defer;
         defer.Interval(std::chrono::milliseconds(50));
-        defer.Tick([this, paths, recent, defer](auto &&, auto &&) {
+        defer.Tick([this, paths, recent, label, defer](auto &&, auto &&) {
             defer.Stop();
-            DoOpenPaths(paths, recent);
+            DoOpenPaths(paths, recent, label);
             open_pending = false;
         });
         defer.Start();
     }
 
-    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent)
+    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                                 std::string const &label)
     {
         if (!recent.empty())
             lk_store_note_recent(recent.c_str());
-        // What Settings ▸ Charts names as open: the folder or file the user
-        // chose, else the first cell (a startup open).
-        open_chart_label = !recent.empty() ? recent : paths.front();
+        // What Settings ▸ Charts names as open: the office whose charts these
+        // are when the caller worked that out ("NOAA"), else the folder or
+        // file the user chose, else the first cell (a startup open).
+        open_chart_label = !label.empty() ? label : !recent.empty() ? recent : paths.front();
 
         StopAlertWatch();     // the alerts belong to the handle this close destroys
         CloseVesselWindows(); // so do the tables
