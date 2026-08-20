@@ -62,7 +62,7 @@ jobs:
       - name: Build
         working-directory: linux
         run: |
-          meson setup build --prefix=/usr --buildtype=release
+          meson setup build --prefix=/usr -Dcore-optimize=Debug
           ninja -C build
           DESTDIR="$PWD/dist" meson install -C build
 
@@ -88,14 +88,14 @@ jobs:
       - name: Build macOS
         run: |
           xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
-            -configuration Release -destination 'platform=macOS' \
+            -configuration Debug -destination 'platform=macOS' \
             -derivedDataPath macos/build-mac \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
 
       - name: Build iOS
         run: |
           xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
-            -configuration Release -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath macos/build-mac \
             CODE_SIGNING_ALLOWED=NO build
 
@@ -104,9 +104,9 @@ jobs:
       - name: Package
         run: |
           products=macos/build-mac/Build/Products
-          tar -czf LookoutMarine-macos.tar.gz -C "$products/Release" LookoutMarine.app
+          tar -czf LookoutMarine-macos.tar.gz -C "$products/Debug" LookoutMarine.app
           tar -czf LookoutMarine-iossimulator.tar.gz \
-            -C "$products/Release-iphonesimulator" LookoutMarine.app
+            -C "$products/Debug-iphonesimulator" LookoutMarine.app
 
       - uses: actions/upload-artifact@v5
         with:
@@ -137,17 +137,17 @@ jobs:
         run: scripts/build-wamr.sh windows-x64
 
       - name: Build core
-        run: pwsh windows/build-core.ps1 -Platform x64
+        run: pwsh windows/build-core.ps1 -Configuration Debug -Platform x64
 
       - name: Build
         run: |
-          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Release /p:Platform=x64
-          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=x64
+          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Debug /p:Platform=x64
+          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Debug /p:Platform=x64
 
       - uses: actions/upload-artifact@v5
         with:
           name: lookout-marine-windows-x64
-          path: windows/x64/Release
+          path: windows/x64/Debug
 
   android:
     name: Android app
