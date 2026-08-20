@@ -117,6 +117,7 @@ lk_plugin_list_free (gpointer data)
   LkPluginList *list = data;
 
   g_ptr_array_unref (list->item_fields);
+  g_ptr_array_unref (list->discover);
   g_free (list);
 }
 
@@ -354,6 +355,26 @@ lk_plugin_state_read_lists (LkPluginState *state, const LkJson *node)
       list->switch_key = lk_or_empty (lk_json_member_string (entry, "switch_key"));
       list->max_rows = lk_json_member_int (entry, "max_rows", 0);
       list->item_fields = g_ptr_array_new_with_free_func (g_free);
+      list->discover = g_ptr_array_new_with_free_func (g_free);
+
+      /* What to browse the boat's network for. The core carries the
+       * declaration; finding anything is the shell's own job. */
+      const LkJson *services = lk_json_member (entry, "discover");
+      guint services_n = lk_json_length (services);
+      for (guint d = 0; d < services_n; d++)
+        {
+          const LkJson *node = lk_json_at (services, d);
+          const char *service = lk_json_member_string (node, "service");
+
+          if (service == NULL)
+            continue;
+
+          LkPluginDiscover *want = g_new0 (LkPluginDiscover, 1);
+
+          want->service = service;
+          want->set = lk_json_member (node, "set");
+          g_ptr_array_add (list->discover, want);
+        }
 
       const LkJson *columns = lk_json_member (entry, "item_fields");
       guint columns_n = lk_json_length (columns);
@@ -1003,6 +1024,52 @@ lk_plugins_add_row (LkPlugins *self, const LkPluginList *list)
       g_hash_table_insert (row->cells, g_strdup (field->key), lk_cell_read (NULL, field));
     }
   g_ptr_array_add (rows, row);
+  lk_plugins_edited (self);
+}
+
+void
+lk_plugins_add_row_from (LkPlugins          *self,
+                         const LkPluginList *list,
+                         const char         *service,
+                         const char         *name,
+                         const char         *host,
+                         int                 port)
+{
+  GPtrArray *rows = lk_plugins_row_array (self, list);
+
+  if (rows == NULL || lk_plugins_list_is_full (self, list))
+    return;
+
+  const LkJson *set = NULL;
+
+  for (guint i = 0; i < list->discover->len; i++)
+    {
+      const LkPluginDiscover *want = g_ptr_array_index (list->discover, i);
+
+      if (g_strcmp0 (want->service, service) == 0)
+        {
+          set = want->set;
+          break;
+        }
+    }
+
+  g_autofree char *uuid = g_uuid_string_random ();
+  g_autofree char *id = g_strdup_printf ("row-%.8s", uuid);
+  LkRow *row = lk_row_new (id);
+
+  /* The service type's columns read exactly like a row out of the registry:
+   * anything it does not name falls back to the column's own default. */
+  for (guint i = 0; i < list->item_fields->len; i++)
+    {
+      const LkPluginField *field = g_ptr_array_index (list->item_fields, i);
+
+      g_hash_table_insert (row->cells, g_strdup (field->key), lk_cell_read (set, field));
+    }
+  g_ptr_array_add (rows, row);
+
+  lk_plugins_set_row_text (self, list, id, "name", name);
+  lk_plugins_set_row_text (self, list, id, "host", host);
+  lk_plugins_set_row_number (self, list, id, "port", port);
   lk_plugins_edited (self);
 }
 

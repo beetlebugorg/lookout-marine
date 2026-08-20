@@ -333,8 +333,23 @@ pub struct ListInfo {
     pub footer: String,
     pub empty: String,
     pub add_label: String,
+    /// The services a shell browses the boat's network for on this list's
+    /// behalf.
+    pub discover: Vec<Discover>,
     /// Which toggle column is the row's own switch.
     pub switch_key: String,
+}
+
+/// One DNS-SD service a connection list is browsed for.
+#[derive(Debug, Clone)]
+pub struct Discover {
+    /// The service type, for example `_signalk-ws._tcp`.
+    pub service: &'static str,
+    /// The columns a discovered row takes beyond its name, address and port,
+    /// as a JSON object. A Signal K server announces its websocket, so a row
+    /// added from one arrives with that column on. Empty when the address is
+    /// all a row needs.
+    pub set: &'static str,
 }
 
 /// One group of the manifest's `"settings"` object.
@@ -380,6 +395,22 @@ pub fn settings_json(groups: &[Group]) -> String {
                         out.push_str(&format!(",\"{}\":", key));
                         json::push_str(&mut out, value);
                     }
+                }
+                if !list.discover.is_empty() {
+                    out.push_str(",\"discover\":[");
+                    for (i, d) in list.discover.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push_str("{\"service\":");
+                        json::push_str(&mut out, d.service);
+                        if !d.set.is_empty() {
+                            out.push_str(",\"set\":");
+                            out.push_str(d.set);
+                        }
+                        out.push('}');
+                    }
+                    out.push(']');
                 }
                 out.push_str(",\"switch_key\":");
                 json::push_str(&mut out, &list.switch_key);

@@ -37,6 +37,20 @@ A boat can have more than one gateway: a masthead AIS on one address, a plotter
 bridging the instruments on another. Add a row for each. Everything switched on
 feeds the same chart.
 
+## Adding one that announces itself
+
+Some gateways announce themselves on the boat's network. Those show up in the
+list above **Add Connection**, under the name they announce and the address
+they answered on. The **+** beside one fills a row in: name, address, port, and
+switched on.
+
+Lookout looks only while the settings window is open, and only for the kind of
+source each list takes. A gateway whose address is already in the list is not
+offered again.
+
+Nothing announcing itself means nothing to show, which is most gateways: the
+address in the manual is the way in.
+
 ## Reading what a connection is doing
 
 The line under the name says what that connection is doing now. The dot beside

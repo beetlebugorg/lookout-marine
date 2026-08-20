@@ -37,6 +37,19 @@ rate, **Reconnecting**, **Unreachable**, **Paused** or **No address**. The rate
 counts deltas a second. A delta is one update from the server, which may carry
 several values.
 
+## Adding a server that announces itself
+
+A Signal K server announces itself on the boat's network. It shows up in the
+list above **Add Server**, under the name it announces and the address it
+answered on, and the **+** beside it fills a row in.
+
+A server announces its WebSocket, so the row arrives on port 3000 with
+**WebSocket** on. That is a working way in, and it is not the only one: the
+same server carries the same boat on 8375 with **WebSocket** off.
+
+Lookout looks only while the settings window is open. A server whose address is
+already in the list is not offered again, whichever port the row uses.
+
 ## How a Signal K server differs from a gateway
 
 A gateway repeats one instrument network, sentence by sentence, and whatever is

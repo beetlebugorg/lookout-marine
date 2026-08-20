@@ -41,6 +41,9 @@ pub const Connections = lk.connections(.{
         "NMEA 0183 on port 10110. Everything switched on here feeds the same chart.",
     .empty = "No connections yet.",
     .add_label = "Add Connection",
+    // A gateway that announces itself on the boat's network is offered ready
+    // to add. The address is all one needs: the port comes from the service.
+    .discover = &.{.{ .service = "_nmea-0183._tcp" }},
     .columns = .{
         .name = .{
             .label = "Name",

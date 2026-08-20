@@ -112,6 +112,7 @@ sources = files(
   'src/lk-app-model.c',
   'src/lk-chart-controller.c',
   'src/lk-chart-view.c',
+  'src/lk-discovery.c',
   'src/lk-hud.c',
   'src/lk-json.c',
   'src/lk-mariner.c',

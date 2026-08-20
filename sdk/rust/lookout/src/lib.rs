@@ -125,7 +125,7 @@ pub use json::Json;
 pub use post::{alert, alert_keyed, say, Publish, Upsert};
 pub use raw::{log, mono_ms, now_ms, Level, Severity, API_VERSION};
 pub use settings::{
-    expect_manifest, settings_json, Field, FieldSpec, Fields, Flag, Group, ListInfo, Num,
+    expect_manifest, settings_json, Discover, Field, FieldSpec, Fields, Flag, Group, ListInfo, Num,
     SettingsGroup, SettingsHook, Spec, Store, Tab, Text, MAX_FIELDS, MAX_ROWS, MAX_TEXT_BYTES,
 };
 pub use table::{

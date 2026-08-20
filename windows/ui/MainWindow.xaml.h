@@ -3,6 +3,7 @@
 
 #include "lk_controller.h"
 #include "lk_pick.h"
+#include "lk_discovery.h"
 #include "lk_plugin_model.h"
 
 #include <atomic>
@@ -85,6 +86,12 @@ namespace winrt::LookoutMarine::implementation
         void SetPluginCellToggle(std::string const &plugin_id, std::string const &list_key,
                                  std::string const &row_id, std::string const &key, bool on);
         void AddPluginRow(std::string const &plugin_id, std::string const &list_key);
+        void AddPluginRowFrom(std::string const &plugin_id, std::string const &list_key,
+                              lkw::Discovered const &found);
+        std::vector<lkw::Discovered> NearbyFor(lkw::PluginInfo const &p,
+                                               lkw::PluginList const &list);
+        void StartPluginDiscovery();
+        void StopPluginDiscovery();
         void RemovePluginRow(std::string const &plugin_id, std::string const &list_key,
                              std::string const &row_id);
         void TryOpen();
@@ -251,6 +258,12 @@ namespace winrt::LookoutMarine::implementation
         std::vector<lkw::PluginInfo> plugins;
         Microsoft::UI::Xaml::DispatcherTimer plugin_apply_timer{ nullptr };
         Microsoft::UI::Xaml::DispatcherTimer plugin_poll_timer{ nullptr };
+        // What is answering on the boat's network, browsed only while the
+        // settings window is up.
+        lkw::Discovery discovery;
+        // The generation of finds the pane last drew, so the status poll knows
+        // when something new answered.
+        uint64_t discovery_drawn{ 0 };
 
         // gesture state (logical points)
         bool dragging{ false }, rotating{ false };
