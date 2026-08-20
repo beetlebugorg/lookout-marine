@@ -44,8 +44,9 @@ list above **Add Connection**, under the name they announce and the address
 they answered on. The **+** beside one fills a row in: name, address, port, and
 switched on.
 
-Lookout looks only while the settings window is open, and only for the
-addresses in this list. A gateway already in the list is not offered again.
+Lookout looks only while the settings window is open, and only for the kind of
+source each list takes. A gateway whose address is already in the list is not
+offered again.
 
 Nothing announcing itself means nothing to show, which is most gateways: the
 address in the manual is the way in.
