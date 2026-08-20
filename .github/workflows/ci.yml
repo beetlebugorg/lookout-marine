@@ -69,7 +69,9 @@ jobs:
       - uses: actions/upload-artifact@v5
         with:
           name: lookout-marine-linux-x64
-          path: linux/dist
+          # The install tree only: dist also holds the core's staging prefix,
+          # which is static archives the app has already linked.
+          path: linux/dist/usr
 
   apple:
     name: macOS and iOS apps
