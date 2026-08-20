@@ -118,10 +118,9 @@ jobs:
 
   windows:
     name: Windows app
-    # ARM64 with Visual Studio 2026, for the toolset the vcxproj names (v145)
-    # and for the WAMR archive: the MSVC ABI is built by zig cc against the
-    # installed MSVC headers and Windows SDK, so it needs a Windows host.
-    runs-on: windows-11-vs2026-arm
+    # x64, not ARM64: the aarch64-windows Zig 0.16.0 binary segfaults whenever
+    # it resolves the MSVC libc, which is every core and WAMR compile there.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
@@ -133,20 +132,20 @@ jobs:
       # core without this archive is a chart with no boat and no traffic.
       - name: Build WAMR
         shell: bash
-        run: scripts/build-wamr.sh windows-arm64
+        run: scripts/build-wamr.sh windows-x64
 
       - name: Build core
-        run: pwsh windows/build-core.ps1 -Platform ARM64
+        run: pwsh windows/build-core.ps1 -Platform x64
 
       - name: Build
         run: |
-          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Release /p:Platform=ARM64
-          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=ARM64
+          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Release /p:Platform=x64
+          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=x64
 
       - uses: actions/upload-artifact@v5
         with:
-          name: lookout-marine-windows-arm64
-          path: windows/ARM64/Release
+          name: lookout-marine-windows-x64
+          path: windows/x64/Release
 
   android:
     name: Android app
