@@ -56,6 +56,12 @@ final class Discovery: NSObject, ObservableObject {
             browser.stop()
             browsers[type] = nil
             found.removeAll { $0.service == type }
+            // A resolve in flight for this type would otherwise answer after
+            // the browse stopped and put the find back.
+            for service in resolving where Self.normalize(service.type) == type {
+                service.stop()
+                resolving.remove(service)
+            }
         }
         for type in want where browsers[type] == nil {
             let browser = NetServiceBrowser()
@@ -108,9 +114,13 @@ extension Discovery: NetServiceBrowserDelegate, NetServiceDelegate {
     nonisolated func netServiceDidResolveAddress(_ service: NetService) {
         MainActor.assumeIsolated {
             resolving.remove(service)
+            let type = Self.normalize(service.type)
+            // Nothing is browsing for this any more: the window shut, or the
+            // plugin that wanted it went away while the resolve was in flight.
+            guard browsers[type] != nil else { return }
             guard let hostName = service.hostName, service.port > 0 else { return }
             let host = hostName.hasSuffix(".") ? String(hostName.dropLast()) : hostName
-            let entry = DiscoveredService(service: Self.normalize(service.type),
+            let entry = DiscoveredService(service: type,
                                           name: service.name,
                                           host: host,
                                           port: service.port)
