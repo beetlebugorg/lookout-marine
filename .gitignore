@@ -43,3 +43,6 @@ test/annapolis.nmea
 
 # Claude Code agent worktrees / session data
 .claude/
+
+# Kotlin build session state, written by any gradle run.
+android/.kotlin/
