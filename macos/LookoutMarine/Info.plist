@@ -77,5 +77,16 @@
             </dict>
         </dict>
     </array>
+    <!-- Finding a source on the boat's network. NSBonjourServices is the
+         whole list this app may browse for: a plugin that declares a service
+         type not named here is not discoverable until the app ships it.
+         See specs/discovery.md. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Lookout Marine looks for Signal K servers and NMEA gateways on your boat's network so you can add one without typing its address.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_signalk-ws._tcp</string>
+        <string>_nmea-0183._tcp</string>
+    </array>
 </dict>
 </plist>

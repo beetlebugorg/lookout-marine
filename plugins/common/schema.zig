@@ -220,6 +220,21 @@ pub const ListSpec = struct {
     add_label: []const u8 = "",
     /// Which toggle column is the row's own switch.
     switch_key: []const u8 = "enabled",
+    /// What a shell browses the boat's network for, so a server that is
+    /// already running can be added without anyone typing its address.
+    discover: []const Discover = &.{},
+};
+
+/// One DNS-SD service a shell offers as a row ready to add.
+pub const Discover = struct {
+    /// The service type, for example "_signalk-ws._tcp".
+    service: []const u8,
+    /// The columns a discovered row takes beyond its name, address and port,
+    /// as a JSON object. A service announces where it answers and nothing
+    /// else, and the address alone is not always enough to dial it: a Signal K
+    /// server announces its websocket, which this plugin reads only when the
+    /// row says so.
+    set: []const u8 = "",
 };
 
 /// The four columns every connection list carries, in the order a shell draws
@@ -316,6 +331,23 @@ fn listGroupJson(comptime list: ListSpec, comptime fixed: RowColumns, comptime E
         if (list.footer.len > 0) out = out ++ ",\"footer\":" ++ str(list.footer);
         if (list.empty.len > 0) out = out ++ ",\"empty\":" ++ str(list.empty);
         if (list.add_label.len > 0) out = out ++ ",\"add_label\":" ++ str(list.add_label);
+        if (list.discover.len > 0) {
+            out = out ++ ",\"discover\":[";
+            for (list.discover, 0..) |d, i| {
+                if (i > 0) out = out ++ ",";
+                out = out ++ "{\"service\":" ++ str(d.service);
+                // `set` is written into the manifest as it stands, so it has to
+                // be an object here rather than wherever the host parses it.
+                if (d.set.len > 0) {
+                    if (d.set[0] != '{' or d.set[d.set.len - 1] != '}') @compileError(
+                        "a discover entry's `set` must be a JSON object, for example \"{\\\"websocket\\\":true}\"",
+                    );
+                    out = out ++ ",\"set\":" ++ d.set;
+                }
+                out = out ++ "}";
+            }
+            out = out ++ "]";
+        }
         out = out ++ ",\"switch_key\":" ++ str(list.switch_key) ++ ",\"item_fields\":[";
 
         var n = 0;
