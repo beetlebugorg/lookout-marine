@@ -39,6 +39,13 @@ pub const Connections = lk.connections(.{
         "Give its address, and everything switched on here feeds the same chart.",
     .empty = "No servers yet.",
     .add_label = "Add Server",
+    // A server announces its WEBSOCKET, on port 3000, and not the plain stream
+    // on 8375. A discovered row therefore arrives with the websocket switched
+    // on, or it would dial the web page.
+    //
+    // `_signalk-http._tcp` is the same server announced a second time, and
+    // this plugin does not speak HTTP, so it is left alone.
+    .discover = &.{.{ .service = "_signalk-ws._tcp", .set = "{\"websocket\":true}" }},
     .columns = .{
         .name = .{
             .label = "Name",

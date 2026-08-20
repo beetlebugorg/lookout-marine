@@ -31,7 +31,9 @@
 
 use crate::json::{self, Json};
 use crate::raw;
-use crate::settings::{Field, Fields, Flag, Group, ListInfo, Num, Spec, Tab, Text, MAX_ROWS};
+use crate::settings::{
+    Discover, Field, Fields, Flag, Group, ListInfo, Num, Spec, Tab, Text, MAX_ROWS,
+};
 
 /// The four columns every connection list carries, in the order a shell draws
 /// them. A caller overrides the wording and the port's range; the keys and the
@@ -86,6 +88,9 @@ pub struct ConnOpts {
     pub footer: &'static str,
     pub empty: &'static str,
     pub add_label: &'static str,
+    /// What a shell browses the boat's network for on this list's behalf, so a
+    /// source already running is offered ready to add.
+    pub discover: &'static [Discover],
     /// The wording of the four standard columns, and the port's range.
     pub columns: RowColumns,
     /// Delay before a dropped connection is retried.
@@ -116,6 +121,7 @@ impl ConnOpts {
         footer: "",
         empty: "",
         add_label: "",
+        discover: &[],
         columns: RowColumns::DEFAULT,
         reconnect_ms: 2_000,
         unreachable_after: 3,
@@ -168,6 +174,7 @@ pub trait ConnSpec: 'static {
                 footer: o.footer.to_owned(),
                 empty: o.empty.to_owned(),
                 add_label: o.add_label.to_owned(),
+                discover: o.discover.to_vec(),
                 switch_key: "enabled".to_owned(),
             }),
         }
@@ -793,6 +800,10 @@ mod tests {
             key: "servers",
             group: "Signal K servers",
             add_label: "Add Server",
+            discover: &[Discover {
+                service: "_signalk-ws._tcp",
+                set: r#"{"websocket":true}"#,
+            }],
             status_empty: "no servers",
             columns: RowColumns {
                 port: Num {
@@ -928,6 +939,13 @@ mod tests {
         assert_eq!(list.str_or("key", ""), "servers");
         assert_eq!(list.str_or("switch_key", ""), "enabled");
         assert_eq!(list.str_or("add_label", ""), "Add Server");
+
+        // What a shell browses for, and what a row takes from a find beyond
+        // its address.
+        let found = list.get("discover").unwrap().as_array().unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].str_or("service", ""), "_signalk-ws._tcp");
+        assert!(found[0].get("set").unwrap().bool_or("websocket", false));
 
         let cols = list.get("item_fields").unwrap().as_array().unwrap();
         let want = ["name", "host", "port", "websocket", "enabled"];

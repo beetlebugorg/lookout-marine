@@ -1262,6 +1262,25 @@ pub const Host = struct {
                         try out.append(alloc, ':');
                         try writeJsonString(out, alloc, pair[1]);
                     }
+                    // WHAT TO BROWSE THE BOAT'S NETWORK FOR. The host finds
+                    // nothing itself: a shell asks the platform's own Bonjour
+                    // API for these services and offers what answers as a row
+                    // ready to add, with `set` filled in on top of the column
+                    // defaults.
+                    if (l.discover.len > 0) {
+                        try out.appendSlice(alloc, ",\"discover\":[");
+                        for (l.discover, 0..) |d, j| {
+                            if (j > 0) try out.append(alloc, ',');
+                            try out.appendSlice(alloc, "{\"service\":");
+                            try writeJsonString(out, alloc, d.service);
+                            if (d.set.len > 0) {
+                                try out.appendSlice(alloc, ",\"set\":");
+                                try out.appendSlice(alloc, d.set);
+                            }
+                            try out.append(alloc, '}');
+                        }
+                        try out.append(alloc, ']');
+                    }
                     // HOW MANY ROWS THIS LIST HOLDS. The cap is the host's, not
                     // the manifest's, and `normalizeRows` enforces it by
                     // dropping what is over. A shell that knows the number can

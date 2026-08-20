@@ -333,7 +333,17 @@ type listSpec struct {
 	empty     string
 	addLabel  string
 	switchKey string
+	discover  []Discover
 	columns   []specField
+}
+
+// Discover is one DNS-SD service a connection list is browsed for. Set is the
+// columns a discovered row takes beyond its name, address and port, as a JSON
+// object: a Signal K server announces its websocket, so a row added from one
+// arrives with that column on.
+type Discover struct {
+	Service string
+	Set     string
 }
 
 // groupOf reads one settings group: the struct's fields, and the label and tab
@@ -386,6 +396,22 @@ func (g specGroup) appendJSON(b []byte) []byte {
 		if l.addLabel != "" {
 			b = append(b, `,"add_label":`...)
 			b = appendString(b, l.addLabel)
+		}
+		if len(l.discover) > 0 {
+			b = append(b, `,"discover":[`...)
+			for i, d := range l.discover {
+				if i > 0 {
+					b = append(b, ',')
+				}
+				b = append(b, `{"service":`...)
+				b = appendString(b, d.Service)
+				if d.Set != "" {
+					b = append(b, `,"set":`...)
+					b = append(b, d.Set...)
+				}
+				b = append(b, '}')
+			}
+			b = append(b, ']')
 		}
 		b = append(b, `,"switch_key":`...)
 		b = appendString(b, l.switchKey)
