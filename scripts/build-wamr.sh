@@ -10,7 +10,7 @@
 #   iossim         vendor/wamr-dist-iossim/         arm64 simulator
 #   linux-x64      vendor/wamr-dist-linux-x64/
 #   linux-arm64    vendor/wamr-dist-linux-arm64/
-#   windows-x64    vendor/wamr-dist-windows-x64/    mingw ABI — see WINDOWS below
+#   windows-x64    vendor/wamr-dist-windows-x64/    MSVC ABI on Windows — see WINDOWS below
 #   windows-arm64  vendor/wamr-dist-windows-arm64/  MSVC ABI — see WINDOWS below
 #   android-arm64  vendor/wamr-dist-android-arm64/  arm64-v8a, NDK API 24
 #
@@ -37,20 +37,21 @@
 # need zig and cmake and nothing else: WAMR is plain C, so `zig cc -target ...`
 # is the cross compiler and `zig ar` writes the archive. See cross_toolchain.
 #
-# WINDOWS. windows-x64 builds the mingw ABI (x86_64-windows-gnu). The shipping
-# Windows app is MSVC — windows/build-core.ps1 selects aarch64-windows-msvc —
-# and the two ABIs do not meet. `scripts/build-wamr.sh windows-x64 --print-msvc`
-# prints the cmake command that builds the MSVC x64 archive on a Windows
-# machine. A dist directory is per platform and architecture, not per ABI, so
-# the two Windows x64 archives share one and the last one written wins.
+# WINDOWS. Both Windows targets build the MSVC ABI, and they run ON the Windows
+# machine itself, under Git Bash, where `zig cc -target <arch>-windows-msvc`
+# finds the installed MSVC headers and Windows SDK — the same way the core is
+# built there (windows/build-core.ps1) — so the archive meets the core. On that
+# host cmake is the native Windows build, which cannot exec the shell wrappers
+# cross_toolchain writes elsewhere and defaults to the Visual Studio generator;
+# see cross_toolchain and build_one for the .bat/Ninja variant.
 #
-# windows-arm64 is different: it runs ON the ARM64 Windows machine itself,
-# under Git Bash, where `zig cc -target aarch64-windows-msvc` finds the
-# installed MSVC headers and Windows SDK — the same way the core itself is
-# built there — so the archive it writes IS the MSVC ABI and meets the core.
-# On that host cmake is the native Windows build, which cannot exec the shell
-# wrappers cross_toolchain writes elsewhere and defaults to the Visual Studio
-# generator; see cross_toolchain and build_one for the .bat/Ninja variant.
+# Off Windows there is no MSVC ABI to be had: no other host carries those
+# headers. windows-x64 then cross-builds the mingw ABI (x86_64-windows-gnu),
+# which serves a mingw build and does not meet the shipping app, and
+# `scripts/build-wamr.sh windows-x64 --print-msvc` prints the cmake command to
+# run on a Windows machine instead. A dist directory is per platform and
+# architecture, not per ABI, so the two Windows x64 archives share one and the
+# last one written wins. windows-arm64 has no cross form at all.
 #
 # Idempotent per target: returns at once when that archive, its headers and its
 # WAMR_VERSION stamp all match what this script builds now. A dist from an older
@@ -635,10 +636,29 @@ build_one() {
             ;;
         windows-x64)
             dist="$root/vendor/wamr-dist-windows-x64"
-            triple="x86_64-windows-gnu"; wamr_platform=windows; wamr_target=X86_64
+            wamr_platform=windows; wamr_target=X86_64
             platform_flags=(-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=AMD64)
-            check_arch="amd64 COFF"
-            label="$triple (mingw ABI)"
+            if [ -n "$host_windows" ]; then
+                # On the Windows machine itself zig cc resolves
+                # -target x86_64-windows-msvc against the installed MSVC headers
+                # and Windows SDK, exactly as windows/build-core.ps1 builds the
+                # core there, so this archive meets it. The DLL macros are the
+                # windows-arm64 case's, and not cosmetic: see it for why.
+                triple="x86_64-windows-msvc"
+                built="vmlib.lib"
+                # Git Bash's `file` names this machine differently from the
+                # `file` on the hosts that cross-build the mingw archive.
+                check_arch="x86-64 COFF"
+                cc_flags=(-DWASM_API_EXTERN= -DWASM_RUNTIME_API_EXTERN= -DWASM_RUNTIME_STATIC_API)
+                label="$triple (MSVC ABI)"
+            else
+                # Elsewhere zig cross-compiles, and the MSVC ABI is out of
+                # reach: no host carries those headers. The mingw archive
+                # serves a mingw build and does not meet the shipping app.
+                triple="x86_64-windows-gnu"
+                check_arch="amd64 COFF"
+                label="$triple (mingw ABI)"
+            fi
             ;;
         windows-arm64)
             # MSVC ABI, and only on the ARM64 Windows machine itself: zig cc
@@ -769,14 +789,14 @@ build_one() {
         >"$build.log" 2>&1
     then
         cat "$build.log" >&2
-        if [ "$t" = windows-x64 ]; then print_msvc_recipe; fi
+        if [ "$t" = windows-x64 ] && [ -z "$host_windows" ]; then print_msvc_recipe; fi
         exit 1
     fi
 
     echo "wamr: building $t"
     if ! cmake --build "$(cmpath "$build")" --parallel "$(ncpu)" >>"$build.log" 2>&1; then
         tail -40 "$build.log" >&2
-        if [ "$t" = windows-x64 ]; then print_msvc_recipe; fi
+        if [ "$t" = windows-x64 ] && [ -z "$host_windows" ]; then print_msvc_recipe; fi
         exit 1
     fi
 
