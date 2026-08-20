@@ -209,6 +209,16 @@ pub const Host = struct {
         return self.g != null;
     }
 
+    /// The renderer-owned IDXGISwapChain* to compose, for a surface attached
+    /// with NativeKind.d3d12_panel. Null on every other kind and backend. The
+    /// renderer keeps ownership; detachSurface releases it.
+    pub fn swapchainPtr(self: *Host) ?*anyopaque {
+        self.gpu_mu.lock();
+        defer self.gpu_mu.unlock();
+        const g = if (self.g) |*x| x else return null;
+        return g.swapchainPtr();
+    }
+
     /// Resize in LOGICAL POINTS, which is also the camera's unit: density
     /// lives in the projection and is applied once, there. Handing the camera
     /// the pixel size instead would scale the whole world by the density.

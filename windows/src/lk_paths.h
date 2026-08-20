@@ -13,6 +13,12 @@ namespace lkw
     /* Startup chart: $LOOKOUT_OPEN, then the last recent, then the repo test cell. */
     std::vector<std::string> InitialPaths();
 
+    /* Where an import writes the charts it bakes:
+     * %LOCALAPPDATA%\lookout-marine\Charts. LOCAL rather than roaming — a baked
+     * NOAA library is gigabytes, which has no business following a profile onto
+     * another machine. Created on first use. */
+    std::string ChartLibraryDir();
+
     /* Every raster chart under dir (case-insensitive, recursive, sorted):
      * .mbtiles, and .pmtiles for baked BSB/KAP sheets (tile57 bake writes
      * <root>/<stem>/<stem>.pmtiles). Raw .kap is not matched: it must be

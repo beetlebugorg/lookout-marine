@@ -1,11 +1,13 @@
 #pragma once
 #include "MainWindow.g.h"
 
+#include "lk_bake.h"
 #include "lk_controller.h"
 #include "lk_pick.h"
 #include "lk_plugin_model.h"
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <thread>
 #include <functional>
@@ -105,6 +107,11 @@ namespace winrt::LookoutMarine::implementation
         void LoaderTick(int building);
         fire_and_forget PickChartFile();
         fire_and_forget PickChartFolder();
+        // chart import: scan, bake what is raw, then open (MainWindow.Bake.cpp)
+        fire_and_forget PickChartArchive();
+        void ImportCharts(std::string const &path);
+        void TickBake();
+        static std::string BakeOutputDir();
         void SubmitSearch();
         // overlay bubbles, position source, follow lock (MainWindow.Overlay.cpp)
         bool TryPinOverlayAt(double x, double y); // a tap; true = it took it
@@ -224,6 +231,11 @@ namespace winrt::LookoutMarine::implementation
 
         // startup loader state
         bool open_pending{ false };      // an OpenPaths is deferred/running
+        // the running import, its panel timer, and what it was asked to import
+        std::unique_ptr<lkw::BakeJob> bake_job;
+        Microsoft::UI::Xaml::DispatcherTimer bake_timer{ nullptr };
+        std::string bake_source;
+        bool bake_cancel_wired{ false };
         bool loader_waiting{ false };    // loader up, waiting on the first build
         bool loader_saw_building{ false };
         int loader_idle_ticks{ 0 };

@@ -135,11 +135,10 @@ fn nativeKind(kind: c_int) ?lk.NativeKind {
 
 /// The core-owned IDXGISwapChain* for the host's SwapChainPanel
 /// (LOOKOUT_NATIVE_D3D12_PANEL only; NULL on any other kind or backend).
-/// Always NULL while charttable's only backend is Metal — the export stays so
-/// the WinUI3 shell still links against this header.
 export fn lookout_d3d12_swapchain(h: ?*lookout) ?*anyopaque {
-    _ = h;
-    return null;
+    const l = locked(h orelse return null);
+    defer l.apiUnlock();
+    return l.ct.swapchainPtr();
 }
 
 /// Give up the host's surface WITHOUT closing the chart, for a shell whose

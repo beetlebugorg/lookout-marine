@@ -186,6 +186,132 @@ test "collectScamin: no charts is an empty manifest" {
     try std.testing.expectEqual(@as(usize, 0), vals.len);
 }
 
+// Every mariner switch has to reach the built style, because that is the only
+// channel it has: the tiles carry tokens and raw depths, the style decides
+// what they mean. A switch the emitter ignores is a setting the mariner can
+// turn off and still see, which is what "data quality shows when disabled"
+// was. This asks the emitter directly, one bool at a time, and names the ones
+// that make no difference at all.
+test "every mariner toggle changes the built style" {
+    var base: cc.tile57_mariner = undefined;
+    cc.tile57_mariner_defaults(&base);
+
+    const Toggle = struct { name: []const u8, off: *const fn (*cc.tile57_mariner) void, on: *const fn (*cc.tile57_mariner) void };
+    const T = struct {
+        fn dqOff(m: *cc.tile57_mariner) void {
+            m.data_quality = false;
+        }
+        fn dqOn(m: *cc.tile57_mariner) void {
+            m.data_quality = true;
+        }
+        fn icOff(m: *cc.tile57_mariner) void {
+            m.show_inform_callouts = false;
+        }
+        fn icOn(m: *cc.tile57_mariner) void {
+            m.show_inform_callouts = true;
+        }
+        fn mbOff(m: *cc.tile57_mariner) void {
+            m.show_meta_bounds = false;
+        }
+        fn mbOn(m: *cc.tile57_mariner) void {
+            m.show_meta_bounds = true;
+        }
+        fn osOff(m: *cc.tile57_mariner) void {
+            m.show_overscale = false;
+        }
+        fn osOn(m: *cc.tile57_mariner) void {
+            m.show_overscale = true;
+        }
+        fn idOff(m: *cc.tile57_mariner) void {
+            m.show_isolated_dangers_shallow = false;
+        }
+        fn idOn(m: *cc.tile57_mariner) void {
+            m.show_isolated_dangers_shallow = true;
+        }
+        fn tnOff(m: *cc.tile57_mariner) void {
+            m.text_names = false;
+        }
+        fn tnOn(m: *cc.tile57_mariner) void {
+            m.text_names = true;
+        }
+        fn ldOff(m: *cc.tile57_mariner) void {
+            m.show_light_descriptions = false;
+        }
+        fn ldOn(m: *cc.tile57_mariner) void {
+            m.show_light_descriptions = true;
+        }
+        fn toOff(m: *cc.tile57_mariner) void {
+            m.text_other = false;
+        }
+        fn toOn(m: *cc.tile57_mariner) void {
+            m.text_other = true;
+        }
+        fn spOff(m: *cc.tile57_mariner) void {
+            m.simplified_points = false;
+        }
+        fn spOn(m: *cc.tile57_mariner) void {
+            m.simplified_points = true;
+        }
+        fn fsOff(m: *cc.tile57_mariner) void {
+            m.show_full_sector_lines = false;
+        }
+        fn fsOn(m: *cc.tile57_mariner) void {
+            m.show_full_sector_lines = true;
+        }
+        fn doOff(m: *cc.tile57_mariner) void {
+            m.display_other = false;
+        }
+        fn doOn(m: *cc.tile57_mariner) void {
+            m.display_other = true;
+        }
+        fn fwOff(m: *cc.tile57_mariner) void {
+            m.four_shade_water = false;
+        }
+        fn fwOn(m: *cc.tile57_mariner) void {
+            m.four_shade_water = true;
+        }
+    };
+    const toggles = [_]Toggle{
+        .{ .name = "data_quality", .off = T.dqOff, .on = T.dqOn },
+        .{ .name = "show_inform_callouts", .off = T.icOff, .on = T.icOn },
+        .{ .name = "show_meta_bounds", .off = T.mbOff, .on = T.mbOn },
+        .{ .name = "show_overscale", .off = T.osOff, .on = T.osOn },
+        .{ .name = "show_isolated_dangers_shallow", .off = T.idOff, .on = T.idOn },
+        .{ .name = "text_names", .off = T.tnOff, .on = T.tnOn },
+        .{ .name = "show_light_descriptions", .off = T.ldOff, .on = T.ldOn },
+        .{ .name = "text_other", .off = T.toOff, .on = T.toOn },
+        .{ .name = "simplified_points", .off = T.spOff, .on = T.spOn },
+        .{ .name = "show_full_sector_lines", .off = T.fsOff, .on = T.fsOn },
+        .{ .name = "display_other", .off = T.doOff, .on = T.doOn },
+        .{ .name = "four_shade_water", .off = T.fwOff, .on = T.fwOn },
+    };
+
+    var inert: usize = 0;
+    for (toggles) |t| {
+        var m_off = base;
+        t.off(&m_off);
+        var s_off = build(.{ .mariner = m_off }) catch |e| {
+            std.debug.print("  {s}: build failed {t}\n", .{ t.name, e });
+            continue;
+        };
+        defer s_off.deinit();
+        var m_on = base;
+        t.on(&m_on);
+        var s_on = build(.{ .mariner = m_on }) catch |e| {
+            std.debug.print("  {s}: build failed {t}\n", .{ t.name, e });
+            continue;
+        };
+        defer s_on.deinit();
+        const same = std.mem.eql(u8, s_off.json, s_on.json);
+        if (same) inert += 1;
+        std.debug.print("  {s:<32} off={d:>7} on={d:>7} bytes  {s}\n", .{
+            t.name, s_off.json.len, s_on.json.len,
+            if (same) "NO EFFECT ON THE STYLE" else "ok",
+        });
+    }
+    std.debug.print("mariner toggles with no effect on the built style: {d}/{d}\n", .{ inert, toggles.len });
+}
+
 test "the template names the source the host binds" {
     // The two must agree, or every tile request goes to a source charttable
     // has never heard of and the chart stays empty.

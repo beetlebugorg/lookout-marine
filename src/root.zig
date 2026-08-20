@@ -64,16 +64,23 @@ pub const OverlayHit = ov.Store.Hit;
 /// forced permissive so EVERY feature reaches the surface tagged, then gated
 /// per-frame in the shader. Geometry-affecting fields (contours,
 /// units, dates, groups…) pass through unchanged.
+/// The mariner the STYLE is built from: the mariner's own settings, with only
+/// the fields the style build owns rather than the mariner.
+///
+/// This used to force display_base/standard/other, the three text switches and
+/// soundings ON. That was bring-up scaffolding — draw everything while the
+/// renderer was being stood up — and it outlived its purpose: every one of
+/// those is a switch in the settings pane, and forcing them here made the pane
+/// lie. Turning "Other" off still drew the OTHER category, which is where the
+/// data-quality overlay, the info callouts and the meta boundaries live, so
+/// they stayed on screen after being switched off.
+///
+/// What the mariner wants ON at chart open is the OPEN path's business (see the
+/// paper-chart preset in finishOpen, which sets these on `self.mariner`), not
+/// this function's. Setting it there leaves the switch honest afterwards.
 fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_mariner {
     var m = base;
     m.scheme = sch;
-    m.display_base = true;
-    m.display_standard = true;
-    m.display_other = true;
-    m.text_names = true;
-    m.show_light_descriptions = true;
-    m.text_other = true;
-    m.soundings = 1;
     m.size_scale = 1.0; // runtime size lives in the shader uniform
     return m;
 }
@@ -3119,4 +3126,33 @@ test "the marker magenta is dim at night and differs by scheme" {
     try t.expect(lum < 0.35);
     for (day) |ch| try t.expect(ch >= 0 and ch <= 1);
     for (night) |ch| try t.expect(ch >= 0 and ch <= 1);
+}
+
+// The settings pane is only honest if the style is built from what the mariner
+// actually chose. Forcing a switch on here is invisible in the UI: the toggle
+// reads off, the chart keeps drawing it. That is what put the data-quality
+// overlay on screen after it was disabled — it lives in the OTHER display
+// category, and display_other was forced on for every style build.
+test "the style mariner keeps the mariner's own switches" {
+    const t = std.testing;
+    var base: cc.tile57_mariner = undefined;
+    cc.tile57_mariner_defaults(&base);
+    base.display_base = true;
+    base.display_standard = false;
+    base.display_other = false;
+    base.text_names = false;
+    base.show_light_descriptions = false;
+    base.text_other = false;
+    base.soundings = 0;
+
+    const m = buildMarinerFrom(base, base.scheme);
+    try t.expect(!m.display_other);
+    try t.expect(!m.display_standard);
+    try t.expect(!m.text_names);
+    try t.expect(!m.show_light_descriptions);
+    try t.expect(!m.text_other);
+    try t.expectEqual(@as(u8, 0), m.soundings);
+    // And the two the style build does own are still stamped.
+    try t.expectEqual(base.scheme, m.scheme);
+    try t.expectEqual(@as(f64, 1.0), m.size_scale);
 }

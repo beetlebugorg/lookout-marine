@@ -136,6 +136,7 @@
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
     <ClCompile Include="ui\MainWindow.Open.cpp" />
+    <ClCompile Include="ui\MainWindow.Bake.cpp" />
     <ClCompile Include="ui\MainWindow.Input.cpp" />
     <ClCompile Include="ui\MainWindow.Hud.cpp" />
     <ClCompile Include="ui\MainWindow.Loader.cpp" />
@@ -151,6 +152,7 @@
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
     <ClCompile Include="ui\MainWindow.Plugins.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
+    <ClCompile Include="src\lk_bake.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_pick.cpp" />
     <ClCompile Include="src\lk_backdrop.cpp" />

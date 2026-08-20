@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "lk_paths.h"
 
+#include <shlobj.h> // SHGetKnownFolderPath / FOLDERID_LocalAppData
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -9,6 +11,21 @@
 
 namespace lkw
 {
+    std::string ChartLibraryDir()
+    {
+        wchar_t *base = nullptr;
+        std::filesystem::path root;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &base)) && base != nullptr)
+            root = std::filesystem::path(base) / L"lookout-marine" / L"Charts";
+        if (base != nullptr)
+            CoTaskMemFree(base);
+        if (root.empty())
+            root = std::filesystem::path(".") / "Charts";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        return root.string();
+    }
+
     std::vector<std::string> CollectCells(std::string const &dir)
     {
         std::vector<std::string> out;

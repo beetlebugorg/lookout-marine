@@ -21,6 +21,7 @@ const USAGE =
     \\  --width W --height H   render size in pixels (default 1600x1200)
     \\  --png OUT         day PNG output path (default lookout.png)
     \\  --lon L --lat L --zoom Z   explicit view center + zoom (else fit the cell)
+    \\  --mariner K=V[,K=V]   set mariner fields by name (e.g. data_quality=1)
     \\  --raster FILE     a picture chart (.mbtiles) under the chart; repeatable
     \\  --scan PATH       report what a folder or .zip holds, then exit
     \\  --bake-rasters IN OUT   prepare a folder of BSB/KAP sheets, then exit
@@ -185,6 +186,9 @@ pub fn main(init: std.process.Init) !void {
     // --safety N: set the mariner's safety contour before the first build —
     // the depth-band verification hook (bands must move when it does).
     var safety: ?f64 = null;
+    // --mariner k=v[,k=v]: set any mariner field by name before the first
+    // build — the switch-verification hook (a toggle must change the render).
+    var mariner_kv: ?[]const u8 = null;
     // --raster PATH: a picture chart the mariner supplied, drawn under the
     // vector chart. Repeatable — several files group into sets by provider.
     var rasters: std.ArrayList([:0]const u8) = .empty;
@@ -216,6 +220,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--safety") and i + 1 < args.len) {
             i += 1;
             safety = std.fmt.parseFloat(f64, args[i]) catch null;
+        } else if (std.mem.eql(u8, a, "--mariner") and i + 1 < args.len) {
+            i += 1;
+            mariner_kv = args[i];
         } else if (std.mem.eql(u8, a, "--raster") and i + 1 < args.len) {
             i += 1;
             try rasters.append(alloc, args[i][0.. :0]);
@@ -264,6 +271,29 @@ pub fn main(init: std.process.Init) !void {
         l.setMariner(m);
         std.debug.print("safety contour = {d}\n", .{sc});
     }
+    if (mariner_kv) |spec| {
+        var m = l.getMariner();
+        var it = std.mem.splitScalar(u8, spec, ',');
+        while (it.next()) |pair| {
+            const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+            const key = pair[0..eq];
+            const val = pair[eq + 1 ..];
+            var hit = false;
+            inline for (@typeInfo(@TypeOf(m)).@"struct".fields) |f| {
+                if (std.mem.eql(u8, f.name, key)) {
+                    switch (@typeInfo(f.type)) {
+                        .bool => @field(m, f.name) = val.len > 0 and (val[0] == '1' or val[0] == 't'),
+                        .int => @field(m, f.name) = std.fmt.parseInt(f.type, val, 10) catch @field(m, f.name),
+                        .float => @field(m, f.name) = std.fmt.parseFloat(f.type, val) catch @field(m, f.name),
+                        else => {},
+                    }
+                    hit = true;
+                }
+            }
+            std.debug.print("mariner: {s} = {s}{s}\n", .{ key, val, if (hit) "" else " (UNKNOWN FIELD)" });
+        }
+        l.setMariner(m);
+    }
 
     // --zoomscan: at the FIXED center, build every half-zoom from 4 to 14 and
     // report whether the CENTER of the render is chart or NODATA. The center
@@ -298,6 +328,57 @@ pub fn main(init: std.process.Init) !void {
                     }
                 }
                 std.debug.print("zoomscan z={d:.1} {s}\n", .{ zz, if (nodata_ct >= 13) "NODATA" else "chart" });
+            }
+            return;
+        }
+    }
+
+    // --zoomout: the "rebuilding charts" spin repro. Settle at the requested
+    // view, fire a burst of wheel notches outward (the shell's wheel step is
+    // notches * 0.25), then pump the frame loop the way a shell does —
+    // tickAnim + update — and say whether the map ever settles. Run with
+    // CT_MAP_TRACE=1 to see which flag re-raises the work each update.
+    for (args) |a2| {
+        if (std.mem.eql(u8, a2, "--zoomout")) {
+            try l.build();
+            std.debug.print("zoomout: settled at z={d:.2}, firing 16 notches out\n", .{v.zoom});
+            const cx = @as(f32, @floatFromInt(l.ct.width())) * 0.5;
+            const cy = @as(f32, @floatFromInt(l.ct.height())) * 0.5;
+            const dt = 1.0 / 30.0; // the VM's WARP frame cadence
+            var fired: usize = 0;
+            var it: usize = 0;
+            var settled_at: ?usize = null;
+            while (it < 900) : (it += 1) { // 30 s of frames
+                // A fast wheel spin ACROSS frames, the way a shell delivers
+                // it: two notches every third frame while builds are already
+                // in flight, not one burst before the first tick.
+                if (fired < 16 and it % 3 == 0) {
+                    l.zoomAtLogical(-0.5, cx, cy);
+                    fired += 2;
+                }
+                l.tickAnim(dt);
+                l.ct.update();
+                @import("lock.zig").sleepMs(33); // real frame pacing: builds run in wall time
+                const idle_now = l.ct.idle() and !l.animating();
+                if (idle_now and settled_at == null) settled_at = it;
+                if (!idle_now) settled_at = null;
+                // Settled and STAYED settled for a second: done.
+                if (settled_at != null and it - settled_at.? > 30) break;
+                if (it % 60 == 0) std.debug.print(
+                    "zoomout: t={d:.1}s idle={} anim={} building={} rebuilds={d}\n",
+                    .{ @as(f64, @floatFromInt(it)) * dt, l.ct.idle(), l.animating(), l.ct.m.building, l.ct.m.rebuilds },
+                );
+            }
+            if (settled_at) |s| {
+                std.debug.print("zoomout: SETTLED after {d:.1}s, {d} rebuilds total\n", .{ @as(f64, @floatFromInt(s)) * dt, l.ct.m.rebuilds });
+            } else {
+                const m = &l.ct.m;
+                std.debug.print("zoomout: NEVER SETTLED after 30s — the spin. {d} rebuilds\n", .{m.rebuilds});
+                std.debug.print(
+                    "zoomout:   building={} dirty={} partial={} animating={} needsRebuild={} pendingWanted={d} tilesBusy={}\n",
+                    .{ m.building, m.dirty, m.partial, m.cam.animating(), m.needsRebuild(), m.pendingWanted(), l.ct.tiles.busy() },
+                );
+                std.debug.print("zoomout:   camZoom={d:.3} buildZoom={d:.3} covZoom={d:.3}\n", .{ m.cam.zoom, m.buildZoom(), m.cov_zoom });
             }
             return;
         }

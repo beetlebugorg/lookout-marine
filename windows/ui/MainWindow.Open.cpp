@@ -28,6 +28,20 @@ namespace winrt::LookoutMarine::implementation
             return; // pre-layout; retried from the Rendering tick
         open_attempted = true;
 
+        // LOOKOUT_IMPORT=<folder|.zip> drives the import at startup, the way
+        // LOOKOUT_OPEN drives the open. It is the same call the Open Charts
+        // picker makes, so a scripted run exercises the real path — which is
+        // the only way to test an import on a machine where nobody can click.
+        {
+            char env[1024];
+            DWORD n = GetEnvironmentVariableA("LOOKOUT_IMPORT", env, sizeof env);
+            if (n > 0 && n < sizeof env)
+            {
+                ImportCharts(env);
+                return;
+            }
+        }
+
         auto paths = lkw::InitialPaths();
         if (paths.empty())
         {
@@ -189,11 +203,17 @@ namespace winrt::LookoutMarine::implementation
         Windows::Storage::Pickers::FileOpenPicker picker;
         picker.as<::IInitializeWithWindow>()->Initialize(top_hwnd);
         picker.FileTypeFilter().Append(L".pmtiles");
+        // An exchange set as an agency publishes it: one .zip, baked on the way
+        // in without ever being unpacked.
+        picker.FileTypeFilter().Append(L".zip");
+        picker.FileTypeFilter().Append(L".000");
         auto file = co_await picker.PickSingleFileAsync();
         if (file != nullptr)
         {
             std::string path = winrt::to_string(file.Path());
-            OpenPaths({ path }, path);
+            // A .pmtiles is already a chart; a .zip or a raw cell has to bake.
+            // ImportCharts tells them apart by scanning, so both routes are one.
+            ImportCharts(path);
         }
     }
 
@@ -206,8 +226,11 @@ namespace winrt::LookoutMarine::implementation
         auto folder = co_await picker.PickSingleFolderAsync();
         if (folder != nullptr)
         {
-            std::string path = winrt::to_string(folder.Path());
-            OpenPaths(lkw::CollectCells(path), path);
+            // Through the import, not straight to open: a folder the mariner
+            // picks may hold raw S-57 cells, which have to bake before anything
+            // can draw them. ImportCharts scans first and skips the bake when
+            // the folder already holds charts.
+            ImportCharts(winrt::to_string(folder.Path()));
         }
     }
 }

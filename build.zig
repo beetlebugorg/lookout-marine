@@ -110,7 +110,12 @@ fn checkTestCoverage(b: *std.Build, step: *std.Build.Step, roots: []const []cons
         defer walker.deinit();
         while (walker.next(io) catch null) |entry| {
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+            // The walker yields entry.path with the PLATFORM separator, and
+            // both declared lists are written with '/'. Left as-is every file
+            // under a subdirectory compares unequal on Windows, so every one
+            // of them is reported as uncollected and the test step never runs.
             const rel = b.fmt("{s}/{s}", .{ tree, entry.path });
+            std.mem.replaceScalar(u8, rel, '\\', '/');
             const text = std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(rel), b.allocator, .limited(4 * 1024 * 1024)) catch continue;
             if (!carriesTests(text)) continue;
             var declared = false;

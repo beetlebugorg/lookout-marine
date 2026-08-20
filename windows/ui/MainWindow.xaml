@@ -393,6 +393,29 @@
             </Border>
         </Grid>
 
+        <!-- chart import: raw S-57 cells being baked into charts the app can
+             draw. Same surface as the startup loader, but the count is known,
+             so the bar is determinate and the mariner can stop. Driven on a
+             timer from the job's snapshot in MainWindow.Bake.cpp. -->
+        <Grid x:Name="BakePanel" Background="#FF93AEBB" Visibility="Collapsed">
+            <Grid Background="#38000000" />
+            <Border CornerRadius="12" Background="#F2F8F8F8" BorderBrush="#33000000"
+                    BorderThickness="1" Padding="28,22"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="12" HorizontalAlignment="Center" MinWidth="320">
+                    <TextBlock x:Name="BakeTitle" FontSize="16" FontWeight="SemiBold"
+                               Foreground="#1A1A1A" HorizontalAlignment="Center" Text="" />
+                    <ProgressBar x:Name="BakeBar" Width="300" Minimum="0" Maximum="1"
+                                 IsIndeterminate="True" />
+                    <TextBlock x:Name="BakeCount" FontSize="13" Foreground="#1A1A1A"
+                               HorizontalAlignment="Center" Text="" />
+                    <TextBlock x:Name="BakeEta" FontSize="12" Foreground="#6B6B6B"
+                               HorizontalAlignment="Center" Text="" />
+                    <Button x:Name="BakeCancel" Content="Cancel" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
         <!-- a bubble pinned to an overlay object (an AIS target): placed and
              refreshed per tick in MainWindow.Overlay.cpp, closed when the
              object goes. The hover tip is its one-shot cousin under the
