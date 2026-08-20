@@ -2,7 +2,7 @@
 //!
 //! WHY THIS EXISTS. lookout's own chart comes off disk — a .pmtiles archive
 //! charttable reads itself, or a set composed through ct/tiles.zig. A style
-//! the HOST supplied (concerns C13) is the publisher's instead, and it names
+//! the HOST supplied is the publisher's instead, and it names
 //! its sources by URL, over the network. charttable does not have an HTTP
 //! client, and the proxy, cookie, certificate-pinning and API-key rules such a
 //! fetch needs are already the shell's — it applied them to get the style in

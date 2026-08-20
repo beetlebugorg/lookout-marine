@@ -19,8 +19,7 @@
 //! ZOOM CONVENTIONS. lookout.h counts zoom against a 256 px world tile;
 //! charttable follows the style spec and counts against 512. The whole
 //! difference is one level, and it is converted HERE, at the one boundary, so
-//! nothing above this file and nothing below it has to think about it. See
-//! specs/charttable/concerns.md C1.
+//! nothing above this file and nothing below it has to think about it.
 //!
 //! THREADING. Everything here runs under root.zig's api lock. The tile
 //! workers in ct/tiles.zig are the exception, and they touch the compositor
@@ -65,6 +64,13 @@ pub const Options = struct {
 
 pub const Error = error{ SurfaceFailed, StyleFailed, SourceFailed, OutOfMemory };
 
+/// One raster underlay set: the style source name and the provider that
+/// answers its tiles (ct/raster.zig).
+pub const RasterBinding = struct {
+    name: [:0]const u8,
+    provider: *ct.provider.Provider,
+};
+
 pub const Host = struct {
     alloc: std.mem.Allocator,
     m: Map,
@@ -78,6 +84,16 @@ pub const Host = struct {
     provided: cprovided.Provided,
     /// The single-chart path: charttable reads the archive itself.
     archive: ?*Archive = null,
+
+    /// The raster underlay's providers, re-bound by name after every setStyle
+    /// (a new style is a new parse, and bindings do not survive it). The
+    /// caller owns the slice and the providers, which outlive the map
+    /// (ct/raster.zig's lifetime rule).
+    raster_bindings: []const RasterBinding = &.{},
+    /// Called once per update on the map-driving thread: the raster
+    /// underlay's drain (ct/raster.zig pump), owned by the caller.
+    raster_pump: ?*const fn (ctx: *anyopaque) void = null,
+    raster_pump_ctx: ?*anyopaque = null,
 
     /// The last frame's three spans, µs — see `renderPrepare` / `renderPresent`.
     /// Always kept.
@@ -264,6 +280,14 @@ pub const Host = struct {
         self.style.deinit();
         self.style = built;
         self.reportDiagnostics();
+        // The raster underlay's sources, re-bound on every style: the parse
+        // read each source's declaration (zoom band, tileSize), and a source
+        // left unbound asks tiles of nobody, forever.
+        for (self.raster_bindings) |b| {
+            _ = self.m.bindProvider(b.name, b.provider) catch {
+                std.debug.print("raster: bind '{s}' failed\n", .{b.name});
+            };
+        }
         // A new style re-lays-out everything, so nothing the GPU holds is
         // current.
         self.uploaded = .{};
@@ -372,8 +396,19 @@ pub const Host = struct {
     pub fn setChartVisible(self: *Host, on: bool) void {
         const st = self.m.style orelse return;
         for (st.layers) |layer| {
+            // The raster underlay is not the chart: "hide ENC over raster"
+            // hides the survey and leaves the picture.
+            if (std.mem.endsWith(u8, layer.id, "-underlay")) continue;
             self.m.setLayerVisibility(layer.id, on) catch {};
         }
+    }
+
+    /// Show or hide one raster underlay set without a style rebuild — a
+    /// visibility diff, exactly like setChartVisible.
+    pub fn setRasterLayerVisible(self: *Host, source_name: []const u8, on: bool) void {
+        var buf: [64]u8 = undefined;
+        const id = std.fmt.bufPrint(&buf, "{s}-underlay", .{source_name}) catch return;
+        self.m.setLayerVisibility(id, on) catch {};
     }
 
     /// The zoom band the camera may move in, in LOOKOUT zoom.
@@ -453,7 +488,7 @@ pub const Host = struct {
     /// JOINS the build on this thread. Serving a burst image-by-image
     /// therefore pulled the whole "off-thread" build back into the frame,
     /// once per symbol: measured 15-30 ms frames at every new harbor of the
-    /// tour, none of it in the map's own tick (concerns C18).
+    /// tour, none of it in the map's own tick.
     fn serveMissingImages(self: *Host) void {
         const b = self.m.scene() orelse return;
         if (b.missing_images.len == 0) return;
@@ -634,6 +669,7 @@ pub const Host = struct {
         const t0 = clock.ticksUs();
         self.tiles.pump();
         self.provided.pump();
+        if (self.raster_pump) |f| f(self.raster_pump_ctx.?);
         const t1 = clock.ticksUs();
         self.serveMissingImages();
         self.prof_pump_us = t1 - t0;

@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const cthost = @import("ct/host.zig"); // the renderer, behind one struct
 const cstyle = @import("ct/style.zig");
+const craster = @import("ct/raster.zig"); // the raster underlay's data half
 const ctprovided = @import("ct/provided.zig");
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
@@ -734,6 +735,11 @@ pub const Lookout = struct {
     overlay: ov.Store = undefined,
     /// The mariner's markers, read at open and written on every change.
     markers: marks.Store = undefined,
+    /// The raster underlay: the mariner's picture charts, served to charttable
+    /// as raster sources (ct/raster.zig).
+    rasters: craster.Rasters = undefined,
+    /// Host.raster_bindings points into this; refilled by ensureStyle.
+    raster_bind_buf: [craster.MAX_SETS]cthost.RasterBinding = undefined,
     /// The palette the marker geometry was posted for. The marks carry their
     /// colour as RGBA rather than a plugin palette token, so a scheme change
     /// has to re-post them; comparing here is what notices.
@@ -803,6 +809,7 @@ pub const Lookout = struct {
                 defer alloc.free(p);
                 break :blk marks.Store.open(alloc, p);
             } else marks.Store.init(alloc),
+            .rasters = craster.Rasters.init(alloc),
         };
         // After the struct is in place: the tile workers take a pointer to the
         // engine lock that lives in it, so the Host cannot be built before its
@@ -819,10 +826,14 @@ pub const Lookout = struct {
         }) catch |e| {
             self.overlay.deinit();
             self.markers.deinit();
+            self.rasters.deinit();
             alloc.destroy(self);
             return e;
         };
         self.cam = self.ct.camera();
+        // The underlay's drain rides the map's own update tick.
+        self.ct.raster_pump = rasterPump;
+        self.ct.raster_pump_ctx = self;
         if (dbg) {
             std.debug.print("  charttable init (Metal device+shaders+pipelines) {d} ms\n", .{clock.ticksMs() - t});
             t = clock.ticksMs();
@@ -909,10 +920,8 @@ pub const Lookout = struct {
     // already (em_px, pad, per-glyph UVs and EM-unit metrics), so nothing is
     // converted here and no fontnik PBFs exist anywhere in this stack.
     //
-    // ONE FACE. lookout baked three (regular, bold, italic) and the backend
-    // held a texture for each. charttable's assets carry one atlas, so bold
-    // and italic labels draw in the regular face until it grows them. See
-    // specs/charttable/concerns.md C4.
+    // ONE FACE. charttable's assets carry one atlas, so bold and italic
+    // labels draw in the regular face until it grows them.
     fn loadGlyphSheet(self: *Lookout) void {
         if (self.readCache("glyph.png")) |png_b| {
             defer self.alloc.free(png_b);
@@ -1346,7 +1355,7 @@ pub const Lookout = struct {
         // Hand the store the glyph face, so canvas text lays out against the
         // same atlas the labels draw with. Idempotent: only a change marks the
         // store dirty. One face for both slots — the renderer holds a single
-        // atlas, so bold canvas text draws in the regular face (concerns C4).
+        // atlas, so bold canvas text draws in the regular face.
         if (self.ct.glyph_atlas != null) {
             self.glyph_face = .{ .atlas = &self.ct.glyph_atlas.?, .em_px = self.glyph_em_px };
             const src = ov.Font{ .ctx = @ptrCast(&self.glyph_face), .lookup = overlayGlyphLookup };
@@ -1837,6 +1846,9 @@ pub const Lookout = struct {
         // BEFORE the composition and the charts: the renderer's tile workers
         // read the compositor, and its deinit is what stops them.
         self.ct.deinit();
+        // AFTER the renderer: its cache workers hold pointers into the
+        // underlay's providers until the map above has stopped.
+        self.rasters.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
         if (self.alt_style) |s| self.alloc.free(s);
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
@@ -1899,9 +1911,14 @@ pub const Lookout = struct {
             // No survey to frame from, so the pictures decide where to look.
             // Without this a raster-only library opens wherever the camera
             // happened to start, which is nowhere near the charts.
-            // No survey and no pictures to frame from (the underlay is not
-            // wired to the renderer on this branch — concerns C5), so the
-            // opening view is the whole world.
+            if (self.rasters.coverage()) |b| {
+                return .{
+                    .lon = (b[0] + b[2]) * 0.5,
+                    .lat = (b[1] + b[3]) * 0.5,
+                    .zoom = 8,
+                };
+            }
+            // No survey and no pictures: the opening view is the whole world.
             return .{ .lon = 0, .lat = 0, .zoom = 2 };
         } else {
             // Pick the smallest-area bounded cell as the opening view. Falls back
@@ -2252,11 +2269,20 @@ pub const Lookout = struct {
         // it. The mariner's own multiplier goes to the renderer's uniform
         // below, so changing it never rebuilds the style.
         m.device_scale = 1.0; // the camera is in LOGICAL px; density lives in the projection
+        // The raster underlay's sets ride the style, and their providers are
+        // re-bound after every parse (Host.raster_bindings).
+        var rbuf: [craster.MAX_SETS]craster.StyleInfo = undefined;
+        const rsets = self.rasters.styleInfos(&rbuf);
+        for (rsets, 0..) |s, i| {
+            self.raster_bind_buf[i] = .{ .name = s.source_name, .provider = self.rasters.providerAt(i) };
+        }
+        self.ct.raster_bindings = self.raster_bind_buf[0..rsets.len];
         self.ct.setStyle(.{
             .mariner = m,
             .tile_encoding = self.tileEncoding(),
             .scamin = self.scamin,
             .scamin_lat = self.scaminLat(),
+            .rasters = rsets,
         }) catch |e| {
             std.debug.print("style: {s}\n", .{@errorName(e)});
             return;
@@ -2318,7 +2344,7 @@ pub const Lookout = struct {
         // $LOOKOUT_TIMING=1: say how long that took and, crucially, WHICH WAY
         // it ended. Hitting the ceiling is a stall, not slow work, and the two
         // are indistinguishable from the outside — both just show the mariner
-        // a spinner (concerns C17).
+        // a spinner.
         if (std.c.getenv("LOOKOUT_TIMING") != null) {
             std.debug.print("timing: build {d} ms, {d} spins{s}\n", .{
                 clock.ticksMs() - t0,
@@ -2414,7 +2440,7 @@ pub const Lookout = struct {
         // The present blocks on the swapchain's drawable — 0.2 ms typical, and
         // ~400 ms was measured on a wedged GPU — and every gesture and per-tick
         // query the host makes takes this lock, so holding it across the block
-        // froze the input thread for exactly that long (concerns C18). The
+        // froze the input thread for exactly that long. The
         // prepared half is all the map work; the present touches only the
         // surface, under the host's gpu lock.
         var ok = false;
@@ -2617,45 +2643,54 @@ pub const Lookout = struct {
 
     // ---- the raster underlay --------------------------------------------------
     //
-    // NOT WIRED TO THE RENDERER YET. The mariner's picture charts (satellite
-    // imagery, baked RNCs) were drawn by src/raster.zig, which owned its own
-    // tile cache, worker pool and textures and put quads in front of the
-    // chart's area fills using the depth buffer. None of that survives the
-    // move: charttable owns the GPU, and it already has raster sources and
-    // raster layers of its own.
-    //
-    // The port is designed and small, and it is written up as C5 in
-    // specs/charttable/concerns.md: one host-provided raster source per set,
-    // answered from tile57_raster_chart_tile off-thread exactly as ct/tiles.zig
-    // answers vector tiles, plus one raster layer inserted into the style above
-    // the area fills and below every line, symbol and label — which is the same
-    // ordering the depth trick expressed, and reads identically per pixel.
-    //
-    // Until then these answer honestly: there are no sets, nothing is drawn,
-    // and a shell's picture-chart UI shows an empty list rather than lying
-    // about imagery it cannot display.
+    // The mariner's picture charts, held by ct/raster.zig as SETS and served
+    // to charttable as raster sources: one source and one raster layer per
+    // set, spliced into the style above the area fills and below every line,
+    // symbol and label (ct/style.zig). Set state changes (shown, enabled)
+    // reach the screen as layer-visibility diffs; adding a chart is a style
+    // rebuild, because the style has to grow a source.
 
-    /// Open a raster chart the mariner supplied and add it to its set.
+    /// The renderer's per-update hook (Host.raster_pump): drain charttable's
+    /// raster asks onto the serving pool, on the map-driving thread.
+    fn rasterPump(ctx: *anyopaque) void {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.rasters.pump();
+    }
+
+    /// Push every set's current visibility to the renderer — a diff, not a
+    /// restyle. The style rebuild carries the same state, so the two agree.
+    fn syncRasterVisibility(self: *Lookout) void {
+        var buf: [craster.MAX_SETS]craster.StyleInfo = undefined;
+        for (self.rasters.styleInfos(&buf)) |s| {
+            self.ct.setRasterLayerVisible(s.source_name, s.visible);
+        }
+        self.view_dirty = true;
+    }
+
+    /// Open a raster chart the mariner supplied and add it to its set. The
+    /// style must grow a source and a layer for a NEW set, so the style is
+    /// rebuilt rather than diffed.
     pub fn addRaster(self: *Lookout, path: [:0]const u8) bool {
-        _ = self;
-        _ = path;
-        return false;
+        if (!self.rasters.add(path)) return false;
+        self.style_dirty = true;
+        self.view_dirty = true;
+        return true;
     }
 
     pub fn cycleRaster(self: *Lookout) void {
-        _ = self;
+        self.rasters.cycle(self.cam.*);
+        self.syncRasterVisibility();
     }
 
     /// The name of the set drawn over this view, or "" for no picture.
     pub fn rasterName(self: *Lookout) [:0]const u8 {
-        _ = self;
-        return "";
+        return self.rasters.activeNameFor(self.cam.*);
     }
 
-    /// Is the chart actually drawing WITHOUT its opaque fills right now?
+    /// Is a picture drawn beneath THIS view? Keys the host's "the chart is
+    /// reduced" reporting, so it engages only where imagery actually covers.
     pub fn rasterOverChart(self: *Lookout) bool {
-        _ = self;
-        return false;
+        return self.rasters.shownIndex(self.cam.*) != null;
     }
 
     /// Show or hide the vector chart. The picture beneath it stays.
@@ -2678,60 +2713,51 @@ pub const Lookout = struct {
 
     /// The set that covers this view, drawn or not.
     pub fn rasterAvailableName(self: *Lookout) [:0]const u8 {
-        _ = self;
-        return "";
+        return self.rasters.availableName(self.cam.*);
     }
 
+    /// Turn one chart on or off by path, without removing it. A change moves
+    /// which picture a tile answers with, so the style is rebuilt and the
+    /// source refetches.
     pub fn setRasterEnabled(self: *Lookout, path: []const u8, on: bool) bool {
-        _ = self;
-        _ = path;
-        _ = on;
-        return false;
+        if (!self.rasters.setEnabled(path, on)) return false;
+        self.style_dirty = true;
+        self.view_dirty = true;
+        return true;
     }
 
     pub fn rasterEnabled(self: *Lookout, path: []const u8) bool {
-        _ = self;
-        _ = path;
-        return false;
+        return self.rasters.isEnabled(path);
     }
 
     pub fn rasterSetName(self: *Lookout, i: usize) [:0]const u8 {
-        _ = self;
-        _ = i;
-        return "";
+        return self.rasters.setNameAt(i);
     }
 
     pub fn rasterSetInView(self: *Lookout, i: usize) bool {
-        _ = self;
-        _ = i;
-        return false;
+        return self.rasters.setInView(i, self.cam.*);
     }
 
     pub fn rasterActiveIndex(self: *Lookout) ?usize {
-        _ = self;
-        return null;
+        return self.rasters.shownIndex(self.cam.*);
     }
 
     pub fn rasterSelect(self: *Lookout, i: ?usize) void {
-        _ = self;
-        _ = i;
+        self.rasters.selectSet(self.cam.*, i);
+        self.syncRasterVisibility();
     }
 
     pub fn rasterShown(self: *Lookout, i: usize) bool {
-        _ = self;
-        _ = i;
-        return false;
+        return self.rasters.isShown(i);
     }
 
     pub fn rasterSetShown(self: *Lookout, i: usize, on: bool) void {
-        _ = self;
-        _ = i;
-        _ = on;
+        self.rasters.setShown(i, on);
+        self.syncRasterVisibility();
     }
 
     pub fn rasterSetCount(self: *Lookout) usize {
-        _ = self;
-        return 0;
+        return self.rasters.setCount();
     }
 
     pub fn cycleScheme(self: *Lookout) void {

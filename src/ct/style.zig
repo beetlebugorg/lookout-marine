@@ -25,7 +25,7 @@
 //! display scale for free, with no filter rewriting at gesture time. The
 //! alternative (`scamin_filter_gate`) is exact too but pays a setFilter at
 //! every denominator crossing, and in charttable a filter change is a
-//! relayout of every resident tile. See specs/charttable/concerns.md C2.
+//! relayout of every resident tile.
 
 const std = @import("std");
 const cc = @import("../c.zig").c;
@@ -57,7 +57,17 @@ pub const glyphs_url = "lookout://glyphs/{fontstack}/{range}.pbf";
 /// which rides charttable's uniform instead and costs no style rebuild.
 pub const PHYSICAL_SIZE_SCALE: f64 = 1.0;
 
-pub const Error = error{ TemplateFailed, BuildFailed, ColortablesFailed };
+pub const Error = error{ TemplateFailed, BuildFailed, ColortablesFailed, SpliceFailed };
+
+/// One raster underlay set the style must carry: a source and a raster layer,
+/// spliced above the chart's area fills and below its lines (ct/raster.zig).
+pub const RasterSet = struct {
+    source_name: [:0]const u8,
+    minzoom: u8,
+    maxzoom: u8,
+    tile_size: u32,
+    visible: bool,
+};
 
 /// Everything the style depends on. A change to any field means a rebuild.
 pub const Inputs = struct {
@@ -74,15 +84,22 @@ pub const Inputs = struct {
     scamin_lat: f64 = 0,
     /// Band filter, or empty for all bands.
     bands: []const i32 = &.{},
+    /// The raster underlay's sets, in set order.
+    rasters: []const RasterSet = &.{},
 };
 
-/// A built style. `json` is owned by tile57 and freed with `deinit`.
+/// A built style. `json` is owned by tile57 (freed with tile57_free) unless a
+/// raster splice re-allocated it, in which case `alloc` says whose it is.
 pub const Style = struct {
     json: []const u8 = "",
+    alloc: ?std.mem.Allocator = null,
 
     pub fn deinit(self: *Style) void {
-        if (self.json.len != 0) cc.tile57_free(@constCast(self.json.ptr));
+        if (self.json.len != 0) {
+            if (self.alloc) |a| a.free(@constCast(self.json)) else cc.tile57_free(@constCast(self.json.ptr));
+        }
         self.json = "";
+        self.alloc = null;
     }
 };
 
@@ -145,16 +162,108 @@ pub fn build(inputs: Inputs) Error!Style {
         &err,
     ) != cc.TILE57_OK) return Error.BuildFailed;
 
+    var style: Style = .{ .json = out[0..out_len] };
+
+    // The raster underlay rides the same style: one source and one raster
+    // layer per set, above the area fills, below every line, symbol and
+    // label — the picture replaces the water tint, never the survey.
+    if (inputs.rasters.len != 0) {
+        const spliced = spliceRasters(std.heap.c_allocator, style.json, inputs.rasters) catch
+            return Error.SpliceFailed;
+        style.deinit();
+        style = .{ .json = spliced, .alloc = std.heap.c_allocator };
+    }
+
     // LOOKOUT_STYLE_DUMP=<path>: write the built style out. The sizes in it
     // (icon-size, line-width, text-size) are the only way to see what unit the
     // engine is speaking, and guessing at that is what made the symbols wrong
     // twice.
     if (std.c.getenv("LOOKOUT_STYLE_DUMP")) |p| {
         const io = std.Io.Threaded.global_single_threaded.io();
-        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = std.mem.span(p), .data = out[0..out_len] }) catch {};
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = std.mem.span(p), .data = style.json }) catch {};
     }
 
-    return .{ .json = out[0..out_len] };
+    return style;
+}
+
+/// Splice the raster underlay's sources and layers into a built style.
+///
+/// The JSON is our own generator's output, so this is a scanner, not a
+/// parser: sources go right after `"sources":{`, and the layers go in front
+/// of the first layer whose type is neither `background` nor `fill` — above
+/// every area fill, below every line, symbol and label.
+fn spliceRasters(alloc: std.mem.Allocator, json: []const u8, sets: []const RasterSet) ![]u8 {
+    var srcs: std.ArrayList(u8) = .empty;
+    defer srcs.deinit(alloc);
+    var lyrs: std.ArrayList(u8) = .empty;
+    defer lyrs.deinit(alloc);
+    for (sets) |s| {
+        try srcs.print(alloc, "\"{s}\":{{\"type\":\"raster\",\"tiles\":[\"{s}/{{z}}/{{x}}/{{y}}\"]," ++
+            "\"tileSize\":{d},\"minzoom\":{d},\"maxzoom\":{d}}},", .{ s.source_name, s.source_name, s.tile_size, s.minzoom, s.maxzoom });
+        try lyrs.print(alloc, "{{\"id\":\"{s}-underlay\",\"type\":\"raster\",\"source\":\"{s}\"," ++
+            "\"layout\":{{\"visibility\":\"{s}\"}}}},", .{ s.source_name, s.source_name, if (s.visible) "visible" else "none" });
+    }
+
+    const src_tag = "\"sources\":{";
+    const src_at = (std.mem.indexOf(u8, json, src_tag) orelse return error.NoSources) + src_tag.len;
+    const lyr_tag = "\"layers\":[";
+    const lyr_start = (std.mem.indexOf(u8, json, lyr_tag) orelse return error.NoLayers) + lyr_tag.len;
+    const lyr_at = layerInsertAt(json, lyr_start);
+
+    var outb: std.ArrayList(u8) = .empty;
+    errdefer outb.deinit(alloc);
+    if (lyr_at < src_at) return error.NoLayers; // generator order: sources first
+    try outb.appendSlice(alloc, json[0..src_at]);
+    try outb.appendSlice(alloc, srcs.items);
+    try outb.appendSlice(alloc, json[src_at..lyr_at]);
+    try outb.appendSlice(alloc, lyrs.items);
+    try outb.appendSlice(alloc, json[lyr_at..]);
+    return outb.toOwnedSlice(alloc);
+}
+
+/// The offset of the first layer object whose "type" is neither "background"
+/// nor "fill", scanning from just past `"layers":[`. Falls back to the end of
+/// the array when every layer is a fill.
+fn layerInsertAt(json: []const u8, start: usize) usize {
+    var i = start;
+    var depth: usize = 0;
+    var in_str = false;
+    var esc = false;
+    var obj_start: usize = start;
+    while (i < json.len) : (i += 1) {
+        const ch = json[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (ch == '\\') {
+                esc = true;
+            } else if (ch == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        switch (ch) {
+            '"' => in_str = true,
+            '{' => {
+                if (depth == 0) obj_start = i;
+                depth += 1;
+            },
+            '}' => {
+                depth -= 1;
+                if (depth == 0) {
+                    const obj = json[obj_start .. i + 1];
+                    const is_under = std.mem.indexOf(u8, obj, "\"type\":\"fill\"") != null or
+                        std.mem.indexOf(u8, obj, "\"type\":\"background\"") != null;
+                    if (!is_under) return obj_start;
+                }
+            },
+            ']' => {
+                if (depth == 0) return i; // every layer was a fill
+            },
+            else => {},
+        }
+    }
+    return json.len;
 }
 
 /// The distinct SCAMIN denominators across a set of open charts, ascending.

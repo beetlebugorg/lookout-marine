@@ -113,15 +113,14 @@ lk_store_load_view(lookout_view *out)
     get_double(LK_GROUP_VIEW, "lat", &out->lat);
     get_double(LK_GROUP_VIEW, "zoom", &out->zoom);
     get_double(LK_GROUP_VIEW, "rotation_deg", &out->rotation_deg);
-    /* A view a broken session saved must not brick every later launch: an
-     * instance that opened 0 charts once wrote its fit-of-nothing pose
-     * (zoom=22), restoring z22 collapsed the camera to the world corner —
-     * 2^22 tiles overruns f32 world coordinates — and the NEXT session
-     * re-saved that corner (lat 85.0509, the Mercator edge) as its own pose.
-     * So the envelope is what a marine chart can contain, not what the
-     * projection can express: no chart lies above ~84°, and chart detail ends
-     * well before z16. Anything outside is rejected and the open fits the
-     * chart. (Lon keeps the full ±180: the Aleutians cross the dateline.) */
+    /* The envelope is what a marine chart can CONTAIN, not what the
+     * projection can express: no chart lies above ~84° and chart detail ends
+     * well before z16. The projection's own limits (lat ±85.05, zoom 22) are
+     * not safe to accept — a zoom past ~20 overruns f32 world coordinates and
+     * collapses the camera to the world corner, and that corner pose (lat
+     * 85.0509, z<19) then saves itself back inside the projection envelope.
+     * Anything outside is rejected and the open fits the chart instead. Lon
+     * keeps the full ±180: the Aleutians cross the dateline. */
     if (!isfinite(out->lon) || out->lon < -180.0 || out->lon > 180.0 ||
         !isfinite(out->lat) || out->lat < -84.0 || out->lat > 84.0 ||
         !isfinite(out->zoom) || out->zoom < 0.0 || out->zoom > 16.0 ||

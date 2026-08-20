@@ -59,8 +59,14 @@ namespace winrt::LookoutMarine::implementation
 
         /* Nothing raw: these are charts already, so open them and skip the bake
          * entirely. Ready pictures (.mbtiles, baked sheets) go to the raster
-         * underlay, never to the vector open, which has no use for them. */
-        if (scan.sources == 0)
+         * underlay, never to the vector open, which has no use for them.
+         * Counted from the cells, not scan.sources: that counter is the
+         * VECTOR sources alone, and a folder of BSB/KAP sheets must bake. */
+        unsigned to_prepare = 0;
+        for (auto const &c : scan.cells)
+            if (c.NeedsPrepare())
+                ++to_prepare;
+        if (to_prepare == 0)
         {
             BakePanel().Visibility(Visibility::Collapsed);
             std::vector<std::string> baked;
