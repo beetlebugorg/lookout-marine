@@ -396,18 +396,19 @@ pub const Host = struct {
     pub fn setChartVisible(self: *Host, on: bool) void {
         const st = self.m.style orelse return;
         for (st.layers) |layer| {
-            // The raster underlay is not the chart: "hide ENC over raster"
-            // hides the survey and leaves the picture.
-            if (std.mem.endsWith(u8, layer.id, "-underlay")) continue;
+            // The raster underlay's layers are not the chart's.
+            if (std.mem.endsWith(u8, layer.id, "-underlay") or
+                std.mem.endsWith(u8, layer.id, "-overlay")) continue;
             self.m.setLayerVisibility(layer.id, on) catch {};
         }
     }
 
-    /// Show or hide one raster underlay set without a style rebuild — a
-    /// visibility diff, exactly like setChartVisible.
-    pub fn setRasterLayerVisible(self: *Host, source_name: []const u8, on: bool) void {
+    /// Show or hide one raster set layer without a style rebuild — a
+    /// visibility diff. `suffix` picks which of the set's two layers
+    /// ("-underlay" below the survey, "-overlay" above everything).
+    pub fn setRasterLayerVisible(self: *Host, source_name: []const u8, suffix: []const u8, on: bool) void {
         var buf: [64]u8 = undefined;
-        const id = std.fmt.bufPrint(&buf, "{s}-underlay", .{source_name}) catch return;
+        const id = std.fmt.bufPrint(&buf, "{s}{s}", .{ source_name, suffix }) catch return;
         self.m.setLayerVisibility(id, on) catch {};
     }
 

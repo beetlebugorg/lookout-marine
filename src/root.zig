@@ -2272,7 +2272,7 @@ pub const Lookout = struct {
         // The raster underlay's sets ride the style, and their providers are
         // re-bound after every parse (Host.raster_bindings).
         var rbuf: [craster.MAX_SETS]craster.StyleInfo = undefined;
-        const rsets = self.rasters.styleInfos(&rbuf);
+        const rsets = self.rasters.styleInfos(&rbuf, self.chart_hidden);
         for (rsets, 0..) |s, i| {
             self.raster_bind_buf[i] = .{ .name = s.source_name, .provider = self.rasters.providerAt(i) };
         }
@@ -2661,8 +2661,9 @@ pub const Lookout = struct {
     /// restyle. The style rebuild carries the same state, so the two agree.
     fn syncRasterVisibility(self: *Lookout) void {
         var buf: [craster.MAX_SETS]craster.StyleInfo = undefined;
-        for (self.rasters.styleInfos(&buf)) |s| {
-            self.ct.setRasterLayerVisible(s.source_name, s.visible);
+        for (self.rasters.styleInfos(&buf, self.chart_hidden)) |s| {
+            self.ct.setRasterLayerVisible(s.source_name, "-underlay", s.visible);
+            self.ct.setRasterLayerVisible(s.source_name, "-overlay", s.visible_over);
         }
         self.view_dirty = true;
     }
@@ -2693,14 +2694,16 @@ pub const Lookout = struct {
         return self.rasters.shownIndex(self.cam.*) != null;
     }
 
-    /// Show or hide the vector chart. The picture beneath it stays.
+    /// Hide the vector chart where a picture covers it, or show it again.
+    /// Not a chart-layer sweep: each drawn set swaps its underlay for its
+    /// overlay, so the picture covers the ENC exactly where its tiles exist
+    /// and the chart stands wherever they do not. With no picture drawn this
+    /// changes nothing on screen, which is the mode's contract — it engages
+    /// only where imagery actually covers.
     pub fn setChartHidden(self: *Lookout, hidden: bool) void {
         if (self.chart_hidden == hidden) return;
         self.chart_hidden = hidden;
-        // Every chart layer off, in one call, with the tiles left alone: the
-        // style stays loaded and turning it back on is a visibility diff.
-        self.ct.setChartVisible(!hidden);
-        self.view_dirty = true;
+        self.syncRasterVisibility();
     }
 
     pub fn toggleChart(self: *Lookout) void {

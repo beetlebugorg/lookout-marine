@@ -202,6 +202,10 @@ pub const Rasters = struct {
         s.provider.minzoom = minz;
         s.provider.maxzoom = maxz;
         s.provider.tile_size = ts;
+        // Coverage bounds what the map asks for: outside the zoom band the
+        // ask is clamped into it, and without bounds that is band-zoom tiles
+        // across the entire viewport.
+        s.provider.bounds = if (self.setBounds(i)) |b| .{ b.x0, b.y0, b.x1, b.y1 } else null;
     }
 
     /// Turn one chart on or off by path, without removing it. The provider's
@@ -247,16 +251,20 @@ pub const Rasters = struct {
 
     // ---- what the style needs -------------------------------------------
 
-    /// One entry per set, in set order, into `buf`. The style splice draws
-    /// these above the chart's area fills and below its lines.
-    pub fn styleInfos(self: *const Rasters, buf: *[MAX_SETS]StyleInfo) []const StyleInfo {
+    /// One entry per set, in set order, into `buf`. A drawn set shows ONE of
+    /// its two layers: the underlay normally, the overlay when the mariner
+    /// hid the ENC — the picture then covers the chart exactly where its
+    /// tiles exist, and the chart stands wherever they do not.
+    pub fn styleInfos(self: *const Rasters, buf: *[MAX_SETS]StyleInfo, hide_chart: bool) []const StyleInfo {
         for (self.sets.items, 0..) |*s, i| {
+            const on = s.shown and self.setHasEnabled(i);
             buf[i] = .{
                 .source_name = s.source_name,
                 .minzoom = s.provider.minzoom,
                 .maxzoom = s.provider.maxzoom,
                 .tile_size = s.provider.tile_size,
-                .visible = s.shown and self.setHasEnabled(i),
+                .visible = on and !hide_chart,
+                .visible_over = on and hide_chart,
             };
         }
         return buf[0..self.sets.items.len];

@@ -59,14 +59,20 @@ pub const PHYSICAL_SIZE_SCALE: f64 = 1.0;
 
 pub const Error = error{ TemplateFailed, BuildFailed, ColortablesFailed, SpliceFailed };
 
-/// One raster underlay set the style must carry: a source and a raster layer,
-/// spliced above the chart's area fills and below its lines (ct/raster.zig).
+/// One raster underlay set the style must carry: a source and TWO raster
+/// layers — "<name>-underlay" above the chart's area fills and below its
+/// lines, and "<name>-overlay" above every chart layer. At most one is
+/// visible: the underlay is the normal mode (the picture replaces the water
+/// tint, the survey draws over it), the overlay is hide-ENC-over-raster (the
+/// picture covers the chart exactly where its tiles exist, and the chart
+/// stands wherever they do not).
 pub const RasterSet = struct {
     source_name: [:0]const u8,
     minzoom: u8,
     maxzoom: u8,
     tile_size: u32,
     visible: bool,
+    visible_over: bool,
 };
 
 /// Everything the style depends on. A change to any field means a rebuild.
@@ -197,34 +203,43 @@ fn spliceRasters(alloc: std.mem.Allocator, json: []const u8, sets: []const Raste
     defer srcs.deinit(alloc);
     var lyrs: std.ArrayList(u8) = .empty;
     defer lyrs.deinit(alloc);
+    var overs: std.ArrayList(u8) = .empty;
+    defer overs.deinit(alloc);
     for (sets) |s| {
         try srcs.print(alloc, "\"{s}\":{{\"type\":\"raster\",\"tiles\":[\"{s}/{{z}}/{{x}}/{{y}}\"]," ++
             "\"tileSize\":{d},\"minzoom\":{d},\"maxzoom\":{d}}},", .{ s.source_name, s.source_name, s.tile_size, s.minzoom, s.maxzoom });
         try lyrs.print(alloc, "{{\"id\":\"{s}-underlay\",\"type\":\"raster\",\"source\":\"{s}\"," ++
             "\"layout\":{{\"visibility\":\"{s}\"}}}},", .{ s.source_name, s.source_name, if (s.visible) "visible" else "none" });
+        // Leading comma: this rides after the last chart layer.
+        try overs.print(alloc, ",{{\"id\":\"{s}-overlay\",\"type\":\"raster\",\"source\":\"{s}\"," ++
+            "\"layout\":{{\"visibility\":\"{s}\"}}}}", .{ s.source_name, s.source_name, if (s.visible_over) "visible" else "none" });
     }
 
     const src_tag = "\"sources\":{";
     const src_at = (std.mem.indexOf(u8, json, src_tag) orelse return error.NoSources) + src_tag.len;
     const lyr_tag = "\"layers\":[";
     const lyr_start = (std.mem.indexOf(u8, json, lyr_tag) orelse return error.NoLayers) + lyr_tag.len;
-    const lyr_at = layerInsertAt(json, lyr_start);
+    const lyr_at = layerInsertAt(json, lyr_start, false);
+    const lyr_end = layerInsertAt(json, lyr_start, true);
 
     var outb: std.ArrayList(u8) = .empty;
     errdefer outb.deinit(alloc);
-    if (lyr_at < src_at) return error.NoLayers; // generator order: sources first
+    if (lyr_at < src_at or lyr_end < lyr_at) return error.NoLayers; // generator order: sources first
     try outb.appendSlice(alloc, json[0..src_at]);
     try outb.appendSlice(alloc, srcs.items);
     try outb.appendSlice(alloc, json[src_at..lyr_at]);
     try outb.appendSlice(alloc, lyrs.items);
-    try outb.appendSlice(alloc, json[lyr_at..]);
+    try outb.appendSlice(alloc, json[lyr_at..lyr_end]);
+    try outb.appendSlice(alloc, overs.items);
+    try outb.appendSlice(alloc, json[lyr_end..]);
     return outb.toOwnedSlice(alloc);
 }
 
-/// The offset of the first layer object whose "type" is neither "background"
-/// nor "fill", scanning from just past `"layers":[`. Falls back to the end of
-/// the array when every layer is a fill.
-fn layerInsertAt(json: []const u8, start: usize) usize {
+/// Scanning from just past `"layers":[`: with `to_end` false, the offset of
+/// the first layer object whose "type" is neither "background" nor "fill"
+/// (falling back to the array's closing bracket when every layer is a fill);
+/// with `to_end` true, the offset of the closing bracket itself.
+fn layerInsertAt(json: []const u8, start: usize, to_end: bool) usize {
     var i = start;
     var depth: usize = 0;
     var in_str = false;
@@ -250,7 +265,7 @@ fn layerInsertAt(json: []const u8, start: usize) usize {
             },
             '}' => {
                 depth -= 1;
-                if (depth == 0) {
+                if (depth == 0 and !to_end) {
                     const obj = json[obj_start .. i + 1];
                     const is_under = std.mem.indexOf(u8, obj, "\"type\":\"fill\"") != null or
                         std.mem.indexOf(u8, obj, "\"type\":\"background\"") != null;
@@ -258,7 +273,7 @@ fn layerInsertAt(json: []const u8, start: usize) usize {
                 }
             },
             ']' => {
-                if (depth == 0) return i; // every layer was a fill
+                if (depth == 0) return i;
             },
             else => {},
         }
