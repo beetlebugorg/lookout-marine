@@ -26,6 +26,9 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
+      # The demo executable links the Vulkan loader.
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan-dev
+
       # vk is the Linux shell's backend. The default here would be sdl, and no
       # runner image package provides SDL3 for pkg-config.
       - run: zig build -Dbackend=vk
@@ -59,7 +62,7 @@ jobs:
       - name: Build
         working-directory: linux
         run: |
-          meson setup build --prefix=/usr
+          meson setup build --prefix=/usr --buildtype=release
           ninja -C build
           DESTDIR="$PWD/dist" meson install -C build
 
