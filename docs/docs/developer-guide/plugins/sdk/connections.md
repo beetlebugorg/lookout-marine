@@ -264,9 +264,15 @@ value must be that column's kind, or the manifest is refused.
 THE HOST NAME IS WHAT IS KEPT, not the address behind it. A lease turns over
 and the address changes; the name still reaches the same machine.
 
-A list may name four service types at most. Only the Apple shells browse today,
-and each shell also has to ship the type in its own platform declaration, so a
-service type no shell knows is browsed for by nobody.
+A list may name four service types at most. Every shell browses through its own
+platform: NetService on macOS and iOS, NsdManager on Android, Avahi on Linux and
+DnsServiceBrowse on Windows. The Apple shells also have to name the type in
+`NSBonjourServices`, so a service type the application does not ship is not
+browsable there.
+
+A find carries the host NAME on macOS, iOS, Linux and Windows. Android is the
+exception: NsdManager never exposes the SRV target, so a row added there holds
+the address the service answered on.
 
 ## The hooks
 

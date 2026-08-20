@@ -104,7 +104,7 @@
       <!-- user32: LoadImageW/SendMessageW/GetSystemMetrics, for the window icon
            (MinimalCoreWin trims the default link libraries, so the Win32 ones
            this shell uses are all named explicitly). -->
-      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;winmm.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;winmm.lib;dnsapi.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- The WAMR interpreter, when build-core.ps1 built a core with the plugin
            host in it. The static core does not embed the archive off Apple (a
            COFF linker rejects an archive nested inside an archive), so the exe
@@ -150,6 +150,7 @@
     <ClCompile Include="ui\MainWindow.Scale.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
     <ClCompile Include="ui\MainWindow.Plugins.cpp" />
+    <ClCompile Include="src\lk_discovery.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_pick.cpp" />
