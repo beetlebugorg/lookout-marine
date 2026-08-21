@@ -1231,3 +1231,222 @@ export fn Java_org_beetlebug_lookout_Lookout_nToggleOtherCategory(env: [*c]j.JNI
     const h = fromLong(hl) orelse return;
     lookout_toggle_other_category(h.l);
 }
+
+// ---- the bake ---------------------------------------------------------------
+//
+// The import pipeline's engine half: run the phased bake — cells, then
+// sheets, then the lift — on a thread of its own and let Java POLL a
+// snapshot, the way the Windows shell's BakeJob does. No callback ever
+// crosses into the JVM: a bake worker is not an attached thread and must
+// not become one just to move a progress bar.
+
+const BakeJob = struct {
+    thread: ?std.Thread = null,
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    baked: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    phase_offset: u32 = 0,
+    total: u32 = 0,
+
+    source: [:0]u8,
+    ins: [][:0]u8,
+    outs: [][:0]u8,
+    cells: usize,
+    sheets: usize,
+    lifts: usize,
+    archive: bool,
+
+    fn free(self: *BakeJob) void {
+        for (self.ins) |s| gpa.free(s);
+        for (self.outs) |s| gpa.free(s);
+        gpa.free(self.ins);
+        gpa.free(self.outs);
+        gpa.free(self.source);
+        gpa.destroy(self);
+    }
+};
+
+fn bakeProgress(ctx: ?*anyopaque, done: u32, total: u32) callconv(.c) bool {
+    _ = total;
+    const job: *BakeJob = @ptrCast(@alignCast(ctx.?));
+    job.done.store(job.phase_offset + done, .release);
+    return !job.cancelled.load(.acquire);
+}
+
+fn bakeWorker(job: *BakeJob) void {
+    const cpus = std.Thread.getCpuCount() catch 4;
+    // A MEMORY bound, not a speed dial: each worker holds a whole cell.
+    const workers: u32 = @intCast(@max(1, @min(8, cpus)));
+
+    const ins_c = gpa.alloc([*c]const u8, job.ins.len) catch {
+        job.running.store(false, .release);
+        return;
+    };
+    defer gpa.free(ins_c);
+    const outs_c = gpa.alloc([*c]const u8, job.outs.len) catch {
+        job.running.store(false, .release);
+        return;
+    };
+    defer gpa.free(outs_c);
+    for (job.ins, 0..) |s, i| ins_c[i] = s.ptr;
+    for (job.outs, 0..) |s, i| outs_c[i] = s.ptr;
+
+    var st: cc.tile57_status = cc.TILE57_OK;
+    var err: cc.tile57_error = undefined;
+    var total_baked: u32 = 0;
+
+    // Sorted by kind upstream, so each phase is one contiguous run.
+    if (job.cells > 0 and !job.cancelled.load(.acquire)) {
+        job.phase_offset = 0;
+        var n: u32 = 0;
+        st = if (job.archive)
+            cc.tile57_bake_zip_charts(job.source.ptr, ins_c.ptr, outs_c.ptr, job.cells, workers, bakeProgress, null, job, &n, &err)
+        else
+            cc.tile57_bake_files(ins_c.ptr, outs_c.ptr, job.cells, workers, bakeProgress, null, job, &n, &err);
+        total_baked += n;
+    }
+    if (st == cc.TILE57_OK and job.sheets > 0 and !job.cancelled.load(.acquire)) {
+        job.phase_offset = @intCast(job.cells);
+        var n: u32 = 0;
+        st = if (job.archive)
+            cc.tile57_bake_zip_rasters(job.source.ptr, ins_c.ptr + job.cells, outs_c.ptr + job.cells, job.sheets, workers, bakeProgress, null, job, &n, &err)
+        else
+            cc.tile57_bake_rasters(ins_c.ptr + job.cells, outs_c.ptr + job.cells, job.sheets, workers, bakeProgress, null, job, &n, &err);
+        total_baked += n;
+    }
+    // Only an archive holds anything to lift; in a folder those files are
+    // already where the engine can read them.
+    if (st == cc.TILE57_OK and job.archive and job.lifts > 0 and !job.cancelled.load(.acquire)) {
+        job.phase_offset = @intCast(job.cells + job.sheets);
+        const off = job.cells + job.sheets;
+        var n: u32 = 0;
+        st = cc.tile57_zip_extract(job.source.ptr, ins_c.ptr + off, outs_c.ptr + off, job.lifts, bakeProgress, job, &n, &err);
+        total_baked += n;
+    }
+
+    job.baked.store(total_baked, .release);
+    // A cancelled bake is not a failure: whatever landed is a usable library.
+    job.ok.store(st == cc.TILE57_OK, .release);
+    job.running.store(false, .release);
+}
+
+/// long nBakeStart(String source, String[] ins, String[] outs, int cells,
+///                 int sheets, int lifts, boolean zip) -- 0 when nothing
+/// starts. `ins`/`outs` are kind-contiguous: cells, then sheets, then lifts.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeStart(env: [*c]j.JNIEnv, cls: j.jclass, source: j.jstring, ins: j.jobjectArray, outs: j.jobjectArray, cells: j.jint, sheets: j.jint, lifts: j.jint, zip: j.jboolean) j.jlong {
+    _ = cls;
+    const n_ins: usize = @intCast(env_(env).GetArrayLength.?(env, ins));
+    const n_outs: usize = @intCast(env_(env).GetArrayLength.?(env, outs));
+    const want: usize = @intCast(cells + sheets + lifts);
+    if (n_ins != want or n_outs != want or want == 0) return 0;
+
+    const csrc = env_(env).GetStringUTFChars.?(env, source, null) orelse return 0;
+    const src_copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(csrc)))) catch {
+        env_(env).ReleaseStringUTFChars.?(env, source, csrc);
+        return 0;
+    };
+    env_(env).ReleaseStringUTFChars.?(env, source, csrc);
+
+    // Copy-and-release per element, the nOpenCharts lesson: ART's local
+    // reference table holds 512 and an archive holds thousands of entries.
+    const takeAll = struct {
+        fn take(e: [*c]j.JNIEnv, arr: j.jobjectArray, n: usize) ?[][:0]u8 {
+            const out = gpa.alloc([:0]u8, n) catch return null;
+            var got: usize = 0;
+            while (got < n) : (got += 1) {
+                const s: j.jstring = @ptrCast(env_(e).GetObjectArrayElement.?(e, arr, @intCast(got)));
+                const c = env_(e).GetStringUTFChars.?(e, s, null) orelse {
+                    for (out[0..got]) |x| gpa.free(x);
+                    gpa.free(out);
+                    return null;
+                };
+                const copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(c)))) catch {
+                    env_(e).ReleaseStringUTFChars.?(e, s, c);
+                    env_(e).DeleteLocalRef.?(e, s);
+                    for (out[0..got]) |x| gpa.free(x);
+                    gpa.free(out);
+                    return null;
+                };
+                env_(e).ReleaseStringUTFChars.?(e, s, c);
+                env_(e).DeleteLocalRef.?(e, s);
+                out[got] = copy;
+            }
+            return out;
+        }
+    }.take;
+
+    const ins_z = takeAll(env, ins, want) orelse {
+        gpa.free(src_copy);
+        return 0;
+    };
+    const outs_z = takeAll(env, outs, want) orelse {
+        for (ins_z) |s| gpa.free(s);
+        gpa.free(ins_z);
+        gpa.free(src_copy);
+        return 0;
+    };
+
+    const job = gpa.create(BakeJob) catch {
+        for (ins_z) |s| gpa.free(s);
+        gpa.free(ins_z);
+        for (outs_z) |s| gpa.free(s);
+        gpa.free(outs_z);
+        gpa.free(src_copy);
+        return 0;
+    };
+    job.* = .{
+        .source = src_copy,
+        .ins = ins_z,
+        .outs = outs_z,
+        .cells = @intCast(cells),
+        .sheets = @intCast(sheets),
+        .lifts = @intCast(lifts),
+        .archive = zip != 0,
+        .total = @intCast(want),
+    };
+    job.thread = std.Thread.spawn(.{}, bakeWorker, .{job}) catch {
+        job.free();
+        return 0;
+    };
+    return @bitCast(@intFromPtr(job));
+}
+
+/// boolean nBakePoll(long job, int[] out) -- true while running;
+/// out[0] = done, out[1] = total, out[2] = baked, out[3] = ok.
+export fn Java_org_beetlebug_lookout_Lookout_nBakePoll(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong, out: j.jintArray) j.jboolean {
+    _ = cls;
+    if (jl == 0) return 0;
+    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    if (env_(env).GetArrayLength.?(env, out) >= 4) {
+        var buf: [4]j.jint = .{
+            @intCast(job.done.load(.acquire)),
+            @intCast(job.total),
+            @intCast(job.baked.load(.acquire)),
+            if (job.ok.load(.acquire)) 1 else 0,
+        };
+        env_(env).SetIntArrayRegion.?(env, out, 0, 4, &buf);
+    }
+    return if (job.running.load(.acquire)) 1 else 0;
+}
+
+/// void nBakeCancel(long job) -- tile57 stops at the next chart boundary.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeCancel(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    if (jl == 0) return;
+    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    job.cancelled.store(true, .release);
+}
+
+/// void nBakeFree(long job) -- joins the worker; cancel a running bake first
+/// or this blocks about one chart's bake time.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeFree(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    if (jl == 0) return;
+    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    if (job.thread) |t| t.join();
+    job.free();
+}

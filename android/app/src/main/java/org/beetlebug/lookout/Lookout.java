@@ -471,4 +471,23 @@ public final class Lookout implements AutoCloseable {
     private static native void nToggleText(long h);
     private static native void nToggleSoundings(long h);
     private static native void nToggleOtherCategory(long h);
+    // ---- the bake ----------------------------------------------------------
+
+    /** Start the phased bake (cells, sheets, lift; kind-contiguous lists).
+     *  0 when nothing starts. Poll with {@link #bakePoll}; free when done. */
+    public static long bakeStart(String source, String[] ins, String[] outs,
+                                 int cells, int sheets, int lifts, boolean zip) {
+        return nBakeStart(source, ins, outs, cells, sheets, lifts, zip);
+    }
+    /** True while running; out (length >= 4) gets done, total, baked, ok. */
+    public static boolean bakePoll(long job, int[] out) { return nBakePoll(job, out); }
+    /** tile57 stops at the next chart boundary, not instantly. */
+    public static void bakeCancel(long job) { nBakeCancel(job); }
+    /** Joins the worker: cancel a running bake first. */
+    public static void bakeFree(long job) { nBakeFree(job); }
+
+    private static native long nBakeStart(String source, String[] ins, String[] outs, int cells, int sheets, int lifts, boolean zip);
+    private static native boolean nBakePoll(long job, int[] out);
+    private static native void nBakeCancel(long job);
+    private static native void nBakeFree(long job);
 }

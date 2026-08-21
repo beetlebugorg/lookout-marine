@@ -14,6 +14,8 @@ import androidx.compose.material.icons.filled.Sd
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -316,7 +318,47 @@ private fun FolderBrowser(charts: ChartsModel) {
                 scope.launch { charts.select(dir) }
             },
         ) { Text(if (charts.scanning) "Scanning…" else "Open this folder") }
+        // The import: bake what stands here — raw ENC cells, BSB/KAP sheets,
+        // an agency archive — into the app's own library, and open THAT.
+        OutlinedButton(
+            enabled = cur != null && charts.importer.state?.running != true,
+            onClick = {
+                val dir = cur ?: return@OutlinedButton
+                charts.importer.start(dir) { out ->
+                    if (out != null) scope.launch { charts.select(out) }
+                }
+            },
+        ) { Text("Import") }
         if (charts.scanning) CircularProgressIndicator(Modifier.size(20.dp))
+    }
+
+    charts.importer.state?.let { st ->
+        if (st.running) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (st.total > 0) {
+                    LinearProgressIndicator(
+                        progress = { st.done.toFloat() / st.total },
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.weight(1f))
+                }
+                Text(
+                    if (st.total > 0) "${st.done} of ${st.total}" else "Finding charts…",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(onClick = { charts.importer.cancel() }) { Text("Stop") }
+            }
+            Footer("Importing ${st.name}. What has landed already draws; a stop keeps it.")
+        } else if (st.failed) {
+            Footer("Nothing could be prepared from ${st.name}.")
+        }
     }
 }
 
@@ -360,7 +402,7 @@ private fun libraryHint(dir: File): String? {
         ?: top.firstOrNull { d -> d.isDirectory && d.listFiles()?.any { it.extension == "pmtiles" } == true }
     if (nested != null) return "Baked cells under ${nested.name}/."
     if (top.any { it.isFile && it.name.endsWith(".000") }) {
-        return "ENC source charts (*.000) — bake these with tile57 first."
+        return "ENC source charts (*.000) — Import bakes them into the library."
     }
     return null
 }

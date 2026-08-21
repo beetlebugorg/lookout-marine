@@ -65,6 +65,9 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
 
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /** The import pipeline: scan, bake what is raw, open the result. */
+    val importer = ChartImport(appContext)
+
     /** Volume roots a folder browser starts from (computed once). */
     val roots: List<File> by lazy { storageRoots(appContext) }
 
