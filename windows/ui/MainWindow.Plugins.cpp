@@ -669,11 +669,22 @@ namespace winrt::LookoutMarine::implementation
                 box.Text(Wide(cell != row_it->cells.end() ? cell->second.text : f.fallback_text));
                 if (f.optional)
                     box.PlaceholderText(L"Optional");
-                box.TextChanged([this, plugin_id, list_key, row_id, key](auto &&s, auto &&) {
+                /* Commits on Enter or focus loss, never per keystroke: an
+                 * address pushed letter-by-letter dials "1", "10", "10.0"…
+                 * and the plugin churns through partial hosts while the
+                 * mariner is mid-word (the reference's CommitTextField rule). */
+                auto commit = [this, plugin_id, list_key, row_id, key](Controls::TextBox const &b) {
                     if (settings_loading)
                         return;
                     SetPluginCellText(plugin_id, list_key, row_id, key,
-                                      winrt::to_string(s.template as<Controls::TextBox>().Text()));
+                                      winrt::to_string(b.Text()));
+                };
+                box.LostFocus([commit](auto &&s, auto &&) {
+                    commit(s.template as<Controls::TextBox>());
+                });
+                box.KeyDown([commit](auto &&s, auto &&e) {
+                    if (e.Key() == Windows::System::VirtualKey::Enter)
+                        commit(s.template as<Controls::TextBox>());
                 });
                 fields.Children().Append(box);
                 break;

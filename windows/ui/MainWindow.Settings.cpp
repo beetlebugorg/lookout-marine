@@ -695,13 +695,22 @@ namespace winrt::LookoutMarine::implementation
                 Controls::TextBox date;
                 date.Text(winrt::to_hstring(pending.date_view));
                 date.MaxLength(8);
-                date.TextChanged([this](auto &&s, auto &&) {
+                /* Commits on Enter or focus loss, never per keystroke — half
+                 * a date is not a date the chart should redraw against. */
+                auto commit_date = [this](Controls::TextBox const &b) {
                     if (settings_loading)
                         return;
-                    std::string t = winrt::to_string(s.template as<Controls::TextBox>().Text());
+                    std::string t = winrt::to_string(b.Text());
                     memset(pending.date_view, 0, sizeof pending.date_view);
                     strncpy_s(pending.date_view, t.c_str(), sizeof pending.date_view - 1);
                     ScheduleApply();
+                };
+                date.LostFocus([commit_date](auto &&s, auto &&) {
+                    commit_date(s.template as<Controls::TextBox>());
+                });
+                date.KeyDown([commit_date](auto &&s, auto &&e) {
+                    if (e.Key() == Windows::System::VirtualKey::Enter)
+                        commit_date(s.template as<Controls::TextBox>());
                 });
                 stack.Children().Append(date);
             }

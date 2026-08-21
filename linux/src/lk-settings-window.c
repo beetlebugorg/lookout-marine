@@ -976,8 +976,10 @@ lk_build_charts_page (LkSettings *settings)
   lk_plugin_fill_tab (page, settings, "charts");
 }
 
+/* Commits on Enter or focus loss, never per keystroke — half a date is not a
+   date the chart should redraw against. */
 static void
-lk_date_changed (GtkEditable *editable, gpointer user_data)
+lk_date_commit (GtkEntry *entry, gpointer user_data)
 {
   LkSettings *settings = user_data;
   tile57_mariner *m = lk_mariner_raw (settings->mariner);
@@ -986,8 +988,15 @@ lk_date_changed (GtkEditable *editable, gpointer user_data)
     return;
 
   memset (m->date_view, 0, sizeof m->date_view);
-  g_strlcpy (m->date_view, gtk_editable_get_text (editable), sizeof m->date_view);
+  g_strlcpy (m->date_view, gtk_editable_get_text (GTK_EDITABLE (entry)), sizeof m->date_view);
   lk_mariner_touch (settings->mariner);
+}
+
+static void
+lk_date_focus_left (GtkEventControllerFocus *focus, gpointer user_data)
+{
+  GtkWidget *entry = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (focus));
+  lk_date_commit (GTK_ENTRY (entry), user_data);
 }
 
 static void
@@ -1018,7 +1027,10 @@ lk_build_advanced_page (LkSettings *settings)
   gtk_entry_set_max_length (GTK_ENTRY (entry), 8);
   gtk_editable_set_text (GTK_EDITABLE (entry), m->date_view);
   gtk_widget_set_valign (entry, GTK_ALIGN_CENTER);
-  g_signal_connect (entry, "changed", G_CALLBACK (lk_date_changed), settings);
+  g_signal_connect (entry, "activate", G_CALLBACK (lk_date_commit), settings);
+  GtkEventController *date_focus = gtk_event_controller_focus_new ();
+  g_signal_connect (date_focus, "leave", G_CALLBACK (lk_date_focus_left), settings);
+  gtk_widget_add_controller (entry, date_focus);
   lk_row (dates, "View date", entry);
   lk_footer (dates, "Leave the date empty to use today.");
 
@@ -1246,6 +1258,37 @@ lk_plugin_cell_text_changed (GtkEditable *editable, gpointer user_data)
                            binding->key, gtk_editable_get_text (editable));
 }
 
+/* GDestroyNotify shape for the binding, for when it rides on the widget
+   rather than a signal closure. */
+static void
+lk_plugin_row_binding_destroy (gpointer data)
+{
+  lk_plugin_row_binding_free (data, NULL);
+}
+
+/* Commits on Enter or focus loss, never per keystroke: an address pushed
+   letter-by-letter dials "1", "10", "10.0"… and the plugin churns through
+   partial hosts while the mariner is mid-word (the Mac shell's
+   CommitTextField rule). */
+static void
+lk_plugin_cell_text_commit (GtkEntry *entry, gpointer user_data)
+{
+  (void) user_data;
+  gpointer binding = g_object_get_data (G_OBJECT (entry), "lk-cell-binding");
+
+  if (binding != NULL)
+    lk_plugin_cell_text_changed (GTK_EDITABLE (entry), binding);
+}
+
+static void
+lk_plugin_cell_focus_left (GtkEventControllerFocus *focus, gpointer user_data)
+{
+  (void) user_data;
+  GtkWidget *entry = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (focus));
+
+  lk_plugin_cell_text_commit (GTK_ENTRY (entry), NULL);
+}
+
 static void
 lk_plugin_cell_number_changed (GtkSpinButton *spin, gpointer user_data)
 {
@@ -1452,10 +1495,17 @@ lk_plugin_fill_row (LkSettings *settings, GtkWidget *box,
                                  lk_plugins_row_text (settings->plugins, list, row_id, field->key));
           if (field->optional)
             gtk_entry_set_placeholder_text (GTK_ENTRY (control), "Optional");
-          g_signal_connect_data (control, "changed",
-                                 G_CALLBACK (lk_plugin_cell_text_changed),
-                                 lk_plugin_row_binding_new (settings, list, row_id, field->key),
-                                 lk_plugin_row_binding_free, 0);
+          g_object_set_data_full (G_OBJECT (control), "lk-cell-binding",
+                                  lk_plugin_row_binding_new (settings, list, row_id, field->key),
+                                  lk_plugin_row_binding_destroy);
+          g_signal_connect (control, "activate",
+                            G_CALLBACK (lk_plugin_cell_text_commit), NULL);
+          {
+            GtkEventController *cell_focus = gtk_event_controller_focus_new ();
+            g_signal_connect (cell_focus, "leave",
+                              G_CALLBACK (lk_plugin_cell_focus_left), NULL);
+            gtk_widget_add_controller (control, cell_focus);
+          }
           break;
 
         case LK_PLUGIN_FIELD_NUMBER:

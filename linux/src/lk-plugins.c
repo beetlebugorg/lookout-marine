@@ -87,6 +87,10 @@ typedef struct {
 
   GHashTable *values; /* the field key -> double, boxed */
   GHashTable *rows;   /* the list key -> GPtrArray of LkRow* */
+
+  /* The config JSON as last pushed, so an apply skips a plugin whose settings
+   * did not move: one edit used to re-push and re-save every plugin. */
+  char *last_json;
 } LkPluginState;
 
 struct _LkPlugins {
@@ -144,6 +148,7 @@ lk_plugin_state_free (gpointer data)
   g_ptr_array_unref (state->types);
   g_hash_table_unref (state->values);
   g_hash_table_unref (state->rows);
+  g_free (state->last_json);
   g_free (state);
 }
 
@@ -767,6 +772,10 @@ lk_plugins_apply (gpointer user_data)
 
       g_autofree char *json = lk_plugin_state_config_json (state);
 
+      if (g_strcmp0 (json, state->last_json) == 0)
+        continue;
+      g_free (state->last_json);
+      state->last_json = g_strdup (json);
       lk_chart_controller_set_plugin_config (self->controller, state->id, json);
       lk_store_save_plugin_config (state->id, json);
     }
