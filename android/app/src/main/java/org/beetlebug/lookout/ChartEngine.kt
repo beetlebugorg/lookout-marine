@@ -110,6 +110,11 @@ class ChartEngine private constructor() {
                 // A resize rebuilds the swapchain and the api lock it takes is
                 // held for a whole frame, which is why this is not done on the
                 // UI thread: there a rotation becomes an input-dispatch ANR.
+                // The density rides along: a fold or an external display
+                // recreates the Activity with a new one over the same engine,
+                // and symbols sized for the old glass mis-draw AND mis-pick.
+                l.setDensity(density)
+                l.setDeviceScale(density)
                 l.resize(wPts, hPts)
                 return@post
             }
@@ -148,17 +153,27 @@ class ChartEngine private constructor() {
         val done = CountDownLatch(1)
         h.post {
             Choreographer.getInstance().removeFrameCallback(frameCallback)
+            idlePolling = false
             frameHook = null
             controller?.onSurfaceDetached()
             l.detachSurface()
             startBackgroundTick()
             done.countDown()
         }
-        try {
-            done.await()
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
+        // NOT interruptible: the platform frees the surface the moment
+        // surfaceDestroyed returns, so returning early hands the render
+        // thread a freed surface — a native use-after-free. Remember the
+        // interrupt, finish the wait, re-assert it on the way out.
+        var interrupted = false
+        while (true) {
+            try {
+                done.await()
+                break
+            } catch (e: InterruptedException) {
+                interrupted = true
+            }
         }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     /** Hand the engine's reclaimable caches back. Safe on any thread. */

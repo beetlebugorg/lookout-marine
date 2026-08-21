@@ -548,14 +548,22 @@ class ChartController(private val appContext: Context) {
         saveView() // last known pose; the handle is about to close
         engine = null
         lk = null
-        rendering = false
-        identify = emptyList()
-        // The chart is going away with the plugins that raised the alarms, so
-        // nothing is left to acknowledge and nothing may go on sounding.
-        alerts = emptyList()
-        siren.setSounding(false)
-        // And nothing left to hold the process up for.
-        stopService()
+        // Everything below is the MAIN thread's: Compose state, the siren
+        // (whose strike runnable lives on the main handler and whose flag is
+        // not volatile), and the service. Called here from the render thread
+        // inside closeOn, so it hops — the race let one more strike sound
+        // after the engine and its alarm were gone.
+        main.post {
+            rendering = false
+            identify = emptyList()
+            // The chart is going away with the plugins that raised the
+            // alarms, so nothing is left to acknowledge and nothing may go
+            // on sounding.
+            alerts = emptyList()
+            siren.setSounding(false)
+            // And nothing left to hold the process up for.
+            stopService()
+        }
     }
 
     /** Persist the last sampled pose. No native call — [lastPushed] has it. */
