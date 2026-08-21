@@ -432,13 +432,8 @@ test "every mariner toggle changes the built style" {
             t.name, s_off.json.len, s_on.json.len,
             if (same) "NO EFFECT ON THE STYLE" else "ok",
         });
-        // show_full_sector_lines is plumbed through the mariner but consumed
-        // nowhere in tile57: sector figures fold into `lines` at bake, so the
-        // style has no layer to filter (tile57 style/maplibre.zig). Exact
-        // equality here means a toggle going inert fails, and the exemption
-        // itself fails the day the engine learns the switch.
-        const known_inert = std.mem.eql(u8, t.name, "show_full_sector_lines");
-        try std.testing.expectEqual(known_inert, same);
+        // Exact equality: any toggle going inert fails, by name, above.
+        try std.testing.expectEqual(false, same);
     }
     std.debug.print("mariner toggles with no effect on the built style: {d}/{d}\n", .{ inert, toggles.len });
 }
