@@ -496,7 +496,7 @@ fun IdentifyPanel(
 
 // ---- formatting -------------------------------------------------------------
 
-private fun coordString(lat: Double, lon: Double): String =
+fun coordString(lat: Double, lon: Double): String =
     "${dm(lat, true)} ${dm(lon, false)}"
 
 /**

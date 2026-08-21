@@ -133,13 +133,13 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 return true;
             }
 
-            /** Through the controller, not the handle: a scheme change has to
-             *  land in the settings state and be SAVED, or a scheme picked by
-             *  long-press is lost on relaunch while the same scheme picked in
-             *  the sheet survives. */
+            /** The chart menu, as the reference's right-click raises it: the
+             *  place's coordinates, the pick, and the marker verbs. The scheme
+             *  cycle this gesture used to spend itself on lives in Settings ›
+             *  Display, where the pick persists either way. */
             @Override
             public void onLongPress(MotionEvent e) {
-                controller.cycleScheme();
+                controller.showChartMenu(e.getX() / density, e.getY() / density);
             }
 
             @Override

@@ -293,6 +293,24 @@ fun ChartScreen(
                 showSettings = true
             },
         )
+
+        controller.chartMenu?.let { menu ->
+            ChartMenuPanel(
+                menu = menu,
+                onPick = { controller.menuPick() },
+                onDropMarker = { controller.dropMarker() },
+                onRenameMarker = { controller.beginRenameMarker() },
+                onRemoveMarker = { controller.removeMarker() },
+                onDismiss = { controller.dismissChartMenu() },
+            )
+        }
+        controller.renamingMarker?.let { m ->
+            MarkerRenameDialog(
+                current = m.markerName,
+                onCommit = { controller.commitRenameMarker(it) },
+                onCancel = { controller.cancelRenameMarker() },
+            )
+        }
     }
 
     if (showSearch) {

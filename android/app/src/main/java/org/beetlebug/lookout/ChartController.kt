@@ -609,7 +609,12 @@ class ChartController(private val appContext: Context) {
                 r.zoom != pose.zoom || r.rotationDeg != pose.rotationDeg
             ) {
                 pickPose = null
-                main.post { dismissIdentify() }
+                main.post {
+                    dismissIdentify()
+                    // A camera move retires the chart menu with the report:
+                    // both describe a point the chart has slid out from under.
+                    chartMenu = null
+                }
             }
         }
         // The pill appears and goes as the mariner sails in and out of the
@@ -966,6 +971,79 @@ class ChartController(private val appContext: Context) {
     }
 
     fun resetRotation() = onEngine { it.resetRotation() }
+
+    // ---- the chart menu and markers -----------------------------------------
+
+    /** The long-press chart menu: what stands where it was raised. */
+    data class ChartMenu(
+        val at: Offset,
+        val lon: Double,
+        val lat: Double,
+        /** 0 over open water; else the mark under the finger. */
+        val markerId: Long = 0,
+        val markerName: String = "",
+    )
+
+    var chartMenu by mutableStateOf<ChartMenu?>(null)
+        private set
+
+    /** The mark being renamed, holding the menu's place data. */
+    var renamingMarker by mutableStateOf<ChartMenu?>(null)
+        private set
+
+    /**
+     * Raise the chart menu. Over a mark it renames and removes; over water it
+     * drops. The mark is core-owned and chart-independent — the shell stores
+     * nothing and draws nothing.
+     */
+    fun showChartMenu(xPts: Float, yPts: Float) = onEngine { l ->
+        l.screenToGeo(xPts, yPts, geoBuf)
+        val id = l.markerAt(xPts, yPts)
+        val name = if (id != 0L) l.markerName(id).orEmpty() else ""
+        val menu = ChartMenu(Offset(xPts, yPts), geoBuf[0], geoBuf[1], id, name)
+        main.post { chartMenu = menu }
+    }
+
+    fun dismissChartMenu() {
+        chartMenu = null
+    }
+
+    fun menuPick() {
+        val m = chartMenu ?: return
+        chartMenu = null
+        identifyAt(m.at.x, m.at.y)
+    }
+
+    /** THE DROP NEVER WAITS FOR TYPING: the core places and names the mark. */
+    fun dropMarker() {
+        val m = chartMenu ?: return
+        chartMenu = null
+        onEngine { l ->
+            if (l.markerAdd(m.lon, m.lat) == 0L) Log.w(TAG, "marker refused")
+        }
+    }
+
+    fun removeMarker() {
+        val m = chartMenu ?: return
+        chartMenu = null
+        onEngine { l -> l.markerRemove(m.markerId) }
+    }
+
+    fun beginRenameMarker() {
+        renamingMarker = chartMenu
+        chartMenu = null
+    }
+
+    /** Empty keeps the old name — the core decides, so shells agree. */
+    fun commitRenameMarker(name: String) {
+        val m = renamingMarker ?: return
+        renamingMarker = null
+        onEngine { l -> l.markerRename(m.markerId, name) }
+    }
+
+    fun cancelRenameMarker() {
+        renamingMarker = null
+    }
 
     /**
      * The compass tap walks the orientation ladder, exactly the reference's
