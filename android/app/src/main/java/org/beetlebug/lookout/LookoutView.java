@@ -282,7 +282,14 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 breakTrack(); // the focus moves to the mean of one more finger
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (dragging) {
+                // With TWO fingers down the pan stands aside, as the
+                // reference shell's pinch cancels its pan: the zoom's own
+                // anchor keeps the chart under the fingers, and feeding the
+                // focus drift to the pan AS WELL fights that correction
+                // frame by frame — the chart visibly shakes while zooming.
+                if (e.getPointerCount() >= 2) {
+                    // nothing recorded: applyPan sees no track and sits out
+                } else if (dragging) {
                     recordTouch(e);
                 } else if (Math.hypot(e.getX() - downX, e.getY() - downY) > touchSlop) {
                     // Past the slop: start the track HERE, so the pan doesn't
