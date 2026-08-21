@@ -1973,6 +1973,9 @@ lk_settings_window_destroyed (GtkWidget *window, gpointer user_data)
 
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
+  /* The raster refill too: a toggle queues it, and a window destroyed before
+     the idle runs would have it write into freed rows. */
+  g_clear_handle_id (&settings->raster_refresh_id, g_source_remove);
   g_ptr_array_set_size (settings->status_labels, 0);
   g_ptr_array_set_size (settings->pending_lists, 0);
   g_hash_table_remove_all (settings->list_boxes);

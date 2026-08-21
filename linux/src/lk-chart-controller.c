@@ -5,6 +5,8 @@
 #include "lk-plugins.h"
 #include "lk-store.h"
 
+#include <string.h>
+
 struct _LkChartController {
   GObject parent_instance;
 
@@ -23,6 +25,8 @@ struct _LkChartController {
 
   gint64 last_readouts_us;
   gint64 last_view_saved_us;
+  /* The pose as last written, so an unchanged one is not re-written. */
+  lookout_view last_saved_view;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -115,10 +119,25 @@ lk_chart_controller_push_readouts (LkChartController *self)
    * the pill is fed from the frame like every other readout. */
   lk_app_model_refresh_raster_state (self->model);
 
-  /* Persist periodically: a crash or kill -9 never reaches close(). */
-  if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC)
+  /* Under follow the CORE moves the camera without the shell; the pick's
+   * mark must ride its water, not its pixels. Only the mark moves — the
+   * report's frame is fixed for the report's life. */
+  double plon, plat;
+  if (lk_app_model_get_pick_geo (self->model, &plon, &plat))
+    {
+      double sx, sy;
+      if (lk_chart_controller_screen_of (self, plon, plat, &sx, &sy))
+        lk_app_model_move_pick (self->model, sx, sy);
+    }
+
+  /* Persist periodically — but only a pose that moved: AIS-driven redraws
+   * with a stationary camera were writing the disk every three seconds for
+   * nothing, and a boat computer's flash pays for that. */
+  if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC &&
+      memcmp (&view, &self->last_saved_view, sizeof view) != 0)
     {
       self->last_view_saved_us = now;
+      self->last_saved_view = view;
       lk_store_save_view (&view);
     }
 }

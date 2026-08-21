@@ -7,6 +7,7 @@
 #include "lk-plugin-install.h"
 #include "lk-pick-report.h"
 #include "lk-plugins.h"
+#include "lk-tether.h"
 #include "lk-search.h"
 #include "lk-settings-window.h"
 #include "lk-table-window.h"
@@ -863,7 +864,27 @@ lk_window_queue_place_pick (LkWindow *self)
 static void
 lk_window_pick_changed (LkAppModel *model, gpointer user_data)
 {
-  lk_window_update_pick (user_data);
+  LkWindow *self = user_data;
+
+  if (gtk_widget_in_destruction (self->window))
+    return;
+  lk_window_update_pick (self);
+}
+
+/* Follow re-projected the open pick's mark. The mark alone: the report's
+ * frame is fixed for the report's life, so a moving boat can still read it. */
+static void
+lk_window_pick_moved (LkAppModel *model, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  double x, y;
+
+  if (gtk_widget_in_destruction (self->window) || self->pick_marker == NULL)
+    return;
+  if (!lk_app_model_get_pick_point (model, &x, &y))
+    return;
+  gtk_widget_set_margin_start (self->pick_marker, MAX (0, (int) (x - LK_PICK_MARKER_SIZE / 2)));
+  gtk_widget_set_margin_top (self->pick_marker, MAX (0, (int) (y - LK_PICK_MARKER_SIZE / 2)));
 }
 
 /* The engine owns which set is drawn: the cycle key, a chart opening and a
@@ -873,7 +894,11 @@ static void
 lk_window_raster_changed (LkAppModel *model, gpointer user_data)
 {
   LkWindow *self = user_data;
-  GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window), "raster-select");
+  GAction *action = NULL;
+
+  if (gtk_widget_in_destruction (self->window))
+    return;
+  action = g_action_map_lookup_action (G_ACTION_MAP (self->window), "raster-select");
 
   if (action != NULL)
     g_simple_action_set_state (G_SIMPLE_ACTION (action),
@@ -902,6 +927,12 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
   LkWindow *self = user_data;
   const char *name = g_param_spec_get_name (pspec);
+
+  /* The close path fires notifies from inside the widget teardown (unrealize
+     closes the controller, which drops has-chart); touching half-disposed
+     children from here is the crash this guards. */
+  if (gtk_widget_in_destruction (self->window))
+    return;
 
   if (g_str_equal (name, "show-startup-loader") || g_str_equal (name, "has-chart") ||
       g_str_equal (name, "baking"))
@@ -1122,9 +1153,14 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   g_signal_connect (drop, "drop", G_CALLBACK (lk_window_dropped), self);
   gtk_widget_add_controller (self->overlay, GTK_EVENT_CONTROLLER (drop));
 
-  g_signal_connect (model, "notify", G_CALLBACK (lk_window_notify), self);
-  g_signal_connect (model, "pick-results", G_CALLBACK (lk_window_pick_changed), self);
-  g_signal_connect (model, "raster-changed", G_CALLBACK (lk_window_raster_changed), self);
+  lk_tether (model, g_signal_connect (model, "notify",
+                                      G_CALLBACK (lk_window_notify), self), self->window);
+  lk_tether (model, g_signal_connect (model, "pick-results",
+                                      G_CALLBACK (lk_window_pick_changed), self), self->window);
+  lk_tether (model, g_signal_connect (model, "raster-changed",
+                                      G_CALLBACK (lk_window_raster_changed), self), self->window);
+  lk_tether (model, g_signal_connect (model, "pick-moved",
+                                      G_CALLBACK (lk_window_pick_moved), self), self->window);
 
   lk_window_update_overlays (self);
 

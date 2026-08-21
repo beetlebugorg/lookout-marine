@@ -45,6 +45,11 @@ struct _LkChartBake {
 
   /* Read by the engine's progress callback on its worker threads. */
   gint cancelled;
+  /* Progress posts queued on the main loop and not yet run. Incremented on
+   * the worker, decremented on the main loop. */
+  gint posts_pending;
+  /* Destroyed while posts were still queued; the last one frees the job. */
+  gboolean orphaned;
 
   GMutex lock;
   int phase_offset; /* the engine counts from zero per call; put it back */
@@ -348,6 +353,8 @@ lk_bake_out_path (const LkChartBake *bake, const LkScannedCell *cell)
   return g_build_filename (dir, leaf, NULL);
 }
 
+static void lk_chart_bake_free (LkChartBake *bake);
+
 typedef struct {
   LkChartBake   *bake;
   LkBakeProgress progress;
@@ -357,12 +364,17 @@ static gboolean
 lk_bake_post_idle (gpointer data)
 {
   LkBakePost *post = data;
+  LkChartBake *bake = post->bake;
 
-  if (post->bake->on_progress != NULL)
-    post->bake->on_progress (&post->progress, post->bake->user_data);
+  if (bake->on_progress != NULL)
+    bake->on_progress (&post->progress, bake->user_data);
 
   lk_bake_progress_clear (&post->progress);
   g_free (post);
+  /* The last queued post frees an orphaned job: destroy ran on this same
+     loop while we sat queued, so it could not free under us. */
+  if (g_atomic_int_dec_and_test (&bake->posts_pending) && bake->orphaned)
+    lk_chart_bake_free (bake);
   return G_SOURCE_REMOVE;
 }
 
@@ -399,7 +411,10 @@ lk_bake_progress_cb (void *ctx, uint32_t done, uint32_t total)
 
   (void) total;
   if (msg != NULL)
-    g_idle_add (lk_bake_post_idle, msg);
+    {
+      g_atomic_int_inc (&bake->posts_pending);
+      g_idle_add (lk_bake_post_idle, msg);
+    }
 
   return g_atomic_int_get (&bake->cancelled) == 0;
 }
@@ -603,4 +618,38 @@ lk_chart_bake_cancel (LkChartBake *bake)
 {
   if (bake != NULL)
     g_atomic_int_set (&bake->cancelled, 1);
+}
+
+void
+lk_chart_bake_destroy (LkChartBake *bake)
+{
+  if (bake == NULL)
+    return;
+
+  /* A finished worker joins at once; a running one exits at the next chart
+     boundary once cancelled. */
+  g_atomic_int_set (&bake->cancelled, 1);
+  if (bake->thread != NULL)
+    {
+      g_thread_join (bake->thread);
+      bake->thread = NULL;
+    }
+
+  /* The done idle holds the job as its data; it must not fire after this.
+     Calling from inside that idle is fine — a dispatching source removes
+     cleanly. */
+  while (g_source_remove_by_user_data (bake))
+    ;
+
+  /* Progress posts already queued on this loop still point at the job.
+     Disarm them and let the last one free it; freeing here would be a
+     use-after-free the moment the loop turns. */
+  bake->on_progress = NULL;
+  bake->on_done = NULL;
+  if (g_atomic_int_get (&bake->posts_pending) > 0)
+    {
+      bake->orphaned = TRUE;
+      return;
+    }
+  lk_chart_bake_free (bake);
 }

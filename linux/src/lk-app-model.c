@@ -59,6 +59,11 @@ struct _LkAppModel {
   GPtrArray *pick_results;
   gboolean   pick_valid;
   double     pick_x, pick_y; /* logical points in the chart view */
+  /* The water the pick describes. The mark rides this under follow — the
+     core moves the camera without the shell — while the report's frame stays
+     where it opened. */
+  double     pick_lon, pick_lat;
+  gboolean   pick_has_geo;
   guint      pick_index;
 };
 
@@ -91,6 +96,7 @@ enum {
 
 enum {
   SIGNAL_PICK_RESULTS,
+  SIGNAL_PICK_MOVED,
   SIGNAL_RASTER_CHANGED,
   N_SIGNALS
 };
@@ -151,6 +157,9 @@ lk_app_model_dispose (GObject *object)
 {
   LkAppModel *self = LK_APP_MODEL (object);
 
+  /* A bake still running holds this model as its callback data; its idles
+     must not fire into a freed object. Blocks up to about one chart. */
+  g_clear_pointer (&self->bake, lk_chart_bake_destroy);
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
@@ -210,6 +219,12 @@ lk_app_model_class_init (LkAppModelClass *klass)
   /* Carries nothing; the panel reads results back via lk_app_model_get_pick_results. */
   signals[SIGNAL_PICK_RESULTS] =
       g_signal_new ("pick-results", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
+                    0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+
+  /* The open pick's mark was re-projected: only the mark moves, so this is a
+     separate, lighter signal than pick-results, which rebuilds the report. */
+  signals[SIGNAL_PICK_MOVED] =
+      g_signal_new ("pick-moved", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
                     0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 
   /* The installed list, the sets in view, the drawn one, or the ENC switch
@@ -462,9 +477,11 @@ static void
 lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
 {
   LkAppModel *self = user_data;
-  g_autofree char *source = g_strdup (self->bake_progress.name);
 
-  self->bake = NULL;
+  /* The job leaked here for its whole life once: path arrays, labels, a
+     mutex and the thread handle, per import. Destroy joins the worker (it
+     has just returned) and frees the lot. */
+  g_clear_pointer (&self->bake, lk_chart_bake_destroy);
   self->baking = FALSE;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
 
@@ -1372,7 +1389,8 @@ lk_app_model_set_open_error (LkAppModel *self, const char *message)
 }
 
 void
-lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y)
+lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y,
+                       double lon, double lat)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
@@ -1381,10 +1399,42 @@ lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y)
   self->pick_valid = results != NULL && results->len > 0;
   self->pick_x = x;
   self->pick_y = y;
+  self->pick_lon = lon;
+  self->pick_lat = lat;
+  self->pick_has_geo = self->pick_valid;
   /* A new pick is a new set of objects: the report opens on the best one, as
    * the engine ranked them. */
   self->pick_index = 0;
   g_signal_emit (self, signals[SIGNAL_PICK_RESULTS], 0);
+}
+
+gboolean
+lk_app_model_get_pick_geo (LkAppModel *self, double *out_lon, double *out_lat)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  if (!self->pick_valid || !self->pick_has_geo)
+    return FALSE;
+  if (out_lon != NULL)
+    *out_lon = self->pick_lon;
+  if (out_lat != NULL)
+    *out_lat = self->pick_lat;
+  return TRUE;
+}
+
+void
+lk_app_model_move_pick (LkAppModel *self, double x, double y)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (!self->pick_valid)
+    return;
+  /* Below half a point the mark would shimmer, not move. */
+  if (ABS (x - self->pick_x) < 0.5 && ABS (y - self->pick_y) < 0.5)
+    return;
+  self->pick_x = x;
+  self->pick_y = y;
+  g_signal_emit (self, signals[SIGNAL_PICK_MOVED], 0);
 }
 
 void

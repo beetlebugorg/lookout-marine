@@ -1,4 +1,5 @@
 #include "lk-hud.h"
+#include "lk-tether.h"
 
 #include <math.h>
 #include <string.h>
@@ -421,6 +422,9 @@ lk_hud_capsule_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   LkHudCapsule *capsule = user_data;
   const char *name = g_param_spec_get_name (pspec);
 
+  if (gtk_widget_in_destruction (capsule->root))
+    return;
+
   if (g_str_equal (name, "fix-state") || g_str_equal (name, "fix-lon") ||
       g_str_equal (name, "fix-lat"))
     lk_hud_update_coord (capsule);
@@ -537,8 +541,10 @@ lk_hud_capsule_new (LkAppModel *model)
    * chart is in view, which is most water. */
   gtk_box_append (GTK_BOX (root), lk_raster_pill_new (model));
 
-  g_signal_connect_data (model, "notify", G_CALLBACK (lk_hud_capsule_notify), capsule,
-                         lk_hud_capsule_free, 0);
+  lk_tether (model,
+             g_signal_connect_data (model, "notify", G_CALLBACK (lk_hud_capsule_notify),
+                                    capsule, lk_hud_capsule_free, 0),
+             root);
 
   lk_hud_update_coord (capsule);
   lk_hud_update_scale (capsule);
@@ -817,9 +823,13 @@ lk_scale_bar_update (LkScaleBar *bar)
 static void
 lk_scale_bar_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
+  LkScaleBar *bar = user_data;
+
+  if (gtk_widget_in_destruction (bar->root))
+    return;
   if (g_str_equal (g_param_spec_get_name (pspec), "scale-denominator") ||
       g_str_equal (g_param_spec_get_name (pspec), "has-chart"))
-    lk_scale_bar_update (user_data);
+    lk_scale_bar_update (bar);
 }
 
 GtkWidget *
@@ -846,8 +856,10 @@ lk_scale_bar_new (LkAppModel *model)
   gtk_widget_set_halign (bar->root, GTK_ALIGN_START);
   gtk_widget_set_valign (bar->root, GTK_ALIGN_END);
 
-  g_signal_connect_data (model, "notify", G_CALLBACK (lk_scale_bar_notify), bar,
-                         lk_scale_bar_free, 0);
+  lk_tether (model,
+             g_signal_connect_data (model, "notify", G_CALLBACK (lk_scale_bar_notify),
+                                    bar, lk_scale_bar_free, 0),
+             bar->root);
   lk_scale_bar_update (bar);
   return bar->root;
 }
@@ -881,7 +893,8 @@ lk_building_pill_new (LkAppModel *model)
   gtk_widget_set_can_target (pill, FALSE);
   gtk_widget_set_visible (pill, lk_app_model_get_building (model));
 
-  g_signal_connect (model, "notify", G_CALLBACK (lk_building_notify), pill);
+  /* Data is the widget itself, so the object variant carries the lifetime. */
+  g_signal_connect_object (model, "notify", G_CALLBACK (lk_building_notify), pill, 0);
   return pill;
 }
 
@@ -916,6 +929,9 @@ lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
   LkAppModel *model = LK_APP_MODEL (object);
   LkBakePill *pill = user_data;
+
+  if (gtk_widget_in_destruction (pill->root))
+    return;
   const LkBakeProgress *p = lk_app_model_get_bake_progress (model);
 
   gtk_widget_set_visible (pill->root, p != NULL);
@@ -976,7 +992,10 @@ lk_bake_pill_new (LkAppModel *model)
   gtk_widget_set_valign (row, GTK_ALIGN_START);
   gtk_widget_set_visible (row, lk_app_model_get_baking (model));
 
-  g_signal_connect_data (model, "notify", G_CALLBACK (lk_bake_notify), pill, lk_bake_pill_free, 0);
+  lk_tether (model,
+             g_signal_connect_data (model, "notify", G_CALLBACK (lk_bake_notify),
+                                    pill, lk_bake_pill_free, 0),
+             row);
   return row;
 }
 

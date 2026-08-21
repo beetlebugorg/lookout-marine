@@ -390,7 +390,7 @@ lk_chart_view_identify_at (LkChartView *self, double x, double y)
 
   lk_app_model_pin_overlay (self->model, NULL);
   lk_app_model_set_pick (self->model, lk_chart_controller_pick (self->controller, lon, lat),
-                         x, y);
+                         x, y, lon, lat);
 }
 
 /* ---- the chart menu ------------------------------------------------------ */
@@ -413,7 +413,7 @@ lk_chart_menu_pick (GtkButton *button, gpointer user_data)
   lk_app_model_set_pick (self->model,
                          lk_chart_controller_pick (self->controller,
                                                    self->menu_lon, self->menu_lat),
-                         self->menu_x, self->menu_y);
+                         self->menu_x, self->menu_y, self->menu_lon, self->menu_lat);
 }
 
 /* THE DROP NEVER WAITS FOR TYPING. The core places the mark and names it in one

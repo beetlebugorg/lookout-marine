@@ -71,6 +71,12 @@ LkChartBake *lk_chart_bake_start (const char        *source,
  * within roughly one chart's bake time, not instantly. */
 void lk_chart_bake_cancel (LkChartBake *bake);
 
+/* Join the worker and free the job. Call when the done callback has fired, or
+ * to tear down a running bake (it is cancelled first and this blocks up to
+ * about one chart's bake time). MAIN THREAD only: pending progress posts are
+ * disarmed here and drain on the same loop. */
+void lk_chart_bake_destroy (LkChartBake *bake);
+
 /* Everything this app prepared for itself, and nothing else. */
 const char *lk_chart_bake_root (void);
 

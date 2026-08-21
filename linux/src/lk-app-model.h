@@ -169,7 +169,13 @@ void lk_app_model_set_open_error (LkAppModel *self, const char *message);
 /* The pick from the last tap, and where on the chart it landed (logical points
  * in the chart view — the report stands beside the mark there). Transfer full;
  * emits ::pick-results, which is what rebuilds the report. */
-void       lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y);
+void       lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y,
+                                  double lon, double lat);
+/* The water the open pick describes; FALSE when no pick is open. */
+gboolean   lk_app_model_get_pick_geo (LkAppModel *self, double *out_lon, double *out_lat);
+/* Re-place the open pick's mark. Emits "pick-moved" (the mark alone; the
+ * report's frame never moves) and only when it moved at least half a point. */
+void       lk_app_model_move_pick (LkAppModel *self, double x, double y);
 void       lk_app_model_clear_pick (LkAppModel *self);
 GPtrArray *lk_app_model_get_pick_results (LkAppModel *self);
 gboolean   lk_app_model_get_pick_point (LkAppModel *self, double *out_x, double *out_y);
