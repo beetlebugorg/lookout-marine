@@ -173,8 +173,17 @@ namespace winrt::LookoutMarine::implementation
          * written is complete, and a later import resumes from them. */
         bake_timer.Stop();
         auto rasters = bake_job->FinishedRasters();
+        auto error = bake_job->Error();
         bake_job.reset();
         BakePanel().Visibility(Visibility::Collapsed);
+
+        /* An import that produced nothing says why. Anything partial opens
+         * below without a dialog: what landed is a usable library. */
+        if (!error.empty())
+        {
+            ShowImportError(winrt::to_hstring("Couldn't prepare those charts.\n" + error));
+            return;
+        }
 
         /* Open the whole LIBRARY at once, not this import's output alone: an
          * import adds to what earlier imports baked, a resume skips what is
@@ -287,5 +296,16 @@ namespace winrt::LookoutMarine::implementation
         auto file = co_await picker.PickSingleFileAsync();
         if (file != nullptr)
             ImportCharts(winrt::to_string(file.Path()));
+    }
+
+    fire_and_forget MainWindow::ShowImportError(winrt::hstring msg)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(DialogRoot());
+        dialog.Title(winrt::box_value(L"Import Charts"));
+        dialog.Content(winrt::box_value(msg));
+        dialog.CloseButtonText(L"OK");
+        co_await dialog.ShowAsync();
     }
 }

@@ -103,6 +103,14 @@ namespace winrt::LookoutMarine::implementation
             InstallStoredRasters(); // the open destroyed the handle they rode on
             RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
             StartAlertWatch();      // a collision alarm must not need a pane open
+            if (!pending_plugin_install.empty())
+            {
+                // The .lkplug that arrived at the empty state, now that a
+                // plugin layer exists to inspect it.
+                std::string parked = pending_plugin_install;
+                pending_plugin_install.clear();
+                InstallPluginFromPath(parked);
+            }
             RefreshPluginTables();  // the Vessels menu follows the declarations
             EmptyState().Visibility(Visibility::Collapsed);
             SetLoaderTessellating(); // the loader stands until the first build
@@ -180,7 +188,18 @@ namespace winrt::LookoutMarine::implementation
         chart_panel = Controls::SwapChainPanel{};
         Root().Children().InsertAt(0, chart_panel);
         auto panel_native = chart_panel.as<ISwapChainPanelNative>();
-        winrt::check_hresult(panel_native->SetSwapChain(sc));
+        // Not check_hresult: this can run inside a DispatcherTimer tick, where
+        // a throw (device removed at exactly this moment) is uncaught and
+        // takes the app down. A failed attach is an ordinary failed open.
+        if (FAILED(panel_native->SetSwapChain(sc)))
+        {
+            uint32_t idx;
+            if (Root().Children().IndexOf(chart_panel, idx))
+                Root().Children().RemoveAt(idx);
+            chart_panel = nullptr;
+            lk_controller_close(controller);
+            return false;
+        }
         ApplyPanelScale();
         fprintf(stderr, "shell: D3D12 swapchain up (%u x %u pt @ %.2f)\n", wpt, hpt, density);
         return true;

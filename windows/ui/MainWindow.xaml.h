@@ -144,6 +144,9 @@ namespace winrt::LookoutMarine::implementation
 
         // plugin install + file routing (MainWindow.PluginInstall.cpp)
         fire_and_forget InstallPluginFromPath(std::string path); // consent first
+        // A .lkplug that arrived before any chart was open: installed (with
+        // consent) the moment one is, instead of erroring at the empty state.
+        std::string pending_plugin_install;
         fire_and_forget PickPluginFile();
         fire_and_forget ShowPluginError(winrt::hstring msg);
         void OpenDroppedPath(std::string const &path);
@@ -175,6 +178,7 @@ namespace winrt::LookoutMarine::implementation
         void ShowRasterMenu();
         void UpdateRasterPill(lk_readout const &r);
         fire_and_forget ShowRasterError(winrt::hstring msg);
+        fire_and_forget ShowImportError(winrt::hstring msg);
         // zoom-to-scale panel (MainWindow.Scale.cpp)
         void WireScale();
         void ToggleScalePanel();
@@ -320,6 +324,11 @@ namespace winrt::LookoutMarine::implementation
         double pick_x{ 0 }, pick_y{ 0 }; // the mark, logical points
         lk_readout pick_pose{};          // the camera pose the report describes
         bool pick_pose_valid{ false };
+        // A tap parked one double-tap interval, so the first release of a
+        // double-tap never flashes the pick report before the zoom.
+        Microsoft::UI::Xaml::DispatcherTimer tap_timer{ nullptr };
+        double tap_x{ 0 };
+        double tap_y{ 0 };
         // The tallest the card has stood for this pick; it never shrinks
         // below this (capped by the placement room), so the controls and the
         // chart under the pointer never move as the selection changes.

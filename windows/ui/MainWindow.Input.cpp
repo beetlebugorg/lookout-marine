@@ -75,13 +75,30 @@ namespace winrt::LookoutMarine::implementation
         double moved = std::hypot(x - down_x, y - down_y);
         if (moved <= kTapSlopPt)
         {
-            // A tap on an overlay symbol pins its bubble and never also opens
-            // the chart pick report; a tap on open water retires the bubble.
-            if (!TryPinOverlayAt(x, y))
+            // Held back one double-tap interval: the first release of a
+            // double-tap must not flash the pick report open (or pin a
+            // bubble) before the second tap zooms. A lone tap lands when the
+            // timer fires; a double-tap cancels it.
+            tap_x = x;
+            tap_y = y;
+            if (tap_timer == nullptr)
             {
-                CloseOverlayBubble();
-                ShowPick(x, y);
+                tap_timer = DispatcherTimer{};
+                tap_timer.Tick([this](auto &&, auto &&) {
+                    tap_timer.Stop();
+                    // A tap on an overlay symbol pins its bubble and never
+                    // also opens the chart pick report; a tap on open water
+                    // retires the bubble.
+                    if (!TryPinOverlayAt(tap_x, tap_y))
+                    {
+                        CloseOverlayBubble();
+                        ShowPick(tap_x, tap_y);
+                    }
+                });
             }
+            tap_timer.Interval(std::chrono::milliseconds{ ::GetDoubleClickTime() });
+            tap_timer.Stop();
+            tap_timer.Start();
         }
         else
             lk_controller_fling_start(controller, vx, vy);
@@ -95,6 +112,9 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::GestureDoubleTap(double x, double y)
     {
+        // The parked first tap belongs to this gesture, not to the chart.
+        if (tap_timer != nullptr)
+            tap_timer.Stop();
         if (lk_controller_is_open(controller))
             lk_controller_zoom_at(controller, 1.0, x, y);
     }

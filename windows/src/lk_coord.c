@@ -53,7 +53,13 @@ parse_hemispheres(const char *text, double *out_lat, double *out_lon)
         p++;
     }
 
-    return have_lat && have_lon;
+    /* The same envelope the decimal form checks: "999 N 999 E" is not a
+     * place, and the engine must never be handed one. */
+    if (!have_lat || !have_lon)
+        return 0;
+    if (*out_lat < -90.0 || *out_lat > 90.0 || *out_lon < -180.0 || *out_lon > 180.0)
+        return 0;
+    return 1;
 }
 
 int

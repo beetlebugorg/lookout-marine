@@ -443,11 +443,14 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     lookout_set_pixel_density(h, density);
     lookout_resize(h, width_pt, height_pt);
 
-    /* Reopen where we left off; a first run (no saved pose) frames the opened
-     * chart, so the user sees their cells and not a world-zoom speck. */
+    /* Reopen where we left off; a first run (no saved pose) takes the core's
+     * default view, not fit_chart: fitting a big library lands on an
+     * arbitrary harbor cell, and the default keeps that centre but pulls back
+     * to an overview (the one piece of this policy the core keeps in one
+     * place — see lookout.h). */
     lookout_view v;
     if (!lk_store_load_view(&v))
-        lookout_fit_chart(h, &v);
+        lookout_default_view(h, &v);
     lookout_set_view(h, &v);
     apply_env_view(h);
 
@@ -782,8 +785,13 @@ copy_name(const char *name, size_t len, char *out, size_t out_len)
         return;
     if (name == NULL)
         len = 0;
-    if (len >= out_len)
+    if (len >= out_len) {
         len = out_len - 1;
+        /* Never cut mid-sequence: a truncated UTF-8 tail makes
+         * winrt::to_hstring throw over a long non-ASCII set name. */
+        while (len > 0 && ((unsigned char)name[len] & 0xC0) == 0x80)
+            len--;
+    }
     memcpy(out, name, len);
     out[len] = '\0';
 }

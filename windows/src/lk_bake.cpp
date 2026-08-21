@@ -169,6 +169,12 @@ namespace lkw
         return p;
     }
 
+    std::string BakeJob::Error() const
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        return error_;
+    }
+
     std::vector<std::string> BakeJob::Finished() const
     {
         std::lock_guard<std::mutex> g(mu_);
@@ -310,6 +316,7 @@ namespace lkw
             ++sheets;
 
         tile57_error err{};
+        uint32_t baked_total = 0;
         auto run = [&](size_t off, size_t n, bool raster) {
             if (n == 0 || cancel_.load())
                 return;
@@ -333,6 +340,7 @@ namespace lkw
                     tile57_bake_files(ins.data() + off, outs.data() + off, n, workers,
                                       ProgressThunk, LabelThunk, this, &baked, &err);
             }
+            baked_total += baked;
         };
 
         run(0, cells, false);
@@ -361,6 +369,18 @@ namespace lkw
                 else
                     finished_.push_back(out_paths_[i]);
             }
+        }
+
+        /* An import that produced NOTHING must say why, not just take the
+         * panel down: a folder of malformed cells otherwise looks like an app
+         * that did nothing. A partial bake is not an error — what landed is a
+         * library — so only the all-failed case keeps the message. */
+        if (!cancel_.load() && baked_total == 0 && (cells + sheets) != 0)
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            error_ = err.message[0] != '\0'
+                         ? err.message
+                         : "None of the charts could be prepared.";
         }
 
         running_.store(false);

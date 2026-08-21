@@ -125,6 +125,14 @@ namespace winrt::LookoutMarine::implementation
     // goes when nothing is there.
     void MainWindow::HoverProbe(double x, double y)
     {
+        // One card at a time: while a bubble is pinned the hover tip stays
+        // down, or the two overlap over the same target.
+        if (!overlay_pin_id.empty())
+        {
+            HoverTip().Visibility(Visibility::Collapsed);
+            hover_payload.clear();
+            return;
+        }
         LARGE_INTEGER now, freq;
         QueryPerformanceCounter(&now);
         QueryPerformanceFrequency(&freq);

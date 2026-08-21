@@ -115,6 +115,10 @@ namespace lkw
 
         BakeProgress Snapshot() const;
         bool Running() const { return running_.load(); }
+        /* Why an import produced nothing, one sentence ready to show. Empty on
+         * success, on cancel, and on a partial result (what landed is a
+         * library). Valid once Running() is false. */
+        std::string Error() const;
         /* Every VECTOR chart archive that finished — what the open takes.
          * Valid once Running() is false. */
         std::vector<std::string> Finished() const;
@@ -132,6 +136,7 @@ namespace lkw
 
         mutable std::mutex mu_;
         BakeProgress p_;
+        std::string error_;
         std::vector<std::string> out_paths_;
         std::vector<std::string> finished_;
         std::vector<std::string> finished_rasters_;

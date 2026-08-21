@@ -75,6 +75,15 @@ namespace winrt::LookoutMarine::implementation
     {
         auto lifetime = get_strong();
 
+        // Parked, not refused: a .lkplug dropped at the empty state has no
+        // chart handle for the plugin layer to ride, so it installs the
+        // moment one opens instead of erroring now.
+        if (!lk_controller_is_open(controller))
+        {
+            pending_plugin_install = path;
+            co_return;
+        }
+
         char *json = lk_controller_plugin_inspect(controller, path.c_str());
         if (json == nullptr)
         {
