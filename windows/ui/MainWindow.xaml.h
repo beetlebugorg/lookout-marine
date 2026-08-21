@@ -183,6 +183,13 @@ namespace winrt::LookoutMarine::implementation
         // The chart context menu and the mariner's markers (right-click).
         void ShowChartMenu(double x, double y);
         fire_and_forget RenameMarkerDialog(uint64_t id, winrt::hstring current);
+
+        // True while the chrome wears the dark (dusk/night) dictionaries.
+        // Code-built cards pick their ink through lkw::chrome::Ink(dark).
+        bool DarkChrome()
+        {
+            return Root().ActualTheme() == Microsoft::UI::Xaml::ElementTheme::Dark;
+        }
         // zoom-to-scale panel (MainWindow.Scale.cpp)
         void WireScale();
         void ToggleScalePanel();

@@ -134,20 +134,25 @@ namespace winrt::LookoutMarine::implementation
             co_return;
         }
 
+        // The dialog wears the chart's scheme (its XamlRoot is Root's), so
+        // the consent ink resolves against it: dark cards need light text.
+        auto ink = DarkChrome() ? winrt::Windows::UI::Color{ 0xFF, 0xDD, 0xE4, 0xEA } : kInk;
+        auto muted = DarkChrome() ? winrt::Windows::UI::Color{ 0xFF, 0x9F, 0xB0, 0xBD } : kMuted;
+
         Controls::StackPanel body;
         body.Spacing(8);
         body.MaxWidth(420);
         if (!version.empty())
-            body.Children().Append(ConsentLine(L"Version " + version, 12, false, kMuted));
+            body.Children().Append(ConsentLine(L"Version " + version, 12, false, muted));
         if (!replaces.empty())
-            body.Children().Append(ConsentLine(replaces, 12, false, kMuted));
+            body.Children().Append(ConsentLine(replaces, 12, false, muted));
         body.Children().Append(ConsentLine(
-            replaces.empty() ? L"This plugin can:" : L"After this install it can:", 13, true, kInk));
+            replaces.empty() ? L"This plugin can:" : L"After this install it can:", 13, true, ink));
         if (sentences.empty())
             body.Children().Append(ConsentLine(L"This plugin only draws its own settings pages.",
-                                               13, false, kInk));
+                                               13, false, ink));
         for (auto const &s : sentences)
-            body.Children().Append(ConsentLine(s, 13, false, kInk));
+            body.Children().Append(ConsentLine(s, 13, false, ink));
         if (!adds.empty())
         {
             body.Children().Append(ConsentLine(L"New since the installed version:", 12, true, kAdd));
@@ -156,9 +161,9 @@ namespace winrt::LookoutMarine::implementation
         }
         if (!drops.empty())
         {
-            body.Children().Append(ConsentLine(L"No longer asks to:", 12, true, kMuted));
+            body.Children().Append(ConsentLine(L"No longer asks to:", 12, true, muted));
             for (auto const &s : drops)
-                body.Children().Append(ConsentLine(s, 12, false, kMuted));
+                body.Children().Append(ConsentLine(s, 12, false, muted));
         }
 
         Controls::ContentDialog dialog;

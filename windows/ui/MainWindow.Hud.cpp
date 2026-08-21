@@ -18,6 +18,20 @@ namespace winrt::LookoutMarine::implementation
         lk_readout r{};
         lk_controller_readout(controller, &r);
 
+        // The chrome wears the CHART's scheme: dusk and night take the dark
+        // dictionaries (see the XAML ThemeDictionaries), and menus and
+        // dialogs follow the element theme on their own.
+        ElementTheme want = r.scheme != 0 ? ElementTheme::Dark : ElementTheme::Light;
+        if (Root().RequestedTheme() != want)
+        {
+            Root().RequestedTheme(want);
+            // The change-detected chrome re-resolves its colours on its next
+            // build; force one, or the pills keep the old theme's ink.
+            fix_state_shown = -2;
+            follow_state_shown = -2;
+            raster_pill_shown.clear();
+        }
+
         // A pick report describes the objects under one point of one view:
         // any camera move the MARINER makes — pan, fling, zoom, rotate —
         // retires it. Follow moving the chart under way does not: the core

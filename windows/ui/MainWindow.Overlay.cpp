@@ -22,6 +22,29 @@ namespace
         return c;
     }
 
+    // Ink and muted follow the ELEMENT's theme: the chrome re-themes with the
+    // chart's scheme (see the XAML ThemeDictionaries), and these cards are
+    // rebuilt when their content changes, which is when they re-resolve.
+    bool DarkOn(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark;
+    }
+
+    winrt::Windows::UI::Color Ink(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return DarkOn(el) ? winrt::Windows::UI::Color{ 0xFF, 0xDD, 0xE4, 0xEA } : kInk;
+    }
+
+    winrt::Windows::UI::Color Muted(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return DarkOn(el) ? winrt::Windows::UI::Color{ 0xFF, 0x9F, 0xB0, 0xBD } : kMuted;
+    }
+
+    winrt::Windows::UI::Color Accent(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return DarkOn(el) ? winrt::Windows::UI::Color{ 0xFF, 0x7E, 0xA1, 0xF5 } : kAccent;
+    }
+
     // {"title":"...","rows":[["key","value"],...]} into a small stack.
     void BuildPayload(winrt::Microsoft::UI::Xaml::Controls::StackPanel const &into,
                       std::string const &json)
@@ -34,7 +57,7 @@ namespace
             title.Text(root.GetNamedString(L"title", L""));
             title.FontSize(13);
             title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            title.Foreground(Media::SolidColorBrush{ kInk });
+            title.Foreground(Media::SolidColorBrush{ Ink(into) });
             into.Children().Append(title);
             for (auto const &rv : root.GetNamedArray(L"rows", JsonArray{}))
             {
@@ -47,12 +70,12 @@ namespace
                 winrt::Microsoft::UI::Xaml::Controls::TextBlock k;
                 k.Text(pair.GetAt(0).GetString());
                 k.FontSize(12);
-                k.Foreground(Media::SolidColorBrush{ kMuted });
+                k.Foreground(Media::SolidColorBrush{ Muted(into) });
                 line.Children().Append(k);
                 winrt::Microsoft::UI::Xaml::Controls::TextBlock v;
                 v.Text(pair.GetAt(1).GetString());
                 v.FontSize(12);
-                v.Foreground(Media::SolidColorBrush{ kInk });
+                v.Foreground(Media::SolidColorBrush{ Ink(into) });
                 line.Children().Append(v);
                 into.Children().Append(line);
             }
@@ -191,9 +214,9 @@ namespace winrt::LookoutMarine::implementation
         {
             GpsIcon().Glyph(L"\uE713");
             GpsText().Text(L"Configure GPS");
-            GpsIcon().Foreground(Media::SolidColorBrush{ kMuted });
-            GpsText().Foreground(Media::SolidColorBrush{ kMuted });
-            GpsPill().Background(Media::SolidColorBrush{ WithAlpha(kMuted, 0.14) });
+            GpsIcon().Foreground(Media::SolidColorBrush{ Muted(GpsText()) });
+            GpsText().Foreground(Media::SolidColorBrush{ Muted(GpsText()) });
+            GpsPill().Background(Media::SolidColorBrush{ WithAlpha(Muted(GpsText()), 0.14) });
         }
         Controls::ToolTipService::SetToolTip(GpsPill(), winrt::box_value(
             state == 0 ? L"No source of position. Add a gateway or a Signal K server."
@@ -235,8 +258,8 @@ namespace winrt::LookoutMarine::implementation
         follow_state_shown = state;
 
         NorthLetter().Text(state == 3 ? L"C" : L"N");
-        auto tint = state == 0 ? kInk : state == 1 ? winrt::Windows::UI::Color{ 0xFF, 0xF5, 0x9E, 0x0B }
-                                                   : kAccent;
+        auto tint = state == 0 ? Ink(NorthLetter()) : state == 1 ? winrt::Windows::UI::Color{ 0xFF, 0xF5, 0x9E, 0x0B }
+                                                                 : Accent(NorthLetter());
         NorthLetter().Foreground(Media::SolidColorBrush{ tint });
         NorthCaret().Foreground(Media::SolidColorBrush{ tint });
         Controls::ToolTipService::SetToolTip(NorthBtn(), winrt::box_value(

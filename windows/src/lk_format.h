@@ -29,5 +29,15 @@ namespace lkw
         constexpr uint32_t kAmberEdge = 0x66F59E0B;  /* 40 % amber */
         constexpr uint32_t kRule = 0xFFDDDDDD;
         constexpr uint32_t kClear = 0x00000000;
+
+        /* Theme-aware picks: the chrome wears the chart's scheme (the XAML
+         * ThemeDictionaries), and code-built cards resolve at build time from
+         * the element they fill (ActualTheme == Dark). Amber stays amber at
+         * night to mean anything; the accent lightens to read on dark. */
+        constexpr uint32_t Ink(bool dark) { return dark ? 0xFFDDE4EAu : kInk; }
+        constexpr uint32_t Muted(bool dark) { return dark ? 0xFF9FB0BDu : kMuted; }
+        constexpr uint32_t Accent(bool dark) { return dark ? 0xFF7EA1F5u : kAccent; }
+        constexpr uint32_t AccentFill(bool dark) { return dark ? 0x1F7EA1F5u : kAccentFill; }
+        constexpr uint32_t Rule(bool dark) { return dark ? 0xFF33414Du : kRule; }
     }
 }

@@ -148,7 +148,7 @@ namespace winrt::LookoutMarine::implementation
                     Controls::FontIcon book;
                     book.Glyph(L"\uE736"); // an open book: the chart's notes
                     book.FontSize(13);
-                    book.Foreground(Brush(kMuted));
+                    book.Foreground(Brush(Muted(DarkChrome())));
                     line.Children().Append(book);
                     Controls::TextBlock chip;
                     chip.Text(!d.chip.empty() ? d.chip : d.title);
@@ -175,7 +175,7 @@ namespace winrt::LookoutMarine::implementation
                         Controls::TextBlock subtitle;
                         subtitle.Text(sub);
                         subtitle.FontSize(11);
-                        subtitle.Foreground(Brush(kMuted));
+                        subtitle.Foreground(Brush(Muted(DarkChrome())));
                         subtitle.TextTrimming(TextTrimming::CharacterEllipsis);
                         subtitle.MaxLines(1);
                         text.Children().Append(subtitle);
@@ -189,7 +189,7 @@ namespace winrt::LookoutMarine::implementation
                 row.CornerRadius({ 8, 8, 8, 8 });
                 row.BorderThickness({ 0, 0, 0, 0 });
                 row.Background(Brush(kClear));
-                row.Foreground(Brush(kInk));
+                row.Foreground(Brush(Ink(DarkChrome())));
                 row.Click([this, i](auto &&, auto &&) { SelectPickObject(i); });
                 return row;
             };
@@ -256,8 +256,8 @@ namespace winrt::LookoutMarine::implementation
             {
                 auto row = panel.Children().GetAt(j).as<Controls::Button>();
                 bool sel = unbox_value<int>(row.Tag()) == index;
-                row.Background(Brush(sel ? kAccentFill : kClear));
-                row.Foreground(Brush(sel ? kAccent : kInk));
+                row.Background(Brush(sel ? AccentFill(DarkChrome()) : kClear));
+                row.Foreground(Brush(sel ? Accent(DarkChrome()) : Ink(DarkChrome())));
                 if (sel && scrolls)
                 {
                     // Keep the selection in sight, and move ONLY when it has
@@ -326,7 +326,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock text;
             text.Text(note);
             text.FontSize(13);
-            text.Foreground(Brush(kInk));
+            text.Foreground(Brush(Ink(DarkChrome())));
             text.TextWrapping(TextWrapping::Wrap);
             text.IsTextSelectionEnabled(true);
             text.MaxWidth(kDetailWidth - 80);
@@ -343,7 +343,7 @@ namespace winrt::LookoutMarine::implementation
                              ? L"The cell carries no attributes for this object."
                              : L"The cell carries only source data for this object.");
             verdict.FontSize(13);
-            verdict.Foreground(Brush(kMuted));
+            verdict.Foreground(Brush(Muted(DarkChrome())));
             verdict.TextWrapping(TextWrapping::Wrap);
             verdict.Margin({ 16, 4, 16, 4 });
             body.Children().Append(verdict);
@@ -363,13 +363,13 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock label;
             label.Text(row.label);
             label.FontSize(13);
-            label.Foreground(Brush(kMuted));
+            label.Foreground(Brush(Muted(DarkChrome())));
             label.TextWrapping(TextWrapping::Wrap);
             grid.Children().Append(label);
             Controls::TextBlock value;
             value.Text(row.value);
             value.FontSize(13);
-            value.Foreground(Brush(kInk));
+            value.Foreground(Brush(Ink(DarkChrome())));
             value.TextWrapping(TextWrapping::Wrap);
             value.IsTextSelectionEnabled(true);
             Controls::Grid::SetColumn(value, 1);
@@ -400,13 +400,13 @@ namespace winrt::LookoutMarine::implementation
                               : (raw.value.empty() ? raw.name : hstring{ raw.name + L":" }));
                 name.FontSize(11);
                 name.FontFamily(Media::FontFamily{ L"Consolas" });
-                name.Foreground(Brush(kMuted));
+                name.Foreground(Brush(Muted(DarkChrome())));
                 grid.Children().Append(name);
                 Controls::TextBlock value;
                 value.Text(raw.value);
                 value.FontSize(11);
                 value.FontFamily(Media::FontFamily{ L"Consolas" });
-                value.Foreground(Brush(kInk));
+                value.Foreground(Brush(Ink(DarkChrome())));
                 value.TextWrapping(TextWrapping::Wrap);
                 value.IsTextSelectionEnabled(true);
                 Controls::Grid::SetColumn(value, 1);
