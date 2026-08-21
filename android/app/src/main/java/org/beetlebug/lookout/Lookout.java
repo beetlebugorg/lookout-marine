@@ -389,4 +389,86 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nPluginConfigSet(long h, String id, String json);
     private static native String nPluginAlertsJson(long h);
     private static native boolean nPluginAlertAck(long h, long id);
+    // ---- follow mode and own ship ------------------------------------------
+
+    /** Fix states {@link #ownShip} answers. */
+    public static final int FIX_NONE = 0;
+    public static final int FIX_LOST = 1;
+    public static final int FIX_LIVE = 2;
+
+    /** Centre the chart on own ship and keep it there. The engine drops
+     *  follow on a pan, so poll {@link #followActive}, never remember a tap. */
+    public void followSet(boolean on)            { if (h != 0) nFollowSet(h, on); }
+    /** 0 off, 1 following, 2 armed and waiting for a fix. */
+    public int followActive()                    { return h == 0 ? 0 : nFollowActive(h); }
+    public void courseUpSet(boolean on)          { if (h != 0) nCourseUpSet(h, on); }
+    public boolean courseUpActive()              { return h != 0 && nCourseUpActive(h) != 0; }
+
+    /** The reported fix into {@code out} (length >= 2: lon, lat); answers a
+     *  FIX_* state. The numbers mean nothing unless it answers FIX_LIVE. */
+    public int ownShip(double[] out)             { return h == 0 ? FIX_NONE : nOwnShip(h, out); }
+
+    // ---- raster shown state and the ENC switch -----------------------------
+
+    /** Whether set {@code i} is drawn where it covers. The engine owns the
+     *  election; this is read back to SAVE the mariner's choice by set. */
+    public boolean rasterShown(int i)            { return h != 0 && nRasterShown(h, i); }
+    public void rasterSetShown(int i, boolean on){ if (h != 0) nRasterSetShown(h, i, on); }
+    public void setChartHidden(boolean hidden)   { if (h != 0) nSetChartHidden(h, hidden); }
+    /** How many survey cells are aboard. 0 means no ENC: a raster set saved
+     *  hidden must draw anyway, or the sea is blank. */
+    public int chartsCount()                     { return h == 0 ? 0 : nChartsCount(h); }
+
+    // ---- markers -----------------------------------------------------------
+
+    /** Drop a mark; the CORE names it ("Mark 1"), so the drop never waits for
+     *  typing. Answers the id, 0 refused. */
+    public long markerAdd(double lon, double lat){ return h == 0 ? 0 : nMarkerAdd(h, lon, lat); }
+    /** The marker's name, or null once it is gone. */
+    public String markerName(long id)            { return h == 0 ? null : nMarkerName(h, id); }
+    /** The marker within about 14 pt of a LOGICAL point, or 0. Decides the
+     *  chart menu's items: over a mark it renames and removes. */
+    public long markerAt(float xPts, float yPts) { return h == 0 ? 0 : nMarkerAt(h, xPts, yPts); }
+    /** Empty keeps the old name; the core clips at 32 characters. */
+    public boolean markerRename(long id, String name) { return h != 0 && nMarkerRename(h, id, name); }
+    public boolean markerRemove(long id)         { return h != 0 && nMarkerRemove(h, id); }
+
+    // ---- the chart's own files and the library -----------------------------
+
+    /** A file the chart carries (TXTDSC text, PICREP picture), or null.
+     *  {@code mimeOut} (length >= 1, may be null) receives the mime type. */
+    public byte[] auxFile(String cell, String name, String[] mimeOut) {
+        return h == 0 ? null : nAuxFile(h, cell, name, mimeOut);
+    }
+
+    /** Look through a folder or archive for charts; the engine's scan JSON,
+     *  or null. NOT REENTRANT — serialize callers — and handle-less: the
+     *  scan reads the filesystem, not the open chart. */
+    public static String scanCharts(String path, boolean zip) { return nScanCharts(path, zip); }
+
+    // ---- portrayal quick toggles -------------------------------------------
+
+    public void toggleText()                     { if (h != 0) nToggleText(h); }
+    public void toggleSoundings()                { if (h != 0) nToggleSoundings(h); }
+    public void toggleOtherCategory()            { if (h != 0) nToggleOtherCategory(h); }
+
+    private static native void nFollowSet(long h, boolean on);
+    private static native int nFollowActive(long h);
+    private static native void nCourseUpSet(long h, boolean on);
+    private static native int nCourseUpActive(long h);
+    private static native int nOwnShip(long h, double[] out);
+    private static native boolean nRasterShown(long h, int i);
+    private static native void nRasterSetShown(long h, int i, boolean shown);
+    private static native void nSetChartHidden(long h, boolean hidden);
+    private static native int nChartsCount(long h);
+    private static native long nMarkerAdd(long h, double lon, double lat);
+    private static native String nMarkerName(long h, long id);
+    private static native long nMarkerAt(long h, float xPts, float yPts);
+    private static native boolean nMarkerRename(long h, long id, String name);
+    private static native boolean nMarkerRemove(long h, long id);
+    private static native byte[] nAuxFile(long h, String cell, String name, String[] mimeOut);
+    private static native String nScanCharts(String path, boolean zip);
+    private static native void nToggleText(long h);
+    private static native void nToggleSoundings(long h);
+    private static native void nToggleOtherCategory(long h);
 }

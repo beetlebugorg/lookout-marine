@@ -981,3 +981,253 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigSet(env: [*c]j.JNIEnv,
     defer env_(env).ReleaseStringUTFChars.?(env, json, cjson);
     return if (lookout_plugin_config_set(h.l, @ptrCast(cid), @ptrCast(cjson)) == 0) 1 else 0;
 }
+
+// ---- follow mode and own ship ----------------------------------------------
+//
+// The engine owns follow: a pan drops it, so the shell POLLS the state per
+// readout tick and never remembers a tap (ChartController.swift does the
+// same). Own ship's numbers are published only while the fix is live.
+
+extern fn lookout_follow_set(h: ?*anyopaque, on: c_int) void;
+extern fn lookout_follow_active(h: ?*anyopaque) c_int;
+extern fn lookout_course_up_set(h: ?*anyopaque, on: c_int) void;
+extern fn lookout_course_up_active(h: ?*anyopaque) c_int;
+extern fn lookout_own_ship(h: ?*anyopaque, lon: *f64, lat: *f64) c_int;
+
+/// void nFollowSet(long h, boolean on)
+export fn Java_org_beetlebug_lookout_Lookout_nFollowSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, on: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_follow_set(h.l, if (on != 0) 1 else 0);
+}
+
+/// int nFollowActive(long h) -- 0 off, 1 following, 2 armed and waiting.
+export fn Java_org_beetlebug_lookout_Lookout_nFollowActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return lookout_follow_active(h.l);
+}
+
+/// void nCourseUpSet(long h, boolean on)
+export fn Java_org_beetlebug_lookout_Lookout_nCourseUpSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, on: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_course_up_set(h.l, if (on != 0) 1 else 0);
+}
+
+/// int nCourseUpActive(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nCourseUpActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return lookout_course_up_active(h.l);
+}
+
+/// int nOwnShip(long h, double[] out) -- fix state; out[0]=lon, out[1]=lat.
+export fn Java_org_beetlebug_lookout_Lookout_nOwnShip(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, out: j.jdoubleArray) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    if (env_(env).GetArrayLength.?(env, out) < 2) return 0;
+    var buf: [2]f64 = .{ 0, 0 };
+    const state = lookout_own_ship(h.l, &buf[0], &buf[1]);
+    env_(env).SetDoubleArrayRegion.?(env, out, 0, 2, &buf);
+    return state;
+}
+
+// ---- raster shown state and the ENC switch ---------------------------------
+//
+// The election is the engine's; these let the shell SAVE a choice by set and
+// put it back at the next open (AppModel.restoreRasterShown's two passes).
+
+extern fn lookout_raster_shown(h: ?*anyopaque, i: u32) c_int;
+extern fn lookout_raster_set_shown(h: ?*anyopaque, i: u32, shown: c_int) void;
+extern fn lookout_set_chart_hidden(h: ?*anyopaque, hidden: c_int) void;
+extern fn lookout_charts_count(h: ?*anyopaque) u32;
+
+/// boolean nRasterShown(long h, int i)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterShown(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    if (i < 0) return 0;
+    return if (lookout_raster_shown(h.l, @intCast(i)) != 0) 1 else 0;
+}
+
+/// void nRasterSetShown(long h, int i, boolean shown)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetShown(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint, shown: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    if (i < 0) return;
+    lookout_raster_set_shown(h.l, @intCast(i), if (shown != 0) 1 else 0);
+}
+
+/// void nSetChartHidden(long h, boolean hidden)
+export fn Java_org_beetlebug_lookout_Lookout_nSetChartHidden(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, hidden: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_set_chart_hidden(h.l, if (hidden != 0) 1 else 0);
+}
+
+/// int nChartsCount(long h) -- 0 means no survey: "hidden" loses its meaning.
+export fn Java_org_beetlebug_lookout_Lookout_nChartsCount(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return @intCast(lookout_charts_count(h.l));
+}
+
+// ---- markers ----------------------------------------------------------------
+//
+// Core-owned and chart-independent; the shell stores nothing and draws
+// nothing. THE DROP NEVER WAITS FOR TYPING: the core names the mark.
+
+const lookout_marker = extern struct {
+    id: u64,
+    lon: f64,
+    lat: f64,
+    name: [*:0]const u8,
+    name_len: usize,
+    dropped_ms: i64,
+};
+
+extern fn lookout_marker_add(h: ?*anyopaque, lon: f64, lat: f64) u64;
+extern fn lookout_marker_by_id(h: ?*anyopaque, id: u64, out: *lookout_marker) c_int;
+extern fn lookout_marker_at(h: ?*anyopaque, x_pt: f32, y_pt: f32, out: *lookout_marker) c_int;
+extern fn lookout_marker_rename(h: ?*anyopaque, id: u64, name: [*:0]const u8) c_int;
+extern fn lookout_marker_remove(h: ?*anyopaque, id: u64) c_int;
+
+/// long nMarkerAdd(long h, double lon, double lat) -- the id, 0 refused.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, lon: j.jdouble, lat: j.jdouble) j.jlong {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return @bitCast(lookout_marker_add(h.l, lon, lat));
+}
+
+/// String nMarkerName(long h, long id) -- null once the marker is gone. The
+/// name is borrowed from the core and copied by NewStringUTF before return.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerName(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var m: lookout_marker = undefined;
+    if (lookout_marker_by_id(h.l, @bitCast(id), &m) == 0) return null;
+    return env_(env).NewStringUTF.?(env, m.name);
+}
+
+/// long nMarkerAt(long h, float xPt, float yPt) -- the marker within reach of
+/// a LOGICAL point (about 14 pt), or 0. Decides the chart menu's items.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerAt(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, x_pt: j.jfloat, y_pt: j.jfloat) j.jlong {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    var m: lookout_marker = undefined;
+    if (lookout_marker_at(h.l, x_pt, y_pt, &m) == 0) return 0;
+    return @bitCast(m.id);
+}
+
+/// boolean nMarkerRename(long h, long id, String name) -- empty keeps the old
+/// name; the core clips at 32 characters, so shells agree.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerRename(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, name: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cname = env_(env).GetStringUTFChars.?(env, name, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, name, cname);
+    return if (lookout_marker_rename(h.l, @bitCast(id), @ptrCast(cname)) == 0) 1 else 0;
+}
+
+/// boolean nMarkerRemove(long h, long id)
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerRemove(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_marker_remove(h.l, @bitCast(id)) == 0) 1 else 0;
+}
+
+// ---- the chart's own files and the library ---------------------------------
+
+extern fn lookout_aux_file(h: ?*anyopaque, cell: [*:0]const u8, name: [*:0]const u8, bytes: *[*c]const u8, len: *usize, mime: *[*c]const u8) void;
+extern fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
+extern fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
+
+/// byte[] nAuxFile(long h, String cell, String name, String[] mimeOut) --
+/// null when the chart does not carry the file. The bytes are borrowed from
+/// the engine's scratch and copied into the array before return.
+export fn Java_org_beetlebug_lookout_Lookout_nAuxFile(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, cell: j.jstring, name: j.jstring, mime_out: j.jobjectArray) j.jbyteArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const ccell = env_(env).GetStringUTFChars.?(env, cell, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, cell, ccell);
+    const cname = env_(env).GetStringUTFChars.?(env, name, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, name, cname);
+
+    var bytes: [*c]const u8 = null;
+    var len: usize = 0;
+    var mime: [*c]const u8 = null;
+    lookout_aux_file(h.l, @ptrCast(ccell), @ptrCast(cname), &bytes, &len, &mime);
+    if (bytes == null or len == 0) return null;
+
+    const arr = env_(env).NewByteArray.?(env, @intCast(len)) orelse return null;
+    env_(env).SetByteArrayRegion.?(env, arr, 0, @intCast(len), @ptrCast(bytes));
+    if (mime != null and mime_out != null and env_(env).GetArrayLength.?(env, mime_out) >= 1) {
+        const ms = env_(env).NewStringUTF.?(env, mime);
+        env_(env).SetObjectArrayElement.?(env, mime_out, 0, ms);
+    }
+    return arr;
+}
+
+/// String nScanCharts(String path) -- the scan JSON, or null. NOT REENTRANT:
+/// the two scan calls share one buffer in the core; the shell serializes.
+export fn Java_org_beetlebug_lookout_Lookout_nScanCharts(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring, zip: j.jboolean) j.jstring {
+    _ = cls;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+
+    var len: usize = 0;
+    const json = if (zip != 0)
+        lookout_scan_zip(@ptrCast(cpath), &len)
+    else
+        lookout_scan_charts(@ptrCast(cpath), &len);
+    if (json == null or len == 0) return null;
+
+    // A COUNTED buffer, decoded by length, never as a C string — but
+    // NewStringUTF wants a terminator, so copy through one.
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+// ---- portrayal quick toggles ------------------------------------------------
+
+extern fn lookout_toggle_text(h: ?*anyopaque) void;
+extern fn lookout_toggle_soundings(h: ?*anyopaque) void;
+extern fn lookout_toggle_other_category(h: ?*anyopaque) void;
+
+/// void nToggleText(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nToggleText(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_text(h.l);
+}
+
+/// void nToggleSoundings(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nToggleSoundings(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_soundings(h.l);
+}
+
+/// void nToggleOtherCategory(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nToggleOtherCategory(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_other_category(h.l);
+}

@@ -1110,7 +1110,11 @@ export fn lookout_marker_remove(h: ?*lookout, id: u64) c_int {
 
 comptime {
     _ = lookout_open;
-    // The Android Java shell's JNI natives ride in the same archive on vk
-    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout). The
-    // Android shell comes back when charttable has a Vulkan backend.
+    // The Android Java shell's JNI natives ride in the same archive (they
+    // wrap this C ABI for org.beetlebug.lookout.Lookout). Only an android
+    // target analyzes the file: it @cImports the NDK's jni.h, which only the
+    // NDK sysroot holds.
+    if (builtin.abi.isAndroid()) {
+        _ = @import("jni_android.zig");
+    }
 }
