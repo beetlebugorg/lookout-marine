@@ -188,6 +188,8 @@ const ConnState = sockets.ConnState;
 const Conn = sockets.Conn;
 const Udp = sockets.Udp;
 const Timer = sockets.Timer;
+pub const max_timer_delay_ms = sockets.max_timer_delay_ms;
+pub const max_timers_per_plugin = sockets.max_timers_per_plugin;
 const Owner = sockets.Owner;
 const read_chunk = sockets.read_chunk;
 const resolver_stack_bytes = sockets.resolver_stack_bytes;
@@ -2031,6 +2033,10 @@ pub const Broker = struct {
             return -1;
         };
         w.* = .{ .br = self, .id = 0, .plugin = plugin, .url = url, .protocols = protocols };
+        // Without the pair every send, close and shutdown waits out the full
+        // ws_poll_ms; the poll timeout stays as the fallback when a host has
+        // no descriptors to spare.
+        net.wakePair(&w.wake) catch {};
 
         self.mu.lock();
         const id = self.next_id;

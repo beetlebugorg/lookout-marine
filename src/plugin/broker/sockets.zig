@@ -58,6 +58,15 @@ pub const Timer = struct {
     period: i64,
 };
 
+/// A week. The floor is 1 ms (anything shorter would spin the I/O thread);
+/// the ceiling keeps a plugin-supplied i64 out of the due arithmetic, where
+/// maxInt would overflow — a panic in a safe build, a stuck timer otherwise.
+pub const max_timer_delay_ms: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Timers were the one per-plugin resource with no budget, and every armed
+/// timer is a row in the I/O thread's deadline scan.
+pub const max_timers_per_plugin = 64;
+
 /// How often the fanout tick runs. STORE_CHANGED is specified at <=10 Hz, so
 /// the tick sets the rate and the store's dirty set does the coalescing.
 pub const tick_ms: i64 = 100;
