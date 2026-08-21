@@ -504,6 +504,7 @@ internal fun trimmed(v: Double): String =
  */
 object PluginPrefs {
     private const val PREFS = "plugins.lists.v1"
+    private const val SCALARS = "plugins.v1"
 
     private fun key(pluginId: String, listKey: String) = "$pluginId/$listKey"
 
@@ -516,4 +517,21 @@ object PluginPrefs {
     fun savedRows(ctx: android.content.Context, list: PluginListSchema): String? =
         ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
             .getString(key(list.pluginId, list.key), null)
+
+    /**
+     * One scalar field — the Android twin of macOS's `plugins.v1`. Toggles
+     * ride as 1.0/0.0; the field's kind, read from the live schema at restore,
+     * decides the JSON shape the core is given back. Stored as raw double bits
+     * because SharedPreferences has no double.
+     */
+    fun saveScalar(ctx: android.content.Context, pluginId: String, fieldKey: String, value: Double) {
+        ctx.getSharedPreferences(SCALARS, android.content.Context.MODE_PRIVATE)
+            .edit().putLong(key(pluginId, fieldKey), java.lang.Double.doubleToRawLongBits(value)).apply()
+    }
+
+    /** Every saved scalar, keyed `pluginId/fieldKey`. */
+    fun savedScalars(ctx: android.content.Context): Map<String, Double> =
+        ctx.getSharedPreferences(SCALARS, android.content.Context.MODE_PRIVATE)
+            .all.mapNotNull { (k, v) -> (v as? Long)?.let { k to java.lang.Double.longBitsToDouble(it) } }
+            .toMap()
 }

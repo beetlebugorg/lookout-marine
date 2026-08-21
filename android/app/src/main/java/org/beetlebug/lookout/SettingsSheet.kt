@@ -697,10 +697,10 @@ private fun PluginGroups(groups: List<PluginGroup>, controller: ChartController,
         for (field in group.fields) {
             when (field.kind) {
                 PluginField.Kind.TOGGLE -> PluginToggleRow(field) { on ->
-                    controller.setPluginConfig(group.pluginId, jsonOf(field.key, on))
+                    controller.setPluginScalar(group.pluginId, field, if (on) 1.0 else 0.0)
                 }
                 PluginField.Kind.NUMBER -> PluginNumberRow(field) { v ->
-                    controller.setPluginConfig(group.pluginId, jsonOf(field.key, v))
+                    controller.setPluginScalar(group.pluginId, field, v)
                 }
                 // A text field only ever lives in a list row, where the row
                 // editor draws it. One declared loose is a manifest mistake,
@@ -1051,10 +1051,6 @@ private fun AddRowButton(schema: PluginListSchema, count: Int, onAdd: () -> Unit
     }
     if (full) Footer("${schema.maxRows} is all this plugin holds.")
 }
-
-/** One key set on one plugin, as the object lookout_plugin_config_set takes. */
-private fun jsonOf(key: String, value: Any): String =
-    org.json.JSONObject().put(key, value).toString()
 
 /** The described-row pattern: the switch's title, and under it what it does. */
 @Composable

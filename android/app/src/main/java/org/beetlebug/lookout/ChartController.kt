@@ -112,6 +112,19 @@ class ChartController(private val appContext: Context) {
     }
 
     /**
+     * Apply one scalar field and persist it, so an alarm range raised at the
+     * helm survives the next launch and the next library switch. Lists have
+     * [setPluginList]; this is their twin for toggles and numbers.
+     */
+    fun setPluginScalar(pluginId: String, field: PluginField, value: Double) {
+        PluginPrefs.saveScalar(appContext, pluginId, field.key, value)
+        val body = org.json.JSONObject()
+            .put(field.key, if (field.kind == PluginField.Kind.TOGGLE) value != 0.0 else value)
+            .toString()
+        setPluginConfig(pluginId, body)
+    }
+
+    /**
      * Replace one repeating list whole and persist it — the shape the core takes
      * (see `normalizeRows` in src/plugin/host.zig): every edit sends the entire
      * array, and what comes back is what is in force after the host clamped it.
@@ -340,7 +353,9 @@ class ChartController(private val appContext: Context) {
         // that a screenshot cannot give.
         val json = l.pluginsJson()
         Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
-        val restored = restoreLists(l, PluginRegistry.parse(json))
+        val loadedReg = PluginRegistry.parse(json)
+        val restored = restoreLists(l, loadedReg)
+        restoreScalars(l, loadedReg)
         // The developer override, and only where the mariner has said nothing:
         // a list they have edited is the truth, empty or not.
         nmeaAddress?.let { addr ->
@@ -385,6 +400,33 @@ class ChartController(private val appContext: Context) {
             }
         }
         return done
+    }
+
+    /**
+     * Push the mariner's saved toggles and numbers back into the plugins that
+     * just came up, one composed body per plugin. Runs on every open for the
+     * same reason [restoreLists] does: a new engine handle starts from the
+     * manifests' defaults. The live schema decides each field's JSON shape —
+     * a toggle must arrive as a bool — and a key the schema no longer declares
+     * is dropped by the core on the way in.
+     */
+    private fun restoreScalars(l: Lookout, reg: PluginRegistry) {
+        val saved = PluginPrefs.savedScalars(appContext)
+        if (saved.isEmpty()) return
+        for (p in reg.plugins) {
+            val body = org.json.JSONObject()
+            for (f in p.fields) {
+                val v = saved["${p.id}/${f.key}"] ?: continue
+                when (f.kind) {
+                    PluginField.Kind.TOGGLE -> body.put(f.key, v != 0.0)
+                    PluginField.Kind.NUMBER -> body.put(f.key, v)
+                    else -> {}
+                }
+            }
+            if (body.length() == 0) continue
+            val ok = l.pluginConfigSet(p.id, body.toString())
+            Log.i(TAG, "plugins: ${p.id} scalars restored ${if (ok) "ok" else "REFUSED"}")
+        }
     }
 
     /**
