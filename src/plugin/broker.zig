@@ -354,6 +354,9 @@ pub const Broker = struct {
         for (self.queues.items) |*q| {
             for (q.items.items[q.head..]) |e| self.alloc.free(e.payload);
             q.items.deinit(self.alloc);
+            for (q.wake) |fd| {
+                if (net.valid(fd)) net.close(fd);
+            }
         }
         self.queues.deinit(self.alloc);
         for (self.conns.items) |*c| {
@@ -429,10 +432,15 @@ pub const Broker = struct {
 
     // -- the queues ----------------------------------------------------------
 
-    /// This plugin's queue, created on first use.
+    /// This plugin's queue, created on first use, with the wake pair its
+    /// dispatch thread parks on. A pair that cannot be made stays invalid
+    /// and parking degrades to the bounded poll.
     fn queueForLocked(self: *Broker, plugin: u32) !*Queue {
         if (plugin >= max_plugins) return error.TooManyPlugins;
-        while (self.queues.items.len <= plugin) try self.queues.append(self.alloc, .{});
+        while (self.queues.items.len <= plugin) {
+            try self.queues.append(self.alloc, .{});
+            net.wakePair(&self.queues.items[self.queues.items.len - 1].wake) catch {};
+        }
         return &self.queues.items[plugin];
     }
 
@@ -467,7 +475,13 @@ pub const Broker = struct {
         }) catch {
             self.alloc.free(owned);
             self.dropLocked(q, plugin, kind);
+            return;
         };
+        // The plugin's dispatch thread may be parked on its wake pipe.
+        if (net.valid(q.wake[1])) {
+            const one = [_]u8{0};
+            _ = net.send(q.wake[1], &one);
+        }
     }
 
     /// A dropped event, counted and — for the first one, and then rarely —
@@ -526,6 +540,32 @@ pub const Broker = struct {
 
     pub fn freeEvent(self: *Broker, e: Event) void {
         self.alloc.free(e.payload);
+    }
+
+    /// Park one plugin's dispatch thread until an event lands in its queue,
+    /// or `timeout_ms` passes — the bounded fallback that lets the stop and
+    /// kill flags be seen even when no event ever comes. An idle plugin costs
+    /// one wakeup per timeout instead of a hundred a second.
+    pub fn waitEvents(self: *Broker, plugin: u32, timeout_ms: i32) void {
+        var fd: net.Socket = net.invalid;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            if (plugin < self.queues.items.len) {
+                const q = &self.queues.items[plugin];
+                // A push between the pop that answered null and this park has
+                // its byte in the pipe already; the poll returns at once.
+                if (q.depth() != 0) return;
+                fd = q.wake[0];
+            }
+        }
+        if (!net.valid(fd)) {
+            sleepMs(8);
+            return;
+        }
+        var fds = [_]net.pollfd{.{ .fd = fd, .events = net.POLL.IN, .revents = 0 }};
+        _ = net.poll(&fds, timeout_ms);
+        if (fds[0].revents != 0) net.drainWake(fd);
     }
 
     /// Throw away everything queued for one plugin. Its dispatch thread calls

@@ -1856,11 +1856,6 @@ pub const Host = struct {
     /// Deliver this plugin's events until it stops, faults or is told to stop.
     fn serveEvents(self: *Host, index: u32) void {
         const e = self.entryAt(index);
-        // Polled rather than waited on a condition variable, for the same
-        // reason raster.zig's worker is: Zig 0.16 has no std.Thread.Condition
-        // outside an Io. The backoff keeps an idle plugin off the CPU; the
-        // broker's fanout tick lands every 100 ms anyway.
-        var idle_ms: u32 = 1;
         while (!e.stopping.load(.acquire) and e.isLive()) {
             // The watchdog may have terminated this instance while the thread
             // was between events, or just after a call returned. Either way the
@@ -1873,11 +1868,13 @@ pub const Host = struct {
             // is written here, where the status line has one writer.
             e.state.drainQueueBudget();
             const ev = self.br.popFor(index) orelse {
-                broker.sleepMs(idle_ms);
-                if (idle_ms < 8) idle_ms *= 2;
+                // Parked on the queue's wake pipe, not polled: an idle plugin
+                // used to wake ~125 times a second for nothing. The bounded
+                // timeout is only so the stop and kill flags above get a look
+                // when no event ever comes.
+                self.br.waitEvents(index, 250);
                 continue;
             };
-            idle_ms = 1;
             defer self.br.freeEvent(ev);
             self.deliverTo(index, ev.kind, ev.handle, ev.payload);
         }
