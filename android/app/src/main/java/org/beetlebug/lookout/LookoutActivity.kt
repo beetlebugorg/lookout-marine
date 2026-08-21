@@ -53,6 +53,16 @@ class LookoutActivity : ComponentActivity() {
         // every launch (~1s), having no cache path in the environment.
         Lookout.setCacheDir(cacheDir.absolutePath)
 
+        // Tiles are the one thing this app fetches in bulk (a chart link's
+        // sources). The response cache spares the pan back over water already
+        // crossed and survives a relaunch on the same chart — the reference
+        // shell's URLCache, in Android's clothes.
+        try {
+            android.net.http.HttpResponseCache.install(File(cacheDir, "http"), 256L * 1024 * 1024)
+        } catch (e: Exception) {
+            Log.w(TAG, "http cache: $e")
+        }
+
         // The foreground service's notification is the mariner's only sight of
         // what is holding the process up, and their only way to stop it. On API
         // 33 and up it needs a grant; refused, the service still runs and the
