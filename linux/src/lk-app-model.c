@@ -492,7 +492,16 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
      are baked. */
   g_autoptr (LkChartSet) set = lk_chart_scan (dir);
 
-  if (set != NULL && set->sources > 0 && !self->baking)
+  /* Counted from the cells, not set->sources: that counter is the vector
+     sources alone. A folder of BSB/KAP sheets, or an archive whose charts
+     are already baked, still has to prepare before anything can draw. */
+  guint to_prepare = 0;
+  if (set != NULL)
+    for (guint i = 0; i < set->cells->len; i++)
+      if (lk_scanned_cell_needs_prepare (g_ptr_array_index (set->cells, i)))
+        to_prepare++;
+
+  if (set != NULL && to_prepare > 0 && !self->baking)
     {
       g_free (self->pending_open_source);
       self->pending_open_source = g_strdup (dir);
