@@ -179,6 +179,10 @@ namespace winrt::LookoutMarine::implementation
         void UpdateRasterPill(lk_readout const &r);
         fire_and_forget ShowRasterError(winrt::hstring msg);
         fire_and_forget ShowImportError(winrt::hstring msg);
+
+        // The chart context menu and the mariner's markers (right-click).
+        void ShowChartMenu(double x, double y);
+        fire_and_forget RenameMarkerDialog(uint64_t id, winrt::hstring current);
         // zoom-to-scale panel (MainWindow.Scale.cpp)
         void WireScale();
         void ToggleScalePanel();

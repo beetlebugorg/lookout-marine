@@ -879,6 +879,63 @@ lk_controller_charts_count(lk_controller *self)
     return (int)lookout_charts_count(self->handle);
 }
 
+/* ---- markers ------------------------------------------------------------- */
+
+static void
+copy_marker(const lookout_marker *in, lk_marker *out)
+{
+    out->id = in->id;
+    out->lon = in->lon;
+    out->lat = in->lat;
+    size_t len = in->name_len;
+    if (len >= sizeof out->name) {
+        len = sizeof out->name - 1;
+        while (len > 0 && ((unsigned char)in->name[len] & 0xC0) == 0x80)
+            len--;
+    }
+    memcpy(out->name, in->name, len);
+    out->name[len] = '\0';
+}
+
+uint64_t
+lk_controller_marker_add(lk_controller *self, double lon, double lat)
+{
+    lk_controller_kick();
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_marker_add(self->handle, lon, lat);
+}
+
+int
+lk_controller_marker_at(lk_controller *self, double x_pt, double y_pt, lk_marker *out)
+{
+    if (!lk_controller_is_open(self) || out == NULL)
+        return 0;
+    lookout_marker m;
+    if (!lookout_marker_at(self->handle, (float)x_pt, (float)y_pt, &m))
+        return 0;
+    copy_marker(&m, out);
+    return 1;
+}
+
+int
+lk_controller_marker_rename(lk_controller *self, uint64_t id, const char *name)
+{
+    lk_controller_kick();
+    if (!lk_controller_is_open(self) || name == NULL)
+        return -1;
+    return lookout_marker_rename(self->handle, id, name);
+}
+
+int
+lk_controller_marker_remove(lk_controller *self, uint64_t id)
+{
+    lk_controller_kick();
+    if (!lk_controller_is_open(self))
+        return -1;
+    return lookout_marker_remove(self->handle, id);
+}
+
 void
 lk_controller_toggle_chart(lk_controller *self)
 {

@@ -151,11 +151,24 @@ namespace winrt::LookoutMarine::implementation
         Root().PointerPressed([this, on_chart](auto &&, Input::PointerRoutedEventArgs const &e) {
             if (!on_chart(e.OriginalSource()))
                 return;
-            auto p = e.GetCurrentPoint(Root()).Position();
+            auto pt = e.GetCurrentPoint(Root());
+            // A right press is the chart menu's (RightTapped below), not the
+            // start of a pan.
+            if (pt.Properties().IsRightButtonPressed())
+                return;
+            auto p = pt.Position();
             bool rot = (e.KeyModifiers() & Windows::System::VirtualKeyModifiers::Shift) ==
                        Windows::System::VirtualKeyModifiers::Shift;
             GesturePress(p.X, p.Y, rot);
             Root().CapturePointer(e.Pointer());
+        });
+        // Right-click (or a touch long-press) raises the chart menu at that
+        // point on the water.
+        Root().RightTapped([this, on_chart](auto &&, Input::RightTappedRoutedEventArgs const &e) {
+            if (!on_chart(e.OriginalSource()))
+                return;
+            auto p = e.GetPosition(Root());
+            ShowChartMenu(p.X, p.Y);
         });
         Root().PointerMoved([this, on_chart](auto &&, Input::PointerRoutedEventArgs const &e) {
             auto p = e.GetCurrentPoint(Root()).Position();

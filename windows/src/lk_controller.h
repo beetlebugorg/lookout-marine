@@ -85,6 +85,25 @@ void lk_controller_zoom_centered(lk_controller *self, double dzoom, unsigned w_p
 void lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double x1, double y1);
 /* Geo to logical points (the inverse of geo_at) — anchors chart-pinned chrome. */
 int  lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y);
+
+/* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
+
+typedef struct lk_marker {
+    uint64_t id;
+    double   lon, lat;
+    char     name[64]; /* copied out — the engine's string is borrowed */
+} lk_marker;
+
+/* Drop a marker, placed AND named by the core in one call ("Mark 1", …): the
+ * drop never waits for typing. Returns its id, or 0. */
+uint64_t lk_controller_marker_add(lk_controller *self, double lon, double lat);
+/* The marker nearest a LOGICAL point, within about 14 pt. 1 when found. This
+ * is what decides the chart menu's items: over a marker it offers Rename and
+ * Remove in place of Drop. */
+int  lk_controller_marker_at(lk_controller *self, double x_pt, double y_pt, lk_marker *out);
+/* An empty name keeps the old one (the core decides, so every shell agrees). */
+int  lk_controller_marker_rename(lk_controller *self, uint64_t id, const char *name);
+int  lk_controller_marker_remove(lk_controller *self, uint64_t id);
 void lk_controller_reset_rotation(lk_controller *self);
 void lk_controller_fling_start(lk_controller *self, double vx, double vy);
 int  lk_controller_geo_at(lk_controller *self, double x, double y, double *lon, double *lat);

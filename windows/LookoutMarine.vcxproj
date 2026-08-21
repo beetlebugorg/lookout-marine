@@ -145,6 +145,7 @@
     <ClCompile Include="ui\MainWindow.Alerts.cpp" />
     <ClCompile Include="ui\MainWindow.Vessels.cpp" />
     <ClCompile Include="ui\MainWindow.Menu.cpp" />
+    <ClCompile Include="ui\MainWindow.Markers.cpp" />
     <ClCompile Include="ui\MainWindow.PluginInstall.cpp" />
     <ClCompile Include="ui\MainWindow.Overlay.cpp" />
     <ClCompile Include="ui\MainWindow.Raster.cpp" />
