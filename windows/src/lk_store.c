@@ -19,25 +19,68 @@
  * set alone is 968 files. */
 #define LK_MAX_RASTERS 2048
 
-/* %APPDATA%\lookout-marine\settings.ini (created on first write). One static
- * buffer: the store is only touched from the UI thread. */
-static const char *
-store_path(void)
+/* One lock over the whole store. The UI thread writes settings while the
+ * render thread saves the pose every three seconds; the profile API gives no
+ * atomicity across two writers of one file, and interleaved writes have
+ * dropped whole sections. Every public entry takes it; internal helpers are
+ * named _locked and expect it held. */
+static SRWLOCK store_mu = SRWLOCK_INIT;
+
+static void
+store_lock(void)
 {
-    static char path[MAX_PATH];
+    AcquireSRWLockExclusive(&store_mu);
+}
+
+static void
+store_unlock(void)
+{
+    ReleaseSRWLockExclusive(&store_mu);
+}
+
+/* A file beside settings.ini, created on first write. Caller holds the lock
+ * (the static buffer is initialized under it). */
+static const char *
+store_file(const char *name, char *path, size_t path_len)
+{
     if (path[0] != '\0')
         return path;
 
     char base[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, base))) {
-        snprintf(path, sizeof path, "%s\\lookout-marine", base);
+        snprintf(path, path_len, "%s\\lookout-marine", base);
         CreateDirectoryA(path, NULL);
-        strncat(path, "\\settings.ini", sizeof path - strlen(path) - 1);
+        strncat(path, "\\", path_len - strlen(path) - 1);
+        strncat(path, name, path_len - strlen(path) - 1);
     } else {
-        strcpy(path, ".\\lookout-settings.ini");
+        snprintf(path, path_len, ".\\lookout-%s", name);
     }
     return path;
 }
+
+/* %APPDATA%\lookout-marine\settings.ini */
+static const char *
+store_path(void)
+{
+    static char path[MAX_PATH];
+    return store_file("settings.ini", path, sizeof path);
+}
+
+/* %APPDATA%\lookout-marine\rasters.list — the raster library, out of the INI:
+ * the profile API truncates a section READ at 32,767 chars whatever buffer it
+ * is given, about a fifth of the 968-sheet set this store is sized for, and a
+ * truncated load re-saved is a silently shrunk library. */
+static const char *
+rasters_path(void)
+{
+    static char path[MAX_PATH];
+    return store_file("rasters.list", path, sizeof path);
+}
+
+static int load_view_locked(lookout_view *out);
+static char **load_recents_locked(void);
+static char **load_rasters_locked(int **enabled_out);
+static void save_rasters_locked(const char *const *paths, const int *enabled, int n);
 
 /* ---- small profile-API helpers ------------------------------------------ */
 
@@ -105,6 +148,15 @@ lk_store_load_view(lookout_view *out)
 {
     if (out == NULL)
         return 0;
+    store_lock();
+    int ok = load_view_locked(out);
+    store_unlock();
+    return ok;
+}
+
+static int
+load_view_locked(lookout_view *out)
+{
     out->lat = 0;
     out->zoom = 0;
     out->rotation_deg = 0;
@@ -114,16 +166,15 @@ lk_store_load_view(lookout_view *out)
     get_double(LK_GROUP_VIEW, "zoom", &out->zoom);
     get_double(LK_GROUP_VIEW, "rotation_deg", &out->rotation_deg);
     /* The envelope is what a marine chart can CONTAIN, not what the
-     * projection can express: no chart lies above ~84° and chart detail ends
-     * well before z16. The projection's own limits (lat ±85.05, zoom 22) are
-     * not safe to accept — a zoom past ~20 overruns f32 world coordinates and
-     * collapses the camera to the world corner, and that corner pose (lat
-     * 85.0509, z<19) then saves itself back inside the projection envelope.
-     * Anything outside is rejected and the open fits the chart instead. Lon
-     * keeps the full ±180: the Aleutians cross the dateline. */
+     * projection can express: no chart lies above ~84°, and that latitude
+     * bound alone rejects the corner pose a zoom past ~20 collapses to (lat
+     * 85.0509 after the f32 world overrun). Zoom stops at 19: berthing work
+     * sits at z16–19 and must restore, while past 19 the f32 world overrun
+     * begins. Anything outside is rejected and the open fits the chart
+     * instead. Lon keeps the full ±180: the Aleutians cross the dateline. */
     if (!isfinite(out->lon) || out->lon < -180.0 || out->lon > 180.0 ||
         !isfinite(out->lat) || out->lat < -84.0 || out->lat > 84.0 ||
-        !isfinite(out->zoom) || out->zoom < 0.0 || out->zoom > 16.0 ||
+        !isfinite(out->zoom) || out->zoom < 0.0 || out->zoom > 19.0 ||
         !isfinite(out->rotation_deg))
         return 0;
     return 1;
@@ -134,16 +185,27 @@ lk_store_save_view(const lookout_view *view)
 {
     if (view == NULL)
         return;
+    store_lock();
     set_double(LK_GROUP_VIEW, "lon", view->lon);
     set_double(LK_GROUP_VIEW, "lat", view->lat);
     set_double(LK_GROUP_VIEW, "zoom", view->zoom);
     set_double(LK_GROUP_VIEW, "rotation_deg", view->rotation_deg);
+    store_unlock();
 }
 
 /* ---- recents ------------------------------------------------------------- */
 
 char **
 lk_store_load_recents(void)
+{
+    store_lock();
+    char **out = load_recents_locked();
+    store_unlock();
+    return out;
+}
+
+static char **
+load_recents_locked(void)
 {
     int count = 0;
     get_int(LK_GROUP_RECENTS, "count", &count);
@@ -171,7 +233,8 @@ lk_store_note_recent(const char *path)
     if (path == NULL || path[0] == '\0')
         return;
 
-    char **existing = lk_store_load_recents();
+    store_lock();
+    char **existing = load_recents_locked();
 
     /* New entry first, then the previous ones minus any duplicate, capped. */
     const char *merged[LK_MAX_RECENTS];
@@ -188,6 +251,7 @@ lk_store_note_recent(const char *path)
         snprintf(key, sizeof key, "item%d", i);
         set_str(LK_GROUP_RECENTS, key, merged[i]);
     }
+    store_unlock();
 
     lk_store_free_recents(existing);
 }
@@ -212,8 +276,11 @@ lk_store_load_settings_size(int *width, int *height)
     if (width == NULL || height == NULL)
         return 0;
     int w = 0, h = 0;
-    if (!get_int(LK_GROUP_WINDOW, "settings_w", &w) ||
-        !get_int(LK_GROUP_WINDOW, "settings_h", &h))
+    store_lock();
+    int have = get_int(LK_GROUP_WINDOW, "settings_w", &w) &&
+               get_int(LK_GROUP_WINDOW, "settings_h", &h);
+    store_unlock();
+    if (!have)
         return 0;
     *width = w;
     *height = h;
@@ -225,22 +292,35 @@ lk_store_save_settings_size(int width, int height)
 {
     if (width <= 0 || height <= 0)
         return;
+    store_lock();
     set_int(LK_GROUP_WINDOW, "settings_w", width);
     set_int(LK_GROUP_WINDOW, "settings_h", height);
+    store_unlock();
 }
 
 /* ---- raster charts ------------------------------------------------------- */
 
-/* The whole group is read and written as ONE section (GetPrivateProfileSection
- * / WritePrivateProfileSection): a baked sheet bundle holds hundreds of paths,
- * and per-key profile calls re-parse the file every time. */
+/* rasters.list holds one chart per line, "1|path" or "0|path" (the enabled
+ * flag first). Lines because a Windows path cannot contain a newline, so
+ * nothing needs escaping, and a human can read the library back. Replaced
+ * whole through a temp file + MoveFileEx: a torn write must not half-empty
+ * the library. */
 
 char **
 lk_store_load_rasters(int **enabled_out)
 {
-    if (enabled_out != NULL)
-        *enabled_out = NULL;
+    store_lock();
+    char **out = load_rasters_locked(enabled_out);
+    store_unlock();
+    return out;
+}
 
+/* The pre-rasters.list layout: one INI section, "item%d" / "enabled%d". Read
+ * once for migration, then the section is deleted — the profile API truncates
+ * a section read at 32,767 chars, which is why the list moved out. */
+static char **
+load_rasters_ini_locked(int **enabled_out)
+{
     static const DWORD SEC_BYTES = 1u << 20;
     char *sec = (char *)malloc(SEC_BYTES);
     char **by_idx = (char **)calloc(LK_MAX_RASTERS, sizeof(char *));
@@ -256,8 +336,6 @@ lk_store_load_rasters(int **enabled_out)
 
     GetPrivateProfileSectionA(LK_GROUP_RASTER, sec, SEC_BYTES, store_path());
 
-    /* "key=value" entries, NUL-separated; addressed by index so a reordered
-     * file still loads. "count" is written for a human reader and ignored. */
     for (char *p = sec; *p != '\0'; p += strlen(p) + 1) {
         char *eq = strchr(p, '=');
         if (eq == NULL)
@@ -293,27 +371,85 @@ lk_store_load_rasters(int **enabled_out)
     return out;
 }
 
-static void
-save_rasters(const char *const *paths, const int *enabled, int n)
+static char **
+load_rasters_locked(int **enabled_out)
 {
-    size_t cap = 64;
-    for (int i = 0; i < n; i++)
-        cap += strlen(paths[i]) + 48;
-    char *buf = (char *)malloc(cap);
-    if (buf == NULL)
-        return;
+    if (enabled_out != NULL)
+        *enabled_out = NULL;
 
-    size_t off = 0;
-    off += (size_t)snprintf(buf + off, cap - off, "count=%d", n) + 1;
-    for (int i = 0; i < n; i++) {
-        off += (size_t)snprintf(buf + off, cap - off, "item%d=%s", i, paths[i]) + 1;
-        off += (size_t)snprintf(buf + off, cap - off, "enabled%d=%d", i, enabled[i] ? 1 : 0) + 1;
+    FILE *f = fopen(rasters_path(), "rb");
+    if (f == NULL) {
+        /* No list yet: migrate whatever the INI section holds, once, and
+         * take the section down so the two can never disagree. */
+        int *en = NULL;
+        char **out = load_rasters_ini_locked(&en);
+        if (out != NULL && out[0] != NULL) {
+            int n = 0;
+            while (out[n] != NULL)
+                n++;
+            save_rasters_locked((const char *const *)out, en, n);
+            WritePrivateProfileStringA(LK_GROUP_RASTER, NULL, NULL, store_path());
+        }
+        if (enabled_out != NULL)
+            *enabled_out = en;
+        else
+            free(en);
+        return out;
     }
-    buf[off] = '\0'; /* double NUL ends the section */
 
-    /* Replaces the whole section, so a removal never leaves a stale tail. */
-    WritePrivateProfileSectionA(LK_GROUP_RASTER, buf, store_path());
-    free(buf);
+    char **out = (char **)calloc(LK_MAX_RASTERS + 1, sizeof(char *));
+    int *en = (int *)calloc(LK_MAX_RASTERS + 1, sizeof(int));
+    char *line = (char *)malloc(MAX_PATH * 2);
+    if (out == NULL || en == NULL || line == NULL) {
+        free(out); free(en); free(line);
+        fclose(f);
+        return NULL;
+    }
+
+    int n = 0;
+    while (n < LK_MAX_RASTERS && fgets(line, MAX_PATH * 2, f) != NULL) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+        if (len < 3 || (line[0] != '0' && line[0] != '1') || line[1] != '|')
+            continue;
+        out[n] = _strdup(line + 2);
+        if (out[n] == NULL)
+            continue;
+        en[n] = line[0] == '1';
+        n++;
+    }
+    fclose(f);
+    free(line);
+    out[n] = NULL;
+
+    if (enabled_out != NULL)
+        *enabled_out = en;
+    else
+        free(en);
+    return out;
+}
+
+static void
+save_rasters_locked(const char *const *paths, const int *enabled, int n)
+{
+    char tmp[MAX_PATH + 8];
+    snprintf(tmp, sizeof tmp, "%s.tmp", rasters_path());
+    FILE *f = fopen(tmp, "wb");
+    if (f == NULL)
+        return;
+    int ok = 1;
+    for (int i = 0; i < n; i++) {
+        if (fprintf(f, "%d|%s\n", enabled[i] ? 1 : 0, paths[i]) < 0)
+            ok = 0;
+    }
+    if (fclose(f) != 0)
+        ok = 0;
+    if (!ok) {
+        DeleteFileA(tmp);
+        return;
+    }
+    MoveFileExA(tmp, rasters_path(), MOVEFILE_REPLACE_EXISTING);
 }
 
 static int
@@ -334,14 +470,16 @@ edit_rasters(const char *const *edit, int n_edit, int op, int arg)
     if (edit == NULL || n_edit <= 0)
         return;
 
+    store_lock();
     int *enabled = NULL;
-    char **existing = lk_store_load_rasters(&enabled);
+    char **existing = load_rasters_locked(&enabled);
 
     const char **paths = (const char **)malloc(LK_MAX_RASTERS * sizeof *paths);
     int *flags = (int *)malloc(LK_MAX_RASTERS * sizeof *flags);
     if (paths == NULL || flags == NULL) {
         free(paths);
         free(flags);
+        store_unlock();
         lk_store_free_rasters(existing, enabled);
         return;
     }
@@ -367,7 +505,8 @@ edit_rasters(const char *const *edit, int n_edit, int op, int arg)
         }
     }
 
-    save_rasters(paths, flags, n);
+    save_rasters_locked(paths, flags, n);
+    store_unlock();
     free(paths);
     free(flags);
     lk_store_free_rasters(existing, enabled);
@@ -428,6 +567,7 @@ lk_store_save_mariner(const tile57_mariner *m)
     if (m == NULL)
         return;
 
+    store_lock();
     set_int(LK_GROUP_MARINER, "scheme", (int)m->scheme);
     set_int(LK_GROUP_MARINER, "depth_unit", (int)m->depth_unit);
     set_double(LK_GROUP_MARINER, "shallow_contour", m->shallow_contour);
@@ -456,6 +596,7 @@ lk_store_save_mariner(const tile57_mariner *m)
     set_int(LK_GROUP_MARINER, "date_dependent", m->date_dependent ? 1 : 0);
     set_int(LK_GROUP_MARINER, "highlight_date_dependent", m->highlight_date_dependent ? 1 : 0);
     set_str(LK_GROUP_MARINER, "date_view", m->date_view);
+    store_unlock();
 }
 
 /* Apply each key only when present, so older settings files leave newer fields
@@ -492,6 +633,7 @@ lk_store_apply_saved_mariner(tile57_mariner *m)
     if (m == NULL)
         return;
 
+    store_lock();
     APPLY_INT("scheme", m->scheme);
     APPLY_INT("depth_unit", m->depth_unit);
     APPLY_DBL("shallow_contour", m->shallow_contour);
@@ -525,6 +667,7 @@ lk_store_apply_saved_mariner(tile57_mariner *m)
         memset(m->date_view, 0, sizeof m->date_view);
         strncpy(m->date_view, date, sizeof m->date_view - 1);
     }
+    store_unlock();
 }
 
 #undef APPLY_INT
@@ -541,7 +684,9 @@ lk_store_save_plugin_config(const char *plugin_id, const char *json)
 {
     if (plugin_id == NULL)
         return;
+    store_lock();
     set_str(LK_GROUP_PLUGINS, plugin_id, json);
+    store_unlock();
 }
 
 void

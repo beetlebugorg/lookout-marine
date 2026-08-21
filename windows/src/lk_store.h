@@ -2,9 +2,14 @@
  *
  * Mirrors linux/src/lk-store.c: camera pose, recents, the full mariner state
  * (saved field-by-field, never raw struct bytes), and the DMS HUD pref. Stored
- * as an INI at %APPDATA%\lookout-marine\settings.ini via the Win32 profile API.
- * The mariner overlay applies each key only when present, so an older file
- * leaves newer fields at engine defaults. */
+ * as an INI at %APPDATA%\lookout-marine\settings.ini via the Win32 profile
+ * API, except the raster library, which lives in rasters.list beside it — the
+ * profile API truncates a section read at 32,767 chars, a fifth of the sheet
+ * bundles the store is sized for. The mariner overlay applies each key only
+ * when present, so an older file leaves newer fields at engine defaults.
+ *
+ * Thread-safe: one lock inside serializes every entry point, because the
+ * render thread saves the pose while the UI thread writes settings. */
 #ifndef LK_STORE_H
 #define LK_STORE_H
 
