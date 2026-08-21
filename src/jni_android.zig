@@ -127,19 +127,25 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpenCharts(env: [*c]j.JNIEnv, cls:
     const count = env_(env).GetArrayLength.?(env, paths);
     if (count <= 0) return 0;
     const n: usize = @intCast(count);
-    // Both arrays are needed to RELEASE: ReleaseStringUTFChars wants the
-    // jstring its chars came from, so the local refs are kept alongside.
-    const strs = gpa.alloc(j.jstring, n) catch return 0;
-    defer gpa.free(strs);
+    // Each path is COPIED and its ref dropped inside the loop: a real library
+    // is thousands of paths, and ART's local reference table holds 512.
+    // Keeping a ref and a pinned string per element until the open returned
+    // overflowed the table and aborted the process.
     const cs = gpa.alloc([*:0]const u8, n) catch return 0;
     defer gpa.free(cs);
     var got: usize = 0;
-    defer for (0..got) |i| env_(env).ReleaseStringUTFChars.?(env, strs[i], @ptrCast(cs[i]));
+    defer for (0..got) |i| gpa.free(std.mem.span(cs[i]));
     while (got < n) : (got += 1) {
         const s: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, paths, @intCast(got)));
         const c = env_(env).GetStringUTFChars.?(env, s, null) orelse return 0;
-        strs[got] = s;
-        cs[got] = @ptrCast(c);
+        const copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(c)))) catch {
+            env_(env).ReleaseStringUTFChars.?(env, s, c);
+            env_(env).DeleteLocalRef.?(env, s);
+            return 0;
+        };
+        env_(env).ReleaseStringUTFChars.?(env, s, c);
+        env_(env).DeleteLocalRef.?(env, s);
+        cs[got] = copy.ptr;
     }
     const win = j.ANativeWindow_fromSurface(env, surface) orelse return 0;
     const l = lookout_open_charts_in_window(LOOKOUT_NATIVE_ANDROID_WINDOW, win, cs.ptr, n, @intCast(w_px), @intCast(h_px), if (msaa != 0) 1 else 0) orelse {
