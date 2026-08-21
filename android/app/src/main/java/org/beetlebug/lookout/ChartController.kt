@@ -1008,6 +1008,27 @@ class ChartController(private val appContext: Context) {
         chartMenu = null
     }
 
+    /** A file the chart carries (TXTDSC text, PICREP picture), fetched. */
+    class AuxFile(val name: String, val bytes: ByteArray, val mime: String)
+
+    var auxFile by mutableStateOf<AuxFile?>(null)
+        private set
+
+    fun openAuxFile(cell: String, name: String) = onEngine { l ->
+        val mime = arrayOfNulls<String>(1)
+        val bytes = l.auxFile(cell, name, mime)
+        if (bytes == null) {
+            Log.w(TAG, "aux file not carried: $cell/$name")
+            return@onEngine
+        }
+        val out = AuxFile(name, bytes, mime[0] ?: "")
+        main.post { auxFile = out }
+    }
+
+    fun dismissAuxFile() {
+        auxFile = null
+    }
+
     fun menuPick() {
         val m = chartMenu ?: return
         chartMenu = null

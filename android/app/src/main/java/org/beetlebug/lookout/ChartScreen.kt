@@ -225,6 +225,7 @@ fun ChartScreen(
                 onDismiss = { controller.dismissIdentify() },
                 width = width,
                 maxHeight = place.room,
+                onAuxFile = { cell, name -> controller.openAuxFile(cell, name) },
                 modifier = Modifier
                     .align(alignment)
                     .padding(
@@ -310,6 +311,9 @@ fun ChartScreen(
                 onCommit = { controller.commitRenameMarker(it) },
                 onCancel = { controller.cancelRenameMarker() },
             )
+        }
+        controller.auxFile?.let { f ->
+            AuxFileDialog(file = f, onDismiss = { controller.dismissAuxFile() })
         }
     }
 
