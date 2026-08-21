@@ -65,16 +65,16 @@ namespace winrt::LookoutMarine::implementation
 
         WireChrome();
 
-        rendering_token = Media::CompositionTarget::Rendering({ this, &MainWindow::OnRendering });
+        readout_timer = DispatcherTimer{};
+        readout_timer.Interval(std::chrono::milliseconds(100));
+        readout_timer.Tick([this](auto &&, auto &&) { OnRendering(nullptr, nullptr); });
+        readout_timer.Start();
         // The ROOT ELEMENT's SizeChanged, not the window's: the element fires
         // after layout, when ActualWidth/Height already hold the new size.
         Root().SizeChanged([this](auto &&, auto &&) { SyncChartBounds(); });
         this->Closed([this](auto &&, auto &&) {
-            if (rendering_token)
-            {
-                Media::CompositionTarget::Rendering(rendering_token);
-                rendering_token = {};
-            }
+            if (readout_timer != nullptr)
+                readout_timer.Stop();
             StopAlertWatch();
             // The other windows hold this controller and this window: they
             // cannot outlive either.
@@ -255,15 +255,7 @@ namespace winrt::LookoutMarine::implementation
             TryOpen();
             return;
         }
-        LARGE_INTEGER now, freq;
-        QueryPerformanceCounter(&now);
-        QueryPerformanceFrequency(&freq);
-        double sec = (double)(now.QuadPart - last_readout_qpc) / freq.QuadPart;
-        if (last_readout_qpc == 0 || sec > 0.1)
-        {
-            last_readout_qpc = now.QuadPart;
-            UpdateReadouts(false);
-        }
+        UpdateReadouts(false);
     }
 
     void MainWindow::StartRenderThread()
@@ -277,6 +269,7 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::StopRenderThread()
     {
         render_run.store(false);
+        lk_controller_kick(); // it may be parked; a stop must not wait out the timeout
         if (render_thread.joinable())
             render_thread.join();
     }
@@ -284,6 +277,7 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::RenderLoop()
     {
         long long last_qpc = 0;
+        DWORD idle_wait_ms = 1;
         while (render_run.load())
         {
             LARGE_INTEGER now, freq;
@@ -303,7 +297,16 @@ namespace winrt::LookoutMarine::implementation
                 }
                 drew = lk_controller_tick(controller, dt) != 0;
             }
-            Sleep(drew ? 1 : 8);
+            /* Parked, not slept: input kicks the event and the next frame
+             * starts at once. The escalating timeout is only for what the
+             * engine does on its own — a plugin drawing, a build finishing —
+             * and caps at the same 250 ms the Mac shell idles at. A quiet
+             * chart costs four wakeups a second instead of 125. */
+            if (drew)
+                idle_wait_ms = 1;
+            else if (idle_wait_ms < 250)
+                idle_wait_ms = idle_wait_ms * 2 > 250 ? 250 : idle_wait_ms * 2;
+            lk_controller_wait(drew ? 1 : idle_wait_ms);
         }
     }
 

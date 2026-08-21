@@ -204,9 +204,17 @@ class ChartController(private val appContext: Context) {
     @Volatile private var engine: Handler? = null
 
     /** Run [block] on the render thread, or drop it if there is no engine. */
+    /** Set by the engine: wakes its idled frame loop after a mutation lands.
+     * A spurious wake — a read posted through here — costs one needsRedraw
+     * check. */
+    var onMutated: (() -> Unit)? = null
+
     private fun onEngine(block: (Lookout) -> Unit) {
         val h = engine ?: return
-        h.post { lk?.let(block) }
+        h.post {
+            lk?.let(block)
+            onMutated?.invoke()
+        }
     }
     private val readoutBuf = DoubleArray(Lookout.READOUTS_LEN)
     private val geoBuf = DoubleArray(2)

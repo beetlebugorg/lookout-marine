@@ -69,6 +69,12 @@ int  lk_controller_tick(lk_controller *self, double dt);
 /* 1 while the host should keep ticking (animating / needs redraw / building). */
 int  lk_controller_needs_tick(lk_controller *self);
 
+/* Park the render thread until a mutation kicks it or `ms` passes. Every
+ * mutating lk_controller_* call kicks, so the frame that shows a change
+ * starts at once; the timeout covers what the engine does on its own. */
+void lk_controller_wait(int ms);
+void lk_controller_kick(void);
+
 void lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt);
 void lk_controller_set_density(lk_controller *self, float density);
 

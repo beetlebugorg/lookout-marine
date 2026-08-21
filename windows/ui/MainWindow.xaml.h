@@ -203,14 +203,16 @@ namespace winrt::LookoutMarine::implementation
         Microsoft::UI::Xaml::Controls::SwapChainPanel chart_panel{ nullptr };
         lk_controller *controller{ nullptr };
 
-        winrt::event_token rendering_token{};
+        /* 10 Hz: the readout poll and the open retry. A DispatcherTimer, not
+         * CompositionTarget::Rendering — that subscription ticked the UI
+         * thread at refresh rate for the process life, idle or not. */
+        Microsoft::UI::Xaml::DispatcherTimer readout_timer{ nullptr };
         // Software (WARP) frames can take tens of ms: rendering runs on its
         // own thread (the core locks internally), never on the UI thread.
         std::thread render_thread;
         std::atomic<bool> render_run{ false };
         std::atomic<int> warmup_frames{ 0 }; // force presents while DWM starts composing us
         long long last_tick_qpc{ 0 };
-        long long last_readout_qpc{ 0 };
         double scalebar_pt{ 0 }, scalebar_m{ 0 };
         bool open_attempted{ false };
         std::string open_chart_label; // what Settings ▸ Charts names as open

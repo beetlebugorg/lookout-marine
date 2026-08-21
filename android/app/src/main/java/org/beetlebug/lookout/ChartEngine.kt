@@ -90,6 +90,9 @@ class ChartEngine private constructor() {
         }
         val h = queue ?: return
         frameHook = hook
+        // Before any path returns: every controller mutation must be able to
+        // wake an idled frame loop, whichever branch below runs.
+        controller.onMutated = ::kick
         h.post {
             var l = lookout
             if (l != null && !chartPaths.contentEquals(paths)) {
@@ -124,6 +127,8 @@ class ChartEngine private constructor() {
             }
             stopBackgroundTick()
             lastFrameNs = 0 // a new surface is not a continuation of the old
+            idleFrames = 0
+            idlePolling = false
             Choreographer.getInstance().postFrameCallback(frameCallback)
         }
     }
@@ -166,6 +171,10 @@ class ChartEngine private constructor() {
 
     private val frameCallback = Choreographer.FrameCallback { t -> doFrame(t) }
 
+    /** Quiet frames before the loop stands down. Two, like the Mac shell. */
+    private var idleFrames = 0
+    private var idlePolling = false
+
     private fun doFrame(frameTimeNanos: Long) {
         val l = lookout ?: return
         // No surface to present on: stop rescheduling. attach starts it again.
@@ -177,10 +186,67 @@ class ChartEngine private constructor() {
         frameHook?.onFrame(l, frameTimeNanos)
         val animating = l.animating()
         if (animating && dt > 0) l.tickAnim(dt)
-        if (animating || l.needsRedraw()) l.render()
+        val busy = animating || l.needsRedraw()
+        if (busy) l.render()
         // Sample the HUD here rather than on a timer: the readouts describe the
         // frame that was just presented. The controller throttles the push.
         controller?.onFrameRendered(frameTimeNanos)
+        // Idle means idle, and this is the platform it matters most on: a
+        // plotter left on the chart screen used to pace with vsync forever.
+        // After two quiet frames the loop stands down; kick() resumes it on
+        // input, and the idle poll watches for what the engine does on its
+        // own — a plugin drawing — at 4 Hz, only while plugins are up.
+        idleFrames = if (busy) 0 else idleFrames + 1
+        if (idleFrames > 2) {
+            lastFrameNs = 0L
+            startIdlePoll(l)
+            return
+        }
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    private val idlePoll = object : Runnable {
+        override fun run() {
+            if (!idlePolling) return
+            val l = lookout ?: return
+            if (!l.isAttached) {
+                idlePolling = false
+                return
+            }
+            if (l.animating() || l.needsRedraw()) {
+                idlePolling = false
+                resumeFrames()
+                return
+            }
+            queue?.postDelayed(this, IDLE_POLL_MS)
+        }
+    }
+
+    private fun startIdlePoll(l: Lookout) {
+        // With no plugins there is nothing that draws behind the shell's
+        // back, and every shell mutation kicks — so nothing to poll for.
+        if (!l.pluginsActive()) return
+        if (idlePolling) return
+        idlePolling = true
+        queue?.postDelayed(idlePoll, IDLE_POLL_MS)
+    }
+
+    /** Wake the frame loop: a mutation happened. Safe from any thread. */
+    fun kick() {
+        val h = queue ?: return
+        h.post {
+            idlePolling = false
+            resumeFrames()
+        }
+    }
+
+    /** Render thread. Re-posting through remove keeps the callback single. */
+    private fun resumeFrames() {
+        val l = lookout ?: return
+        if (!l.isAttached) return
+        idleFrames = 0
+        lastFrameNs = 0L
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
@@ -265,6 +331,9 @@ class ChartEngine private constructor() {
 
     companion object {
         private const val TAG = "lookout"
+        /* The idle watch for plugin-driven redraws: the AIS store coalesces
+         * at 2 Hz, so 4 Hz sees every change with one frame of slack. */
+        private const val IDLE_POLL_MS = 250L
 
         /**
          * One engine for the process. Not tied to the Activity: the point of

@@ -90,6 +90,8 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
         h.post(() -> {
             Lookout l = engine.getLookout();
             if (l != null) t.run(l);
+            // The frame loop may have stood down; a gesture is a frame.
+            engine.kick();
         });
     }
 
