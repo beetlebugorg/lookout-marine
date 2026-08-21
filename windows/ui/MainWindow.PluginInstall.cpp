@@ -4,9 +4,10 @@
 // NOTHING IS INSTALLED BEFORE ITS PERMISSIONS ARE SHOWN. The consent
 // sentences come from the core (lookout_plugin_inspect), so every shell shows
 // the same words; a reinstall calls out exactly what changed. The file router
-// asks the plugins first (lookout_open_file) and falls back to opening a
-// chart — the shell never matches extensions except to find the consent
-// sheet for a .lkplug.
+// sends a folder or an archive to the chart import, asks the plugins about
+// anything else (lookout_open_file), and falls back to opening a chart — the
+// shell matches extensions only to find the consent sheet for a .lkplug and
+// to tell an archive from a file, the same routing the Mac shell does.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
@@ -14,7 +15,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 
+#include "lk_bake.h"
 #include "lk_paths.h"
 
 using namespace winrt;
@@ -205,6 +208,15 @@ namespace winrt::LookoutMarine::implementation
         if (IsPluginPackage(path))
         {
             InstallPluginFromPath(path);
+            return;
+        }
+        // A folder or an archive is a library arriving, not a file for a
+        // plugin: a chart agency's whole catalogue is one zip. Import scans
+        // it, bakes what is raw and opens what it holds.
+        std::error_code ec;
+        if (std::filesystem::is_directory(path, ec) || lkw::IsArchive(path))
+        {
+            ImportCharts(path);
             return;
         }
         int taken = lk_controller_open_file(controller, path.c_str());
