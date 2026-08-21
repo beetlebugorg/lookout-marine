@@ -193,6 +193,25 @@ namespace winrt::LookoutMarine::implementation
             return Root().ActualTheme() == Microsoft::UI::Xaml::ElementTheme::Dark;
         }
 
+        // ---- chart sets (the folders of charts aboard) ----------------------
+        // A set is a folder — the baked library, a folder of .pmtiles, a
+        // folder of pictures — with an on/off switch. What opens is the UNION
+        // of the switched-on sets. Mirrors the macOS "sets aboard" model.
+        struct ChartSetRow
+        {
+            std::string path;
+            bool on{ true };
+            std::vector<std::string> cells;
+            std::vector<std::string> rasters;
+            std::string title; // the agency whose charts these are, else the folder
+        };
+        void LoadChartSets(std::function<void()> then);
+        std::vector<std::string> ChartSetOpenPaths() const;
+        void AdoptChartSet(std::string const &path);
+        void SetChartSetOn(std::string const &path, bool on);
+        void RemoveChartSet(std::string const &path);
+        std::vector<ChartSetRow> chart_sets;
+
         // ---- chart links (an online map AS the chart) -----------------------
         // One chart added by link: a MapLibre style url. Picking it renders
         // that style INSTEAD of the built-in chart. `doc` carries the wrapper
@@ -337,6 +356,9 @@ namespace winrt::LookoutMarine::implementation
         std::vector<SettingsTab> settings_tabs;
         int settings_tab{ 0 };
         Microsoft::UI::Xaml::Window settings_window{ nullptr };
+        // The settings window's last client size, written once at close.
+        int settings_size_w{ 0 };
+        int settings_size_h{ 0 };
         Microsoft::UI::Xaml::DispatcherTimer apply_timer{ nullptr };
 
         // wasm plugin settings. The schemas are read when the pane opens; only

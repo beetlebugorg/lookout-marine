@@ -42,16 +42,27 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
-        std::string source;
-        auto paths = lkw::InitialPaths(&source);
-        if (paths.empty())
-        {
-            EmptyState().Visibility(Visibility::Visible);
-            return;
-        }
-        // Name the set by who made the charts ("NOAA"), not by where the bake
-        // happened to put them ("Charts").
-        OpenPaths(paths, source, lkw::AgencyForCells(paths));
+        // The sets aboard decide the startup open: the UNION of the
+        // switched-on ones. With none saved (or none answering — a drive not
+        // plugged in), fall through to the recents-based walk.
+        LoadChartSets([this] {
+            auto set_paths = ChartSetOpenPaths();
+            if (!set_paths.empty())
+            {
+                OpenPaths(set_paths, set_paths.front(), lkw::AgencyForCells(set_paths));
+                return;
+            }
+            std::string source;
+            auto paths = lkw::InitialPaths(&source);
+            if (paths.empty())
+            {
+                EmptyState().Visibility(Visibility::Visible);
+                return;
+            }
+            // Name the set by who made the charts ("NOAA"), not by where the
+            // bake happened to put them ("Charts").
+            OpenPaths(paths, source, lkw::AgencyForCells(paths));
+        });
     }
 
     // The open itself is synchronous on the UI thread (the core mmaps and
@@ -104,6 +115,10 @@ namespace winrt::LookoutMarine::implementation
             InstallStoredRasters(); // the open destroyed the handle they rode on
             RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
             StartAlertWatch();      // a collision alarm must not need a pane open
+            // A folder the mariner opened is aboard: it joins the set list
+            // (an existing entry keeps its switch). A single file or a cell
+            // path is not a folder and adopts nothing.
+            AdoptChartSet(recent);
             if (!pending_plugin_install.empty())
             {
                 // The .lkplug that arrived at the empty state, now that a

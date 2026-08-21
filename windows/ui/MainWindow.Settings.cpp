@@ -79,16 +79,22 @@ namespace winrt::LookoutMarine::implementation
         }
         app_window.ResizeClient({ width, height });
 
+        // Remembered per event, WRITTEN once at close: a drag fires a size
+        // change per mouse move, and each store write is a synchronous file
+        // write under the store lock.
         app_window.Changed([this](auto &&sender, auto &&args) {
             if (args.DidSizeChange())
             {
                 auto size = sender.ClientSize();
-                lk_store_save_settings_size(size.Width, size.Height);
+                settings_size_w = size.Width;
+                settings_size_h = size.Height;
             }
         });
 
         w.Closed([this](auto &&, auto &&) {
             StopPluginStatusPoll();
+            if (settings_size_w > 0 && settings_size_h > 0)
+                lk_store_save_settings_size(settings_size_w, settings_size_h);
             if (settings_window != nullptr)
                 settings_window.Content(nullptr); // the markup outlives the window
             settings_window = nullptr;
@@ -407,6 +413,76 @@ namespace winrt::LookoutMarine::implementation
                 : L"No chart open");
             open_tb.FontSize(12);
             stack.Children().Append(open_tb);
+
+            // ---- the sets aboard: each folder of charts with its own
+            // switch. What draws is the union of the switched-on ones; a set
+            // whose water is not today's water is switched off, not removed.
+            if (!chart_sets.empty())
+            {
+                header(L"Charts aboard");
+                for (auto const &set : chart_sets)
+                {
+                    Controls::Grid srow;
+                    Controls::ColumnDefinition sc0, sc1, sc2, sc3;
+                    sc0.Width({ 0, GridUnitType::Auto });
+                    sc1.Width({ 1, GridUnitType::Star });
+                    sc2.Width({ 0, GridUnitType::Auto });
+                    sc3.Width({ 0, GridUnitType::Auto });
+                    srow.ColumnDefinitions().ReplaceAll({ sc0, sc1, sc2, sc3 });
+
+                    Controls::ToggleSwitch sts;
+                    sts.OnContent(nullptr);
+                    sts.OffContent(nullptr);
+                    sts.MinWidth(0);
+                    sts.IsOn(set.on);
+                    std::string spath = set.path;
+                    sts.Toggled([this, spath](auto &&sw, auto &&) {
+                        if (settings_loading)
+                            return;
+                        SetChartSetOn(spath, sw.template as<Controls::ToggleSwitch>().IsOn());
+                    });
+                    srow.Children().Append(sts);
+
+                    Controls::StackPanel stext;
+                    Controls::TextBlock sname;
+                    sname.Text(winrt::to_hstring(set.title));
+                    sname.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
+                    sname.Opacity(set.on ? 1.0 : 0.6);
+                    sname.TextTrimming(TextTrimming::CharacterEllipsis);
+                    stext.Children().Append(sname);
+                    Controls::TextBlock ssum;
+                    std::string sum;
+                    if (!set.cells.empty())
+                        sum = std::to_string(set.cells.size()) + (set.cells.size() == 1 ? " chart" : " charts");
+                    if (!set.rasters.empty())
+                        sum += (sum.empty() ? "" : ", ") + std::to_string(set.rasters.size()) +
+                               (set.rasters.size() == 1 ? " picture" : " pictures");
+                    if (sum.empty())
+                        sum = "not answering (drive unplugged?)";
+                    ssum.Text(winrt::to_hstring(sum));
+                    ssum.FontSize(11);
+                    ssum.Opacity(0.7);
+                    stext.Children().Append(ssum);
+                    stext.VerticalAlignment(VerticalAlignment::Center);
+                    Controls::Grid::SetColumn(stext, 1);
+                    srow.Children().Append(stext);
+
+                    Controls::Button srm;
+                    Controls::FontIcon sminus;
+                    sminus.Glyph(L""); // Remove
+                    sminus.FontSize(12);
+                    srm.Content(sminus);
+                    srm.Padding({ 4, 2, 4, 2 });
+                    srm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    srm.BorderThickness({ 0, 0, 0, 0 });
+                    Automation::AutomationProperties::SetName(srm,
+                        L"Take this set off the list. The folder itself is not touched.");
+                    srm.Click([this, spath](auto &&, auto &&) { RemoveChartSet(spath); });
+                    Controls::Grid::SetColumn(srm, 3);
+                    srow.Children().Append(srm);
+                    stack.Children().Append(srow);
+                }
+            }
 
             header(L"Recent");
             char **recents = lk_store_load_recents();

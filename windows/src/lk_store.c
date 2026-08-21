@@ -559,6 +559,143 @@ lk_store_free_rasters(char **paths, int *enabled)
     free(enabled);
 }
 
+/* ---- chart sets ----------------------------------------------------------- */
+
+/* chartsets.list: the folders of charts the mariner has aboard, one per line
+ * "1|path" / "0|path" — the flag is the set's on/off switch (a set is
+ * switched off, not removed, when its water is not today's water). The same
+ * shape and the same temp-file replace as rasters.list. */
+
+#define LK_MAX_CHARTSETS 64
+
+static const char *
+chartsets_path(void)
+{
+    static char path[MAX_PATH];
+    return store_file("chartsets.list", path, sizeof path);
+}
+
+static char **
+load_chartsets_locked(int **on_out)
+{
+    if (on_out != NULL)
+        *on_out = NULL;
+    char **out = (char **)calloc(LK_MAX_CHARTSETS + 1, sizeof(char *));
+    int *on = (int *)calloc(LK_MAX_CHARTSETS + 1, sizeof(int));
+    if (out == NULL || on == NULL) {
+        free(out);
+        free(on);
+        return NULL;
+    }
+    FILE *f = fopen(chartsets_path(), "rb");
+    int n = 0;
+    if (f != NULL) {
+        char line[MAX_PATH * 2];
+        while (n < LK_MAX_CHARTSETS && fgets(line, sizeof line, f) != NULL) {
+            size_t len = strlen(line);
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+                line[--len] = '\0';
+            if (len < 3 || (line[0] != '0' && line[0] != '1') || line[1] != '|')
+                continue;
+            out[n] = _strdup(line + 2);
+            if (out[n] == NULL)
+                continue;
+            on[n] = line[0] == '1';
+            n++;
+        }
+        fclose(f);
+    }
+    out[n] = NULL;
+    if (on_out != NULL)
+        *on_out = on;
+    else
+        free(on);
+    return out;
+}
+
+static void
+save_chartsets_locked(const char *const *paths, const int *on, int n)
+{
+    char tmp[MAX_PATH + 8];
+    snprintf(tmp, sizeof tmp, "%s.tmp", chartsets_path());
+    FILE *f = fopen(tmp, "wb");
+    if (f == NULL)
+        return;
+    int ok = 1;
+    for (int i = 0; i < n; i++) {
+        if (fprintf(f, "%d|%s\n", on[i] ? 1 : 0, paths[i]) < 0)
+            ok = 0;
+    }
+    if (fclose(f) != 0)
+        ok = 0;
+    if (ok)
+        MoveFileExA(tmp, chartsets_path(), MOVEFILE_REPLACE_EXISTING);
+    else
+        DeleteFileA(tmp);
+}
+
+char **
+lk_store_load_chartsets(int **on_out)
+{
+    store_lock();
+    char **out = load_chartsets_locked(on_out);
+    store_unlock();
+    return out;
+}
+
+/* op: 0 = append (on, deduped), 1 = remove, 2 = set the on flag to `arg`. */
+static void
+edit_chartsets(const char *path, int op, int arg)
+{
+    if (path == NULL || path[0] == '\0')
+        return;
+    store_lock();
+    int *on = NULL;
+    char **existing = load_chartsets_locked(&on);
+    const char *paths[LK_MAX_CHARTSETS];
+    int flags[LK_MAX_CHARTSETS];
+    int n = 0;
+    for (int i = 0; existing && existing[i] != NULL && n < LK_MAX_CHARTSETS; i++) {
+        int hit = _stricmp(existing[i], path) == 0;
+        if (hit && op == 1)
+            continue;
+        if (hit && op == 0) {
+            store_unlock();
+            lk_store_free_rasters(existing, on);
+            return; /* already aboard, and its switch is the mariner's */
+        }
+        paths[n] = existing[i];
+        flags[n] = (hit && op == 2) ? (arg ? 1 : 0) : on[i];
+        n++;
+    }
+    if (op == 0 && n < LK_MAX_CHARTSETS) {
+        paths[n] = path;
+        flags[n] = 1;
+        n++;
+    }
+    save_chartsets_locked(paths, flags, n);
+    store_unlock();
+    lk_store_free_rasters(existing, on);
+}
+
+void
+lk_store_note_chartset(const char *path)
+{
+    edit_chartsets(path, 0, 0);
+}
+
+void
+lk_store_forget_chartset(const char *path)
+{
+    edit_chartsets(path, 1, 0);
+}
+
+void
+lk_store_set_chartset_on(const char *path, int on)
+{
+    edit_chartsets(path, 2, on);
+}
+
 /* ---- raster shown state --------------------------------------------------- */
 
 /* Which raster SETS are not drawn, by set name, one per line in

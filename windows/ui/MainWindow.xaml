@@ -246,16 +246,40 @@
         </Border>
 
         <!-- empty state -->
-        <Border x:Name="EmptyState" CornerRadius="12" Padding="24"
+        <Border x:Name="EmptyState" CornerRadius="12" Padding="24" MaxWidth="560"
                 Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Visibility="Collapsed">
-            <StackPanel Spacing="10" HorizontalAlignment="Center">
-                <TextBlock Text="No chart open" FontSize="18" FontWeight="SemiBold"
-                           HorizontalAlignment="Center" />
-                <TextBlock Text="Open a baked chart (.pmtiles) or a folder of cells."
-                           FontSize="13" Opacity="0.7" HorizontalAlignment="Center" />
-                <Button x:Name="EmptyOpenBtn" Content="Open Charts…" HorizontalAlignment="Center" />
+            <StackPanel Spacing="10">
+                <TextBlock Text="No chart open" FontSize="18" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button x:Name="EmptyOpenBtn" Content="Choose Charts…" />
+                    <TextBlock Text="or drop them anywhere in this window"
+                               FontSize="12" Opacity="0.7" VerticalAlignment="Center" />
+                </StackPanel>
+                <!-- Where the charts come from goes first: a mariner with none
+                     needs that before a list of file extensions. -->
+                <TextBlock FontSize="12" Opacity="0.85" TextWrapping="Wrap">
+                    <Run>NOAA publishes every United States chart at no cost, at</Run>
+                    <Hyperlink NavigateUri="https://www.charts.noaa.gov/ENCs/ENCs.shtml">charts.noaa.gov</Hyperlink><Run>. Most other offices sell theirs.</Run>
+                </TextBlock>
+                <TextBlock Text="A folder of cells (.000), prepared charts (.pmtiles), imagery (.mbtiles) or BSB/KAP sheets. Cells and sheets are converted once on the way in, a few seconds each."
+                           FontSize="12" Opacity="0.85" TextWrapping="Wrap" />
+                <!-- Last, and set apart: the one thing on this page not about
+                     getting started, and the one a mariner must not skim. -->
+                <Border CornerRadius="9" Padding="12" Background="#24F59E0B"
+                        BorderBrush="#8CF59E0B" BorderThickness="1" Margin="0,6,0,0">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="NOT FOR NAVIGATION" FontSize="12" FontWeight="Bold"
+                                   CharacterSpacing="50" />
+                        <TextBlock Text="By importing charts you accept that Lookout is a prototype and not a certified navigation system, and that the charts it prepares are processed for display and are not the official ENC. They do not meet chart carriage regulations. You remain responsible for the safe navigation of your vessel and for keeping clear of every danger. Verify everything shown here against official, up-to-date charts and publications, and keep a paper backup."
+                                   FontSize="12" TextWrapping="Wrap" />
+                        <TextBlock FontSize="11" Opacity="0.8" TextWrapping="Wrap">
+                            <Run>NOAA ENC® charts come from the NOAA Office of Coast Survey and are updated weekly on a best-efforts basis; you are responsible for holding the current edition and the latest updates. NOAA makes no warranty and assumes no liability for their use. See the</Run>
+                            <Hyperlink NavigateUri="https://www.charts.noaa.gov/ENCs/ENC_Agreement.shtml">NOAA ENC User Agreement</Hyperlink><Run>.</Run>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
 
