@@ -249,6 +249,7 @@ fun ChartScreen(
             )
             StartupLoader(
                 cells = charts.chartPaths.size,
+                phase = controller.loadPhase,
                 modifier = Modifier.align(Alignment.Center),
             )
         } else if (controller.readouts.building) {

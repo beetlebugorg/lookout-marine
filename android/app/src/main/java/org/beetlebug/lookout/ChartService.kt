@@ -129,13 +129,18 @@ class ChartService : Service() {
          * that would have started it from the background will try again the
          * next time they are.
          */
-        fun start(ctx: Context) {
+        /** True when the platform took the start. API 31+ refuses a foreground
+         *  start from the background; the caller keeps its state honest and
+         *  tries again later rather than believing the service is up. */
+        fun start(ctx: Context): Boolean {
             val i = Intent(ctx, ChartService::class.java)
-            try {
+            return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
                 else ctx.startService(i)
+                true
             } catch (e: Exception) {
                 Log.w(TAG, "foreground service refused: $e")
+                false
             }
         }
 

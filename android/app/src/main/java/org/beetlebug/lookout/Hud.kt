@@ -51,6 +51,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.Canvas
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.abs
@@ -276,8 +282,7 @@ private fun RasterPill(
     // how a pill comes to read "NAVIONICS | OFF" while Navionics is drawn.
     val named = visible.firstOrNull { it.id == raster.active } ?: visible.firstOrNull()
     val drawn = named != null && named.id == raster.active
-    val amber = Color(0xFFFFA726)
-    val tint = if (drawn) MaterialTheme.colorScheme.primary else amber
+    val tint = if (drawn) MaterialTheme.colorScheme.primary else Chrome.amber
     val stateWord = when {
         !drawn -> "off"
         raster.chartHidden -> "drawn, ENC hidden"
@@ -371,13 +376,15 @@ private fun Separator() {
 
 @Composable
 private fun OverscaleBadge(overscale: Double) {
-    val amber = Color(0xFFFFA726)
-    Surface(color = amber.copy(alpha = 0.25f), shape = CircleShape) {
+    // The reference's overscale red-orange (theme tertiary), NOT amber:
+    // zoomed past the survey is stronger news than a plugin's warning.
+    val c = MaterialTheme.colorScheme.tertiary
+    Surface(color = c.copy(alpha = 0.2f), shape = CircleShape) {
         Text(
             text = String.format(Locale.US, "×%.1f", overscale),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
-            color = amber,
+            color = c,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
         )
     }
@@ -546,10 +553,26 @@ private fun bandString(n: Double): String = when {
 /**
  * The startup loader. Opening a real library is one chart open per cell, the
  * atlas bake and the GPU bring-up, which is tens of seconds; the surface is
- * bare until the first frame. The loader says what the wait is for.
+ * bare until the first frame. The loader says what the wait is for, step by
+ * step, the way the reference's StartupLoader does: the one-time symbol
+ * atlas, the mapping pass, then the first scene.
  */
 @Composable
-fun StartupLoader(cells: Int, modifier: Modifier = Modifier) {
+fun StartupLoader(
+    cells: Int,
+    phase: ChartController.LoadPhase,
+    modifier: Modifier = Modifier,
+) {
+    val step = when (phase) {
+        ChartController.LoadPhase.SYMBOLS -> 0
+        ChartController.LoadPhase.MAPPING -> 1
+        ChartController.LoadPhase.TESSELLATING -> 2
+    }
+    val mapping = if (cells > 1) {
+        String.format(Locale.US, "Mapping %,d cells", cells)
+    } else {
+        "Mapping the chart"
+    }
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
@@ -559,25 +582,124 @@ fun StartupLoader(cells: Int, modifier: Modifier = Modifier) {
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = Alignment.Start,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
-            Text(
-                text = if (cells > 1) {
-                    String.format(Locale.US, "Mapping %,d cells", cells)
-                } else {
-                    "Mapping the chart"
-                },
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CompassMark(Modifier.size(24.dp))
+                Text(
+                    text = if (cells > 1) {
+                        String.format(Locale.US, "Opening %,d charts", cells)
+                    } else {
+                        "Opening the chart"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            LinearProgressIndicator(Modifier.width(240.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                // The atlas bake happens on the first run only, so on every
+                // other run it is already done rather than skipped.
+                BakeStep(
+                    state = if (step > 0) StepState.DONE else StepState.RUNNING,
+                    label = "Preparing chart symbols",
+                    detail = if (step > 0) "" else "first run only",
+                )
+                BakeStep(
+                    state = when {
+                        step > 1 -> StepState.DONE
+                        step == 1 -> StepState.RUNNING
+                        else -> StepState.WAITING
+                    },
+                    label = mapping,
+                    detail = if (step == 1) "not loading them, so this is quick" else "",
+                )
+                BakeStep(
+                    state = if (step == 2) StepState.RUNNING else StepState.WAITING,
+                    label = "Drawing the first scene",
+                    detail = "",
+                )
+            }
+        }
+    }
+}
+
+private enum class StepState { WAITING, RUNNING, DONE }
+
+/** One loader step: a state mark, its label, and an aside when one helps. */
+@Composable
+private fun BakeStep(state: StepState, label: String, detail: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when (state) {
+            StepState.RUNNING -> CircularProgressIndicator(
+                Modifier.size(14.dp),
+                strokeWidth = 2.dp,
             )
+            StepState.DONE -> Icon(
+                Icons.Default.Check,
+                contentDescription = null, // the label carries the meaning
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+            )
+            StepState.WAITING -> Spacer(Modifier.size(14.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (state == StepState.WAITING) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+        if (detail.isNotEmpty()) {
             Text(
-                text = "The chart draws as soon as the first scene is built.",
-                style = MaterialTheme.typography.bodySmall,
+                text = detail,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * The compass rose of the loader. It is drawn, not a Material icon, so the
+ * shape is the same on each platform (the reference's CompassMark).
+ */
+@Composable
+private fun CompassMark(modifier: Modifier = Modifier) {
+    val accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+    val needle = Color(0xFFD42E2E)
+    Canvas(modifier) {
+        val r = size.minDimension / 2
+        val c = Offset(r, r)
+        drawCircle(color = accent, radius = r - 1.dp.toPx(), center = c, style = Stroke(2.dp.toPx()))
+        // The four cardinal ticks.
+        for (i in 0 until 4) {
+            rotate(degrees = i * 90f, pivot = c) {
+                drawLine(
+                    color = accent,
+                    start = Offset(r, r * 0.14f),
+                    end = Offset(r, r * 0.42f),
+                    strokeWidth = 1.5f.dp.toPx(),
+                )
+            }
+        }
+        // The north needle. A chart compass rose uses the same red.
+        val p = Path().apply {
+            moveTo(r, r * 0.28f)
+            lineTo(r * 0.7f, r * 1.32f)
+            lineTo(r * 1.3f, r * 1.32f)
+            close()
+        }
+        drawPath(p, needle)
     }
 }
 

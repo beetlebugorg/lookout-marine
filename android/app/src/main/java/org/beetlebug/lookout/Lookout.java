@@ -161,6 +161,8 @@ public final class Lookout implements AutoCloseable {
 
     /** onTrimMemory: drop reclaimable engine caches. */
     public void memoryWarning()                   { if (h != 0) nMemoryWarning(h); }
+    /** Whether the next open skips the one-time symbol rasterize. */
+    public static boolean atlasCacheReady()       { return nAtlasCacheReady(); }
 
     // ---- mariner (all S-52 display settings) -------------------------------
 
@@ -223,6 +225,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nRotateDrag(long h, float x0, float y0, float x1, float y1);
     private static native void nFlingStart(long h, double vx, double vy);
     private static native void nMemoryWarning(long h);
+    private static native boolean nAtlasCacheReady();
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);

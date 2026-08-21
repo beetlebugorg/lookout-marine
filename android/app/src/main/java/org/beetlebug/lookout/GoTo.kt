@@ -124,9 +124,10 @@ fun ScaleEntryDialog(
     )
 }
 
+// The reference shell's presets, verbatim: one representative scale per band.
 private val BANDS = listOf(
-    "Berthing" to 4_000,
-    "Harbor" to 20_000,
+    "Berthing" to 2_000,
+    "Harbor" to 12_000,
     "Approach" to 50_000,
     "Coastal" to 150_000,
     "General" to 700_000,
@@ -153,7 +154,8 @@ object ScaleParser {
         }
         val n = s.toDoubleOrNull() ?: return null
         val d = n * multiplier
-        return if (d.isFinite() && d > 0) d else null
+        // The reference's sanity range: no chart is 1:5, none is 1:5 billion.
+        return if (d.isFinite() && d >= 100 && d <= 100_000_000) d else null
     }
 }
 

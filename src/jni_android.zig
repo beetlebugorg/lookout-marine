@@ -401,6 +401,16 @@ export fn Java_org_beetlebug_lookout_Lookout_nMemoryWarning(env: [*c]j.JNIEnv, c
     lookout_memory_warning(h.l);
 }
 
+extern fn lookout_atlas_cache_ready() c_int;
+
+/// boolean nAtlasCacheReady() -- whether the next open skips the one-time
+/// symbol rasterize, so the loader says "preparing symbols" only on first run.
+export fn Java_org_beetlebug_lookout_Lookout_nAtlasCacheReady(env: [*c]j.JNIEnv, cls: j.jclass) j.jboolean {
+    _ = env;
+    _ = cls;
+    return if (lookout_atlas_cache_ready() != 0) 1 else 0;
+}
+
 // ---- mariner settings ------------------------------------------------------
 //
 // The mariner state crosses as a FLAT double[] of the fields the settings UI

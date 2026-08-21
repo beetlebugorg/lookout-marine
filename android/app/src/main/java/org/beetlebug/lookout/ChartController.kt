@@ -257,6 +257,18 @@ class ChartController(private val appContext: Context) {
     var rendering by mutableStateOf(false)
         private set
 
+    /** The startup loader's steps, the reference's LoadPhase: the one-time
+     *  symbol atlas bake, the open (one chart open per cell), then the first
+     *  scene build. */
+    enum class LoadPhase { SYMBOLS, MAPPING, TESSELLATING }
+    var loadPhase by mutableStateOf(LoadPhase.MAPPING)
+        private set
+
+    /** Called around the open on the render thread; the loader recomposes. */
+    fun noteOpenPhase(p: LoadPhase) {
+        main.post { loadPhase = p }
+    }
+
     /** Result of the last tap-to-identify; empty hides the report. */
     var identify by mutableStateOf<List<PickFeature>>(emptyList())
 
@@ -707,6 +719,10 @@ class ChartController(private val appContext: Context) {
     /** Whether the process is currently being held up. RENDER THREAD. */
     private var serviceOn = false
     private var lastLiveMs = 0L
+    /** When a refused foreground start may be tried again. The platform
+     *  refuses from the background (API 31+); one attempt per backoff keeps
+     *  the log quiet, and a foreground return heals it on the next tick. */
+    private var serviceRetryAtMs = 0L
 
     /**
      * Start or stop the service from what the connections say. Live means the
@@ -726,8 +742,16 @@ class ChartController(private val appContext: Context) {
         if (c.live) lastLiveMs = now
         val want = c.live || (serviceOn && now - lastLiveMs < SERVICE_LINGER_MS)
         if (want == serviceOn) return
-        serviceOn = want
-        if (want) ChartService.start(appContext) else ChartService.stop(appContext)
+        if (want) {
+            if (now < serviceRetryAtMs) return
+            // Only believe the service is up when the platform took the start;
+            // a refused start is retried, not recorded as running.
+            serviceOn = ChartService.start(appContext)
+            if (!serviceOn) serviceRetryAtMs = now + SERVICE_RETRY_MS
+        } else {
+            serviceOn = false
+            ChartService.stop(appContext)
+        }
     }
 
     /** The engine is going, so nothing is left to hold the process up for. */
@@ -1482,6 +1506,8 @@ class ChartController(private val appContext: Context) {
          * go within the minute.
          */
         const val SERVICE_LINGER_MS = 45_000L
+        /** Backoff after the platform refuses a foreground start. */
+        const val SERVICE_RETRY_MS = 30_000L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
         const val SAVE_INTERVAL_NS = 3_000_000_000L

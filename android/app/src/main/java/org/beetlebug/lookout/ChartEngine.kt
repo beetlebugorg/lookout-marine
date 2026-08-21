@@ -127,8 +127,16 @@ class ChartEngine private constructor() {
             }
             if (l == null) {
                 this.controller = controller
+                // The loader's honest phases: the one-time atlas bake shows
+                // only when the cache is cold, and the first-scene step takes
+                // over once the (synchronous) open returns.
+                controller.noteOpenPhase(
+                    if (Lookout.atlasCacheReady()) ChartController.LoadPhase.MAPPING
+                    else ChartController.LoadPhase.SYMBOLS
+                )
                 l = openOn(surface, chartPaths, controller, density, wPx, hPx, wPts, hPts, h)
                     ?: return@post
+                controller.noteOpenPhase(ChartController.LoadPhase.TESSELLATING)
             }
             stopBackgroundTick()
             lastFrameNs = 0 // a new surface is not a continuation of the old
