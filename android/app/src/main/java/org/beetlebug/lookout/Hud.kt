@@ -165,7 +165,6 @@ fun ReadoutsCapsule(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
         ) {
-            FixPill(readouts.fixState, onConfigureGps)
             // The band survives on a phone where the position does not: six
             // characters against twenty-seven, and it is the one readout here
             // that says how much the chart has generalised what it shows.
@@ -197,18 +196,20 @@ fun ReadoutsCapsule(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
-                // Own ship's REPORTED fix, and nothing else: the map centre or
-                // a dead-reckoned number here is a wrong position a mariner
-                // may write in a log (the reference's ship-or-nothing rule).
-                if (readouts.fixState == Lookout.FIX_LIVE) {
-                    Separator()
-                    Text(
-                        text = coordString(readouts.shipLat, readouts.shipLon),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                    )
-                }
+            }
+            // The position slot, where the reference keeps it: the fix pill,
+            // and beside it own ship's REPORTED fix — nothing else. The map
+            // centre or a dead-reckoned number here is a wrong position a
+            // mariner may write in a log (the ship-or-nothing rule).
+            Separator()
+            FixPill(readouts.fixState, onConfigureGps)
+            if (!compact && readouts.fixState == Lookout.FIX_LIVE) {
+                Text(
+                    text = coordString(readouts.shipLat, readouts.shipLon),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
             }
             if (readouts.overscale > OVERSCALE_VISIBLE_AT) {
                 OverscaleBadge(readouts.overscale)

@@ -134,6 +134,8 @@ class ChartEngine private constructor() {
             lastFrameNs = 0 // a new surface is not a continuation of the old
             idleFrames = 0
             idlePolling = false
+            frameLoopLive = true
+            Choreographer.getInstance().removeFrameCallback(frameCallback)
             Choreographer.getInstance().postFrameCallback(frameCallback)
         }
     }
@@ -190,10 +192,21 @@ class ChartEngine private constructor() {
     private var idleFrames = 0
     private var idlePolling = false
 
+    /** True while the frame callback is posted. A kick on a LIVE loop only
+     *  resets the idle counter: re-posting the callback per gesture event
+     *  churned the choreographer and zeroed the frame clock mid-drag. */
+    private var frameLoopLive = false
+
     private fun doFrame(frameTimeNanos: Long) {
-        val l = lookout ?: return
+        val l = lookout ?: run {
+            frameLoopLive = false
+            return
+        }
         // No surface to present on: stop rescheduling. attach starts it again.
-        if (!l.isAttached) return
+        if (!l.isAttached) {
+            frameLoopLive = false
+            return
+        }
         var dt = if (lastFrameNs == 0L) 0.0 else (frameTimeNanos - lastFrameNs) / 1e9
         lastFrameNs = frameTimeNanos
         if (dt > 0.1) dt = 0.1 // resumed from pause: don't lurch the ease
@@ -211,8 +224,9 @@ class ChartEngine private constructor() {
         // After two quiet frames the loop stands down; kick() resumes it on
         // input, and the idle poll watches for what the engine does on its
         // own — a plugin drawing — at 4 Hz, only while plugins are up.
-        idleFrames = if (busy) 0 else idleFrames + 1
+        idleFrames = if (busy || gestureActive) 0 else idleFrames + 1
         if (idleFrames > 2) {
+            frameLoopLive = false
             lastFrameNs = 0L
             startIdlePoll(l)
             return
@@ -246,6 +260,18 @@ class ChartEngine private constructor() {
         queue?.postDelayed(idlePoll, IDLE_POLL_MS)
     }
 
+    /** True while a pointer is on the glass. The pan stream is consumed BY
+     *  the frame loop (the view's resampler hook), so the loop must not
+     *  stand down mid-gesture — it did, during the touch slop's quiet
+     *  frames, and the whole drag then landed at the lift. */
+    @Volatile private var gestureActive = false
+
+    /** UI thread, from the view's touch handler. Safe from any thread. */
+    fun setGestureActive(on: Boolean) {
+        gestureActive = on
+        if (on) kick()
+    }
+
     /** Wake the frame loop: a mutation happened. Safe from any thread. */
     fun kick() {
         val h = queue ?: return
@@ -255,13 +281,15 @@ class ChartEngine private constructor() {
         }
     }
 
-    /** Render thread. Re-posting through remove keeps the callback single. */
+    /** Render thread. A live loop only has its idle counter reset; the
+     *  choreographer is touched solely on a true resume from stand-down. */
     private fun resumeFrames() {
         val l = lookout ?: return
         if (!l.isAttached) return
         idleFrames = 0
+        if (frameLoopLive) return
+        frameLoopLive = true
         lastFrameNs = 0L
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 

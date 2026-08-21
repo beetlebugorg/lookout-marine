@@ -247,6 +247,11 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
     public boolean onTouchEvent(MotionEvent e) {
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                // The pan stream is consumed BY the frame loop (the resampler
+                // hook), so the loop must run for the whole touch. Without
+                // this it stood down during the slop's quiet frames and the
+                // entire drag applied at the lift.
+                engine.setGestureActive(true);
                 breakTrack();
                 dragging = false;
                 downX = e.getX();
@@ -283,6 +288,7 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 if (e.getPointerCount() >= 2) trackTwist(e);
                 break;
             case MotionEvent.ACTION_UP:
+                engine.setGestureActive(false);
                 if (twoTap && e.getEventTime() - twoDownMs < 300) {
                     final float mx = twoMidX / density, my = twoMidY / density;
                     onEngine(l -> l.zoomAt(-1.0, mx, my));
@@ -296,6 +302,7 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 breakTrack(); // and the focus jumps back onto that finger
                 break;
             case MotionEvent.ACTION_CANCEL:
+                engine.setGestureActive(false);
                 twoTap = false;
                 rotating = false;
                 dragging = false;
