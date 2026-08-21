@@ -64,6 +64,56 @@ import kotlin.math.abs
 private const val OVERSCALE_VISIBLE_AT = 1.05
 
 /**
+ * The fix in three states that differ in more than colour, so no one signal
+ * carries it alone (the reference's PositionReadout): live is a filled "GPS"
+ * pill, lost is an outlined "NO GPS" — with NO numbers anywhere near it — and
+ * never-had-a-source is a "Configure GPS" button that opens Connections,
+ * because that state carries a fix-it, not a warning.
+ */
+@Composable
+private fun FixPill(fixState: Int, onConfigure: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    when (fixState) {
+        Lookout.FIX_LIVE -> Surface(shape = RoundedCornerShape(50), color = accent) {
+            Text(
+                "GPS",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            )
+        }
+        Lookout.FIX_LOST -> Surface(
+            shape = RoundedCornerShape(50),
+            color = Color.Transparent,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+        ) {
+            Text(
+                "NO GPS",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            )
+        }
+        else -> Surface(
+            shape = RoundedCornerShape(50),
+            color = Color.Transparent,
+            border = androidx.compose.foundation.BorderStroke(1.dp, accent),
+            modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onConfigure),
+        ) {
+            Text(
+                "Configure GPS",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = accent,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+/**
  * Lat/lon, 1:N scale and zoom in one row at the bottom of the chart. The
  * overscale badge shows when the view is zoomed past the data. The position is
  * in degrees, minutes and seconds, the format that each host uses.
@@ -78,6 +128,7 @@ fun ReadoutsCapsule(
     onRasterSelect: (Int) -> Unit = {},
     onToggleChart: () -> Unit = {},
     onAddRasterCharts: () -> Unit = {},
+    onConfigureGps: () -> Unit = {},
 ) {
     // A phone will not take the whole row on one line: the position alone is
     // 44% of its width, and the raster chart pill pushed it past the screen,
@@ -107,12 +158,7 @@ fun ReadoutsCapsule(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
         ) {
-            Surface(
-                modifier = Modifier.size(10.dp),
-                shape = CircleShape,
-                color = Color(0xFFF59E0B),
-                content = {},
-            )
+            FixPill(readouts.fixState, onConfigureGps)
             // The band survives on a phone where the position does not: six
             // characters against twenty-seven, and it is the one readout here
             // that says how much the chart has generalised what it shows.
@@ -144,13 +190,18 @@ fun ReadoutsCapsule(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
-                Separator()
-                Text(
-                    text = coordString(readouts.lat, readouts.lon),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                )
+                // Own ship's REPORTED fix, and nothing else: the map centre or
+                // a dead-reckoned number here is a wrong position a mariner
+                // may write in a log (the reference's ship-or-nothing rule).
+                if (readouts.fixState == Lookout.FIX_LIVE) {
+                    Separator()
+                    Text(
+                        text = coordString(readouts.shipLat, readouts.shipLon),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                    )
+                }
             }
             if (readouts.overscale > OVERSCALE_VISIBLE_AT) {
                 OverscaleBadge(readouts.overscale)

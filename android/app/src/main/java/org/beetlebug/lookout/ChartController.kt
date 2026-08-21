@@ -59,6 +59,14 @@ data class Readouts(
     val overscale: Double = 1.0,
     val scaleDenominator: Double = 0.0,
     val building: Boolean = false,
+    /** 0 off, 1 following own ship, 2 armed and waiting for a fix. Polled,
+     *  never remembered from a tap: the engine drops follow on a pan. */
+    val followState: Int = 0,
+    val courseUp: Boolean = false,
+    /** A [Lookout] FIX_* state. The ship numbers mean nothing off FIX_LIVE. */
+    val fixState: Int = Lookout.FIX_NONE,
+    val shipLon: Double = 0.0,
+    val shipLat: Double = 0.0,
 )
 
 /**
@@ -218,6 +226,7 @@ class ChartController(private val appContext: Context) {
     }
     private val readoutBuf = DoubleArray(Lookout.READOUTS_LEN)
     private val geoBuf = DoubleArray(2)
+    private val shipBuf = DoubleArray(2)
 
     // The pinned bubble is re-read every frame, so its two crossings reuse
     // their buffers rather than allocating on the frame loop. Both are touched
@@ -573,6 +582,7 @@ class ChartController(private val appContext: Context) {
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
+        val fix = l.ownShip(shipBuf)
         val r = Readouts(
             lon = readoutBuf[Lookout.R_LON],
             lat = readoutBuf[Lookout.R_LAT],
@@ -581,6 +591,13 @@ class ChartController(private val appContext: Context) {
             overscale = readoutBuf[Lookout.R_OVERSCALE],
             scaleDenominator = readoutBuf[Lookout.R_SCALE_DENOM],
             building = readoutBuf[Lookout.R_BUILDING] != 0.0,
+            followState = l.followActive(),
+            courseUp = l.courseUpActive(),
+            fixState = fix,
+            // Published only when live — the readout never falls back to the
+            // map centre or a dead-reckoned number.
+            shipLon = if (fix == Lookout.FIX_LIVE) shipBuf[0] else 0.0,
+            shipLat = if (fix == Lookout.FIX_LIVE) shipBuf[1] else 0.0,
         )
         // The chart moved under an open report, so retire the report. This
         // covers every move, including the pan and the fling, which run on
@@ -906,6 +923,20 @@ class ChartController(private val appContext: Context) {
     }
 
     fun resetRotation() = onEngine { it.resetRotation() }
+
+    /**
+     * The compass tap walks the orientation ladder, exactly the reference's
+     * `cycleOrientation`: off → follow; following north-up → course-up; else
+     * back to north-up, still locked. The STATE is never remembered here — the
+     * engine drops follow on a pan, and the readouts poll it back.
+     */
+    fun cycleOrientation() = onEngine { l ->
+        when {
+            l.followActive() == 0 -> l.followSet(true)
+            !l.courseUpActive() -> l.courseUpSet(true)
+            else -> l.resetRotation()
+        }
+    }
 
     fun memoryWarning() = onEngine { it.memoryWarning() }
 

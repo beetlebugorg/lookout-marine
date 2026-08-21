@@ -127,6 +127,7 @@ fun SettingsSheet(
     controller: ChartController,
     onRequestAccess: () -> Unit,
     onDismiss: () -> Unit,
+    initialSection: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val registry = controller.pluginRegistry
@@ -137,7 +138,9 @@ fun SettingsSheet(
     // phone's width spent on navigation.
     val twoPane = LocalConfiguration.current.screenWidthDp >= 600
 
-    var open by remember { mutableStateOf<String?>(if (twoPane) "display" else null) }
+    var open by remember {
+        mutableStateOf(initialSection ?: if (twoPane) "display" else null)
+    }
     // A section can go away — a plugin that stopped takes its section with it —
     // so a stale selection falls back rather than showing a blank pane.
     val current = open?.takeIf { id -> sections.any { it.id == id } }

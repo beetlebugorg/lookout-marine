@@ -102,28 +102,41 @@ fun ChromeBubble(
 }
 
 /**
- * The north bubble. The mark turns with the view and a tap sets the chart
- * north-up. It is always visible: a mariner reads the chart's orientation from
- * it, so it must not appear only once the chart is already turned.
+ * The compass bubble. The mark turns with the view; a tap walks the
+ * orientation ladder (north-up → follow → course-up → north-up, still
+ * locked). Always visible: a mariner reads the chart's orientation from it.
+ *
+ * The states draw like the reference's NorthBubble: locked fills with the
+ * accent and inverts the ink; armed (waiting for a fix) draws a ring and no
+ * fill; the letter is "C" under course-up — and stands still, the ROTATION is
+ * the information then — else "N" turned with the chart.
  */
 @Composable
-fun NorthBubble(rotationDeg: Double, onReset: () -> Unit, modifier: Modifier = Modifier) {
+fun NorthBubble(
+    rotationDeg: Double,
+    followState: Int,
+    courseUp: Boolean,
+    onCycle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val locked = followState == 1
+    val armed = followState == 2
+    val accent = MaterialTheme.colorScheme.primary
     Surface(
         modifier = modifier
             .size(Chrome.bubble)
             .clip(CircleShape)
-            .clickable(onClick = onReset),
+            .clickable(onClick = onCycle),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        color = if (locked) accent else MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        border = if (armed) androidx.compose.foundation.BorderStroke(2.dp, accent) else null,
         tonalElevation = 2.dp,
         shadowElevation = 3.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .rotate(-rotationDeg.toFloat())
-                    .semanticsNorth(),
+                modifier = if (courseUp) Modifier else Modifier.rotate(-rotationDeg.toFloat()),
             ) {
                 Canvas(Modifier.size(9.dp)) {
                     // The pointer: a filled triangle over the letter.
@@ -136,17 +149,16 @@ fun NorthBubble(rotationDeg: Double, onReset: () -> Unit, modifier: Modifier = M
                     drawPath(p, Color(0xFFE53935))
                 }
                 Text(
-                    "N",
+                    if (courseUp) "C" else "N",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (locked) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
     }
 }
-
-private fun Modifier.semanticsNorth(): Modifier = this
 
 /**
  * The distance bar: four alternating segments under a label. The width comes

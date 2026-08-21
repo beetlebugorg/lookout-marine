@@ -56,6 +56,9 @@ fun ChartScreen(
     onViewCreated: (LookoutView) -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
+    // The section the settings sheet opens on: "Configure GPS" goes straight
+    // to Connections; everything else starts at the list or Display.
+    var settingsSection by remember { mutableStateOf<String?>(null) }
     var showSearch by remember { mutableStateOf(false) }
     var showScaleEntry by remember { mutableStateOf(false) }
     // The chart's size, tracked so the zoom buttons can zoom about its centre
@@ -115,7 +118,9 @@ fun ChartScreen(
         // ---- top right: north ------------------------------------------------
         NorthBubble(
             rotationDeg = controller.readouts.rotationDeg,
-            onReset = { controller.resetRotation() },
+            followState = controller.readouts.followState,
+            courseUp = controller.readouts.courseUp,
+            onCycle = { controller.cycleOrientation() },
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
@@ -283,6 +288,10 @@ fun ChartScreen(
             // The Charts tab is where charts are added; the pill's item goes
             // there rather than growing a second file browser.
             onAddRasterCharts = { showSettings = true },
+            onConfigureGps = {
+                settingsSection = "connections"
+                showSettings = true
+            },
         )
     }
 
@@ -313,7 +322,11 @@ fun ChartScreen(
             charts = charts,
             controller = controller,
             onRequestAccess = onRequestFileAccess,
-            onDismiss = { showSettings = false },
+            onDismiss = {
+                showSettings = false
+                settingsSection = null
+            },
+            initialSection = settingsSection,
         )
     }
 }
