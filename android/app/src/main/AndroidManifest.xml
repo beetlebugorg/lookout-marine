@@ -70,7 +70,12 @@
         android:allowBackup="true"
         android:theme="@style/AppTheme"
         android:hardwareAccelerated="true"
-        android:requestLegacyExternalStorage="true" >
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true" >
+        <!-- Cleartext stays on: a boat's chart and data services live on the
+             vessel LAN (a Pi serving tiles, a Signal K gateway) where http is
+             the norm and no certificate authority reaches. -->
+
 
         <activity android:name="org.beetlebug.lookout.LookoutActivity"
             android:label="@string/app_name"

@@ -1592,3 +1592,160 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginGrantSet(env: [*c]j.JNIEnv, 
     defer env_(env).ReleaseStringUTFChars.?(env, cap, ccap);
     return if (lookout_plugin_grant_set(h.l, @ptrCast(cid), @ptrCast(ccap), if (on != 0) 1 else 0) == 0) 1 else 0;
 }
+
+// ---- alt chart styles (an online map AS the chart) --------------------------
+//
+// The core takes a MapLibre style as JSON and asks back for every tile the
+// style's sources name (lookout does no networking). The ask lands on the
+// render thread with the api lock held, so nothing here may touch the JVM:
+// requests are parked in a ring the Java side drains through nTilePoll — the
+// same no-upcall pattern as the bake job — and answered from any thread with
+// nTileRespond, which the C ABI documents as lock-free.
+
+extern fn lookout_alt_chart_style_json(h: ?*anyopaque, json: ?[*]const u8, len: usize) c_int;
+extern fn lookout_alt_chart_style_active(h: ?*anyopaque) c_int;
+const TileRequestFn = *const fn (user: ?*anyopaque, source: [*c]const u8, req_id: u64, z: c_int, x: c_int, y: c_int) callconv(.c) void;
+extern fn lookout_set_tile_provider(h: ?*anyopaque, cb: ?TileRequestFn, user: ?*anyopaque) void;
+extern fn lookout_tile_respond(h: ?*anyopaque, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int) void;
+
+const TileAsk = struct {
+    id: u64,
+    z: i32,
+    x: i32,
+    y: i32,
+    /// Style source names are short ("sat", "openmaptiles"); a name that does
+    /// not fit is truncated, which at worst mis-keys one source's template.
+    source: [64]u8,
+    slen: u8,
+};
+
+/// One engine at a time on Android, so the ring is a global. Guarded by a
+/// spinlock: both sides hold it for a few loads and stores.
+var tile_lock = std.atomic.Value(bool).init(false);
+var tile_ring: [256]TileAsk = undefined;
+var tile_count: usize = 0;
+
+fn tileLockAcquire() void {
+    while (tile_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn tileLockRelease() void {
+    tile_lock.store(false, .release);
+}
+
+fn tileRequestCb(user: ?*anyopaque, source: [*c]const u8, req_id: u64, z: c_int, x: c_int, y: c_int) callconv(.c) void {
+    tileLockAcquire();
+    if (tile_count >= tile_ring.len) {
+        tileLockRelease();
+        // Answered, not dropped: a tile nobody answers is a hole in the chart
+        // that never fills. tile_respond is the one call allowed from here.
+        lookout_tile_respond(user, req_id, null, 0, 2);
+        return;
+    }
+    const ask = &tile_ring[tile_count];
+    ask.id = req_id;
+    ask.z = z;
+    ask.x = x;
+    ask.y = y;
+    ask.slen = 0;
+    if (source) |s| {
+        var i: usize = 0;
+        while (s[i] != 0 and i < ask.source.len) : (i += 1) ask.source[i] = s[i];
+        ask.slen = @intCast(i);
+    }
+    tile_count += 1;
+    tileLockRelease();
+}
+
+/// boolean nAltStyleSet(long h, String json) -- draw the host's style instead
+/// of the portrayal; null or empty restores lookout's chart. Setting a style
+/// installs the tile provider; clearing it uninstalls it and drops what was
+/// queued (the core fails unanswered tiles itself once the provider is gone).
+export fn Java_org_beetlebug_lookout_Lookout_nAltStyleSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, json: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    if (json == null) {
+        lookout_set_tile_provider(h.l, null, null);
+        tileLockAcquire();
+        tile_count = 0;
+        tileLockRelease();
+        // This entry answers 1 on success, unlike most of the C ABI.
+        return if (lookout_alt_chart_style_json(h.l, null, 0) != 0) 1 else 0;
+    }
+    const cjson = env_(env).GetStringUTFChars.?(env, json, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, json, cjson);
+    const len = std.mem.len(@as([*:0]const u8, @ptrCast(cjson)));
+    lookout_set_tile_provider(h.l, tileRequestCb, h.l);
+    return if (lookout_alt_chart_style_json(h.l, @ptrCast(cjson), len) != 0) 1 else 0;
+}
+
+/// boolean nAltStyleActive(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nAltStyleActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_alt_chart_style_active(h.l) != 0) 1 else 0;
+}
+
+/// int nTilePoll(long h, long[] ids, int[] zxy, String[] sources) -- drain up
+/// to ids.length parked tile asks. zxy carries z,x,y per ask, packed in
+/// triples. Returns how many were taken.
+export fn Java_org_beetlebug_lookout_Lookout_nTilePoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jlongArray, zxy: j.jintArray, sources: j.jobjectArray) j.jint {
+    _ = cls;
+    if (fromLong(hl) == null) return 0;
+    const cap: usize = @intCast(env_(env).GetArrayLength.?(env, ids));
+    if (cap == 0) return 0;
+
+    // Copy out under the lock, release, THEN touch the JVM: NewStringUTF can
+    // trigger a GC pause, and the render thread must never spin behind one.
+    var taken: [64]TileAsk = undefined;
+    var n: usize = 0;
+    tileLockAcquire();
+    while (n < tile_count and n < cap and n < taken.len) : (n += 1) taken[n] = tile_ring[n];
+    const left = tile_count - n;
+    var i: usize = 0;
+    while (i < left) : (i += 1) tile_ring[i] = tile_ring[i + n];
+    tile_count = left;
+    tileLockRelease();
+    if (n == 0) return 0;
+
+    var jids: [64]j.jlong = undefined;
+    var jzxy: [192]j.jint = undefined;
+    for (taken[0..n], 0..) |ask, k| {
+        jids[k] = @bitCast(ask.id);
+        jzxy[k * 3 + 0] = ask.z;
+        jzxy[k * 3 + 1] = ask.x;
+        jzxy[k * 3 + 2] = ask.y;
+        var name: [65:0]u8 = undefined;
+        @memcpy(name[0..ask.slen], ask.source[0..ask.slen]);
+        name[ask.slen] = 0;
+        const s = env_(env).NewStringUTF.?(env, &name);
+        env_(env).SetObjectArrayElement.?(env, sources, @intCast(k), s);
+        env_(env).DeleteLocalRef.?(env, s);
+    }
+    env_(env).SetLongArrayRegion.?(env, ids, 0, @intCast(n), &jids);
+    env_(env).SetIntArrayRegion.?(env, zxy, 0, @intCast(n * 3), &jzxy);
+    return @intCast(n);
+}
+
+/// void nTileRespond(long h, long id, byte[] bytes, int status) -- answer one
+/// ask from any thread. status 0 takes bytes; 1 is "no tile there"; 2 is
+/// "tried and failed".
+export fn Java_org_beetlebug_lookout_Lookout_nTileRespond(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, bytes: j.jbyteArray, status: j.jint) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    const req: u64 = @bitCast(id);
+    if (status != 0 or bytes == null) {
+        lookout_tile_respond(h.l, req, null, 0, status);
+        return;
+    }
+    const len: usize = @intCast(env_(env).GetArrayLength.?(env, bytes));
+    const p = env_(env).GetByteArrayElements.?(env, bytes, null) orelse {
+        lookout_tile_respond(h.l, req, null, 0, 2);
+        return;
+    };
+    defer env_(env).ReleaseByteArrayElements.?(env, bytes, p, j.JNI_ABORT);
+    lookout_tile_respond(h.l, req, p, len, 0);
+}

@@ -516,6 +516,21 @@ public final class Lookout implements AutoCloseable {
     public boolean pluginTableOpen(String id, String key, boolean open) {
         return h != 0 && nPluginTableOpen(h, id, key, open);
     }
+
+    // ---- alt chart styles ---------------------------------------------------
+
+    /** Draw a host-supplied MapLibre style instead of the portrayal; null
+     *  restores lookout's chart. Tiles are then asked back through tilePoll. */
+    public boolean altStyleSet(String json)      { return h != 0 && nAltStyleSet(h, json); }
+    public boolean altStyleActive()              { return h != 0 && nAltStyleActive(h); }
+    /** Drain up to ids.length parked tile asks; zxy is packed z,x,y triples. */
+    public int tilePoll(long[] ids, int[] zxy, String[] sources) {
+        return h == 0 ? 0 : nTilePoll(h, ids, zxy, sources);
+    }
+    /** Answer one ask, from any thread. status 0 bytes, 1 no tile, 2 failed. */
+    public void tileRespond(long id, byte[] bytes, int status) {
+        if (h != 0) nTileRespond(h, id, bytes, status);
+    }
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -526,6 +541,10 @@ public final class Lookout implements AutoCloseable {
     private static native String nPluginInspect(long h, String path);
     private static native String nPluginInstall(long h, String path);
     private static native boolean nPluginUninstall(long h, String id);
+    private static native boolean nAltStyleSet(long h, String json);
+    private static native boolean nAltStyleActive(long h);
+    private static native int nTilePoll(long h, long[] ids, int[] zxy, String[] sources);
+    private static native void nTileRespond(long h, long id, byte[] bytes, int status);
     private static native String nPluginTables(long h);
     private static native String nPluginTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);

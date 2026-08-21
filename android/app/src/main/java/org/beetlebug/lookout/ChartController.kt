@@ -372,6 +372,9 @@ class ChartController(private val appContext: Context) {
         if (rasterCharts.chartHidden) l.setChartHidden(true)
         pushRaster(l)
         loadPlugins(l)
+        // The picked chart link survives a change of ENC like the rasters do:
+        // pushed again on every open.
+        if (activeChartLink != null) main.post { pushChartLink() }
         val loaded = date
         main.post { mariner.loadFrom(v, loaded) }
     }
@@ -576,6 +579,9 @@ class ChartController(private val appContext: Context) {
     fun detach(l: Lookout?) {
         if (l != null && lk !== l) return
         saveView() // last known pose; the handle is about to close
+        // Before the handle closes: a tile fetch landing later must find the
+        // provider gone, not a dying engine.
+        altTiles.stop()
         engine = null
         lk = null
         // Everything below is the MAIN thread's: Compose state, the siren
@@ -961,6 +967,190 @@ class ChartController(private val appContext: Context) {
             if (l.followActive() != 0) l.followSet(false)
             val r = lastPushed
             l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
+        }
+    }
+
+    // ---- chart links (an online map AS the chart) ----------------------------
+    //
+    // One chart added by link: a MapLibre style url. Picking it renders that
+    // style INSTEAD of the built-in chart — Lookout's own chart is just the
+    // default entry in the same list. The style is fetched HERE on every push
+    // (lookout takes JSON, not a url) and its tiles are served back through
+    // AltChartTiles; a publisher's edits show up without a refresh.
+
+    data class ChartLink(val url: String, val name: String, val doc: String? = null)
+
+    var chartLinks by mutableStateOf<List<ChartLink>>(emptyList())
+        private set
+    /** The picked link's url; null draws the built-in chart. */
+    var activeChartLink by mutableStateOf<String?>(null)
+        private set
+    var chartLinkBusy by mutableStateOf(false)
+        private set
+    var chartLinkError by mutableStateOf<String?>(null)
+
+    private val altTiles = AltChartTiles()
+    private val linkPrefs = appContext.getSharedPreferences("chartlinks.v1", Context.MODE_PRIVATE)
+
+    init {
+        loadChartLinks()
+    }
+
+    private fun loadChartLinks() {
+        val raw = linkPrefs.getString("links", null) ?: return
+        val links = ArrayList<ChartLink>()
+        try {
+            val arr = org.json.JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val url = o.optString("url")
+                if (url.isEmpty()) continue
+                links.add(ChartLink(url, o.optString("name"), o.optString("doc").ifEmpty { null }))
+            }
+        } catch (_: Exception) {
+            return
+        }
+        chartLinks = links
+        val active = linkPrefs.getString("active", null)
+        activeChartLink = if (links.any { it.url == active }) active else null
+    }
+
+    private fun saveChartLinks() {
+        val arr = org.json.JSONArray()
+        for (l in chartLinks) {
+            val o = org.json.JSONObject().put("url", l.url).put("name", l.name)
+            l.doc?.let { o.put("doc", it) }
+            arr.put(o)
+        }
+        linkPrefs.edit().putString("links", arr.toString()).putString("active", activeChartLink).apply()
+    }
+
+    /**
+     * Add a chart by its style link. The link is read once here — a dead or
+     * non-style link is refused NOW, at the form, not discovered later as a
+     * blank chart. The new chart is picked immediately: adding it is the
+     * request to sail on it.
+     */
+    fun addChartLink(raw: String) {
+        val trimmed = raw.trim()
+        chartLinkError = null
+        val scheme = trimmed.substringBefore("://", "").lowercase()
+        if (scheme != "https" && scheme != "http" && scheme != "file" && !trimmed.startsWith("/")) {
+            chartLinkError = "That isn't a link."
+            return
+        }
+        if (chartLinks.any { it.url == trimmed }) {
+            selectChartLink(trimmed)
+            return
+        }
+        chartLinkBusy = true
+        Thread {
+            val found = AltChartStyle.probeChartLink(trimmed)
+            main.post {
+                chartLinkBusy = false
+                if (found == null) {
+                    chartLinkError = "No chart style or tile source at that link."
+                    return@post
+                }
+                if (chartLinks.none { it.url == found.first }) {
+                    chartLinks = chartLinks + ChartLink(found.first, found.second, found.third)
+                }
+                selectChartLink(found.first)
+            }
+        }.start()
+    }
+
+    fun selectChartLink(url: String?) {
+        activeChartLink = url
+        saveChartLinks()
+        pushChartLink()
+    }
+
+    fun removeChartLink(url: String) {
+        chartLinks = chartLinks.filter { it.url != url }
+        if (activeChartLink == url) activeChartLink = null
+        saveChartLinks()
+        pushChartLink()
+    }
+
+    /**
+     * Re-read a linked chart and rebuild what was frozen when it was added. A
+     * style link needs nothing (fetched fresh on every push) but a TileJSON
+     * link's wrapper was GENERATED from what the publisher served that day. A
+     * link that does not answer leaves the chart exactly as it was.
+     */
+    fun refreshChartLink(url: String) {
+        if (chartLinks.none { it.url == url }) return
+        chartLinkError = null
+        chartLinkBusy = true
+        val wasPicked = activeChartLink == url
+        Thread {
+            val found = AltChartStyle.probeChartLink(url)
+            main.post {
+                chartLinkBusy = false
+                if (found == null) {
+                    chartLinkError = "That link didn't answer. The chart is unchanged."
+                    return@post
+                }
+                chartLinks = chartLinks.map {
+                    if (it.url == url) ChartLink(found.first, found.second, found.third) else it
+                }
+                if (wasPicked) {
+                    activeChartLink = found.first
+                    saveChartLinks()
+                    pushChartLink()
+                } else {
+                    saveChartLinks()
+                }
+            }
+        }.start()
+    }
+
+    /** Draw whatever is picked now. Called on pick and on every open. */
+    fun pushChartLink() {
+        val active = activeChartLink
+        if (active == null) {
+            onEngine { l ->
+                altTiles.stop()
+                l.altStyleSet(null)
+            }
+            return
+        }
+        val link = chartLinks.firstOrNull { it.url == active }
+        Thread {
+            // A TileJSON link carries the wrapper generated when it was
+            // added; a style link is the publisher's own document, fetched
+            // fresh so their edits show up.
+            val raw = link?.doc ?: AltChartStyle.fetchText(active)
+            val resolved = raw?.let { AltChartStyle.resolve(it) }
+            main.post { applyAltStyle(resolved, active) }
+        }.start()
+    }
+
+    /**
+     * Hand a resolved style to the chart, or say why not. `for` guards the
+     * race the mariner can cause: picking a second chart while the first is
+     * still being fetched — the slower fetch must not win.
+     */
+    private fun applyAltStyle(style: AltChartStyle?, url: String) {
+        if (activeChartLink != url) return
+        if (style == null) {
+            chartLinkError = "That chart didn't answer. Showing the Lookout chart."
+            activeChartLink = null
+            saveChartLinks()
+            onEngine { l ->
+                altTiles.stop()
+                l.altStyleSet(null)
+            }
+            return
+        }
+        chartLinkError = null
+        onEngine { l ->
+            if (l.altStyleSet(style.json)) {
+                altTiles.start(l, style.sources)
+            } else {
+                Log.w(TAG, "alt chart style refused")
+            }
         }
     }
 

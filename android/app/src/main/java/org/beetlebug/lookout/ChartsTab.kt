@@ -2,6 +2,13 @@ package org.beetlebug.lookout
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -91,6 +98,101 @@ fun ChartsSection(
     }
 
     RasterChartsSection(controller)
+    ChartLinksSection(controller)
+}
+
+/**
+ * Charts by link: an online map AS the chart. Picking one renders that
+ * publisher's MapLibre style instead of the built-in portrayal — Lookout's own
+ * chart is just the default entry in the same list (the reference shell's
+ * Chart list, row for row).
+ */
+@Composable
+private fun ChartLinksSection(controller: ChartController) {
+    SectionHeader("Chart")
+    Footer(
+        "A chart added by link draws INSTEAD of Lookout's own: the publisher " +
+            "styles it and their tiles are fetched as you sail. While one is " +
+            "picked, the display settings above shape only Lookout's chart.",
+    )
+    LinkChoiceRow(
+        title = "Lookout chart",
+        desc = "The built-in portrayal of your opened cells.",
+        selected = controller.activeChartLink == null,
+    ) { controller.selectChartLink(null) }
+    for (link in controller.chartLinks) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                LinkChoiceRow(
+                    title = link.name.ifEmpty { link.url },
+                    desc = link.url,
+                    selected = controller.activeChartLink == link.url,
+                ) { controller.selectChartLink(link.url) }
+            }
+            TextButton(onClick = { controller.refreshChartLink(link.url) }) { Text("Refresh") }
+            TextButton(onClick = { controller.removeChartLink(link.url) }) {
+                Text("Remove", color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+    var newLink by remember { mutableStateOf("") }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val submit = {
+            if (newLink.isNotBlank()) {
+                controller.addChartLink(newLink)
+                newLink = ""
+            }
+        }
+        OutlinedTextField(
+            value = newLink,
+            onValueChange = { newLink = it },
+            label = { Text("https://…/style.json") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { submit() }),
+        )
+        TextButton(onClick = submit, enabled = newLink.isNotBlank()) { Text("Add") }
+    }
+    if (controller.chartLinkBusy) {
+        LinearProgressIndicator(Modifier.padding(horizontal = 20.dp))
+    }
+    controller.chartLinkError?.let { Footer(it) }
+    Footer("A style link or a TileJSON tile source; also a style.json on the device by path.")
+}
+
+/** The radio row of the Chart list; the whole row is the touch target. */
+@Composable
+private fun LinkChoiceRow(title: String, desc: String, selected: Boolean, onSelect: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(start = 16.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 /**
