@@ -57,7 +57,9 @@ const Set = struct {
     /// The style source ("raster0"…): stable for the set's whole life, which
     /// is what lets a style rebuild rebind the same provider.
     source_name: [:0]const u8,
-    charts: std.ArrayListUnmanaged(Chart) = .empty,
+    /// Boxed: a worker holds a chart across a tile read while the API thread
+    /// may grow this list, so the addresses must not move with it.
+    charts: std.ArrayListUnmanaged(*Chart) = .empty,
     /// Drawn where it covers. PER SET: switching the Atlantic on must not
     /// switch the west coast, so one selection index cannot express this.
     shown: bool = false,
@@ -77,6 +79,10 @@ pub const Rasters = struct {
     alloc: std.mem.Allocator,
     sets: std.ArrayListUnmanaged(Set) = .empty,
 
+    /// Guards queue and in_flight, and every touch of `sets` or a set's
+    /// `charts` a worker can race: the API thread appends sets and charts and
+    /// flips `enabled` while workers walk the lists. API-thread readers need
+    /// no lock of their own — every mutator already runs under the api lock.
     mu: Lock = .{},
     queue: std.ArrayListUnmanaged(Job) = .empty,
     in_flight: usize = 0,
@@ -97,9 +103,10 @@ pub const Rasters = struct {
         for (self.threads[0..self.n_threads]) |t| if (t) |th| th.join();
         self.n_threads = 0;
         for (self.sets.items) |*s| {
-            for (s.charts.items) |*c| {
+            for (s.charts.items) |c| {
                 cc.tile57_raster_chart_close(c.chart);
                 self.alloc.free(c.path);
+                self.alloc.destroy(c);
             }
             s.charts.deinit(self.alloc);
             s.provider.deinit();
@@ -124,19 +131,32 @@ pub const Rasters = struct {
             return false;
         }
         const ch = chart orelse return false;
-        errdefer cc.tile57_raster_chart_close(ch);
+        // Not errdefer: this function fails by returning false, and an open
+        // chart that never joined a set must still close.
+        var adopted = false;
+        defer if (!adopted) cc.tile57_raster_chart_close(ch);
 
         var info: cc.tile57_raster_chart_info = undefined;
         cc.tile57_raster_chart_get_info(ch, &info);
 
-        const set = self.setNamed(setNameFor(path)) orelse return false;
         const path_copy = self.alloc.dupe(u8, path) catch return false;
-        set.charts.append(self.alloc, .{
-            .chart = ch,
-            .info = info,
-            .path = path_copy,
-        }) catch {
+        const boxed = self.alloc.create(Chart) catch {
             self.alloc.free(path_copy);
+            return false;
+        };
+        boxed.* = .{ .chart = ch, .info = info, .path = path_copy };
+
+        self.mu.lock();
+        const set = self.setNamed(setNameFor(path)) orelse {
+            self.mu.unlock();
+            self.alloc.free(path_copy);
+            self.alloc.destroy(boxed);
+            return false;
+        };
+        set.charts.append(self.alloc, boxed) catch {
+            self.mu.unlock();
+            self.alloc.free(path_copy);
+            self.alloc.destroy(boxed);
             return false;
         };
 
@@ -149,12 +169,14 @@ pub const Rasters = struct {
         // drawn: a second provider for one coast is a choice, not a
         // replacement; a new coast has nothing to compete with.
         if (!self.anyShownOver(idx)) self.sets.items[idx].shown = true;
+        self.mu.unlock();
 
+        adopted = true;
         self.start();
         return true;
     }
 
-    /// The set called `name`, creating it if room remains.
+    /// The set called `name`, creating it if room remains. Caller holds mu.
     fn setNamed(self: *Rasters, name: []const u8) ?*Set {
         for (self.sets.items) |*s| {
             if (std.mem.eql(u8, s.name, name)) return s;
@@ -189,7 +211,7 @@ pub const Rasters = struct {
         var minz: u8 = 255;
         var maxz: u8 = 0;
         var ts: u32 = 256;
-        for (s.charts.items) |*c| {
+        for (s.charts.items) |c| {
             if (!c.enabled) continue;
             minz = @min(minz, c.info.min_zoom);
             maxz = @max(maxz, c.info.max_zoom);
@@ -213,10 +235,12 @@ pub const Rasters = struct {
     /// answers with changed — so its memory of them has to go with it; the
     /// caller rebuilds the style, and the fresh source refetches.
     pub fn setEnabled(self: *Rasters, path: []const u8, on: bool) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
         var found = false;
         for (self.sets.items, 0..) |*set, i| {
             var hit = false;
-            for (set.charts.items) |*c| {
+            for (set.charts.items) |c| {
                 if (!std.mem.eql(u8, c.path, path)) continue;
                 if (c.enabled != on) {
                     c.enabled = on;
@@ -235,7 +259,7 @@ pub const Rasters = struct {
 
     pub fn isEnabled(self: *Rasters, path: []const u8) bool {
         for (self.sets.items) |*set| {
-            for (set.charts.items) |*c| {
+            for (set.charts.items) |c| {
                 if (std.mem.eql(u8, c.path, path)) return c.enabled;
             }
         }
@@ -243,7 +267,7 @@ pub const Rasters = struct {
     }
 
     fn setHasEnabled(self: *const Rasters, i: usize) bool {
-        for (self.sets.items[i].charts.items) |*c| {
+        for (self.sets.items[i].charts.items) |c| {
             if (c.enabled) return true;
         }
         return false;
@@ -335,16 +359,38 @@ pub const Rasters = struct {
             self.in_flight -= 1;
             self.mu.unlock();
         }
+        // The API thread grows `sets` and `charts` while workers run, and
+        // either append may move its backing array — so the lists are only
+        // read under mu. The tile read itself runs outside mu on the boxed
+        // chart, whose address never moves; mu is re-taken per chart rather
+        // than held across the read, which can be a disk seek.
+        self.mu.lock();
         // Sets are append-only, so the index stays valid for the set's life.
-        if (job.set >= self.sets.items.len) return;
-        const s = &self.sets.items[job.set];
+        if (job.set >= self.sets.items.len) {
+            self.mu.unlock();
+            return;
+        }
+        // Heap-boxed and never freed while the map lives.
+        const provider = self.sets.items[job.set].provider;
+        self.mu.unlock();
 
         // First enabled chart in the set that holds the tile wins. These
         // pyramids are clipped to a coastline and run about 38% dense, so
         // "no tile there" is the ordinary case, not a failure.
-        for (s.charts.items) |*c| {
-            if (!c.enabled) continue;
-            if (job.req.z < c.info.min_zoom or job.req.z > c.info.max_zoom) continue;
+        var i: usize = 0;
+        while (true) : (i += 1) {
+            self.mu.lock();
+            const charts = self.sets.items[job.set].charts.items;
+            if (i >= charts.len) {
+                self.mu.unlock();
+                break;
+            }
+            const c = charts[i];
+            const usable = c.enabled and
+                job.req.z >= c.info.min_zoom and job.req.z <= c.info.max_zoom;
+            self.mu.unlock();
+            if (!usable) continue;
+
             var bytes: [*c]u8 = null;
             var len: usize = 0;
             var err: cc.tile57_error = undefined;
@@ -354,10 +400,10 @@ pub const Rasters = struct {
             if (st != cc.TILE57_OK) continue;
             if (bytes == null or len == 0) continue;
             defer cc.tile57_free(bytes);
-            s.provider.respond(job.req.id, bytes[0..len], .ok);
+            provider.respond(job.req.id, bytes[0..len], .ok);
             return;
         }
-        s.provider.respond(job.req.id, "", .empty);
+        provider.respond(job.req.id, "", .empty);
     }
 
     // ---- the election ----------------------------------------------------
@@ -434,7 +480,7 @@ pub const Rasters = struct {
     fn setBounds(self: *const Rasters, i: usize) ?Box {
         if (i >= self.sets.items.len) return null;
         var out: ?Box = null;
-        for (self.sets.items[i].charts.items) |*c| {
+        for (self.sets.items[i].charts.items) |c| {
             if (!c.enabled) continue;
             const b: Box = .{
                 .x0 = lonToWorldX(c.info.west),
@@ -455,7 +501,7 @@ pub const Rasters = struct {
     pub fn setInView(self: *const Rasters, i: usize, cam: Camera) bool {
         if (i >= self.sets.items.len) return false;
         const box = visibleBox(cam);
-        for (self.sets.items[i].charts.items) |*c| {
+        for (self.sets.items[i].charts.items) |c| {
             if (!c.enabled) continue;
             const n = latToWorldY(c.info.north);
             const s2 = latToWorldY(c.info.south);
@@ -563,7 +609,7 @@ pub const Rasters = struct {
     pub fn coverage(self: *const Rasters) ?[4]f64 {
         var out: ?[4]f64 = null;
         for (self.sets.items) |*set| {
-            for (set.charts.items) |*c| {
+            for (set.charts.items) |c| {
                 const b: [4]f64 = .{ c.info.west, c.info.south, c.info.east, c.info.north };
                 if (b[0] == 0 and b[1] == 0 and b[2] == 0 and b[3] == 0) continue;
                 if (out) |*u| {
