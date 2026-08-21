@@ -416,14 +416,14 @@ test "every mariner toggle changes the built style" {
         t.off(&m_off);
         var s_off = build(.{ .mariner = m_off }) catch |e| {
             std.debug.print("  {s}: build failed {t}\n", .{ t.name, e });
-            continue;
+            return e;
         };
         defer s_off.deinit();
         var m_on = base;
         t.on(&m_on);
         var s_on = build(.{ .mariner = m_on }) catch |e| {
             std.debug.print("  {s}: build failed {t}\n", .{ t.name, e });
-            continue;
+            return e;
         };
         defer s_on.deinit();
         const same = std.mem.eql(u8, s_off.json, s_on.json);
@@ -432,6 +432,13 @@ test "every mariner toggle changes the built style" {
             t.name, s_off.json.len, s_on.json.len,
             if (same) "NO EFFECT ON THE STYLE" else "ok",
         });
+        // show_full_sector_lines is plumbed through the mariner but consumed
+        // nowhere in tile57: sector figures fold into `lines` at bake, so the
+        // style has no layer to filter (tile57 style/maplibre.zig). Exact
+        // equality here means a toggle going inert fails, and the exemption
+        // itself fails the day the engine learns the switch.
+        const known_inert = std.mem.eql(u8, t.name, "show_full_sector_lines");
+        try std.testing.expectEqual(known_inert, same);
     }
     std.debug.print("mariner toggles with no effect on the built style: {d}/{d}\n", .{ inert, toggles.len });
 }
