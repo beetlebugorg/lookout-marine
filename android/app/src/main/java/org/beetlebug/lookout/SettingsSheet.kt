@@ -183,14 +183,14 @@ fun SettingsSheet(
                     VerticalDivider()
                     Box(Modifier.weight(1f)) {
                         current?.let {
-                            SectionPane(it, m, charts, controller, registry, onRequestAccess, null)
+                            SectionPane(it, m, charts, controller, registry, onRequestAccess, null, onDismiss)
                         }
                     }
                 }
             } else if (current == null) {
                 SectionList(sections = sections, selected = null, onOpen = { open = it })
             } else {
-                SectionPane(current, m, charts, controller, registry, onRequestAccess) { open = null }
+                SectionPane(current, m, charts, controller, registry, onRequestAccess, { open = null }, onDismiss)
             }
         }
     }
@@ -295,6 +295,7 @@ private fun SectionPane(
     registry: PluginRegistry,
     onRequestAccess: () -> Unit,
     onBack: (() -> Unit)?,
+    onCloseSheet: () -> Unit,
 ) {
     Column(Modifier.fillMaxHeight()) {
         val label = SettingsSection.all.firstOrNull { it.id == id }?.label ?: id
@@ -333,9 +334,27 @@ private fun SectionPane(
                 "plugins" -> PluginsManageSection(registry, controller)
                 "advanced" -> AdvancedSection(m)
             }
+            // The declared tables that belong to this section — the reference
+            // shell's Vessels menu, as rows. Opening one closes the sheet: the
+            // table sits over the chart, and a row's reveal needs it visible.
+            val tables = controller.tableSpecs.filter { it.menu.equals(id, ignoreCase = true) }
+            val hasTables = tables.isNotEmpty()
+            if (hasTables) {
+                SectionHeader("Tables", first = !core)
+                for (spec in tables) {
+                    TextButton(
+                        onClick = {
+                            onCloseSheet()
+                            controller.showTable(spec)
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    ) { Text("${spec.title}…") }
+                }
+                Footer("Live while it is open. Tap a row to find it on the chart.")
+            }
             val groups = registry.groups(id)
-            PluginGroups(groups, controller, first = !core)
-            PluginLists(registry, id, controller, first = !core && groups.isEmpty())
+            PluginGroups(groups, controller, first = !core && !hasTables)
+            PluginLists(registry, id, controller, first = !core && !hasTables && groups.isEmpty())
         }
     }
 }

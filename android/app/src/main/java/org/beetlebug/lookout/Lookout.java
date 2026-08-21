@@ -503,6 +503,16 @@ public final class Lookout implements AutoCloseable {
         return h == 0 ? "The plugin layer could not start." : nPluginInstall(h, path);
     }
     public boolean pluginUninstall(String id)    { return h != 0 && nPluginUninstall(h, id); }
+    /** Every table the loaded plugins declare, as JSON; null when none is up. */
+    public String pluginTables()                 { return h == 0 ? null : nPluginTables(h); }
+    /** One table's rows in shown order; null for an unknown plugin or table. */
+    public String pluginTableRows(String id, String key, String sortKey, boolean ascending) {
+        return h == 0 ? null : nPluginTableRows(h, id, key, sortKey, ascending);
+    }
+    /** Tell the plugin its table is on screen: it builds no rows until then. */
+    public boolean pluginTableOpen(String id, String key, boolean open) {
+        return h != 0 && nPluginTableOpen(h, id, key, open);
+    }
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -513,5 +523,8 @@ public final class Lookout implements AutoCloseable {
     private static native String nPluginInspect(long h, String path);
     private static native String nPluginInstall(long h, String path);
     private static native boolean nPluginUninstall(long h, String id);
+    private static native String nPluginTables(long h);
+    private static native String nPluginTableRows(long h, String id, String key, String sortKey, boolean ascending);
+    private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);
     private static native boolean nPluginGrantSet(long h, String id, String cap, boolean on);
 }

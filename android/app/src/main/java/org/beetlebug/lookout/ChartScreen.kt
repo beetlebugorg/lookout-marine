@@ -315,6 +315,9 @@ fun ChartScreen(
         controller.auxFile?.let { f ->
             AuxFileDialog(file = f, onDismiss = { controller.dismissAuxFile() })
         }
+        // A plugin's declared table (AIS targets), over the chart so a row's
+        // reveal lands on a visible chart.
+        PluginTableDialog(controller)
     }
 
     if (showSearch) {

@@ -1459,6 +1459,9 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeFree(env: [*c]j.JNIEnv, cls: j
 // mariner installed comes back at every open like the other shells' does.
 
 extern fn lookout_plugins_install_root(h: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn lookout_plugin_tables_json(h: ?*anyopaque, out_len: ?*usize) [*c]const u8;
+extern fn lookout_plugin_table_rows(h: ?*anyopaque, id: [*:0]const u8, key: [*:0]const u8, sort_key: ?[*:0]const u8, ascending: c_int, out_len: ?*usize) [*c]const u8;
+extern fn lookout_plugin_table_open(h: ?*anyopaque, id: [*:0]const u8, key: [*:0]const u8, open: c_int) c_int;
 extern fn lookout_plugins_load_installed(h: ?*anyopaque) c_int;
 extern fn lookout_plugin_inspect(h: ?*anyopaque, path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
 extern fn lookout_plugin_install(h: ?*anyopaque, path: [*:0]const u8) [*c]const u8;
@@ -1510,6 +1513,53 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginInstall(env: [*c]j.JNIEnv, c
     const msg = lookout_plugin_install(h.l, @ptrCast(cpath));
     if (msg == null) return null;
     return env_(env).NewStringUTF.?(env, msg);
+}
+
+/// String nPluginTables(long h) -- every table the loaded plugins declare,
+/// or null when no layer is up. Borrowed, so copied out here.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginTables(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var len: usize = 0;
+    const json = lookout_plugin_tables_json(h.l, &len);
+    if (json == null or len == 0) return null;
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+/// String nPluginTableRows(long h, String id, String key, String sortKey,
+/// boolean ascending) -- one table's rows, already in shown order; null when
+/// the plugin or the table is unknown.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginTableRows(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, sort_key: j.jstring, ascending: j.jboolean) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const ckey = env_(env).GetStringUTFChars.?(env, key, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, key, ckey);
+    const csort = if (sort_key != null) env_(env).GetStringUTFChars.?(env, sort_key, null) else null;
+    defer if (csort) |s| env_(env).ReleaseStringUTFChars.?(env, sort_key, s);
+    var len: usize = 0;
+    const json = lookout_plugin_table_rows(h.l, @ptrCast(cid), @ptrCast(ckey), @ptrCast(csort), if (ascending != 0) 1 else 0, &len);
+    if (json == null or len == 0) return null;
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+/// boolean nPluginTableOpen(long h, String id, String key, boolean open) --
+/// tell the plugin its table is on screen: it builds no rows until then.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginTableOpen(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, open: j.jboolean) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const ckey = env_(env).GetStringUTFChars.?(env, key, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, key, ckey);
+    return if (lookout_plugin_table_open(h.l, @ptrCast(cid), @ptrCast(ckey), if (open != 0) 1 else 0) == 0) 1 else 0;
 }
 
 /// boolean nPluginUninstall(long h, String id)
