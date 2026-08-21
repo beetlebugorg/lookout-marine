@@ -66,10 +66,13 @@ namespace lkw
     {
         std::string path;
         std::string name;
-        std::string kind; /* "baked" (draws now), "source" (bakes first), "raster_source" */
+        std::string kind; /* "baked" (draws now), "source" (bakes first), "raster_source", "raster" */
         int band = 0;
+        /* `path` is an entry inside the archive: even a chart that draws now
+         * has to come out before the engine can be handed it. */
+        bool archived = false;
 
-        bool NeedsPrepare() const { return kind == "source" || kind == "raster_source"; }
+        bool NeedsPrepare() const { return archived || kind == "source" || kind == "raster_source"; }
     };
 
     struct ScanResult

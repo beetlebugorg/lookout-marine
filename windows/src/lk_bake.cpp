@@ -121,6 +121,9 @@ namespace lkw
         out.root = JsonString(root, L"root");
         out.sources = (unsigned)JsonInt(root, L"sources");
 
+        /* Inside an archive every entry is archived: `path` is an entry name,
+         * and nothing opens until the bake takes it out. */
+        const bool zip = IsArchive(path);
         for (wchar_t const *key : { L"cells", L"raster" })
         {
             if (!root.HasKey(key))
@@ -134,6 +137,7 @@ namespace lkw
                 c.name = JsonString(o, L"name");
                 c.kind = JsonString(o, L"kind");
                 c.band = JsonInt(o, L"band");
+                c.archived = zip;
                 if (!c.path.empty())
                     out.cells.push_back(std::move(c));
             }
@@ -240,17 +244,24 @@ namespace lkw
         for (auto const &c : ordered_)
         {
             std::filesystem::path stem = std::filesystem::path(c.name).stem();
-            std::filesystem::path base = (c.kind == "raster_source") ? raster_out_dir : out_dir;
+            const bool raster = (c.kind == "raster_source" || c.kind == "raster");
+            std::filesystem::path base = raster ? raster_out_dir : out_dir;
             if (zip)
             {
                 std::filesystem::path rel = std::filesystem::path(c.path).parent_path();
                 if (!rel.empty())
                     base /= rel;
             }
-            std::filesystem::path dir = (base.filename() == stem) ? base : base / stem;
+            /* A lift keeps the entry's own name in the mirrored directory: it
+             * is a chart already, and the stem directory is for what a bake
+             * writes beside a cell. */
+            const bool lift = Rank(c) == 2;
+            std::filesystem::path dir = (lift || base.filename() == stem) ? base : base / stem;
             std::error_code ec;
             std::filesystem::create_directories(dir, ec);
-            out_paths_.push_back((dir / (stem.string() + ".pmtiles")).string());
+            std::string fname = lift ? std::filesystem::path(c.path).filename().string()
+                                     : stem.string() + ".pmtiles";
+            out_paths_.push_back((dir / fname).string());
         }
 
         {
@@ -326,6 +337,31 @@ namespace lkw
 
         run(0, cells, false);
         run(cells, sheets, true);
+
+        /* The lift: entries that are charts already and only have to come out
+         * of the archive. Serial in the engine; no label callback, so the
+         * finished lists are settled from what actually landed — an entry the
+         * archive does not hold is skipped and writes nothing. */
+        const size_t lifts = ordered_.size() - cells - sheets;
+        if (zip && lifts != 0 && !cancel_.load())
+        {
+            const size_t off = cells + sheets;
+            offset_ = (unsigned)off;
+            uint32_t done = 0;
+            tile57_zip_extract(source.c_str(), ins.data() + off, outs.data() + off, lifts,
+                               ProgressThunk, this, &done, &err);
+            std::lock_guard<std::mutex> g(mu_);
+            for (size_t i = off; i < ordered_.size(); ++i)
+            {
+                std::error_code ec;
+                if (!std::filesystem::exists(out_paths_[i], ec))
+                    continue;
+                if (ordered_[i].kind == "raster")
+                    finished_rasters_.push_back(out_paths_[i]);
+                else
+                    finished_.push_back(out_paths_[i]);
+            }
+        }
 
         running_.store(false);
     }
