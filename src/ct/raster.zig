@@ -86,8 +86,10 @@ pub const Rasters = struct {
     mu: Lock = .{},
     queue: std.ArrayListUnmanaged(Job) = .empty,
     in_flight: usize = 0,
-    threads: [WORKERS]?std.Thread = .{null} ** WORKERS,
-    n_threads: usize = 0,
+    /// Workers standing, detached. They stand down after IDLE_EXIT_MS with
+    /// nothing to serve and the next ask spawns them again, so an idle chart
+    /// holds no ticking threads (see tiles.zig, the same pattern).
+    alive: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Drain scratch, reused so a frame allocates nothing new. Map thread only.
     asks: std.ArrayListUnmanaged(Request) = .empty,
@@ -100,8 +102,9 @@ pub const Rasters = struct {
 
     pub fn deinit(self: *Rasters) void {
         self.stopping.store(true, .release);
-        for (self.threads[0..self.n_threads]) |t| if (t) |th| th.join();
-        self.n_threads = 0;
+        // Detached, so joined by handshake: each worker's last act is the
+        // decrement, and they wake within a backoff step to see `stopping`.
+        while (self.alive.load(.acquire) != 0) sleepMs(1);
         for (self.sets.items) |*s| {
             for (s.charts.items) |c| {
                 cc.tile57_raster_chart_close(c.chart);
@@ -303,15 +306,20 @@ pub const Rasters = struct {
     // ---- serving ---------------------------------------------------------
 
     fn start(self: *Rasters) void {
-        if (self.n_threads != 0) return;
-        while (self.n_threads < WORKERS) : (self.n_threads += 1) {
-            self.threads[self.n_threads] = std.Thread.spawn(.{}, worker, .{self}) catch break;
+        while (self.alive.load(.acquire) < WORKERS) {
+            _ = self.alive.fetchAdd(1, .acq_rel);
+            const th = std.Thread.spawn(.{}, worker, .{self}) catch {
+                _ = self.alive.fetchSub(1, .acq_rel);
+                break;
+            };
+            th.detach();
         }
     }
 
     /// Take charttable's outstanding asks and queue them for the pool. Call
     /// once per frame from whichever thread drives the map.
     pub fn pump(self: *Rasters) void {
+        var queued_any = false;
         for (self.sets.items, 0..) |*s, i| {
             self.asks.clearRetainingCapacity();
             s.provider.drain(&self.asks, self.alloc);
@@ -321,7 +329,10 @@ pub const Rasters = struct {
                 self.queue.append(self.alloc, .{ .set = i, .req = req }) catch break;
             }
             self.mu.unlock();
+            queued_any = true;
         }
+        // The pool may have stood down since the last ask.
+        if (queued_any) self.start();
     }
 
     pub fn busy(self: *Rasters) bool {
@@ -332,15 +343,37 @@ pub const Rasters = struct {
 
     fn worker(self: *Rasters) void {
         var idle_ms: u32 = 1;
+        var idle_total: u32 = 0;
         while (!self.stopping.load(.acquire)) {
             const job = self.take() orelse {
+                if (idle_total >= @import("tiles.zig").IDLE_EXIT_MS) {
+                    // The LAST one out re-checks the queue: an ask that
+                    // landed after its final take would otherwise sit
+                    // unserved, a permanent hole in the picture.
+                    if (self.alive.fetchSub(1, .acq_rel) == 1 and self.hasQueued()) {
+                        _ = self.alive.fetchAdd(1, .acq_rel);
+                        idle_ms = 1;
+                        idle_total = 0;
+                        continue;
+                    }
+                    return;
+                }
                 sleepMs(idle_ms);
+                idle_total += idle_ms;
                 if (idle_ms < 32) idle_ms *= 2;
                 continue;
             };
             idle_ms = 1;
+            idle_total = 0;
             self.serve(job);
         }
+        _ = self.alive.fetchSub(1, .acq_rel);
+    }
+
+    fn hasQueued(self: *Rasters) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.queue.items.len != 0;
     }
 
     fn take(self: *Rasters) ?Job {

@@ -86,6 +86,11 @@ var stats: Stats = .{};
 /// filling in as fast as the tiles decode.
 const MAX_WORKERS = 4;
 
+/// How long a worker polls an empty queue before standing down. Two seconds
+/// outlasts any pan's settling; past it the boat is at anchor and the pool
+/// costs nothing.
+pub const IDLE_EXIT_MS = 2_000;
+
 pub const Tiles = struct {
     alloc: std.mem.Allocator,
     provider: ct.provider.Provider,
@@ -102,8 +107,12 @@ pub const Tiles = struct {
     /// Jobs a worker has taken but not answered yet. Queue length alone would
     /// read empty in the window where the last tile is still composing.
     in_flight: usize = 0,
-    threads: [MAX_WORKERS]?std.Thread = .{null} ** MAX_WORKERS,
-    n_threads: usize = 0,
+    /// Workers standing, detached. They hand the badge in after IDLE_EXIT_MS
+    /// with nothing to do and the next ask spawns them again, so an idle
+    /// chart holds ZERO ticking threads — the invariant is "no poll that
+    /// could be an event", and between interactions there is no event coming
+    /// that pump() does not know about first.
+    alive: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Asks drained from charttable, reused so a frame allocates nothing new.
     asks: std.ArrayListUnmanaged(Request) = .empty,
@@ -116,20 +125,27 @@ pub const Tiles = struct {
         };
     }
 
-    /// Start the workers. Idempotent.
+    /// Bring the pool up to strength. Called again freely: workers stand
+    /// down when idle, and every path that queues work calls this behind it.
+    /// Serialized by the api lock like every other mutator here.
     pub fn start(self: *Tiles) void {
-        if (self.n_threads != 0) return;
         const cpus = std.Thread.getCpuCount() catch 1;
         const want = @min(@max(cpus / 2, 1), MAX_WORKERS);
-        while (self.n_threads < want) : (self.n_threads += 1) {
-            self.threads[self.n_threads] = std.Thread.spawn(.{}, worker, .{self}) catch break;
+        while (self.alive.load(.acquire) < want) {
+            _ = self.alive.fetchAdd(1, .acq_rel);
+            const th = std.Thread.spawn(.{}, worker, .{self}) catch {
+                _ = self.alive.fetchSub(1, .acq_rel);
+                break;
+            };
+            th.detach();
         }
     }
 
     pub fn deinit(self: *Tiles) void {
         self.stopping.store(true, .release);
-        for (self.threads[0..self.n_threads]) |t| if (t) |th| th.join();
-        self.n_threads = 0;
+        // Detached, so joined by handshake: each worker's last act is the
+        // decrement, and they wake within a backoff step to see `stopping`.
+        while (self.alive.load(.acquire) != 0) sleepMs(1);
         self.queue.deinit(self.alloc);
         self.asks.deinit(self.alloc);
         self.provider.deinit();
@@ -156,6 +172,8 @@ pub const Tiles = struct {
         self.mu.lock();
         self.queue.appendSlice(self.alloc, self.asks.items) catch {};
         self.mu.unlock();
+        // The pool may have stood down since the last ask.
+        self.start();
     }
 
     /// True while any tile is queued or being composed. The caller waits on
@@ -166,21 +184,45 @@ pub const Tiles = struct {
         return self.queue.items.len != 0 or self.in_flight != 0;
     }
 
-    /// Polled rather than waited on a condition variable, and backed off the
-    /// way raster.zig's pool is: Zig 0.16 has no std.Thread.Condition outside
-    /// an Io. 1 ms while tiles are moving keeps the fill-in prompt; 32 ms once
-    /// the view settles means an idle chart is not paying for a pool.
+    /// Polled rather than waited on a condition variable — Zig 0.16 has no
+    /// std.Thread.Condition outside an Io — but the poll is BOUNDED: after
+    /// IDLE_EXIT_MS with nothing to do the worker stands down, and the next
+    /// pump spawns the pool again. 1 ms while tiles are moving keeps the
+    /// fill-in prompt; an idle chart holds no threads at all.
     fn worker(self: *Tiles) void {
         var idle_ms: u32 = 1;
+        var idle_total: u32 = 0;
         while (!self.stopping.load(.acquire)) {
             const job = self.take() orelse {
+                if (idle_total >= IDLE_EXIT_MS) {
+                    // The LAST one out re-checks the queue: an ask that landed
+                    // after its final take would otherwise sit unserved, and a
+                    // parked tile that is never answered is a hole in the
+                    // chart forever.
+                    if (self.alive.fetchSub(1, .acq_rel) == 1 and self.queued()) {
+                        _ = self.alive.fetchAdd(1, .acq_rel);
+                        idle_ms = 1;
+                        idle_total = 0;
+                        continue;
+                    }
+                    return;
+                }
                 sleepMs(idle_ms);
+                idle_total += idle_ms;
                 if (idle_ms < 32) idle_ms *= 2;
                 continue;
             };
             idle_ms = 1;
+            idle_total = 0;
             self.serve(job);
         }
+        _ = self.alive.fetchSub(1, .acq_rel);
+    }
+
+    fn queued(self: *Tiles) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.queue.items.len != 0;
     }
 
     fn take(self: *Tiles) ?Request {
