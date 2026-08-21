@@ -163,6 +163,8 @@ public final class Lookout implements AutoCloseable {
     public void memoryWarning()                   { if (h != 0) nMemoryWarning(h); }
     /** Whether the next open skips the one-time symbol rasterize. */
     public static boolean atlasCacheReady()       { return nAtlasCacheReady(); }
+    /** Offer an opened file to the plugins: 1 claimed, 0 none, -1 failed. */
+    public int openFile(String path)              { return h == 0 ? 0 : nOpenFile(h, path); }
 
     // ---- mariner (all S-52 display settings) -------------------------------
 
@@ -226,6 +228,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nFlingStart(long h, double vx, double vy);
     private static native void nMemoryWarning(long h);
     private static native boolean nAtlasCacheReady();
+    private static native int nOpenFile(long h, String path);
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);

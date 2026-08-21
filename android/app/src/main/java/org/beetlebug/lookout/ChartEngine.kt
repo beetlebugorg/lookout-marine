@@ -217,7 +217,7 @@ class ChartEngine private constructor() {
         }
         var dt = if (lastFrameNs == 0L) 0.0 else (frameTimeNanos - lastFrameNs) / 1e9
         lastFrameNs = frameTimeNanos
-        if (dt > 0.1) dt = 0.1 // resumed from pause: don't lurch the ease
+        if (dt > 0.05) dt = 0.05 // resumed from pause: don't lurch the ease (the reference's cap)
         // Before anything reads the camera: the view's share of this frame.
         frameHook?.onFrame(l, frameTimeNanos)
         val animating = l.animating()

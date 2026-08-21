@@ -1749,3 +1749,15 @@ export fn Java_org_beetlebug_lookout_Lookout_nTileRespond(env: [*c]j.JNIEnv, cls
     defer env_(env).ReleaseByteArrayElements.?(env, bytes, p, j.JNI_ABORT);
     lookout_tile_respond(h.l, req, p, len, 0);
 }
+
+extern fn lookout_open_file(h: ?*anyopaque, path: [*:0]const u8) c_int;
+
+/// int nOpenFile(long h, String path) -- offer a file the mariner opened to
+/// the plugins: 1 claimed, 0 none does, -1 claimed but could not be given.
+export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return lookout_open_file(h.l, @ptrCast(cpath));
+}

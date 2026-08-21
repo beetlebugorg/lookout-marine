@@ -99,6 +99,51 @@ class LookoutActivity : ComponentActivity() {
                 )
             }
         }
+        routeOpenedFile(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        routeOpenedFile(intent)
+    }
+
+    /**
+     * A file another app opened into us. A content: uri has no path the core
+     * can mmap, so the stream is copied into the cache dir first; then the
+     * NAME routes it — a .lkplug goes to the install consent sheet, anything
+     * else is offered to the plugins ([ChartController.openFile]).
+     */
+    private fun routeOpenedFile(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        Thread {
+            val name = openedFileName(uri)
+            val out = File(cacheDir, "opened/$name")
+            out.parentFile?.mkdirs()
+            try {
+                contentResolver.openInputStream(uri).use { input ->
+                    if (input == null) return@Thread
+                    FileOutputStream(out).use { input.copyTo(it) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "opened file unreadable: $uri: $e")
+                return@Thread
+            }
+            runOnUiThread { controller.openFile(out.absolutePath) }
+        }.start()
+    }
+
+    /** The display name a content uri carries, or the uri's last segment. */
+    private fun openedFileName(uri: Uri): String {
+        if (uri.scheme == "content") {
+            try {
+                contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (i >= 0 && c.moveToFirst()) c.getString(i)?.let { return it }
+                }
+            } catch (_: Exception) {}
+        }
+        return uri.lastPathSegment?.substringAfterLast('/') ?: "opened.bin"
     }
 
     /**

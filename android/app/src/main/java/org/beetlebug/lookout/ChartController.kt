@@ -376,7 +376,10 @@ class ChartController(private val appContext: Context) {
         // pushed again on every open.
         if (activeChartLink != null) main.post { pushChartLink() }
         val loaded = date
-        main.post { mariner.loadFrom(v, loaded) }
+        main.post {
+            mariner.loadFrom(v, loaded)
+            drainOpenFiles()
+        }
     }
 
     /**
@@ -1417,6 +1420,45 @@ class ChartController(private val appContext: Context) {
 
     /** One sentence from the core, ready to show. */
     var installError by mutableStateOf<String?>(null)
+
+    /**
+     * A file another app opened into us, by NAME: a .lkplug is a plugin
+     * package and goes to the consent sheet; anything else is offered to the
+     * plugins, which take what they already claim (a GPX to a route plugin).
+     *
+     * A file that arrives BEFORE the engine is up — the usual case, since an
+     * opened file often launches the app — is parked and routed again the
+     * moment the open finishes.
+     */
+    fun openFile(path: String) {
+        if (engine == null) {
+            synchronized(pendingOpenFiles) { pendingOpenFiles.add(path) }
+            return
+        }
+        if (path.endsWith(".lkplug", ignoreCase = true)) {
+            beginPluginInstall(path)
+            return
+        }
+        onEngine { l ->
+            when (l.openFile(path)) {
+                1 -> Log.i(TAG, "opened file taken by a plugin: $path")
+                -1 -> Log.w(TAG, "opened file claimed but not taken: $path")
+                else -> Log.i(TAG, "opened file claimed by nothing: $path")
+            }
+        }
+    }
+
+    private val pendingOpenFiles = mutableListOf<String>()
+
+    /** Route what arrived while there was no engine. Main thread, post-attach. */
+    private fun drainOpenFiles() {
+        val parked = synchronized(pendingOpenFiles) {
+            val copy = pendingOpenFiles.toList()
+            pendingOpenFiles.clear()
+            copy
+        }
+        for (p in parked) openFile(p)
+    }
 
     fun beginPluginInstall(path: String) = onEngine { l ->
         val json = l.pluginInspect(path)

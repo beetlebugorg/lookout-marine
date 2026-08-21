@@ -86,6 +86,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Files opened from another app: a .lkplug goes to the install
+                 consent sheet, anything else is offered to the plugins
+                 (lookout_open_file). File managers stamp unknown extensions
+                 application/octet-stream or zip, so those are the types a
+                 .lkplug arrives under; the NAME decides the route in code. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/octet-stream" />
+                <data android:scheme="content" android:mimeType="application/zip" />
+                <data android:scheme="content" android:mimeType="application/gpx+xml" />
+                <data android:scheme="file" android:mimeType="application/octet-stream" />
+                <data android:scheme="file" android:mimeType="application/zip" />
+                <data android:scheme="file" android:mimeType="application/gpx+xml" />
+            </intent-filter>
         </activity>
 
         <!-- Started and stopped from what the connection rows say, never from

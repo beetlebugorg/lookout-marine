@@ -1286,6 +1286,15 @@ private fun PluginsManageSection(registry: PluginRegistry, controller: ChartCont
             dismissButton = { TextButton(onClick = { uninstalling = null }) { Text("Cancel") } },
         )
     }
+}
+
+/**
+ * The consent and install-error dialogs. Composed at SCREEN level, not inside
+ * the Plugins pane: a .lkplug can arrive from another app with no settings
+ * sheet anywhere, and consent has to come up over the chart just the same.
+ */
+@Composable
+fun PluginInstallDialogs(controller: ChartController) {
     controller.pluginConsent?.let { pkg ->
         PluginConsentDialog(
             pkg = pkg,
