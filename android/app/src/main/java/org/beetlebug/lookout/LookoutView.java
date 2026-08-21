@@ -185,8 +185,16 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
     private static final float MIN_TWIST_SPAN_DP = 96f;
     // Engaged, a held-still pinch should not creep.
     private static final float TWIST_DEADBAND_DEG = 0.25f;
+    // Once the gesture is clearly a ZOOM — the finger span has changed by
+    // this ratio either way — rotation stays out for the rest of it. A long
+    // pinch drifts a degree here and a degree there, and the accumulated
+    // drift used to cross the engage angle mid-zoom: the chart turned when
+    // nobody asked. A deliberate twist reaches the engage angle long before
+    // its span changes this much.
+    private static final float TWIST_ZOOM_LOCKOUT_RATIO = 1.25f;
     private boolean rotating;
-    private float twistPrevDeg, twistAccumDeg;
+    private boolean twistLocked;
+    private float twistPrevDeg, twistAccumDeg, twistDownSpan;
 
     /** Angle of the vector between the first two pointers, in degrees. */
     private static float twistAngle(MotionEvent e) {
@@ -265,6 +273,8 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                     twoMidY = (e.getY(0) + e.getY(1)) * 0.5f;
                     twistPrevDeg = twistAngle(e);
                     twistAccumDeg = 0;
+                    twistDownSpan = (float) Math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0));
+                    twistLocked = false;
                     rotating = false;
                 } else {
                     twoTap = false; // third finger: not a two-finger tap
@@ -332,6 +342,16 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
         if (span < MIN_TWIST_SPAN_DP * density) return;
 
         if (!rotating) {
+            if (twistLocked) return;
+            // The zoom lockout: the span moving is the pinch announcing
+            // itself, and from then on this gesture does not rotate.
+            if (twistDownSpan > 0) {
+                float ratio = span / twistDownSpan;
+                if (ratio > TWIST_ZOOM_LOCKOUT_RATIO || ratio < 1f / TWIST_ZOOM_LOCKOUT_RATIO) {
+                    twistLocked = true;
+                    return;
+                }
+            }
             twistAccumDeg += d;
             if (Math.abs(twistAccumDeg) < ROTATE_ENGAGE_DEG) return;
             rotating = true; // engaged: from here the twist tracks 1:1
