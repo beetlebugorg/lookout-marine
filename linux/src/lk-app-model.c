@@ -12,6 +12,9 @@ struct _LkAppModel {
   gboolean has_chart;
   char    *chart_path;
   char    *open_error;
+  /* True while a scan worker is out. One at a time: the engine's two scan
+     entry points share one non-reentrant buffer. */
+  gboolean scanning;
   /* The set being prepared, and where it has got to. */
   LkChartBake   *bake;
   char          *pending_open_source;
@@ -482,15 +485,21 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
     }
 }
 
-void
-lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
-{
-  g_return_if_fail (LK_IS_APP_MODEL (self));
+typedef struct {
+  LkAppModel *model; /* strong ref, dropped on the main loop */
+  char       *dir;
+  LkChartSet *set;
+} LkScanJob;
 
-  /* Ask the engine what is actually there before offering it: a chart folder
-     also holds files that are not charts, and raw cells do not draw until they
-     are baked. */
-  g_autoptr (LkChartSet) set = lk_chart_scan (dir);
+static gboolean
+lk_scan_done_idle (gpointer data)
+{
+  LkScanJob *job = data;
+  LkAppModel *self = job->model;
+  g_autoptr (LkChartSet) set = g_steal_pointer (&job->set);
+  const char *dir = job->dir;
+
+  self->scanning = FALSE;
 
   /* Counted from the cells, not set->sources: that counter is the vector
      sources alone. A folder of BSB/KAP sheets, or an archive whose charts
@@ -514,12 +523,50 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
           self->baking = TRUE;
           lk_app_model_set_open_error (self, NULL);
           g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
-          return;
+          goto out;
         }
       g_clear_pointer (&self->pending_open_source, g_free);
     }
 
   lk_app_model_open_prepared (self, dir);
+
+out:
+  g_object_unref (job->model);
+  g_free (job->dir);
+  g_free (job);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+lk_scan_worker (gpointer data)
+{
+  LkScanJob *job = data;
+  job->set = lk_chart_scan (job->dir);
+  g_idle_add (lk_scan_done_idle, job);
+  return NULL;
+}
+
+void
+lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  /* Ask the engine what is actually there before offering it — off the main
+     loop, because a folder scan opens every archive it finds and the whole
+     UI stood still for it. One scan at a time: the engine's two scan entry
+     points share one non-reentrant buffer. */
+  if (self->scanning)
+    {
+      lk_app_model_set_open_error (self,
+          "Still looking through the last pick. Try again in a moment.");
+      return;
+    }
+
+  self->scanning = TRUE;
+  LkScanJob *job = g_new0 (LkScanJob, 1);
+  job->model = g_object_ref (self);
+  job->dir = g_strdup (dir);
+  g_thread_unref (g_thread_new ("lk-scan", lk_scan_worker, job));
 }
 
 const char *const *

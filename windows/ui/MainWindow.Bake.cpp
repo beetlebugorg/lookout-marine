@@ -36,7 +36,7 @@ namespace winrt::LookoutMarine::implementation
      * collected .pmtiles only, found none, and opened an empty list. */
     void MainWindow::ImportCharts(std::string const &path)
     {
-        if (controller == nullptr || bake_job != nullptr)
+        if (controller == nullptr || bake_job != nullptr || import_scanning)
             return;
 
         BakeTitle().Text(winrt::to_hstring("Finding charts in " +
@@ -46,11 +46,29 @@ namespace winrt::LookoutMarine::implementation
         BakeBar().IsIndeterminate(true);
         BakePanel().Visibility(Visibility::Visible);
 
-        /* The scan reads only an archive's central directory (about 8 ms for
-         * NOAA's 27,680 entries), so it is quick enough to do inline — and it
-         * MUST be, because the two scan entry points share one buffer in the
-         * core and are not reentrant. */
-        auto scan = lkw::ScanCharts(path);
+        /* Scanned off the UI thread: an archive's central directory is 8 ms,
+         * but a FOLDER scan walks the filesystem and opens every archive it
+         * finds — seconds on a network share, with the window frozen for all
+         * of it. One scan at a time (`import_scanning`): the two scan entry
+         * points share one buffer in the core and are not reentrant. */
+        import_scanning = true;
+        auto queue = DispatcherQueue();
+        std::thread([this, queue, path] {
+            auto scan = std::make_shared<lkw::ScanResult>(lkw::ScanCharts(path));
+            queue.TryEnqueue([this, path, scan] {
+                import_scanning = false;
+                FinishImport(path, *scan);
+            });
+        }).detach();
+    }
+
+    void MainWindow::FinishImport(std::string const &path, lkw::ScanResult const &scan)
+    {
+        if (controller == nullptr || bake_job != nullptr)
+        {
+            BakePanel().Visibility(Visibility::Collapsed);
+            return;
+        }
         if (!scan.ok)
         {
             BakePanel().Visibility(Visibility::Collapsed);

@@ -120,6 +120,8 @@ namespace winrt::LookoutMarine::implementation
         // chart import: scan, bake what is raw, then open (MainWindow.Bake.cpp)
         fire_and_forget PickChartArchive();
         void ImportCharts(std::string const &path);
+        /* The half of an import that runs after the scan came back. */
+        void FinishImport(std::string const &path, lkw::ScanResult const &scan);
         /* Bake picked BSB/KAP sheets into the raster library, then add them to
          * the raster underlay. The same BakeJob and panel as a chart import. */
         void BakeRasterSources(std::vector<std::string> const &sources);
@@ -249,6 +251,7 @@ namespace winrt::LookoutMarine::implementation
         bool open_pending{ false };      // an OpenPaths is deferred/running
         // the running import, its panel timer, and what it was asked to import
         std::unique_ptr<lkw::BakeJob> bake_job;
+        bool import_scanning{ false }; // a scan worker is out; one at a time
         Microsoft::UI::Xaml::DispatcherTimer bake_timer{ nullptr };
         std::string bake_source;
         bool bake_rasters_only{ false }; // this job is the raster add flow's
