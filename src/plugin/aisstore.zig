@@ -27,6 +27,11 @@ const Lock = store.Lock;
 /// characters, and an aid to navigation may add a 14-character extension.
 pub const max_name = 34;
 
+/// Distinct MMSIs held at once. The busiest harbours run a few thousand live
+/// targets; without a cap a publisher inventing MMSIs grows the set forever,
+/// and the memory budgets never see host-side growth.
+pub const max_targets = 4096;
+
 /// A target not heard from for this long is gone. 600 s is well past the
 /// slowest class A static report, so it only fires when the target really has
 /// left range or switched off.
@@ -109,6 +114,9 @@ pub const Error = error{
     /// Half a position, an out-of-range one, or a non-finite number.
     InvalidPosition,
     InvalidNumber,
+    /// max_targets distinct MMSIs are held; a NEW one is refused until one
+    /// ages out. Known targets keep updating.
+    TargetSetFull,
 };
 
 pub const AisStore = struct {
@@ -147,6 +155,8 @@ pub const AisStore = struct {
         self.mu.lock();
         defer self.mu.unlock();
 
+        if (self.targets.count() >= max_targets and !self.targets.contains(u.mmsi))
+            return Error.TargetSetFull;
         const gop = try self.targets.getOrPut(self.alloc, u.mmsi);
         if (!gop.found_existing) gop.value_ptr.* = .{ .mmsi = u.mmsi };
         const tgt = gop.value_ptr;
@@ -434,4 +444,19 @@ test "the change counter moves only when the target set does" {
     try t.expectEqual(after_upsert, s.seq());
     try t.expectEqual(@as(usize, 1), try s.evict(700_000));
     try t.expect(s.seq() != after_upsert);
+}
+
+test "a full target set refuses a new MMSI and keeps updating known ones" {
+    var s = AisStore.init(t.allocator);
+    defer s.deinit();
+    var mmsi: u32 = 1;
+    while (mmsi <= max_targets) : (mmsi += 1) {
+        try s.upsert(.{ .mmsi = mmsi, .ts_ms = 0 }, 1);
+    }
+    try t.expectError(Error.TargetSetFull, s.upsert(.{ .mmsi = max_targets + 1, .ts_ms = 0 }, 1));
+    try s.upsert(.{ .mmsi = 1, .lat = 38.9, .lon = -76.4, .ts_ms = 5 }, 1);
+    try t.expectEqual(@as(i64, 5), s.get(1).?.ts_ms);
+    // Eviction makes room again.
+    try t.expectEqual(@as(usize, max_targets), try s.evict(700_000));
+    try s.upsert(.{ .mmsi = max_targets + 1, .ts_ms = 700_001 }, 1);
 }

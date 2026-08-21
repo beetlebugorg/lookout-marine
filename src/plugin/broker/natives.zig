@@ -157,6 +157,10 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
     if (targets != .array) return -1;
     const source = batchSource(p, parsed.value.object, "ais_upsert");
 
+    // Eviction measures `now - ts`, so a plugin-stamped future `ts` would
+    // make its target immortal. Clamped here because the store itself reads
+    // no wall clock.
+    const now = wallMs();
     var applied: i32 = 0;
     for (targets.array.items) |tv| {
         if (tv != .object) continue;
@@ -182,7 +186,7 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jsonBool(o.get("virtual")),
             .off_position = jsonBool(o.get("off_position")),
-            .ts_ms = jsonInt(o.get("ts")) orelse wallMs(),
+            .ts_ms = @min(jsonInt(o.get("ts")) orelse now, now),
         };
         p.broker.ais.upsert(upd, source) catch |e| {
             p.broker.say(level_warn, p.id, "ais_upsert {d}: {s}", .{ mmsi, @errorName(e) });
