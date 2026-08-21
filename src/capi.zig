@@ -241,6 +241,19 @@ export fn lookout_plugins_load_installed(h: ?*lookout) c_int {
     return if (ensureInstalledPlugins(l)) 0 else -1;
 }
 
+/// Name the per-user plugin directory, for platforms whose environment cannot
+/// (Android: the app's files dir has no path in the environment; every other
+/// platform resolves a default and never needs this). Call before any other
+/// plugin call — the layer reads it once at creation. 0 on success, -1 once
+/// the layer is already up.
+export fn lookout_plugins_install_root(h: ?*lookout, path: [*:0]const u8) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setPluginInstallRoot(std.mem.span(path)) catch return -1;
+    return 0;
+}
+
 /// Read a .lkplug without installing it: everything the consent sheet shows,
 /// as JSON. `{"id":..,"name":..,"version":..,"sentences":[..]}`, plus
 /// `"installed":{"version":..,"origin":..,"adds":[..],"drops":[..],
@@ -390,7 +403,10 @@ export fn lookout_plugin_alert_ack(h: ?*lookout, id: u64) c_int {
 /// rather than treated as an error: a first install has nothing yet.
 fn ensureInstalledPlugins(l: *lk.Lookout) bool {
     if (comptime !plugins_enabled) return false;
-    const root = phost.installRootAlloc(gpa) orelse return l.plugins != null;
+    const root: []u8 = if (l.plugin_install_root) |r|
+        gpa.dupe(u8, r) catch return l.plugins != null
+    else
+        phost.installRootAlloc(gpa) orelse return l.plugins != null;
     defer gpa.free(root);
     std.Io.Dir.cwd().createDirPath(capi_io, root) catch {};
     l.loadPlugins(root) catch return l.plugins != null;

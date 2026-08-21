@@ -490,4 +490,28 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nBakePoll(long job, int[] out);
     private static native void nBakeCancel(long job);
     private static native void nBakeFree(long job);
+    // ---- plugin install and consent ----------------------------------------
+
+    /** Name the install root (the app's files dir): before any plugin call. */
+    public boolean pluginsInstallRoot(String path) { return h != 0 && nPluginsInstallRoot(h, path); }
+    /** Load the set the mariner installed. Call after the bundled load. */
+    public boolean pluginsLoadInstalled()        { return h != 0 && nPluginsLoadInstalled(h); }
+    /** The consent JSON for a .lkplug, or null when no layer can come up. */
+    public String pluginInspect(String path)     { return h == 0 ? null : nPluginInspect(h, path); }
+    /** Install a consented .lkplug: null on success, else one sentence why. */
+    public String pluginInstall(String path) {
+        return h == 0 ? "The plugin layer could not start." : nPluginInstall(h, path);
+    }
+    public boolean pluginUninstall(String id)    { return h != 0 && nPluginUninstall(h, id); }
+    /** A live grant flip; a revoked call answers -1 to the running plugin. */
+    public boolean pluginGrantSet(String id, String cap, boolean on) {
+        return h != 0 && nPluginGrantSet(h, id, cap, on);
+    }
+
+    private static native boolean nPluginsInstallRoot(long h, String path);
+    private static native boolean nPluginsLoadInstalled(long h);
+    private static native String nPluginInspect(long h, String path);
+    private static native String nPluginInstall(long h, String path);
+    private static native boolean nPluginUninstall(long h, String id);
+    private static native boolean nPluginGrantSet(long h, String id, String cap, boolean on);
 }

@@ -187,7 +187,7 @@ const PluginSystem = if (plugins_on) struct {
     /// by the caller until the next such call, like every other query here.
     json: std.ArrayList(u8) = .empty,
 
-    fn create(alloc: std.mem.Allocator, overlay: *ov.Store) !*@This() {
+    fn create(alloc: std.mem.Allocator, overlay: *ov.Store, install_root: []const u8) !*@This() {
         const self = try alloc.create(@This());
         errdefer alloc.destroy(self);
         self.* = .{
@@ -202,7 +202,10 @@ const PluginSystem = if (plugins_on) struct {
             .applyFn = applyOverlay,
             .removeFn = removeOverlay,
         });
-        self.host = phost.Host.init(alloc, &self.br, optionsFromEnv());
+        var opts = optionsFromEnv();
+        // Borrowed for the host's life; the Lookout's copy outlives it.
+        opts.install_root = install_root;
+        self.host = phost.Host.init(alloc, &self.br, opts);
         return self;
     }
 
@@ -728,6 +731,11 @@ pub const Lookout = struct {
     /// at open, or lookout_plugins_load). Null costs nothing: no threads, no
     /// stores, no runtime.
     plugins: ?*PluginSystem = null,
+    /// Where installed plugins live, on platforms whose environment names no
+    /// place (Android: the files dir has no path in the environment). Set by
+    /// the shell before the plugin layer comes up; null takes the platform
+    /// default in plugin/host/install.zig.
+    plugin_install_root: ?[]u8 = null,
 
     /// The retained chart overlay: what plugins post and what the core draws
     /// over the chart. The handle owns it, because the marks below go into it
@@ -1293,7 +1301,7 @@ pub const Lookout = struct {
     pub fn loadPlugins(self: *Lookout, dir: []const u8) !void {
         if (plugins_on) {
             const ps = self.plugins orelse blk: {
-                const created = try PluginSystem.create(self.alloc, &self.overlay);
+                const created = try PluginSystem.create(self.alloc, &self.overlay, self.plugin_install_root orelse "");
                 self.plugins = created;
                 break :blk created;
             };
@@ -1301,6 +1309,15 @@ pub const Lookout = struct {
             try ps.host.start();
             self.markDirty();
         } else return error.PluginsUnavailable;
+    }
+
+    /// Name the per-user plugin directory. Only before the plugin layer is up:
+    /// the host reads it once at creation and caches what it resolves.
+    pub fn setPluginInstallRoot(self: *Lookout, path: []const u8) !void {
+        if (self.plugins != null) return error.PluginsUnavailable;
+        const dup = try self.alloc.dupe(u8, path);
+        if (self.plugin_install_root) |old| self.alloc.free(old);
+        self.plugin_install_root = dup;
     }
 
     /// The overlay store's view of the renderer's glyph atlas: one metrics
@@ -1839,6 +1856,8 @@ pub const Lookout = struct {
                 self.plugins = null;
             }
         }
+        // AFTER the host: it borrows this slice for its life.
+        if (self.plugin_install_root) |r| self.alloc.free(r);
         // Now that nothing else can post into them.
         self.overlay.deinit();
         self.markers.deinit();

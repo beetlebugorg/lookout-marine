@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.io.File
 
 /** One feature under the cursor: S-57 object class, its acronym, source cell. */
 data class PickFeature(val cls: String, val s57: String, val chart: String)
@@ -364,10 +365,17 @@ class ChartController(private val appContext: Context) {
      */
     private fun loadPlugins(l: Lookout) {
         val dir = pluginDir ?: return
+        // Android's files dir has no path in the environment, so the core
+        // cannot resolve an install root itself. Before the layer comes up.
+        l.pluginsInstallRoot(File(appContext.filesDir, "plugins").absolutePath)
         if (!l.pluginsLoad(dir)) {
             Log.w(TAG, "plugins: none loaded from $dir (no host in this build?)")
             return
         }
+        // Then the set the mariner installed: bundled first, installed after,
+        // so on an id collision the application's copy wins (the documented
+        // precedence every shell follows).
+        l.pluginsLoadInstalled()
         // What actually came up, by id — the answer to "did the module load"
         // that a screenshot cannot give.
         val json = l.pluginsJson()
@@ -1035,6 +1043,95 @@ class ChartController(private val appContext: Context) {
 
     fun dismissAuxFile() {
         auxFile = null
+    }
+
+    // ---- plugin install ------------------------------------------------------
+    //
+    // NOTHING IS INSTALLED BEFORE ITS PERMISSIONS ARE SHOWN. The sentences
+    // come from the core, so every shell shows the same words.
+
+    /** What the consent sheet shows for a .lkplug the mariner picked. */
+    data class PluginPackage(
+        val path: String,
+        val id: String,
+        val name: String,
+        val version: String,
+        val sentences: List<String>,
+        val installedVersion: String?,
+        val installedOrigin: String?,
+        val adds: List<String>,
+        val drops: List<String>,
+        val downgrade: Boolean,
+    )
+
+    var pluginConsent by mutableStateOf<PluginPackage?>(null)
+        private set
+
+    /** One sentence from the core, ready to show. */
+    var installError by mutableStateOf<String?>(null)
+
+    fun beginPluginInstall(path: String) = onEngine { l ->
+        val json = l.pluginInspect(path)
+        if (json == null) {
+            main.post { installError = "The plugin layer could not start." }
+            return@onEngine
+        }
+        try {
+            val o = org.json.JSONObject(json)
+            val err = o.optString("error")
+            if (err.isNotEmpty()) {
+                main.post { installError = err }
+                return@onEngine
+            }
+            fun arr(a: org.json.JSONArray?): List<String> =
+                if (a == null) emptyList() else List(a.length()) { a.optString(it) }
+            val inst = o.optJSONObject("installed")
+            val pkg = PluginPackage(
+                path = path,
+                id = o.optString("id"),
+                name = o.optString("name"),
+                version = o.optString("version"),
+                sentences = arr(o.optJSONArray("sentences")),
+                installedVersion = inst?.optString("version"),
+                installedOrigin = inst?.optString("origin"),
+                adds = arr(inst?.optJSONArray("adds")),
+                drops = arr(inst?.optJSONArray("drops")),
+                downgrade = inst?.optBoolean("downgrade") ?: false,
+            )
+            main.post { pluginConsent = pkg }
+        } catch (e: Exception) {
+            main.post { installError = "That file is not a plugin package." }
+        }
+    }
+
+    /** The Install button; nothing touched disk before this. */
+    fun confirmPluginInstall() {
+        val pkg = pluginConsent ?: return
+        pluginConsent = null
+        onEngine { l ->
+            val msg = l.pluginInstall(pkg.path)
+            if (msg != null) main.post { installError = msg }
+            republish(l)
+        }
+    }
+
+    fun cancelPluginInstall() {
+        pluginConsent = null
+    }
+
+    fun dismissInstallError() {
+        installError = null
+    }
+
+    fun uninstallPlugin(id: String) = onEngine { l ->
+        if (!l.pluginUninstall(id)) Log.w(TAG, "uninstall refused: $id")
+        republish(l)
+    }
+
+    /** A live grant flip; the registry re-read carries the new truth. */
+    fun setPluginGrant(id: String, cap: String, on: Boolean) = onEngine { l ->
+        if (!l.pluginGrantSet(id, cap, on)) Log.w(TAG, "grant flip refused: $id/$cap")
+        republish(l)
     }
 
     fun menuPick() {

@@ -164,6 +164,14 @@ const char *lookout_plugins_json(lookout *h, size_t *out_len);
 
 /* ---- plugin install and consent ------------------------------------------ */
 
+/* Name the per-user plugin directory, for platforms whose environment cannot.
+ * Android's files dir has no path in the environment, so the shell passes it
+ * here; every other platform resolves a default (see the table in
+ * plugin/install.md) and never needs this call. Call before any other plugin
+ * call — the layer reads it once at creation. Returns 0 on success, -1 once
+ * the layer is already up. */
+int lookout_plugins_install_root(lookout *h, const char *path);
+
 /* Load the INSTALLED plugin set — what lookout_plugin_install() put under the
  * per-user plugin directory (macOS: ~/Library/Application Support/Lookout
  * Marine/Plugins/<id>/) — creating the plugin layer if nothing has yet. Call

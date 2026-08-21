@@ -1450,3 +1450,85 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeFree(env: [*c]j.JNIEnv, cls: j
     if (job.thread) |t| t.join();
     job.free();
 }
+
+// ---- plugin install and consent ---------------------------------------------
+//
+// NOTHING IS INSTALLED BEFORE ITS PERMISSIONS ARE SHOWN. The consent
+// sentences come from the core (lookout_plugin_inspect), so every shell
+// shows the same words. Also lookout_plugins_load_installed, so the set a
+// mariner installed comes back at every open like the other shells' does.
+
+extern fn lookout_plugins_install_root(h: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn lookout_plugins_load_installed(h: ?*anyopaque) c_int;
+extern fn lookout_plugin_inspect(h: ?*anyopaque, path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
+extern fn lookout_plugin_install(h: ?*anyopaque, path: [*:0]const u8) [*c]const u8;
+extern fn lookout_plugin_uninstall(h: ?*anyopaque, id: [*:0]const u8) c_int;
+extern fn lookout_plugin_grant_set(h: ?*anyopaque, id: [*:0]const u8, cap: [*:0]const u8, on: c_int) c_int;
+
+/// boolean nPluginsInstallRoot(long h, String path) -- Android's files dir
+/// has no path in the environment, so the shell names the install root here,
+/// before any other plugin call.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsInstallRoot(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return if (lookout_plugins_install_root(h.l, @ptrCast(cpath)) == 0) 1 else 0;
+}
+
+/// boolean nPluginsLoadInstalled(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsLoadInstalled(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_plugins_load_installed(h.l) == 0) 1 else 0;
+}
+
+/// String nPluginInspect(long h, String path) -- the consent JSON, or null
+/// when no plugin layer can come up. Borrowed, so copied out here.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginInspect(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    var len: usize = 0;
+    const json = lookout_plugin_inspect(h.l, @ptrCast(cpath), &len);
+    if (json == null or len == 0) return null;
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+/// String nPluginInstall(long h, String path) -- null on success, else one
+/// sentence saying why, ready to show.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginInstall(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return env_(env).NewStringUTF.?(env, "The plugin layer could not start.");
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    const msg = lookout_plugin_install(h.l, @ptrCast(cpath));
+    if (msg == null) return null;
+    return env_(env).NewStringUTF.?(env, msg);
+}
+
+/// boolean nPluginUninstall(long h, String id)
+export fn Java_org_beetlebug_lookout_Lookout_nPluginUninstall(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    return if (lookout_plugin_uninstall(h.l, @ptrCast(cid)) == 0) 1 else 0;
+}
+
+/// boolean nPluginGrantSet(long h, String id, String cap, boolean on) -- a
+/// live revoke; the plugin keeps running and the lost call answers -1.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginGrantSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, cap: j.jstring, on: j.jboolean) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const ccap = env_(env).GetStringUTFChars.?(env, cap, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, cap, ccap);
+    return if (lookout_plugin_grant_set(h.l, @ptrCast(cid), @ptrCast(ccap), if (on != 0) 1 else 0) == 0) 1 else 0;
+}
