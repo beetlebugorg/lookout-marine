@@ -63,6 +63,9 @@ namespace winrt::LookoutMarine::implementation
 
         controller = lk_controller_new();
 
+        // The mariner's linked charts, before any open pushes the active one.
+        LoadChartLinks();
+
         WireChrome();
 
         readout_timer = DispatcherTimer{};
@@ -75,6 +78,7 @@ namespace winrt::LookoutMarine::implementation
         this->Closed([this](auto &&, auto &&) {
             if (readout_timer != nullptr)
                 readout_timer.Stop();
+            AltTilesDetach(); // before the handle: fetches must not answer into it
             StopAlertWatch();
             // The other windows hold this controller and this window: they
             // cannot outlive either.

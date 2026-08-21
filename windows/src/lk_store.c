@@ -654,6 +654,93 @@ lk_store_set_chart_hidden(int hidden)
     store_unlock();
 }
 
+/* ---- chart links ---------------------------------------------------------- */
+
+/* chartlinks.json beside settings.ini: the whole list as one JSON text whose
+ * shape the UI layer owns (a TileJSON link carries a generated wrapper style,
+ * which is a JSON document itself — a line format would spend its life
+ * escaping). Replaced whole through a temp file, like the raster library. */
+
+static const char *
+chartlinks_path(void)
+{
+    static char path[MAX_PATH];
+    return store_file("chartlinks.json", path, sizeof path);
+}
+
+char *
+lk_store_load_chartlinks(void)
+{
+    store_lock();
+    FILE *f = fopen(chartlinks_path(), "rb");
+    if (f == NULL) {
+        store_unlock();
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0 || n > (16 << 20)) {
+        fclose(f);
+        store_unlock();
+        return NULL;
+    }
+    char *out = (char *)malloc((size_t)n + 1);
+    if (out == NULL) {
+        fclose(f);
+        store_unlock();
+        return NULL;
+    }
+    size_t got = fread(out, 1, (size_t)n, f);
+    fclose(f);
+    store_unlock();
+    out[got] = '\0';
+    return out;
+}
+
+void
+lk_store_save_chartlinks(const char *json)
+{
+    if (json == NULL)
+        return;
+    store_lock();
+    char tmp[MAX_PATH + 8];
+    snprintf(tmp, sizeof tmp, "%s.tmp", chartlinks_path());
+    FILE *f = fopen(tmp, "wb");
+    if (f == NULL) {
+        store_unlock();
+        return;
+    }
+    int ok = fwrite(json, 1, strlen(json), f) == strlen(json);
+    if (fclose(f) != 0)
+        ok = 0;
+    if (ok)
+        MoveFileExA(tmp, chartlinks_path(), MOVEFILE_REPLACE_EXISTING);
+    else
+        DeleteFileA(tmp);
+    store_unlock();
+}
+
+int
+lk_store_load_chartlink_active(char *out, int out_len)
+{
+    if (out == NULL || out_len <= 0)
+        return 0;
+    out[0] = '\0';
+    store_lock();
+    int have = get_str(LK_GROUP_VIEW, "chartlink_active", out, out_len);
+    store_unlock();
+    return have && out[0] != '\0';
+}
+
+void
+lk_store_save_chartlink_active(const char *url)
+{
+    store_lock();
+    set_str(LK_GROUP_VIEW, "chartlink_active", url != NULL ? url : "");
+    store_unlock();
+}
+
 /* ---- mariner ------------------------------------------------------------- */
 
 void

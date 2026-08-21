@@ -664,6 +664,114 @@ namespace winrt::LookoutMarine::implementation
             raster_foot.Opacity(0.7);
             raster_foot.TextWrapping(TextWrapping::Wrap);
             stack.Children().Append(raster_foot);
+
+            // ---- charts by link: an online map AS the chart. Picking one
+            // renders that publisher's MapLibre style instead of the built-in
+            // portrayal — Lookout's own chart is just the default entry in
+            // the same list (the reference shell's Chart list, row for row).
+            header(L"Chart");
+            auto link_row = [this](std::string const &url, std::string const &title,
+                                   std::string const &sub, bool removable) {
+                Controls::Grid row;
+                Controls::ColumnDefinition c0, c1, c2, c3;
+                c0.Width({ 0, GridUnitType::Auto });
+                c1.Width({ 1, GridUnitType::Star });
+                c2.Width({ 0, GridUnitType::Auto });
+                c3.Width({ 0, GridUnitType::Auto });
+                row.ColumnDefinitions().ReplaceAll({ c0, c1, c2, c3 });
+
+                Controls::RadioButton pick;
+                pick.GroupName(L"chartlink");
+                pick.IsChecked(active_chart_link == url);
+                pick.MinWidth(0);
+                pick.Checked([this, url](auto &&, auto &&) {
+                    if (!settings_loading && active_chart_link != url)
+                        SelectChartLink(url);
+                });
+                row.Children().Append(pick);
+
+                Controls::StackPanel text;
+                Controls::TextBlock name;
+                name.Text(winrt::to_hstring(title));
+                name.TextTrimming(TextTrimming::CharacterEllipsis);
+                text.Children().Append(name);
+                if (!sub.empty())
+                {
+                    Controls::TextBlock s;
+                    s.Text(winrt::to_hstring(sub));
+                    s.FontSize(11);
+                    s.Opacity(0.7);
+                    s.TextTrimming(TextTrimming::CharacterEllipsis);
+                    text.Children().Append(s);
+                }
+                text.VerticalAlignment(VerticalAlignment::Center);
+                Controls::Grid::SetColumn(text, 1);
+                row.Children().Append(text);
+
+                if (removable)
+                {
+                    Controls::Button refresh;
+                    refresh.Content(winrt::box_value(L"Refresh"));
+                    refresh.FontSize(11);
+                    refresh.Padding({ 6, 2, 6, 2 });
+                    refresh.Click([this, url](auto &&, auto &&) { RefreshChartLink(url); });
+                    Controls::Grid::SetColumn(refresh, 2);
+                    row.Children().Append(refresh);
+
+                    Controls::Button rm;
+                    Controls::FontIcon minus;
+                    minus.Glyph(L"");
+                    minus.FontSize(12);
+                    rm.Content(minus);
+                    rm.Padding({ 4, 2, 4, 2 });
+                    rm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    rm.BorderThickness({ 0, 0, 0, 0 });
+                    rm.Click([this, url](auto &&, auto &&) { RemoveChartLink(url); });
+                    Controls::Grid::SetColumn(rm, 3);
+                    row.Children().Append(rm);
+                }
+                stack.Children().Append(row);
+            };
+            link_row("", "Lookout chart", "The built-in portrayal of your opened cells.", false);
+            for (auto const &l : chart_links)
+                link_row(l.url, l.name.empty() ? l.url : l.name, l.url, true);
+
+            // Add by link, committed on Enter like every other field.
+            Controls::TextBox link_box;
+            link_box.PlaceholderText(L"https://…/style.json");
+            link_box.Margin({ 0, 6, 0, 0 });
+            link_box.KeyDown([this](auto &&s, auto &&e) {
+                if (e.Key() != Windows::System::VirtualKey::Enter)
+                    return;
+                auto box = s.template as<Controls::TextBox>();
+                auto text = winrt::to_string(box.Text());
+                if (!text.empty())
+                {
+                    AddChartLink(text);
+                    box.Text(L"");
+                }
+            });
+            stack.Children().Append(link_box);
+
+            if (!chart_link_error.empty())
+            {
+                Controls::TextBlock err;
+                err.Text(winrt::to_hstring(chart_link_error));
+                err.FontSize(11);
+                err.Foreground(lkw::Brush(lkw::chrome::kAmber));
+                err.TextWrapping(TextWrapping::Wrap);
+                stack.Children().Append(err);
+            }
+
+            Controls::TextBlock link_foot;
+            link_foot.Text(L"A chart added by link draws INSTEAD of Lookout's own: the "
+                           L"publisher styles it and their tiles are fetched as you sail. "
+                           L"A style link or a TileJSON tile source; also a style.json "
+                           L"on this machine by path.");
+            link_foot.FontSize(11);
+            link_foot.Opacity(0.7);
+            link_foot.TextWrapping(TextWrapping::Wrap);
+            stack.Children().Append(link_foot);
         }
         else if (tab == "advanced")
         {

@@ -88,6 +88,7 @@ namespace winrt::LookoutMarine::implementation
 
         StopAlertWatch();     // the alerts belong to the handle this close destroys
         CloseVesselWindows(); // so do the tables
+        AltTilesDetach();     // and the style's tile provider
         StopRenderThread();
         lk_controller_close(controller);
         if (chart_panel != nullptr)
@@ -110,6 +111,19 @@ namespace winrt::LookoutMarine::implementation
                 std::string parked = pending_plugin_install;
                 pending_plugin_install.clear();
                 InstallPluginFromPath(parked);
+            }
+            // The picked chart link survives a change of library like the
+            // rasters do: pushed again on every open (an alt style belongs
+            // to a handle). $LOOKOUT_CHART_LINK is the dev hook the
+            // screenshot protocol needs — a style url or file drawn at
+            // launch with nobody clicking.
+            {
+                char spec[2048];
+                if (GetEnvironmentVariableA("LOOKOUT_CHART_LINK", spec, sizeof spec) > 0 &&
+                    spec[0] != '\0')
+                    AddChartLink(spec);
+                else if (!active_chart_link.empty())
+                    PushChartLink();
             }
             RefreshPluginTables();  // the Vessels menu follows the declarations
             EmptyState().Visibility(Visibility::Collapsed);

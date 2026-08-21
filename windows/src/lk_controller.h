@@ -86,6 +86,25 @@ void lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double
 /* Geo to logical points (the inverse of geo_at) — anchors chart-pinned chrome. */
 int  lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y);
 
+/* ---- alt chart styles (an online map AS the chart) ----------------------- */
+
+/* One tile an alt style's source wants, which only the host can fetch (the
+ * core does no networking). Called on the render thread with the core's lock
+ * held: copy the name, start the fetch, return. Answer from any thread with
+ * lk_controller_tile_respond — the one call that is safe from there. */
+typedef void (*lk_tile_request)(void *user, const char *source,
+                                unsigned long long req_id, int z, int x, int y);
+
+/* Draw a host-supplied MapLibre style instead of the portrayal; NULL restores
+ * lookout's chart. The bytes are copied. 1 on success (this core entry
+ * answers 1 on success, unlike most of the ABI). */
+int  lk_controller_alt_style_set(lk_controller *self, const char *json);
+int  lk_controller_alt_style_active(lk_controller *self);
+void lk_controller_set_tile_provider(lk_controller *self, lk_tile_request cb, void *user);
+/* status: 0 bytes, 1 "no tile there", 2 "tried and failed". Lock-free. */
+void lk_controller_tile_respond(lk_controller *self, unsigned long long req_id,
+                                const void *bytes, size_t len, int status);
+
 /* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
 
 typedef struct lk_marker {

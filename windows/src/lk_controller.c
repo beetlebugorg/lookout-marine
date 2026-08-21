@@ -879,6 +879,45 @@ lk_controller_charts_count(lk_controller *self)
     return (int)lookout_charts_count(self->handle);
 }
 
+/* ---- alt chart styles ---------------------------------------------------- */
+
+int
+lk_controller_alt_style_set(lk_controller *self, const char *json)
+{
+    lk_controller_kick();
+    if (!lk_controller_is_open(self))
+        return 0;
+    if (json == NULL)
+        return lookout_alt_chart_style_json(self->handle, NULL, 0);
+    return lookout_alt_chart_style_json(self->handle, json, strlen(json));
+}
+
+int
+lk_controller_alt_style_active(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_alt_chart_style_active(self->handle);
+}
+
+void
+lk_controller_set_tile_provider(lk_controller *self, lk_tile_request cb, void *user)
+{
+    if (lk_controller_is_open(self))
+        lookout_set_tile_provider(self->handle, (lookout_tile_request)cb, user);
+}
+
+void
+lk_controller_tile_respond(lk_controller *self, unsigned long long req_id,
+                           const void *bytes, size_t len, int status)
+{
+    /* lookout_tile_respond takes no lock of the core's and ignores an unknown
+     * id, so a fetch landing late is harmless — but never after close: the
+     * shell detaches the provider and joins its fetches first. */
+    if (lk_controller_is_open(self))
+        lookout_tile_respond(self->handle, req_id, bytes, len, status);
+}
+
 /* ---- markers ------------------------------------------------------------- */
 
 static void

@@ -66,6 +66,16 @@ void   lk_store_save_hidden_sets(const char *const *names, int n);
 int    lk_store_chart_hidden(void);
 void   lk_store_set_chart_hidden(int hidden);
 
+/* Chart links (an online map AS the chart): the whole list as one JSON text
+ * the UI layer owns the shape of, plus the picked link's url. load returns a
+ * malloc'd NUL-terminated string or NULL; caller frees. Written whole through
+ * a temp file, like the raster library. */
+char *lk_store_load_chartlinks(void);
+void  lk_store_save_chartlinks(const char *json);
+/* The active link's url, or "" for the built-in chart. */
+int   lk_store_load_chartlink_active(char *out, int out_len);
+void  lk_store_save_chartlink_active(const char *url);
+
 /* Plugin settings, kept as the config object each plugin was last handed —
  * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per
  * plugin id.
