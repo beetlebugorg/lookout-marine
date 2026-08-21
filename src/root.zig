@@ -2911,6 +2911,7 @@ test {
     _ = @import("ct/tiles.zig");
     _ = ctprovided;
     _ = cthost;
+    _ = craster;
 }
 
 test "camera roundtrip" {
