@@ -345,8 +345,6 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
         if (e.getActionMasked() != MotionEvent.ACTION_SCROLL || engine.getLookout() == null) return false;
         float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
         if (v == 0) v = e.getAxisValue(MotionEvent.AXIS_SCROLL); // rotary encoders
-        android.util.Log.i("lookout", "scroll: src=0x" + Integer.toHexString(e.getSource())
-                + " v=" + v + " at (" + e.getX() + "," + e.getY() + ")");
         if (v == 0) return false;
         float x = e.getX(), y = e.getY();
         if (x <= 0 && y <= 0) { // no cursor position (rotary): zoom about center

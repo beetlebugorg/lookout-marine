@@ -2,6 +2,8 @@ package org.beetlebug.lookout
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -137,7 +139,12 @@ fun ReadoutsCapsule(
     // have to write down or pass over the radio, and it becomes the vessel's
     // own once there is a GPS.
     Surface(
-        modifier = modifier.heightIn(min = Chrome.capsule),
+        modifier = modifier
+            .heightIn(min = Chrome.capsule)
+            // Chrome refuses the chart's gestures: a tap on the capsule's own
+            // face used to fall through to the SurfaceView and pick whatever
+            // sat under the HUD.
+            .pointerInput(Unit) { detectTapGestures { } },
         // A capsule at one line and a rounded block at two: the radius is half
         // the one-line height, so the settled shape is the capsule it has
         // always been.

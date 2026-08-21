@@ -1137,6 +1137,32 @@ private fun PluginNumberRow(field: PluginField, onCommit: (Double) -> Unit) {
  * Stage A shows the standing state; the collapsible rows with their capability
  * grants are Stage B.
  */
+/**
+ * The status line as a sentence, never as the JSON a managed plugin writes it
+ * in: word + " · " + detail (the reference's word map). Null when the plugin
+ * says nothing.
+ */
+private fun statusCaption(p: PluginInfo): String? {
+    val raw = p.status.trim()
+    if (raw.isEmpty()) return null
+    if (!raw.startsWith("{")) return raw
+    return try {
+        val o = org.json.JSONObject(raw)
+        val word = when (o.optString("state")) {
+            "running", "" -> "Running"
+            "starting" -> "Starting"
+            "degraded" -> "Degraded"
+            "disabled" -> "Disabled"
+            "stopped" -> "Stopped"
+            else -> o.optString("state")
+        }
+        val detail = o.optString("detail")
+        if (detail.isEmpty()) word else "$word · $detail"
+    } catch (e: Exception) {
+        raw
+    }
+}
+
 @Composable
 private fun PluginsManageSection(registry: PluginRegistry) {
     SectionHeader("Installed plugins", first = true)
@@ -1158,7 +1184,7 @@ private fun PluginsManageSection(registry: PluginRegistry) {
             Column(Modifier.weight(1f)) {
                 Text(p.name, style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    if (p.status.isNotEmpty()) p.status else p.id,
+                    statusCaption(p) ?: p.id,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
