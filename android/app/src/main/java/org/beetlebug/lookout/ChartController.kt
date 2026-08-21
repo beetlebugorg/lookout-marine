@@ -134,10 +134,24 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD only: [lastPluginsJson] is its own.
      */
     private var lastPluginsJson: String? = null
+    private var pluginsJsonWasNull = false
 
     private fun republish(l: Lookout) {
         val json = l.pluginsJson()
-        if (json != null && json == lastPluginsJson) return
+        if (json == null) {
+            // A null read is the plugin layer mid-restart, not an empty
+            // registry. Publishing it would empty Vessels, Alarms and
+            // Connections until the next good read; keep the last one and
+            // say so once each way.
+            if (!pluginsJsonWasNull) Log.w(TAG, "plugins registry unreadable; keeping the last one")
+            pluginsJsonWasNull = true
+            return
+        }
+        if (pluginsJsonWasNull) {
+            Log.w(TAG, "plugins registry is back")
+            pluginsJsonWasNull = false
+        }
+        if (json == lastPluginsJson) return
         lastPluginsJson = json
         val reg = PluginRegistry.parse(json)
         main.post { pluginRegistry = reg }
