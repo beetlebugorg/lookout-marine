@@ -345,6 +345,8 @@ class ChartController(private val appContext: Context) {
             if (!l.rasterAdd(p)) Log.w(TAG, "raster chart will not open: $p")
             else if (!rasterCharts.isEnabled(p)) l.rasterSetEnabled(p, false)
         }
+        restoreRasterShown(l)
+        if (rasterCharts.chartHidden) l.setChartHidden(true)
         pushRaster(l)
         loadPlugins(l)
         val loaded = date
@@ -791,12 +793,49 @@ class ChartController(private val appContext: Context) {
      * Read the pill's state off the engine. RENDER THREAD ONLY, like the
      * readouts: these are native calls, and the api lock is held for a frame.
      */
+    /**
+     * Put the mariner's per-set choice back after an open, TWO passes — hide
+     * first, then show — or the election (showing a set turns off same-water
+     * rivals) loses the pick. Then the no-survey override: with no ENC aboard
+     * "hidden" no longer means what it meant, and obeying it leaves a blank
+     * sea, so the first covering set draws anyway. The SAVED choice is not
+     * rewritten (the reference's restoreRasterShown, move for move).
+     */
+    private fun restoreRasterShown(l: Lookout) {
+        val hidden = rasterCharts.hidden
+        if (hidden.isNotEmpty()) {
+            val n = l.rasterSetCount()
+            for (i in 0 until n) if (l.rasterSetName(i) in hidden) l.rasterSetShown(i, false)
+            for (i in 0 until n) if (l.rasterSetName(i) !in hidden) l.rasterSetShown(i, true)
+        }
+        if (l.chartsCount() == 0) {
+            val n = l.rasterSetCount()
+            var shownInView = false
+            for (i in 0 until n) {
+                if (l.rasterSetInView(i) && l.rasterShown(i)) shownInView = true
+            }
+            if (!shownInView) {
+                for (i in 0 until n) {
+                    if (l.rasterSetInView(i)) {
+                        Log.i(TAG, "no survey aboard; drawing ${l.rasterSetName(i)} over the blank sea")
+                        l.rasterSetShown(i, true)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
     private fun pushRaster(l: Lookout) {
         val n = l.rasterSetCount()
         val sets = ArrayList<RasterSet>(n)
         for (i in 0 until n) {
-            sets.add(RasterSet(i, l.rasterSetName(i), l.rasterSetInView(i)))
+            sets.add(RasterSet(i, l.rasterSetName(i), l.rasterSetInView(i), l.rasterShown(i)))
         }
+        // Read back from the engine and remembered, never tracked here: the
+        // engine owns the election.
+        rasterCharts.noteShown(sets.map { it.name to it.shown })
+        rasterCharts.setChartHidden(l.chartHidden())
         val s = RasterState(
             name = l.rasterActiveName(),
             available = l.rasterAvailableName(),
@@ -820,10 +859,14 @@ class ChartController(private val appContext: Context) {
             var opened = 0
             for (p in added) if (l.rasterAdd(p)) opened++
             if (opened > 0) {
-                val name = RasterCharts.providerLabel(added.last())
+                // The newest covering set is the one the mariner just added
+                // while looking at this water. By INDEX from the top — the
+                // engine appends sets in add order — not by re-deriving the
+                // engine's name from the path: the two label tables disagreed
+                // and the pick silently missed.
                 val n = l.rasterSetCount()
-                for (i in 0 until n) {
-                    if (l.rasterSetName(i) == name && l.rasterSetInView(i)) {
+                for (i in n - 1 downTo 0) {
+                    if (l.rasterSetInView(i)) {
                         l.rasterSelect(i)
                         break
                     }

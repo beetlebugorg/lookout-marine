@@ -39,9 +39,32 @@ class RasterCharts(appContext: Context) {
     var off by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /**
+     * Set NAMES the mariner turned off where they cover, drawn back at the
+     * next open. By NAME, not path: an unplugged drive is not a change of
+     * mind, so an entry survives its files being absent for a launch.
+     */
+    var hidden: Set<String> = emptySet()
+        private set
+
+    /** The ENC hidden under the picture, put back at the next open. */
+    var chartHidden: Boolean = false
+        private set
+
     init {
-        paths = prefs.getStringSet(KEY_PATHS, null)?.sorted() ?: emptyList()
+        // An ordered JSON array, because "order added" IS the contract and a
+        // StringSet reloaded .sorted() silently made it alphabetical.
+        val ordered = prefs.getString(KEY_PATHS_ORDERED, null)
+        paths = if (ordered != null) {
+            val arr = org.json.JSONArray(ordered)
+            List(arr.length()) { arr.getString(it) }
+        } else {
+            // The pre-ordered layout, migrated on the next save.
+            prefs.getStringSet(KEY_PATHS, null)?.sorted() ?: emptyList()
+        }
         off = prefs.getStringSet(KEY_OFF, null)?.toSet() ?: emptySet()
+        hidden = prefs.getStringSet(KEY_HIDDEN, null)?.toSet() ?: emptySet()
+        chartHidden = prefs.getBoolean(KEY_CHART_HIDDEN, false)
     }
 
     fun add(newPaths: List<String>): List<String> {
@@ -65,10 +88,32 @@ class RasterCharts(appContext: Context) {
 
     fun isEnabled(path: String) = path !in off
 
+    /**
+     * Record which sets are drawn, from the engine's own answers — the engine
+     * owns the election; the shell never tracks it, only remembers it.
+     * Entries for sets not aboard this launch are KEPT (see [hidden]).
+     */
+    fun noteShown(sets: List<Pair<String, Boolean>>) {
+        val seen = sets.map { it.first }.toSet()
+        val nowHidden = sets.filter { !it.second }.map { it.first }.toSet()
+        val merged = (hidden - seen) + nowHidden
+        if (merged == hidden) return
+        hidden = merged
+        save()
+    }
+
+    fun setChartHidden(on: Boolean) {
+        if (chartHidden == on) return
+        chartHidden = on
+        save()
+    }
+
     private fun save() {
         prefs.edit()
-            .putStringSet(KEY_PATHS, paths.toSet())
+            .putString(KEY_PATHS_ORDERED, org.json.JSONArray(paths).toString())
             .putStringSet(KEY_OFF, off)
+            .putStringSet(KEY_HIDDEN, hidden)
+            .putBoolean(KEY_CHART_HIDDEN, chartHidden)
             .apply()
     }
 
@@ -84,7 +129,10 @@ class RasterCharts(appContext: Context) {
     companion object {
         private const val PREFS = "rastercharts.v1"
         private const val KEY_PATHS = "paths"
+        private const val KEY_PATHS_ORDERED = "paths.ordered"
         private const val KEY_OFF = "off"
+        private const val KEY_HIDDEN = "hidden.names"
+        private const val KEY_CHART_HIDDEN = "chart.hidden"
 
         /**
          * Providers seen in community charts, longest first so "ArcGIS.Imagery"
@@ -120,7 +168,13 @@ class RasterCharts(appContext: Context) {
 }
 
 /** One set the engine reports: charts of one provider, drawn as one picture. */
-data class RasterSet(val id: Int, val name: String, val inView: Boolean)
+data class RasterSet(
+    val id: Int,
+    val name: String,
+    val inView: Boolean,
+    /** Drawn where it covers — the engine's answer, never the shell's. */
+    val shown: Boolean = false,
+)
 
 /**
  * What the HUD pill needs, read from the engine every pushed frame because
