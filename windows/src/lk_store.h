@@ -56,6 +56,16 @@ void   lk_store_note_rasters(const char *const *paths, int n);
 void   lk_store_forget_rasters(const char *const *paths, int n);
 void   lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled);
 
+/* Which raster SETS are not drawn, by set name — the pill's per-set choice,
+ * distinct from a path's enabled flag. load returns a NULL-terminated array
+ * of malloc'd names, freed with lk_store_free_recents. save replaces the
+ * whole list (entries for sets not installed this launch are kept by the
+ * caller). chart_hidden persists the "hide ENC over raster" toggle. */
+char **lk_store_load_hidden_sets(void);
+void   lk_store_save_hidden_sets(const char *const *names, int n);
+int    lk_store_chart_hidden(void);
+void   lk_store_set_chart_hidden(int hidden);
+
 /* Plugin settings, kept as the config object each plugin was last handed —
  * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per
  * plugin id.

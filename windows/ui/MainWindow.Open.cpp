@@ -101,6 +101,7 @@ namespace winrt::LookoutMarine::implementation
         if (OpenChart(paths))
         {
             InstallStoredRasters(); // the open destroyed the handle they rode on
+            RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
             StartAlertWatch();      // a collision alarm must not need a pane open
             RefreshPluginTables();  // the Vessels menu follows the declarations
             EmptyState().Visibility(Visibility::Collapsed);

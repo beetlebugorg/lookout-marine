@@ -8,6 +8,7 @@
 
 #include "lk_coord.h"
 #include "lk_format.h"
+#include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -120,7 +121,10 @@ namespace winrt::LookoutMarine::implementation
         case 'd': lk_controller_toggle_other_category(controller); break;
         case 'i': CycleRaster(); break;
         case 'I': AddRasterFiles(); break;
-        case 'H': lk_controller_toggle_chart(controller); break;
+        case 'H':
+            lk_controller_toggle_chart(controller);
+            lk_store_set_chart_hidden(lk_controller_chart_hidden(controller));
+            break;
         case 'f':
         {
             bool open = SearchBox().Visibility() == Visibility::Visible;

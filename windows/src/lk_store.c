@@ -559,6 +559,101 @@ lk_store_free_rasters(char **paths, int *enabled)
     free(enabled);
 }
 
+/* ---- raster shown state --------------------------------------------------- */
+
+/* Which raster SETS are not drawn, by set name, one per line in
+ * rasters.hidden beside the library. Beside it because both describe the same
+ * charts, and either living somewhere else is a way for them to drift apart.
+ * Not the same thing as a path's enabled flag: off means "installed and
+ * quiet" and takes a set out of the pill's list; this is the pill's own
+ * choice of which picture covers a water, and a hidden set is still offered.
+ * Sets not installed this launch keep their entry: a mariner who unplugs the
+ * drive holding one has not changed their mind about it. */
+
+#define LK_MAX_HIDDEN_SETS 256
+
+static const char *
+hidden_sets_path(void)
+{
+    static char path[MAX_PATH];
+    return store_file("rasters.hidden", path, sizeof path);
+}
+
+char **
+lk_store_load_hidden_sets(void)
+{
+    store_lock();
+    char **out = (char **)calloc(LK_MAX_HIDDEN_SETS + 1, sizeof(char *));
+    if (out == NULL) {
+        store_unlock();
+        return NULL;
+    }
+    FILE *f = fopen(hidden_sets_path(), "rb");
+    int n = 0;
+    if (f != NULL) {
+        char line[512];
+        while (n < LK_MAX_HIDDEN_SETS && fgets(line, sizeof line, f) != NULL) {
+            size_t len = strlen(line);
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+                line[--len] = '\0';
+            if (len == 0)
+                continue;
+            out[n] = _strdup(line);
+            if (out[n] != NULL)
+                n++;
+        }
+        fclose(f);
+    }
+    out[n] = NULL;
+    store_unlock();
+    return out;
+}
+
+void
+lk_store_save_hidden_sets(const char *const *names, int n)
+{
+    store_lock();
+    char tmp[MAX_PATH + 8];
+    snprintf(tmp, sizeof tmp, "%s.tmp", hidden_sets_path());
+    FILE *f = fopen(tmp, "wb");
+    if (f == NULL) {
+        store_unlock();
+        return;
+    }
+    int ok = 1;
+    for (int i = 0; i < n; i++) {
+        if (names[i] == NULL || names[i][0] == '\0')
+            continue;
+        if (fprintf(f, "%s\n", names[i]) < 0)
+            ok = 0;
+    }
+    if (fclose(f) != 0)
+        ok = 0;
+    if (ok)
+        MoveFileExA(tmp, hidden_sets_path(), MOVEFILE_REPLACE_EXISTING);
+    else
+        DeleteFileA(tmp);
+    store_unlock();
+}
+
+int
+lk_store_chart_hidden(void)
+{
+    store_lock();
+    int v = 0;
+    get_int(LK_GROUP_RASTER, "chart_hidden", &v);
+    store_unlock();
+    return v ? 1 : 0;
+}
+
+void
+lk_store_set_chart_hidden(int hidden)
+{
+    store_lock();
+    set_int(LK_GROUP_RASTER, "chart_hidden", hidden ? 1 : 0);
+    store_unlock();
+}
+
 /* ---- mariner ------------------------------------------------------------- */
 
 void

@@ -116,6 +116,7 @@ namespace winrt::LookoutMarine::implementation
             it.IsChecked(i == active);
             it.Click([this, i](auto &&, auto &&) {
                 lk_controller_raster_select(controller, i);
+                SaveRasterShown();
                 UpdateReadouts(true);
             });
             menu.Items().Append(it);
@@ -126,6 +127,7 @@ namespace winrt::LookoutMarine::implementation
         none.IsChecked(active < 0);
         none.Click([this](auto &&, auto &&) {
             lk_controller_raster_select(controller, -1);
+            SaveRasterShown();
             UpdateReadouts(true);
         });
         menu.Items().Append(none);
@@ -137,6 +139,7 @@ namespace winrt::LookoutMarine::implementation
                                                         : L"Hide ENC Over Raster");
         enc.Click([this](auto &&, auto &&) {
             lk_controller_toggle_chart(controller);
+            lk_store_set_chart_hidden(lk_controller_chart_hidden(controller));
             UpdateReadouts(true);
         });
         menu.Items().Append(enc);
@@ -159,6 +162,7 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
         lk_controller_raster_cycle(controller);
+        SaveRasterShown();
     }
 
     // ---- adding -------------------------------------------------------------
@@ -223,6 +227,7 @@ namespace winrt::LookoutMarine::implementation
                 if (want == name && lk_controller_raster_set_in_view(controller, (unsigned)i))
                 {
                     lk_controller_raster_select(controller, i);
+                    SaveRasterShown();
                     break;
                 }
             }
@@ -333,5 +338,102 @@ namespace winrt::LookoutMarine::implementation
         lk_store_free_rasters(paths, enabled);
         if (total > 0)
             fprintf(stderr, "shell: raster %d/%d source(s) re-installed\n", ok, total);
+    }
+
+    // Put back which raster sets the mariner had drawn, then the saved
+    // ENC-hidden switch. Adding a source draws its set, which is right for a
+    // chart just picked and wrong for one being re-installed at launch, so
+    // every open has to correct it — before the first frame, or a set the
+    // mariner switched off flashes on screen.
+    //
+    // Two passes. Hiding first and showing second is what keeps the election:
+    // where two providers cover one coast, the sources were added in an order
+    // that drew the first of them, so showing the mariner's pick before
+    // hiding its rival would leave the rival to turn the pick straight back
+    // off.
+    void MainWindow::RestoreRasterShown()
+    {
+        raster_hidden.clear();
+        if (char **names = lk_store_load_hidden_sets())
+        {
+            for (int i = 0; names[i] != nullptr; ++i)
+                raster_hidden.insert(names[i]);
+            lk_store_free_recents(names);
+        }
+
+        int count = lk_controller_raster_set_count(controller);
+        if (count > 0)
+        {
+            char name[192];
+            for (int i = 0; i < count; ++i)
+            {
+                lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+                if (raster_hidden.count(name))
+                    lk_controller_raster_set_shown(controller, (unsigned)i, 0);
+            }
+            for (int i = 0; i < count; ++i)
+            {
+                lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+                if (!raster_hidden.count(name))
+                    lk_controller_raster_set_shown(controller, (unsigned)i, 1);
+            }
+
+            // With no survey open, the imagery IS the chart, and switching a
+            // set off no longer means what it meant when it was said: the
+            // mariner hid it to see the ENC underneath, and obeying that now
+            // leaves a blank sea. The set covering this water comes back on —
+            // named in the pill and one click from off again, which a blank
+            // screen is not. What they SAVED is not rewritten; add ENC charts
+            // back and the set they hid is hidden again.
+            if (lk_controller_charts_count(controller) == 0)
+            {
+                bool any_shown = false;
+                int first_here = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    if (!lk_controller_raster_set_in_view(controller, (unsigned)i))
+                        continue;
+                    if (first_here < 0)
+                        first_here = i;
+                    if (lk_controller_raster_shown(controller, (unsigned)i))
+                        any_shown = true;
+                }
+                if (!any_shown && first_here >= 0)
+                    lk_controller_raster_set_shown(controller, (unsigned)first_here, 1);
+            }
+        }
+
+        if (lk_store_chart_hidden())
+            lk_controller_set_chart_hidden(controller, 1);
+    }
+
+    // Record the engine's per-set drawn state, by name. Read back from the
+    // engine rather than tracked here: it owns the election — showing one set
+    // turns off the sets covering the same water — so what it says after the
+    // change is the only account that can be right.
+    void MainWindow::SaveRasterShown()
+    {
+        int count = lk_controller_raster_set_count(controller);
+        if (count <= 0)
+            return;
+        auto hidden = raster_hidden;
+        char name[192];
+        for (int i = 0; i < count; ++i)
+        {
+            lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+            if (name[0] == '\0')
+                continue;
+            if (lk_controller_raster_shown(controller, (unsigned)i))
+                hidden.erase(name);
+            else
+                hidden.insert(name);
+        }
+        if (hidden == raster_hidden)
+            return;
+        raster_hidden = std::move(hidden);
+        std::vector<const char *> cps;
+        for (auto const &n : raster_hidden)
+            cps.push_back(n.c_str());
+        lk_store_save_hidden_sets(cps.data(), (int)cps.size());
     }
 }

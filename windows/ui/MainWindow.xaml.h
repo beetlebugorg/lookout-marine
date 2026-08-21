@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <functional>
@@ -165,6 +166,8 @@ namespace winrt::LookoutMarine::implementation
 
         // raster underlay (MainWindow.Raster.cpp)
         void InstallStoredRasters();  // re-add the stored list after each open
+        void RestoreRasterShown();    // put back which sets were drawn, then the saved ENC-hidden
+        void SaveRasterShown();       // record the engine's per-set drawn state by name
         void AddRasterPaths(std::vector<std::string> const &paths);
         fire_and_forget AddRasterFiles();
         fire_and_forget AddRasterFolder();
@@ -248,6 +251,11 @@ namespace winrt::LookoutMarine::implementation
         // the lookout handle the open destroyed). UI thread only.
         std::vector<std::string> raster_paths;
         std::wstring raster_pill_shown; // change-detect: last pill text ("" = hidden)
+        // Which raster SETS are not drawn, by set name — the saved per-set
+        // choice. Entries for sets not installed this launch are kept: a
+        // mariner who unplugs the drive holding one has not changed their
+        // mind about it.
+        std::set<std::string> raster_hidden;
 
         // startup loader state
         bool open_pending{ false };      // an OpenPaths is deferred/running

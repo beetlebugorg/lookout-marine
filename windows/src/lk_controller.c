@@ -834,6 +834,43 @@ lk_controller_raster_enabled(lk_controller *self, const char *path)
     return lookout_raster_enabled(self->handle, path);
 }
 
+int
+lk_controller_raster_shown(lk_controller *self, unsigned i)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_raster_shown(self->handle, i);
+}
+
+/* By index and without reference to the camera: raster_select answers for the
+ * view on screen, and the view a launch opens into is often nowhere near the
+ * set being restored. Showing still turns off the sets covering the same
+ * water (the engine's election). */
+void
+lk_controller_raster_set_shown(lk_controller *self, unsigned i, int on)
+{
+    lk_controller_kick();
+    if (lk_controller_is_open(self))
+        lookout_raster_set_shown(self->handle, i, on);
+}
+
+void
+lk_controller_set_chart_hidden(lk_controller *self, int hidden)
+{
+    lk_controller_kick();
+    if (lk_controller_is_open(self))
+        lookout_set_chart_hidden(self->handle, hidden);
+}
+
+/* How many vector charts are open. Zero is a library of pictures alone. */
+int
+lk_controller_charts_count(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return 0;
+    return (int)lookout_charts_count(self->handle);
+}
+
 void
 lk_controller_toggle_chart(lk_controller *self)
 {

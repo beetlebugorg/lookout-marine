@@ -218,6 +218,13 @@ int  lk_controller_raster_set_in_view(lk_controller *self, unsigned i);
 int  lk_controller_raster_active_index(lk_controller *self);
 int  lk_controller_raster_set_enabled(lk_controller *self, const char *path, int enabled);
 int  lk_controller_raster_enabled(lk_controller *self, const char *path);
+/* A set's own drawn state (not "drawn over this view"): what gets saved, and
+ * what set_shown restores by index without reference to the camera. */
+int  lk_controller_raster_shown(lk_controller *self, unsigned i);
+void lk_controller_raster_set_shown(lk_controller *self, unsigned i, int on);
+void lk_controller_set_chart_hidden(lk_controller *self, int hidden);
+/* How many vector charts are open. Zero is a library of pictures alone. */
+int  lk_controller_charts_count(lk_controller *self);
 /* Hide/show the ENC where a picture covers it (instant, never rebuilds). */
 void lk_controller_toggle_chart(lk_controller *self);
 int  lk_controller_chart_hidden(lk_controller *self);
