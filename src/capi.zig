@@ -741,32 +741,6 @@ export fn lookout_alt_sprite_pack(h: ?*lookout, prefix: ?[*:0]const u8, index_js
     return @intCast(l.altSpritePack(p, index_json[0..json_len], png[0..png_len]));
 }
 
-/// Where an alt style's tiles are asked for. See lookout.h.
-export fn lookout_set_tile_provider(h: ?*lookout, cb: ?lk.Lookout.TileRequestFn, user: ?*anyopaque) void {
-    const l = locked(h);
-    defer l.apiUnlock();
-    l.setTileProvider(cb, user);
-}
-
-/// Answer one tile request, from any thread. See lookout.h.
-///
-/// The ONLY handle-taking export that does not hold the api lock, and
-/// deliberately: the host answers from whatever thread its networking
-/// finished on, and that thread must not queue behind a frame in flight. The
-/// switchboard underneath has its own lock and is written for it — and it is
-/// also why this is the one call a tile-request callback may make re-entrantly,
-/// since that callback runs with the api lock already held.
-export fn lookout_tile_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
-    if (h == null) return;
-    const st: lk.Lookout.TileStatus = switch (status) {
-        0 => .ok,
-        1 => .empty,
-        else => .failed,
-    };
-    const slice: []const u8 = if (st == .ok and bytes != null) bytes.?[0..len] else &.{};
-    cast(h).respondTile(req_id, slice, st);
-}
-
 // ---- charts by link --------------------------------------------------------
 /// Adopt the shell's url fetcher. See lookout.h.
 export fn lookout_set_http_provider(h: ?*lookout, get: ?lk.Lookout.HttpGetFn, cancel: ?lk.Lookout.HttpCancelFn, user: ?*anyopaque) void {

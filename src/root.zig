@@ -2471,25 +2471,7 @@ pub const Lookout = struct {
         self.links.setProvider(get, cancel, user);
     }
 
-    pub const TileRequestFn = ctprovided.RequestFn;
     pub const TileStatus = ctprovided.Status;
-
-    /// Where an alt style's tiles are asked for. The host resolves the url
-    /// from the style it fetched and answers with `respondTile`. See
-    /// ct/provided.zig for why the fetching lives up there.
-    pub fn setTileProvider(self: *Lookout, cb: ?TileRequestFn, user: ?*anyopaque) void {
-        self.ct.setTileProvider(cb, user);
-    }
-
-    /// The host's answer to one ask, from any thread.
-    ///
-    /// No markDirty: the tile is still WANTED by the map until it decodes, so
-    /// the frame loop is already running and will pick the bytes up on its
-    /// next pass. Reaching for the dirty flag from a network thread would be
-    /// touching render state without the lock for no gain.
-    pub fn respondTile(self: *Lookout, req_id: u64, bytes: []const u8, status: TileStatus) void {
-        self.ct.respondTile(req_id, bytes, status);
-    }
 
     /// Rebuild the style and hand it to charttable, if the mariner moved.
     ///

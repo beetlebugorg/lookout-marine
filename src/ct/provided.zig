@@ -1,24 +1,22 @@
 //! Serves the sources an ALT STYLE names, by asking the host for them.
 //!
 //! WHY THIS EXISTS. lookout's own chart comes off disk — a .pmtiles archive
-//! charttable reads itself, or a set composed through ct/tiles.zig. A style
-//! the HOST supplied is the publisher's instead, and it names
-//! its sources by URL, over the network. charttable does not have an HTTP
-//! client, and the proxy, cookie, certificate-pinning and API-key rules such a
-//! fetch needs are already the shell's — it applied them to get the style in
-//! the first place.
+//! charttable reads itself, or a set composed through ct/tiles.zig. An alt
+//! style is the publisher's instead, and it names its sources by URL, over the
+//! network. charttable has no HTTP client, and the proxy, cookie,
+//! certificate-pinning and API-key rules such a fetch needs are the shell's.
 //!
-//! So the ask goes OUT. The core reports the source name and z/x/y, the shell
-//! resolves that against the style it holds, fetches with its own networking,
-//! and hands the bytes back to `respond`. This file is only the switchboard.
+//! So the ask goes OUT. This file reports the source name and z/x/y to
+//! src/chartlinks.zig, which fills that source's url template and hands the
+//! url to the shell's fetcher; the bytes come back to `respond`. This file is
+//! only the switchboard.
 //!
-//! THREADING. `pump` runs on the thread that drives the map, and the host's
-//! callback is invoked with no lock of ours held — so a host that already has
-//! the tile (a cache, the app bundle) may answer inside the callback rather
-//! than bouncing through a queue to avoid a deadlock. `respond` is called from
-//! whatever thread the host's networking finished on and does not take the api
-//! lock, so a tile landing never waits on a frame in flight. That is
-//! ct/tiles.zig's rule as well, and for the same reason.
+//! THREADING. `pump` runs on the thread that drives the map, and the sink is
+//! called with no lock of ours held — so an answer may arrive before the call
+//! returns rather than bouncing through a queue to avoid a deadlock.
+//! `respond` is called from whatever thread the bytes landed on and does not
+//! take the api lock, so a tile landing never waits on a frame in flight. That
+//! is ct/tiles.zig's rule as well, and for the same reason.
 //!
 //! LIFETIME. A Source is never freed while the map lives. charttable's cache
 //! workers call `fetch` on a provider from their own threads, so dropping one
@@ -32,22 +30,10 @@ const Lock = @import("../lock.zig").Lock;
 
 const Request = ct.provider.Request;
 
-/// One tile the chart wants and only the host can fetch. Answer with
-/// `respond`, from any thread, whenever the bytes arrive — the tile is parked,
-/// not spinning, and a slow answer is never mistaken for a missing tile.
-pub const RequestFn = *const fn (
-    user: ?*anyopaque,
-    source: [*:0]const u8,
-    req_id: u64,
-    z: c_int,
-    x: c_int,
-    y: c_int,
-) callconv(.c) void;
-
-/// Where an ask goes when the CORE is the one serving tiles: the shell gave a
-/// generic url fetcher instead of a tile provider, so src/chartlinks.zig does
-/// the templating and issues the fetch. Takes priority over `cb`, which is the
-/// older per-shell door.
+/// Where an ask goes: src/chartlinks.zig, which fills the source's url
+/// template and hands the url to the shell's fetcher. Answer with `respond`,
+/// from any thread, whenever the bytes arrive — the tile is parked, not
+/// spinning, and a slow answer is never mistaken for a missing tile.
 pub const CoreFn = *const fn (
     ctx: *anyopaque,
     source: []const u8,
@@ -67,8 +53,6 @@ pub const Provided = struct {
     /// on a foreign thread.
     mu: Lock = .{},
     sources: std.ArrayListUnmanaged(*Source) = .empty,
-    cb: ?RequestFn = null,
-    user: ?*anyopaque = null,
     core_cb: ?CoreFn = null,
     core_ctx: ?*anyopaque = null,
 
@@ -105,26 +89,9 @@ pub const Provided = struct {
         self.asks.deinit(self.alloc);
     }
 
-    /// Where the asks go. Setting no callback is not an error — every ask is
-    /// then answered `failed`, because a tile nobody will ever answer is a
-    /// hole in the chart that never fills.
-    pub fn setCallback(self: *Provided, cb: ?RequestFn, user: ?*anyopaque) void {
-        self.mu.lock();
-        defer self.mu.unlock();
-        self.cb = cb;
-        self.user = user;
-    }
-
-    pub fn hasCallback(self: *Provided) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
-        return self.cb != null or self.core_cb != null;
-    }
-
-    /// Let the core serve these asks itself. Set when the shell supplies a
-    /// generic url fetcher (lookout_set_http_provider) instead of a tile
-    /// provider; the two doors never both stand open, because a shell uses one
-    /// or the other.
+    /// Where the asks go. Setting none is not an error — every ask is then
+    /// answered `failed`, because a tile nobody will ever answer is a hole in
+    /// the chart that never fills.
     pub fn setCoreSink(self: *Provided, cb: ?CoreFn, ctx: ?*anyopaque) void {
         self.mu.lock();
         defer self.mu.unlock();
@@ -144,7 +111,7 @@ pub const Provided = struct {
         s.name = try self.alloc.dupeZ(u8, name);
         errdefer self.alloc.free(s.name);
         s.provider = ct.provider.Provider.init(self.alloc);
-        // Request ids must be unique across ALL of these: one callback and one
+        // Request ids must be unique across ALL of these: one sink and one
         // respond() serve every source, so two providers numbering from 1
         // would answer each other's tiles — a raster source's PNG handed to a
         // vector source to decode.
@@ -153,13 +120,11 @@ pub const Provided = struct {
         return s;
     }
 
-    /// Take every outstanding ask and report it to the host. Call once per
+    /// Take every outstanding ask and report it to the sink. Call once per
     /// frame, from whichever thread drives the map.
     pub fn pump(self: *Provided) void {
         self.asks.clearRetainingCapacity();
         self.mu.lock();
-        const cb = self.cb;
-        const user = self.user;
         const core_cb = self.core_cb;
         const core_ctx = self.core_ctx;
         for (self.sources.items) |s| {
@@ -171,22 +136,20 @@ pub const Provided = struct {
         }
         self.mu.unlock();
 
-        // Outside the lock: a host with the tile already in hand is allowed to
-        // answer before this returns.
+        // Outside the lock: an answer is allowed to arrive before this
+        // returns.
         for (self.asks.items) |a| {
             if (core_cb) |f| {
                 f(core_ctx.?, std.mem.span(a.source), a.req.id, @intCast(a.req.z), @intCast(a.req.x), @intCast(a.req.y));
-            } else if (cb) |f| {
-                f(user, a.source, a.req.id, @intCast(a.req.z), @intCast(a.req.x), @intCast(a.req.y));
             } else {
                 self.respond(a.req.id, "", .failed);
             }
         }
     }
 
-    /// The host's answer, from any thread. `bytes` is copied. An id that is
-    /// unknown or already answered is ignored rather than treated as an error:
-    /// a host racing a style change, or answering twice, must not corrupt
+    /// One answer, from any thread. `bytes` is copied. An id that is unknown
+    /// or already answered is ignored rather than treated as an error: an
+    /// answer racing a style change, or arriving twice, must not corrupt
     /// anything.
     pub fn respond(self: *Provided, req_id: u64, bytes: []const u8, status: Status) void {
         // The high bits say which source asked (see id_bias). Only that one is
@@ -204,10 +167,10 @@ pub const Provided = struct {
         if (s) |src| src.provider.respond(req_id, bytes, status);
     }
 
-    /// How many asks the host has been told about and not yet answered.
-    /// Reported rather than folded into `idle`: the host may never answer, and
-    /// a chart that says "still building" forever because one tile server is
-    /// down would spin a progress indicator for the rest of the session.
+    /// How many asks have gone out and not been answered. Reported rather
+    /// than folded into `idle`: an answer may never come, and a chart that
+    /// says "still building" forever because one tile server is down would
+    /// spin a progress indicator for the rest of the session.
     pub fn outstanding(self: *Provided) usize {
         self.mu.lock();
         defer self.mu.unlock();
@@ -221,22 +184,22 @@ pub const Provided = struct {
 
 const testing = std.testing;
 
-/// A host that records what it was asked. One per test, reached through the
-/// `user` pointer — which is what that pointer is for, and a global here would
+/// A sink that records what it was asked. One per test, reached through the
+/// `ctx` pointer — which is what that pointer is for, and a global here would
 /// have to be reset between tests in one binary.
 const FakeHost = struct {
     seen: std.ArrayListUnmanaged(Seen) = .empty,
 
-    const Seen = struct { source: []const u8, id: u64, z: c_int, x: c_int, y: c_int };
+    const Seen = struct { source: []const u8, id: u64, z: i32, x: i32, y: i32 };
 
     fn deinit(self: *FakeHost) void {
         self.seen.deinit(testing.allocator);
     }
 
-    fn onTile(user: ?*anyopaque, src: [*:0]const u8, id: u64, z: c_int, x: c_int, y: c_int) callconv(.c) void {
-        const self: *FakeHost = @ptrCast(@alignCast(user.?));
+    fn onTile(ctx: *anyopaque, src: []const u8, id: u64, z: i32, x: i32, y: i32) void {
+        const self: *FakeHost = @ptrCast(@alignCast(ctx));
         self.seen.append(testing.allocator, .{
-            .source = std.mem.span(src),
+            .source = src,
             .id = id,
             .z = z,
             .x = x,
@@ -253,12 +216,12 @@ const FakeHost = struct {
     }
 };
 
-test "provided: an ask reaches the host with its source name, and the bytes come back" {
+test "provided: an ask reaches the sink with its source name, and the bytes come back" {
     var p = Provided.init(testing.allocator);
     defer p.deinit();
     var host: FakeHost = .{};
     defer host.deinit();
-    p.setCallback(FakeHost.onTile, &host);
+    p.setCoreSink(FakeHost.onTile, &host);
 
     const s = try p.source("satellite");
     const src = s.provider.source();
@@ -266,16 +229,16 @@ test "provided: an ask reaches the host with its source name, and the bytes come
     defer arena.deinit();
     const id = ct.coord.TileId{ .z = 7, .x = 33, .y = 48 };
 
-    // The map asks, the tile parks, the host is told once.
+    // The map asks, the tile parks, the sink is told once.
     try testing.expect(src.fetch(src.ptr, arena.allocator(), id) == .not_ready);
     p.pump();
     try testing.expectEqual(@as(usize, 1), host.seen.items.len);
     try testing.expectEqualStrings("satellite", host.seen.items[0].source);
-    try testing.expectEqual(@as(c_int, 7), host.seen.items[0].z);
-    try testing.expectEqual(@as(c_int, 33), host.seen.items[0].x);
-    try testing.expectEqual(@as(c_int, 48), host.seen.items[0].y);
+    try testing.expectEqual(@as(i32, 7), host.seen.items[0].z);
+    try testing.expectEqual(@as(i32, 33), host.seen.items[0].x);
+    try testing.expectEqual(@as(i32, 48), host.seen.items[0].y);
 
-    // Still parked until the host answers — never cached as missing.
+    // Still parked until it is answered — never cached as missing.
     try testing.expect(src.fetch(src.ptr, arena.allocator(), id) == .not_ready);
 
     p.respond(host.seen.items[0].id, "tile bytes", .ok);
@@ -291,7 +254,7 @@ test "provided: two sources answer through one door without crossing" {
     defer p.deinit();
     var host: FakeHost = .{};
     defer host.deinit();
-    p.setCallback(FakeHost.onTile, &host);
+    p.setCoreSink(FakeHost.onTile, &host);
 
     const a = try p.source("basemap");
     const b = try p.source("hillshade");
@@ -318,7 +281,7 @@ test "provided: two sources answer through one door without crossing" {
     try testing.expectEqualStrings("hillshade bytes", got.bytes);
 }
 
-test "provided: with no host to ask, a tile is failed rather than parked forever" {
+test "provided: with nowhere to ask, a tile is failed rather than parked forever" {
     var p = Provided.init(testing.allocator);
     defer p.deinit();
 

@@ -329,16 +329,11 @@ pub const Host = struct {
         return !std.mem.eql(u8, name, cstyle.source_name);
     }
 
-    /// Where a provided source's tiles are asked for. Null stops the asking:
-    /// every outstanding tile is then failed rather than parked, because a
-    /// tile nobody will answer is a hole in the chart that never fills.
-    pub fn setTileProvider(self: *Host, cb: ?cprovided.RequestFn, user: ?*anyopaque) void {
-        self.provided.setCallback(cb, user);
-    }
-
-    /// Serve a provided source's tiles from the CORE instead of the shell: the
-    /// shell gave a generic url fetcher, so src/chartlinks.zig does the
-    /// templating. See provided.zig.
+    /// Where a provided source's tiles are asked for: src/chartlinks.zig,
+    /// which fills the template and hands the url to the shell's fetcher. Null
+    /// stops the asking, and every outstanding tile is then failed rather than
+    /// parked, because a tile nobody will answer is a hole in the chart that
+    /// never fills. See provided.zig.
     pub fn setCoreTileSink(self: *Host, cb: ?cprovided.CoreFn, ctx: ?*anyopaque) void {
         self.provided.setCoreSink(cb, ctx);
     }

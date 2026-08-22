@@ -528,9 +528,10 @@ void lookout_set_pixel_density(lookout *h, float density);
  * MapLibre style and the chart becomes whatever its publisher styled. `json`
  * NULL (or len 0) restores lookout's chart.
  *
- * The bytes are copied. The host fetches the style itself, so a link is
- * resolved with the host's own networking, and the tiles the style names are
- * served back through lookout_set_tile_provider.
+ * The bytes are copied. This is the raw entry: it takes a style that is
+ * already whole, and the sources it names are served through the url fetcher
+ * at "charts by link" below. Adding a chart BY LINK goes through
+ * lookout_chart_link_add instead, which resolves the link and calls this.
  *
  * While a style is set, the mariner's display settings do not shape the chart.
  * They build lookout's portrayal, and this is not it. */
@@ -544,53 +545,15 @@ int lookout_alt_chart_style_active(lookout *h);
  * the pack's id from the style's array form — its icons resolve as
  * "<prefix>:<name>" — or NULL/"" for the spec's "default" pack (bare names).
  *
- * The host fetches the pack (lookout does no networking) and sends it AFTER
- * lookout_alt_chart_style_json: setting a style clears the previous style's
- * packs. The cells fold into the resident symbol atlas and the scene
+ * Sent AFTER lookout_alt_chart_style_json: setting a style clears the previous
+ * style's packs. A chart added by link has its packs fetched and folded in by
+ * lookout itself. The cells fold into the resident symbol atlas and the scene
  * rebuilds, so icons the style asked for by these names start drawing. Cells
  * the pack marks `sdf` are skipped (they need a pipeline this tier does not
  * run them through). Answers how many cells landed. Bytes are copied. */
 int lookout_alt_sprite_pack(lookout *h, const char *prefix,
                             const char *index_json, size_t json_len,
                             const char *png, size_t png_len);
-
-/* DEPRECATED, superseded by lookout_set_http_provider / lookout_http_respond
- * below. A shell that has moved to those never calls these two, and they are
- * deleted once every shell has. See "charts by link" at the end of this file.
- *
- * One tile an alt style's source wants, which only the host can fetch.
- *
- * lookout does not do any networking. The shell already fetched the style,
- * with whatever proxy, API key or certificate rules the publisher needs, so it
- * is the one that can resolve `source` against that style's tile url template
- * and fetch z/x/y.
- *
- * Answer with lookout_tile_respond, from any thread, whenever the bytes
- * arrive. The tile is parked, not spinning, and a SLOW answer is never
- * mistaken for a missing tile — so taking a second over a bad connection
- * costs nothing but the wait.
- *
- * Called on the render thread with lookout's lock held. Do not call back into
- * lookout from it except lookout_tile_respond; start the fetch and return. */
-typedef void (*lookout_tile_request)(void *user, const char *source,
-                                     uint64_t req_id, int z, int x, int y);
-
-/* DEPRECATED (see above). Set (or clear, with NULL) the callback above. With
- * no callback set, every tile an alt style asks for is failed rather than left
- * waiting: a tile nobody will ever answer is a hole in the chart that never
- * fills. Ignored while an http provider is set: that one serves the tiles. */
-void lookout_set_tile_provider(lookout *h, lookout_tile_request cb, void *user);
-
-/* DEPRECATED (see above). Answer one request. `status` is 0 for bytes, 1 for
- * "no tile there", 2 for "I tried and failed". Only 0 reads `bytes`, which is
- * copied before this returns, so the host may free its buffer immediately. 1
- * and 2 are both remembered, so a 404 or a dead server is not re-asked every
- * frame.
- *
- * Safe from any thread, and it does not take lookout's lock — a tile landing
- * never waits on a frame. An unknown or already-answered id is ignored. */
-void lookout_tile_respond(lookout *h, uint64_t req_id, const void *bytes,
-                          size_t len, int status);
 
 int lookout_raster_add(lookout *h, const char *path);
 
@@ -838,9 +801,8 @@ int lookout_marker_remove(lookout *h, uint64_t id);
  * still opens no socket. The shell keeps ONE job — fetch the bytes at a url —
  * and lookout drives it.
  *
- * This replaces lookout_alt_chart_style_json / lookout_alt_sprite_pack /
- * lookout_set_tile_provider for a shell that adopts it. Those stay for shells
- * that have not, and go when the last one has. */
+ * lookout_alt_chart_style_json and lookout_alt_sprite_pack stay as the raw
+ * entries for a style that is already whole; nothing here needs them. */
 
 /* Fetch the bytes at `url`. Called from lookout with its lock held: do NOT
  * block and do NOT call back into lookout except lookout_http_respond — start
@@ -874,9 +836,9 @@ typedef void (*lookout_http_cancel)(void *user, uint64_t req_id);
  * through it; the shell does not know which is which and fetches the url it is
  * handed.
  *
- * Setting one takes over tile serving from lookout_set_tile_provider. Clearing
- * it (get NULL) stands the feature down and fails every outstanding tile,
- * because a tile nobody will answer is a hole in the chart that never fills.
+ * Clearing it (get NULL) stands the feature down and fails every outstanding
+ * tile, because a tile nobody will answer is a hole in the chart that never
+ * fills.
  *
  * Setting one also resolves whatever chart the mariner left selected: the list
  * is read at open, before the shell can have supplied a fetcher. */
