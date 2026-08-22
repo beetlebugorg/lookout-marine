@@ -32,6 +32,10 @@ typedef struct {
   GtkWidget *links_list;
   guint      links_refresh_id;
 
+  /* The chart library, same discipline. */
+  GtkWidget *sets_list;
+  guint      sets_refresh_id;
+
   /* Depths tab widgets that have to react to each other. */
   GtkWidget *band_preview;
   GtkWidget *shallow_row;
@@ -68,6 +72,7 @@ lk_settings_free (gpointer data)
 
   g_clear_handle_id (&settings->raster_refresh_id, g_source_remove);
   g_clear_handle_id (&settings->links_refresh_id, g_source_remove);
+  g_clear_handle_id (&settings->sets_refresh_id, g_source_remove);
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
   g_clear_pointer (&settings->status_labels, g_ptr_array_unref);
@@ -1044,6 +1049,127 @@ lk_settings_links_changed (LkChartLinks *links, gpointer user_data)
   settings->links_refresh_id = g_idle_add (lk_settings_refill_links, settings);
 }
 
+/* ---- the chart library --------------------------------------------------- */
+
+static void
+lk_chart_set_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *path = g_object_get_data (G_OBJECT (widget), "lk-path");
+
+  if (settings->updating)
+    return;
+  lk_app_model_set_chart_set_on (settings->model, path, gtk_switch_get_active (widget));
+}
+
+static void
+lk_chart_set_remove_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *path = g_object_get_data (G_OBJECT (button), "lk-path");
+
+  lk_app_model_remove_chart_set (settings->model, path);
+}
+
+/* What is aboard, and what is being sailed on: a switch and a title per set,
+ * the folder underneath so two sets from the same office are told apart, and
+ * what the background scan counted once it has. */
+static void
+lk_settings_fill_sets_list (LkSettings *settings)
+{
+  GtkWidget *list = settings->sets_list;
+  GtkWidget *child;
+
+  settings->updating = TRUE;
+  while ((child = gtk_widget_get_first_child (list)) != NULL)
+    gtk_box_remove (GTK_BOX (list), child);
+
+  g_autoptr (GPtrArray) rows = lk_app_model_get_chart_sets (settings->model);
+  if (rows->len == 0)
+    {
+      GtkWidget *empty = gtk_label_new ("No chart sets yet");
+      gtk_widget_add_css_class (empty, "dim-label");
+      gtk_label_set_xalign (GTK_LABEL (empty), 0.0);
+      gtk_box_append (GTK_BOX (list), empty);
+      settings->updating = FALSE;
+      return;
+    }
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *set = g_ptr_array_index (rows, i);
+      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      GtkWidget *toggle = lk_raster_switch (set->on);
+      GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
+      GtkWidget *title = gtk_label_new (set->title);
+      g_autofree char *base = g_path_get_basename (set->path);
+      GtkWidget *where = gtk_label_new (base);
+      GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
+
+      gtk_widget_add_css_class (title, "heading");
+      gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+      gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+      gtk_widget_add_css_class (where, "dim-label");
+      gtk_widget_add_css_class (where, "caption");
+      gtk_label_set_xalign (GTK_LABEL (where), 0.0);
+      gtk_label_set_ellipsize (GTK_LABEL (where), PANGO_ELLIPSIZE_MIDDLE);
+      /* The agency title can hide the folder name; the tooltip keeps the
+       * whole path reachable. */
+      gtk_widget_set_tooltip_text (row, set->path);
+
+      gtk_box_append (GTK_BOX (column), title);
+      gtk_box_append (GTK_BOX (column), where);
+      if (set->detail[0] != '\0')
+        {
+          GtkWidget *detail = gtk_label_new (set->detail);
+          gtk_widget_add_css_class (detail, "dim-label");
+          gtk_widget_add_css_class (detail, "caption");
+          gtk_label_set_xalign (GTK_LABEL (detail), 0.0);
+          gtk_label_set_ellipsize (GTK_LABEL (detail), PANGO_ELLIPSIZE_END);
+          gtk_box_append (GTK_BOX (column), detail);
+        }
+      gtk_widget_set_hexpand (column, TRUE);
+
+      gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
+      gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
+      gtk_widget_set_tooltip_text (remove,
+                                   "Remove from the library. Charts Lookout prepared "
+                                   "from it are deleted; your folder is not touched.");
+
+      g_object_set_data_full (G_OBJECT (toggle), "lk-path", g_strdup (set->path), g_free);
+      g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (set->path), g_free);
+      g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_chart_set_toggled), settings);
+      g_signal_connect (remove, "clicked", G_CALLBACK (lk_chart_set_remove_clicked), settings);
+
+      gtk_box_append (GTK_BOX (row), toggle);
+      gtk_box_append (GTK_BOX (row), column);
+      gtk_box_append (GTK_BOX (row), remove);
+      gtk_box_append (GTK_BOX (list), row);
+    }
+  settings->updating = FALSE;
+}
+
+static gboolean
+lk_settings_refill_sets (gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  settings->sets_refresh_id = 0;
+  lk_settings_fill_sets_list (settings);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+lk_settings_sets_changed (LkAppModel *model, gpointer user_data)
+{
+  LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
+
+  if (settings == NULL || settings->sets_list == NULL || settings->sets_refresh_id != 0)
+    return;
+
+  settings->sets_refresh_id = g_idle_add (lk_settings_refill_sets, settings);
+}
+
 static void
 lk_build_charts_page (LkSettings *settings)
 {
@@ -1097,6 +1223,17 @@ lk_build_charts_page (LkSettings *settings)
       gtk_label_set_xalign (GTK_LABEL (label), 0.0);
       gtk_box_append (GTK_BOX (open), label);
     }
+
+  /* The library: the sets aboard, each with its switch. This is what decides
+   * the chart; Open above only reports what is on screen now. */
+  GtkWidget *library = lk_section (page, "Chart library");
+  settings->sets_list = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  gtk_box_append (GTK_BOX (library), settings->sets_list);
+  lk_settings_fill_sets_list (settings);
+  lk_footer (library,
+             "Each folder or archive added is a set. The chart is every set "
+             "switched on, drawn as one seamless library; a set switched off "
+             "stays aboard and out of the chart.");
 
   const char *const *recents = lk_app_model_get_recents (settings->model);
   if (recents != NULL && recents[0] != NULL)
@@ -2229,6 +2366,9 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
   /* Likewise a chart link resolving (or failing) while the panel is open. */
   g_signal_connect_object (lk_app_model_get_chart_links (model), "changed",
                            G_CALLBACK (lk_settings_links_changed), window, 0);
+  /* And the library, whose titles fill in as the background scans land. */
+  g_signal_connect_object (model, "chart-sets-changed",
+                           G_CALLBACK (lk_settings_sets_changed), window, 0);
 
   /* A SIDEBAR OF SECTIONS beside the pane it chooses, as on the Mac. It is a
    * slot list, not a fixed menu: the four core sections, Plugins and Advanced

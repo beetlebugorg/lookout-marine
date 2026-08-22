@@ -37,6 +37,35 @@ void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
 const char *const *lk_app_model_get_recents (LkAppModel *self);
 
+/* ---- the chart library: sets aboard -------------------------------------- */
+
+/* A SET is a folder the mariner added, or one .zip — how a chart agency
+ * publishes them. The list answers what is aboard and what is being sailed
+ * on: switching a set off keeps it aboard and takes it out of the chart, and
+ * the chart is composed as the UNION of the sets switched on. */
+typedef struct {
+  char    *path;
+  char    *title;  /* the agency when the charts agree on one, else the folder name */
+  char    *detail; /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB";
+                    * "" until the background scan lands */
+  gboolean on;
+} LkChartSetRow;
+
+void lk_chart_set_row_free (LkChartSetRow *row);
+
+/* Every set aboard, in the order added. Transfer full: a GPtrArray of
+ * LkChartSetRow. Titles and details fill in as the background scans land;
+ * ::chart-sets-changed says when to ask again. */
+GPtrArray *lk_app_model_get_chart_sets (LkAppModel *self);
+
+/* Switch one set into or out of the chart. Persists, and recomposes the open
+ * chart from the sets that remain on — all of them off closes it. */
+void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean on);
+
+/* Take a set off the list. What Lookout prepared from it is deleted — it can
+ * be made again — and the mariner's own folder is never touched. */
+void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
+
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
 void lk_app_model_zoom_in (LkAppModel *self);

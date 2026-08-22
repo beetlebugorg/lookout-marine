@@ -39,6 +39,16 @@ void     lk_store_save_raster_hidden (const char *const *names);
 gboolean lk_store_load_chart_hidden (void);
 void     lk_store_save_chart_hidden (gboolean hidden);
 
+/* The chart SETS aboard — the folders and archives the mariner added — and
+ * the ones switched off. Only the path and the switch are stored: the cells
+ * are scanned again at launch, because a folder changes underneath the app.
+ * Load answers NULL when no library was ever saved (the caller seeds it from
+ * the recents, once), and an empty strv for a library emptied on purpose. */
+char **lk_store_load_chart_sets (void);
+void   lk_store_save_chart_sets (const char *const *paths);
+char **lk_store_load_chart_sets_off (void);
+void   lk_store_save_chart_sets_off (const char *const *paths);
+
 /* The chart links the mariner added, as one JSON array text — the same
  * document every shell stores ([{url,name,doc},…]), so what a link means is
  * defined once, in the chart-links code, not per store. NULL when none are

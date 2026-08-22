@@ -88,16 +88,22 @@ lk_chart_scan (const char *path)
   if (path == NULL || *path == '\0')
     return NULL;
 
+  /* The two scan calls share one buffer inside the engine, so every scan in
+   * the process serializes here — the open road and the library's background
+   * metadata scans both come through this function. The lock covers the parse
+   * too: the buffer is borrowed until the next call. */
+  static GMutex scan_mutex;
+
   gboolean archive = lk_chart_scan_is_archive (path);
+
+  g_mutex_lock (&scan_mutex);
   /* The two calls answer in the same shape, so everything below reads one
-     format. They also share one buffer inside the engine, which is why this
-     is documented as not reentrant. */
+     format. */
   const char *json = archive ? lookout_scan_zip (path, NULL)
                              : lookout_scan_charts (path, NULL);
-  if (json == NULL)
-    return NULL;
+  LkJson *root = json != NULL ? lk_json_parse (json) : NULL;
+  g_mutex_unlock (&scan_mutex);
 
-  LkJson *root = lk_json_parse (json);
   if (root == NULL)
     return NULL;
 
