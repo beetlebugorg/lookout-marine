@@ -509,11 +509,13 @@ lk_chart_links_init (LkChartLinks *self)
   self->in_flight = g_hash_table_new_full (lk_links_id_hash, lk_links_id_equal,
                                            g_free, g_object_unref);
   /* A stalled fetch must not hold a slot forever: the chart is drawn from
-   * whatever HAS landed, so a slow tile costs only itself. soup pools per
-   * host, and nothing here reasons about which source a url belongs to, so no
-   * source can hold a lane another source's tiles are waiting on. */
+   * whatever HAS landed, so a slow tile costs only itself, and a style that
+   * asks a base map past the zoom it actually serves fails fast instead of
+   * holding a worker. soup pools per host, and nothing here reasons about
+   * which source a url belongs to, so no source can hold a lane another
+   * source's tiles are waiting on. */
   self->session = soup_session_new_with_options ("user-agent", LK_LINKS_USER_AGENT,
-                                                 "timeout", 20,
+                                                 "timeout", 8,
                                                  "idle-timeout", 10,
                                                  "max-conns", 16,
                                                  "max-conns-per-host", 8,

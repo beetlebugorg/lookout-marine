@@ -57,8 +57,11 @@ namespace
         if (ses == nullptr)
             return 0;
         // A stalled fetch must not hold a worker forever: the chart is drawn
-        // from whatever HAS landed, so a slow tile costs only itself.
-        WinHttpSetTimeouts(ses, 20000, 20000, 20000, 20000);
+        // from whatever HAS landed, so a slow tile costs only itself, and a
+        // style that asks a base map past the zoom it actually serves fails
+        // fast instead of holding a worker. It also bounds how long the
+        // detach below waits for the pool to join.
+        WinHttpSetTimeouts(ses, 8000, 8000, 8000, 8000);
 
         int status = 0;
         HINTERNET con = WinHttpConnect(ses, host, parts.nPort, 0);

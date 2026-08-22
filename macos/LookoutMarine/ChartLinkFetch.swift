@@ -46,8 +46,10 @@ final class ChartLinkFetch: @unchecked Sendable {
         cfg.requestCachePolicy = .useProtocolCachePolicy
         cfg.urlCache = URLCache(memoryCapacity: 16 << 20, diskCapacity: 256 << 20)
         // A stalled fetch must not hold a slot forever: the chart is drawn from
-        // whatever HAS landed, so a slow tile costs only itself.
-        cfg.timeoutIntervalForRequest = 20
+        // whatever HAS landed, so a slow tile costs only itself, and a style
+        // that asks a base map past the zoom it actually serves fails fast
+        // instead of holding a worker. It also bounds how long detach waits.
+        cfg.timeoutIntervalForRequest = 8
         // URLSession pools per host. Connection concurrency is its business:
         // nothing here reasons about which source a url belongs to, so no
         // source can hold a lane another source's tiles are waiting on.
