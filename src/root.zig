@@ -2696,13 +2696,21 @@ pub const Lookout = struct {
     }
 
     pub fn isBuilding(self: *Lookout) bool {
+        if (self.loading) return true;
+        // An alt style's tiles stream from the host and never fully stop over
+        // a web map — an overscan edge is always in flight — so the ENC's
+        // "not idle" test would leave the indicator up for as long as the
+        // chart is looked at. What the pill means here is narrower: is there
+        // a picture yet, or is one being tessellated. `buildingScene` answers
+        // that and ignores tiles in flight.
+        if (self.alt_style != null) return self.ct.buildingScene();
         // `recomposing` counts only while the ENC is what is on screen:
         // switching back from a chart link while the library is still
         // composing behind it (the link-first startup) showed a blank chart
         // with nothing saying why. Over a live link the same recompose is
         // background work nobody is waiting on, and the pill would just be
         // noise on a complete picture.
-        return self.loading or (self.recomposing and self.alt_style == null) or !self.ct.idle();
+        return self.recomposing or !self.ct.idle();
     }
 
     /// Render offscreen and write a PNG.

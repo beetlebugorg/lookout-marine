@@ -21,10 +21,8 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.Semaphore
 import kotlin.math.abs
 
 /** Where one source's tiles come from, by the name the style gave it. */
@@ -375,8 +373,6 @@ class AltChartTiles {
      *  network read happens before the lock is taken, so stop() waits
      *  milliseconds at most. */
     private val respondLock = Any()
-    /** At most two concurrent downloads per host; see fetch(). */
-    private val hostLanes = ConcurrentHashMap<String, Semaphore>()
     @Volatile private var sources: Map<String, AltTileSource> = emptyMap()
     private var engine: Lookout? = null
     private var pool: ExecutorService? = null
@@ -398,9 +394,10 @@ class AltChartTiles {
         stop()
         engine = l
         live = true
-        // Six, not four: a level change asks ~50 tiles across several hosts,
-        // and the two extra lanes shorten the tail without leaning on any
-        // one host harder than its usage policy likes.
+        // A level change asks ~50 tiles across several hosts; six workers keep
+        // the tail short. No per-host throttle: a couple of slow or dead
+        // requests to one host (a base map asked past the zoom it serves) must
+        // not hold a lane and starve the rest.
         pool = Executors.newFixedThreadPool(6)
         poller = Thread({
             val ids = LongArray(64)
@@ -458,18 +455,7 @@ class AltChartTiles {
         }
         if (noteFirst(loggedAsk, name)) Log.i(TAG, "alt tiles: $name -> $link")
         try {
-            // Limit each host to two concurrent fetches. The pool's six
-            // threads shorten the tail across a multi-host style, but a
-            // single-host source such as OSM's tile server should see at
-            // most the two download threads its usage policy asks of one
-            // client.
-            val lane = hostLanes.computeIfAbsent(URL(link).host ?: "") { Semaphore(2) }
-            lane.acquire()
-            try {
-                fetchInto(l, name, id, z, x, y, link)
-            } finally {
-                lane.release()
-            }
+            fetchInto(l, name, id, z, x, y, link)
         } catch (e: Exception) {
             if (noteFirst(loggedFail, name)) Log.w(TAG, "alt tiles: $name z$z/$x/$y -> $e")
             respond(l, id, null, FAILED)
@@ -480,8 +466,13 @@ class AltChartTiles {
         try {
             val conn = URL(link).openConnection() as HttpURLConnection
             AltChartStyle.identify(conn)
-            conn.connectTimeout = 20_000
-            conn.readTimeout = 20_000
+            // Short timeouts: a tile the chart is drawn without, and a style
+            // that asks a base map past the zoom it actually serves (OSM over
+            // open water) makes many requests that never answer. A long
+            // timeout leaves those holding pool threads and the chart reads
+            // as "building" until they expire.
+            conn.connectTimeout = 8_000
+            conn.readTimeout = 8_000
             try {
                 val code = conn.responseCode
                 when {

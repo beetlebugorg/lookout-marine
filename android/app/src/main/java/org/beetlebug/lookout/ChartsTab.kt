@@ -158,11 +158,7 @@ fun ChartsSection(
 @Composable
 private fun ChartLinksSection(controller: ChartController) {
     SectionHeader("Chart", first = true)
-    Footer(
-        "A chart added by link draws INSTEAD of Lookout's own: the publisher " +
-            "styles it and their tiles are fetched as you sail. While one is " +
-            "picked, the display settings above shape only Lookout's chart.",
-    )
+    Footer("Pick the chart to draw. A linked chart replaces Lookout's own.")
     LinkChoiceRow(
         title = "Lookout chart",
         desc = "The built-in portrayal of your opened cells.",

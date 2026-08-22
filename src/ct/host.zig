@@ -798,6 +798,15 @@ pub const Host = struct {
         return self.m.idle() and !self.tiles.busy();
     }
 
+    /// Whether the drawn scene is still being CONSTRUCTED, ignoring tiles in
+    /// flight (Map.buildingScene). For an alt style whose tiles stream from
+    /// the host, the ENC compositor may still be busy in the background
+    /// (a link-first startup loads the library behind the link) — that is not
+    /// what the mariner is looking at, so it does not count here.
+    pub fn buildingScene(self: *Host) bool {
+        return self.m.buildingScene();
+    }
+
     pub fn pendingTiles(self: *const Host) usize {
         return self.m.pendingWanted();
     }
