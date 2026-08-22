@@ -2665,7 +2665,13 @@ pub const Lookout = struct {
     }
 
     pub fn isBuilding(self: *Lookout) bool {
-        return self.loading or !self.ct.idle();
+        // `recomposing` counts only while the ENC is what is on screen:
+        // switching back from a chart link while the library is still
+        // composing behind it (the link-first startup) showed a blank chart
+        // with nothing saying why. Over a live link the same recompose is
+        // background work nobody is waiting on, and the pill would just be
+        // noise on a complete picture.
+        return self.loading or (self.recomposing and self.alt_style == null) or !self.ct.idle();
     }
 
     /// Render offscreen and write a PNG.
