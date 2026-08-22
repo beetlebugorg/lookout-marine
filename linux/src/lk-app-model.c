@@ -530,9 +530,9 @@ lk_app_model_compose_library (LkAppModel *self)
   return (char **) g_ptr_array_free (g_steal_pointer (&all), FALSE);
 }
 
-/* Reopen the chart as the library now stands. Every set off closes it: an
- * empty view that says so beats a chart quietly showing what was switched
- * away. */
+/* Reopen the chart from the current library. If every set is off, close
+ * the chart: an empty view that says so is better than a chart quietly
+ * showing material that was switched off. */
 static void
 lk_app_model_recompose_library (LkAppModel *self)
 {
@@ -544,7 +544,8 @@ lk_app_model_recompose_library (LkAppModel *self)
     lk_chart_controller_close (self->controller);
 }
 
-/* Put a source on the list, switched on: opening it IS picking it. */
+/* Put a source on the list, switched on. Opening a source is also
+ * selecting it. */
 static void
 lk_app_model_note_chart_set (LkAppModel *self, const char *path)
 {

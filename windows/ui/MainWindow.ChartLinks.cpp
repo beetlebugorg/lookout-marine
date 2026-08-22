@@ -84,9 +84,10 @@ namespace
             status = (int)code;
             if (status == 200)
             {
-                // A hostile or broken host must not stream the app out of
-                // memory. Nothing a chart link fetches — style, TileJSON,
-                // sprite sheet or tile — comes near this.
+                // A hostile or broken host must not be able to stream the
+                // app out of memory. Nothing a chart link legitimately
+                // fetches (style, TileJSON, sprite sheet, or tile) comes
+                // anywhere near this cap.
                 constexpr size_t kFetchCap = size_t{ 64 } << 20;
                 DWORD avail = 0;
                 while (WinHttpQueryDataAvailable(req, &avail) && avail > 0)
@@ -164,10 +165,10 @@ namespace
                (!link.empty() && (link[0] == '/' || (link.size() >= 2 && link[1] == ':')));
     }
 
-    // `allow_file` marks a link the MARINER typed, or one derived from it.
-    // Only those may read the disk: a url found inside a document fetched
+    // allow_file marks a link the mariner typed, or one derived from it.
+    // Only those may read the disk. A url found inside a document fetched
     // from the network must never reach the file branch, or a hostile style
-    // gets the shell reading arbitrary local files as its "TileJSON".
+    // could make the shell read arbitrary local files as its "TileJSON".
     bool FetchText(std::string const &link, std::string &out, bool allow_file)
     {
         if (allow_file && ReadFileLink(link, out))
@@ -823,8 +824,8 @@ namespace winrt::LookoutMarine::implementation
             }
             catch (...)
             {
-                // As in AddChartLink: wrong-typed JSON throws; it must read
-                // as "did not answer", never as a crash.
+                // As in AddChartLink: wrong-typed JSON throws, and it must
+                // be treated as "did not answer" rather than a crash.
             }
             queue.TryEnqueue([this, found, url, was_picked, n_url, name, doc] {
                 if (!found)
@@ -837,9 +838,10 @@ namespace winrt::LookoutMarine::implementation
                 for (auto &l : chart_links)
                     if (l.url == url)
                         l = { *n_url, *name, *doc };
-                // A refresh can resolve to the sibling style.json another
-                // entry already carries. One url is one chart: the first copy
-                // absorbs the refreshed document rather than a twin appearing.
+                // A refresh can resolve to the sibling style.json that
+                // another entry already carries. Keep one entry per url: the
+                // first copy takes the refreshed document instead of a
+                // duplicate row appearing.
                 {
                     std::vector<ChartLink> unique;
                     for (auto &l : chart_links)
@@ -915,7 +917,8 @@ namespace winrt::LookoutMarine::implementation
             catch (...)
             {
                 // Wrong-typed JSON throws out of GetNamedString; a hostile
-                // style reads as "did not answer", never as a crash.
+                // style must be treated as "did not answer" rather than a
+                // crash.
                 ok = false;
             }
             queue.TryEnqueue([this, epoch, link, ok, json, sources, credit, packs] {
@@ -926,10 +929,10 @@ namespace winrt::LookoutMarine::implementation
                     return;
                 if (!ok)
                 {
-                    // A lost connection must not cost the mariner the chart
-                    // they are sailing on: the PICK STAYS — the next open or
-                    // re-pick retries it — and the Lookout chart stands in
-                    // meanwhile.
+                    // A lost connection must not cost the mariner their
+                    // picked chart. The selection is kept (the next open or
+                    // re-pick retries it) and the Lookout chart is shown in
+                    // the meantime.
                     chart_link_error =
                         "That chart didn't answer. Showing the Lookout chart until it does.";
                     AltTilesDetach();
@@ -1018,9 +1021,9 @@ namespace winrt::LookoutMarine::implementation
         }
         g_tile_pool.Run([this, url, id] {
             {
-                // Detached while this sat in the queue: skip the fetch too,
-                // not just the answer — a backlog of 20-second dead fetches
-                // would stall live tiles behind it.
+                // If the provider was detached while this task sat in the
+                // queue, skip the fetch as well as the answer. A backlog of
+                // 20-second dead fetches would stall live tiles behind it.
                 std::lock_guard<std::mutex> g(alt_mu);
                 if (!alt_live)
                     return;

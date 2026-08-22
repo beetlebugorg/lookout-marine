@@ -189,10 +189,10 @@ lk_links_is_file_link (const char *link)
   return g_str_has_prefix (link, "file://") || link[0] == '/';
 }
 
-/* `allow_file` marks a link the MARINER typed, or one derived from it. Only
- * those may read the disk: a url found inside a document fetched from the
- * network must never reach the file branch, or a hostile style gets the
- * shell reading arbitrary local files as its "TileJSON". */
+/* allow_file marks a link the mariner typed, or one derived from it. Only
+ * those may read the disk. A url found inside a document fetched from the
+ * network must never reach the file branch, or a hostile style could make
+ * the shell read arbitrary local files as its "TileJSON". */
 static char *
 lk_links_fetch_text (SoupSession *session, const char *link, gboolean allow_file)
 {
@@ -1102,9 +1102,9 @@ lk_links_push_done (GObject *source_object, GAsyncResult *result, gpointer user_
 
   if (!push->ok)
     {
-      /* A lost connection must not cost the mariner the chart they are
-       * sailing on: the PICK STAYS — the next open replays it — and the
-       * Lookout chart stands in meanwhile. */
+      /* A lost connection must not cost the mariner their picked chart.
+       * The selection is kept (the next open retries it) and the Lookout
+       * chart is shown in the meantime. */
       lk_links_set_error (self,
                           "That chart didn't answer. Showing the Lookout chart until it does.");
       lk_links_detach (self);
@@ -1215,13 +1215,13 @@ lk_links_add_done (GObject *source_object, GAsyncResult *result, gpointer user_d
     }
   if (op->epoch == self->epoch)
     {
-      /* Adding it was the request to sail on it. */
+      /* Adding a chart is also the request to select it. */
       lk_chart_links_select (self, probe->url);
     }
   else
     {
-      /* The mariner picked something else while this probe was out: the
-       * chart goes on the list, and the pick they made stands. */
+      /* The mariner picked something else while this probe was running: the
+       * chart is added to the list and their newer selection is kept. */
       lk_chart_links_save (self);
       lk_links_emit_changed (self);
     }
@@ -1257,9 +1257,9 @@ lk_links_refresh_done (GObject *source_object, GAsyncResult *result, gpointer us
       link->name = g_strdup (probe->name);
       link->doc = g_strdup (probe->doc);
     }
-  /* A refresh can resolve to the sibling style.json another entry already
-   * carries. One url is one chart: the first copy absorbs the refreshed
-   * document rather than a twin appearing. */
+  /* A refresh can resolve to the sibling style.json that another entry
+   * already carries. Keep one entry per url: the first copy takes the
+   * refreshed document instead of a duplicate row appearing. */
   {
     guint first = G_MAXUINT;
     for (guint i = 0; i < self->links->len; )
@@ -1303,8 +1303,9 @@ lk_links_run_probe (LkChartLinks *self, const char *link, GAsyncReadyCallback do
 
   op->link = g_strdup (link);
   op->doc = g_strdup ("");
-  /* What the pick looked like when the probe left: a slow add landing after
-   * the mariner picked something else must not steal the chart back. */
+  /* The epoch at the time the probe started. A slow add that finishes
+   * after the mariner picked something else must not override that newer
+   * selection. */
   op->epoch = self->epoch;
 
   GTask *task = g_task_new (self, NULL, done, NULL);
@@ -1395,12 +1396,12 @@ lk_chart_links_reapply (LkChartLinks *self)
 {
   g_return_if_fail (LK_IS_CHART_LINKS (self));
 
-  /* The handle this replays into is NEW, and it numbers tile requests from 1
-   * exactly as the old one did: a fetch started for the old handle and
-   * landing late would answer one of the new handle's ids with the old
-   * style's bytes. The new handle has asked for nothing yet — the open runs
-   * whole on this thread before any render tick — so cancelling here closes
-   * the race completely. */
+  /* The handle this replays into is new, and it numbers tile requests from
+   * 1 exactly as the old one did, so a fetch started for the old handle
+   * that lands late would answer one of the new handle's ids with the old
+   * style's bytes. The new handle has not asked for anything yet (the open
+   * runs entirely on this thread before any render tick), so cancelling
+   * here closes the race completely. */
   g_cancellable_cancel (self->tile_cancel);
   g_clear_object (&self->tile_cancel);
   self->tile_cancel = g_cancellable_new ();

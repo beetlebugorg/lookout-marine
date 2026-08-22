@@ -910,9 +910,9 @@ final class AppModel: ObservableObject {
                                for url: String, epoch: UInt64) {
         guard epoch == chartLinkEpoch, activeChartLink == url else { return }
         guard let style else {
-            // A lost connection must not cost the mariner the chart they are
-            // sailing on. The pick STAYS — the next open replays it — and the
-            // Lookout chart stands in meanwhile.
+            // A lost connection must not cost the mariner their picked
+            // chart. The selection is kept (the next open retries it) and
+            // the Lookout chart is shown in the meantime.
             chartLinkError = "That chart didn't answer. Showing the Lookout chart until it does."
             chartLinkAttribution = nil
             controller?.setAltChartStyle(nil)
@@ -920,8 +920,8 @@ final class AppModel: ObservableObject {
         }
         chartLinkError = nil
         if controller?.setAltChartStyle(style, packs: packs) == false {
-            // The core refused the style. The pick and the credit must not
-            // claim a chart that is not drawn — the Lookout chart is.
+            // The core refused the style. The selection and the credit must
+            // not claim a chart that is not being drawn.
             chartLinkError = "That style could not be drawn. Showing the Lookout chart."
             activeChartLink = nil
             chartLinkAttribution = nil
@@ -1087,10 +1087,11 @@ final class AppModel: ObservableObject {
                 }
                 guard let i = self.chartLinks.firstIndex(where: { $0.url == url }) else { return }
                 self.chartLinks[i] = .init(url: found.url, name: found.name, doc: found.doc)
-                // A refresh can resolve to the sibling style.json another
-                // entry already carries. One url is one chart: the standing
-                // entry absorbs the refreshed document rather than a twin
-                // appearing (and colliding ids in the settings list).
+                // A refresh can resolve to the sibling style.json that
+                // another entry already carries. Keep one entry per url: the
+                // existing entry takes the refreshed document, instead of a
+                // duplicate row appearing and colliding ids in the settings
+                // list.
                 if let first = self.chartLinks.firstIndex(where: { $0.url == found.url }), first != i {
                     self.chartLinks[first] = self.chartLinks[i]
                     self.chartLinks.remove(at: i)
@@ -1197,10 +1198,11 @@ final class AppModel: ObservableObject {
     }
 
     func selectChartLink(_ url: String?) {
-        // Re-picking what is already drawn is a no-op — the settings row fires
-        // on every click, and a re-pick would refetch the style and every
-        // sprite pack for nothing. A pick that last FAILED retries. Refresh
-        // pushes directly, so a refreshed wrapper still redraws.
+        // Selecting the link that is already drawn is a no-op: the settings
+        // row fires on every click, and re-selecting would refetch the style
+        // and every sprite pack for nothing. A selection whose last push
+        // failed does retry, and refresh calls push directly, so a refreshed
+        // wrapper still redraws.
         if url != nil, url == activeChartLink, chartLinkError == nil { return }
         activeChartLink = url
         saveChartLinks()

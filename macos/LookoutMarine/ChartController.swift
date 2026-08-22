@@ -1096,10 +1096,10 @@ final class ChartController: NSObject {
     /// about before this knows where to fetch it is answered "failed" and
     /// remembered as such.
     ///
-    /// False means the CORE REFUSED the style — the caller must not leave the
-    /// pick, the credit or the tile sources claiming a chart that is not
-    /// drawn. No handle answers true: there is nothing to refuse, and the
-    /// open replay will push again.
+    /// Returns false when the core refused the style; the caller must not
+    /// leave the selection, the credit, or the tile sources claiming a chart
+    /// that is not being drawn. With no handle this returns true: there is
+    /// nothing to refuse, and the open replay will push again.
     @discardableResult
     func setAltChartStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = []) -> Bool {
         guard let h = handle else { return true }
