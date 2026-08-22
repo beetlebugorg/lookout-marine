@@ -295,6 +295,11 @@ LkOverlayObject *lk_chart_controller_overlay_hit (LkChartController *self,
                                                   double             x,
                                                   double             y);
 
+/* What the symbol nearest a logical point says, for a hover: the JSON
+ * lookout_overlay_at documents ({"title":…,"rows":[[key,value],…]}), or NULL
+ * when nothing is within about 14 pt. Transfer full. */
+char *lk_chart_controller_overlay_at (LkChartController *self, double x, double y);
+
 /* What that object says now, or NULL once it is gone: the target aged out, or
  * its plugin stopped. A pinned bubble re-reads this every tick to move itself
  * and refresh its values, and closes itself on NULL. Transfer full. */

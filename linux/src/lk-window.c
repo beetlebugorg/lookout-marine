@@ -882,6 +882,11 @@ lk_window_fill_menu (GtkMenuButton *button, gpointer user_data)
 
 /* ---- model-driven chrome ------------------------------------------------ */
 
+/* Defined with the loader below. */
+static char *lk_group_number (guint value);
+static void  lk_loader_step_set (GtkWidget *row, int state,
+                                 const char *text, const char *detail_text);
+
 static void
 lk_window_update_overlays (LkWindow *self)
 {
@@ -900,14 +905,37 @@ lk_window_update_overlays (LkWindow *self)
   gtk_widget_set_visible (self->capsule, has_chart);
   gtk_widget_set_visible (self->scale_bar, has_chart);
 
-  GtkWidget *label = g_object_get_data (G_OBJECT (self->loader), "lk-label");
-  gtk_label_set_text (GTK_LABEL (label),
-                      lk_app_model_get_preparing_symbols (self->model)
-                          ? "Preparing chart symbols…"
-                          : "Loading charts…");
+  /* A hidden empty state drops its inline error with it: the sentence
+   * belonged to the press that raised it. */
+  if (loading || has_chart || baking)
+    gtk_widget_set_visible (g_object_get_data (G_OBJECT (self->empty_state), "lk-error"),
+                            FALSE);
 
-  GtkWidget *hint = g_object_get_data (G_OBJECT (self->loader), "lk-hint");
-  gtk_widget_set_visible (hint, lk_app_model_get_preparing_symbols (self->model));
+  if (loading && !baking)
+    {
+      /* Which of the three waits this is. The atlas bake happens on the first
+       * run only, so on every other run it reads done rather than skipped. */
+      guint cells = lk_app_model_get_opening_cells (self->model);
+      int step = lk_app_model_get_preparing_symbols (self->model) ? 0
+                 : lk_app_model_get_opening (self->model)         ? 1
+                                                                  : 2;
+      g_autofree char *count = lk_group_number (cells);
+      g_autofree char *opening = cells > 1 ? g_strdup_printf ("Opening %s charts", count)
+                                           : g_strdup ("Opening the chart");
+      g_autofree char *mapping = cells > 1 ? g_strdup_printf ("Mapping %s cells", count)
+                                           : g_strdup ("Mapping the chart");
+
+      GtkWidget *title = g_object_get_data (G_OBJECT (self->loader), "lk-title");
+      gtk_label_set_text (GTK_LABEL (title), opening);
+      lk_loader_step_set (g_object_get_data (G_OBJECT (self->loader), "lk-step0"),
+                          step > 0 ? 2 : 1, "Preparing chart symbols",
+                          step > 0 ? "" : "first run only");
+      lk_loader_step_set (g_object_get_data (G_OBJECT (self->loader), "lk-step1"),
+                          step > 1 ? 2 : (step == 1 ? 1 : 0), mapping,
+                          step == 1 ? "not loading them, so this is quick" : "");
+      lk_loader_step_set (g_object_get_data (G_OBJECT (self->loader), "lk-step2"),
+                          step == 2 ? 1 : 0, "Drawing the first scene", "");
+    }
 }
 
 /* ---- the pick ----------------------------------------------------------- */
@@ -1041,16 +1069,27 @@ lk_window_raster_changed (LkAppModel *model, gpointer user_data)
 static void
 lk_window_show_open_error (LkWindow *self)
 {
-  const char *message = NULL;
+  g_autofree char *message = NULL;
 
   g_object_get (self->model, "open-error", &message, NULL);
   if (message == NULL)
     return;
 
-  GtkAlertDialog *dialog = gtk_alert_dialog_new ("Couldn't open chart");
-  gtk_alert_dialog_set_detail (dialog, message);
-  gtk_alert_dialog_show (dialog, GTK_WINDOW (self->window));
-  g_object_unref (dialog);
+  if (gtk_widget_get_visible (self->empty_state))
+    {
+      /* The mariner pressed the button on the first-run page; the sentence
+       * belongs there, not in an alert floating over an empty window. */
+      GtkWidget *error = g_object_get_data (G_OBJECT (self->empty_state), "lk-error");
+      gtk_label_set_text (GTK_LABEL (error), message);
+      gtk_widget_set_visible (error, TRUE);
+    }
+  else
+    {
+      GtkAlertDialog *dialog = gtk_alert_dialog_new ("Couldn't open chart");
+      gtk_alert_dialog_set_detail (dialog, message);
+      gtk_alert_dialog_show (dialog, GTK_WINDOW (self->window));
+      g_object_unref (dialog);
+    }
 
   lk_app_model_set_open_error (self->model, NULL);
 }
@@ -1100,76 +1139,299 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
 /* ---- overlays ----------------------------------------------------------- */
 
+/* 7217 → "7,217". The separator is a comma on every shell, as it is in the
+ * scale readout. */
+static char *
+lk_group_number (guint value)
+{
+  g_autofree char *plain = g_strdup_printf ("%u", value);
+  gsize length = strlen (plain);
+  GString *grouped = g_string_new (NULL);
+
+  for (gsize i = 0; i < length; i++)
+    {
+      if (i > 0 && (length - i) % 3 == 0)
+        g_string_append_c (grouped, ',');
+      g_string_append_c (grouped, plain[i]);
+    }
+  return g_string_free (grouped, FALSE);
+}
+
+/* The compass rose of the loader. Drawn, not an icon, so the shape is the
+ * same on each platform (CompassMark on macOS and iOS). */
+static void
+lk_compass_mark_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
+                      gpointer user_data)
+{
+  double r = MIN (width, height) / 2.0;
+  double cx = width / 2.0, cy = height / 2.0;
+
+  /* The pinned accent (#0a5bb5) at the reference's 35%. */
+  cairo_set_source_rgba (cr, 0.039, 0.357, 0.710, 0.35);
+  cairo_set_line_width (cr, 2.0);
+  cairo_arc (cr, cx, cy, r - 1.0, 0, 2 * G_PI);
+  cairo_stroke (cr);
+  for (int i = 0; i < 4; i++)
+    {
+      cairo_save (cr);
+      cairo_translate (cr, cx, cy);
+      cairo_rotate (cr, i * G_PI / 2.0);
+      cairo_rectangle (cr, -0.75, -r * 0.86, 1.5, r * 0.28);
+      cairo_fill (cr);
+      cairo_restore (cr);
+    }
+  /* The north needle, in the red a chart compass rose uses. */
+  cairo_save (cr);
+  cairo_translate (cr, cx - r, cy - r);
+  cairo_set_source_rgb (cr, 0.831, 0.180, 0.180);
+  cairo_move_to (cr, r, r * 0.28);
+  cairo_line_to (cr, r * 0.7, r * 1.32);
+  cairo_line_to (cr, r * 1.3, r * 1.32);
+  cairo_close_path (cr);
+  cairo_fill (cr);
+  cairo_restore (cr);
+}
+
+/* One step of the opening page: what it says, and whether it is waiting,
+ * running or done. */
+static GtkWidget *
+lk_loader_step_new (GtkWidget *box)
+{
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *mark = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *spinner = gtk_spinner_new ();
+  GtkWidget *check = gtk_image_new_from_icon_name ("object-select-symbolic");
+  GtkWidget *label = gtk_label_new ("");
+  GtkWidget *detail = gtk_label_new ("");
+
+  gtk_widget_set_size_request (mark, 16, 16);
+  gtk_widget_set_valign (mark, GTK_ALIGN_CENTER);
+  gtk_widget_set_size_request (spinner, 14, 14);
+  gtk_image_set_pixel_size (GTK_IMAGE (check), 14);
+  gtk_box_append (GTK_BOX (mark), spinner);
+  gtk_box_append (GTK_BOX (mark), check);
+
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_widget_add_css_class (detail, "dim-label");
+  gtk_widget_add_css_class (detail, "caption");
+
+  gtk_box_append (GTK_BOX (row), mark);
+  gtk_box_append (GTK_BOX (row), label);
+  gtk_box_append (GTK_BOX (row), detail);
+  gtk_box_append (GTK_BOX (box), row);
+
+  g_object_set_data (G_OBJECT (row), "lk-spinner", spinner);
+  g_object_set_data (G_OBJECT (row), "lk-check", check);
+  g_object_set_data (G_OBJECT (row), "lk-label", label);
+  g_object_set_data (G_OBJECT (row), "lk-detail", detail);
+  return row;
+}
+
+/* `state`: 0 waiting, 1 running, 2 done. */
+static void
+lk_loader_step_set (GtkWidget *row, int state, const char *text, const char *detail_text)
+{
+  GtkWidget *spinner = g_object_get_data (G_OBJECT (row), "lk-spinner");
+  GtkWidget *check = g_object_get_data (G_OBJECT (row), "lk-check");
+  GtkWidget *label = g_object_get_data (G_OBJECT (row), "lk-label");
+  GtkWidget *detail = g_object_get_data (G_OBJECT (row), "lk-detail");
+
+  gtk_widget_set_visible (spinner, state == 1);
+  gtk_spinner_set_spinning (GTK_SPINNER (spinner), state == 1);
+  gtk_widget_set_visible (check, state == 2);
+  gtk_label_set_text (GTK_LABEL (label), text);
+  if (state == 0)
+    gtk_widget_add_css_class (label, "dim-label");
+  else
+    gtk_widget_remove_css_class (label, "dim-label");
+  gtk_label_set_text (GTK_LABEL (detail), detail_text);
+  gtk_widget_set_visible (detail, detail_text[0] != '\0');
+}
+
+/* Opening, as a page. The three waits are different work and the mariner
+ * should be able to see which one they are in: the one-time symbol bake,
+ * mapping the library, and tessellating the first scene. A single spinner
+ * that vanishes says only that something happened. The twin of StartupLoader
+ * (macOS) and the WinUI loader page. */
 static GtkWidget *
 lk_window_build_loader (void)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
-  GtkWidget *spinner = gtk_spinner_new ();
-  GtkWidget *label = gtk_label_new ("Loading charts…");
-  GtkWidget *hint = gtk_label_new ("First launch only — this is cached for next time.");
+  GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+  GtkWidget *compass = gtk_drawing_area_new ();
+  GtkWidget *title = gtk_label_new ("Opening the chart");
 
-  gtk_widget_set_size_request (spinner, 32, 32);
-  gtk_spinner_start (GTK_SPINNER (spinner));
-  gtk_widget_add_css_class (label, "title-4");
-  gtk_widget_add_css_class (hint, "dim-label");
-  gtk_widget_add_css_class (hint, "caption");
-  gtk_widget_set_visible (hint, FALSE);
+  gtk_widget_set_size_request (compass, 24, 24);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (compass),
+                                  lk_compass_mark_draw, NULL, NULL);
+  gtk_widget_add_css_class (title, "title-4");
+  gtk_box_append (GTK_BOX (header), compass);
+  gtk_box_append (GTK_BOX (header), title);
+  gtk_box_append (GTK_BOX (box), header);
 
-  gtk_box_append (GTK_BOX (box), spinner);
-  gtk_box_append (GTK_BOX (box), label);
-  gtk_box_append (GTK_BOX (box), hint);
+  g_object_set_data (G_OBJECT (box), "lk-title", title);
+  g_object_set_data (G_OBJECT (box), "lk-step0", lk_loader_step_new (box));
+  g_object_set_data (G_OBJECT (box), "lk-step1", lk_loader_step_new (box));
+  g_object_set_data (G_OBJECT (box), "lk-step2", lk_loader_step_new (box));
 
   gtk_widget_add_css_class (box, "lk-card");
   gtk_widget_set_halign (box, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
   gtk_widget_set_visible (box, FALSE);
-
-  g_object_set_data (G_OBJECT (box), "lk-label", label);
-  g_object_set_data (G_OBJECT (box), "lk-hint", hint);
   return box;
 }
 
+/* One fact under the first-run panel's buttons: an icon and a line. */
+static void
+lk_empty_state_note (GtkWidget *box, const char *icon_name, const char *markup)
+{
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
+  GtkWidget *text = gtk_label_new (NULL);
+
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), 13);
+  gtk_widget_add_css_class (icon, "dim-label");
+  gtk_widget_set_valign (icon, GTK_ALIGN_START);
+  gtk_widget_set_margin_top (icon, 2);
+  gtk_label_set_markup (GTK_LABEL (text), markup);
+  gtk_widget_add_css_class (text, "dim-label");
+  gtk_widget_add_css_class (text, "caption");
+  gtk_label_set_wrap (GTK_LABEL (text), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (text), 0.0);
+  gtk_widget_set_hexpand (text, TRUE);
+
+  gtk_box_append (GTK_BOX (row), icon);
+  gtk_box_append (GTK_BOX (row), text);
+  gtk_box_append (GTK_BOX (box), row);
+}
+
+/* The first thing a mariner sees, before any chart is aboard.
+ *
+ * It answers three questions in the order they are asked: what is this
+ * program for, why is it empty, what do I do now — and it closes with the one
+ * block that is not about getting started, which a mariner must not skim.
+ * The twin of EmptyChartState (macOS); the words are the reference's. */
 static GtkWidget *
 lk_window_build_empty_state (void)
 {
-  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   GtkWidget *icon = gtk_image_new_from_icon_name ("mark-location-symbolic");
-  GtkWidget *title = gtk_label_new ("No chart open");
-  GtkWidget *body = gtk_label_new ("Open a folder of chart cells, or the .zip an agency "
-                                   "published, to get started. Raw cells are prepared on "
-                                   "the way in.");
-  GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  GtkWidget *button = gtk_button_new_with_label ("Open Folder…");
-  GtkWidget *archive = gtk_button_new_with_label ("Open Archive…");
+  GtkWidget *title = gtk_label_new ("No charts yet");
+  GtkWidget *body = gtk_label_new ("Lookout draws official S-57 and S-101 ENC charts. "
+                                   "It does not come with any, so point it at yours.");
+  GtkWidget *error = gtk_label_new ("");
+  GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+  GtkWidget *button = gtk_button_new_with_label ("Choose Charts…");
+  GtkWidget *archive = gtk_button_new_with_label ("Choose an Archive…");
+  GtkWidget *drop_hint = gtk_label_new ("or drop them anywhere in this window");
 
-  gtk_image_set_pixel_size (GTK_IMAGE (icon), 48);
-  gtk_widget_add_css_class (icon, "dim-label");
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), 26);
+  gtk_widget_add_css_class (icon, "lk-accent");
+  gtk_widget_set_halign (icon, GTK_ALIGN_START);
+  gtk_widget_set_margin_bottom (icon, 12);
+
   gtk_widget_add_css_class (title, "title-2");
+  gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+  gtk_widget_set_margin_bottom (title, 6);
+
   gtk_widget_add_css_class (body, "dim-label");
   gtk_label_set_wrap (GTK_LABEL (body), TRUE);
-  gtk_label_set_justify (GTK_LABEL (body), GTK_JUSTIFY_CENTER);
-  gtk_widget_set_size_request (body, 320, -1);
+  gtk_label_set_xalign (GTK_LABEL (body), 0.0);
+  gtk_widget_set_margin_bottom (body, 16);
+
+  /* A folder that held nothing has to say so HERE. This page is where the
+   * mariner pressed the button, and an alert over an empty page is ceremony. */
+  gtk_widget_add_css_class (error, "warning");
+  gtk_label_set_wrap (GTK_LABEL (error), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (error), 0.0);
+  gtk_widget_set_margin_bottom (error, 10);
+  gtk_widget_set_visible (error, FALSE);
 
   gtk_widget_add_css_class (button, "suggested-action");
   gtk_widget_add_css_class (button, "pill");
-  gtk_widget_set_halign (button, GTK_ALIGN_CENTER);
   gtk_actionable_set_action_name (GTK_ACTIONABLE (button), "win.open");
   gtk_widget_add_css_class (archive, "pill");
   gtk_actionable_set_action_name (GTK_ACTIONABLE (archive), "win.open-archive");
-  gtk_widget_set_halign (buttons, GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class (drop_hint, "dim-label");
+  gtk_widget_add_css_class (drop_hint, "caption");
   gtk_box_append (GTK_BOX (buttons), button);
   gtk_box_append (GTK_BOX (buttons), archive);
+  gtk_box_append (GTK_BOX (buttons), drop_hint);
+  gtk_widget_set_halign (buttons, GTK_ALIGN_START);
+  gtk_widget_set_margin_bottom (buttons, 14);
 
   gtk_box_append (GTK_BOX (box), icon);
   gtk_box_append (GTK_BOX (box), title);
   gtk_box_append (GTK_BOX (box), body);
+  gtk_box_append (GTK_BOX (box), error);
   gtk_box_append (GTK_BOX (box), buttons);
 
+  /* What actually works, in the words of what the mariner has in hand. Where
+   * the charts come from goes first: a mariner with none needs that before a
+   * list of file extensions. */
+  lk_empty_state_note (box, "web-browser-symbolic",
+                       "NOAA publishes every United States chart at no cost, at "
+                       "<a href=\"https://www.charts.noaa.gov/ENCs/ENCs.shtml\">"
+                       "charts.noaa.gov</a>. Most other offices sell theirs.");
+  lk_empty_state_note (box, "folder-open-symbolic",
+                       "A folder of cells (.000), prepared charts (.pmtiles), imagery "
+                       "(.mbtiles) or BSB/KAP sheets. Cells and sheets are converted "
+                       "once on the way in, a few seconds each.");
+
+  /* Last, and set apart. */
+  GtkWidget *warn = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+  GtkWidget *warn_title = gtk_label_new ("NOT FOR NAVIGATION");
+  GtkWidget *warn_body = gtk_label_new (
+      "By importing charts you accept that Lookout is a prototype and not a "
+      "certified navigation system, and that the charts it prepares are processed "
+      "for display and are not the official ENC. They do not meet chart carriage "
+      "regulations. You remain responsible for the safe navigation of your vessel "
+      "and for keeping clear of every danger. Verify everything shown here against "
+      "official, up-to-date charts and publications, and keep a paper backup.");
+  GtkWidget *warn_noaa = gtk_label_new (NULL);
+
+  gtk_widget_add_css_class (warn, "lk-not-nav");
+  gtk_widget_add_css_class (warn_title, "lk-not-nav-title");
+  gtk_label_set_xalign (GTK_LABEL (warn_title), 0.0);
+  gtk_label_set_wrap (GTK_LABEL (warn_body), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (warn_body), 0.0);
+  gtk_widget_add_css_class (warn_body, "caption");
+  /* NOAA's own terms, in their words. They apply to their charts whoever
+   * prepared them. */
+  gtk_label_set_markup (GTK_LABEL (warn_noaa),
+                        "NOAA ENC\xC2\xAE charts come from the NOAA Office of Coast "
+                        "Survey and are updated weekly on a best-efforts basis; you "
+                        "are responsible for holding the current edition and the "
+                        "latest updates. NOAA makes no warranty and assumes no "
+                        "liability for their use. See the <a href=\""
+                        "https://www.charts.noaa.gov/ENCs/ENC_Agreement.shtml\">"
+                        "NOAA ENC User Agreement</a>.");
+  gtk_label_set_wrap (GTK_LABEL (warn_noaa), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (warn_noaa), 0.0);
+  gtk_widget_add_css_class (warn_noaa, "caption");
+  gtk_widget_add_css_class (warn_noaa, "dim-label");
+  gtk_box_append (GTK_BOX (warn), warn_title);
+  gtk_box_append (GTK_BOX (warn), warn_body);
+  gtk_box_append (GTK_BOX (warn), warn_noaa);
+  gtk_widget_set_margin_top (warn, 10);
+  gtk_box_append (GTK_BOX (box), warn);
+
   gtk_widget_add_css_class (box, "lk-card");
-  gtk_widget_set_halign (box, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
-  gtk_widget_set_visible (box, FALSE);
-  return box;
+  gtk_widget_set_size_request (box, 430, -1);
+
+  /* A page this tall must still fit a short window, so it scrolls. */
+  GtkWidget *scroller = gtk_scrolled_window_new ();
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), box);
+  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
+                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_propagate_natural_width (GTK_SCROLLED_WINDOW (scroller), TRUE);
+  gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
+  gtk_widget_set_halign (scroller, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (scroller, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible (scroller, FALSE);
+
+  g_object_set_data (G_OBJECT (scroller), "lk-error", error);
+  return scroller;
 }
 
 /* ---- titlebar ----------------------------------------------------------- */

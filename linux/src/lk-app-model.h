@@ -175,6 +175,11 @@ void lk_app_model_set_first_build_done (LkAppModel *self, gboolean done);
 void lk_app_model_set_opening (LkAppModel *self, gboolean opening, gboolean preparing_symbols);
 gboolean lk_app_model_get_show_startup_loader (LkAppModel *self);
 gboolean lk_app_model_get_preparing_symbols (LkAppModel *self);
+gboolean lk_app_model_get_opening (LkAppModel *self);
+/* How many charts that open covers, when known; 0 otherwise. The loader page
+ * says "Opening 7,217 charts" from it. */
+void  lk_app_model_set_opening_cells (LkAppModel *self, guint cells);
+guint lk_app_model_get_opening_cells (LkAppModel *self);
 void lk_app_model_set_chart_open (LkAppModel *self, gboolean open, const char *path);
 void lk_app_model_set_open_error (LkAppModel *self, const char *message);
 

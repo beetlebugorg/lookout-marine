@@ -279,7 +279,16 @@ static const char *LK_CSS =
     "  border-color: alpha(#2c343f, 0.8);"
     "}"
     ".lk-night menubutton.lk-bubble > button { background: none; }"
-    ".lk-night .lk-capsule .dim-label { color: #7f8894; }";
+    ".lk-night .lk-capsule .dim-label { color: #7f8894; }"
+    /* The NOT FOR NAVIGATION block of the first-run page: amber, bordered,
+     * set apart from everything about getting started. */
+    ".lk-not-nav {"
+    "  background: alpha(#f59e0b, 0.14);"
+    "  border: 1px solid alpha(#f59e0b, 0.55);"
+    "  border-radius: 9px;"
+    "  padding: 12px;"
+    "}"
+    ".lk-not-nav-title { font-weight: bold; letter-spacing: 0.5px; font-size: 90%; }";
 
 static void
 lk_app_activate (GtkApplication *app, gpointer user_data)

@@ -2,6 +2,7 @@
 
 #include "lk-app-model.h"
 #include "lk-hud.h"
+#include "lk-json.h"
 
 /* S-52 NODATA, day scheme — what lookout's first frame clears to. */
 static const GdkRGBA LK_NODATA_COLOR = { 0.576f, 0.682f, 0.733f, 1.0f };
@@ -204,8 +205,9 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
     return;
 
   self->did_auto_open = TRUE;
-  /* Spinner up before the synchronous open; the flag marks a first-ever run,
+  /* Loader up before the synchronous open; the flag marks a first-ever run,
    * when the symbol/font atlases still have to be baked. */
+  lk_app_model_set_opening_cells (self->model, paths != NULL ? g_strv_length (paths) : 0);
   lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
   self->auto_open_id = g_idle_add (lk_chart_view_do_auto_open, self);
 }
@@ -966,12 +968,67 @@ lk_chart_view_class_init (LkChartViewClass *klass)
   gtk_widget_class_set_css_name (widget_class, "chartview");
 }
 
+/* The hover tip over a plugin's symbol: a vessel's name, course and speed,
+ * formatted from the JSON lookout_overlay_at documents — title bold, then a
+ * dim key beside each value. FALSE (no tip) over open water. GTK owns the
+ * dwell and the re-query on movement, so the engine is asked only when a tip
+ * could actually show. */
+static gboolean
+lk_chart_view_query_tooltip (GtkWidget *widget, int x, int y, gboolean keyboard,
+                             GtkTooltip *tooltip, gpointer user_data)
+{
+  LkChartView *self = LK_CHART_VIEW (widget);
+
+  if (keyboard)
+    return FALSE;
+
+  g_autofree char *payload = lk_chart_controller_overlay_at (self->controller, x, y);
+  if (payload == NULL)
+    return FALSE;
+
+  g_autoptr (LkJson) root = lk_json_parse (payload);
+  const char *title = lk_json_member_string (root, "title");
+  const LkJson *rows = lk_json_member (root, "rows");
+  g_autoptr (GString) markup = g_string_new (NULL);
+
+  if (title != NULL)
+    {
+      g_autofree char *escaped = g_markup_escape_text (title, -1);
+      g_string_append_printf (markup, "<b>%s</b>", escaped);
+    }
+  for (guint i = 0; i < lk_json_length (rows); i++)
+    {
+      const LkJson *row = lk_json_at (rows, i);
+      const char *key = lk_json_text (lk_json_at (row, 0));
+      const char *value = lk_json_text (lk_json_at (row, 1));
+
+      if (key[0] == '\0' && value[0] == '\0')
+        continue;
+
+      g_autofree char *ekey = g_markup_escape_text (key, -1);
+      g_autofree char *evalue = g_markup_escape_text (value, -1);
+      if (markup->len > 0)
+        g_string_append_c (markup, '\n');
+      g_string_append_printf (markup, "<span alpha='55%%'>%s</span>  %s", ekey, evalue);
+    }
+  if (markup->len == 0)
+    return FALSE;
+
+  gtk_tooltip_set_markup (tooltip, markup->str);
+  return TRUE;
+}
+
 static void
 lk_chart_view_init (LkChartView *self)
 {
   gtk_widget_set_focusable (GTK_WIDGET (self), TRUE);
   gtk_widget_set_hexpand (GTK_WIDGET (self), TRUE);
   gtk_widget_set_vexpand (GTK_WIDGET (self), TRUE);
+
+  /* The overlay hover tip, through GTK's own tooltip machinery. */
+  gtk_widget_set_has_tooltip (GTK_WIDGET (self), TRUE);
+  g_signal_connect (self, "query-tooltip",
+                    G_CALLBACK (lk_chart_view_query_tooltip), NULL);
 
   GtkGesture *click = gtk_gesture_click_new ();
   gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), GDK_BUTTON_PRIMARY);

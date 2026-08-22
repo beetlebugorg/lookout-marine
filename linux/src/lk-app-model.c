@@ -26,6 +26,7 @@ struct _LkAppModel {
   gboolean is_opening;
   gboolean preparing_symbols;
   gboolean first_build_done;
+  guint    opening_cells; /* how many charts the open in flight covers, when known */
 
   double   center_lon, center_lat;
   double   zoom;
@@ -1364,6 +1365,27 @@ lk_app_model_set_opening (LkAppModel *self, gboolean opening, gboolean preparing
     return;
   self->is_opening = opening;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SHOW_STARTUP_LOADER]);
+}
+
+void
+lk_app_model_set_opening_cells (LkAppModel *self, guint cells)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  self->opening_cells = cells;
+}
+
+guint
+lk_app_model_get_opening_cells (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), 0);
+  return self->opening_cells;
+}
+
+gboolean
+lk_app_model_get_opening (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+  return self->is_opening;
 }
 
 gboolean

@@ -633,6 +633,23 @@ lk_chart_controller_overlay_hit (LkChartController *self, double x, double y)
   return lk_overlay_object_copy (&raw);
 }
 
+char *
+lk_chart_controller_overlay_at (LkChartController *self, double x, double y)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL)
+    return NULL;
+
+  /* Borrowed until the next overlay call, so copied before anything else
+   * runs. */
+  size_t length = 0;
+  const char *raw = lookout_overlay_at (self->handle, (float) x, (float) y, &length);
+  if (raw == NULL || length == 0)
+    return NULL;
+  return g_strndup (raw, length);
+}
+
 LkOverlayObject *
 lk_chart_controller_overlay_info (LkChartController *self, const char *id)
 {
