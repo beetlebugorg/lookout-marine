@@ -39,6 +39,10 @@ class AltChartStyle(
      *  TileJSON source inlined. */
     val json: String,
     val sources: Map<String, AltTileSource>,
+    /** Every distinct source attribution, tags stripped, joined for display.
+     *  Public tile hosts require visible credit — OSM's tile usage policy
+     *  makes it a condition of service, not a courtesy. */
+    val attribution: String? = null,
 ) {
     companion object {
         private const val TAG = "lookout"
@@ -77,7 +81,25 @@ class AltChartStyle(
                     flipY = src.optString("scheme").lowercase() == "tms",
                 )
             }
-            return AltChartStyle(top.toString(), resolved)
+            return AltChartStyle(top.toString(), resolved, attributionOf(declared))
+        }
+
+        /** The credit line the sources ask for: distinct attributions in
+         *  source order, HTML markup reduced to its text. */
+        private fun attributionOf(declared: JSONObject): String? {
+            val seen = LinkedHashSet<String>()
+            for (name in declared.keys().asSequence().toList()) {
+                val src = declared.optJSONObject(name) ?: continue
+                val raw = src.optString("attribution")
+                if (raw.isEmpty()) continue
+                val text = raw
+                    .replace(Regex("<[^>]*>"), "")
+                    .replace("&copy;", "©")
+                    .replace("&amp;", "&")
+                    .trim()
+                if (text.isNotEmpty()) seen.add(text)
+            }
+            return if (seen.isEmpty()) null else seen.joinToString(" · ")
         }
 
         /**
@@ -199,6 +221,7 @@ class AltChartStyle(
             readFileLink(link)?.let { return it }
             return try {
                 val conn = URL(link).openConnection() as HttpURLConnection
+                identify(conn)
                 conn.connectTimeout = 20_000
                 conn.readTimeout = 20_000
                 try {
@@ -212,6 +235,23 @@ class AltChartStyle(
                 null
             }
         }
+
+        /**
+         * Say who is asking, on every chart-link request. Public tile hosts
+         * serve "access blocked" placeholder tiles to anonymous or
+         * platform-default agents — openstreetmap.org's tile usage policy
+         * (osm.wiki/Blocked_tiles) wants a unique, identifiable User-Agent
+         * with a way to reach the developer, and the Referer names the app's
+         * home for hosts that key on it.
+         */
+        fun identify(conn: HttpURLConnection) {
+            conn.setRequestProperty("User-Agent", USER_AGENT)
+            conn.setRequestProperty("Referer", REFERER)
+        }
+
+        const val USER_AGENT =
+            "LookoutMarine/1.0 (Android; org.beetlebug.lookout; contact jeremy.collins@beetlebug.org)"
+        const val REFERER = "https://beetlebug.org/"
     }
 }
 
@@ -243,7 +283,10 @@ class AltChartTiles {
         stop()
         engine = l
         live = true
-        pool = Executors.newFixedThreadPool(4)
+        // Six, not four: a level change asks ~50 tiles across several hosts,
+        // and the two extra lanes shorten the tail without leaning on any
+        // one host harder than its usage policy likes.
+        pool = Executors.newFixedThreadPool(6)
         poller = Thread({
             val ids = LongArray(64)
             val zxy = IntArray(192)
@@ -286,6 +329,7 @@ class AltChartTiles {
         if (noteFirst(loggedAsk, name)) Log.i(TAG, "alt tiles: $name -> $link")
         try {
             val conn = URL(link).openConnection() as HttpURLConnection
+            AltChartStyle.identify(conn)
             conn.connectTimeout = 20_000
             conn.readTimeout = 20_000
             try {

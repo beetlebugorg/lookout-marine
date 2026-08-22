@@ -153,6 +153,7 @@ fun ChartScreen(
                 .align(Alignment.BottomStart)
                 .navigationBarsPadding()
                 .padding(start = Chrome.margin, bottom = Chrome.gap + capsuleH + Chrome.gap),
+            attribution = controller.chartLinkAttribution,
         )
 
         // ---- a tapped overlay object, in a bubble pinned to it ---------------

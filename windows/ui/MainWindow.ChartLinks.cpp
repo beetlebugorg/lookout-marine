@@ -44,7 +44,11 @@ namespace
         if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
             return 0;
 
-        HINTERNET ses = WinHttpOpen(L"LookoutMarine/1.0",
+        // A unique, identifiable agent with a way to reach the developer:
+        // public tile hosts (openstreetmap.org's tile usage policy,
+        // osm.wiki/Blocked_tiles) serve "access blocked" placeholder tiles
+        // to anonymous or platform-default agents.
+        HINTERNET ses = WinHttpOpen(L"LookoutMarine/1.0 (Windows; org.beetlebug.lookout; contact jeremy.collins@beetlebug.org)",
                                     WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (ses == nullptr)
@@ -59,7 +63,7 @@ namespace
         if (con != nullptr)
         {
             DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
-            req = WinHttpOpenRequest(con, L"GET", path, nullptr, WINHTTP_NO_REFERER,
+            req = WinHttpOpenRequest(con, L"GET", path, nullptr, L"https://beetlebug.org/",
                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         }
         if (req != nullptr &&

@@ -992,6 +992,12 @@ class ChartController(private val appContext: Context) {
         private set
     var chartLinkError by mutableStateOf<String?>(null)
 
+    /** The active chart link's source credits, shown by the scale bar while
+     *  the link draws (tile usage policies make the credit a condition of
+     *  service). Null when the Lookout chart is up. */
+    var chartLinkAttribution by mutableStateOf<String?>(null)
+        private set
+
     private val altTiles = AltChartTiles()
     private val linkPrefs = appContext.getSharedPreferences("chartlinks.v1", Context.MODE_PRIVATE)
 
@@ -1113,6 +1119,7 @@ class ChartController(private val appContext: Context) {
     fun pushChartLink() {
         val active = activeChartLink
         if (active == null) {
+            chartLinkAttribution = null
             onEngine { l ->
                 altTiles.stop()
                 l.altStyleSet(null)
@@ -1140,6 +1147,7 @@ class ChartController(private val appContext: Context) {
         if (style == null) {
             chartLinkError = "That chart didn't answer. Showing the Lookout chart."
             activeChartLink = null
+            chartLinkAttribution = null
             saveChartLinks()
             onEngine { l ->
                 altTiles.stop()
@@ -1148,6 +1156,7 @@ class ChartController(private val appContext: Context) {
             return
         }
         chartLinkError = null
+        chartLinkAttribution = style.attribution
         onEngine { l ->
             if (l.altStyleSet(style.json)) {
                 altTiles.start(l, style.sources)

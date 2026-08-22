@@ -921,7 +921,7 @@ final class AppModel: ObservableObject {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             return try Data(contentsOf: url)
         }
-        let (data, resp) = try await URLSession.shared.data(from: url)
+        let (data, resp) = try await URLSession.shared.data(for: AltChartStyle.identifiedRequest(url))
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
@@ -1084,7 +1084,7 @@ final class AppModel: ObservableObject {
     private static func siblingStyle(of tilejsonURL: URL) async -> (url: String, name: String)? {
         let candidate = tilejsonURL.deletingLastPathComponent().appendingPathComponent("style.json")
         guard candidate.absoluteString != tilejsonURL.absoluteString else { return nil }
-        guard let (data, resp) = try? await URLSession.shared.data(from: candidate),
+        guard let (data, resp) = try? await URLSession.shared.data(for: AltChartStyle.identifiedRequest(candidate)),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               obj["layers"] != nil, obj["version"] != nil else { return nil }

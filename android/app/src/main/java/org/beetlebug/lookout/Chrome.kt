@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -166,7 +167,14 @@ fun NorthBubble(
  * label always reads as one.
  */
 @Composable
-fun ScaleBar(scaleDenominator: Double, modifier: Modifier = Modifier) {
+fun ScaleBar(
+    scaleDenominator: Double,
+    modifier: Modifier = Modifier,
+    /** Source credits for an active chart link — tile usage policies make
+     *  the visible credit a condition of service, so it rides the one HUD
+     *  element that is always on screen. */
+    attribution: String? = null,
+) {
     if (scaleDenominator <= 0) return
     val metresPerDp = scaleDenominator * Chrome.METRES_PER_DP_AT_1_TO_1
     val target = TARGET_DP * metresPerDp
@@ -197,6 +205,14 @@ fun ScaleBar(scaleDenominator: Double, modifier: Modifier = Modifier) {
                     content = {},
                 )
             }
+        }
+        if (attribution != null) {
+            Text(
+                text = attribution,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }

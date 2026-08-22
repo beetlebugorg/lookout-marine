@@ -27,6 +27,24 @@ struct AltChartStyle {
     /// Where each source's tiles come from, by the name the style gave it.
     let sources: [String: AltChartTiles.Source]
 
+    /// Say who is asking, on every chart-link request. Public tile hosts
+    /// serve "access blocked" placeholder tiles to anonymous or
+    /// platform-default agents — openstreetmap.org's tile usage policy
+    /// (osm.wiki/Blocked_tiles) wants a unique, identifiable User-Agent with
+    /// a way to reach the developer, and the Referer names the app's home
+    /// for hosts that key on it.
+    static let userAgent =
+        "LookoutMarine/1.0 (macOS; org.beetlebug.lookout; contact jeremy.collins@beetlebug.org)"
+    static let referer = "https://beetlebug.org/"
+
+    /// A GET for a chart-link resource, identified as above.
+    static func identifiedRequest(_ url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue(referer, forHTTPHeaderField: "Referer")
+        return req
+    }
+
     /// Read a style and resolve every source in it. Network work, so async;
     /// the tile fetching that follows is not, because it is answered from
     /// whatever thread lookout asks on.
@@ -68,7 +86,7 @@ struct AltChartStyle {
 
     private static func fetchTileJSON(_ link: String) async -> [String: Any]? {
         guard let url = URL(string: link),
-              let (data, resp) = try? await URLSession.shared.data(from: url),
+              let (data, resp) = try? await URLSession.shared.data(for: identifiedRequest(url)),
               (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
@@ -122,6 +140,14 @@ final class AltChartTiles: @unchecked Sendable {
         // whatever HAS landed, so a slow tile costs only itself.
         cfg.timeoutIntervalForRequest = 20
         cfg.httpMaximumConnectionsPerHost = 8
+        // A unique, identifiable agent with a way to reach the developer:
+        // public tile hosts (openstreetmap.org's tile usage policy,
+        // osm.wiki/Blocked_tiles) serve "access blocked" placeholder tiles
+        // to anonymous or platform-default agents.
+        cfg.httpAdditionalHeaders = [
+            "User-Agent": AltChartStyle.userAgent,
+            "Referer": AltChartStyle.referer,
+        ]
         session = URLSession(configuration: cfg)
     }
 
