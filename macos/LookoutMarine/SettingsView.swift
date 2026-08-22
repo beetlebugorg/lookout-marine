@@ -312,22 +312,19 @@ private struct ChartsSections: View {
                     chartPickRow(name: link.name, detail: link.url,
                                  picked: model.activeChartLink == link.url) { model.selectChartLink(link.url) }
                     Spacer(minLength: 4)
-                    // Only a chart holding a FROZEN document has anything to
-                    // refresh: a tile link, whose wrapper style was generated
-                    // here from what the publisher served the day it was
-                    // added, and a style file, whose text was read then. A
-                    // style link is fetched fresh on every push and has
-                    // nothing to re-read.
-                    if link.doc != nil {
-                        Button { model.refreshChartLink(link.url) } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .disabled(model.chartLinkBusy)
-                        .help("Read this chart again — its tile urls, zooms and credit")
-                        .accessibilityLabel("Refresh \(link.name)")
+                    // Every chart can be re-read: a link goes back to the
+                    // publisher, and a style file the mariner has aboard goes
+                    // back to the path it came from. What a refresh brings is
+                    // the publisher's edits — moved tiles, a wider zoom band, a
+                    // changed credit.
+                    Button { model.refreshChartLink(link.url) } label: {
+                        Image(systemName: "arrow.clockwise")
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(model.chartLinkBusy)
+                    .help("Read this chart again — its tile urls, zooms and credit")
+                    .accessibilityLabel("Refresh \(link.name)")
                     Button { model.removeChartLink(link.url) } label: {
                         Image(systemName: "minus.circle")
                     }

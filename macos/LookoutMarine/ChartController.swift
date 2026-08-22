@@ -112,9 +112,9 @@ final class ChartController: NSObject {
     /// no one at the trackpad. Writes the frame profile above and quits.
     private var gestureBench: GestureBench?
 
-    /// Serves an alt chart style's tiles. Idle — no callback installed on the
-    /// core, nothing fetched — until a style is set. See AltChartStyle.swift.
-    private let altTiles = AltChartTiles()
+    /// This shell's whole part in charts by link: fetch bytes for a url the
+    /// core hands it. See ChartLinkFetch.swift.
+    private let linkFetch = ChartLinkFetch()
 
     // MARK: - Lifecycle
 
@@ -165,10 +165,10 @@ final class ChartController: NSObject {
         lkLog("open OK")
         model?.openError = nil
         handle = h
-        // The tile door, before anything can ask through it. A style set on the
-        // old handle does not survive — the model pushes it back below, the
-        // same way the raster charts are replayed.
-        altTiles.attach(to: h)
+        // The fetch door, before anything can ask through it. Installing it
+        // also resolves whatever chart link the mariner left selected: the core
+        // read the list at open and has been waiting for a way to fetch.
+        linkFetch.attach(to: h)
         // Empty is legal: a library of pictures alone opens with no cell, and
         // then there is no chart path to report.
         chartPath = paths.isEmpty ? nil
@@ -323,10 +323,10 @@ final class ChartController: NSObject {
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
-        // Before the barrier: this clears the core's callback and cancels the
-        // fetches still out, so nothing can answer into a handle that is about
-        // to be destroyed.
-        altTiles.detach()
+        // Before the barrier: this answers the fetches still out, clears the
+        // core's callback and cancels the transfers, so nothing can answer into
+        // a handle that is about to be destroyed.
+        linkFetch.detach()
         let h = handle
         handle = nil
         renderQueue.sync {}
@@ -1090,53 +1090,55 @@ final class ChartController: NSObject {
     func toggleChart()        { guard let h = handle else { return }; lookout_toggle_chart(h); kick(); pushReadouts() }
     func setChartHidden(_ hidden: Bool) { guard let h = handle else { return }; lookout_set_chart_hidden(h, hidden ? 1 : 0) }
 
-    /// Draw a publisher's style instead of Lookout's own chart, or nil to go
-    /// back to it. The style's sources are installed FIRST: the core starts
-    /// asking for tiles as soon as it has the style, and a source it asks
-    /// about before this knows where to fetch it is answered "failed" and
-    /// remembered as such.
-    ///
-    /// Returns false when the core refused the style; the caller must not
-    /// leave the selection, the credit, or the tile sources claiming a chart
-    /// that is not being drawn. With no handle this returns true: there is
-    /// nothing to refuse, and the open replay will push again.
-    @discardableResult
-    func setAltChartStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = []) -> Bool {
-        guard let h = handle else { return true }
-        altTiles.setSources(style?.sources ?? [:])
-        if let style {
-            lkLog("alt style: \(style.json.utf8.count) B, source(s): \(style.sources.keys.sorted().joined(separator: ", "))")
-            let ok = style.json.withCString { p in
-                lookout_alt_chart_style_json(h, p, strlen(p))
-            }
-            if ok == 0 {
-                lkLog("alt style: the core refused it")
-                altTiles.setSources([:])
-                kick()
-                pushReadouts()
-                return false
-            } else {
-                // AFTER the style: setting one clears the previous style's
-                // packs, so this order is what makes the icons stick.
-                for p in packs {
-                    let n = p.json.withUnsafeBytes { (jb: UnsafeRawBufferPointer) in
-                        p.png.withUnsafeBytes { (pb: UnsafeRawBufferPointer) in
-                            lookout_alt_sprite_pack(
-                                h, p.prefix,
-                                jb.baseAddress?.assumingMemoryBound(to: CChar.self), jb.count,
-                                pb.baseAddress?.assumingMemoryBound(to: CChar.self), pb.count)
-                        }
-                    }
-                    lkLog("sprite pack '\(p.prefix)': \(n) cells")
-                }
-            }
+    // MARK: - Charts by link
+
+    /// Add a chart by link. The core resolves it through this shell's fetcher
+    /// and, on success, keeps it and selects it. Non-blocking: what happened
+    /// arrives in the snapshot below.
+    func addChartLink(_ link: String) {
+        guard let h = handle else { return }
+        link.withCString { lookout_chart_link_add(h, $0) }
+        kick()
+    }
+
+    /// Draw one of the carried charts, or nil for Lookout's own.
+    func selectChartLink(_ url: String?) {
+        guard let h = handle else { return }
+        if let url {
+            url.withCString { lookout_chart_link_select(h, $0) }
         } else {
-            lkLog("alt style: cleared, back to the Lookout chart")
-            lookout_alt_chart_style_json(h, nil, 0)
+            lookout_chart_link_select(h, nil)
         }
         kick()
-        pushReadouts()
-        return true
+    }
+
+    func removeChartLink(_ url: String) {
+        guard let h = handle else { return }
+        url.withCString { lookout_chart_link_remove(h, $0) }
+        kick()
+    }
+
+    func refreshChartLink(_ url: String) {
+        guard let h = handle else { return }
+        url.withCString { lookout_chart_link_refresh(h, $0) }
+        kick()
+    }
+
+    /// Hand the mariner's old UserDefaults list to the core, once. See
+    /// AppModel.migrateChartLinks.
+    func importChartLinks(_ json: String) {
+        guard let h = handle else { return }
+        json.withCString { lookout_chart_links_import(h, $0) }
+    }
+
+    /// Everything the chart list shows, or nil when nothing changed since the
+    /// last poll. The flag has ONE consumer, so this is called from exactly one
+    /// place: pushReadouts.
+    func chartLinksSnapshot() -> String? {
+        guard let h = handle, lookout_chart_links_changed(h) != 0 else { return nil }
+        guard let c = lookout_chart_links_json(h) else { return nil }
+        defer { lookout_string_free(c) }
+        return String(cString: c)
     }
 
     /// Is a publisher's style the one being drawn?
@@ -1330,6 +1332,10 @@ final class ChartController: NSObject {
         if model.courseUpState != cup { model.courseUpState = cup }
         let plugged = pluginsActive
         if model.pluginsActive != plugged { model.pluginsActive = plugged }
+        // The chart-link list, the credit and the error, from the core. A
+        // landing answer raises needs-redraw, so a resolve keeps this ticking
+        // until it is done.
+        model.pollChartLinks()
         // Own ship, for the position readout. The state and the numbers move
         // together: a readout that kept the last position through a lost fix
         // would be presenting a stale one as live.
