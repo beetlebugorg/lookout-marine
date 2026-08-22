@@ -166,6 +166,7 @@ pub const NativeKind = cthost.NativeKind;
 
 const Lock = @import("lock.zig").Lock;
 const RwLock = @import("lock.zig").RwLock;
+const sleepMs = @import("lock.zig").sleepMs;
 
 /// Everything the plugin layer needs from the core, in one heap allocation:
 /// the vessel store, the AIS store, the broker that implements the ABI over
@@ -656,6 +657,10 @@ pub const Lookout = struct {
     /// A composition is being rebuilt over a library that is already drawing.
     /// Unlike `loading` this leaves the chart on screen.
     recomposing: bool = false,
+    /// True while a chartsAdd is in flight. The api lock is dropped during
+    /// its file opens, and a second add entering that window would race the
+    /// compose worker. Read and written under the api lock.
+    adding: bool = false,
 
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
     last_change_ms: i64 = 0, // when the view last moved
@@ -1159,6 +1164,19 @@ pub const Lookout = struct {
     /// must never blank the display of the charts already there.
     pub fn chartsAdd(self: *Lookout, paths: []const [:0]const u8) usize {
         if (paths.len == 0) return 0;
+        // Only one add may run at a time. The api lock is dropped during
+        // the file opens below, so without this flag a second add could pass
+        // the entry poll while the first is still running, leaving two
+        // compose workers over one chart list and an unjoined thread. The
+        // wait releases the api lock so the in-flight add can reacquire it
+        // and finish.
+        while (self.adding) {
+            self.apiUnlock();
+            sleepMs(2);
+            self.apiLock();
+        }
+        self.adding = true;
+        defer self.adding = false;
         // A build already running was started without these charts. Take it
         // first, then start one that has them.
         self.pollCompose(true);
@@ -1182,7 +1200,11 @@ pub const Lookout = struct {
             for (paths) |p| self.addChartPath(p);
         } else for (opened, paths) |c, p| {
             if (c) |ch| {
-                self.charts.append(self.alloc, ch) catch {};
+                self.charts.append(self.alloc, ch) catch {
+                    cc.tile57_chart_close(ch);
+                    std.debug.print("skip '{s}': no memory to hold it\n", .{p});
+                    continue;
+                };
                 self.noteChartDir(p);
             } else std.debug.print("skip '{s}'\n", .{p});
         }
@@ -2325,6 +2347,10 @@ pub const Lookout = struct {
     /// scene rebuilt so icons that were missing resolve. Answers how many
     /// cells landed.
     pub fn altSpritePack(self: *Lookout, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        // Sprite packs only apply while an alt style is active. Without one
+        // there is no style to resolve their icons against, and storing them
+        // anyway would grow the S-52 atlas again on every scheme change.
+        if (self.alt_style == null) return 0;
         const p = self.alloc.dupe(u8, prefix) catch return 0;
         const j = self.alloc.dupe(u8, index_json) catch {
             self.alloc.free(p);
@@ -2516,8 +2542,13 @@ pub const Lookout = struct {
 
     /// The pulse drawn while a chart library is opening; true means still loading.
     fn loadingPulse(self: *Lookout) bool {
-        if (!self.loading) return false;
-        self.pollCompose(false);
+        // Adopt a finished compose from the frame loop, whether it came
+        // from the initial open or from a background add. chartsAdd returns
+        // before its worker finishes, and without this poll a finished
+        // recompose would not be adopted until the next blocking API call:
+        // the building indicator would spin forever and switching back to
+        // the ENC would draw a blank chart.
+        if (self.loading or self.recomposing) self.pollCompose(false);
         return self.loading;
     }
 

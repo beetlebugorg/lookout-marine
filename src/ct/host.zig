@@ -542,13 +542,32 @@ pub const Host = struct {
         return added;
     }
 
-    /// The deepest zoom any bound source serves — an alt style's own depth,
-    /// for the camera band while one is up. 22 when nothing is bound yet
-    /// (never clamp a chart that has not said how deep it goes).
+    /// The deepest zoom among the sources the active style names, used for
+    /// the camera band while an alt style is up. Bindings outlive a style
+    /// swap: the ENC's own source and the raster underlays stay bound while
+    /// a link is drawn, and a deeper one of those must not extend the zoom
+    /// band of a shallower publisher's map or hide its overscale badge.
+    /// Returns 22 when no source qualifies, so a chart that has not declared
+    /// its depth is not clamped.
     pub fn deepestSourceZoom(self: *Host) f64 {
         var maxz: f64 = 0;
-        for (self.m.cache.sources.items) |s| maxz = @max(maxz, @as(f64, @floatFromInt(s.maxzoom)));
+        for (self.m.cache.sources.items, 0..) |s, si| {
+            if (!self.sourceNamedByStyle(si)) continue;
+            maxz = @max(maxz, @as(f64, @floatFromInt(s.maxzoom)));
+        }
         return if (maxz > 0) maxz else 22;
+    }
+
+    /// True when the map's current style names this source. This is the
+    /// same test the renderer applies to its own tile requests
+    /// (map_object.zig, sourceInStyle).
+    fn sourceNamedByStyle(self: *Host, si: usize) bool {
+        const style = if (self.m.style) |*s| s else return true;
+        for (self.m.bound.items) |b| {
+            if (b.index == si) return style.sources.get(b.name) != null;
+        }
+        // Bound without a name to check against: count it.
+        return true;
     }
 
     fn packUint(o: std.json.ObjectMap, key: []const u8) ?u32 {
