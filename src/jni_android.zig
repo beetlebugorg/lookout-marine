@@ -29,6 +29,7 @@ const cc = @import("c.zig").c;
 const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 };
 extern fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
+extern fn lookout_charts_add(h: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize) c_int;
 extern fn lookout_close(h: ?*anyopaque) void;
 extern fn lookout_detach_surface(h: ?*anyopaque) void;
 extern fn lookout_attach_surface(h: ?*anyopaque, kind: c_int, native_handle: ?*anyopaque, width: u32, height: u32) c_int;
@@ -122,37 +123,71 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpen(env: [*c]j.JNIEnv, cls: j.jcl
 ///
 /// The compose+partition build is slow for a big library, so the engine runs it
 /// on a worker and shows its loader; the first cell renders immediately.
-export fn Java_org_beetlebug_lookout_Lookout_nOpenCharts(env: [*c]j.JNIEnv, cls: j.jclass, paths: j.jobjectArray, surface: j.jobject, w_px: j.jint, h_px: j.jint, w_pts: j.jint, h_pts: j.jint, msaa: j.jboolean) j.jlong {
-    _ = cls;
-    const count = env_(env).GetArrayLength.?(env, paths);
-    if (count <= 0) return 0;
-    const n: usize = @intCast(count);
-    // Each path is COPIED and its ref dropped inside the loop: a real library
-    // is thousands of paths, and ART's local reference table holds 512.
-    // Keeping a ref and a pinned string per element until the open returned
-    // overflowed the table and aborted the process.
-    const cs = gpa.alloc([*:0]const u8, n) catch return 0;
-    defer gpa.free(cs);
+/// Copy a Java String[] of paths to NUL-terminated C strings. Each element's
+/// ref is dropped inside the loop: a real library is thousands of paths, and
+/// ART's local reference table holds 512 — keeping a ref and a pinned string
+/// per element until the call returned overflowed the table and aborted the
+/// process. Free with freePathArray.
+fn copyPathArray(env: [*c]j.JNIEnv, paths: j.jobjectArray, n: usize) ?[][*:0]const u8 {
+    const cs = gpa.alloc([*:0]const u8, n) catch return null;
     var got: usize = 0;
-    defer for (0..got) |i| gpa.free(std.mem.span(cs[i]));
     while (got < n) : (got += 1) {
         const s: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, paths, @intCast(got)));
-        const c = env_(env).GetStringUTFChars.?(env, s, null) orelse return 0;
+        const c = env_(env).GetStringUTFChars.?(env, s, null) orelse {
+            for (cs[0..got]) |p| gpa.free(std.mem.span(p));
+            gpa.free(cs);
+            return null;
+        };
         const copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(c)))) catch {
             env_(env).ReleaseStringUTFChars.?(env, s, c);
             env_(env).DeleteLocalRef.?(env, s);
-            return 0;
+            for (cs[0..got]) |p| gpa.free(std.mem.span(p));
+            gpa.free(cs);
+            return null;
         };
         env_(env).ReleaseStringUTFChars.?(env, s, c);
         env_(env).DeleteLocalRef.?(env, s);
         cs[got] = copy.ptr;
     }
+    return cs;
+}
+
+fn freePathArray(cs: [][*:0]const u8) void {
+    for (cs) |p| gpa.free(std.mem.span(p));
+    gpa.free(cs);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nOpenCharts(env: [*c]j.JNIEnv, cls: j.jclass, paths: j.jobjectArray, surface: j.jobject, w_px: j.jint, h_px: j.jint, w_pts: j.jint, h_pts: j.jint, msaa: j.jboolean) j.jlong {
+    _ = cls;
+    // ZERO paths is a real open: the link-first startup brings the engine up
+    // empty so an active chart link can paint, and adds the library behind
+    // it (nChartsAdd).
+    const count = env_(env).GetArrayLength.?(env, paths);
+    if (count < 0) return 0;
+    const n: usize = @intCast(count);
+    const cs = copyPathArray(env, paths, n) orelse return 0;
+    defer freePathArray(cs);
     const win = j.ANativeWindow_fromSurface(env, surface) orelse return 0;
     const l = lookout_open_charts_in_window(LOOKOUT_NATIVE_ANDROID_WINDOW, win, cs.ptr, n, @intCast(w_px), @intCast(h_px), if (msaa != 0) 1 else 0) orelse {
         j.ANativeWindow_release(win);
         return 0;
     };
     return finishOpen(l, win, w_pts, h_pts);
+}
+
+/// int nChartsAdd(long h, String[] paths): add baked charts to the open
+/// library. The heavy opens run OFF the engine lock (root.chartsAdd), so a
+/// background thread calls this while the chart draws — the link-first
+/// startup's second half.
+export fn Java_org_beetlebug_lookout_Lookout_nChartsAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, paths: j.jobjectArray) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const count = env_(env).GetArrayLength.?(env, paths);
+    if (count <= 0) return 0;
+    const n: usize = @intCast(count);
+    const cs = copyPathArray(env, paths, n) orelse return 0;
+    defer freePathArray(cs);
+    return @intCast(lookout_charts_add(h.l, cs.ptr, n));
 }
 
 /// The tail both opens share: hand the camera its LOGICAL size (so the core can

@@ -58,6 +58,11 @@ class ChartEngine private constructor() {
 
     /** The library this engine was opened on. RENDER THREAD. */
     private var paths: Array<String> = emptyArray()
+
+    /** The background library add of a link-first startup, joined before any
+     *  close: the add runs with the api lock dropped for its file opens, so
+     *  the handle has to outlive it. */
+    private var libraryAdd: Thread? = null
     private var lastFrameNs = 0L
     private var ticking = false
 
@@ -134,9 +139,30 @@ class ChartEngine private constructor() {
                     if (Lookout.atlasCacheReady()) ChartController.LoadPhase.MAPPING
                     else ChartController.LoadPhase.SYMBOLS
                 )
-                l = openOn(surface, chartPaths, controller, density, wPx, hPx, wPts, hPts, h)
-                    ?: return@post
+                // An active chart link needs no cell library to paint. Open
+                // the engine EMPTY — about a second instead of the ten that
+                // mapping thousands of cells costs — so the link takes the
+                // screen first, and bring the library aboard behind it (the
+                // add drops the engine's locks for its file opens, so the
+                // chart keeps drawing). Without a link the library IS the
+                // first picture, and the loader stays honest about it.
+                val linkFirst = controller.activeChartLink != null && chartPaths.isNotEmpty()
+                l = openOn(
+                    surface,
+                    if (linkFirst) emptyArray() else chartPaths,
+                    controller, density, wPx, hPx, wPts, hPts, h,
+                ) ?: return@post
+                // The TARGET library, whatever was opened so far: a re-attach
+                // must not close a still-loading engine over the difference.
+                paths = chartPaths
                 controller.noteOpenPhase(ChartController.LoadPhase.TESSELLATING)
+                if (linkFirst) {
+                    val engine = l
+                    libraryAdd = Thread({
+                        val n = engine.chartsAdd(chartPaths)
+                        Log.i(TAG, "library aboard behind the chart link: $n cells")
+                    }, "lookout-library-add").also { it.start() }
+                }
             }
             stopBackgroundTick()
             lastFrameNs = 0 // a new surface is not a continuation of the old
@@ -374,6 +400,14 @@ class ChartEngine private constructor() {
     private fun closeOn(l: Lookout) {
         stopBackgroundTick()
         Choreographer.getInstance().removeFrameCallback(frameCallback)
+        // The library add drops the engine's api lock for its file opens, so
+        // the handle must outlive the add: join it before closing.
+        libraryAdd?.let { t ->
+            while (true) {
+                try { t.join(); break } catch (_: InterruptedException) {}
+            }
+        }
+        libraryAdd = null
         controller?.detach(l)
         l.close()
         lookout = null

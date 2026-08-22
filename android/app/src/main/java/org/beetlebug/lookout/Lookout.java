@@ -55,6 +55,14 @@ public final class Lookout implements AutoCloseable {
         return h == 0 ? null : new Lookout(h);
     }
 
+    /**
+     * Add baked charts to the open library; answers how many opened. The
+     * heavy per-cell opens run off the engine lock, so a background thread
+     * may call this while the chart draws — how the link-first startup
+     * brings the library aboard behind an already-drawing chart link.
+     */
+    public int chartsAdd(String[] paths) { return h == 0 ? 0 : nChartsAdd(h, paths); }
+
     @Override
     public void close() {
         if (h != 0) {
@@ -201,6 +209,7 @@ public final class Lookout implements AutoCloseable {
     private static native long nOpen(String chartPath, Surface surface,
                                      int widthPx, int heightPx,
                                      int widthPts, int heightPts, boolean msaa);
+    private static native int nChartsAdd(long h, String[] paths);
     private static native long nOpenCharts(String[] chartPaths, Surface surface,
                                            int widthPx, int heightPx,
                                            int widthPts, int heightPts, boolean msaa);
