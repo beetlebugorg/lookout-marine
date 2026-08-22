@@ -32,6 +32,10 @@ typedef struct {
   guint      place_id; /* re-places the report after a resize, off the layout */
 
   GtkWidget *settings_window;
+
+  /* What the desktop preferred before the chart's scheme overrode it, so day
+   * gives the preference back instead of forcing light on a dark desktop. */
+  gboolean desktop_prefers_dark;
 } LkWindow;
 
 static void
@@ -562,6 +566,135 @@ lk_action_full_screen (GSimpleAction *action, GVariant *parameter, gpointer user
     gtk_window_fullscreen (GTK_WINDOW (self->window));
 }
 
+/* ---- dev/screenshot hooks ------------------------------------------------ */
+
+/* One deferred hook: the object it acts on and the value it carries. */
+typedef struct {
+  GObject *target; /* strong: the model, or the window */
+  char    *value;
+} LkDevHook;
+
+static void
+lk_dev_hook_free (gpointer data)
+{
+  LkDevHook *hook = data;
+
+  g_object_unref (hook->target);
+  g_free (hook->value);
+  g_free (hook);
+}
+
+static gboolean
+lk_dev_hook_add (gpointer data)
+{
+  LkDevHook *hook = data;
+  const char *paths[] = { hook->value, NULL };
+
+  lk_app_model_add_raster_charts (LK_APP_MODEL (hook->target), paths);
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+lk_dev_hook_remove (gpointer data)
+{
+  LkDevHook *hook = data;
+
+  lk_app_model_remove_raster_chart (LK_APP_MODEL (hook->target), hook->value);
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+lk_dev_hook_chart_link (gpointer data)
+{
+  LkDevHook *hook = data;
+
+  lk_chart_links_add (lk_app_model_get_chart_links (LK_APP_MODEL (hook->target)),
+                      hook->value);
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+lk_dev_hook_show (gpointer data)
+{
+  LkDevHook *hook = data;
+  GActionGroup *actions = G_ACTION_GROUP (hook->target);
+  const char *spec = hook->value;
+
+  if (g_str_equal (spec, "settings"))
+    g_action_group_activate_action (actions, "settings", NULL);
+  else if (g_str_has_prefix (spec, "settings:"))
+    g_action_group_activate_action (actions, "settings-at",
+                                    g_variant_new_string (spec + strlen ("settings:")));
+  else if (g_str_has_prefix (spec, "table:"))
+    g_action_group_activate_action (actions, "open-table",
+                                    g_variant_new_string (spec + strlen ("table:")));
+  else
+    g_warning ("ignoring LOOKOUT_SHOW '%s' "
+               "(want settings, settings:<tab> or table:<plugin>/<key>)", spec);
+  return G_SOURCE_REMOVE;
+}
+
+/* "value[@seconds]": fire now, or that long after launch — which is how a
+ * recording stages a change mid-take, and how table: waits for the plugins a
+ * chart open loads. */
+static void
+lk_dev_hook_schedule (gpointer target, const char *spec, GSourceFunc fire)
+{
+  char *value = g_strdup (spec);
+  char *at = strrchr (value, '@');
+  guint delay_ms = 0;
+
+  if (at != NULL)
+    {
+      char *end = NULL;
+      double seconds = g_ascii_strtod (at + 1, &end);
+      if (end != at + 1 && *end == '\0' && seconds >= 0)
+        {
+          *at = '\0';
+          delay_ms = (guint) (seconds * 1000.0);
+        }
+    }
+  if (value[0] == '\0')
+    {
+      g_free (value);
+      return;
+    }
+
+  LkDevHook *hook = g_new0 (LkDevHook, 1);
+  hook->target = g_object_ref (target);
+  hook->value = value;
+  g_timeout_add_full (G_PRIORITY_DEFAULT, delay_ms, fire, hook, lk_dev_hook_free);
+}
+
+/* The screenshot/development hooks the other shells answer, as environment
+ * variables so a script can stage a scene: size the window, open a settings
+ * page or a plugin table, add or remove a raster chart mid-recording, or sail
+ * on a chart link. LOOKOUT_OPEN and LOOKOUT_VIEW are read where they act;
+ * LOOKOUT_MULTI and LOOKOUT_CLEAN where the app and the plugins come up. */
+static void
+lk_window_apply_dev_hooks (LkWindow *self)
+{
+  const char *spec;
+
+  if ((spec = g_getenv ("LOOKOUT_WINDOW")) != NULL)
+    {
+      int width = 0, height = 0;
+      if (sscanf (spec, "%dx%d", &width, &height) == 2 && width >= 320 && height >= 240)
+        gtk_window_set_default_size (GTK_WINDOW (self->window), width, height);
+      else
+        g_warning ("ignoring malformed LOOKOUT_WINDOW '%s' (want WxH)", spec);
+    }
+
+  if ((spec = g_getenv ("LOOKOUT_SHOW")) != NULL)
+    lk_dev_hook_schedule (self->window, spec, lk_dev_hook_show);
+  if ((spec = g_getenv ("LOOKOUT_ADD")) != NULL)
+    lk_dev_hook_schedule (self->model, spec, lk_dev_hook_add);
+  if ((spec = g_getenv ("LOOKOUT_REMOVE")) != NULL)
+    lk_dev_hook_schedule (self->model, spec, lk_dev_hook_remove);
+  if ((spec = g_getenv ("LOOKOUT_CHART_LINK")) != NULL)
+    lk_dev_hook_schedule (self->model, spec, lk_dev_hook_chart_link);
+}
+
 static const GActionEntry lk_window_actions[] = {
   { "open",             lk_action_open },
   { "open-archive",     lk_action_open_archive },
@@ -922,6 +1055,26 @@ lk_window_show_open_error (LkWindow *self)
   lk_app_model_set_open_error (self->model, NULL);
 }
 
+/* The chrome follows the chart into dusk and night. The chart dims itself to
+ * protect night vision, and a bright theme floating over it would undo that:
+ * dusk and night take the dark theme (every chrome fill rides
+ * @theme_bg_color, so the flip carries the capsule and the bubbles), and
+ * night stamps a class the stylesheet quiets further. Day gives back
+ * whatever the desktop preferred. */
+static void
+lk_window_apply_scheme (LkWindow *self)
+{
+  int scheme = lk_app_model_get_scheme (self->model);
+  GtkSettings *settings = gtk_widget_get_settings (self->window);
+
+  g_object_set (settings, "gtk-application-prefer-dark-theme",
+                scheme != 0 || self->desktop_prefers_dark, NULL);
+  if (scheme == 2)
+    gtk_widget_add_css_class (self->window, "lk-night");
+  else
+    gtk_widget_remove_css_class (self->window, "lk-night");
+}
+
 static void
 lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
@@ -941,6 +1094,8 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
     lk_window_queue_place_pick (self);
   else if (g_str_equal (name, "open-error"))
     lk_window_show_open_error (self);
+  else if (g_str_equal (name, "scheme"))
+    lk_window_apply_scheme (self);
 }
 
 /* ---- overlays ----------------------------------------------------------- */
@@ -1162,7 +1317,12 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   lk_tether (model, g_signal_connect (model, "pick-moved",
                                       G_CALLBACK (lk_window_pick_moved), self), self->window);
 
+  g_object_get (gtk_widget_get_settings (self->window),
+                "gtk-application-prefer-dark-theme", &self->desktop_prefers_dark, NULL);
+
   lk_window_update_overlays (self);
+  lk_window_apply_scheme (self);
+  lk_window_apply_dev_hooks (self);
 
   return self->window;
 }

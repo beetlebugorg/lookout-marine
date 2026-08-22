@@ -1197,6 +1197,11 @@ lk_scale_parse (const char *text, double *out_denominator)
   double denominator = value * multiplier;
   if (!isfinite (denominator) || denominator <= 0)
     return FALSE;
+  /* The range ScaleParser holds on the other shells: below 1:100 no chart
+   * exists, above 1:100,000,000 the number is a typo, and either way Go would
+   * fire a nonsense zoom. */
+  if (denominator < 100.0 || denominator > 100000000.0)
+    return FALSE;
 
   *out_denominator = denominator;
   return TRUE;

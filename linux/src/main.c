@@ -267,7 +267,19 @@ static const char *LK_CSS =
     "}"
     ".lk-raster-pill > button:hover { background: alpha(@accent_color, 0.30); }"
     ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
-    ".lk-raster-bar { opacity: 0.5; }";
+    ".lk-raster-bar { opacity: 0.5; }"
+    /* Night. The dark-theme flip (lk-window.c, lk_window_apply_scheme) does
+     * most of the work — every chrome fill above rides @theme_bg_color — and
+     * this class quiets the surfaces further, so the brightest thing on deck
+     * is the chart, never the readouts floating over it. The fix pill keeps
+     * its state tints: they are the readout. */
+    ".lk-night .lk-capsule, .lk-night .lk-bubble, .lk-night .lk-card,"
+    ".lk-night .lk-pill, .lk-night .lk-panel {"
+    "  background: alpha(#0d1117, 0.92);"
+    "  border-color: alpha(#2c343f, 0.8);"
+    "}"
+    ".lk-night menubutton.lk-bubble > button { background: none; }"
+    ".lk-night .lk-capsule .dim-label { color: #7f8894; }";
 
 static void
 lk_app_activate (GtkApplication *app, gpointer user_data)
@@ -340,8 +352,14 @@ main (int argc, char *argv[])
      nothing will ever mention again. */
   lk_chart_bake_sweep_trash ();
 
-  g_autoptr (GtkApplication) app =
-      gtk_application_new (LK_APP_ID, G_APPLICATION_DEFAULT_FLAGS);
+  /* One instance is the rule — a dock click focuses the chart already
+   * sailing. LOOKOUT_MULTI is the development escape hatch every shell keeps:
+   * a second live window for side-by-side comparison and recording. */
+  GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;
+  if (g_getenv ("LOOKOUT_MULTI") != NULL)
+    flags |= G_APPLICATION_NON_UNIQUE;
+
+  g_autoptr (GtkApplication) app = gtk_application_new (LK_APP_ID, flags);
   g_autoptr (LkAppModel) model = lk_app_model_new ();
 
   g_signal_connect (app, "startup", G_CALLBACK (lk_app_startup), model);

@@ -794,6 +794,12 @@ lk_plugins_edited (LkPlugins *self)
 void
 lk_plugins_apply_saved (LkChartController *controller)
 {
+  /* LOOKOUT_CLEAN: a demonstration launch. The mariner's saved plugin state
+   * stays on disk and stays out of the frame — no connection is dialed, no
+   * private host or vessel name lands in a recording. */
+  if (g_getenv ("LOOKOUT_CLEAN") != NULL)
+    return;
+
   g_auto (GStrv) ids = lk_store_load_plugin_ids ();
 
   for (guint i = 0; ids != NULL && ids[i] != NULL; i++)
