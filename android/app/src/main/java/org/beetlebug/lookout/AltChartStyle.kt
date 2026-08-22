@@ -33,6 +33,13 @@ data class AltTileSource(
     val flipY: Boolean,
 )
 
+/** One sprite pack a style declares: the pack id as the icon-name prefix
+ *  ("" for the spec's "default"), and the base url `.json`/`.png` append to. */
+class SpritePack(val prefix: String, val url: String)
+
+/** A sprite pack fetched whole, ready for the engine. */
+class FetchedSpritePack(val prefix: String, val json: ByteArray, val png: ByteArray)
+
 /** A chart style the host supplies, with its tile sources resolved. */
 class AltChartStyle(
     /** The style JSON to hand to lookout: the publisher's, with every
@@ -43,6 +50,9 @@ class AltChartStyle(
      *  Public tile hosts require visible credit — OSM's tile usage policy
      *  makes it a condition of service, not a courtesy. */
     val attribution: String? = null,
+    /** The style's sprite packs, still unfetched (network work is the
+     *  caller's, off the main thread — fetchSpritePacks). */
+    val spritePacks: List<SpritePack> = emptyList(),
 ) {
     companion object {
         private const val TAG = "lookout"
@@ -81,11 +91,74 @@ class AltChartStyle(
                     flipY = src.optString("scheme").lowercase() == "tms",
                 )
             }
-            return AltChartStyle(top.toString(), resolved, attributionOf(declared))
+            return AltChartStyle(top.toString(), resolved, attributionOf(declared), spritePacksOf(top))
+        }
+
+        /** The style's `sprite` root: one base url, or the array form of
+         *  {id, url} packs whose icons resolve as "id:name" ("default" gives
+         *  bare names). */
+        private fun spritePacksOf(top: JSONObject): List<SpritePack> {
+            val v = top.opt("sprite") ?: return emptyList()
+            if (v is String) return if (v.isEmpty()) emptyList() else listOf(SpritePack("", v))
+            if (v !is JSONArray) return emptyList()
+            val out = ArrayList<SpritePack>()
+            for (i in 0 until v.length()) {
+                val o = v.optJSONObject(i) ?: continue
+                val url = o.optString("url")
+                if (url.isEmpty()) continue
+                val id = o.optString("id")
+                out.add(SpritePack(if (id == "default") "" else id, url))
+            }
+            return out
+        }
+
+        /** Fetch a style's sprite packs whole, preferring the @2x sheet on a
+         *  dense display (with the other density as the fallback — a pack
+         *  publisher may ship only one). Network work — call off the main
+         *  thread. A pack that will not fetch is skipped, not fatal: the
+         *  chart draws, short its icons. */
+        fun fetchSpritePacks(packs: List<SpritePack>): List<FetchedSpritePack> {
+            if (packs.isEmpty()) return emptyList()
+            val hidpi = android.content.res.Resources.getSystem().displayMetrics.density > 1.3f
+            val suffixes = if (hidpi) listOf("@2x", "") else listOf("", "@2x")
+            val out = ArrayList<FetchedSpritePack>()
+            for (p in packs) {
+                var got: FetchedSpritePack? = null
+                for (s in suffixes) {
+                    val j = fetchBytes(p.url + s + ".json") ?: continue
+                    val b = fetchBytes(p.url + s + ".png") ?: continue
+                    got = FetchedSpritePack(p.prefix, j, b)
+                    break
+                }
+                if (got != null) out.add(got)
+                else Log.w(TAG, "sprite pack ${p.url}: fetch failed; its icons will be missing")
+            }
+            return out
+        }
+
+        fun fetchBytes(link: String): ByteArray? {
+            return try {
+                val conn = URL(link).openConnection() as HttpURLConnection
+                identify(conn)
+                conn.connectTimeout = 20_000
+                conn.readTimeout = 20_000
+                try {
+                    if (conn.responseCode != 200) null
+                    else conn.inputStream.use { it.readBytes() }
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "fetch $link: $e")
+                null
+            }
         }
 
         /** The credit line the sources ask for: distinct attributions in
-         *  source order, HTML markup reduced to its text. */
+         *  source order, HTML markup reduced to its text. An attribution
+         *  CONTAINED in another is dropped — sources repeat each other's
+         *  credits inside composite strings, and keeping both made the line
+         *  longer than the scale bar it sits under. */
         private fun attributionOf(declared: JSONObject): String? {
             val seen = LinkedHashSet<String>()
             for (name in declared.keys().asSequence().toList()) {
@@ -99,7 +172,8 @@ class AltChartStyle(
                     .trim()
                 if (text.isNotEmpty()) seen.add(text)
             }
-            return if (seen.isEmpty()) null else seen.joinToString(" · ")
+            val kept = seen.filter { s -> seen.none { t -> t !== s && t.contains(s) } }
+            return if (kept.isEmpty()) null else kept.joinToString(" · ")
         }
 
         /**

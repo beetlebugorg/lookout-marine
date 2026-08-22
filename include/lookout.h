@@ -539,6 +539,21 @@ int lookout_alt_chart_style_json(lookout *h, const char *json, size_t len);
 /* Is a host-supplied style the one being drawn? */
 int lookout_alt_chart_style_active(lookout *h);
 
+/* One sprite pack of the active alt style: the index JSON and the sheet PNG
+ * exactly as fetched (maplibre.org/maplibre-style-spec/sprite). `prefix` is
+ * the pack's id from the style's array form — its icons resolve as
+ * "<prefix>:<name>" — or NULL/"" for the spec's "default" pack (bare names).
+ *
+ * The host fetches the pack (lookout does no networking) and sends it AFTER
+ * lookout_alt_chart_style_json: setting a style clears the previous style's
+ * packs. The cells fold into the resident symbol atlas and the scene
+ * rebuilds, so icons the style asked for by these names start drawing. Cells
+ * the pack marks `sdf` are skipped (they need a pipeline this tier does not
+ * run them through). Answers how many cells landed. Bytes are copied. */
+int lookout_alt_sprite_pack(lookout *h, const char *prefix,
+                            const char *index_json, size_t json_len,
+                            const char *png, size_t png_len);
+
 /* One tile an alt style's source wants, which only the host can fetch.
  *
  * lookout does not do any networking. The shell already fetched the style,

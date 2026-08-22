@@ -665,6 +665,12 @@ pub const Lookout = struct {
     /// Null means the chart is lookout's own. While one is set, the mariner's
     /// display settings do not shape the chart: it is the publisher's.
     alt_style: ?[]u8 = null,
+    /// The alt style's sprite packs (index JSON + sheet PNG, bytes as the
+    /// host fetched them), kept so a scheme change — which rebakes the S-52
+    /// sheet and REPLACES the atlas — can fold them back in. They belong to
+    /// the current alt style: setAltStyle clears them, and the host re-sends
+    /// the new style's packs after.
+    alt_packs: std.ArrayListUnmanaged(AltPack) = .empty,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -1041,6 +1047,7 @@ pub const Lookout = struct {
                     self.ct.setSprite(json, png_b, scale, scheme))
                 {
                     self.sprite_density = scale;
+                    self.reapplyAltSprites(); // the new sheet lost the alt style's cells
                     std.debug.print("sprite sheet {s} @ {d:.2}x (cache)\n", .{ schemeName(scheme), scale });
                     return;
                 }
@@ -1075,6 +1082,7 @@ pub const Lookout = struct {
             }
             if (!self.ct.setSprite(json, png_bytes, scale, scheme)) return;
             self.sprite_density = scale;
+            self.reapplyAltSprites(); // the new sheet lost the alt style's cells
             std.debug.print("sprite sheet: {s} {d}x{d} @ {d:.2}x (baked)\n", .{ schemeName(scheme), size[0], size[1], scale });
             self.writeCache(png_name, png_bytes);
             self.writeCache(json_name, json);
@@ -1789,6 +1797,22 @@ pub const Lookout = struct {
     /// and a tile level is a charttable zoom.
     const MIN_ZOOM_FLOOR = 4.0;
     fn updateZoomLimits(self: *Lookout) void {
+        // An alt chart is the publisher's map, not the library's: its own
+        // sources say how deep it goes, and the ENC's coverage must not
+        // clamp it — behind a link-first startup the library is still
+        // loading, and clamping to it pinned the zoom two levels past
+        // whatever had composed so far. Runs every frame, so clearing the
+        // alt style restores the library band by itself.
+        if (self.alt_style != null) {
+            const deep = self.ct.deepestSourceZoom();
+            self.engine_max_zoom = deep;
+            // Web maps show the whole world; below 2 the mercator square is
+            // smaller than the screen.
+            self.cam.min_zoom = 2.0;
+            self.cam.max_zoom = deep + OVERSCALE_ALLOW;
+            self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
+            return;
+        }
         const zr = self.zoomRange();
         self.engine_max_zoom = zr[1];
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
@@ -1825,6 +1849,10 @@ pub const Lookout = struct {
     /// gesture profile. Recomputed after ~32 screen px of pan or half a zoom
     /// level; compose adoption invalidates (zl_valid).
     fn viewMaxZoom(self: *Lookout) f64 {
+        // The alt chart's depth is its sources', wherever the view sits —
+        // the ENC partition under it is not what is being drawn, and its
+        // answer put an overscale badge on a chart with levels to spare.
+        if (self.alt_style != null) return self.ct.deepestSourceZoom();
         const c = self.compose orelse return self.zoomRange()[1];
         const thresh = 32.0 / (std.math.exp2(self.cam.zoom) * 512.0);
         if (self.zl_valid and
@@ -1899,6 +1927,8 @@ pub const Lookout = struct {
         self.rasters.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
         if (self.alt_style) |s| self.alloc.free(s);
+        self.clearAltPacks();
+        self.alt_packs.deinit(self.alloc);
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
@@ -2259,14 +2289,79 @@ pub const Lookout = struct {
         self.api_mu.unlock();
     }
 
+    /// One sprite pack of the active alt style, held as fetched.
+    pub const AltPack = struct {
+        prefix: []u8,
+        json: []u8,
+        png: []u8,
+    };
+
     /// Draw a host-supplied style instead of the engine's portrayal, or null
-    /// for lookout's own chart. The bytes are copied.
+    /// for lookout's own chart. The bytes are copied. Any sprite packs
+    /// belong to the style they came with, so they go here — the host sends
+    /// the new style's packs after (altSpritePack).
     pub fn setAltStyle(self: *Lookout, json: ?[]const u8) !void {
         if (self.alt_style) |old| self.alloc.free(old);
         self.alt_style = null;
+        self.clearAltPacks();
         if (json) |j| self.alt_style = try self.alloc.dupe(u8, j);
         self.style_dirty = true;
         self.markDirty();
+    }
+
+    fn clearAltPacks(self: *Lookout) void {
+        for (self.alt_packs.items) |p| {
+            self.alloc.free(p.prefix);
+            self.alloc.free(p.json);
+            self.alloc.free(p.png);
+        }
+        self.alt_packs.clearRetainingCapacity();
+    }
+
+    /// One MapLibre sprite pack for the active alt style: the pack's id as
+    /// the icon-name prefix ("" for the spec's "default"), the index JSON
+    /// and the sheet PNG as the host fetched them. Folded into the resident
+    /// atlas at once, kept so a scheme change can fold it back in, and the
+    /// scene rebuilt so icons that were missing resolve. Answers how many
+    /// cells landed.
+    pub fn altSpritePack(self: *Lookout, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        const p = self.alloc.dupe(u8, prefix) catch return 0;
+        const j = self.alloc.dupe(u8, index_json) catch {
+            self.alloc.free(p);
+            return 0;
+        };
+        const b = self.alloc.dupe(u8, png_bytes) catch {
+            self.alloc.free(p);
+            self.alloc.free(j);
+            return 0;
+        };
+        // Replace a pack re-sent under the same prefix rather than stacking
+        // copies for the scheme-change replay.
+        for (self.alt_packs.items, 0..) |old, i| {
+            if (std.mem.eql(u8, old.prefix, prefix)) {
+                self.alloc.free(old.prefix);
+                self.alloc.free(old.json);
+                self.alloc.free(old.png);
+                _ = self.alt_packs.swapRemove(i);
+                break;
+            }
+        }
+        self.alt_packs.append(self.alloc, .{ .prefix = p, .json = j, .png = b }) catch {
+            self.alloc.free(p);
+            self.alloc.free(j);
+            self.alloc.free(b);
+            return 0;
+        };
+        const added = self.ct.addSpritePack(prefix, index_json, png_bytes);
+        if (added > 0) self.markDirty();
+        return added;
+    }
+
+    /// Fold the active alt style's packs back into a freshly (re)loaded
+    /// sheet — a scheme change replaces the atlas out from under them.
+    fn reapplyAltSprites(self: *Lookout) void {
+        for (self.alt_packs.items) |p|
+            _ = self.ct.addSpritePack(p.prefix, p.json, p.png);
     }
 
     pub fn altStyleActive(self: *const Lookout) bool {

@@ -900,6 +900,17 @@ lk_controller_alt_style_active(lk_controller *self)
     return lookout_alt_chart_style_active(self->handle);
 }
 
+int
+lk_controller_alt_sprite_pack(lk_controller *self, const char *prefix,
+                              const char *json, size_t json_len,
+                              const char *png, size_t png_len)
+{
+    lk_controller_kick();
+    if (!lk_controller_is_open(self))
+        return 0;
+    return lookout_alt_sprite_pack(self->handle, prefix, json, json_len, png, png_len);
+}
+
 void
 lk_controller_set_tile_provider(lk_controller *self, lk_tile_request cb, void *user)
 {

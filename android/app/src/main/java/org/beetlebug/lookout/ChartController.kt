@@ -1130,10 +1130,12 @@ class ChartController(private val appContext: Context) {
         Thread {
             // A TileJSON link carries the wrapper generated when it was
             // added; a style link is the publisher's own document, fetched
-            // fresh so their edits show up.
+            // fresh so their edits show up. The sprite packs ride along:
+            // fetched here, off the main thread, so applying is instant.
             val raw = link?.doc ?: AltChartStyle.fetchText(active)
             val resolved = raw?.let { AltChartStyle.resolve(it) }
-            main.post { applyAltStyle(resolved, active) }
+            val packs = resolved?.let { AltChartStyle.fetchSpritePacks(it.spritePacks) } ?: emptyList()
+            main.post { applyAltStyle(resolved, packs, active) }
         }.start()
     }
 
@@ -1142,7 +1144,7 @@ class ChartController(private val appContext: Context) {
      * race the mariner can cause: picking a second chart while the first is
      * still being fetched — the slower fetch must not win.
      */
-    private fun applyAltStyle(style: AltChartStyle?, url: String) {
+    private fun applyAltStyle(style: AltChartStyle?, packs: List<FetchedSpritePack>, url: String) {
         if (activeChartLink != url) return
         if (style == null) {
             chartLinkError = "That chart didn't answer. Showing the Lookout chart."
@@ -1160,6 +1162,12 @@ class ChartController(private val appContext: Context) {
         onEngine { l ->
             if (l.altStyleSet(style.json)) {
                 altTiles.start(l, style.sources)
+                // AFTER the style: setting one clears the previous style's
+                // packs, so this order is what makes the icons stick.
+                for (p in packs) {
+                    val n = l.altSpritePack(p.prefix, p.json, p.png)
+                    Log.i(TAG, "sprite pack '${p.prefix}': $n cells")
+                }
             } else {
                 Log.w(TAG, "alt chart style refused")
             }

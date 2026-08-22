@@ -732,6 +732,15 @@ export fn lookout_alt_chart_style_active(h: ?*lookout) c_int {
     return if (l.altStyleActive()) 1 else 0;
 }
 
+/// One sprite pack of the active alt style. See lookout.h.
+export fn lookout_alt_sprite_pack(h: ?*lookout, prefix: ?[*:0]const u8, index_json: [*]const u8, json_len: usize, png: [*]const u8, png_len: usize) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (json_len == 0 or png_len == 0) return 0;
+    const p: []const u8 = if (prefix) |pp| std.mem.span(pp) else "";
+    return @intCast(l.altSpritePack(p, index_json[0..json_len], png[0..png_len]));
+}
+
 /// Where an alt style's tiles are asked for. See lookout.h.
 export fn lookout_set_tile_provider(h: ?*lookout, cb: ?lk.Lookout.TileRequestFn, user: ?*anyopaque) void {
     const l = locked(h);

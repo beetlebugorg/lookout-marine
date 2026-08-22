@@ -466,6 +466,100 @@ pub const Host = struct {
         });
     }
 
+    /// Fold one MapLibre sprite PACK — an alt style's, fetched by the shell —
+    /// into the resident atlas: every cell re-packed under its array-form
+    /// name (`<prefix>:<name>`, bare when the pack id is "default"). Cells
+    /// marked `sdf` are SKIPPED: the sprite pipeline draws texels verbatim,
+    /// and a distance field drawn verbatim is a smear where an icon should
+    /// be. Answers how many cells landed.
+    ///
+    /// Adding to the resident sheet (not swapping it) is the point: the
+    /// S-52 symbols, the baked sounding runs and the alt style's seamarks
+    /// share one atlas, one texture, and the banded-row upload that already
+    /// exists for the missing-symbol path.
+    pub fn addSpritePack(self: *Host, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        self.m.waitForBuild(); // the build worker reads the sprite
+        var tmp = std.heap.ArenaAllocator.init(self.alloc);
+        defer tmp.deinit();
+        const ta = tmp.allocator();
+
+        const img = ct.png.read(ta, png_bytes) catch return 0;
+        const doc = std.json.parseFromSliceLeaky(std.json.Value, ta, index_json, .{}) catch return 0;
+        if (doc != .object) return 0;
+
+        if (self.sprite == null) {
+            self.sprite = ct.sprite.Sprite.initEmpty(self.alloc, img.w) catch return 0;
+        }
+        const sp = &self.sprite.?;
+
+        var added: usize = 0;
+        var skipped_sdf: usize = 0;
+        var it = doc.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .object) continue;
+            const o = e.value_ptr.object;
+            const x = packUint(o, "x") orelse continue;
+            const y = packUint(o, "y") orelse continue;
+            const w = packUint(o, "width") orelse continue;
+            const h = packUint(o, "height") orelse continue;
+            if (w == 0 or h == 0 or x > img.w or w > img.w - x or y > img.h or h > img.h - y)
+                continue;
+            if (o.get("sdf")) |s| {
+                if (s == .bool and s.bool) {
+                    skipped_sdf += 1;
+                    continue;
+                }
+            }
+            var ratio: f32 = 1;
+            if (o.get("pixelRatio")) |r| switch (r) {
+                .integer => |i| ratio = @floatFromInt(i),
+                .float => |f| ratio = @floatCast(f),
+                else => {},
+            };
+            if (!(ratio > 0)) ratio = 1;
+
+            // A tight copy of the cell, row by row.
+            const cell = ta.alloc(u8, @as(usize, w) * h * 4) catch continue;
+            for (0..h) |r| {
+                const src = ((@as(usize, y) + r) * img.w + x) * 4;
+                @memcpy(cell[r * w * 4 ..][0 .. w * 4], img.rgba[src..][0 .. w * 4]);
+            }
+            const name = if (prefix.len == 0)
+                e.key_ptr.*
+            else
+                std.fmt.allocPrint(ta, "{s}:{s}", .{ prefix, e.key_ptr.* }) catch continue;
+            sp.addImage(name, cell, w, h, ratio) catch continue;
+            added += 1;
+        }
+        if (added > 0) {
+            // One swap for the whole pack, and the missing-image ledger
+            // starts over: names that could not resolve before this pack
+            // landed can now.
+            self.applyAssets();
+            self.forgetReported();
+        }
+        std.debug.print("sprite pack '{s}': {d} cells added, {d} sdf skipped\n", .{ prefix, added, skipped_sdf });
+        return added;
+    }
+
+    /// The deepest zoom any bound source serves — an alt style's own depth,
+    /// for the camera band while one is up. 22 when nothing is bound yet
+    /// (never clamp a chart that has not said how deep it goes).
+    pub fn deepestSourceZoom(self: *Host) f64 {
+        var maxz: f64 = 0;
+        for (self.m.cache.sources.items) |s| maxz = @max(maxz, @as(f64, @floatFromInt(s.maxzoom)));
+        return if (maxz > 0) maxz else 22;
+    }
+
+    fn packUint(o: std.json.ObjectMap, key: []const u8) ?u32 {
+        const v = o.get(key) orelse return null;
+        return switch (v) {
+            .integer => |i| if (i >= 0 and i <= std.math.maxInt(u32)) @intCast(i) else null,
+            .float => |f| if (f >= 0 and f <= std.math.maxInt(u32) and f == @floor(f)) @intFromFloat(f) else null,
+            else => null,
+        };
+    }
+
     fn forgetReported(self: *Host) void {
         var it = self.reported.keyIterator();
         while (it.next()) |k| self.alloc.free(k.*);

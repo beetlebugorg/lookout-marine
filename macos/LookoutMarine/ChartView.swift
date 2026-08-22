@@ -211,7 +211,8 @@ struct OverlayLayer: View {
                 // Bottom left: the scale bar.
                 .overlay(alignment: .bottomLeading) {
                     if model.hasChart {
-                        ScaleBarView(scaleDenominator: model.scaleDenominator)
+                        ScaleBarView(scaleDenominator: model.scaleDenominator,
+                                     credit: model.chartLinkAttribution)
                             .padding(.leading, Chrome.margin + sideInset)
                             .padding(.bottom, corner)
                     }

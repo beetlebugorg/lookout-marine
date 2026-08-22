@@ -535,6 +535,13 @@ public final class Lookout implements AutoCloseable {
      *  restores lookout's chart. Tiles are then asked back through tilePoll. */
     public boolean altStyleSet(String json)      { return h != 0 && nAltStyleSet(h, json); }
     public boolean altStyleActive()              { return h != 0 && nAltStyleActive(h); }
+    /** One sprite pack of the active alt style, exactly as fetched: the
+     *  pack's id as the icon-name prefix ("" for "default"), its index JSON
+     *  and its sheet PNG. Send AFTER altStyleSet — setting a style clears
+     *  the previous style's packs. Answers how many cells landed. */
+    public int altSpritePack(String prefix, byte[] json, byte[] png) {
+        return h == 0 ? 0 : nAltSpritePack(h, prefix, json, png);
+    }
     /** Drain up to ids.length parked tile asks; zxy is packed z,x,y triples. */
     public int tilePoll(long[] ids, int[] zxy, String[] sources) {
         return h == 0 ? 0 : nTilePoll(h, ids, zxy, sources);
@@ -554,6 +561,7 @@ public final class Lookout implements AutoCloseable {
     private static native String nPluginInstall(long h, String path);
     private static native boolean nPluginUninstall(long h, String id);
     private static native boolean nAltStyleSet(long h, String json);
+    private static native int nAltSpritePack(long h, String prefix, byte[] json, byte[] png);
     private static native boolean nAltStyleActive(long h);
     private static native int nTilePoll(long h, long[] ids, int[] zxy, String[] sources);
     private static native void nTileRespond(long h, long id, byte[] bytes, int status);

@@ -100,6 +100,12 @@ typedef void (*lk_tile_request)(void *user, const char *source,
  * answers 1 on success, unlike most of the ABI). */
 int  lk_controller_alt_style_set(lk_controller *self, const char *json);
 int  lk_controller_alt_style_active(lk_controller *self);
+/* One sprite pack of the active alt style, exactly as fetched — send AFTER
+ * alt_style_set (setting a style clears the previous style's packs). Answers
+ * how many cells landed. See lookout.h (lookout_alt_sprite_pack). */
+int  lk_controller_alt_sprite_pack(lk_controller *self, const char *prefix,
+                                   const char *json, size_t json_len,
+                                   const char *png, size_t png_len);
 void lk_controller_set_tile_provider(lk_controller *self, lk_tile_request cb, void *user);
 /* status: 0 bytes, 1 "no tile there", 2 "tried and failed". Lock-free. */
 void lk_controller_tile_respond(lk_controller *self, unsigned long long req_id,

@@ -132,6 +132,90 @@ namespace
         return JsonObject::TryParse(winrt::to_hstring(text), out);
     }
 
+    // One sprite pack a style declares: the pack id as the icon-name prefix
+    // ("" for the spec's "default"), and the base url `.json`/`.png` append
+    // to.
+    struct SpritePackRef
+    {
+        std::string prefix;
+        std::string url;
+    };
+
+    // A pack fetched whole, ready for the engine.
+    struct FetchedSpritePack
+    {
+        std::string prefix;
+        std::string json;
+        std::vector<uint8_t> png;
+    };
+
+    // The style's `sprite` root: one base url, or the array form of {id, url}
+    // packs whose icons resolve as "id:name" ("default" gives bare names).
+    std::vector<SpritePackRef> SpritePacksOf(JsonObject const &top)
+    {
+        std::vector<SpritePackRef> out;
+        auto v = top.TryLookup(L"sprite");
+        if (v == nullptr)
+            return out;
+        if (v.ValueType() == JsonValueType::String)
+        {
+            auto url = winrt::to_string(v.GetString());
+            if (!url.empty())
+                out.push_back({ "", url });
+            return out;
+        }
+        if (v.ValueType() != JsonValueType::Array)
+            return out;
+        for (auto const &e : v.GetArray())
+        {
+            if (e.ValueType() != JsonValueType::Object)
+                continue;
+            auto o = e.GetObject();
+            auto url = winrt::to_string(o.GetNamedString(L"url", L""));
+            if (url.empty())
+                continue;
+            auto id = winrt::to_string(o.GetNamedString(L"id", L""));
+            out.push_back({ id == "default" ? std::string{} : id, url });
+        }
+        return out;
+    }
+
+    bool FetchBytes(std::string const &link, std::vector<uint8_t> &out)
+    {
+        return FetchUrl(winrt::to_hstring(link).c_str(), out) == 200;
+    }
+
+    // Fetch a style's sprite packs whole. @2x first — the sheets draw at
+    // their authored logical size whatever the ratio, and every display that
+    // matters is dense — with the 1x pack as the fallback for a publisher
+    // who ships only one. A pack that will not fetch is skipped, not fatal:
+    // the chart draws, short its icons.
+    std::vector<FetchedSpritePack> FetchSpritePacks(std::vector<SpritePackRef> const &packs)
+    {
+        std::vector<FetchedSpritePack> out;
+        for (auto const &p : packs)
+        {
+            bool got = false;
+            for (auto const *s : { "@2x", "" })
+            {
+                std::vector<uint8_t> jb, pb;
+                if (!FetchBytes(p.url + s + ".json", jb) || !FetchBytes(p.url + s + ".png", pb))
+                    continue;
+                FetchedSpritePack f;
+                f.prefix = p.prefix;
+                f.json.assign(jb.begin(), jb.end());
+                f.png = std::move(pb);
+                out.push_back(std::move(f));
+                got = true;
+                break;
+            }
+            if (!got)
+                fprintf(stderr, "shell: sprite pack %s: fetch failed; its icons will be missing\n",
+                        p.url.c_str());
+        }
+        return out;
+    }
+
     // A style for a bare tile source. Raster tiles draw as imagery; vector
     // tiles draw each advertised layer in a legible generic scheme — honest
     // geometry, not the publisher's portrayal (a tile source doesn't carry
@@ -350,11 +434,14 @@ namespace
     // false when the text is not a style.
     bool ResolveStyle(std::string const &raw, std::string &out_json,
                       std::map<std::string, std::pair<std::vector<std::string>, bool>> &out_sources,
-                      std::string &out_attribution)
+                      std::string &out_attribution,
+                      std::vector<SpritePackRef> &out_packs)
     {
         JsonObject top;
         if (!ParseObject(raw, top))
             return false;
+        out_packs = SpritePacksOf(top);
+        std::vector<std::string> credits;
         auto declared = top.TryLookup(L"sources");
         if (declared == nullptr || declared.ValueType() != JsonValueType::Object)
             return false;
@@ -402,13 +489,30 @@ namespace
 
             std::string credit =
                 StripAttribution(winrt::to_string(src.GetNamedString(L"attribution", L"")));
-            if (!credit.empty() &&
-                out_attribution.find(credit) == std::string::npos)
+            if (!credit.empty())
+                credits.push_back(std::move(credit));
+        }
+        // Distinct, and an attribution CONTAINED in another is dropped —
+        // sources repeat each other's credits inside composite strings, and
+        // keeping both made the line longer than the scale bar it sits
+        // under.
+        for (size_t i = 0; i < credits.size(); ++i)
+        {
+            bool drop = false;
+            for (size_t k = 0; k < credits.size() && !drop; ++k)
             {
-                if (!out_attribution.empty())
-                    out_attribution += " \xC2\xB7 ";
-                out_attribution += credit;
+                if (k == i)
+                    continue;
+                if (credits[k] == credits[i])
+                    drop = k < i; // exact duplicate: the first one speaks
+                else if (credits[k].find(credits[i]) != std::string::npos)
+                    drop = true; // contained in a longer credit
             }
+            if (drop)
+                continue;
+            if (!out_attribution.empty())
+                out_attribution += " \xC2\xB7 ";
+            out_attribution += credits[i];
         }
         out_json = winrt::to_string(top.Stringify());
         return true;
@@ -681,10 +785,16 @@ namespace winrt::LookoutMarine::implementation
             auto sources = std::make_shared<
                 std::map<std::string, std::pair<std::vector<std::string>, bool>>>();
             auto credit = std::make_shared<std::string>();
+            auto packs = std::make_shared<std::vector<FetchedSpritePack>>();
             std::string raw = doc;
             bool ok = !raw.empty() || FetchText(link, raw);
-            ok = ok && ResolveStyle(raw, *json, *sources, *credit);
-            queue.TryEnqueue([this, epoch, link, ok, json, sources, credit] {
+            std::vector<SpritePackRef> pack_refs;
+            ok = ok && ResolveStyle(raw, *json, *sources, *credit, pack_refs);
+            // The sprite packs ride along: fetched here, off the UI thread,
+            // so applying is instant.
+            if (ok)
+                *packs = FetchSpritePacks(pack_refs);
+            queue.TryEnqueue([this, epoch, link, ok, json, sources, credit, packs] {
                 // The epoch guards the race the mariner can cause: picking a
                 // second chart while the first is still being fetched. The
                 // slower fetch must not win.
@@ -715,7 +825,23 @@ namespace winrt::LookoutMarine::implementation
                 }
                 lk_controller_set_tile_provider(controller, TileThunk, this);
                 if (!lk_controller_alt_style_set(controller, json->c_str()))
+                {
                     fprintf(stderr, "shell: alt chart style refused\n");
+                }
+                else
+                {
+                    // AFTER the style: setting one clears the previous
+                    // style's packs, so this order is what makes the icons
+                    // stick.
+                    for (auto const &p : *packs)
+                    {
+                        int n = lk_controller_alt_sprite_pack(
+                            controller, p.prefix.c_str(),
+                            p.json.data(), p.json.size(),
+                            reinterpret_cast<char const *>(p.png.data()), p.png.size());
+                        fprintf(stderr, "shell: sprite pack '%s': %d cells\n", p.prefix.c_str(), n);
+                    }
+                }
             });
         }).detach();
     }

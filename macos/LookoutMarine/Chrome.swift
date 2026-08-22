@@ -292,6 +292,10 @@ struct PickMarker: View {
 /// width comes from the 1:N scale.
 struct ScaleBarView: View {
     let scaleDenominator: Double
+    /// Source credits while a chart link draws — tile usage policies make
+    /// the visible credit a condition of service, so it rides the one HUD
+    /// element that is always on screen.
+    var credit: String? = nil
 
     private static let nice: [Double] = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
                                          10_000, 20_000, 50_000, 100_000, 200_000, 500_000]
@@ -326,6 +330,13 @@ struct ScaleBarView: View {
                     }
                 }
                 .overlay(Rectangle().stroke(Chrome.ink, lineWidth: 1))
+                if let credit {
+                    Text(credit)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Chrome.muted)
+                        .shadow(color: .white.opacity(0.9), radius: 2)
+                        .frame(maxWidth: 360, alignment: .leading)
+                }
             }
             .allowsHitTesting(false)
         }

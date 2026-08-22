@@ -1785,6 +1785,29 @@ export fn Java_org_beetlebug_lookout_Lookout_nTileRespond(env: [*c]j.JNIEnv, cls
     lookout_tile_respond(h.l, req, p, len, 0);
 }
 
+extern fn lookout_alt_sprite_pack(h: ?*anyopaque, prefix: ?[*:0]const u8, index_json: [*]const u8, json_len: usize, png: [*]const u8, png_len: usize) c_int;
+
+/// int nAltSpritePack(long h, String prefix, byte[] json, byte[] png) — one
+/// sprite pack of the active alt style, exactly as fetched. See lookout.h.
+export fn Java_org_beetlebug_lookout_Lookout_nAltSpritePack(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, prefix: j.jstring, json: j.jbyteArray, png_arr: j.jbyteArray) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    if (json == null or png_arr == null) return 0;
+    const jl = env_(env).GetArrayLength.?(env, json);
+    const pl = env_(env).GetArrayLength.?(env, png_arr);
+    if (jl <= 0 or pl <= 0) return 0;
+    const jb = env_(env).GetByteArrayElements.?(env, json, null) orelse return 0;
+    defer env_(env).ReleaseByteArrayElements.?(env, json, jb, j.JNI_ABORT);
+    const pb = env_(env).GetByteArrayElements.?(env, png_arr, null) orelse return 0;
+    defer env_(env).ReleaseByteArrayElements.?(env, png_arr, pb, j.JNI_ABORT);
+    const cp: ?[*:0]const u8 = if (prefix != null)
+        @ptrCast(env_(env).GetStringUTFChars.?(env, prefix, null))
+    else
+        null;
+    defer if (cp != null) env_(env).ReleaseStringUTFChars.?(env, prefix, @ptrCast(cp));
+    return lookout_alt_sprite_pack(h.l, cp, @ptrCast(jb), @intCast(jl), @ptrCast(pb), @intCast(pl));
+}
+
 extern fn lookout_open_file(h: ?*anyopaque, path: [*:0]const u8) c_int;
 
 /// int nOpenFile(long h, String path) -- offer a file the mariner opened to

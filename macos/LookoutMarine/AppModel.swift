@@ -836,6 +836,10 @@ final class AppModel: ObservableObject {
     @Published var activeChartLink: String? = nil
     @Published var chartLinkBusy = false
     @Published var chartLinkError: String? = nil
+    /// The active chart link's source credits, drawn by the scale bar while
+    /// the link draws (tile usage policies make the credit a condition of
+    /// service). Nil when the Lookout chart is up.
+    @Published var chartLinkAttribution: String? = nil
 
     private static let chartLinksKey = "lookout.chartlinks"
     private static let chartLinkActiveKey = "lookout.chartlinks.active"
@@ -865,6 +869,7 @@ final class AppModel: ObservableObject {
     /// showing up without a refresh.
     func pushChartLink() {
         guard let active = activeChartLink else {
+            chartLinkAttribution = nil
             controller?.setAltChartStyle(nil)
             return
         }
@@ -874,13 +879,15 @@ final class AppModel: ObservableObject {
         if let doc = link?.doc {
             Task { [weak self] in
                 let resolved = await AltChartStyle.resolve(json: doc)
-                await MainActor.run { self?.applyAltStyle(resolved, for: active) }
+                let packs = await AltChartStyle.fetchSpritePacks(resolved?.spritePacks ?? [])
+                await MainActor.run { self?.applyAltStyle(resolved, packs: packs, for: active) }
             }
             return
         }
         Task { [weak self] in
             let resolved = await Self.fetchStyle(active)
-            await MainActor.run { self?.applyAltStyle(resolved, for: active) }
+            let packs = await AltChartStyle.fetchSpritePacks(resolved?.spritePacks ?? [])
+            await MainActor.run { self?.applyAltStyle(resolved, packs: packs, for: active) }
         }
     }
 
@@ -890,17 +897,19 @@ final class AppModel: ObservableObject {
     /// chart while the first is still being fetched. Without it the slower
     /// fetch wins whenever it lands last, and the chart is not the one with
     /// the tick beside it.
-    private func applyAltStyle(_ style: AltChartStyle?, for url: String) {
+    private func applyAltStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = [], for url: String) {
         guard activeChartLink == url else { return }
         guard let style else {
             chartLinkError = "That chart didn't answer. Showing the Lookout chart."
             activeChartLink = nil
+            chartLinkAttribution = nil
             saveChartLinks()
             controller?.setAltChartStyle(nil)
             return
         }
         chartLinkError = nil
-        controller?.setAltChartStyle(style)
+        chartLinkAttribution = style.attribution
+        controller?.setAltChartStyle(style, packs: packs)
     }
 
     private static func fetchStyle(_ link: String) async -> AltChartStyle? {

@@ -19,6 +19,20 @@
 
 import Foundation
 
+/// One sprite pack a style declares: the pack id as the icon-name prefix
+/// ("" for the spec's "default"), and the base url `.json`/`.png` append to.
+struct SpritePack {
+    let prefix: String
+    let url: String
+}
+
+/// A sprite pack fetched whole, ready for the engine.
+struct FetchedSpritePack {
+    let prefix: String
+    let json: Data
+    let png: Data
+}
+
 /// A chart style the host supplies, with its tile sources resolved.
 struct AltChartStyle {
     /// The style JSON to hand to lookout: the publisher's, with every TileJSON
@@ -26,6 +40,12 @@ struct AltChartStyle {
     let json: String
     /// Where each source's tiles come from, by the name the style gave it.
     let sources: [String: AltChartTiles.Source]
+    /// The style's sprite packs, still unfetched (fetchSpritePacks).
+    var spritePacks: [SpritePack] = []
+    /// Every distinct source attribution, tags stripped, joined for display.
+    /// Public tile hosts make the visible credit a condition of service —
+    /// OSM's tile usage policy among them.
+    var attribution: String? = nil
 
     /// Say who is asking, on every chart-link request. Public tile hosts
     /// serve "access blocked" placeholder tiles to anonymous or
@@ -81,7 +101,77 @@ struct AltChartStyle {
         top["sources"] = declared
         guard let out = try? JSONSerialization.data(withJSONObject: top),
               let text = String(data: out, encoding: .utf8) else { return nil }
-        return .init(json: text, sources: resolved)
+        return .init(json: text, sources: resolved,
+                     spritePacks: spritePacks(of: top),
+                     attribution: attribution(of: declared))
+    }
+
+    /// The credit line the sources ask for: distinct attributions, HTML
+    /// markup reduced to its text.
+    private static func attribution(of declared: [String: Any]) -> String? {
+        var seen: [String] = []
+        for (_, v) in declared {
+            guard let src = v as? [String: Any],
+                  let raw = src["attribution"] as? String, !raw.isEmpty else { continue }
+            let text = raw
+                .replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "&copy;", with: "©")
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty && !seen.contains(text) { seen.append(text) }
+        }
+        // An attribution CONTAINED in another is dropped — sources repeat
+        // each other's credits inside composite strings, and keeping both
+        // made the line longer than the scale bar it sits under.
+        let kept = seen.filter { s in !seen.contains { $0 != s && $0.contains(s) } }
+        return kept.isEmpty ? nil : kept.joined(separator: " · ")
+    }
+
+    /// The style's `sprite` root: one base url, or the array form of
+    /// {id, url} packs whose icons resolve as "id:name" ("default" gives
+    /// bare names).
+    private static func spritePacks(of top: [String: Any]) -> [SpritePack] {
+        if let url = top["sprite"] as? String {
+            return url.isEmpty ? [] : [SpritePack(prefix: "", url: url)]
+        }
+        guard let arr = top["sprite"] as? [[String: Any]] else { return [] }
+        return arr.compactMap { o in
+            guard let url = o["url"] as? String, !url.isEmpty else { return nil }
+            let id = o["id"] as? String ?? ""
+            return SpritePack(prefix: id == "default" ? "" : id, url: url)
+        }
+    }
+
+    /// Fetch a style's sprite packs whole. @2x first — the sheets are drawn
+    /// at their authored logical size whatever the ratio, and every display
+    /// that matters is dense — with the 1x pack as the fallback for a
+    /// publisher who ships only one. A pack that will not fetch is skipped,
+    /// not fatal: the chart draws, short its icons.
+    static func fetchSpritePacks(_ packs: [SpritePack]) async -> [FetchedSpritePack] {
+        guard !packs.isEmpty else { return [] }
+        var out: [FetchedSpritePack] = []
+        for p in packs {
+            var got: FetchedSpritePack?
+            for s in ["@2x", ""] {
+                guard let j = await fetchData(p.url + s + ".json"),
+                      let b = await fetchData(p.url + s + ".png") else { continue }
+                got = FetchedSpritePack(prefix: p.prefix, json: j, png: b)
+                break
+            }
+            if let got {
+                out.append(got)
+            } else {
+                lkLog("sprite pack \(p.url): fetch failed; its icons will be missing")
+            }
+        }
+        return out
+    }
+
+    private static func fetchData(_ link: String) async -> Data? {
+        guard let url = URL(string: link),
+              let (data, resp) = try? await URLSession.shared.data(for: identifiedRequest(url)),
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data
     }
 
     private static func fetchTileJSON(_ link: String) async -> [String: Any]? {

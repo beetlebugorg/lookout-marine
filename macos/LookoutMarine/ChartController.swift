@@ -1095,7 +1095,7 @@ final class ChartController: NSObject {
     /// asking for tiles as soon as it has the style, and a source it asks
     /// about before this knows where to fetch it is answered "failed" and
     /// remembered as such.
-    func setAltChartStyle(_ style: AltChartStyle?) {
+    func setAltChartStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = []) {
         guard let h = handle else { return }
         altTiles.setSources(style?.sources ?? [:])
         if let style {
@@ -1103,7 +1103,23 @@ final class ChartController: NSObject {
             let ok = style.json.withCString { p in
                 lookout_alt_chart_style_json(h, p, strlen(p))
             }
-            if ok == 0 { lkLog("alt style: the core refused it") }
+            if ok == 0 {
+                lkLog("alt style: the core refused it")
+            } else {
+                // AFTER the style: setting one clears the previous style's
+                // packs, so this order is what makes the icons stick.
+                for p in packs {
+                    let n = p.json.withUnsafeBytes { (jb: UnsafeRawBufferPointer) in
+                        p.png.withUnsafeBytes { (pb: UnsafeRawBufferPointer) in
+                            lookout_alt_sprite_pack(
+                                h, p.prefix,
+                                jb.baseAddress?.assumingMemoryBound(to: CChar.self), jb.count,
+                                pb.baseAddress?.assumingMemoryBound(to: CChar.self), pb.count)
+                        }
+                    }
+                    lkLog("sprite pack '\(p.prefix)': \(n) cells")
+                }
+            }
         } else {
             lkLog("alt style: cleared, back to the Lookout chart")
             lookout_alt_chart_style_json(h, nil, 0)
