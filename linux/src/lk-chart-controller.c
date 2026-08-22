@@ -169,7 +169,13 @@ lk_chart_controller_tick (GtkWidget     *widget,
 
   gboolean building = lookout_is_building (self->handle) != 0;
   if (self->model != NULL)
-    lk_app_model_set_building (self->model, building);
+    {
+      lk_app_model_set_building (self->model, building);
+      /* The chart-link list, the credit and the error, from the core. A
+       * landing answer raises needs-redraw, so a resolve keeps this ticking
+       * until it is done. */
+      lk_app_model_poll_chart_links (self->model);
+    }
 
   if (animating || lookout_needs_redraw (self->handle) != 0)
     {
@@ -928,12 +934,11 @@ lk_chart_controller_close (LkChartController *self)
   if (self->handle == NULL)
     return;
 
-  /* Before the handle: a tile fetch landing later must find the provider
-   * gone, never a dying engine. The respond wrapper below refuses a NULL
-   * handle, and the links layer cancels its in-flight fetches before the
-   * NEXT handle can ask for anything (lk_chart_links_reapply) — a new handle
-   * reuses the old one's request ids. */
-  lookout_set_tile_provider (self->handle, NULL, NULL);
+  /* Before the handle: a fetch landing later must find the provider gone,
+   * never a dying engine. The respond wrapper below refuses a NULL handle,
+   * and the links layer cancels its in-flight fetches before the NEXT handle
+   * can ask for anything — a new handle reuses the old one's request ids. */
+  lookout_set_http_provider (self->handle, NULL, NULL, NULL);
 
   lookout_view view;
   lookout_get_view (self->handle, &view); /* the pose to reopen on, before the handle dies */
@@ -946,19 +951,7 @@ lk_chart_controller_close (LkChartController *self)
     lk_app_model_set_chart_open (self->model, FALSE, NULL);
 }
 
-/* ---- alt chart styles (charts by link) ----------------------------------- */
-
-gboolean
-lk_chart_controller_alt_style_set (LkChartController *self, const char *json)
-{
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
-  if (self->handle == NULL)
-    return FALSE;
-  int ok = lookout_alt_chart_style_json (self->handle, json,
-                                         json != NULL ? strlen (json) : 0);
-  lk_chart_controller_kick (self);
-  return ok != 0;
-}
+/* ---- charts by link ------------------------------------------------------ */
 
 gboolean
 lk_chart_controller_alt_style_active (LkChartController *self)
@@ -968,31 +961,20 @@ lk_chart_controller_alt_style_active (LkChartController *self)
   return lookout_alt_chart_style_active (self->handle) != 0;
 }
 
-int
-lk_chart_controller_alt_sprite_pack (LkChartController *self, const char *prefix,
-                                     const char *json, gsize json_len,
-                                     const char *png, gsize png_len)
-{
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
-  if (self->handle == NULL)
-    return 0;
-  int n = lookout_alt_sprite_pack (self->handle, prefix, json, json_len, png, png_len);
-  lk_chart_controller_kick (self);
-  return n;
-}
-
 void
-lk_chart_controller_set_tile_provider (LkChartController *self,
-                                       lookout_tile_request cb, gpointer user)
+lk_chart_controller_set_http_provider (LkChartController *self,
+                                       lookout_http_get get,
+                                       lookout_http_cancel cancel,
+                                       gpointer user)
 {
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
   if (self->handle == NULL)
     return;
-  lookout_set_tile_provider (self->handle, cb, user);
+  lookout_set_http_provider (self->handle, get, cancel, user);
 }
 
 void
-lk_chart_controller_tile_respond (LkChartController *self, guint64 req_id,
+lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
                                   const void *bytes, gsize len, int status)
 {
   /* From soup completion callbacks, which may outlive the handle they were
@@ -1000,7 +982,78 @@ lk_chart_controller_tile_respond (LkChartController *self, guint64 req_id,
    * request id it no longer knows. */
   if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
     return;
-  lookout_tile_respond (self->handle, req_id, bytes, len, status);
+  lookout_http_respond (self->handle, req_id, bytes, len, status);
+  /* An answer is adopted at the top of a frame, and the tick stands down when
+   * nothing is moving, so a resolve landing with no gesture behind it needs
+   * someone to ask for the next frame. */
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_add (LkChartController *self, const char *link)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || link == NULL)
+    return;
+  lookout_chart_link_add (self->handle, link);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_select (LkChartController *self, const char *url)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL)
+    return;
+  lookout_chart_link_select (self->handle, url);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_remove (LkChartController *self, const char *url)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || url == NULL)
+    return;
+  lookout_chart_link_remove (self->handle, url);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_refresh (LkChartController *self, const char *url)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || url == NULL)
+    return;
+  lookout_chart_link_refresh (self->handle, url);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_links_import (LkChartController *self, const char *json)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || json == NULL)
+    return;
+  lookout_chart_links_import (self->handle, json);
+}
+
+char *
+lk_chart_controller_chart_links_changed_json (LkChartController *self)
+{
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return NULL;
+  if (lookout_chart_links_changed (self->handle) == 0)
+    return NULL;
+
+  char *owned = lookout_chart_links_json (self->handle);
+  if (owned == NULL)
+    return NULL;
+  /* lookout and GLib need not share a malloc, so the bytes are copied out and
+   * handed back to the allocator they came from. */
+  char *copy = g_strdup (owned);
+  lookout_string_free (owned);
+  return copy;
 }
 
 /* ---- view --------------------------------------------------------------- */

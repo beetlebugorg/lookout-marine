@@ -1,12 +1,14 @@
-/* lk-chart-links.h — an online map AS the chart. The shell fetches a
- * publisher's MapLibre style, hands lookout the JSON, and then serves that
- * style's tiles (lookout does no networking — see include/lookout.h,
- * lookout_set_tile_provider). The GTK twin of MainWindow.ChartLinks.cpp
- * (Windows) and AltChartStyle.swift (macOS).
+/* lk-chart-links.h — an online map AS the chart.
  *
- * Everything here runs on the main thread. Resolving a link fans out over
- * several fetches, so it runs whole on a GTask worker with its own session;
- * tile fetches are soup async calls started right in the engine's callback.
+ * lookout owns the whole feature: it probes the link, inlines TileJSON
+ * sources, generates a wrapper style for bare tiles, fetches the sprite packs,
+ * builds the credit line, templates the tile urls and persists the list. This
+ * object is the shell's two halves of it — a libsoup fetcher for the urls
+ * lookout asks for, and the snapshot the settings list and the HUD render.
+ * See include/lookout.h, lookout_set_http_provider.
+ *
+ * Everything here runs on the main thread: the render tick is the main
+ * thread, so lookout's asks arrive there and soup answers there.
  */
 #pragma once
 
@@ -17,14 +19,10 @@ G_BEGIN_DECLS
 #define LK_TYPE_CHART_LINKS (lk_chart_links_get_type ())
 G_DECLARE_FINAL_TYPE (LkChartLinks, lk_chart_links, LK, CHART_LINKS, GObject)
 
-/* One chart the mariner added by link. `url` is its identity; `doc` carries
- * the style TEXT where the link itself cannot be re-read the same way (a
- * mariner's own file, or the wrapper generated for a bare TileJSON) and is
- * empty for a style link, which is fetched fresh on every push. */
+/* One chart the mariner added by link. `url` is its identity. */
 typedef struct {
   char *url;
   char *name;
-  char *doc;
 } LkChartLink;
 
 /* Takes a strong reference on the controller: a fetch that lands late must
@@ -42,27 +40,35 @@ const char *lk_chart_links_active (LkChartLinks *self);
  * it beside the scale readout. */
 const char *lk_chart_links_attribution (LkChartLinks *self);
 
-/* One sentence about the last add/refresh/push that went wrong, or "". It is
+/* One sentence about the last add/select/refresh that went wrong, or "". It is
  * cleared by the next attempt. */
 const char *lk_chart_links_error (LkChartLinks *self);
 
-/* Add a chart by its style link and sail on it. The link is read ONCE here —
- * a dead or non-style link is refused now, at the form, not discovered later
- * as a blank chart. Emits ::changed when the probe answers. */
+/* TRUE while a resolve is in flight. */
+gboolean lk_chart_links_busy (LkChartLinks *self);
+
+/* Add a chart by its style link and sail on it. lookout resolves it and
+ * refuses a dead or non-style link, which surfaces through the error above.
+ * ::changed fires as the snapshot moves. */
 void lk_chart_links_add (LkChartLinks *self, const char *link);
 
 /* Forget one link. Removing the active one comes back to lookout's chart. */
 void lk_chart_links_remove (LkChartLinks *self, const char *url);
 
-/* Re-read a linked chart and rebuild what was frozen when it was added. A
- * link that does not answer leaves the chart exactly as it was. */
+/* Read a linked chart again — its tile urls, zooms, sprites and credit. A link
+ * that does not answer leaves the chart as it was. */
 void lk_chart_links_refresh (LkChartLinks *self, const char *url);
 
-/* Sail on one added link, or NULL for lookout's own chart. Persists. */
+/* Sail on one added link, or NULL for lookout's own chart. */
 void lk_chart_links_select (LkChartLinks *self, const char *url);
 
-/* Push the active link into the handle again. Every open replaces the engine
- * handle, so the model replays this beside the raster charts. */
+/* Install the fetcher on the handle just opened, hand lookout the shell's old
+ * store the first time, and take the snapshot that follows. Every open makes a
+ * new handle, so the model calls this beside its raster replay. */
 void lk_chart_links_reapply (LkChartLinks *self);
+
+/* Take lookout's snapshot if it changed, emitting ::changed when it did.
+ * Called once per render tick: the changed flag has ONE consumer. */
+void lk_chart_links_poll (LkChartLinks *self);
 
 G_END_DECLS

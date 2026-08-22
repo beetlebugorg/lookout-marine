@@ -146,29 +146,33 @@ void     lk_chart_controller_toggle_chart (LkChartController *self);
 void     lk_chart_controller_set_chart_hidden (LkChartController *self, gboolean hidden);
 gboolean lk_chart_controller_chart_hidden (LkChartController *self);
 
-/* ---- alt chart styles (charts by link) ----------------------------------- */
+/* ---- charts by link ------------------------------------------------------ */
 
-/* Draw a host-supplied MapLibre style instead of lookout's own portrayal, or
- * NULL to come back to it. See include/lookout.h (lookout_alt_chart_style_json). */
-gboolean lk_chart_controller_alt_style_set (LkChartController *self, const char *json);
+/* TRUE while a publisher's style is the chart being drawn. */
 gboolean lk_chart_controller_alt_style_active (LkChartController *self);
 
-/* One sprite pack of the active alt style, exactly as fetched. Send AFTER
- * alt_style_set — setting a style clears the previous style's packs. Answers
- * how many cells landed. */
-int lk_chart_controller_alt_sprite_pack (LkChartController *self, const char *prefix,
-                                         const char *json, gsize json_len,
-                                         const char *png, gsize png_len);
+/* The url fetcher lookout drives for the style, TileJSON, sprite packs and
+ * every tile. The callback fires with lookout's lock held: start the fetch and
+ * return. See include/lookout.h (lookout_set_http_provider). */
+void lk_chart_controller_set_http_provider (LkChartController *self,
+                                            lookout_http_get get,
+                                            lookout_http_cancel cancel,
+                                            gpointer user);
 
-/* The tile provider an alt style's sources are served through. The callback
- * fires with lookout's lock held: start the fetch and return. */
-void lk_chart_controller_set_tile_provider (LkChartController *self,
-                                            lookout_tile_request cb, gpointer user);
-
-/* Answer one tile ask: status 0 carries bytes, 1 is "no tile there", 2 is
- * "tried and failed". Safe after the handle closed — the answer is dropped. */
-void lk_chart_controller_tile_respond (LkChartController *self, guint64 req_id,
+/* Answer one ask: `status` is the final HTTP status, or 0 for a transport
+ * failure. Safe after the handle closed — the answer is dropped. */
+void lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
                                        const void *bytes, gsize len, int status);
+
+/* The chart-link management surface, straight through to lookout. */
+void  lk_chart_controller_chart_link_add (LkChartController *self, const char *link);
+void  lk_chart_controller_chart_link_select (LkChartController *self, const char *url);
+void  lk_chart_controller_chart_link_remove (LkChartController *self, const char *url);
+void  lk_chart_controller_chart_link_refresh (LkChartController *self, const char *url);
+void  lk_chart_controller_chart_links_import (LkChartController *self, const char *json);
+/* Everything the chart list shows, or NULL when nothing changed since the last
+ * poll. Transfer full. ONE consumer: whoever polls clears the flag. */
+char *lk_chart_controller_chart_links_changed_json (LkChartController *self);
 
 /* ---- wasm plugins -------------------------------------------------------- */
 

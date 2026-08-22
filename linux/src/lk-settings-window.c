@@ -1013,6 +1013,17 @@ lk_settings_fill_links_list (LkSettings *settings)
       gtk_box_append (GTK_BOX (list), row);
     }
 
+  /* A resolve is several fetches deep, so say so rather than leave the list
+   * looking as though the click did nothing. */
+  if (lk_chart_links_busy (links))
+    {
+      GtkWidget *label = gtk_label_new ("Reading the chart…");
+      gtk_widget_add_css_class (label, "dim-label");
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_box_append (GTK_BOX (list), label);
+    }
+
   if (error[0] != '\0')
     {
       GtkWidget *label = gtk_label_new (error);

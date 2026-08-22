@@ -344,6 +344,13 @@ lk_app_model_reapply_chart_link (LkAppModel *self)
   lk_chart_links_reapply (self->chart_links);
 }
 
+void
+lk_app_model_poll_chart_links (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_links_poll (self->chart_links);
+}
+
 /* ---- opening charts ----------------------------------------------------- */
 
 static void lk_app_model_open_prepared (LkAppModel *self, const char *source);

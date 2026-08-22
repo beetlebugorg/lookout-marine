@@ -155,6 +155,10 @@ LkChartLinks *lk_app_model_get_chart_links (LkAppModel *self);
  * style belongs to a lookout handle, and every open replaces the handle. */
 void lk_app_model_reapply_chart_link (LkAppModel *self);
 
+/* Take lookout's chart-link snapshot if it changed. Called once per render
+ * tick: the changed flag has ONE consumer. */
+void lk_app_model_poll_chart_links (LkAppModel *self);
+
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
 int         lk_app_model_get_raster_active (LkAppModel *self);
