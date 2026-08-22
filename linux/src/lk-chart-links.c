@@ -181,10 +181,22 @@ lk_links_read_file_link (const char *link)
   return text;
 }
 
-static char *
-lk_links_fetch_text (SoupSession *session, const char *link)
+/* True for a path or file url — something the mariner keeps on disk, whose
+ * style may in turn name files beside it. */
+static gboolean
+lk_links_is_file_link (const char *link)
 {
-  char *from_file = lk_links_read_file_link (link);
+  return g_str_has_prefix (link, "file://") || link[0] == '/';
+}
+
+/* `allow_file` marks a link the MARINER typed, or one derived from it. Only
+ * those may read the disk: a url found inside a document fetched from the
+ * network must never reach the file branch, or a hostile style gets the
+ * shell reading arbitrary local files as its "TileJSON". */
+static char *
+lk_links_fetch_text (SoupSession *session, const char *link, gboolean allow_file)
+{
+  char *from_file = allow_file ? lk_links_read_file_link (link) : NULL;
 
   if (from_file != NULL)
     return from_file;
@@ -303,6 +315,20 @@ lk_links_sprite_packs_of (JsonObject *top)
  * every display that matters is dense — with the 1x pack as the fallback for
  * a publisher who ships only one. A pack that will not fetch is skipped, not
  * fatal: the chart draws, short its icons. */
+/* "\xe2\x80\xa6/sprite" + "@2x" + ".json", keeping a query string at the end: an
+ * API-keyed host serves \xe2\x80\xa6/sprite@2x.json?key=K, never \xe2\x80\xa6?key=K@2x.json. */
+static char *
+lk_links_sprite_variant (const char *base, const char *density, const char *ext)
+{
+  const char *q = strchr (base, '?');
+
+  if (q == NULL)
+    return g_strconcat (base, density, ext, NULL);
+
+  g_autofree char *stem = g_strndup (base, q - base);
+  return g_strconcat (stem, density, ext, q, NULL);
+}
+
 static void
 lk_links_fetch_sprite_packs (SoupSession *session, GPtrArray *refs, GPtrArray *out)
 {
@@ -315,8 +341,8 @@ lk_links_fetch_sprite_packs (SoupSession *session, GPtrArray *refs, GPtrArray *o
 
       for (gsize d = 0; d < G_N_ELEMENTS (densities) && !got; d++)
         {
-          g_autofree char *json_url = g_strconcat (ref->url, densities[d], ".json", NULL);
-          g_autofree char *png_url = g_strconcat (ref->url, densities[d], ".png", NULL);
+          g_autofree char *json_url = lk_links_sprite_variant (ref->url, densities[d], ".json");
+          g_autofree char *png_url = lk_links_sprite_variant (ref->url, densities[d], ".png");
           g_autoptr (GBytes) json = lk_links_fetch_url (session, json_url, NULL);
           g_autoptr (GBytes) png =
               json != NULL ? lk_links_fetch_url (session, png_url, NULL) : NULL;
@@ -496,7 +522,7 @@ lk_links_sibling_style (SoupSession *session, const char *link,
   if (g_str_equal (candidate, link))
     return FALSE;
 
-  g_autofree char *text = lk_links_fetch_text (session, candidate);
+  g_autofree char *text = lk_links_fetch_text (session, candidate, FALSE);
   JsonObject *style = NULL;
   g_autoptr (JsonParser) parser = lk_links_parse_object (text, &style);
   if (parser == NULL || !json_object_has_member (style, "layers") ||
@@ -545,7 +571,7 @@ lk_links_probe (SoupSession *session, const char *raw,
       return TRUE;
     }
 
-  g_autofree char *text = lk_links_fetch_text (session, raw);
+  g_autofree char *text = lk_links_fetch_text (session, raw, TRUE);
   JsonObject *top = NULL;
   g_autoptr (JsonParser) parser = lk_links_parse_object (text, &top);
   if (parser == NULL)
@@ -591,6 +617,11 @@ lk_links_strip_attribution (const char *raw)
       if (in_tag)
         continue;
       if (g_str_has_prefix (p, "&copy;")) { g_string_append (out, "\xC2\xA9"); p += 5; continue; }
+      if (g_str_has_prefix (p, "&lt;")) { g_string_append_c (out, '<'); p += 3; continue; }
+      if (g_str_has_prefix (p, "&gt;")) { g_string_append_c (out, '>'); p += 3; continue; }
+      if (g_str_has_prefix (p, "&quot;")) { g_string_append_c (out, '"'); p += 5; continue; }
+      if (g_str_has_prefix (p, "&#39;")) { g_string_append_c (out, '\''); p += 4; continue; }
+      if (g_str_has_prefix (p, "&nbsp;")) { g_string_append_c (out, ' '); p += 5; continue; }
       if (g_str_has_prefix (p, "&amp;")) { g_string_append_c (out, '&'); p += 4; continue; }
       g_string_append_c (out, *p);
     }
@@ -605,7 +636,7 @@ lk_links_strip_attribution (const char *raw)
 static gboolean
 lk_links_resolve_style (SoupSession *session, const char *raw, char **out_json,
                         GHashTable *out_sources, char **out_attribution,
-                        GPtrArray **out_pack_refs)
+                        GPtrArray **out_pack_refs, gboolean local_style)
 {
   JsonObject *top = NULL;
   g_autoptr (JsonParser) parser = lk_links_parse_object (raw, &top);
@@ -633,7 +664,7 @@ lk_links_resolve_style (SoupSession *session, const char *raw, char **out_json,
         {
           const char *link = lk_links_member_string (src, "url", "");
           g_autofree char *text =
-              link[0] != '\0' ? lk_links_fetch_text (session, link) : NULL;
+              link[0] != '\0' ? lk_links_fetch_text (session, link, local_style) : NULL;
           JsonObject *doc = NULL;
           g_autoptr (JsonParser) doc_parser = lk_links_parse_object (text, &doc);
           if (doc_parser != NULL)
@@ -1014,12 +1045,14 @@ lk_links_push_thread (GTask *task, gpointer source_object, gpointer task_data,
      * edits showing up. */
     g_autofree char *raw = op->doc[0] != '\0'
                                ? g_strdup (op->doc)
-                               : lk_links_fetch_text (session, op->link);
+                               : lk_links_fetch_text (session, op->link, TRUE);
     g_autoptr (GPtrArray) pack_refs = NULL;
+    /* Only a style the mariner keeps on disk may read files its sources
+     * name; one off the network may not. */
     result->ok = raw != NULL &&
                  lk_links_resolve_style (session, raw, &result->style_json,
                                          result->sources, &result->attribution,
-                                         &pack_refs);
+                                         &pack_refs, lk_links_is_file_link (op->link));
     /* The sprite packs ride along: fetched here, off the main thread, so
      * applying is instant. */
     if (result->ok)
@@ -1069,9 +1102,11 @@ lk_links_push_done (GObject *source_object, GAsyncResult *result, gpointer user_
 
   if (!push->ok)
     {
-      lk_links_set_error (self, "That chart didn't answer. Showing the Lookout chart.");
-      g_clear_pointer (&self->active, g_free);
-      lk_chart_links_save (self);
+      /* A lost connection must not cost the mariner the chart they are
+       * sailing on: the PICK STAYS — the next open replays it — and the
+       * Lookout chart stands in meanwhile. */
+      lk_links_set_error (self,
+                          "That chart didn't answer. Showing the Lookout chart until it does.");
       lk_links_detach (self);
       lk_chart_controller_alt_style_set (self->controller, NULL);
       lk_links_set_attribution (self, "");
@@ -1151,6 +1186,7 @@ static void
 lk_links_add_done (GObject *source_object, GAsyncResult *result, gpointer user_data)
 {
   LkChartLinks *self = LK_CHART_LINKS (source_object);
+  LkLinkOp *op = g_task_get_task_data (G_TASK (result));
   LkProbeResult *probe = g_task_propagate_pointer (G_TASK (result), NULL);
 
   if (probe == NULL)
@@ -1177,7 +1213,18 @@ lk_links_add_done (GObject *source_object, GAsyncResult *result, gpointer user_d
       link->doc = g_strdup (probe->doc);
       g_ptr_array_add (self->links, link);
     }
-  lk_chart_links_select (self, probe->url);
+  if (op->epoch == self->epoch)
+    {
+      /* Adding it was the request to sail on it. */
+      lk_chart_links_select (self, probe->url);
+    }
+  else
+    {
+      /* The mariner picked something else while this probe was out: the
+       * chart goes on the list, and the pick they made stands. */
+      lk_chart_links_save (self);
+      lk_links_emit_changed (self);
+    }
   lk_probe_result_free (probe);
 }
 
@@ -1210,6 +1257,32 @@ lk_links_refresh_done (GObject *source_object, GAsyncResult *result, gpointer us
       link->name = g_strdup (probe->name);
       link->doc = g_strdup (probe->doc);
     }
+  /* A refresh can resolve to the sibling style.json another entry already
+   * carries. One url is one chart: the first copy absorbs the refreshed
+   * document rather than a twin appearing. */
+  {
+    guint first = G_MAXUINT;
+    for (guint i = 0; i < self->links->len; )
+      {
+        LkChartLink *link = g_ptr_array_index (self->links, i);
+        if (!g_str_equal (link->url, probe->url))
+          {
+            i++;
+            continue;
+          }
+        if (first == G_MAXUINT)
+          {
+            first = i++;
+            continue;
+          }
+        LkChartLink *keep = g_ptr_array_index (self->links, first);
+        g_free (keep->name);
+        g_free (keep->doc);
+        keep->name = g_strdup (link->name);
+        keep->doc = g_strdup (link->doc);
+        g_ptr_array_remove_index (self->links, i);
+      }
+  }
   if (g_strcmp0 (self->active, op->link) == 0)
     {
       /* Re-picking pushes the rebuilt document and persists both. */
@@ -1230,6 +1303,9 @@ lk_links_run_probe (LkChartLinks *self, const char *link, GAsyncReadyCallback do
 
   op->link = g_strdup (link);
   op->doc = g_strdup ("");
+  /* What the pick looked like when the probe left: a slow add landing after
+   * the mariner picked something else must not steal the chart back. */
+  op->epoch = self->epoch;
 
   GTask *task = g_task_new (self, NULL, done, NULL);
   g_task_set_task_data (task, op, lk_link_op_free);
@@ -1318,6 +1394,16 @@ void
 lk_chart_links_reapply (LkChartLinks *self)
 {
   g_return_if_fail (LK_IS_CHART_LINKS (self));
+
+  /* The handle this replays into is NEW, and it numbers tile requests from 1
+   * exactly as the old one did: a fetch started for the old handle and
+   * landing late would answer one of the new handle's ids with the old
+   * style's bytes. The new handle has asked for nothing yet — the open runs
+   * whole on this thread before any render tick — so cancelling here closes
+   * the race completely. */
+  g_cancellable_cancel (self->tile_cancel);
+  g_clear_object (&self->tile_cancel);
+  self->tile_cancel = g_cancellable_new ();
 
   if (self->active != NULL)
     lk_chart_links_push (self);

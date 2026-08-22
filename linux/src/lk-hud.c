@@ -458,6 +458,12 @@ lk_hud_credit_changed (LkChartLinks *links, gpointer user_data)
   GtkWidget *label = user_data;
   const char *credit = lk_chart_links_attribution (links);
 
+  /* The tether cuts the handler when the column FINALIZES, which is after
+   * its children were disposed: a push resolving mid-teardown must not touch
+   * a dying label (lk-tether.h's contract). */
+  if (gtk_widget_in_destruction (label))
+    return;
+
   gtk_label_set_text (GTK_LABEL (label), credit);
   gtk_widget_set_visible (label, credit[0] != '\0');
 }

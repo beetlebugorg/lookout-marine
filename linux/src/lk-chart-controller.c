@@ -929,8 +929,10 @@ lk_chart_controller_close (LkChartController *self)
     return;
 
   /* Before the handle: a tile fetch landing later must find the provider
-   * gone, never a dying engine. The links layer aborts its own fetches on
-   * ::has-chart, and tile_respond below refuses a NULL handle either way. */
+   * gone, never a dying engine. The respond wrapper below refuses a NULL
+   * handle, and the links layer cancels its in-flight fetches before the
+   * NEXT handle can ask for anything (lk_chart_links_reapply) — a new handle
+   * reuses the old one's request ids. */
   lookout_set_tile_provider (self->handle, NULL, NULL);
 
   lookout_view view;
