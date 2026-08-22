@@ -336,6 +336,13 @@ pub const Host = struct {
         self.provided.setCallback(cb, user);
     }
 
+    /// Serve a provided source's tiles from the CORE instead of the shell: the
+    /// shell gave a generic url fetcher, so src/chartlinks.zig does the
+    /// templating. See provided.zig.
+    pub fn setCoreTileSink(self: *Host, cb: ?cprovided.CoreFn, ctx: ?*anyopaque) void {
+        self.provided.setCoreSink(cb, ctx);
+    }
+
     /// The host's answer to one ask. Safe from any thread — see provided.zig.
     pub fn respondTile(self: *Host, req_id: u64, bytes: []const u8, status: cprovided.Status) void {
         self.provided.respond(req_id, bytes, status);

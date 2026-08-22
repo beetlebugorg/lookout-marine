@@ -21,6 +21,7 @@ const cthost = @import("ct/host.zig"); // the renderer, behind one struct
 const cstyle = @import("ct/style.zig");
 const craster = @import("ct/raster.zig"); // the raster underlay's data half
 const ctprovided = @import("ct/provided.zig");
+const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 pub const library = @import("library.zig"); // what a folder of charts holds
@@ -676,6 +677,10 @@ pub const Lookout = struct {
     /// the current alt style: setAltStyle clears them, and the host re-sends
     /// the new style's packs after.
     alt_packs: std.ArrayListUnmanaged(AltPack) = .empty,
+    /// Charts by link: the whole feature, from the mariner's typed link to the
+    /// tiles the style names. The shell keeps one job, fetching bytes for a
+    /// url. See src/chartlinks.zig.
+    links: clinks.Links = undefined,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -853,6 +858,15 @@ pub const Lookout = struct {
         // The underlay's drain rides the map's own update tick.
         self.ct.raster_pump = rasterPump;
         self.ct.raster_pump_ctx = self;
+        // The mariner's chart links, read before the shell can have asked for
+        // anything. Beside the marks, because both are the mariner's own state
+        // and neither belongs to a chart. Nothing resolves until the shell
+        // supplies a fetcher (setHttpProvider).
+        self.links = clinks.Links.init(alloc, self.linksSink());
+        if (marks.supportDirAlloc(alloc)) |d| {
+            defer alloc.free(d);
+            self.links.openStore(d);
+        }
         if (dbg) {
             std.debug.print("  charttable init (Metal device+shaders+pipelines) {d} ms\n", .{clock.ticksMs() - t});
             t = clock.ticksMs();
@@ -1940,6 +1954,9 @@ pub const Lookout = struct {
         // Now that nothing else can post into them.
         self.overlay.deinit();
         self.markers.deinit();
+        // BEFORE the renderer: standing the link machine down answers the
+        // tiles it has outstanding, and those answers go through the renderer.
+        self.links.deinit();
         self.pollCompose(true); // finish any in-flight partition build first
         // BEFORE the composition and the charts: the renderer's tile workers
         // read the compositor, and its deinit is what stops them.
@@ -2394,6 +2411,66 @@ pub const Lookout = struct {
         return self.alt_style != null;
     }
 
+    // ---- charts by link ------------------------------------------------------
+
+    /// The renderer's half of the chart-link machine. Three calls, so the
+    /// machine itself needs no renderer to be driven in a test.
+    fn linksSink(self: *Lookout) clinks.Sink {
+        return .{
+            .ctx = self,
+            .setStyle = linkSetStyle,
+            .spritePack = linkSpritePack,
+            .tileRespond = linkTileRespond,
+        };
+    }
+
+    /// Set a link's style and hand it to the renderer AT ONCE, answering
+    /// whether the renderer took it. The machine needs the verdict now: a
+    /// style the core refuses drops the mariner's pick, and a refusal noticed
+    /// a frame later would already have claimed the publisher's credit.
+    fn linkSetStyle(ctx: *anyopaque, json: ?[]const u8) bool {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.setAltStyle(json) catch return false;
+        const j = json orelse return true; // lookout's own chart always draws
+        self.style_dirty = false;
+        self.style_lat = self.scaminLat();
+        self.ct.setStyleJson(j) catch |e| {
+            std.debug.print("chart link style: {s}\n", .{@errorName(e)});
+            return false;
+        };
+        return true;
+    }
+
+    fn linkSpritePack(ctx: *anyopaque, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        return self.altSpritePack(prefix, index_json, png_bytes);
+    }
+
+    fn linkTileRespond(ctx: *anyopaque, req_id: u64, bytes: []const u8, status: clinks.TileStatus) void {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.ct.respondTile(req_id, bytes, switch (status) {
+            .ok => .ok,
+            .empty => .empty,
+            .failed => .failed,
+        });
+    }
+
+    /// What the renderer wants, on its way to the core's templating.
+    fn linkAskTile(ctx: *anyopaque, source: []const u8, req_id: u64, z: i32, x: i32, y: i32) void {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.links.askTile(source, req_id, z, x, y);
+    }
+
+    pub const HttpGetFn = clinks.HttpGetFn;
+    pub const HttpCancelFn = clinks.HttpCancelFn;
+
+    /// Adopt the shell's url fetcher, and take over tile serving with it. With
+    /// none set the older per-shell tile provider path stands.
+    pub fn setHttpProvider(self: *Lookout, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, user: ?*anyopaque) void {
+        self.ct.setCoreTileSink(if (get != null) linkAskTile else null, self);
+        self.links.setProvider(get, cancel, user);
+    }
+
     pub const TileRequestFn = ctprovided.RequestFn;
     pub const TileStatus = ctprovided.Status;
 
@@ -2555,6 +2632,10 @@ pub const Lookout = struct {
     /// Per-frame setup before the draw: follow the drawable, refresh the zoom
     /// clamps, and make sure the style and atlases the scene needs are current.
     fn prepareFrame(self: *Lookout) void {
+        // FIRST: answers the shell's fetch threads enqueued while the last
+        // frame ran. A resolve that completes here sets its style before
+        // ensureStyle below, so the chart it assembled draws in THIS frame.
+        self.links.adopt();
         // charttable adopts the real drawable size at acquire (a wrapped native
         // view can be laid out or rescaled behind our back) — follow it here so
         // the camera's logical viewport always matches what is on screen.
@@ -2683,6 +2764,10 @@ pub const Lookout = struct {
         if (self.cam.vw != lw or self.cam.vh != lh) return true;
         // Everything the mariner did, and everything the renderer owes: no gate.
         if (self.loading or self.recomposing or self.view_dirty or self.style_dirty) return true;
+        // A chart-link answer waiting to be adopted. Without this a shell that
+        // draws on demand would never tick, and a resolve would stall on its
+        // first answer.
+        if (self.links.pending()) return true;
         if (self.ct.needsRedraw()) return true;
         // What the BOAT did. Own ship's display position walks between fixes,
         // a plugin can post geometry from its own thread, and under follow the

@@ -44,6 +44,19 @@ pub const RequestFn = *const fn (
     y: c_int,
 ) callconv(.c) void;
 
+/// Where an ask goes when the CORE is the one serving tiles: the shell gave a
+/// generic url fetcher instead of a tile provider, so src/chartlinks.zig does
+/// the templating and issues the fetch. Takes priority over `cb`, which is the
+/// older per-shell door.
+pub const CoreFn = *const fn (
+    ctx: *anyopaque,
+    source: []const u8,
+    req_id: u64,
+    z: i32,
+    x: i32,
+    y: i32,
+) void;
+
 pub const Status = ct.provider.Status;
 
 pub const Provided = struct {
@@ -56,6 +69,8 @@ pub const Provided = struct {
     sources: std.ArrayListUnmanaged(*Source) = .empty,
     cb: ?RequestFn = null,
     user: ?*anyopaque = null,
+    core_cb: ?CoreFn = null,
+    core_ctx: ?*anyopaque = null,
 
     /// Scratch for `pump`, reused so a frame allocates nothing new. Touched
     /// only on the thread that drives the map.
@@ -103,7 +118,18 @@ pub const Provided = struct {
     pub fn hasCallback(self: *Provided) bool {
         self.mu.lock();
         defer self.mu.unlock();
-        return self.cb != null;
+        return self.cb != null or self.core_cb != null;
+    }
+
+    /// Let the core serve these asks itself. Set when the shell supplies a
+    /// generic url fetcher (lookout_set_http_provider) instead of a tile
+    /// provider; the two doors never both stand open, because a shell uses one
+    /// or the other.
+    pub fn setCoreSink(self: *Provided, cb: ?CoreFn, ctx: ?*anyopaque) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.core_cb = cb;
+        self.core_ctx = ctx;
     }
 
     /// The provider for `name`, created on first use. Call under the api lock.
@@ -134,6 +160,8 @@ pub const Provided = struct {
         self.mu.lock();
         const cb = self.cb;
         const user = self.user;
+        const core_cb = self.core_cb;
+        const core_ctx = self.core_ctx;
         for (self.sources.items) |s| {
             self.drained.clearRetainingCapacity();
             s.provider.drain(&self.drained, self.alloc);
@@ -146,7 +174,9 @@ pub const Provided = struct {
         // Outside the lock: a host with the tile already in hand is allowed to
         // answer before this returns.
         for (self.asks.items) |a| {
-            if (cb) |f| {
+            if (core_cb) |f| {
+                f(core_ctx.?, std.mem.span(a.source), a.req.id, @intCast(a.req.z), @intCast(a.req.x), @intCast(a.req.y));
+            } else if (cb) |f| {
                 f(user, a.source, a.req.id, @intCast(a.req.z), @intCast(a.req.x), @intCast(a.req.y));
             } else {
                 self.respond(a.req.id, "", .failed);

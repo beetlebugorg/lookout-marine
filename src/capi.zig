@@ -767,6 +767,87 @@ export fn lookout_tile_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, l
     cast(h).respondTile(req_id, slice, st);
 }
 
+// ---- charts by link --------------------------------------------------------
+/// Adopt the shell's url fetcher. See lookout.h.
+export fn lookout_set_http_provider(h: ?*lookout, get: ?lk.Lookout.HttpGetFn, cancel: ?lk.Lookout.HttpCancelFn, user: ?*anyopaque) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setHttpProvider(get, cancel, user);
+}
+
+/// Answer one GET, from any thread. See lookout.h.
+///
+/// Like lookout_tile_respond, this does NOT hold the api lock: the shell
+/// answers from whatever thread its networking finished on, and that thread
+/// must not queue behind a frame in flight. It enqueues and raises the
+/// needs-redraw flag; the frame loop adopts it. That is also why a shell may
+/// call this from inside its own http_get callback, which runs with the api
+/// lock already held.
+export fn lookout_http_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
+    if (h == null) return;
+    const slice: []const u8 = if (bytes != null and len != 0) bytes.?[0..len] else &.{};
+    cast(h).links.respond(req_id, slice, status);
+}
+
+/// Add a chart by link. See lookout.h.
+export fn lookout_chart_link_add(h: ?*lookout, link: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = link orelse return;
+    l.links.add(std.mem.span(s));
+}
+
+/// Draw one of the carried charts, or NULL for lookout's own. See lookout.h.
+export fn lookout_chart_link_select(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.links.select(if (url) |u| std.mem.span(u) else null);
+}
+
+export fn lookout_chart_link_remove(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = url orelse return;
+    l.links.remove(std.mem.span(s));
+}
+
+export fn lookout_chart_link_refresh(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = url orelse return;
+    l.links.refresh(std.mem.span(s));
+}
+
+/// Everything the UI renders, as one transfer-full document. See lookout.h.
+export fn lookout_chart_links_json(h: ?*lookout) ?[*:0]u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = l.links.snapshotAlloc(gpa) orelse return null;
+    return s.ptr;
+}
+
+/// Has the snapshot changed since the last poll? See lookout.h.
+export fn lookout_chart_links_changed(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.links.takeChanged()) 1 else 0;
+}
+
+/// One-time migration from a shell's old store. See lookout.h.
+export fn lookout_chart_links_import(h: ?*lookout, links_json: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = links_json orelse return;
+    l.links.import(std.mem.span(s));
+}
+
+/// Free a string the API handed over. See lookout.h. Takes no handle and no
+/// lock: it only returns bytes to the allocator they came from.
+export fn lookout_string_free(s: ?[*:0]u8) void {
+    const p = s orelse return;
+    gpa.free(std.mem.span(p));
+}
+
 /// Open a raster chart (satellite imagery or another picture chart the mariner
 /// supplied) and add it beneath the vector chart. See lookout.h.
 export fn lookout_raster_add(h: ?*lookout, path: ?[*:0]const u8) c_int {

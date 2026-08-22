@@ -554,7 +554,11 @@ int lookout_alt_sprite_pack(lookout *h, const char *prefix,
                             const char *index_json, size_t json_len,
                             const char *png, size_t png_len);
 
-/* One tile an alt style's source wants, which only the host can fetch.
+/* DEPRECATED, superseded by lookout_set_http_provider / lookout_http_respond
+ * below. A shell that has moved to those never calls these two, and they are
+ * deleted once every shell has. See "charts by link" at the end of this file.
+ *
+ * One tile an alt style's source wants, which only the host can fetch.
  *
  * lookout does not do any networking. The shell already fetched the style,
  * with whatever proxy, API key or certificate rules the publisher needs, so it
@@ -571,15 +575,17 @@ int lookout_alt_sprite_pack(lookout *h, const char *prefix,
 typedef void (*lookout_tile_request)(void *user, const char *source,
                                      uint64_t req_id, int z, int x, int y);
 
-/* Set (or clear, with NULL) the callback above. With no callback set, every
- * tile an alt style asks for is failed rather than left waiting: a tile nobody
- * will ever answer is a hole in the chart that never fills. */
+/* DEPRECATED (see above). Set (or clear, with NULL) the callback above. With
+ * no callback set, every tile an alt style asks for is failed rather than left
+ * waiting: a tile nobody will ever answer is a hole in the chart that never
+ * fills. Ignored while an http provider is set: that one serves the tiles. */
 void lookout_set_tile_provider(lookout *h, lookout_tile_request cb, void *user);
 
-/* Answer one request. `status` is 0 for bytes, 1 for "no tile there", 2 for
- * "I tried and failed". Only 0 reads `bytes`, which is copied before this
- * returns, so the host may free its buffer immediately. 1 and 2 are both
- * remembered, so a 404 or a dead server is not re-asked every frame.
+/* DEPRECATED (see above). Answer one request. `status` is 0 for bytes, 1 for
+ * "no tile there", 2 for "I tried and failed". Only 0 reads `bytes`, which is
+ * copied before this returns, so the host may free its buffer immediately. 1
+ * and 2 are both remembered, so a 404 or a dead server is not re-asked every
+ * frame.
  *
  * Safe from any thread, and it does not take lookout's lock — a tile landing
  * never waits on a frame. An unknown or already-answered id is ignored. */
@@ -819,6 +825,133 @@ int lookout_marker_rename(lookout *h, uint64_t id, const char *name);
 
 /* Remove one marker. Returns 0, or -1 for an unknown id. */
 int lookout_marker_remove(lookout *h, uint64_t id);
+
+/* ---- charts by link ------------------------------------------------------
+ *
+ * A publisher's MapLibre style drawn AS the chart. Paste a link and the chart
+ * becomes whatever its publisher styled — a harbour authority's own portrayal,
+ * a bathymetry set, an OSM base map.
+ *
+ * lookout owns the whole behaviour: probing the link, inlining TileJSON
+ * sources, generating a wrapper style for bare tiles, fetching sprite packs,
+ * building the credit line, templating tile urls, and persisting the list. It
+ * still opens no socket. The shell keeps ONE job — fetch the bytes at a url —
+ * and lookout drives it.
+ *
+ * This replaces lookout_alt_chart_style_json / lookout_alt_sprite_pack /
+ * lookout_set_tile_provider for a shell that adopts it. Those stay for shells
+ * that have not, and go when the last one has. */
+
+/* Fetch the bytes at `url`. Called from lookout with its lock held: do NOT
+ * block and do NOT call back into lookout except lookout_http_respond — start
+ * the fetch on your own thread and return. Answer from any thread; answering
+ * synchronously from inside this callback is also safe, because
+ * lookout_http_respond only enqueues (see below).
+ *
+ * Send an identifying User-Agent and Referer. Public tile hosts serve "access
+ * blocked" placeholder tiles to anonymous or platform-default agents —
+ * openstreetmap.org's tile usage policy (osm.wiki/Blocked_tiles) wants a
+ * unique agent with a way to reach the developer.
+ *
+ * `allow_file` says whether the shell may read the url from local disk. It is
+ * 1 only for: the link the mariner typed; and a style/TileJSON/sprite url
+ * named by a document ITSELF read from disk, when it resolves inside the typed
+ * link's directory. Tiles are always 0, and so is every url that arrived over
+ * the network — a hostile style must not be able to make the shell read
+ * arbitrary local files as its "TileJSON". THE SHELL MUST HONOUR THIS. */
+typedef void (*lookout_http_get)(void *user, uint64_t req_id,
+                                 const char *url, int allow_file);
+
+/* lookout no longer wants this answer: a newer resolve superseded it, or the
+ * tile left the wanted set. Advisory — the shell may abort the transfer to
+ * save bandwidth (at sea it matters), and answering anyway is harmless: a
+ * cancelled id is ignored like an unknown one. Same calling rules as
+ * lookout_http_get: lock held, return at once. May be NULL. */
+typedef void (*lookout_http_cancel)(void *user, uint64_t req_id);
+
+/* Adopt the shell's fetcher. Everything the feature fetches — style, TileJSON,
+ * sibling style.json, sprite index and sheet, and every map tile — comes
+ * through it; the shell does not know which is which and fetches the url it is
+ * handed.
+ *
+ * Setting one takes over tile serving from lookout_set_tile_provider. Clearing
+ * it (get NULL) stands the feature down and fails every outstanding tile,
+ * because a tile nobody will answer is a hole in the chart that never fills.
+ *
+ * Setting one also resolves whatever chart the mariner left selected: the list
+ * is read at open, before the shell can have supplied a fetcher. */
+void lookout_set_http_provider(lookout *h, lookout_http_get get,
+                               lookout_http_cancel cancel, void *user);
+
+/* Answer one GET. `status` is the final HTTP status after the platform stack
+ * followed redirects (200, 404, …), or 0 for a transport failure; only 2xx
+ * carries a body lookout reads. `bytes`/`len` are copied before this returns,
+ * so the shell may free them immediately. An unknown, cancelled or
+ * already-answered id is ignored.
+ *
+ * Safe from any thread, and it does NOT take lookout's lock: it enqueues and
+ * raises the needs-redraw flag, and lookout adopts queued answers at the top
+ * of the next frame — so an answer landing never waits on a frame. The cost is
+ * that a resolve advances only while frames run: a backgrounded shell finishes
+ * one on its first frame back.
+ *
+ * Every req_id must eventually be answered or cancelled — an id that is
+ * neither holds one of lookout's outstanding-request slots — so a shell
+ * tearing down its stack answers its in-flight ids with status 0 first. */
+void lookout_http_respond(lookout *h, uint64_t req_id, const void *bytes,
+                          size_t len, int status);
+
+/* Add a chart by link. lookout resolves it and, on success, adds it to the
+ * persisted list and selects it. Non-blocking; progress and result surface
+ * through the poll below. A link already carried is selected, not added
+ * twice. */
+void lookout_chart_link_add(lookout *h, const char *link);
+
+/* Draw one of the carried charts. NULL restores lookout's own chart. */
+void lookout_chart_link_select(lookout *h, const char *url);
+
+/* Drop one chart. Its kept style text goes with it, and if it was the one
+ * being drawn, lookout's own chart comes back. */
+void lookout_chart_link_remove(lookout *h, const char *url);
+
+/* Read one chart again: re-fetch a url, re-read a path. When a path will not
+ * read, the kept text stands and the error below is set. */
+void lookout_chart_link_refresh(lookout *h, const char *url);
+
+/* Everything the UI renders, as one transfer-full document:
+ *   {"links":[{"url":…,"name":…}…],
+ *    "active":…,          // null = lookout's own chart
+ *    "attribution":…,     // "" when none
+ *    "error":…,           // "" when none
+ *    "busy":true|false}   // a resolve is in flight
+ *
+ * One document on purpose: borrowed per-field getters could be freed under the
+ * caller by a resolve finishing on a fetch thread. Free it with
+ * lookout_string_free. NULL only when it could not be built.
+ *
+ * `attribution` is a condition of service on public tile hosts, not a
+ * courtesy: draw it while a link is active.
+ *
+ * Poll after a change — lookout_chart_links_changed is a flag the shell's
+ * frame loop reads, so there is no callback to marshal across threads. It has
+ * ONE consumer: whoever polls it clears it. */
+char *lookout_chart_links_json(lookout *h);
+int lookout_chart_links_changed(lookout *h); /* 1 since last poll, then clears */
+
+/* One-time migration from a shell's old store. Pass the old link-list JSON
+ * once; lookout adopts and persists it, and the shell then deletes its store.
+ * Ignored when lookout has already persisted a list, so a crash between the
+ * import and the delete replays harmlessly next launch.
+ *
+ * Takes {"links":[{"url":…,"name":…}…],"active":…} or a bare array of the
+ * same objects. A link entry may also carry "doc", the style text the shell
+ * kept: it is taken for a LOCAL link, whose path may no longer read, and
+ * ignored for a network one, which is resolved from its url instead. */
+void lookout_chart_links_import(lookout *h, const char *links_json);
+
+/* Free a string the API handed over. lookout and the shell need not share a
+ * malloc, so bytes lookout allocates only lookout can free. */
+void lookout_string_free(char *s);
 
 /* ---- mariner (ALL S-52 display settings) ------------------------------- */
 /* Fill *m with tile57's canonical defaults, then edit and set. */
