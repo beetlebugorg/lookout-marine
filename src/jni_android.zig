@@ -1628,92 +1628,263 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginGrantSet(env: [*c]j.JNIEnv, 
     return if (lookout_plugin_grant_set(h.l, @ptrCast(cid), @ptrCast(ccap), if (on != 0) 1 else 0) == 0) 1 else 0;
 }
 
-// ---- alt chart styles (an online map AS the chart) --------------------------
+// ---- charts by link (an online map AS the chart) ----------------------------
 //
-// The core takes a MapLibre style as JSON and asks back for every tile the
-// style's sources name (lookout does no networking). The ask lands on the
-// render thread with the api lock held, so nothing here may touch the JVM:
-// requests are parked in a ring the Java side drains through nTilePoll — the
-// same no-upcall pattern as the bake job — and answered from any thread with
-// nTileRespond, which the C ABI documents as lock-free.
+// The core owns the whole feature and asks back for every url it needs — the
+// style, a TileJSON, a sprite pack, every tile. The ask lands on the render
+// thread with the api lock held, so nothing here may touch the JVM: asks are
+// parked in a ring the Java side drains through nHttpPoll — the same no-upcall
+// pattern as the bake job — and answered from any thread with nHttpRespond,
+// which the C ABI documents as lock-free.
 
-extern fn lookout_alt_chart_style_json(h: ?*anyopaque, json: ?[*]const u8, len: usize) c_int;
 extern fn lookout_alt_chart_style_active(h: ?*anyopaque) c_int;
-const TileRequestFn = *const fn (user: ?*anyopaque, source: [*c]const u8, req_id: u64, z: c_int, x: c_int, y: c_int) callconv(.c) void;
-extern fn lookout_set_tile_provider(h: ?*anyopaque, cb: ?TileRequestFn, user: ?*anyopaque) void;
-extern fn lookout_tile_respond(h: ?*anyopaque, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int) void;
 
-const TileAsk = struct {
+const HttpGetFn = *const fn (user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void;
+const HttpCancelFn = *const fn (user: ?*anyopaque, req_id: u64) callconv(.c) void;
+extern fn lookout_set_http_provider(h: ?*anyopaque, get: ?HttpGetFn, cancel: ?HttpCancelFn, user: ?*anyopaque) void;
+extern fn lookout_http_respond(h: ?*anyopaque, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int) void;
+extern fn lookout_chart_link_add(h: ?*anyopaque, link: [*:0]const u8) void;
+extern fn lookout_chart_link_select(h: ?*anyopaque, url: ?[*:0]const u8) void;
+extern fn lookout_chart_link_remove(h: ?*anyopaque, url: [*:0]const u8) void;
+extern fn lookout_chart_link_refresh(h: ?*anyopaque, url: [*:0]const u8) void;
+extern fn lookout_chart_links_json(h: ?*anyopaque) ?[*:0]u8;
+extern fn lookout_chart_links_changed(h: ?*anyopaque) c_int;
+extern fn lookout_chart_links_import(h: ?*anyopaque, links_json: [*:0]const u8) void;
+extern fn lookout_string_free(s: ?[*:0]u8) void;
+
+/// The longest url this can carry to Java. A tile template with a key and a
+/// deep path stays well inside it; anything longer is failed rather than
+/// truncated, because a truncated url is a request to the wrong place.
+const MAX_URL = 1024;
+
+const HttpAsk = struct {
     id: u64,
-    z: i32,
-    x: i32,
-    y: i32,
-    /// Style source names are short ("sat", "openmaptiles"); a name that does
-    /// not fit is truncated, which at worst mis-keys one source's template.
-    source: [64]u8,
-    slen: u8,
+    allow_file: c_int,
+    url: [MAX_URL]u8,
+    ulen: u16,
 };
 
-/// One engine at a time on Android, so the ring is a global. Guarded by a
+/// One engine at a time on Android, so the rings are globals. Guarded by a
 /// spinlock: both sides hold it for a few loads and stores.
-var tile_lock = std.atomic.Value(bool).init(false);
-var tile_ring: [256]TileAsk = undefined;
-var tile_count: usize = 0;
+var http_lock = std.atomic.Value(bool).init(false);
+var http_ring: [64]HttpAsk = undefined;
+var http_count: usize = 0;
+var cancel_ring: [64]u64 = undefined;
+var cancel_count: usize = 0;
 
-fn tileLockAcquire() void {
-    while (tile_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+fn httpLockAcquire() void {
+    while (http_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
         std.atomic.spinLoopHint();
     }
 }
 
-fn tileLockRelease() void {
-    tile_lock.store(false, .release);
+fn httpLockRelease() void {
+    http_lock.store(false, .release);
 }
 
-fn tileRequestCb(user: ?*anyopaque, source: [*c]const u8, req_id: u64, z: c_int, x: c_int, y: c_int) callconv(.c) void {
-    tileLockAcquire();
-    if (tile_count >= tile_ring.len) {
-        tileLockRelease();
-        // Answered, not dropped: a tile nobody answers is a hole in the chart
-        // that never fills. tile_respond is the one call allowed from here.
-        lookout_tile_respond(user, req_id, null, 0, 2);
+fn httpGetCb(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+    const len = std.mem.len(url);
+    if (len >= MAX_URL) {
+        lookout_http_respond(user, req_id, null, 0, 0);
         return;
     }
-    const ask = &tile_ring[tile_count];
-    ask.id = req_id;
-    ask.z = z;
-    ask.x = x;
-    ask.y = y;
-    ask.slen = 0;
-    if (source) |s| {
-        var i: usize = 0;
-        while (s[i] != 0 and i < ask.source.len) : (i += 1) ask.source[i] = s[i];
-        ask.slen = @intCast(i);
+    httpLockAcquire();
+    if (http_count >= http_ring.len) {
+        httpLockRelease();
+        // Answered, not dropped: an id that is neither answered nor cancelled
+        // holds one of the core's outstanding-request slots. http_respond is
+        // the one call allowed from here.
+        lookout_http_respond(user, req_id, null, 0, 0);
+        return;
     }
-    tile_count += 1;
-    tileLockRelease();
+    const ask = &http_ring[http_count];
+    ask.id = req_id;
+    ask.allow_file = allow_file;
+    @memcpy(ask.url[0..len], url[0..len]);
+    ask.ulen = @intCast(len);
+    http_count += 1;
+    httpLockRelease();
 }
 
-/// boolean nAltStyleSet(long h, String json) -- draw the host's style instead
-/// of the portrayal; null or empty restores lookout's chart. Setting a style
-/// installs the tile provider; clearing it uninstalls it and drops what was
-/// queued (the core fails unanswered tiles itself once the provider is gone).
-export fn Java_org_beetlebug_lookout_Lookout_nAltStyleSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, json: j.jstring) j.jboolean {
+fn httpCancelCb(user: ?*anyopaque, req_id: u64) callconv(.c) void {
+    _ = user;
+    httpLockAcquire();
+    defer httpLockRelease();
+    // Advisory, so a full ring simply drops it: the transfer runs to the end
+    // and its answer is ignored.
+    if (cancel_count >= cancel_ring.len) return;
+    cancel_ring[cancel_count] = req_id;
+    cancel_count += 1;
+}
+
+/// void nHttpProvider(long h, boolean on) -- install or remove the shell's url
+/// fetcher. Removing it also drops what was parked; the core answers its own
+/// outstanding requests.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpProvider(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, on: j.jboolean) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (on == 0) {
+        lookout_set_http_provider(h.l, null, null, null);
+        httpLockAcquire();
+        http_count = 0;
+        cancel_count = 0;
+        httpLockRelease();
+        return;
+    }
+    lookout_set_http_provider(h.l, httpGetCb, httpCancelCb, h.l);
+}
+
+/// int nHttpPoll(long h, long[] ids, int[] allow, String[] urls) -- drain up to
+/// ids.length parked asks. Returns how many were taken.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpPoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jlongArray, allow: j.jintArray, urls: j.jobjectArray) j.jint {
+    _ = cls;
+    if (fromLong(hl) == null) return 0;
+    const cap: usize = @intCast(env_(env).GetArrayLength.?(env, ids));
+    if (cap == 0) return 0;
+
+    // Copy out under the lock, release, THEN touch the JVM: NewStringUTF can
+    // trigger a GC pause, and the render thread must never spin behind one.
+    var taken: [16]HttpAsk = undefined;
+    var n: usize = 0;
+    httpLockAcquire();
+    while (n < http_count and n < cap and n < taken.len) : (n += 1) taken[n] = http_ring[n];
+    const left = http_count - n;
+    var i: usize = 0;
+    while (i < left) : (i += 1) http_ring[i] = http_ring[i + n];
+    http_count = left;
+    httpLockRelease();
+    if (n == 0) return 0;
+
+    var jids: [16]j.jlong = undefined;
+    var jallow: [16]j.jint = undefined;
+    for (taken[0..n], 0..) |ask, k| {
+        jids[k] = @bitCast(ask.id);
+        jallow[k] = ask.allow_file;
+        var url: [MAX_URL:0]u8 = undefined;
+        @memcpy(url[0..ask.ulen], ask.url[0..ask.ulen]);
+        url[ask.ulen] = 0;
+        const s = env_(env).NewStringUTF.?(env, &url);
+        env_(env).SetObjectArrayElement.?(env, urls, @intCast(k), s);
+        env_(env).DeleteLocalRef.?(env, s);
+    }
+    env_(env).SetLongArrayRegion.?(env, ids, 0, @intCast(n), &jids);
+    env_(env).SetIntArrayRegion.?(env, allow, 0, @intCast(n), &jallow);
+    return @intCast(n);
+}
+
+/// int nHttpCancelPoll(long h, long[] ids) -- drain the ids the core has given
+/// up on. Advisory: the shell may abort those transfers to save bandwidth, and
+/// answering anyway is harmless.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpCancelPoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jlongArray) j.jint {
+    _ = cls;
+    if (fromLong(hl) == null) return 0;
+    const cap: usize = @intCast(env_(env).GetArrayLength.?(env, ids));
+    if (cap == 0) return 0;
+
+    var taken: [64]j.jlong = undefined;
+    var n: usize = 0;
+    httpLockAcquire();
+    while (n < cancel_count and n < cap and n < taken.len) : (n += 1) taken[n] = @bitCast(cancel_ring[n]);
+    const left = cancel_count - n;
+    var i: usize = 0;
+    while (i < left) : (i += 1) cancel_ring[i] = cancel_ring[i + n];
+    cancel_count = left;
+    httpLockRelease();
+    if (n == 0) return 0;
+    env_(env).SetLongArrayRegion.?(env, ids, 0, @intCast(n), &taken);
+    return @intCast(n);
+}
+
+/// void nHttpRespond(long h, long id, byte[] bytes, int status) -- answer one
+/// ask from any thread. `status` is the final HTTP status, or 0 for a transport
+/// failure; only 2xx carries a body the core reads.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpRespond(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, bytes: j.jbyteArray, status: j.jint) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    const req: u64 = @bitCast(id);
+    if (bytes == null) {
+        lookout_http_respond(h.l, req, null, 0, status);
+        return;
+    }
+    const len: usize = @intCast(env_(env).GetArrayLength.?(env, bytes));
+    const p = env_(env).GetByteArrayElements.?(env, bytes, null) orelse {
+        lookout_http_respond(h.l, req, null, 0, 0);
+        return;
+    };
+    defer env_(env).ReleaseByteArrayElements.?(env, bytes, p, j.JNI_ABORT);
+    lookout_http_respond(h.l, req, p, len, status);
+}
+
+/// void nChartLinkAdd(long h, String link)
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, link: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (link == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, link, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, link, c);
+    lookout_chart_link_add(h.l, @ptrCast(c));
+}
+
+/// void nChartLinkSelect(long h, String url) -- null draws lookout's own chart.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkSelect(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) {
+        lookout_chart_link_select(h.l, null);
+        return;
+    }
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    lookout_chart_link_select(h.l, @ptrCast(c));
+}
+
+/// void nChartLinkRemove(long h, String url)
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkRemove(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    lookout_chart_link_remove(h.l, @ptrCast(c));
+}
+
+/// void nChartLinkRefresh(long h, String url)
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkRefresh(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    lookout_chart_link_refresh(h.l, @ptrCast(c));
+}
+
+/// String nChartLinksJson(long h) -- everything the chart list shows.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinksJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const s = lookout_chart_links_json(h.l) orelse return null;
+    defer lookout_string_free(s);
+    return env_(env).NewStringUTF.?(env, s);
+}
+
+/// boolean nChartLinksChanged(long h) -- 1 since the last poll, then clears.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinksChanged(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = env;
     _ = cls;
     const h = fromLong(hl) orelse return 0;
-    if (json == null) {
-        lookout_set_tile_provider(h.l, null, null);
-        tileLockAcquire();
-        tile_count = 0;
-        tileLockRelease();
-        // This entry answers 1 on success, unlike most of the C ABI.
-        return if (lookout_alt_chart_style_json(h.l, null, 0) != 0) 1 else 0;
-    }
-    const cjson = env_(env).GetStringUTFChars.?(env, json, null) orelse return 0;
-    defer env_(env).ReleaseStringUTFChars.?(env, json, cjson);
-    const len = std.mem.len(@as([*:0]const u8, @ptrCast(cjson)));
-    lookout_set_tile_provider(h.l, tileRequestCb, h.l);
-    return if (lookout_alt_chart_style_json(h.l, @ptrCast(cjson), len) != 0) 1 else 0;
+    return if (lookout_chart_links_changed(h.l) != 0) 1 else 0;
+}
+
+/// void nChartLinksImport(long h, String json) -- one-time migration from the
+/// shell's old store.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinksImport(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, json: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (json == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, json, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, json, c);
+    lookout_chart_links_import(h.l, @ptrCast(c));
 }
 
 /// boolean nAltStyleActive(long h)
@@ -1722,90 +1893,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nAltStyleActive(env: [*c]j.JNIEnv, 
     _ = cls;
     const h = fromLong(hl) orelse return 0;
     return if (lookout_alt_chart_style_active(h.l) != 0) 1 else 0;
-}
-
-/// int nTilePoll(long h, long[] ids, int[] zxy, String[] sources) -- drain up
-/// to ids.length parked tile asks. zxy carries z,x,y per ask, packed in
-/// triples. Returns how many were taken.
-export fn Java_org_beetlebug_lookout_Lookout_nTilePoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jlongArray, zxy: j.jintArray, sources: j.jobjectArray) j.jint {
-    _ = cls;
-    if (fromLong(hl) == null) return 0;
-    const cap: usize = @intCast(env_(env).GetArrayLength.?(env, ids));
-    if (cap == 0) return 0;
-
-    // Copy out under the lock, release, THEN touch the JVM: NewStringUTF can
-    // trigger a GC pause, and the render thread must never spin behind one.
-    var taken: [64]TileAsk = undefined;
-    var n: usize = 0;
-    tileLockAcquire();
-    while (n < tile_count and n < cap and n < taken.len) : (n += 1) taken[n] = tile_ring[n];
-    const left = tile_count - n;
-    var i: usize = 0;
-    while (i < left) : (i += 1) tile_ring[i] = tile_ring[i + n];
-    tile_count = left;
-    tileLockRelease();
-    if (n == 0) return 0;
-
-    var jids: [64]j.jlong = undefined;
-    var jzxy: [192]j.jint = undefined;
-    for (taken[0..n], 0..) |ask, k| {
-        jids[k] = @bitCast(ask.id);
-        jzxy[k * 3 + 0] = ask.z;
-        jzxy[k * 3 + 1] = ask.x;
-        jzxy[k * 3 + 2] = ask.y;
-        var name: [65:0]u8 = undefined;
-        @memcpy(name[0..ask.slen], ask.source[0..ask.slen]);
-        name[ask.slen] = 0;
-        const s = env_(env).NewStringUTF.?(env, &name);
-        env_(env).SetObjectArrayElement.?(env, sources, @intCast(k), s);
-        env_(env).DeleteLocalRef.?(env, s);
-    }
-    env_(env).SetLongArrayRegion.?(env, ids, 0, @intCast(n), &jids);
-    env_(env).SetIntArrayRegion.?(env, zxy, 0, @intCast(n * 3), &jzxy);
-    return @intCast(n);
-}
-
-/// void nTileRespond(long h, long id, byte[] bytes, int status) -- answer one
-/// ask from any thread. status 0 takes bytes; 1 is "no tile there"; 2 is
-/// "tried and failed".
-export fn Java_org_beetlebug_lookout_Lookout_nTileRespond(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, bytes: j.jbyteArray, status: j.jint) void {
-    _ = cls;
-    const h = fromLong(hl) orelse return;
-    const req: u64 = @bitCast(id);
-    if (status != 0 or bytes == null) {
-        lookout_tile_respond(h.l, req, null, 0, status);
-        return;
-    }
-    const len: usize = @intCast(env_(env).GetArrayLength.?(env, bytes));
-    const p = env_(env).GetByteArrayElements.?(env, bytes, null) orelse {
-        lookout_tile_respond(h.l, req, null, 0, 2);
-        return;
-    };
-    defer env_(env).ReleaseByteArrayElements.?(env, bytes, p, j.JNI_ABORT);
-    lookout_tile_respond(h.l, req, p, len, 0);
-}
-
-extern fn lookout_alt_sprite_pack(h: ?*anyopaque, prefix: ?[*:0]const u8, index_json: [*]const u8, json_len: usize, png: [*]const u8, png_len: usize) c_int;
-
-/// int nAltSpritePack(long h, String prefix, byte[] json, byte[] png) — one
-/// sprite pack of the active alt style, exactly as fetched. See lookout.h.
-export fn Java_org_beetlebug_lookout_Lookout_nAltSpritePack(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, prefix: j.jstring, json: j.jbyteArray, png_arr: j.jbyteArray) j.jint {
-    _ = cls;
-    const h = fromLong(hl) orelse return 0;
-    if (json == null or png_arr == null) return 0;
-    const jl = env_(env).GetArrayLength.?(env, json);
-    const pl = env_(env).GetArrayLength.?(env, png_arr);
-    if (jl <= 0 or pl <= 0) return 0;
-    const jb = env_(env).GetByteArrayElements.?(env, json, null) orelse return 0;
-    defer env_(env).ReleaseByteArrayElements.?(env, json, jb, j.JNI_ABORT);
-    const pb = env_(env).GetByteArrayElements.?(env, png_arr, null) orelse return 0;
-    defer env_(env).ReleaseByteArrayElements.?(env, png_arr, pb, j.JNI_ABORT);
-    const cp: ?[*:0]const u8 = if (prefix != null)
-        @ptrCast(env_(env).GetStringUTFChars.?(env, prefix, null))
-    else
-        null;
-    defer if (cp != null) env_(env).ReleaseStringUTFChars.?(env, prefix, @ptrCast(cp));
-    return lookout_alt_sprite_pack(h.l, cp, @ptrCast(jb), @intCast(jl), @ptrCast(pb), @intCast(pl));
 }
 
 extern fn lookout_open_file(h: ?*anyopaque, path: [*:0]const u8) c_int;

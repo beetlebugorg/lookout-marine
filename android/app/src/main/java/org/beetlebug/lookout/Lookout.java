@@ -529,27 +529,36 @@ public final class Lookout implements AutoCloseable {
         return h != 0 && nPluginTableOpen(h, id, key, open);
     }
 
-    // ---- alt chart styles ---------------------------------------------------
+    // ---- charts by link -----------------------------------------------------
 
-    /** Draw a host-supplied MapLibre style instead of the portrayal; null
-     *  restores lookout's chart. Tiles are then asked back through tilePoll. */
-    public boolean altStyleSet(String json)      { return h != 0 && nAltStyleSet(h, json); }
+    /** Install or remove this shell's url fetcher. lookout drives it for the
+     *  style, TileJSON, sprite packs and every tile; see lookout.h. */
+    public void httpProvider(boolean on)         { if (h != 0) nHttpProvider(h, on); }
+    /** Drain up to ids.length parked asks. allow[i] is 1 when the url may be
+     *  read off local disk, 0 when it must not be. */
+    public int httpPoll(long[] ids, int[] allow, String[] urls) {
+        return h == 0 ? 0 : nHttpPoll(h, ids, allow, urls);
+    }
+    /** Drain the ids lookout has given up on. Advisory. */
+    public int httpCancelPoll(long[] ids)        { return h == 0 ? 0 : nHttpCancelPoll(h, ids); }
+    /** Answer one ask, from any thread. status is the final HTTP status, or 0
+     *  for a transport failure; only 2xx carries a body. */
+    public void httpRespond(long id, byte[] bytes, int status) {
+        if (h != 0) nHttpRespond(h, id, bytes, status);
+    }
+    public void chartLinkAdd(String link)        { if (h != 0) nChartLinkAdd(h, link); }
+    /** null draws lookout's own chart. */
+    public void chartLinkSelect(String url)      { if (h != 0) nChartLinkSelect(h, url); }
+    public void chartLinkRemove(String url)      { if (h != 0) nChartLinkRemove(h, url); }
+    public void chartLinkRefresh(String url)     { if (h != 0) nChartLinkRefresh(h, url); }
+    /** Everything the chart list shows, as one document. */
+    public String chartLinksJson()               { return h == 0 ? null : nChartLinksJson(h); }
+    /** 1 since the last poll, then clears. ONE consumer. */
+    public boolean chartLinksChanged()           { return h != 0 && nChartLinksChanged(h); }
+    /** One-time migration from the shell's old store. */
+    public void chartLinksImport(String json)    { if (h != 0) nChartLinksImport(h, json); }
+    /** Is a chart link the one being drawn? */
     public boolean altStyleActive()              { return h != 0 && nAltStyleActive(h); }
-    /** One sprite pack of the active alt style, exactly as fetched: the
-     *  pack's id as the icon-name prefix ("" for "default"), its index JSON
-     *  and its sheet PNG. Send AFTER altStyleSet — setting a style clears
-     *  the previous style's packs. Answers how many cells landed. */
-    public int altSpritePack(String prefix, byte[] json, byte[] png) {
-        return h == 0 ? 0 : nAltSpritePack(h, prefix, json, png);
-    }
-    /** Drain up to ids.length parked tile asks; zxy is packed z,x,y triples. */
-    public int tilePoll(long[] ids, int[] zxy, String[] sources) {
-        return h == 0 ? 0 : nTilePoll(h, ids, zxy, sources);
-    }
-    /** Answer one ask, from any thread. status 0 bytes, 1 no tile, 2 failed. */
-    public void tileRespond(long id, byte[] bytes, int status) {
-        if (h != 0) nTileRespond(h, id, bytes, status);
-    }
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -560,11 +569,18 @@ public final class Lookout implements AutoCloseable {
     private static native String nPluginInspect(long h, String path);
     private static native String nPluginInstall(long h, String path);
     private static native boolean nPluginUninstall(long h, String id);
-    private static native boolean nAltStyleSet(long h, String json);
-    private static native int nAltSpritePack(long h, String prefix, byte[] json, byte[] png);
     private static native boolean nAltStyleActive(long h);
-    private static native int nTilePoll(long h, long[] ids, int[] zxy, String[] sources);
-    private static native void nTileRespond(long h, long id, byte[] bytes, int status);
+    private static native void nHttpProvider(long h, boolean on);
+    private static native int nHttpPoll(long h, long[] ids, int[] allow, String[] urls);
+    private static native int nHttpCancelPoll(long h, long[] ids);
+    private static native void nHttpRespond(long h, long id, byte[] bytes, int status);
+    private static native void nChartLinkAdd(long h, String link);
+    private static native void nChartLinkSelect(long h, String url);
+    private static native void nChartLinkRemove(long h, String url);
+    private static native void nChartLinkRefresh(long h, String url);
+    private static native String nChartLinksJson(long h);
+    private static native boolean nChartLinksChanged(long h);
+    private static native void nChartLinksImport(long h, String json);
     private static native String nPluginTables(long h);
     private static native String nPluginTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);

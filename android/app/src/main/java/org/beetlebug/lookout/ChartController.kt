@@ -372,9 +372,11 @@ class ChartController(private val appContext: Context) {
         if (rasterCharts.chartHidden) l.setChartHidden(true)
         pushRaster(l)
         loadPlugins(l)
-        // The picked chart link survives a change of ENC like the rasters do:
-        // pushed again on every open.
-        if (activeChartLink != null) main.post { pushChartLink() }
+        // The core reads its chart-link list at open and resolves the selected
+        // one as soon as this installs the fetcher, so nothing is replayed
+        // here — only the mariner's old SharedPreferences list, once.
+        migrateChartLinks(l)
+        linkFetch.start(l) { onMutated?.invoke() }
         val loaded = date
         main.post {
             mariner.loadFrom(v, loaded)
@@ -557,11 +559,10 @@ class ChartController(private val appContext: Context) {
             republish(l)
             publishAlerts(l)
             pushRaster(l)
-            // Push the chart link again from this controller. The push
-            // restores the on-map credit that the recreation dropped and
-            // starts this controller's tile service; the old controller's
-            // service was stopped in onReplaced.
-            if (activeChartLink != null) main.post { pushChartLink() }
+            // This controller's own fetcher, and its own snapshot poll: the
+            // old controller's was stopped in onReplaced, and the credit the
+            // recreation dropped comes back with the next snapshot.
+            linkFetch.start(l) { onMutated?.invoke() }
             main.post { mariner.loadFrom(v, date) }
         }
     }
@@ -574,7 +575,7 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD.
      */
     fun onReplaced() {
-        altTiles.stop()
+        linkFetch.stop()
     }
 
     /**
@@ -598,9 +599,9 @@ class ChartController(private val appContext: Context) {
     fun detach(l: Lookout?) {
         if (l != null && lk !== l) return
         saveView() // last known pose; the handle is about to close
-        // Before the handle closes: a tile fetch landing later must find the
+        // Before the handle closes: a fetch landing later must find the
         // provider gone, not a dying engine.
-        altTiles.stop()
+        linkFetch.stop()
         engine = null
         lk = null
         // Everything below is the MAIN thread's: Compose state, the siren
@@ -688,6 +689,10 @@ class ChartController(private val appContext: Context) {
         // coverage, so this is read on the frame, not only when something is
         // pressed. Cheap: a handful of calls over a handful of sets.
         pushRaster(l)
+        // The chart-link list, the credit and the error, from the core. A
+        // landing answer raises needs-redraw, so a resolve keeps this ticking
+        // until it is done.
+        pollChartLinks(l)
         if (r == lastPushed) return
         lastPushed = r
         main.post {
@@ -993,11 +998,14 @@ class ChartController(private val appContext: Context) {
     //
     // One chart added by link: a MapLibre style url. Picking it renders that
     // style INSTEAD of the built-in chart — Lookout's own chart is just the
-    // default entry in the same list. The style is fetched HERE on every push
-    // (lookout takes JSON, not a url) and its tiles are served back through
-    // AltChartTiles; a publisher's edits show up without a refresh.
+    // default entry in the same list.
+    //
+    // THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON sources,
+    // generates a wrapper style for bare tiles, fetches the sprite packs,
+    // builds the credit line, templates the tile urls and persists the list.
+    // This shell renders the snapshot and fetches urls (ChartLinkFetch.kt).
 
-    data class ChartLink(val url: String, val name: String, val doc: String? = null)
+    data class ChartLink(val url: String, val name: String)
 
     var chartLinks by mutableStateOf<List<ChartLink>>(emptyList())
         private set
@@ -1014,192 +1022,122 @@ class ChartController(private val appContext: Context) {
     var chartLinkAttribution by mutableStateOf<String?>(null)
         private set
 
-    private val altTiles = AltChartTiles()
+    private val linkFetch = ChartLinkFetch()
     private val linkPrefs = appContext.getSharedPreferences("chartlinks.v1", Context.MODE_PRIVATE)
 
-    init {
-        loadChartLinks()
-    }
+    /**
+     * Whether a chart link was the drawn chart last time. One boolean, not a
+     * second store: the engine chooses between opening link-first and opening
+     * the cell library BEFORE a handle exists, and the list itself is the
+     * core's. Rewritten from every snapshot.
+     */
+    val linkFirstHint: Boolean get() = linkPrefs.getBoolean(LINK_ACTIVE_HINT, false)
 
-    private fun loadChartLinks() {
+    /**
+     * Hand the old SharedPreferences list to the core, once, and then drop it.
+     *
+     * The core ignores the import when it already has a list of its own, so the
+     * window between handing it over and clearing the prefs replays harmlessly
+     * if the process dies in it.
+     *
+     * RENDER THREAD, on every open; a no-op once the prefs are gone.
+     */
+    private fun migrateChartLinks(l: Lookout) {
         val raw = linkPrefs.getString("links", null) ?: return
-        val links = ArrayList<ChartLink>()
+        val doc = org.json.JSONObject()
         try {
-            val arr = org.json.JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val url = o.optString("url")
-                if (url.isEmpty()) continue
-                links.add(ChartLink(url, o.optString("name"), o.optString("doc").ifEmpty { null }))
-            }
+            doc.put("links", org.json.JSONArray(raw))
         } catch (_: Exception) {
+            linkPrefs.edit().remove("links").remove("active").apply()
             return
         }
-        chartLinks = links
-        val active = linkPrefs.getString("active", null)
-        activeChartLink = if (links.any { it.url == active }) active else null
-    }
-
-    private fun saveChartLinks() {
-        val arr = org.json.JSONArray()
-        for (l in chartLinks) {
-            val o = org.json.JSONObject().put("url", l.url).put("name", l.name)
-            l.doc?.let { o.put("doc", it) }
-            arr.put(o)
-        }
-        linkPrefs.edit().putString("links", arr.toString()).putString("active", activeChartLink).apply()
+        linkPrefs.getString("active", null)?.let { doc.put("active", it) }
+        Log.i(TAG, "chart links: handing ${raw.length} B of the old store to the core")
+        l.chartLinksImport(doc.toString())
+        linkPrefs.edit().remove("links").remove("active").apply()
     }
 
     /**
-     * Add a chart by its style link. The link is read once here — a dead or
-     * non-style link is refused NOW, at the form, not discovered later as a
-     * blank chart. The new chart is picked immediately: adding it is the
-     * request to sail on it.
+     * Take the core's snapshot, if it changed. RENDER THREAD, off the readout
+     * tick: the changed flag has one consumer.
+     */
+    private fun pollChartLinks(l: Lookout) {
+        if (!l.chartLinksChanged()) return
+        val json = l.chartLinksJson() ?: return
+        val links = ArrayList<ChartLink>()
+        var active: String? = null
+        var credit: String? = null
+        var err: String? = null
+        var busy = false
+        try {
+            val top = org.json.JSONObject(json)
+            val arr = top.optJSONArray("links")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val url = o.optString("url")
+                    if (url.isEmpty()) continue
+                    links.add(ChartLink(url, o.optString("name")))
+                }
+            }
+            active = if (top.isNull("active")) null else top.optString("active").ifEmpty { null }
+            credit = top.optString("attribution").ifEmpty { null }
+            err = top.optString("error").ifEmpty { null }
+            busy = top.optBoolean("busy")
+        } catch (e: Exception) {
+            Log.w(TAG, "chart links snapshot: $e")
+            return
+        }
+        val hint = active != null
+        main.post {
+            chartLinks = links
+            activeChartLink = active
+            chartLinkAttribution = credit
+            chartLinkError = err
+            chartLinkBusy = busy
+            if (linkPrefs.getBoolean(LINK_ACTIVE_HINT, false) != hint) {
+                linkPrefs.edit().putBoolean(LINK_ACTIVE_HINT, hint).apply()
+            }
+        }
+    }
+
+    /**
+     * Add a chart by its style link. The core reads it once and refuses a dead
+     * or non-style link, which surfaces as [chartLinkError]. The new chart is
+     * picked immediately: adding it is the request to sail on it.
      */
     fun addChartLink(raw: String) {
         val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return
         chartLinkError = null
-        val scheme = trimmed.substringBefore("://", "").lowercase()
-        if (scheme != "https" && scheme != "http" && scheme != "file" && !trimmed.startsWith("/")) {
-            chartLinkError = "That isn't a link."
-            return
-        }
-        if (chartLinks.any { it.url == trimmed }) {
-            selectChartLink(trimmed)
-            return
-        }
         chartLinkBusy = true
-        Thread {
-            val found = AltChartStyle.probeChartLink(trimmed)
-            main.post {
-                chartLinkBusy = false
-                if (found == null) {
-                    chartLinkError = "No chart style or tile source at that link."
-                    return@post
-                }
-                if (chartLinks.none { it.url == found.first }) {
-                    chartLinks = chartLinks + ChartLink(found.first, found.second, found.third)
-                }
-                selectChartLink(found.first)
-            }
-        }.start()
+        onEngine { l -> l.chartLinkAdd(trimmed) }
     }
 
     fun selectChartLink(url: String?) {
-        activeChartLink = url
-        saveChartLinks()
-        pushChartLink()
+        // Selecting the link that is already drawn is a no-op: the settings row
+        // fires on every tap, and re-selecting would re-resolve the style and
+        // every sprite pack for nothing. A selection whose last resolve failed
+        // does retry.
+        if (url != null && url == activeChartLink && chartLinkError == null) return
+        chartLinkError = null
+        if (url != null) chartLinkBusy = true
+        onEngine { l -> l.chartLinkSelect(url) }
     }
 
     fun removeChartLink(url: String) {
-        chartLinks = chartLinks.filter { it.url != url }
-        if (activeChartLink == url) activeChartLink = null
-        saveChartLinks()
-        pushChartLink()
+        onEngine { l -> l.chartLinkRemove(url) }
     }
 
     /**
-     * Re-read a linked chart and rebuild what was frozen when it was added. A
-     * style link needs nothing (fetched fresh on every push) but a TileJSON
-     * link's wrapper was GENERATED from what the publisher served that day. A
-     * link that does not answer leaves the chart exactly as it was.
+     * Read a linked chart again — its tile urls, zooms, sprites and credit. A
+     * link that does not answer leaves the chart as it was: a lost connection
+     * must not cost the mariner the chart they are sailing on.
      */
     fun refreshChartLink(url: String) {
-        if (chartLinks.none { it.url == url }) return
         chartLinkError = null
         chartLinkBusy = true
-        val wasPicked = activeChartLink == url
-        Thread {
-            val found = AltChartStyle.probeChartLink(url)
-            main.post {
-                chartLinkBusy = false
-                if (found == null) {
-                    chartLinkError = "That link didn't answer. The chart is unchanged."
-                    return@post
-                }
-                chartLinks = chartLinks.map {
-                    if (it.url == url) ChartLink(found.first, found.second, found.third) else it
-                }
-                if (wasPicked) {
-                    activeChartLink = found.first
-                    saveChartLinks()
-                    pushChartLink()
-                } else {
-                    saveChartLinks()
-                }
-            }
-        }.start()
-    }
-
-    /** Draw whatever is picked now. Called on pick and on every open. */
-    fun pushChartLink() {
-        val active = activeChartLink
-        if (active == null) {
-            chartLinkAttribution = null
-            onEngine { l ->
-                altTiles.stop()
-                l.altStyleSet(null)
-            }
-            return
-        }
-        val link = chartLinks.firstOrNull { it.url == active }
-        Thread {
-            // A TileJSON link carries the wrapper generated when it was
-            // added; a style link is the publisher's own document, fetched
-            // fresh so their edits show up. The sprite packs ride along:
-            // fetched here, off the main thread, so applying is instant.
-            val raw = link?.doc ?: AltChartStyle.fetchText(active)
-            val local = active.startsWith("file://") || active.startsWith("/")
-            val resolved = raw?.let { AltChartStyle.resolve(it, localStyle = local) }
-            val packs = resolved?.let { AltChartStyle.fetchSpritePacks(it.spritePacks) } ?: emptyList()
-            main.post { applyAltStyle(resolved, packs, active) }
-        }.start()
-    }
-
-    /**
-     * Hand a resolved style to the chart, or say why not. `for` guards the
-     * race the mariner can cause: picking a second chart while the first is
-     * still being fetched — the slower fetch must not win.
-     */
-    private fun applyAltStyle(style: AltChartStyle?, packs: List<FetchedSpritePack>, url: String) {
-        if (activeChartLink != url) return
-        if (style == null) {
-            // A lost connection must not cost the user their picked chart.
-            // The selection is kept (the next open retries it) and the
-            // Lookout chart is shown in the meantime.
-            chartLinkError = "That chart didn't answer. Showing the Lookout chart until it does."
-            chartLinkAttribution = null
-            onEngine { l ->
-                altTiles.stop()
-                l.altStyleSet(null)
-            }
-            return
-        }
-        chartLinkError = null
-        chartLinkAttribution = style.attribution
-        onEngine { l ->
-            if (l.altStyleSet(style.json)) {
-                altTiles.start(l, style.sources)
-                // AFTER the style: setting one clears the previous style's
-                // packs, so this order is what makes the icons stick.
-                for (p in packs) {
-                    val n = l.altSpritePack(p.prefix, p.json, p.png)
-                    Log.i(TAG, "sprite pack '${p.prefix}': $n cells")
-                }
-            } else {
-                Log.w(TAG, "alt chart style refused")
-                // The selection and the credit must not claim a chart that
-                // is not being drawn.
-                main.post {
-                    if (activeChartLink == url) {
-                        chartLinkError = "That style could not be drawn. Showing the Lookout chart."
-                        activeChartLink = null
-                        chartLinkAttribution = null
-                        saveChartLinks()
-                    }
-                }
-            }
-        }
+        onEngine { l -> l.chartLinkRefresh(url) }
     }
 
     // ---- raster charts -----------------------------------------------------
@@ -1741,6 +1679,9 @@ class ChartController(private val appContext: Context) {
 
     private companion object {
         const val TAG = "lookout"
+
+        /** See linkFirstHint. */
+        const val LINK_ACTIVE_HINT = "active_hint"
 
         /** ~10 Hz: fast enough to feel live, slow enough not to drive layout. */
         const val PUSH_INTERVAL_NS = 100_000_000L

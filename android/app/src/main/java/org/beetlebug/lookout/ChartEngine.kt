@@ -150,7 +150,7 @@ class ChartEngine private constructor() {
                 // add drops the engine's locks for its file opens, so the
                 // chart keeps drawing). Without a link the library IS the
                 // first picture, and the loader stays honest about it.
-                val linkFirst = controller.activeChartLink != null && chartPaths.isNotEmpty()
+                val linkFirst = controller.linkFirstHint && chartPaths.isNotEmpty()
                 l = openOn(
                     surface,
                     if (linkFirst) emptyArray() else chartPaths,
