@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <map>
 
+#include "lk_format.h"
 #include "lk_paths.h"
 #include "lk_store.h"
 

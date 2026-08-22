@@ -134,7 +134,8 @@ namespace winrt::LookoutMarine::implementation
             // launch with nobody clicking.
             {
                 char spec[2048];
-                if (GetEnvironmentVariableA("LOOKOUT_CHART_LINK", spec, sizeof spec) > 0 &&
+                DWORD link_n = GetEnvironmentVariableA("LOOKOUT_CHART_LINK", spec, sizeof spec);
+                if (link_n > 0 && link_n < sizeof spec &&
                     spec[0] != '\0')
                     AddChartLink(spec);
                 else if (!active_chart_link.empty())
@@ -151,7 +152,8 @@ namespace winrt::LookoutMarine::implementation
             // reference's hook).
             {
                 char ws[32];
-                if (GetEnvironmentVariableA("LOOKOUT_WINDOW", ws, sizeof ws) > 0 && ws[0] != '\0')
+                DWORD ws_n = GetEnvironmentVariableA("LOOKOUT_WINDOW", ws, sizeof ws);
+                if (ws_n > 0 && ws_n < sizeof ws && ws[0] != '\0')
                 {
                     double w = 0, h = 0;
                     if (sscanf_s(ws, "%lfx%lf", &w, &h) == 2 && w > 100 && h > 100)
@@ -170,7 +172,8 @@ namespace winrt::LookoutMarine::implementation
             // connections opens the section a plugin filled, which is where
             // a gateway is added.
             char pane[32];
-            if (GetEnvironmentVariableA("LOOKOUT_OPEN_SETTINGS", pane, sizeof pane) > 0)
+            DWORD pane_n = GetEnvironmentVariableA("LOOKOUT_OPEN_SETTINGS", pane, sizeof pane);
+            if (pane_n > 0 && pane_n < sizeof pane)
             {
                 std::string tab = pane;
                 if (tab.empty() || tab == "1")
@@ -188,7 +191,8 @@ namespace winrt::LookoutMarine::implementation
             // are still baking (the reference's hooks, delay for delay).
             {
                 char add[1024];
-                if (GetEnvironmentVariableA("LOOKOUT_ADD", add, sizeof add) > 0 && add[0] != '\0')
+                DWORD add_n = GetEnvironmentVariableA("LOOKOUT_ADD", add, sizeof add);
+                if (add_n > 0 && add_n < sizeof add && add[0] != '\0')
                 {
                     std::string path = add;
                     Microsoft::UI::Xaml::DispatcherTimer timer;
@@ -200,7 +204,8 @@ namespace winrt::LookoutMarine::implementation
                     timer.Start();
                 }
                 char rem[1024];
-                if (GetEnvironmentVariableA("LOOKOUT_REMOVE", rem, sizeof rem) > 0 && rem[0] != '\0')
+                DWORD rem_n = GetEnvironmentVariableA("LOOKOUT_REMOVE", rem, sizeof rem);
+                if (rem_n > 0 && rem_n < sizeof rem && rem[0] != '\0')
                 {
                     std::string spec = rem;
                     double after = 0;
@@ -225,7 +230,8 @@ namespace winrt::LookoutMarine::implementation
             // "table[:key[:sort[:asc|desc[:activate]]]]". Applied after the
             // first scenes settle, like the macOS shell's 3 s delay.
             char show[64];
-            if (GetEnvironmentVariableA("LOOKOUT_SHOW", show, sizeof show) > 0)
+            DWORD show_n = GetEnvironmentVariableA("LOOKOUT_SHOW", show, sizeof show);
+            if (show_n > 0 && show_n < sizeof show)
             {
                 bool pick = strncmp(show, "pick", 4) == 0;
                 bool scale = strcmp(show, "scale") == 0;

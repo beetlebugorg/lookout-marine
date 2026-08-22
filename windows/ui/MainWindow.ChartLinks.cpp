@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 
@@ -35,14 +36,20 @@ namespace
     int FetchUrl(std::wstring const &url, std::vector<uint8_t> &bytes)
     {
         URL_COMPONENTS parts{};
-        wchar_t host[256]{}, path[2048]{};
+        wchar_t host[256]{}, path[2048]{}, extra[2048]{};
         parts.dwStructSize = sizeof parts;
         parts.lpszHostName = host;
         parts.dwHostNameLength = _countof(host);
         parts.lpszUrlPath = path;
         parts.dwUrlPathLength = _countof(path);
+        // The query string is its OWN component; without asking for it here
+        // it is silently dropped, and every API-keyed host (?key=…) answers
+        // 401 to a request that never carried the key.
+        parts.lpszExtraInfo = extra;
+        parts.dwExtraInfoLength = _countof(extra);
         if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
             return 0;
+        std::wstring object = std::wstring(path) + extra;
 
         // A unique, identifiable agent with a way to reach the developer:
         // public tile hosts (openstreetmap.org's tile usage policy,
@@ -63,7 +70,7 @@ namespace
         if (con != nullptr)
         {
             DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
-            req = WinHttpOpenRequest(con, L"GET", path, nullptr, L"https://beetlebug.org/",
+            req = WinHttpOpenRequest(con, L"GET", object.c_str(), nullptr, L"https://beetlebug.org/",
                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         }
         if (req != nullptr &&
@@ -77,9 +84,19 @@ namespace
             status = (int)code;
             if (status == 200)
             {
+                // A hostile or broken host must not stream the app out of
+                // memory. Nothing a chart link fetches — style, TileJSON,
+                // sprite sheet or tile — comes near this.
+                constexpr size_t kFetchCap = size_t{ 64 } << 20;
                 DWORD avail = 0;
                 while (WinHttpQueryDataAvailable(req, &avail) && avail > 0)
                 {
+                    if (bytes.size() + avail > kFetchCap)
+                    {
+                        bytes.clear();
+                        status = 0;
+                        break;
+                    }
                     size_t at = bytes.size();
                     bytes.resize(at + avail);
                     DWORD got = 0;
@@ -106,9 +123,32 @@ namespace
     {
         std::string p = link;
         if (p.rfind("file://", 0) == 0)
+        {
             p = p.substr(7);
+            // file:///C:/… keeps a slash before the drive; strip it, and give
+            // %20 and friends their characters back.
+            if (p.size() >= 3 && p[0] == '/' && p[2] == ':')
+                p = p.substr(1);
+            std::string plain;
+            for (size_t i = 0; i < p.size(); ++i)
+            {
+                if (p[i] == '%' && i + 2 < p.size() &&
+                    isxdigit((unsigned char)p[i + 1]) && isxdigit((unsigned char)p[i + 2]))
+                {
+                    plain += (char)std::stoi(p.substr(i + 1, 2), nullptr, 16);
+                    i += 2;
+                }
+                else
+                {
+                    plain += p[i];
+                }
+            }
+            p = std::move(plain);
+        }
         else if (p.empty() || (p[0] != '/' && (p.size() < 2 || p[1] != ':')))
+        {
             return false;
+        }
         std::ifstream f(std::filesystem::path(p), std::ios::binary);
         if (!f)
             return false;
@@ -116,9 +156,21 @@ namespace
         return true;
     }
 
-    bool FetchText(std::string const &link, std::string &out)
+    // True for a path or file url — something the mariner keeps on disk,
+    // whose style may in turn name files beside it.
+    bool LooksLikeFileLink(std::string const &link)
     {
-        if (ReadFileLink(link, out))
+        return link.rfind("file://", 0) == 0 ||
+               (!link.empty() && (link[0] == '/' || (link.size() >= 2 && link[1] == ':')));
+    }
+
+    // `allow_file` marks a link the MARINER typed, or one derived from it.
+    // Only those may read the disk: a url found inside a document fetched
+    // from the network must never reach the file branch, or a hostile style
+    // gets the shell reading arbitrary local files as its "TileJSON".
+    bool FetchText(std::string const &link, std::string &out, bool allow_file)
+    {
+        if (allow_file && ReadFileLink(link, out))
             return true;
         std::vector<uint8_t> bytes;
         if (FetchUrl(winrt::to_hstring(link).c_str(), bytes) != 200)
@@ -190,6 +242,16 @@ namespace
     // matters is dense — with the 1x pack as the fallback for a publisher
     // who ships only one. A pack that will not fetch is skipped, not fatal:
     // the chart draws, short its icons.
+    // "…/sprite" + "@2x" + ".json", keeping a query string at the end: an
+    // API-keyed host serves …/sprite@2x.json?key=K, never …?key=K@2x.json.
+    std::string SpriteVariant(std::string const &base, char const *density, char const *ext)
+    {
+        auto q = base.find('?');
+        if (q == std::string::npos)
+            return base + density + ext;
+        return base.substr(0, q) + density + ext + base.substr(q);
+    }
+
     std::vector<FetchedSpritePack> FetchSpritePacks(std::vector<SpritePackRef> const &packs)
     {
         std::vector<FetchedSpritePack> out;
@@ -199,7 +261,8 @@ namespace
             for (auto const *s : { "@2x", "" })
             {
                 std::vector<uint8_t> jb, pb;
-                if (!FetchBytes(p.url + s + ".json", jb) || !FetchBytes(p.url + s + ".png", pb))
+                if (!FetchBytes(SpriteVariant(p.url, s, ".json"), jb) ||
+                    !FetchBytes(SpriteVariant(p.url, s, ".png"), pb))
                     continue;
                 FetchedSpritePack f;
                 f.prefix = p.prefix;
@@ -349,7 +412,7 @@ namespace
             return false;
         std::string text;
         JsonObject obj;
-        if (!FetchText(candidate, text) || !ParseObject(text, obj))
+        if (!FetchText(candidate, text, false) || !ParseObject(text, obj))
             return false;
         if (!obj.HasKey(L"layers") || !obj.HasKey(L"version"))
             return false;
@@ -380,7 +443,7 @@ namespace
             return true;
         }
         JsonObject obj;
-        if (!FetchText(raw, text) || !ParseObject(text, obj))
+        if (!FetchText(raw, text, true) || !ParseObject(text, obj))
             return false;
         auto n = winrt::to_string(obj.GetNamedString(L"name", L""));
         name = n.empty() ? raw : n;
@@ -419,6 +482,11 @@ namespace
             if (in_tag)
                 continue;
             if (raw.compare(i, 6, "&copy;") == 0) { out += "\xC2\xA9"; i += 5; continue; }
+            if (raw.compare(i, 4, "&lt;") == 0) { out += '<'; i += 3; continue; }
+            if (raw.compare(i, 4, "&gt;") == 0) { out += '>'; i += 3; continue; }
+            if (raw.compare(i, 6, "&quot;") == 0) { out += '"'; i += 5; continue; }
+            if (raw.compare(i, 5, "&#39;") == 0) { out += '\''; i += 4; continue; }
+            if (raw.compare(i, 6, "&nbsp;") == 0) { out += ' '; i += 5; continue; }
             if (raw.compare(i, 5, "&amp;") == 0) { out += '&'; i += 4; continue; }
             out += c;
         }
@@ -435,7 +503,8 @@ namespace
     bool ResolveStyle(std::string const &raw, std::string &out_json,
                       std::map<std::string, std::pair<std::vector<std::string>, bool>> &out_sources,
                       std::string &out_attribution,
-                      std::vector<SpritePackRef> &out_packs)
+                      std::vector<SpritePackRef> &out_packs,
+                      bool local_style)
     {
         JsonObject top;
         if (!ParseObject(raw, top))
@@ -456,7 +525,7 @@ namespace
                 auto link = winrt::to_string(src.GetNamedString(L"url", L""));
                 std::string text;
                 JsonObject docj;
-                if (!link.empty() && FetchText(link, text) && ParseObject(text, docj))
+                if (!link.empty() && FetchText(link, text, local_style) && ParseObject(text, docj))
                 {
                     for (auto const *key : { L"tiles", L"minzoom", L"maxzoom",
                                              L"bounds", L"scheme", L"attribution" })
@@ -551,8 +620,10 @@ namespace
     // A small fixed pool for the tile fetches: tiles arrive in bursts of
     // dozens, and a thread per tile would spawn as many. Four workers match
     // the connection budget a tile host expects from one client. The pool
-    // lives for the process; with no style set it holds no threads awake
-    // beyond four parked waits.
+    // lives for the process, and the workers honour their jthread stop token
+    // — the destructor JOINS at CRT exit, and a wait that never looked at the
+    // token hung the process on quit. condition_variable_any is what takes a
+    // stop token in its wait.
     class TilePool
     {
     public:
@@ -563,7 +634,7 @@ namespace
                 if (workers_.empty())
                 {
                     for (int i = 0; i < 4; ++i)
-                        workers_.emplace_back([this] { Work(); });
+                        workers_.emplace_back([this](std::stop_token st) { Work(st); });
                 }
                 queue_.push_back(std::move(task));
             }
@@ -571,24 +642,25 @@ namespace
         }
 
     private:
-        void Work()
+        void Work(std::stop_token st)
         {
             for (;;)
             {
                 std::function<void()> task;
                 {
                     std::unique_lock<std::mutex> g(mu_);
-                    cv_.wait(g, [this] { return !queue_.empty(); });
+                    if (!cv_.wait(g, st, [this] { return !queue_.empty(); }))
+                        return; // stop requested: the process is quitting
                     task = std::move(queue_.front());
-                    queue_.erase(queue_.begin());
+                    queue_.pop_front();
                 }
                 task();
             }
         }
 
         std::mutex mu_;
-        std::condition_variable cv_;
-        std::vector<std::function<void()>> queue_;
+        std::condition_variable_any cv_;
+        std::deque<std::function<void()>> queue_;
         std::vector<std::jthread> workers_;
     };
 
@@ -620,7 +692,9 @@ namespace winrt::LookoutMarine::implementation
             }
             free(raw);
         }
-        char active[2048];
+        // Room for a long keyed url: a truncated read fails the equality test
+        // below and silently reverts the pick to the built-in chart.
+        char active[8192];
         active_chart_link.clear();
         if (lk_store_load_chartlink_active(active, sizeof active))
         {
@@ -693,7 +767,16 @@ namespace winrt::LookoutMarine::implementation
             auto url = std::make_shared<std::string>();
             auto name = std::make_shared<std::string>();
             auto doc = std::make_shared<std::string>();
-            bool found = ProbeChartLink(trimmed, *url, *name, *doc);
+            bool found = false;
+            try
+            {
+                found = ProbeChartLink(trimmed, *url, *name, *doc);
+            }
+            catch (...)
+            {
+                // A fetched document with a key of the wrong type throws out
+                // of GetNamedString; hostile JSON must not take the app down.
+            }
             queue.TryEnqueue([this, found, url, name, doc] {
                 if (!found)
                 {
@@ -733,7 +816,16 @@ namespace winrt::LookoutMarine::implementation
             auto n_url = std::make_shared<std::string>();
             auto name = std::make_shared<std::string>();
             auto doc = std::make_shared<std::string>();
-            bool found = ProbeChartLink(url, *n_url, *name, *doc);
+            bool found = false;
+            try
+            {
+                found = ProbeChartLink(url, *n_url, *name, *doc);
+            }
+            catch (...)
+            {
+                // As in AddChartLink: wrong-typed JSON throws; it must read
+                // as "did not answer", never as a crash.
+            }
             queue.TryEnqueue([this, found, url, was_picked, n_url, name, doc] {
                 if (!found)
                 {
@@ -745,6 +837,25 @@ namespace winrt::LookoutMarine::implementation
                 for (auto &l : chart_links)
                     if (l.url == url)
                         l = { *n_url, *name, *doc };
+                // A refresh can resolve to the sibling style.json another
+                // entry already carries. One url is one chart: the first copy
+                // absorbs the refreshed document rather than a twin appearing.
+                {
+                    std::vector<ChartLink> unique;
+                    for (auto &l : chart_links)
+                    {
+                        bool have = false;
+                        for (auto &u : unique)
+                            if (u.url == l.url)
+                            {
+                                u = l; // the later (refreshed) document wins
+                                have = true;
+                            }
+                        if (!have)
+                            unique.push_back(std::move(l));
+                    }
+                    chart_links = std::move(unique);
+                }
                 if (was_picked)
                 {
                     active_chart_link = *n_url;
@@ -787,13 +898,26 @@ namespace winrt::LookoutMarine::implementation
             auto credit = std::make_shared<std::string>();
             auto packs = std::make_shared<std::vector<FetchedSpritePack>>();
             std::string raw = doc;
-            bool ok = !raw.empty() || FetchText(link, raw);
-            std::vector<SpritePackRef> pack_refs;
-            ok = ok && ResolveStyle(raw, *json, *sources, *credit, pack_refs);
-            // The sprite packs ride along: fetched here, off the UI thread,
-            // so applying is instant.
-            if (ok)
-                *packs = FetchSpritePacks(pack_refs);
+            bool ok = false;
+            try
+            {
+                ok = !raw.empty() || FetchText(link, raw, true);
+                std::vector<SpritePackRef> pack_refs;
+                // Only a style the mariner keeps on disk may read files its
+                // sources name; one off the network may not.
+                ok = ok && ResolveStyle(raw, *json, *sources, *credit, pack_refs,
+                                        LooksLikeFileLink(link));
+                // The sprite packs ride along: fetched here, off the UI
+                // thread, so applying is instant.
+                if (ok)
+                    *packs = FetchSpritePacks(pack_refs);
+            }
+            catch (...)
+            {
+                // Wrong-typed JSON throws out of GetNamedString; a hostile
+                // style reads as "did not answer", never as a crash.
+                ok = false;
+            }
             queue.TryEnqueue([this, epoch, link, ok, json, sources, credit, packs] {
                 // The epoch guards the race the mariner can cause: picking a
                 // second chart while the first is still being fetched. The
@@ -802,9 +926,12 @@ namespace winrt::LookoutMarine::implementation
                     return;
                 if (!ok)
                 {
-                    chart_link_error = "That chart didn't answer. Showing the Lookout chart.";
-                    active_chart_link.clear();
-                    SaveChartLinks();
+                    // A lost connection must not cost the mariner the chart
+                    // they are sailing on: the PICK STAYS — the next open or
+                    // re-pick retries it — and the Lookout chart stands in
+                    // meanwhile.
+                    chart_link_error =
+                        "That chart didn't answer. Showing the Lookout chart until it does.";
                     AltTilesDetach();
                     lk_controller_alt_style_set(controller, nullptr);
                     ScaleBarCredit().Text(L"");
@@ -890,6 +1017,14 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
         g_tile_pool.Run([this, url, id] {
+            {
+                // Detached while this sat in the queue: skip the fetch too,
+                // not just the answer — a backlog of 20-second dead fetches
+                // would stall live tiles behind it.
+                std::lock_guard<std::mutex> g(alt_mu);
+                if (!alt_live)
+                    return;
+            }
             std::vector<uint8_t> bytes;
             int code = FetchUrl(winrt::to_hstring(url).c_str(), bytes);
             // Under the lock, so a handle closing mid-answer is not answered

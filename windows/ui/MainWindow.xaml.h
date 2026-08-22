@@ -34,6 +34,10 @@ namespace winrt::LookoutMarine::implementation
         // first). Public: the table windows live outside this class.
         void RevealOnChart(double lon, double lat);
 
+        // One tile lookout wants. Public: the C tile-provider thunk (a free
+        // function — the engine takes a plain function pointer) calls it.
+        void TileRequest(std::string source, uint64_t id, int z, int x, int y);
+
     private:
         void WireChrome();
         void ToggleSettings();
@@ -239,7 +243,6 @@ namespace winrt::LookoutMarine::implementation
         void RemoveChartLink(std::string const &url);
         void PushChartLink();   // fetch + resolve off-thread, apply on the UI
         void AltTilesDetach();  // before the handle closes
-        void TileRequest(std::string source, uint64_t id, int z, int x, int y);
 
         std::vector<ChartLink> chart_links;
         std::string active_chart_link; // "" draws the built-in chart

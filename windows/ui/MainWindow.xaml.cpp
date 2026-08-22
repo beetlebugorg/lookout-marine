@@ -71,9 +71,11 @@ namespace winrt::LookoutMarine::implementation
         // uses, writes that profile, and quits.
         {
             char buf[512];
-            if (GetEnvironmentVariableA("LOOKOUT_FRAME_PROF", buf, sizeof buf) > 0 && buf[0] != '\0')
+            DWORD prof_n = GetEnvironmentVariableA("LOOKOUT_FRAME_PROF", buf, sizeof buf);
+            if (prof_n > 0 && prof_n < sizeof buf && buf[0] != '\0')
                 frame_prof_path = buf;
-            if (GetEnvironmentVariableA("LOOKOUT_GESTURE_BENCH", buf, sizeof buf) > 0)
+            DWORD bench_n = GetEnvironmentVariableA("LOOKOUT_GESTURE_BENCH", buf, sizeof buf);
+            if (bench_n > 0 && bench_n < sizeof buf)
             {
                 std::string spec = buf;
                 bench_mode = spec == "pan" ? 1 : spec == "zoom" ? 2 : spec == "both" ? 3 : 0;
