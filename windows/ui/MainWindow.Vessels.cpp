@@ -14,8 +14,11 @@
 
 #include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
 
+#include <array>
 #include <cmath>
 #include <map>
+
+#include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -35,6 +38,8 @@ namespace lkw
     static constexpr winrt::Windows::UI::Color kWarnText{ 0xFF, 0xE0, 0x9B, 0x2A };
     static constexpr winrt::Windows::UI::Color kAlarmRow{ 0x38, 0xD1, 0x40, 0x38 };
     static constexpr winrt::Windows::UI::Color kWarnRow{ 0x33, 0xE0, 0x9B, 0x2A };
+    /* 18 % of the shell accent: the selected row, over any flag tint. */
+    static constexpr winrt::Windows::UI::Color kSelectRow{ 0x2E, 0x1B, 0x49, 0xC4 };
 
     static bool NumericColumn(std::string const &type)
     {
@@ -113,7 +118,55 @@ namespace lkw
         std::string sort_key;
         bool ascending{ true };
         long long seq{ -1 };
+        /* The mariner's place in the table is theirs: kept by index across
+         * the 1 s rebuilds (the core's band-stable sort keeps rows put), and
+         * what Return activates. */
+        int selected{ -1 };
+        /* Per built row: the position a reveal centres on (when the row
+         * carries one) and the flag that tints it — kept so a selection
+         * change restyles in place and Return activates without re-reading
+         * the core. */
+        std::vector<std::array<double, 2>> row_at;
+        std::vector<uint8_t> row_has_at;
+        std::vector<std::wstring> row_flags;
     };
+
+    static winrt::Windows::UI::Color RowTint(VesselTableWin const *t, int idx)
+    {
+        if (idx == t->selected)
+            return kSelectRow;
+        auto const &flag = t->row_flags[(size_t)idx];
+        if (flag == L"alarm")
+            return kAlarmRow;
+        if (flag == L"warning")
+            return kWarnRow;
+        return winrt::Windows::UI::Color{ 0, 0, 0, 0 };
+    }
+
+    /* Repaint row backgrounds in place: the selection moved, nothing else
+     * did. Rows sit at even children — a hairline rule follows each. */
+    static void RestyleRows(VesselTableWin *t)
+    {
+        auto kids = t->rows.Children();
+        for (uint32_t i = 0; i * 2 < kids.Size() && i < t->row_flags.size(); ++i)
+        {
+            auto line = kids.GetAt(i * 2).try_as<winrt::Microsoft::UI::Xaml::Controls::Grid>();
+            if (line != nullptr)
+                line.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
+                    RowTint(t, (int)i) });
+        }
+    }
+
+    /* Open one row on the chart, the way a double-click does: centre and pin
+     * its bubble. Gated exactly as the double-tap is: the declaration must
+     * carry `at`, and this row must have a position somebody heard. */
+    static void ActivateRow(VesselTableWin *t, int idx)
+    {
+        if (!t->spec.locatable || idx < 0 || (size_t)idx >= t->row_has_at.size() ||
+            !t->row_has_at[(size_t)idx])
+            return;
+        t->owner->RevealOnChart(t->row_at[(size_t)idx][0], t->row_at[(size_t)idx][1]);
+    }
 
     static std::wstring WinKey(std::string const &plugin, std::string const &key)
     {
@@ -194,6 +247,9 @@ namespace lkw
             t->seq = seq;
 
             t->rows.Children().Clear();
+            t->row_at.clear();
+            t->row_has_at.clear();
+            t->row_flags.clear();
             auto arr = root.GetNamedArray(L"rows", JsonArray{});
             for (auto const &rv : arr)
             {
@@ -206,16 +262,20 @@ namespace lkw
                     if (t->spec.columns[i].type == "flag" &&
                         cells.GetAt(i).ValueType() == JsonValueType::String)
                         flag = cells.GetAt(i).GetString();
+                t->row_flags.push_back(flag);
+                t->row_at.push_back({ 0, 0 });
+                t->row_has_at.push_back(0);
+                int idx = (int)t->row_flags.size() - 1;
 
                 Controls::Grid line;
                 // A background always: a null brush is not hit-testable and
-                // the row must take a double-tap even with nothing wrong.
-                if (flag == L"alarm")
-                    line.Background(Media::SolidColorBrush{ kAlarmRow });
-                else if (flag == L"warning")
-                    line.Background(Media::SolidColorBrush{ kWarnRow });
-                else
-                    line.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                // the row must take a tap even with nothing wrong. RowTint
+                // layers the selection over the flag.
+                line.Background(Media::SolidColorBrush{ RowTint(t, idx) });
+                line.Tapped([t, idx](auto &&, auto &&) {
+                    t->selected = idx;
+                    RestyleRows(t);
+                });
 
                 Controls::StackPanel cellrow;
                 cellrow.Orientation(Controls::Orientation::Horizontal);
@@ -242,17 +302,21 @@ namespace lkw
                 }
                 line.Children().Append(cellrow);
 
-                // Activate a row: centre the chart on the vessel. Gated on the
-                // declaration carrying "at" and the row carrying a position.
+                // Activate a row: centre the chart on the vessel and pin its
+                // bubble. Gated on the declaration carrying "at" and the row
+                // carrying a position. Return takes the same path through the
+                // selection (ActivateRow).
                 if (t->spec.locatable && row.HasKey(L"at"))
                 {
                     auto at = row.GetNamedArray(L"at", JsonArray{});
                     if (at.Size() >= 2)
                     {
-                        double lon = at.GetAt(0).GetNumber();
-                        double lat = at.GetAt(1).GetNumber();
-                        line.DoubleTapped([t, lon, lat](auto &&, auto &&) {
-                            t->owner->RevealOnChart(lon, lat);
+                        t->row_at.back() = { at.GetAt(0).GetNumber(), at.GetAt(1).GetNumber() };
+                        t->row_has_at.back() = 1;
+                        line.DoubleTapped([t, idx](auto &&, auto &&) {
+                            t->selected = idx;
+                            RestyleRows(t);
+                            ActivateRow(t, idx);
                         });
                     }
                 }
@@ -264,6 +328,10 @@ namespace lkw
                 rule.Background(Media::SolidColorBrush{ kRule });
                 t->rows.Children().Append(rule);
             }
+            // The selection survives a rebuild by index; a shrunk table
+            // clamps it rather than leaving it pointing past the end.
+            if (t->selected >= (int)t->row_flags.size())
+                t->selected = (int)t->row_flags.size() - 1;
             t->empty.Visibility(arr.Size() == 0 ? Visibility::Visible : Visibility::Collapsed);
         }
         catch (winrt::hresult_error const &)
@@ -277,12 +345,16 @@ namespace lkw
 namespace winrt::LookoutMarine::implementation
 {
     // Reveal a table row's vessel on the chart: follow comes off first, or
-    // the camera snaps straight back to own ship.
+    // the camera snaps straight back to own ship. The symbol lands at the
+    // view centre and its bubble pins there — a reveal SHOWS the vessel, not
+    // merely the water it is in (the reference's reveal).
     void MainWindow::RevealOnChart(double lon, double lat)
     {
         lk_controller_follow_set(controller, 0);
         lk_controller_set_center(controller, lon, lat);
         UpdateReadouts(true);
+        if (!TryPinOverlayAt(Root().ActualWidth() / 2, Root().ActualHeight() / 2))
+            CloseOverlayBubble();
     }
 
     // Re-read the table declarations (at open, and when the registry moves).
@@ -380,15 +452,26 @@ namespace winrt::LookoutMarine::implementation
         w.Content(root);
         t->window = w;
 
-        // Width from the columns, height a target list is comfortable in.
-        double width = 90;
-        for (auto const &col : spec.columns)
-            width += lkw::ColumnWidth(col.type) + 4;
-        width = std::min(std::max(width, 480.0), 1100.0);
-        // ResizeClient counts physical pixels, so a layout width has to be
-        // scaled or the window opens narrower than its own columns.
+        // Where the mariner left this table is where it opens again (the
+        // reference's frame autosave); first open sizes from the columns,
+        // height a target list is comfortable in.
+        std::string frame_key = "table-" + spec.plugin + "-" + spec.key;
         double density = Density();
-        w.AppWindow().ResizeClient({ (int32_t)(width * density), (int32_t)(420 * density) });
+        int fw = 0, fh = 0;
+        if (lk_store_load_frame(frame_key.c_str(), &fw, &fh))
+        {
+            w.AppWindow().ResizeClient({ fw, fh });
+        }
+        else
+        {
+            double width = 90;
+            for (auto const &col : spec.columns)
+                width += lkw::ColumnWidth(col.type) + 4;
+            width = std::min(std::max(width, 480.0), 1100.0);
+            // ResizeClient counts physical pixels, so a layout width has to
+            // be scaled or the window opens narrower than its own columns.
+            w.AppWindow().ResizeClient({ (int32_t)(width * density), (int32_t)(420 * density) });
+        }
         HWND hwnd = nullptr;
         if (auto native = w.try_as<::IWindowNative>())
             if (SUCCEEDED(native->get_WindowHandle(&hwnd)))
@@ -407,10 +490,53 @@ namespace winrt::LookoutMarine::implementation
         t->timer.Tick([raw](auto &&, auto &&) { lkw::ReloadTable(raw, false); });
         t->timer.Start();
 
-        w.Closed([this, key](auto &&, auto &&) {
+        // The keyboard mirrors the mouse: Return opens the selected row the
+        // way a double-click does, the arrows move the selection.
+        // Accelerators, not KeyDown — a panel of plain rows holds no focus
+        // for key events to route through.
+        {
+            Input::KeyboardAccelerator enter;
+            enter.Key(Windows::System::VirtualKey::Enter);
+            enter.Invoked([raw](auto &&, Input::KeyboardAcceleratorInvokedEventArgs const &e) {
+                e.Handled(true);
+                lkw::ActivateRow(raw, raw->selected);
+            });
+            root.KeyboardAccelerators().Append(enter);
+
+            Input::KeyboardAccelerator up;
+            up.Key(Windows::System::VirtualKey::Up);
+            up.Invoked([raw](auto &&, Input::KeyboardAcceleratorInvokedEventArgs const &e) {
+                e.Handled(true);
+                if (raw->row_flags.empty())
+                    return;
+                raw->selected = raw->selected <= 0 ? 0 : raw->selected - 1;
+                lkw::RestyleRows(raw);
+            });
+            root.KeyboardAccelerators().Append(up);
+
+            Input::KeyboardAccelerator down;
+            down.Key(Windows::System::VirtualKey::Down);
+            down.Invoked([raw](auto &&, Input::KeyboardAcceleratorInvokedEventArgs const &e) {
+                e.Handled(true);
+                if (raw->row_flags.empty())
+                    return;
+                if (raw->selected + 1 < (int)raw->row_flags.size())
+                    raw->selected++;
+                else if (raw->selected < 0)
+                    raw->selected = 0;
+                lkw::RestyleRows(raw);
+            });
+            root.KeyboardAccelerators().Append(down);
+        }
+
+        w.Closed([this, key, frame_key](auto &&, auto &&) {
             auto it = lkw::g_tables.find(key);
             if (it == lkw::g_tables.end())
                 return;
+            // Saved once, at close: the size is not worth an INI write per
+            // drag, and where it closes is where it opens next time.
+            auto size = it->second->window.AppWindow().ClientSize();
+            lk_store_save_frame(frame_key.c_str(), size.Width, size.Height);
             it->second->timer.Stop(); // no tick can land after this, same thread
             lk_controller_table_open(controller, it->second->spec.plugin.c_str(),
                                      it->second->spec.key.c_str(), 0);

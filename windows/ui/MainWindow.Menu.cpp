@@ -141,6 +141,15 @@ namespace winrt::LookoutMarine::implementation
             enc.IsEnabled(open);
             chart.Items().Append(enc);
         }
+        if (!raster_paths.empty())
+        {
+            /* Takes effect the next time a chart is opened, exactly as the
+             * reference's item says in its help text. */
+            chart.Items().Append(MenuItem(
+                winrt::to_hstring("Forget Raster Charts (" +
+                                  std::to_string(raster_paths.size()) + ")"),
+                L"", [this] { ForgetRasterCharts(); }));
+        }
 
         chart.Items().Append(MenuFlyoutSeparator{});
         chart.Items().Append(MenuItem(L"Zoom In", L"Ctrl+Plus", [this] { Command('+'); }));
@@ -191,6 +200,27 @@ namespace winrt::LookoutMarine::implementation
         menu.Items().Append(MenuFlyoutSeparator{});
         menu.Items().Append(MenuItem(L"Open Charts…", L"Ctrl+O", [this] { PickChartFolder(); }));
         menu.Items().Append(MenuItem(L"Open Chart File…", L"Ctrl+Shift+O", [this] { PickChartFile(); }));
+
+        // The sets aboard, each with its switch — the same list Settings >
+        // Charts manages, reachable without opening Settings (the reference's
+        // File > Charts submenu).
+        MenuFlyoutSubItem sets;
+        sets.Text(L"Charts");
+        for (auto const &s : chart_sets)
+        {
+            std::string label = s.title.empty()
+                                    ? std::filesystem::path(s.path).filename().string()
+                                    : s.title;
+            ToggleMenuFlyoutItem it;
+            it.Text(winrt::to_hstring(label));
+            it.IsChecked(s.on);
+            std::string p = s.path;
+            bool now = s.on;
+            it.Click([this, p, now](auto &&, auto &&) { SetChartSetOn(p, !now); });
+            sets.Items().Append(it);
+        }
+        sets.IsEnabled(!chart_sets.empty());
+        menu.Items().Append(sets);
 
         MenuFlyoutSubItem recents;
         recents.Text(L"Open Recent");

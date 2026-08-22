@@ -134,6 +134,7 @@ namespace winrt::LookoutMarine::implementation
         void TickBake();
         static std::string BakeOutputDir();
         void SubmitSearch();
+        void UpdateSearchResults(); // the live row under the field
         // overlay bubbles, position source, follow lock (MainWindow.Overlay.cpp)
         bool TryPinOverlayAt(double x, double y); // a tap; true = it took it
         void UpdateOverlayBubble();               // per readout tick
@@ -171,6 +172,7 @@ namespace winrt::LookoutMarine::implementation
 
         // raster underlay (MainWindow.Raster.cpp)
         void InstallStoredRasters();  // re-add the stored list after each open
+        void ForgetRasterCharts();    // clear the stored library; next open loses them
         void RestoreRasterShown();    // put back which sets were drawn, then the saved ENC-hidden
         void SaveRasterShown();       // record the engine's per-set drawn state by name
         void AddRasterPaths(std::vector<std::string> const &paths);

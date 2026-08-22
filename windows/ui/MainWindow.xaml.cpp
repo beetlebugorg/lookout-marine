@@ -144,6 +144,7 @@ namespace winrt::LookoutMarine::implementation
             else if (e.Key() == Windows::System::VirtualKey::Escape)
                 Command('f');
         });
+        SearchBox().TextChanged([this](auto &&, auto &&) { UpdateSearchResults(); });
 
         // Chart gestures via XAML (DXGI mode; the fallback path uses the child
         // HWND wndproc). Only presses that start on the chart surface are chart

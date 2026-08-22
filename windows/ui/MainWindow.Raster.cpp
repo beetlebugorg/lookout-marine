@@ -312,6 +312,16 @@ namespace winrt::LookoutMarine::implementation
     // which is also what carries it across a restart. Failures are logged,
     // never alerted: a missing SD card must not become a dialog at every
     // launch.
+    /* Forget every stored raster chart, and the per-set hidden state with it
+     * (the reference's clearRasterCharts). The picture on screen is left
+     * alone — the store is what the NEXT open re-installs from, and that is
+     * the moment this takes effect. */
+    void MainWindow::ForgetRasterCharts()
+    {
+        lk_store_clear_rasters();
+        raster_paths.clear();
+    }
+
     void MainWindow::InstallStoredRasters()
     {
         raster_paths.clear();

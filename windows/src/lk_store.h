@@ -38,6 +38,12 @@ void lk_store_apply_saved_mariner(tile57_mariner *m);
 int  lk_store_load_settings_size(int *width, int *height);
 void lk_store_save_settings_size(int width, int height);
 
+/* One NAMED window frame (client size, physical px), for the windows that
+ * should open where they were left — the vessel tables, one per plugin
+ * table key. load returns 1 when a size was saved. */
+int  lk_store_load_frame(const char *name, int *width, int *height);
+void lk_store_save_frame(const char *name, int width, int height);
+
 /* Raster charts: the installed list survives a change of ENC and a restart —
  * the shell re-adds every stored path after each open. Each path carries its
  * own enabled flag (half-gigabyte downloads are switched off, not deleted).
@@ -55,6 +61,12 @@ void   lk_store_free_rasters(char **paths, int *enabled);
 void   lk_store_note_rasters(const char *const *paths, int n);
 void   lk_store_forget_rasters(const char *const *paths, int n);
 void   lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled);
+/* Forget the whole raster library, and the per-set hidden list with it:
+ * hidden entries are keyed by set name, and leaving them behind means the
+ * same file added again months later comes back not drawn with nothing on
+ * screen to say why. The open chart is untouched — this takes effect at the
+ * next open (the reference's clearRasterCharts). */
+void   lk_store_clear_rasters(void);
 
 /* Which raster SETS are not drawn, by set name — the pill's per-set choice,
  * distinct from a path's enabled flag. load returns a NULL-terminated array

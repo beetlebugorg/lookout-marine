@@ -78,6 +78,17 @@
                          VerticalAlignment="Center" Visibility="Collapsed"
                          PlaceholderText="Go to coordinate  (e.g. 38.978, -76.492)" />
             </StackPanel>
+            <!-- The results row under the field: a parsed coordinate previews
+                 as a go-to; anything else says honestly that name search is
+                 not here yet. Built in code (MainWindow.Input.cpp); never
+                 faked results. -->
+            <Border x:Name="SearchResults" Width="320" CornerRadius="12"
+                    HorizontalAlignment="Left" Margin="58,0,0,0"
+                    Background="{ThemeResource LkCardBrush}"
+                    BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
+                    Visibility="Collapsed">
+                <StackPanel x:Name="SearchResultRows" />
+            </Border>
             <Button x:Name="MenuBtn" Style="{StaticResource Bubble}"
                     HorizontalAlignment="Left"
                     AutomationProperties.Name="Menu">
@@ -122,6 +133,13 @@
                     Margin="16,0,0,16" Spacing="3">
             <TextBlock x:Name="ScaleBarLabel" FontSize="12" FontWeight="SemiBold" Text="" />
             <StackPanel x:Name="ScaleBarSegs" Orientation="Horizontal" Height="6" />
+            <!-- source credits while a chart link draws: tile usage policies
+                 (openstreetmap.org's among them) make the visible credit a
+                 condition of service, so it rides the one HUD element that
+                 is always on screen (MainWindow.ChartLinks.cpp fills it). -->
+            <TextBlock x:Name="ScaleBarCredit" FontSize="10.5" Text=""
+                       Foreground="{ThemeResource LkMutedBrush}"
+                       Visibility="Collapsed" MaxWidth="360" TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- top-center: the plugin alert strip above the build pill, so an

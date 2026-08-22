@@ -6,6 +6,7 @@
 #include <shobjidl.h>
 
 #include <filesystem>
+#include <set>
 
 #include "lk_bake.h"
 #include "lk_paths.h"
@@ -75,13 +76,48 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
 
+        /* Scan-merge, the reference's ChartSets.scan: a cell whose archive is
+         * already in the library needs no prepare, so importing the same
+         * exchange set twice OPENS instead of re-running the job. tile57
+         * would skip each such cell anyway, but the panel would still rise
+         * and count finished work as work to do. */
+        unsigned dropped_ready = 0;
+        lkw::ScanResult merged = scan;
+        {
+            std::set<std::string> ready;
+            auto note = [&ready](std::filesystem::path const &root) {
+                std::error_code ec;
+                if (!std::filesystem::is_directory(root, ec))
+                    return;
+                for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+                     !ec && it != std::filesystem::recursive_directory_iterator();
+                     it.increment(ec))
+                    if (it->is_regular_file(ec))
+                        ready.insert(it->path().stem().string());
+            };
+            note(BakeOutputDir());
+            note(std::filesystem::path(lkw::RasterLibraryDir()) /
+                 std::filesystem::path(path).stem());
+            merged.cells.clear();
+            for (auto const &c : scan.cells)
+            {
+                if (c.NeedsPrepare() &&
+                    ready.count(std::filesystem::path(c.name).stem().string()) != 0)
+                {
+                    ++dropped_ready;
+                    continue;
+                }
+                merged.cells.push_back(c);
+            }
+        }
+
         /* Nothing raw: these are charts already, so open them and skip the bake
          * entirely. Ready pictures (.mbtiles, baked sheets) go to the raster
          * underlay, never to the vector open, which has no use for them.
          * Counted from the cells, not scan.sources: that counter is the
          * VECTOR sources alone, and a folder of BSB/KAP sheets must bake. */
         unsigned to_prepare = 0;
-        for (auto const &c : scan.cells)
+        for (auto const &c : merged.cells)
             if (c.NeedsPrepare())
                 ++to_prepare;
         if (to_prepare == 0)
@@ -89,11 +125,23 @@ namespace winrt::LookoutMarine::implementation
             BakePanel().Visibility(Visibility::Collapsed);
             std::vector<std::string> baked;
             std::vector<std::string> pictures;
-            for (auto const &c : scan.cells)
+            for (auto const &c : merged.cells)
             {
                 if (c.NeedsPrepare())
                     continue;
                 (c.kind == "raster" ? pictures : baked).push_back(c.path);
+            }
+            if (dropped_ready > 0)
+            {
+                /* Part (or all) of this set was prepared by an earlier
+                 * import: open the whole library plus whatever ready charts
+                 * the folder holds itself, exactly as the bake's finish
+                 * does. The recent is the library, never the source. */
+                auto lib = lkw::CollectCells(BakeOutputDir());
+                lib.insert(lib.end(), baked.begin(), baked.end());
+                AdoptBakedRasters(pictures, !lib.empty());
+                OpenPaths(lib, lkw::ChartLibraryDir(), lkw::AgencyForCells(lib));
+                return;
             }
             if (baked.empty() && pictures.empty())
                 baked = lkw::CellsFor(path);
@@ -109,7 +157,7 @@ namespace winrt::LookoutMarine::implementation
         std::string raster_out =
             (std::filesystem::path(lkw::RasterLibraryDir()) /
              std::filesystem::path(path).stem()).string();
-        if (!bake_job->Start(scan, path, BakeOutputDir(), raster_out))
+        if (!bake_job->Start(merged, path, BakeOutputDir(), raster_out))
         {
             bake_job.reset();
             BakePanel().Visibility(Visibility::Collapsed);

@@ -319,11 +319,38 @@ namespace
         return false;
     }
 
+    // The credit line a style's sources ask for: distinct attributions in
+    // source order, HTML markup reduced to its text. Public tile hosts make
+    // the visible credit a condition of service (openstreetmap.org's tile
+    // usage policy among them), so the shell shows it under the scale bar.
+    std::string StripAttribution(std::string const &raw)
+    {
+        std::string out;
+        bool in_tag = false;
+        for (size_t i = 0; i < raw.size(); ++i)
+        {
+            char c = raw[i];
+            if (c == '<') { in_tag = true; continue; }
+            if (c == '>') { in_tag = false; continue; }
+            if (in_tag)
+                continue;
+            if (raw.compare(i, 6, "&copy;") == 0) { out += "\xC2\xA9"; i += 5; continue; }
+            if (raw.compare(i, 5, "&amp;") == 0) { out += '&'; i += 4; continue; }
+            out += c;
+        }
+        // Trim the whitespace the markup leaves behind.
+        size_t a = out.find_first_not_of(" \t\r\n");
+        size_t b = out.find_last_not_of(" \t\r\n");
+        return a == std::string::npos ? "" : out.substr(a, b - a + 1);
+    }
+
     // Resolve a style: inline every TileJSON source, collect each source's
-    // url templates and TMS flag for the tile provider. Returns the rewritten
-    // style JSON; false when the text is not a style.
+    // url templates and TMS flag for the tile provider, and gather the
+    // sources' attribution for display. Returns the rewritten style JSON;
+    // false when the text is not a style.
     bool ResolveStyle(std::string const &raw, std::string &out_json,
-                      std::map<std::string, std::pair<std::vector<std::string>, bool>> &out_sources)
+                      std::map<std::string, std::pair<std::vector<std::string>, bool>> &out_sources,
+                      std::string &out_attribution)
     {
         JsonObject top;
         if (!ParseObject(raw, top))
@@ -372,6 +399,16 @@ namespace
             for (auto &c : scheme)
                 c = (char)tolower((unsigned char)c);
             out_sources[winrt::to_string(kv.Key())] = { templates, scheme == "tms" };
+
+            std::string credit =
+                StripAttribution(winrt::to_string(src.GetNamedString(L"attribution", L"")));
+            if (!credit.empty() &&
+                out_attribution.find(credit) == std::string::npos)
+            {
+                if (!out_attribution.empty())
+                    out_attribution += " \xC2\xB7 ";
+                out_attribution += credit;
+            }
         }
         out_json = winrt::to_string(top.Stringify());
         return true;
@@ -629,6 +666,8 @@ namespace winrt::LookoutMarine::implementation
         {
             AltTilesDetach();
             lk_controller_alt_style_set(controller, nullptr);
+            ScaleBarCredit().Text(L"");
+            ScaleBarCredit().Visibility(Visibility::Collapsed);
             return;
         }
         std::string doc;
@@ -641,10 +680,11 @@ namespace winrt::LookoutMarine::implementation
             auto json = std::make_shared<std::string>();
             auto sources = std::make_shared<
                 std::map<std::string, std::pair<std::vector<std::string>, bool>>>();
+            auto credit = std::make_shared<std::string>();
             std::string raw = doc;
             bool ok = !raw.empty() || FetchText(link, raw);
-            ok = ok && ResolveStyle(raw, *json, *sources);
-            queue.TryEnqueue([this, epoch, link, ok, json, sources] {
+            ok = ok && ResolveStyle(raw, *json, *sources, *credit);
+            queue.TryEnqueue([this, epoch, link, ok, json, sources, credit] {
                 // The epoch guards the race the mariner can cause: picking a
                 // second chart while the first is still being fetched. The
                 // slower fetch must not win.
@@ -657,11 +697,16 @@ namespace winrt::LookoutMarine::implementation
                     SaveChartLinks();
                     AltTilesDetach();
                     lk_controller_alt_style_set(controller, nullptr);
+                    ScaleBarCredit().Text(L"");
+                    ScaleBarCredit().Visibility(Visibility::Collapsed);
                     if (SettingsOpen())
                         BuildSettingsPage();
                     return;
                 }
                 chart_link_error.clear();
+                ScaleBarCredit().Text(winrt::to_hstring(*credit));
+                ScaleBarCredit().Visibility(credit->empty() ? Visibility::Collapsed
+                                                            : Visibility::Visible);
                 {
                     std::lock_guard<std::mutex> g(alt_mu);
                     alt_sources = *sources;

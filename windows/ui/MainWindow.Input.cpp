@@ -150,8 +150,13 @@ namespace winrt::LookoutMarine::implementation
             bool open = SearchBox().Visibility() == Visibility::Visible;
             SearchBox().Visibility(open ? Visibility::Collapsed : Visibility::Visible);
             SearchIcon().Glyph(open ? L"\uE721" : L"\uE711");
-            if (!open)
+            if (open)
+                SearchResults().Visibility(Visibility::Collapsed);
+            else
+            {
                 SearchBox().Focus(FocusState::Programmatic);
+                UpdateSearchResults();
+            }
             break;
         }
         case ',':
@@ -171,7 +176,72 @@ namespace winrt::LookoutMarine::implementation
         {
             lk_controller_set_center(controller, lon, lat);
             SearchBox().Text(L"");
-            Command('f'); // collapse
+            Command('f'); // collapse (also hides the results row)
         }
+    }
+
+    // The results row under the field, live as the mariner types: a parsed
+    // coordinate previews as a go-to they can click; anything else says
+    // honestly that feature/place search is not here yet. Never faked
+    // results (the reference's SearchField dropdown, row for row).
+    void MainWindow::UpdateSearchResults()
+    {
+        std::string text = winrt::to_string(SearchBox().Text());
+        if (SearchBox().Visibility() != Visibility::Visible || text.empty())
+        {
+            SearchResults().Visibility(Visibility::Collapsed);
+            return;
+        }
+
+        SearchResultRows().Children().Clear();
+        double lat = 0, lon = 0;
+        if (lk_coord_parse(text.c_str(), &lat, &lon))
+        {
+            Controls::Button go;
+            go.HorizontalAlignment(HorizontalAlignment::Stretch);
+            go.HorizontalContentAlignment(HorizontalAlignment::Left);
+            go.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+            go.BorderThickness({ 0, 0, 0, 0 });
+            go.Padding({ 12, 10, 12, 10 });
+            Controls::StackPanel row;
+            row.Orientation(Controls::Orientation::Horizontal);
+            row.Spacing(8);
+            Controls::FontIcon pin;
+            pin.Glyph(L""); // map pin
+            pin.FontSize(14);
+            row.Children().Append(pin);
+            Controls::TextBlock label;
+            label.Text(hstring{ L"Go to " } + lkw::FormatCoord(lat, lon));
+            label.FontSize(13);
+            row.Children().Append(label);
+            go.Content(row);
+            go.Click([this](auto &&, auto &&) { SubmitSearch(); });
+            SearchResultRows().Children().Append(go);
+        }
+        else
+        {
+            Controls::StackPanel row;
+            row.Orientation(Controls::Orientation::Horizontal);
+            row.Spacing(8);
+            row.Padding({ 12, 10, 12, 10 });
+            Controls::FontIcon q;
+            q.Glyph(L""); // question ring
+            q.FontSize(14);
+            q.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x6B, 0x6B, 0x6B } });
+            row.Children().Append(q);
+            Controls::StackPanel lines;
+            Controls::TextBlock title;
+            title.Text(L"Feature & place search");
+            title.FontSize(13);
+            lines.Children().Append(title);
+            Controls::TextBlock note;
+            note.Text(L"Coming soon. Needs a chart name index.");
+            note.FontSize(11);
+            note.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x6B, 0x6B, 0x6B } });
+            lines.Children().Append(note);
+            row.Children().Append(lines);
+            SearchResultRows().Children().Append(row);
+        }
+        SearchResults().Visibility(Visibility::Visible);
     }
 }

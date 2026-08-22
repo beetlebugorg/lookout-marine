@@ -298,6 +298,39 @@ lk_store_save_settings_size(int width, int height)
     store_unlock();
 }
 
+int
+lk_store_load_frame(const char *name, int *width, int *height)
+{
+    if (name == NULL || width == NULL || height == NULL)
+        return 0;
+    char kw[160], kh[160];
+    snprintf(kw, sizeof kw, "%s_w", name);
+    snprintf(kh, sizeof kh, "%s_h", name);
+    int w = 0, h = 0;
+    store_lock();
+    int have = get_int(LK_GROUP_WINDOW, kw, &w) && get_int(LK_GROUP_WINDOW, kh, &h);
+    store_unlock();
+    if (!have || w <= 0 || h <= 0)
+        return 0;
+    *width = w;
+    *height = h;
+    return 1;
+}
+
+void
+lk_store_save_frame(const char *name, int width, int height)
+{
+    if (name == NULL || width <= 0 || height <= 0)
+        return;
+    char kw[160], kh[160];
+    snprintf(kw, sizeof kw, "%s_w", name);
+    snprintf(kh, sizeof kh, "%s_h", name);
+    store_lock();
+    set_int(LK_GROUP_WINDOW, kw, width);
+    set_int(LK_GROUP_WINDOW, kh, height);
+    store_unlock();
+}
+
 /* ---- raster charts ------------------------------------------------------- */
 
 /* rasters.list holds one chart per line, "1|path" or "0|path" (the enabled
@@ -546,6 +579,18 @@ void
 lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled)
 {
     edit_rasters(paths, n, 2, enabled);
+}
+
+void
+lk_store_clear_rasters(void)
+{
+    store_lock();
+    save_rasters_locked(NULL, NULL, 0);
+    store_unlock();
+    /* The hidden-set list goes with the library it described (its own lock
+     * inside): entries are keyed by set name, and a stale one makes the same
+     * file added again months later come back not drawn. */
+    lk_store_save_hidden_sets(NULL, 0);
 }
 
 void
