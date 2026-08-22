@@ -67,6 +67,7 @@ xcrun swiftc -swift-version 5 -sdk "$SDK" -target arm64-apple-macosx26.0 \
   -I zig-out/include \
   -L "$WORK" \
   -llookoutall \
+  -lz \
   -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework UniformTypeIdentifiers \
   -o "$WORK/LookoutMarine" macos/LookoutMarine/*.swift 2>&1 \
