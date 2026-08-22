@@ -840,6 +840,9 @@ final class AppModel: ObservableObject {
     /// the link draws (tile usage policies make the credit a condition of
     /// service). Nil when the Lookout chart is up.
     @Published var chartLinkAttribution: String? = nil
+    /// Bumped by every push; a resolve landing with an older epoch is stale
+    /// and dropped, whatever url it carries.
+    private var chartLinkEpoch: UInt64 = 0
 
     private static let chartLinksKey = "lookout.chartlinks"
     private static let chartLinkActiveKey = "lookout.chartlinks.active"
@@ -868,6 +871,12 @@ final class AppModel: ObservableObject {
     /// re-read on every push — which is also what keeps a publisher's edits
     /// showing up without a refresh.
     func pushChartLink() {
+        // The epoch guards the race the mariner can cause: a second push for
+        // the SAME url (a refresh, a re-pick after an error) while the first
+        // is still resolving. The url guard alone let the stale fetch land
+        // last and win.
+        chartLinkEpoch &+= 1
+        let epoch = chartLinkEpoch
         guard let active = activeChartLink else {
             chartLinkAttribution = nil
             controller?.setAltChartStyle(nil)
@@ -880,39 +889,50 @@ final class AppModel: ObservableObject {
             Task { [weak self] in
                 let resolved = await AltChartStyle.resolve(json: doc)
                 let packs = await AltChartStyle.fetchSpritePacks(resolved?.spritePacks ?? [])
-                await MainActor.run { self?.applyAltStyle(resolved, packs: packs, for: active) }
+                await MainActor.run { self?.applyAltStyle(resolved, packs: packs, for: active, epoch: epoch) }
             }
             return
         }
         Task { [weak self] in
             let resolved = await Self.fetchStyle(active)
             let packs = await AltChartStyle.fetchSpritePacks(resolved?.spritePacks ?? [])
-            await MainActor.run { self?.applyAltStyle(resolved, packs: packs, for: active) }
+            await MainActor.run { self?.applyAltStyle(resolved, packs: packs, for: active, epoch: epoch) }
         }
     }
 
     /// Hand a resolved style to the chart, or say why not.
     ///
-    /// `for` guards the race the mariner can actually cause: picking a second
-    /// chart while the first is still being fetched. Without it the slower
-    /// fetch wins whenever it lands last, and the chart is not the one with
-    /// the tick beside it.
-    private func applyAltStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = [], for url: String) {
-        guard activeChartLink == url else { return }
+    /// `for` and `epoch` guard the race the mariner can actually cause:
+    /// picking or refreshing a chart while another fetch is still out.
+    /// Without them the slower fetch wins whenever it lands last, and the
+    /// chart is not the one with the tick beside it.
+    private func applyAltStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = [],
+                               for url: String, epoch: UInt64) {
+        guard epoch == chartLinkEpoch, activeChartLink == url else { return }
         guard let style else {
-            chartLinkError = "That chart didn't answer. Showing the Lookout chart."
+            // A lost connection must not cost the mariner the chart they are
+            // sailing on. The pick STAYS — the next open replays it — and the
+            // Lookout chart stands in meanwhile.
+            chartLinkError = "That chart didn't answer. Showing the Lookout chart until it does."
+            chartLinkAttribution = nil
+            controller?.setAltChartStyle(nil)
+            return
+        }
+        chartLinkError = nil
+        if controller?.setAltChartStyle(style, packs: packs) == false {
+            // The core refused the style. The pick and the credit must not
+            // claim a chart that is not drawn — the Lookout chart is.
+            chartLinkError = "That style could not be drawn. Showing the Lookout chart."
             activeChartLink = nil
             chartLinkAttribution = nil
             saveChartLinks()
             controller?.setAltChartStyle(nil)
             return
         }
-        chartLinkError = nil
         chartLinkAttribution = style.attribution
-        controller?.setAltChartStyle(style, packs: packs)
     }
 
-    private static func fetchStyle(_ link: String) async -> AltChartStyle? {
+    nonisolated private static func fetchStyle(_ link: String) async -> AltChartStyle? {
         guard let url = URL(string: link),
               let data = try? await load(url),
               let text = String(data: data, encoding: .utf8) else { return nil }
@@ -922,7 +942,7 @@ final class AppModel: ObservableObject {
     /// A style document, from the network or from disk. URLSession does not
     /// answer file urls, and a mariner's own style.json is a real way to get a
     /// chart aboard — offline, or one they wrote themselves.
-    private static func load(_ url: URL) async throws -> Data {
+    nonisolated private static func load(_ url: URL) async throws -> Data {
         if url.isFileURL {
             // The sandbox hands access over with the pick, and takes it back
             // when the scope closes. Harmless where no scope is held.
@@ -1008,7 +1028,7 @@ final class AppModel: ObservableObject {
     ///
     /// Shared by add and refresh, so the two can never disagree about what a
     /// link means.
-    private static func probeChartLink(_ url: URL) async -> (url: String, name: String, doc: String?)? {
+    nonisolated private static func probeChartLink(_ url: URL) async -> (url: String, name: String, doc: String?)? {
         let raw = url.absoluteString
         do {
             let data = try await load(url)
@@ -1067,6 +1087,14 @@ final class AppModel: ObservableObject {
                 }
                 guard let i = self.chartLinks.firstIndex(where: { $0.url == url }) else { return }
                 self.chartLinks[i] = .init(url: found.url, name: found.name, doc: found.doc)
+                // A refresh can resolve to the sibling style.json another
+                // entry already carries. One url is one chart: the standing
+                // entry absorbs the refreshed document rather than a twin
+                // appearing (and colliding ids in the settings list).
+                if let first = self.chartLinks.firstIndex(where: { $0.url == found.url }), first != i {
+                    self.chartLinks[first] = self.chartLinks[i]
+                    self.chartLinks.remove(at: i)
+                }
                 if wasPicked {
                     // Redraw on the refreshed document. selectChartLink would
                     // no-op on an unchanged url and leave the old wrapper up.
@@ -1090,7 +1118,7 @@ final class AppModel: ObservableObject {
 
     /// The style.json living beside a TileJSON, when the publisher shipped
     /// one. Returns its url and name only if it parses as a MapLibre style.
-    private static func siblingStyle(of tilejsonURL: URL) async -> (url: String, name: String)? {
+    nonisolated private static func siblingStyle(of tilejsonURL: URL) async -> (url: String, name: String)? {
         let candidate = tilejsonURL.deletingLastPathComponent().appendingPathComponent("style.json")
         guard candidate.absoluteString != tilejsonURL.absoluteString else { return nil }
         guard let (data, resp) = try? await URLSession.shared.data(for: AltChartStyle.identifiedRequest(candidate)),
@@ -1105,7 +1133,7 @@ final class AppModel: ObservableObject {
     /// tiles draw each advertised layer in a legible generic scheme — water
     /// fills, contour lines, point marks — honest geometry, not the
     /// publisher's portrayal (a tile source doesn't carry one).
-    private static func tileJSONWrapperStyle(link: String, tilejson: [String: Any]) -> String {
+    nonisolated private static func tileJSONWrapperStyle(link: String, tilejson: [String: Any]) -> String {
         let vectorLayers = tilejson["vector_layers"] as? [[String: Any]] ?? []
         var layers: [[String: Any]] = [
             ["id": "bg", "type": "background", "paint": ["background-color": "#c9e2f0"]],
@@ -1169,6 +1197,11 @@ final class AppModel: ObservableObject {
     }
 
     func selectChartLink(_ url: String?) {
+        // Re-picking what is already drawn is a no-op — the settings row fires
+        // on every click, and a re-pick would refetch the style and every
+        // sprite pack for nothing. A pick that last FAILED retries. Refresh
+        // pushes directly, so a refreshed wrapper still redraws.
+        if url != nil, url == activeChartLink, chartLinkError == nil { return }
         activeChartLink = url
         saveChartLinks()
         pushChartLink()

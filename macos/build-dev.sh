@@ -70,8 +70,12 @@ xcrun swiftc -swift-version 5 -sdk "$SDK" -target arm64-apple-macosx26.0 \
   -lz \
   -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework UniformTypeIdentifiers \
-  -o "$WORK/LookoutMarine" macos/LookoutMarine/*.swift 2>&1 \
-  | grep -v "was built for newer\|not an allowed client of it" || true
+  -o "$WORK/LookoutMarine" macos/LookoutMarine/*.swift 2>"$WORK/swiftc.log" \
+  || { grep -v "was built for newer\|not an allowed client of it" "$WORK/swiftc.log" >&2 || true
+       echo "==> swiftc FAILED" >&2; exit 1; }
+# The filter swallows only the known benign linker noise; a failed compile
+# above must never bundle and sign the previous stale binary as if it built.
+grep -v "was built for newer\|not an allowed client of it" "$WORK/swiftc.log" >&2 || true
 
 echo "==> bundle"
 APP="$OUT/LookoutMarine.app"

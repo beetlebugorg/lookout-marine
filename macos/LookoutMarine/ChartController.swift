@@ -1095,8 +1095,14 @@ final class ChartController: NSObject {
     /// asking for tiles as soon as it has the style, and a source it asks
     /// about before this knows where to fetch it is answered "failed" and
     /// remembered as such.
-    func setAltChartStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = []) {
-        guard let h = handle else { return }
+    ///
+    /// False means the CORE REFUSED the style — the caller must not leave the
+    /// pick, the credit or the tile sources claiming a chart that is not
+    /// drawn. No handle answers true: there is nothing to refuse, and the
+    /// open replay will push again.
+    @discardableResult
+    func setAltChartStyle(_ style: AltChartStyle?, packs: [FetchedSpritePack] = []) -> Bool {
+        guard let h = handle else { return true }
         altTiles.setSources(style?.sources ?? [:])
         if let style {
             lkLog("alt style: \(style.json.utf8.count) B, source(s): \(style.sources.keys.sorted().joined(separator: ", "))")
@@ -1105,6 +1111,10 @@ final class ChartController: NSObject {
             }
             if ok == 0 {
                 lkLog("alt style: the core refused it")
+                altTiles.setSources([:])
+                kick()
+                pushReadouts()
+                return false
             } else {
                 // AFTER the style: setting one clears the previous style's
                 // packs, so this order is what makes the icons stick.
@@ -1126,6 +1136,7 @@ final class ChartController: NSObject {
         }
         kick()
         pushReadouts()
+        return true
     }
 
     /// Is a publisher's style the one being drawn?

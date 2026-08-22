@@ -116,6 +116,11 @@ struct AltChartStyle {
             let text = raw
                 .replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
                 .replacingOccurrences(of: "&copy;", with: "©")
+                .replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&#39;", with: "'")
+                .replacingOccurrences(of: "&nbsp;", with: " ")
                 .replacingOccurrences(of: "&amp;", with: "&")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty && !seen.contains(text) { seen.append(text) }
@@ -153,8 +158,8 @@ struct AltChartStyle {
         for p in packs {
             var got: FetchedSpritePack?
             for s in ["@2x", ""] {
-                guard let j = await fetchData(p.url + s + ".json"),
-                      let b = await fetchData(p.url + s + ".png") else { continue }
+                guard let j = await fetchData(spriteVariant(p.url, density: s, ext: ".json")),
+                      let b = await fetchData(spriteVariant(p.url, density: s, ext: ".png")) else { continue }
                 got = FetchedSpritePack(prefix: p.prefix, json: j, png: b)
                 break
             }
@@ -165,6 +170,13 @@ struct AltChartStyle {
             }
         }
         return out
+    }
+
+    /// "…/sprite" + "@2x" + ".json", keeping a query string at the end: an
+    /// API-keyed host serves …/sprite@2x.json?key=K, never …?key=K@2x.json.
+    private static func spriteVariant(_ base: String, density: String, ext: String) -> String {
+        guard let q = base.firstIndex(of: "?") else { return base + density + ext }
+        return base[..<q] + density + ext + base[q...]
     }
 
     private static func fetchData(_ link: String) async -> Data? {
@@ -265,10 +277,14 @@ final class AltChartTiles: @unchecked Sendable {
     }
 
     /// What the current style's sources are. Replaces the lot: a style change
-    /// means the old names may not exist any more.
+    /// means the old names may not exist any more — and a new source reusing
+    /// a common name ("composite") gets its first ask and first failure
+    /// logged again.
     func setSources(_ s: [String: Source]) {
         lock.lock()
         sources = s
+        loggedAsk = []
+        loggedFail = []
         lock.unlock()
     }
 
