@@ -29,6 +29,10 @@ final class ChartLinkFetch: @unchecked Sendable {
     /// nil once the chart is closing: a fetch still in flight must not answer
     /// into a handle that is going away.
     private var handle: OpaquePointer?
+    /// Wakes the frame loop. An answer is adopted at the top of a frame, and
+    /// the display link pauses when nothing is moving, so a resolve landing
+    /// with no gesture behind it needs someone to ask for the next frame.
+    private var wake: (() -> Void)?
     /// Tasks by request id, so a cancel can reach the transfer.
     private var inFlight: [UInt64: URLSessionTask] = [:]
     private let session: URLSession
@@ -56,9 +60,11 @@ final class ChartLinkFetch: @unchecked Sendable {
     }
 
     /// Attach to a chart handle and start answering. Call once per handle.
-    func attach(to h: OpaquePointer) {
+    /// `wake` is called on the main thread after every answer.
+    func attach(to h: OpaquePointer, wake: @escaping () -> Void) {
         lock.lock()
         handle = h
+        self.wake = wake
         lock.unlock()
         lookout_set_http_provider(h, chartLinkGet, chartLinkCancel,
                                   Unmanaged.passUnretained(self).toOpaque())
@@ -78,6 +84,7 @@ final class ChartLinkFetch: @unchecked Sendable {
             for (id, _) in tasks { lookout_http_respond(h, id, nil, 0, 0) }
         }
         handle = nil
+        wake = nil
         lock.unlock()
         if let h { lookout_set_http_provider(h, nil, nil, nil) }
         for (_, t) in tasks { t.cancel() }
@@ -155,15 +162,19 @@ final class ChartLinkFetch: @unchecked Sendable {
         // into. lookout_http_respond takes no lock of its own, so nothing can
         // deadlock behind this.
         lock.lock()
-        defer { lock.unlock() }
-        guard let h = handle else { return }
-        if let bytes, !bytes.isEmpty {
-            bytes.withUnsafeBytes { raw in
-                lookout_http_respond(h, id, raw.baseAddress, raw.count, status)
+        let h = handle
+        let wake = self.wake
+        if let h {
+            if let bytes, !bytes.isEmpty {
+                bytes.withUnsafeBytes { raw in
+                    lookout_http_respond(h, id, raw.baseAddress, raw.count, status)
+                }
+            } else {
+                lookout_http_respond(h, id, nil, 0, status)
             }
-        } else {
-            lookout_http_respond(h, id, nil, 0, status)
         }
+        lock.unlock()
+        if h != nil, let wake { DispatchQueue.main.async(execute: wake) }
     }
 }
 

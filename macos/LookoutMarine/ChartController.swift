@@ -168,7 +168,7 @@ final class ChartController: NSObject {
         // The fetch door, before anything can ask through it. Installing it
         // also resolves whatever chart link the mariner left selected: the core
         // read the list at open and has been waiting for a way to fetch.
-        linkFetch.attach(to: h)
+        linkFetch.attach(to: h) { [weak self] in self?.kick() }
         // Empty is legal: a library of pictures alone opens with no cell, and
         // then there is no chart path to report.
         chartPath = paths.isEmpty ? nil
@@ -370,7 +370,7 @@ final class ChartController: NSObject {
     }
 
     /// Resume ticking after any state change (mutating calls funnel through here).
-    private func kick() {
+    func kick() {
         stopIdlePoll()
         idleTicks = 0
         if let link = displayLink {
