@@ -298,6 +298,57 @@ lk_pick_is_note (const LkPickFeature *feature)
 
 static void lk_pick_card_show (LkPickCard *card, guint index);
 
+static void
+lk_pick_picture_texture_drop (gpointer data, GClosure *closure)
+{
+  g_object_unref (data);
+}
+
+static gboolean
+lk_pick_picture_key (GtkEventControllerKey *keys, guint keyval, guint keycode,
+                     GdkModifierType state, gpointer user_data)
+{
+  if (keyval != GDK_KEY_Escape)
+    return FALSE;
+  gtk_window_close (GTK_WINDOW (user_data));
+  return TRUE;
+}
+
+/* The viewer a click on the inline picture opens: the picture in a window of
+ * its own, at its own size up to the screen, scaling with the window from
+ * there. A chart picture is a bridge clearance diagram or an anchorage
+ * sketch — reading matter, and the report's column is too narrow to read it
+ * in. Escape closes, as it closes the report. */
+static void
+lk_pick_picture_clicked (GtkGestureClick *gesture, int n_press, double x, double y,
+                         gpointer user_data)
+{
+  GdkTexture *texture = user_data;
+  GtkWidget *picture = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
+  GtkRoot *root = gtk_widget_get_root (picture);
+  const char *name = g_object_get_data (G_OBJECT (picture), "lk-name");
+
+  GtkWidget *window = gtk_window_new ();
+  gtk_window_set_title (GTK_WINDOW (window), name != NULL ? name : "Chart picture");
+  if (GTK_IS_WINDOW (root))
+    gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (root));
+  gtk_window_set_destroy_with_parent (GTK_WINDOW (window), TRUE);
+
+  GtkWidget *full = gtk_picture_new_for_paintable (GDK_PAINTABLE (texture));
+  gtk_picture_set_content_fit (GTK_PICTURE (full), GTK_CONTENT_FIT_CONTAIN);
+  gtk_picture_set_can_shrink (GTK_PICTURE (full), TRUE);
+  gtk_window_set_child (GTK_WINDOW (window), full);
+  gtk_window_set_default_size (GTK_WINDOW (window),
+                               MIN (gdk_texture_get_width (texture) + 8, 1200),
+                               MIN (gdk_texture_get_height (texture) + 8, 850));
+
+  GtkEventController *keys = gtk_event_controller_key_new ();
+  g_signal_connect (keys, "key-pressed", G_CALLBACK (lk_pick_picture_key), window);
+  gtk_widget_add_controller (window, keys);
+
+  gtk_window_present (GTK_WINDOW (window));
+}
+
 /* A file a feature points at, rather than carries: a caution note or a chart
  * picture. The bake stores those beside the chart; a chart baked before that
  * carries the name alone, and the row then says so. */
@@ -350,6 +401,17 @@ lk_pick_aux_widget (LkPickCard *card, const char *cell, const char *name, gboole
           gtk_picture_set_can_shrink (GTK_PICTURE (image), TRUE);
           gtk_widget_set_size_request (image, -1, MIN (340, gdk_texture_get_height (texture)));
           gtk_widget_add_css_class (image, "lk-aux-picture");
+
+          /* A click opens it full size. The gesture keeps the texture alive
+           * for the viewer it will open. */
+          gtk_widget_set_cursor_from_name (image, "pointer");
+          gtk_widget_set_tooltip_text (image, "Open full size");
+          g_object_set_data_full (G_OBJECT (image), "lk-name", g_strdup (name), g_free);
+          GtkGesture *open = gtk_gesture_click_new ();
+          g_signal_connect_data (open, "released", G_CALLBACK (lk_pick_picture_clicked),
+                                 g_object_ref (texture), lk_pick_picture_texture_drop, 0);
+          gtk_widget_add_controller (image, GTK_EVENT_CONTROLLER (open));
+
           gtk_box_append (GTK_BOX (box), image);
           return box;
         }

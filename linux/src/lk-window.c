@@ -973,13 +973,31 @@ lk_window_update_pick (LkWindow *self)
     return;
 
   GPtrArray *results = lk_app_model_get_pick_results (self->model);
-  int width = lk_pick_report_width (results->len, view_width);
-  LkCalloutPlace place = lk_callout_place (x, y, width, view_width, view_height, LK_HUD_BAND);
 
   self->pick_marker = lk_pick_marker_new ();
   gtk_widget_set_margin_start (self->pick_marker, MAX (0, (int) (x - LK_PICK_MARKER_SIZE / 2)));
   gtk_widget_set_margin_top (self->pick_marker, MAX (0, (int) (y - LK_PICK_MARKER_SIZE / 2)));
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_marker);
+
+  /* A narrow window takes the report as a SHEET across the bottom rather
+   * than a callout beside the mark: a callout squeezed into a phone-shaped
+   * window covers the very water it describes. The same rule the compact
+   * capsule follows, at the same width. */
+  if (view_width < LK_CHROME_COMPACT_WIDTH)
+    {
+      int width = view_width - 2 * LK_CHROME_MARGIN;
+      int room = (int) (view_height * 0.45);
+
+      self->pick_report = lk_pick_report_new (self->model, width, room);
+      gtk_widget_set_halign (self->pick_report, GTK_ALIGN_CENTER);
+      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_END);
+      gtk_widget_set_margin_bottom (self->pick_report, LK_HUD_BAND);
+      gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_report);
+      return;
+    }
+
+  int width = lk_pick_report_width (results->len, view_width);
+  LkCalloutPlace place = lk_callout_place (x, y, width, view_width, view_height, LK_HUD_BAND);
 
   /* The card holds one edge against the mark and the layout places the
    * opposite edge, so nothing here has to measure the card's height. */
