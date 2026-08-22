@@ -59,6 +59,11 @@ namespace winrt::LookoutMarine::implementation
         static void ApplyWindowIcon(HWND hwnd);
         Microsoft::UI::Xaml::XamlRoot DialogRoot(); // the window a dialog belongs to
         void BuildSettingsPage(); // rebuilds the rows for the selected tab
+        void RefreshBandPreview(); // redraw the depth-band legend in place
+        /// The depths tab's band legend, redrawn as the contour fields
+        /// change without rebuilding the page (a rebuild would steal the
+        /// NumberBox focus mid-typing). Null on every other tab.
+        winrt::Microsoft::UI::Xaml::Controls::Grid band_preview{ nullptr };
         /* Refresh the registered status texts and dots in place. The status
          * moves once a second while data flows; rebuilding the page for that
          * flickers every control and resets the expanders. */
@@ -159,6 +164,7 @@ namespace winrt::LookoutMarine::implementation
         // plugin tables (MainWindow.Vessels.cpp)
         void RefreshPluginTables(); // re-read the declarations at open
         void OpenPluginTable(lkw::TableSpec const &spec);
+        void ShowTableHook(std::string const &spec); // LOOKOUT_SHOW=table[:…]
         void CloseVesselWindows(); // the tables belong to the chart handle
 
         // plugin alerts (MainWindow.Alerts.cpp)
@@ -287,6 +293,27 @@ namespace winrt::LookoutMarine::implementation
         std::thread render_thread;
         std::atomic<bool> render_run{ false };
         std::atomic<int> warmup_frames{ 0 }; // force presents while DWM starts composing us
+
+        // Dev hooks — the interactive-path profile (MainWindow.xaml.cpp):
+        // $LOOKOUT_FRAME_PROF rows append on the render thread and the CSV
+        // rewrites at every loop exit; $LOOKOUT_GESTURE_BENCH steps a
+        // scripted gesture once per tick; $LOOKOUT_HITMAP logs hit tests.
+        struct FrameProfRow
+        {
+            double t, gap;
+            int drew, building;
+            double zoom, render_ms;
+        };
+        std::vector<FrameProfRow> frame_prof;
+        std::string frame_prof_path;
+        long long prof_t0_qpc{ 0 };
+        int bench_mode{ 0 };  // 0 off; 1 pan, 2 zoom, 3 both
+        int bench_phase{ 0 }; // settle, pan, rest, zoom, fill, done
+        int bench_frames{ 0 };
+        double bench_fill_t0{ 0 };
+        bool hitmap_log{ false };
+        void BenchStep();
+        void WriteFrameProfile();
         long long last_tick_qpc{ 0 };
         double scalebar_pt{ 0 }, scalebar_m{ 0 };
         bool open_attempted{ false };

@@ -146,6 +146,25 @@ namespace winrt::LookoutMarine::implementation
             warmup_frames.store(30);
             StartRenderThread();
             UpdateReadouts(true);
+            // $LOOKOUT_WINDOW="1400x900": the client size in logical points,
+            // so a screenshot frame is the same on any machine (the
+            // reference's hook).
+            {
+                char ws[32];
+                if (GetEnvironmentVariableA("LOOKOUT_WINDOW", ws, sizeof ws) > 0 && ws[0] != '\0')
+                {
+                    double w = 0, h = 0;
+                    if (sscanf_s(ws, "%lfx%lf", &w, &h) == 2 && w > 100 && h > 100)
+                    {
+                        double density = Density();
+                        AppWindow().ResizeClient({ (int32_t)(w * density), (int32_t)(h * density) });
+                    }
+                    else
+                    {
+                        fprintf(stderr, "shell: ignoring malformed LOOKOUT_WINDOW '%s' (want WIDTHxHEIGHT)\n", ws);
+                    }
+                }
+            }
             // Screenshot/dev hooks: the pane, and the section it opens on.
             // LOOKOUT_OPEN_SETTINGS=1 opens Display; LOOKOUT_OPEN_SETTINGS=
             // connections opens the section a plugin filled, which is where
@@ -160,26 +179,71 @@ namespace winrt::LookoutMarine::implementation
                     OpenSettingsTab(tab);
             }
 
+            // Dev hooks: LOOKOUT_ADD=PATH adds that folder as a chart set
+            // once the window is up — the Add Charts… panel without the
+            // panel; raw cells bake, so it also drives the bake pill.
+            // LOOKOUT_REMOVE=PATH takes one off, as the Charts list does;
+            // "PATH@8" waits eight seconds first, which is the only way to
+            // run the case that matters — a set removed while its own charts
+            // are still baking (the reference's hooks, delay for delay).
+            {
+                char add[1024];
+                if (GetEnvironmentVariableA("LOOKOUT_ADD", add, sizeof add) > 0 && add[0] != '\0')
+                {
+                    std::string path = add;
+                    Microsoft::UI::Xaml::DispatcherTimer timer;
+                    timer.Interval(std::chrono::milliseconds(2000));
+                    timer.Tick([this, path, timer](auto &&, auto &&) {
+                        timer.Stop();
+                        ImportCharts(path);
+                    });
+                    timer.Start();
+                }
+                char rem[1024];
+                if (GetEnvironmentVariableA("LOOKOUT_REMOVE", rem, sizeof rem) > 0 && rem[0] != '\0')
+                {
+                    std::string spec = rem;
+                    double after = 0;
+                    if (size_t at2 = spec.rfind('@'); at2 != std::string::npos)
+                    {
+                        after = atof(spec.c_str() + at2 + 1);
+                        spec = spec.substr(0, at2);
+                    }
+                    Microsoft::UI::Xaml::DispatcherTimer timer;
+                    timer.Interval(std::chrono::milliseconds(2000 + (int64_t)(after * 1000)));
+                    timer.Tick([this, spec, timer](auto &&, auto &&) {
+                        timer.Stop();
+                        RemoveChartSet(spec);
+                    });
+                    timer.Start();
+                }
+            }
+
             // The cross-host screenshot protocol's LOOKOUT_SHOW: "pick" or
             // "pick:0.5x0.85" (a view fraction; 'x' because commas split the
-            // list elsewhere), or "scale". Applied after the first scenes
-            // settle, like the macOS shell's 3 s delay.
+            // list elsewhere), "scale", or
+            // "table[:key[:sort[:asc|desc[:activate]]]]". Applied after the
+            // first scenes settle, like the macOS shell's 3 s delay.
             char show[64];
             if (GetEnvironmentVariableA("LOOKOUT_SHOW", show, sizeof show) > 0)
             {
                 bool pick = strncmp(show, "pick", 4) == 0;
                 bool scale = strcmp(show, "scale") == 0;
+                bool table = strncmp(show, "table", 5) == 0;
                 double fx = 0.5, fy = 0.5;
                 if (pick && show[4] == ':')
                     sscanf_s(show + 5, "%lfx%lf", &fx, &fy);
-                if (pick || scale)
+                if (pick || scale || table)
                 {
+                    std::string spec = show;
                     Microsoft::UI::Xaml::DispatcherTimer timer;
                     timer.Interval(std::chrono::milliseconds(3000));
-                    timer.Tick([this, pick, fx, fy, timer](auto &&, auto &&) {
+                    timer.Tick([this, pick, table, fx, fy, spec, timer](auto &&, auto &&) {
                         timer.Stop();
                         if (pick)
                             ShowPick(Root().ActualWidth() * fx, Root().ActualHeight() * fy);
+                        else if (table)
+                            ShowTableHook(spec);
                         else
                             ToggleScalePanel();
                     });

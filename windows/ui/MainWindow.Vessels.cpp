@@ -547,6 +547,79 @@ namespace winrt::LookoutMarine::implementation
         w.Activate();
     }
 
+    // The screenshot protocol's LOOKOUT_SHOW=table[:key[:sort[:asc|desc
+    // [:activate]]]]: open one declared table — the first when no key is
+    // named — sorted as a mariner would by clicking a heading, and
+    // optionally with the top row opened the way a double-click does, so
+    // the locate-on-chart path can be photographed.
+    void MainWindow::ShowTableHook(std::string const &spec)
+    {
+        std::vector<std::string> parts;
+        size_t at = 0;
+        while (at <= spec.size())
+        {
+            size_t colon = spec.find(':', at);
+            if (colon == std::string::npos)
+            {
+                parts.push_back(spec.substr(at));
+                break;
+            }
+            parts.push_back(spec.substr(at, colon - at));
+            at = colon + 1;
+        }
+        bool activate = !parts.empty() && parts.back() == "activate";
+        std::string key = parts.size() > 1 && parts[1] != "activate" ? parts[1] : "";
+        std::string sort = parts.size() > 2 && parts[2] != "activate" ? parts[2] : "";
+        bool asc = !(parts.size() > 3 && parts[3] == "desc");
+
+        lkw::TableSpec const *found = nullptr;
+        for (auto const &t : tables)
+            if (key.empty() || t.key == key)
+            {
+                found = &t;
+                break;
+            }
+        if (found == nullptr)
+        {
+            fprintf(stderr, "shell: LOOKOUT_SHOW=table: no declared table%s%s\n",
+                    key.empty() ? "" : " with key ", key.c_str());
+            return;
+        }
+        OpenPluginTable(*found);
+        auto wkey = lkw::WinKey(found->plugin, found->key);
+        auto it = lkw::g_tables.find(wkey);
+        if (it == lkw::g_tables.end())
+            return;
+        if (!sort.empty())
+        {
+            it->second->sort_key = sort;
+            it->second->ascending = asc;
+        }
+        // The plugin builds no rows until somebody is looking, so the top
+        // row can only be opened after the first batch lands. Looked up
+        // again at fire time — a window closed inside the wait must not be
+        // reached through a stale pointer.
+        Microsoft::UI::Xaml::DispatcherTimer timer;
+        timer.Interval(std::chrono::milliseconds(1000));
+        std::wstring wk = wkey;
+        bool act = activate;
+        timer.Tick([wk, act, timer](auto &&, auto &&) {
+            timer.Stop();
+            auto it2 = lkw::g_tables.find(wk);
+            if (it2 == lkw::g_tables.end())
+                return;
+            auto *t = it2->second.get();
+            lkw::ReloadTable(t, true);
+            if (act && !t->row_flags.empty())
+            {
+                t->selected = 0;
+                lkw::RestyleRows(t);
+                lkw::ActivateRow(t, 0);
+            }
+        });
+        timer.Start();
+    }
+
     // The tables belong to the chart handle: a close or re-open retires them.
     void MainWindow::CloseVesselWindows()
     {

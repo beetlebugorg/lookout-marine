@@ -89,7 +89,13 @@ namespace winrt::LookoutMarine::implementation
                     // A tap on an overlay symbol pins its bubble and never
                     // also opens the chart pick report; a tap on open water
                     // retires the bubble.
-                    if (!TryPinOverlayAt(tap_x, tap_y))
+                    bool pinned = TryPinOverlayAt(tap_x, tap_y);
+                    // $LOOKOUT_HITMAP: what a tap resolved to, for chasing a
+                    // pick that lands somewhere the eye disagrees with.
+                    if (hitmap_log)
+                        fprintf(stderr, "[hitmap] tap (%.0f, %.0f) overlay=%d\n",
+                                tap_x, tap_y, pinned ? 1 : 0);
+                    if (!pinned)
                     {
                         CloseOverlayBubble();
                         ShowPick(tap_x, tap_y);

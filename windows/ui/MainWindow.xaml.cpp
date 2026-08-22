@@ -63,6 +63,24 @@ namespace winrt::LookoutMarine::implementation
 
         controller = lk_controller_new();
 
+        // The interactive-path profile, as the reference's hooks:
+        // $LOOKOUT_FRAME_PROF=<path> writes one CSV row per render-loop tick
+        // (the offscreen harnesses render from a settled camera and cannot
+        // show what a moving one costs); $LOOKOUT_GESTURE_BENCH=pan|zoom|both
+        // drives a scripted gesture through the same entry points the mouse
+        // uses, writes that profile, and quits.
+        {
+            char buf[512];
+            if (GetEnvironmentVariableA("LOOKOUT_FRAME_PROF", buf, sizeof buf) > 0 && buf[0] != '\0')
+                frame_prof_path = buf;
+            if (GetEnvironmentVariableA("LOOKOUT_GESTURE_BENCH", buf, sizeof buf) > 0)
+            {
+                std::string spec = buf;
+                bench_mode = spec == "pan" ? 1 : spec == "zoom" ? 2 : spec == "both" ? 3 : 0;
+            }
+            hitmap_log = GetEnvironmentVariableA("LOOKOUT_HITMAP", nullptr, 0) > 0;
+        }
+
         // The mariner's linked charts, before any open pushes the active one.
         LoadChartLinks();
 
@@ -296,15 +314,21 @@ namespace winrt::LookoutMarine::implementation
     {
         long long last_qpc = 0;
         DWORD idle_wait_ms = 1;
+        LARGE_INTEGER freq;
+        QueryPerformanceFrequency(&freq);
+        const bool prof = !frame_prof_path.empty();
         while (render_run.load())
         {
-            LARGE_INTEGER now, freq;
+            LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
-            QueryPerformanceFrequency(&freq);
+            if (prof_t0_qpc == 0)
+                prof_t0_qpc = now.QuadPart;
             double dt = last_qpc == 0 ? 0.0 : (double)(now.QuadPart - last_qpc) / freq.QuadPart;
             last_qpc = now.QuadPart;
 
             bool drew = false;
+            double render_ms = -1;
+            lk_readout r{};
             if (controller != nullptr && lk_controller_is_open(controller))
             {
                 int w = warmup_frames.load();
@@ -313,8 +337,28 @@ namespace winrt::LookoutMarine::implementation
                     warmup_frames.store(w - 1);
                     lk_controller_invalidate(controller);
                 }
+                if (bench_mode != 0 && bench_phase < 5)
+                    BenchStep();
+                if (prof)
+                    lk_controller_readout(controller, &r);
+                LARGE_INTEGER rt0, rt1;
+                QueryPerformanceCounter(&rt0);
                 drew = lk_controller_tick(controller, dt) != 0;
+                if (prof && drew)
+                {
+                    QueryPerformanceCounter(&rt1);
+                    render_ms = (double)(rt1.QuadPart - rt0.QuadPart) / freq.QuadPart * 1000.0;
+                }
             }
+            if (prof)
+                frame_prof.push_back({
+                    (double)(now.QuadPart - prof_t0_qpc) / freq.QuadPart * 1000.0,
+                    dt * 1000.0,
+                    drew ? 1 : 0,
+                    r.building,
+                    r.zoom,
+                    render_ms,
+                });
             /* Parked, not slept: input kicks the event and the next frame
              * starts at once. The escalating timeout is only for what the
              * engine does on its own — a plugin drawing, a build finishing —
@@ -326,6 +370,108 @@ namespace winrt::LookoutMarine::implementation
                 idle_wait_ms = idle_wait_ms * 2 > 250 ? 250 : idle_wait_ms * 2;
             lk_controller_wait(drew ? 1 : idle_wait_ms);
         }
+        // Rewritten whole at every loop exit (a resize restarts the loop),
+        // so the file on disk always holds the run so far.
+        WriteFrameProfile();
+        if (bench_mode != 0 && bench_phase >= 5)
+        {
+            // The bench is over: leave, the way the reference's run does.
+            DispatcherQueue().TryEnqueue([this] { Close(); });
+        }
+    }
+
+    /* The scripted gesture, one step per render tick: settle until the chart
+     * is open and quiet, pan a steady drag (4 pt a frame is an ordinary
+     * finger, and it keeps crossing into new tiles), rest, zoom IN across
+     * levels (each one needs tiles the view never held), then measure how
+     * long the chart takes to FINISH after the gesture stops — the phases of
+     * the reference's GestureBench, minus its tour. */
+    void MainWindow::BenchStep()
+    {
+        lk_readout r{};
+        lk_controller_readout(controller, &r);
+        bench_frames++;
+        switch (bench_phase)
+        {
+        case 0: // settle: open and quiet, then 120 clean frames
+            if (r.building)
+            {
+                bench_frames = 0;
+                return;
+            }
+            if (bench_frames >= 120)
+            {
+                bench_phase = (bench_mode & 1) ? 1 : 3;
+                bench_frames = 0;
+            }
+            break;
+        case 1: // pan
+            lk_controller_pan(controller, -4, -1.5);
+            if (bench_frames >= 240)
+            {
+                bench_phase = 2;
+                bench_frames = 0;
+            }
+            break;
+        case 2: // rest between gestures
+            if (bench_frames >= 60)
+            {
+                bench_phase = (bench_mode & 2) ? 3 : 5;
+                bench_frames = 0;
+            }
+            break;
+        case 3: // zoom in, 0.05 a frame — six levels over 480 frames
+        {
+            RECT rc{};
+            GetClientRect(top_hwnd, &rc);
+            double density = GetDpiForWindow(top_hwnd) / 96.0;
+            lk_controller_zoom_centered(controller, 0.05,
+                                        (unsigned)(rc.right / density),
+                                        (unsigned)(rc.bottom / density));
+            if (bench_frames >= 480)
+            {
+                bench_phase = 4;
+                bench_frames = 0;
+                LARGE_INTEGER n, f;
+                QueryPerformanceCounter(&n);
+                QueryPerformanceFrequency(&f);
+                bench_fill_t0 = (double)n.QuadPart / f.QuadPart;
+            }
+            break;
+        }
+        case 4: // fill: how long until the chart FINISHES after the gesture
+            if (!r.building || bench_frames > 900)
+            {
+                LARGE_INTEGER n, f;
+                QueryPerformanceCounter(&n);
+                QueryPerformanceFrequency(&f);
+                fprintf(stderr, "shell: fill after zoom: %.0f ms (%d frames)\n",
+                        ((double)n.QuadPart / f.QuadPart - bench_fill_t0) * 1000.0, bench_frames);
+                bench_phase = 5;
+                render_run.store(false); // the loop tail writes the profile and quits
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    void MainWindow::WriteFrameProfile()
+    {
+        if (frame_prof_path.empty() || frame_prof.empty())
+            return;
+        FILE *f = nullptr;
+        if (fopen_s(&f, frame_prof_path.c_str(), "w") != 0 || f == nullptr)
+            return;
+        // The reference's columns, so one script reads both hosts' runs.
+        // This loop has no render gate, so `dropped` is always 0 here.
+        fprintf(f, "t_ms,gap_ms,dispatched,dropped,building,zoom,render_ms\n");
+        for (auto const &row : frame_prof)
+            fprintf(f, "%.2f,%.2f,%d,0,%d,%.4f,%.3f\n",
+                    row.t, row.gap, row.drew, row.building, row.zoom, row.render_ms);
+        fclose(f);
+        fprintf(stderr, "shell: frame profile: %zu ticks -> %s\n",
+                frame_prof.size(), frame_prof_path.c_str());
     }
 
     // The core owns the swapchain: a resize is set_density + resize (the core

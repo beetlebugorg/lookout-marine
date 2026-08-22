@@ -80,6 +80,27 @@ namespace winrt::LookoutMarine::implementation
 
     void App::OnLaunched(LaunchActivatedEventArgs const &)
     {
+        // $LOOKOUT_LOG=<path>: append everything the shell and the core say
+        // to a file. A WinUI app has no console, which leaves a dev run with
+        // no way to see what the app just did; a file always works (the
+        // macOS shell's hook). Both sinks are pointed there: the CRT stream
+        // (the shell's fprintf) and the Win32 handle (the core's own
+        // prints go through GetStdHandle, which freopen does not move).
+        {
+            char log_path[512];
+            if (::GetEnvironmentVariableA("LOOKOUT_LOG", log_path, sizeof log_path) > 0 &&
+                log_path[0] != '\0')
+            {
+                HANDLE h = ::CreateFileA(log_path, FILE_APPEND_DATA,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h != INVALID_HANDLE_VALUE)
+                    ::SetStdHandle(STD_ERROR_HANDLE, h);
+                FILE *f = nullptr;
+                freopen_s(&f, log_path, "a", stderr);
+                setvbuf(stderr, nullptr, _IONBF, 0);
+            }
+        }
         if (HandOverToRunningCopy())
         {
             // Nothing is built yet to unwind - leave the way the macOS shell

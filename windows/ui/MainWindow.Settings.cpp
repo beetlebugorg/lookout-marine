@@ -5,6 +5,7 @@
 
 #include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -14,6 +15,93 @@
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
+
+namespace
+{
+    /* The chart colours of one scheme: the presentation library's own sRGB
+     * values (S-101 colour profile, tokens DEPDW/DEPMD/DEPMS/DEPVS/LANDA/
+     * CSTLN), copied so a swatch can be drawn without opening a chart. A
+     * legend of the palette, not the palette itself — the engine draws from
+     * the tables in the chart (the reference's SchemePalette, hex for hex). */
+    struct SchemePalette
+    {
+        winrt::Windows::UI::Color deep, medium, shallow, very_shallow, land, coastline;
+    };
+
+    winrt::Windows::UI::Color Hex(uint32_t v)
+    {
+        return { 0xFF, (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
+    }
+
+    SchemePalette PaletteOf(int scheme)
+    {
+        switch (scheme)
+        {
+        case 1: // dusk
+            return { Hex(0x000000), Hex(0x0f1b21), Hex(0x1d3246),
+                     Hex(0x1e4165), Hex(0x40402e), Hex(0x6b7f89) };
+        case 2: // night
+            return { Hex(0x000000), Hex(0x03070a), Hex(0x050e16),
+                     Hex(0x071727), Hex(0x17160e), Hex(0x252d31) };
+        default: // day
+            return { Hex(0xc9edff), Hex(0xa7d9fb), Hex(0x82caff),
+                     Hex(0x61b7ff), Hex(0xbfbe8f), Hex(0x4c5b63) };
+        }
+    }
+
+    /* A shore in one scheme: the four depth shades out to deep water, then
+     * land behind a curved coastline. A piece of chart, not a colour chip.
+     * Drawn at a fixed design size and stretched by a Viewbox, so the Bezier
+     * needs no size handling. */
+    Controls::Viewbox SchemeSwatch(SchemePalette const &p)
+    {
+        Controls::Grid design;
+        design.Width(100);
+        design.Height(78);
+
+        Controls::StackPanel bands;
+        auto band = [&](winrt::Windows::UI::Color c, double h) {
+            Controls::Border b;
+            b.Background(Media::SolidColorBrush{ c });
+            b.Height(h);
+            bands.Children().Append(b);
+        };
+        band(p.deep, 78 * 0.36);
+        band(p.medium, 78 * 0.18);
+        band(p.shallow, 78 * 0.16);
+        band(p.very_shallow, 78 * 0.30);
+        design.Children().Append(bands);
+
+        // The shoreline: a bay open to the top-left, land filling the corner.
+        Media::PathFigure fig;
+        fig.StartPoint({ 0, 78 });
+        fig.IsClosed(true);
+        Media::LineSegment l1;
+        l1.Point({ 0, 78 * 0.80f });
+        Media::BezierSegment bez;
+        bez.Point1({ 100 * 0.35f, 78 * 0.74f });
+        bez.Point2({ 100 * 0.60f, 78 * 0.44f });
+        bez.Point3({ 100, 78 * 0.52f });
+        Media::LineSegment l2;
+        l2.Point({ 100, 78 });
+        fig.Segments().Append(l1);
+        fig.Segments().Append(bez);
+        fig.Segments().Append(l2);
+        Media::PathGeometry geo;
+        geo.Figures().Append(fig);
+        Shapes::Path shore;
+        shore.Data(geo);
+        shore.Fill(Media::SolidColorBrush{ p.land });
+        shore.Stroke(Media::SolidColorBrush{ p.coastline });
+        shore.StrokeThickness(1.5);
+        design.Children().Append(shore);
+
+        Controls::Viewbox vb;
+        vb.Stretch(Media::Stretch::Fill);
+        vb.Child(design);
+        return vb;
+    }
+}
 
 namespace winrt::LookoutMarine::implementation
 {
@@ -240,6 +328,77 @@ namespace winrt::LookoutMarine::implementation
         apply_timer.Start();
     }
 
+    // The band strip, redrawn in place: which shades exist for the current
+    // settings and which contour separates each pair, labelled in the
+    // mariner's unit. Colours approximate the day palette — a legend, not
+    // the palette itself.
+    void MainWindow::RefreshBandPreview()
+    {
+        if (band_preview == nullptr)
+            return;
+        band_preview.Children().Clear();
+        band_preview.ColumnDefinitions().Clear();
+
+        const double ft = 3.28084;
+        bool feet = pending.depth_unit == 1;
+        auto label = [&](double metres) -> std::wstring {
+            wchar_t buf[32];
+            if (feet)
+                swprintf_s(buf, L"%d ft", (int)std::lround(metres * ft));
+            else
+                swprintf_s(buf, L"%g m", metres);
+            return buf;
+        };
+
+        struct Band
+        {
+            winrt::Windows::UI::Color c;
+            std::wstring text;
+        };
+        const winrt::Windows::UI::Color drying{ 0xFF, 0x8C, 0xCC, 0x99 };
+        const winrt::Windows::UI::Color very_shallow{ 0xFF, 0x73, 0xBF, 0xED };
+        const winrt::Windows::UI::Color shallow{ 0xFF, 0x8C, 0xD1, 0xF7 };
+        const winrt::Windows::UI::Color medium{ 0xFF, 0xBF, 0xE5, 0xFC };
+        const winrt::Windows::UI::Color deep{ 0xFF, 0xFF, 0xFF, 0xFF };
+        std::vector<Band> bands;
+        if (pending.four_shade_water)
+        {
+            bands.push_back({ drying, L"drying" });
+            bands.push_back({ very_shallow,
+                              L"0\u2013" + label(std::min(pending.shallow_contour, pending.safety_contour)) });
+            bands.push_back({ shallow, L"\u2013" + label(pending.safety_contour) });
+            bands.push_back({ medium,
+                              L"\u2013" + label(std::max(pending.deep_contour, pending.safety_contour)) });
+            bands.push_back({ deep, L"deeper" });
+        }
+        else
+        {
+            bands.push_back({ drying, L"drying" });
+            bands.push_back({ very_shallow, L"0\u2013" + label(pending.safety_contour) });
+            bands.push_back({ deep, L"deeper" });
+        }
+
+        for (size_t i = 0; i < bands.size(); ++i)
+        {
+            Controls::ColumnDefinition cd;
+            cd.Width({ 1, GridUnitType::Star });
+            band_preview.ColumnDefinitions().Append(cd);
+            Controls::Border b;
+            b.Background(Media::SolidColorBrush{ bands[i].c });
+            Controls::TextBlock t;
+            t.Text(winrt::hstring{ bands[i].text });
+            t.FontSize(9);
+            t.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xBF, 0x00, 0x00, 0x00 } });
+            t.HorizontalAlignment(HorizontalAlignment::Center);
+            t.VerticalAlignment(VerticalAlignment::Bottom);
+            t.TextTrimming(TextTrimming::CharacterEllipsis);
+            t.Margin({ 2, 0, 2, 2 });
+            b.Child(t);
+            Controls::Grid::SetColumn(b, (int)i);
+            band_preview.Children().Append(b);
+        }
+    }
+
     void MainWindow::LoadSettings()
     {
         lk_controller_get_mariner(controller, &pending);
@@ -267,6 +426,7 @@ namespace winrt::LookoutMarine::implementation
         stack.Children().Clear();
         // The controls the status poll updates in place died with that Clear.
         plugin_status_ui.clear();
+        band_preview = nullptr; // died with the Clear too; depths re-makes it
 
         const double ft = 3.28084;
         bool feet = pending.depth_unit == 1;
@@ -331,6 +491,17 @@ namespace winrt::LookoutMarine::implementation
             });
             stack.Children().Append(nb);
         };
+        // The reference's section footers: the sentence that explains what a
+        // setting MEANS, part of the pane rather than a tooltip nobody finds.
+        auto footer = [&](winrt::hstring const &text) {
+            Controls::TextBlock tb;
+            tb.Text(text);
+            tb.FontSize(11.5);
+            tb.TextWrapping(TextWrapping::Wrap);
+            tb.Opacity(0.65);
+            tb.Margin({ 0, 2, 0, 6 });
+            stack.Children().Append(tb);
+        };
         auto slider = [&](wchar_t const *label, double value, auto &&set) {
             Controls::TextBlock tb;
             tb.Text(label);
@@ -356,14 +527,80 @@ namespace winrt::LookoutMarine::implementation
 
         if (tab == "display")
         {
-            combo(L"Color scheme", { L"Day", L"Dusk", L"Night" }, (int)pending.scheme,
-                  [this](int i) { pending.scheme = (tile57_scheme)i; });
+            // The three schemes DRAWN, not named: each swatch is a piece of
+            // chart in that scheme's own colours, so the choice is made by
+            // eye — day is unreadable at night and night by day, and the
+            // swatches say so without words (the reference's SchemeSwatches).
+            {
+                Controls::TextBlock tb;
+                tb.Text(L"Color scheme");
+                tb.FontSize(12);
+                stack.Children().Append(tb);
+
+                Controls::Grid row;
+                wchar_t const *names[] = { L"Day", L"Dusk", L"Night" };
+                for (int i = 0; i < 3; ++i)
+                {
+                    Controls::ColumnDefinition cd;
+                    cd.Width({ 1, GridUnitType::Star });
+                    row.ColumnDefinitions().Append(cd);
+                }
+                for (int i = 0; i < 3; ++i)
+                {
+                    bool sel = (int)pending.scheme == i;
+                    Controls::StackPanel cell;
+                    cell.Spacing(4);
+                    cell.Margin({ i == 0 ? 0.0 : 4.0, 4, i == 2 ? 0.0 : 4.0, 0 });
+
+                    Controls::Border frame;
+                    frame.Height(64);
+                    frame.CornerRadius({ 8, 8, 8, 8 });
+                    frame.BorderThickness(sel ? Thickness{ 3, 3, 3, 3 } : Thickness{ 1, 1, 1, 1 });
+                    frame.BorderBrush(Media::SolidColorBrush{
+                        sel ? winrt::Windows::UI::Color{ 0xFF, 0x1B, 0x49, 0xC4 }
+                            : winrt::Windows::UI::Color{ 0x40, 0x80, 0x80, 0x80 } });
+                    frame.Child(SchemeSwatch(PaletteOf(i)));
+                    cell.Children().Append(frame);
+
+                    Controls::TextBlock name;
+                    name.Text(names[i]);
+                    name.FontSize(12);
+                    name.HorizontalAlignment(HorizontalAlignment::Center);
+                    if (sel)
+                        name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+                    else
+                        name.Opacity(0.65);
+                    cell.Children().Append(name);
+
+                    Controls::Grid::SetColumn(cell, i);
+                    // A tap picks the scheme; the page rebuilds so the ring
+                    // moves, and the pane takes the new scheme's chrome —
+                    // WITHOUT re-reading `pending` (LoadSettings would
+                    // discard the change the apply timer has not pushed yet).
+                    cell.Tapped([this, i](auto &&, auto &&) {
+                        if (settings_loading)
+                            return;
+                        pending.scheme = (tile57_scheme)i;
+                        ScheduleApply();
+                        bool dark = pending.scheme != 0;
+                        SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
+                        SettingsPane().Background(Media::SolidColorBrush{
+                            dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x24, 0x28 }
+                                 : winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
+                        BuildSettingsPage();
+                    });
+                    row.Children().Append(cell);
+                }
+                stack.Children().Append(row);
+            }
+            footer(L"The palettes switch instantly. Night keeps your eyes dark-adapted.");
             int cat = pending.display_other ? 2 : (pending.display_standard ? 1 : 0);
             combo(L"Display category", { L"Base", L"Standard", L"Other" }, cat, [this](int i) {
                 pending.display_base = true;
                 pending.display_standard = i != 0;
                 pending.display_other = i == 2;
             });
+            footer(L"Each category contains the one before it.");
             combo(L"Soundings", { L"Follow category", L"Always on", L"Always off" }, (int)pending.soundings,
                   [this](int i) { pending.soundings = (uint8_t)i; });
         }
@@ -378,16 +615,31 @@ namespace winrt::LookoutMarine::implementation
                       pending.four_shade_water = i == 1;
                       BuildSettingsPage();
                   });
+            footer(pending.four_shade_water
+                       ? L"Four shades: white (safe) water starts at the DEEP contour; the safety contour separates the two middle blues."
+                       : L"Two shades: water deeper than the safety contour is white (safe), everything shallower is blue.");
+            // Schematic of the S-52 depth bands for the CURRENT settings:
+            // which shades exist, and which contour separates each pair. A
+            // legend, not the palette (the reference's BandPreview). Redrawn
+            // in place as the contour fields change.
+            band_preview = Controls::Grid{};
+            band_preview.Height(34);
+            band_preview.CornerRadius({ 6, 6, 6, 6 });
+            band_preview.Margin({ 0, 6, 0, 0 });
+            stack.Children().Append(band_preview);
+            RefreshBandPreview();
+            footer(L"Shading follows the depth areas in the chart: the effective safety contour is the next DEEPER contour available in the data, drawn bold.");
             if (pending.four_shade_water)
                 number(feet ? L"Shallow contour (ft)" : L"Shallow contour (m)", pending.shallow_contour,
-                       [this](double v) { pending.shallow_contour = v; });
+                       [this](double v) { pending.shallow_contour = v; RefreshBandPreview(); });
             number(feet ? L"Safety contour (ft)" : L"Safety contour (m)", pending.safety_contour,
-                   [this](double v) { pending.safety_contour = v; });
+                   [this](double v) { pending.safety_contour = v; RefreshBandPreview(); });
             if (pending.four_shade_water)
                 number(feet ? L"Deep contour (ft)" : L"Deep contour (m)", pending.deep_contour,
-                       [this](double v) { pending.deep_contour = v; });
+                       [this](double v) { pending.deep_contour = v; RefreshBandPreview(); });
             number(feet ? L"Safety depth (ft)" : L"Safety depth (m)", pending.safety_depth,
                    [this](double v) { pending.safety_depth = v; });
+            footer(L"Safety depth bolds soundings at or shallower than it; it does not shade water.");
         }
         else if (tab == "text")
         {

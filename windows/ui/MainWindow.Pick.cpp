@@ -105,6 +105,15 @@ namespace winrt::LookoutMarine::implementation
     {
         lk_pick_feature *feats = nullptr;
         int n = lk_controller_pick_at(controller, x, y, &feats);
+        // $LOOKOUT_HITMAP: the classes a pick resolved, for chasing a report
+        // that names something the eye disagrees with.
+        if (hitmap_log)
+        {
+            fprintf(stderr, "[pick] at (%.0f, %.0f) -> [", x, y);
+            for (int i = 0; i < n; ++i)
+                fprintf(stderr, "%s%s", i > 0 ? "," : "", feats[i].cls ? feats[i].cls : "?");
+            fprintf(stderr, "]\n");
+        }
         DismissPick(); // a tap on bare water is how a mariner dismisses it
         if (n <= 0)
             return;
