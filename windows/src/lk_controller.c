@@ -879,18 +879,7 @@ lk_controller_charts_count(lk_controller *self)
     return (int)lookout_charts_count(self->handle);
 }
 
-/* ---- alt chart styles ---------------------------------------------------- */
-
-int
-lk_controller_alt_style_set(lk_controller *self, const char *json)
-{
-    lk_controller_kick();
-    if (!lk_controller_is_open(self))
-        return 0;
-    if (json == NULL)
-        return lookout_alt_chart_style_json(self->handle, NULL, 0);
-    return lookout_alt_chart_style_json(self->handle, json, strlen(json));
-}
+/* ---- charts by link ------------------------------------------------------ */
 
 int
 lk_controller_alt_style_active(lk_controller *self)
@@ -900,33 +889,89 @@ lk_controller_alt_style_active(lk_controller *self)
     return lookout_alt_chart_style_active(self->handle);
 }
 
-int
-lk_controller_alt_sprite_pack(lk_controller *self, const char *prefix,
-                              const char *json, size_t json_len,
-                              const char *png, size_t png_len)
-{
-    lk_controller_kick();
-    if (!lk_controller_is_open(self))
-        return 0;
-    return lookout_alt_sprite_pack(self->handle, prefix, json, json_len, png, png_len);
-}
-
 void
-lk_controller_set_tile_provider(lk_controller *self, lk_tile_request cb, void *user)
+lk_controller_set_http_provider(lk_controller *self, lk_http_get get,
+                                lk_http_cancel cancel, void *user)
 {
     if (lk_controller_is_open(self))
-        lookout_set_tile_provider(self->handle, (lookout_tile_request)cb, user);
+        lookout_set_http_provider(self->handle, (lookout_http_get)get,
+                                  (lookout_http_cancel)cancel, user);
 }
 
 void
-lk_controller_tile_respond(lk_controller *self, unsigned long long req_id,
+lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
                            const void *bytes, size_t len, int status)
 {
-    /* lookout_tile_respond takes no lock of the core's and ignores an unknown
+    /* lookout_http_respond takes no lock of the core's and ignores an unknown
      * id, so a fetch landing late is harmless — but never after close: the
      * shell detaches the provider and joins its fetches first. */
-    if (lk_controller_is_open(self))
-        lookout_tile_respond(self->handle, req_id, bytes, len, status);
+    if (!lk_controller_is_open(self))
+        return;
+    lookout_http_respond(self->handle, req_id, bytes, len, status);
+    /* An answer is adopted at the top of a frame, and the render loop stands
+     * down when nothing is moving, so a resolve landing with no gesture behind
+     * it needs someone to ask for the next frame. */
+    lk_controller_kick();
+}
+
+void
+lk_controller_chart_link_add(lk_controller *self, const char *link)
+{
+    if (!lk_controller_is_open(self) || link == NULL)
+        return;
+    lookout_chart_link_add(self->handle, link);
+    lk_controller_kick();
+}
+
+void
+lk_controller_chart_link_select(lk_controller *self, const char *url)
+{
+    if (!lk_controller_is_open(self))
+        return;
+    lookout_chart_link_select(self->handle, url);
+    lk_controller_kick();
+}
+
+void
+lk_controller_chart_link_remove(lk_controller *self, const char *url)
+{
+    if (!lk_controller_is_open(self) || url == NULL)
+        return;
+    lookout_chart_link_remove(self->handle, url);
+    lk_controller_kick();
+}
+
+void
+lk_controller_chart_link_refresh(lk_controller *self, const char *url)
+{
+    if (!lk_controller_is_open(self) || url == NULL)
+        return;
+    lookout_chart_link_refresh(self->handle, url);
+    lk_controller_kick();
+}
+
+void
+lk_controller_chart_links_import(lk_controller *self, const char *json)
+{
+    if (!lk_controller_is_open(self) || json == NULL)
+        return;
+    lookout_chart_links_import(self->handle, json);
+}
+
+char *
+lk_controller_chart_links_changed_json(lk_controller *self)
+{
+    if (!lk_controller_is_open(self))
+        return NULL;
+    if (!lookout_chart_links_changed(self->handle))
+        return NULL;
+    return lookout_chart_links_json(self->handle);
+}
+
+void
+lk_controller_string_free(char *s)
+{
+    lookout_string_free(s);
 }
 
 /* ---- markers ------------------------------------------------------------- */

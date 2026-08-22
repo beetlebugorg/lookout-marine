@@ -1082,6 +1082,17 @@ namespace winrt::LookoutMarine::implementation
             });
             stack.Children().Append(link_box);
 
+            // A resolve is several fetches deep, so say so rather than leave
+            // the list looking as though the click did nothing.
+            if (chart_link_busy)
+            {
+                Controls::TextBlock working;
+                working.Text(L"Reading the chart\u2026");
+                working.FontSize(11);
+                working.Opacity(0.7);
+                stack.Children().Append(working);
+            }
+
             if (!chart_link_error.empty())
             {
                 Controls::TextBlock err;

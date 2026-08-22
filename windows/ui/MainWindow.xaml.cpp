@@ -83,9 +83,6 @@ namespace winrt::LookoutMarine::implementation
             hitmap_log = GetEnvironmentVariableA("LOOKOUT_HITMAP", nullptr, 0) > 0;
         }
 
-        // The mariner's linked charts, before any open pushes the active one.
-        LoadChartLinks();
-
         WireChrome();
 
         readout_timer = DispatcherTimer{};
@@ -98,7 +95,7 @@ namespace winrt::LookoutMarine::implementation
         this->Closed([this](auto &&, auto &&) {
             if (readout_timer != nullptr)
                 readout_timer.Stop();
-            AltTilesDetach(); // before the handle: fetches must not answer into it
+            ChartLinksDetach(); // before the handle: fetches must not answer into it
             StopAlertWatch();
             // The other windows hold this controller and this window: they
             // cannot outlive either.
@@ -294,6 +291,10 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
         UpdateReadouts(false);
+        // The chart-link list, the credit and the error, from the core. A
+        // landing answer raises needs-redraw, so a resolve keeps the render
+        // loop ticking until it is done.
+        PollChartLinks();
     }
 
     void MainWindow::StartRenderThread()

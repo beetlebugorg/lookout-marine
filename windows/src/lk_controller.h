@@ -86,30 +86,39 @@ void lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double
 /* Geo to logical points (the inverse of geo_at) — anchors chart-pinned chrome. */
 int  lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y);
 
-/* ---- alt chart styles (an online map AS the chart) ----------------------- */
+/* ---- charts by link (an online map AS the chart) ------------------------- */
 
-/* One tile an alt style's source wants, which only the host can fetch (the
- * core does no networking). Called on the render thread with the core's lock
- * held: copy the name, start the fetch, return. Answer from any thread with
- * lk_controller_tile_respond — the one call that is safe from there. */
-typedef void (*lk_tile_request)(void *user, const char *source,
-                                unsigned long long req_id, int z, int x, int y);
+/* One url lookout wants: the style, a TileJSON, a sprite pack, a tile. Called
+ * on the render thread with the core's lock held: copy the url, start the
+ * fetch, return. Answer from any thread with lk_controller_http_respond — the
+ * one call that is safe from there. `allow_file` is 1 only when the url may be
+ * read off local disk; see lookout.h (lookout_http_get). */
+typedef void (*lk_http_get)(void *user, unsigned long long req_id,
+                            const char *url, int allow_file);
+/* lookout no longer wants an answer. Advisory; same calling rules. */
+typedef void (*lk_http_cancel)(void *user, unsigned long long req_id);
 
-/* Draw a host-supplied MapLibre style instead of the portrayal; NULL restores
- * lookout's chart. The bytes are copied. 1 on success (this core entry
- * answers 1 on success, unlike most of the ABI). */
-int  lk_controller_alt_style_set(lk_controller *self, const char *json);
+/* TRUE while a publisher's style is the chart being drawn. */
 int  lk_controller_alt_style_active(lk_controller *self);
-/* One sprite pack of the active alt style, exactly as fetched — send AFTER
- * alt_style_set (setting a style clears the previous style's packs). Answers
- * how many cells landed. See lookout.h (lookout_alt_sprite_pack). */
-int  lk_controller_alt_sprite_pack(lk_controller *self, const char *prefix,
-                                   const char *json, size_t json_len,
-                                   const char *png, size_t png_len);
-void lk_controller_set_tile_provider(lk_controller *self, lk_tile_request cb, void *user);
-/* status: 0 bytes, 1 "no tile there", 2 "tried and failed". Lock-free. */
-void lk_controller_tile_respond(lk_controller *self, unsigned long long req_id,
+
+void lk_controller_set_http_provider(lk_controller *self, lk_http_get get,
+                                     lk_http_cancel cancel, void *user);
+/* `status` is the final HTTP status, or 0 for a transport failure; only 2xx
+ * carries a body the core reads. Lock-free. */
+void lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
                                 const void *bytes, size_t len, int status);
+
+/* The chart-link management surface, straight through to lookout. */
+void lk_controller_chart_link_add(lk_controller *self, const char *link);
+void lk_controller_chart_link_select(lk_controller *self, const char *url); /* NULL = own chart */
+void lk_controller_chart_link_remove(lk_controller *self, const char *url);
+void lk_controller_chart_link_refresh(lk_controller *self, const char *url);
+void lk_controller_chart_links_import(lk_controller *self, const char *json);
+/* Everything the chart list shows, or NULL when nothing changed since the last
+ * poll. Free with lk_controller_string_free. ONE consumer: whoever polls it
+ * clears the flag. */
+char *lk_controller_chart_links_changed_json(lk_controller *self);
+void  lk_controller_string_free(char *s);
 
 /* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
 

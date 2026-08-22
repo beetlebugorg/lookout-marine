@@ -224,38 +224,42 @@ namespace winrt::LookoutMarine::implementation
         void RemoveChartSet(std::string const &path);
         std::vector<ChartSetRow> chart_sets;
 
-        // ---- chart links (an online map AS the chart) -----------------------
+        // ---- charts by link (an online map AS the chart) --------------------
         // One chart added by link: a MapLibre style url. Picking it renders
-        // that style INSTEAD of the built-in chart. `doc` carries the wrapper
-        // generated for a TileJSON link at add time; empty for a style link,
-        // which is fetched fresh on every push.
+        // that style INSTEAD of the built-in chart.
+        //
+        // THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON
+        // sources, generates a wrapper style for bare tiles, fetches the
+        // sprite packs, builds the credit line, templates the tile urls and
+        // persists the list. This shell renders the snapshot and fetches urls
+        // (MainWindow.ChartLinks.cpp).
         struct ChartLink
         {
             std::string url;
             std::string name;
-            std::string doc;
         };
-        void LoadChartLinks();
-        void SaveChartLinks();
         void SelectChartLink(std::string const &url); // "" = the built-in chart
         void AddChartLink(std::string const &raw);
         void RefreshChartLink(std::string const &url);
         void RemoveChartLink(std::string const &url);
-        void PushChartLink();   // fetch + resolve off-thread, apply on the UI
-        void AltTilesDetach();  // before the handle closes
+        void ChartLinksAttach();  // on the handle just opened
+        void ChartLinksDetach();  // before the handle closes
+        void MigrateChartLinks(); // the old store, handed over once
+        void PollChartLinks();    // the snapshot; UI thread, one consumer
+        void ChartLinkRespond(uint64_t id, void const *bytes, size_t len, int status);
+        static void HttpGetThunk(void *user, unsigned long long req_id,
+                                 const char *url, int allow_file);
+        static void HttpCancelThunk(void *user, unsigned long long req_id);
 
         std::vector<ChartLink> chart_links;
         std::string active_chart_link; // "" draws the built-in chart
         std::string chart_link_error;
-        // Guards the race the mariner can cause: picking a second chart while
-        // the first is still being fetched — the slower fetch must not win.
-        uint64_t chart_link_epoch{ 0 };
-        // The tile provider's state, shared with fetch threads. Answers are
-        // given under the lock so a closing handle is never answered into.
-        std::mutex alt_mu;
-        bool alt_live{ false };
-        std::map<std::string, std::pair<std::vector<std::string>, bool>> alt_sources;
-        std::set<std::string> alt_logged;
+        bool chart_link_busy{ false };
+        bool chart_links_imported{ false };
+        // Answers are given under this lock, so a closing handle is never
+        // answered into.
+        std::mutex link_mu;
+        bool link_live{ false };
         // zoom-to-scale panel (MainWindow.Scale.cpp)
         void WireScale();
         void ToggleScalePanel();
