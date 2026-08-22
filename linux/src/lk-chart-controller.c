@@ -831,6 +831,11 @@ lk_chart_controller_open (LkChartController *self,
   if (self->model != NULL)
     lk_app_model_reinstall_raster_charts (self->model);
 
+  /* The active chart link is replayed for the same reason: an alt style
+   * belongs to a handle, and this is a new one. */
+  if (self->model != NULL)
+    lk_app_model_reapply_chart_link (self->model);
+
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
@@ -906,6 +911,11 @@ lk_chart_controller_close (LkChartController *self)
   if (self->handle == NULL)
     return;
 
+  /* Before the handle: a tile fetch landing later must find the provider
+   * gone, never a dying engine. The links layer aborts its own fetches on
+   * ::has-chart, and tile_respond below refuses a NULL handle either way. */
+  lookout_set_tile_provider (self->handle, NULL, NULL);
+
   lookout_view view;
   lookout_get_view (self->handle, &view); /* the pose to reopen on, before the handle dies */
   lk_store_save_view (&view);
@@ -915,6 +925,63 @@ lk_chart_controller_close (LkChartController *self)
 
   if (self->model != NULL)
     lk_app_model_set_chart_open (self->model, FALSE, NULL);
+}
+
+/* ---- alt chart styles (charts by link) ----------------------------------- */
+
+gboolean
+lk_chart_controller_alt_style_set (LkChartController *self, const char *json)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+  if (self->handle == NULL)
+    return FALSE;
+  int ok = lookout_alt_chart_style_json (self->handle, json,
+                                         json != NULL ? strlen (json) : 0);
+  lk_chart_controller_kick (self);
+  return ok != 0;
+}
+
+gboolean
+lk_chart_controller_alt_style_active (LkChartController *self)
+{
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return FALSE;
+  return lookout_alt_chart_style_active (self->handle) != 0;
+}
+
+int
+lk_chart_controller_alt_sprite_pack (LkChartController *self, const char *prefix,
+                                     const char *json, gsize json_len,
+                                     const char *png, gsize png_len)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+  if (self->handle == NULL)
+    return 0;
+  int n = lookout_alt_sprite_pack (self->handle, prefix, json, json_len, png, png_len);
+  lk_chart_controller_kick (self);
+  return n;
+}
+
+void
+lk_chart_controller_set_tile_provider (LkChartController *self,
+                                       lookout_tile_request cb, gpointer user)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL)
+    return;
+  lookout_set_tile_provider (self->handle, cb, user);
+}
+
+void
+lk_chart_controller_tile_respond (LkChartController *self, guint64 req_id,
+                                  const void *bytes, gsize len, int status)
+{
+  /* From soup completion callbacks, which may outlive the handle they were
+   * started for: a NULL handle swallows the answer, and the core ignores a
+   * request id it no longer knows. */
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return;
+  lookout_tile_respond (self->handle, req_id, bytes, len, status);
 }
 
 /* ---- view --------------------------------------------------------------- */

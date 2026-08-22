@@ -7,6 +7,7 @@
 #define LK_GROUP_RASTER  "raster"
 #define LK_GROUP_MARINER "mariner.v1"
 #define LK_GROUP_PLUGINS "plugins.v1"
+#define LK_GROUP_CHARTLINKS "chartlinks"
 
 #define LK_MAX_RECENTS 10
 
@@ -185,6 +186,55 @@ lk_store_save_chart_hidden (gboolean hidden)
 
   g_key_file_set_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", hidden);
   lk_store_flush (keyfile);
+}
+
+/* ---- chart links --------------------------------------------------------- */
+
+static char *
+lk_store_load_string (const char *group, const char *key)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  char *value = g_key_file_get_string (keyfile, group, key, NULL);
+
+  if (value != NULL && value[0] == '\0')
+    g_clear_pointer (&value, g_free);
+  return value;
+}
+
+static void
+lk_store_save_string (const char *group, const char *key, const char *value)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  if (value == NULL || value[0] == '\0')
+    g_key_file_remove_key (keyfile, group, key, NULL);
+  else
+    g_key_file_set_string (keyfile, group, key, value);
+  lk_store_flush (keyfile);
+}
+
+char *
+lk_store_load_chart_links (void)
+{
+  return lk_store_load_string (LK_GROUP_CHARTLINKS, "links");
+}
+
+void
+lk_store_save_chart_links (const char *json)
+{
+  lk_store_save_string (LK_GROUP_CHARTLINKS, "links", json);
+}
+
+char *
+lk_store_load_chart_link_active (void)
+{
+  return lk_store_load_string (LK_GROUP_CHARTLINKS, "active");
+}
+
+void
+lk_store_save_chart_link_active (const char *url)
+{
+  lk_store_save_string (LK_GROUP_CHARTLINKS, "active", url);
 }
 
 /* ---- mariner ------------------------------------------------------------ */

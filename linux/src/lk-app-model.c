@@ -8,6 +8,7 @@ struct _LkAppModel {
   GObject parent_instance;
 
   LkChartController *controller;
+  LkChartLinks      *chart_links;
 
   gboolean has_chart;
   char    *chart_path;
@@ -160,6 +161,9 @@ lk_app_model_dispose (GObject *object)
   /* A bake still running holds this model as its callback data; its idles
      must not fire into a freed object. Blocks up to about one chart. */
   g_clear_pointer (&self->bake, lk_chart_bake_destroy);
+  /* Before the controller: the links object detaches its tile provider from
+   * the handle on the way out. */
+  g_clear_object (&self->chart_links);
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
@@ -240,6 +244,7 @@ lk_app_model_init (LkAppModel *self)
 {
   self->controller = lk_chart_controller_new ();
   lk_chart_controller_set_model (self->controller, self);
+  self->chart_links = lk_chart_links_new (self->controller);
 
   self->recents = lk_store_load_recents ();
   self->overscale = 1.0;
@@ -262,6 +267,20 @@ lk_app_model_get_controller (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
   return self->controller;
+}
+
+LkChartLinks *
+lk_app_model_get_chart_links (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->chart_links;
+}
+
+void
+lk_app_model_reapply_chart_link (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_chart_links_reapply (self->chart_links);
 }
 
 /* ---- opening charts ----------------------------------------------------- */

@@ -448,6 +448,20 @@ lk_hud_rule (void)
   return rule;
 }
 
+/* The credit a chart link's sources ask for. Public tile hosts make the
+ * visible credit a condition of service (openstreetmap.org's tile usage
+ * policy among them), so it stands with the scale readout whenever a linked
+ * chart is drawn, and only then. */
+static void
+lk_hud_credit_changed (LkChartLinks *links, gpointer user_data)
+{
+  GtkWidget *label = user_data;
+  const char *credit = lk_chart_links_attribution (links);
+
+  gtk_label_set_text (GTK_LABEL (label), credit);
+  gtk_widget_set_visible (label, credit[0] != '\0');
+}
+
 GtkWidget *
 lk_hud_capsule_new (LkAppModel *model)
 {
@@ -460,11 +474,7 @@ lk_hud_capsule_new (LkAppModel *model)
   capsule->root = root;
   gtk_widget_add_css_class (root, "lk-capsule");
   gtk_widget_set_size_request (root, -1, LK_CHROME_CAPSULE);
-  /* The capsule is a control surface, so it takes the presses that land on it
-   * — as the WinUI pill and the Compose surface do. It is small and it sits at
-   * the bottom centre; the chart keeps everything around it. */
   gtk_widget_set_halign (root, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (root, GTK_ALIGN_END);
 
   /* The amber dot every shell leads the capsule with. It is CSS, not a
    * drawing: a 10pt circle of one colour is what a stylesheet is for. */
@@ -551,7 +561,30 @@ lk_hud_capsule_new (LkAppModel *model)
   lk_hud_update_zoom (capsule);
   lk_hud_update_overscale (capsule);
   lk_hud_update_compact (capsule);
-  return root;
+
+  /* The capsule and, beneath it, the credit a linked chart's sources ask
+   * for. The column is what the window places; both parts sit at the bottom
+   * centre — as the WinUI pill and the Compose surface do — and the chart
+   * keeps everything around them. */
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+  gtk_widget_set_halign (column, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (column, GTK_ALIGN_END);
+  gtk_box_append (GTK_BOX (column), root);
+
+  GtkWidget *credit = gtk_label_new ("");
+  gtk_widget_add_css_class (credit, "caption");
+  gtk_widget_add_css_class (credit, "dim-label");
+  gtk_label_set_ellipsize (GTK_LABEL (credit), PANGO_ELLIPSIZE_END);
+  gtk_widget_set_halign (credit, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (column), credit);
+
+  LkChartLinks *links = lk_app_model_get_chart_links (model);
+  lk_tether (links,
+             g_signal_connect (links, "changed", G_CALLBACK (lk_hud_credit_changed), credit),
+             column);
+  lk_hud_credit_changed (links, credit);
+
+  return column;
 }
 
 /* ---- the raster chart pill ---------------------------------------------- */

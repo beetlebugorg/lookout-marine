@@ -39,6 +39,16 @@ void     lk_store_save_raster_hidden (const char *const *names);
 gboolean lk_store_load_chart_hidden (void);
 void     lk_store_save_chart_hidden (gboolean hidden);
 
+/* The chart links the mariner added, as one JSON array text — the same
+ * document every shell stores ([{url,name,doc},…]), so what a link means is
+ * defined once, in the chart-links code, not per store. NULL when none are
+ * saved; free the load. The active link is the url of the one being sailed
+ * on, or NULL/empty for lookout's own chart. */
+char *lk_store_load_chart_links (void);
+void  lk_store_save_chart_links (const char *json);
+char *lk_store_load_chart_link_active (void);
+void  lk_store_save_chart_link_active (const char *url);
+
 /* Mariner settings. Load overlays onto a struct already holding engine
  * defaults, so unknown/engine-only fields are left untouched. */
 void lk_store_save_mariner (const tile57_mariner *mariner);

@@ -8,6 +8,7 @@
 #include <gtk/gtk.h>
 
 #include "lk-chart-controller.h"
+#include "lk-chart-links.h"
 #include "lk-raster.h"
 
 G_BEGIN_DECLS
@@ -113,6 +114,17 @@ void lk_app_model_toggle_chart (LkAppModel *self);
  * while the chart renders, and the settings window can be open over a chart
  * that is standing still. Emits ::raster-changed when something moved. */
 void lk_app_model_refresh_raster_state (LkAppModel *self);
+
+/* ---- charts by link ------------------------------------------------------ */
+
+/* The mariner's linked charts (an online map AS the chart). Owned here so the
+ * settings section and the HUD credit read one object. */
+LkChartLinks *lk_app_model_get_chart_links (LkAppModel *self);
+
+/* Re-push the active link into a chart the engine has just opened. Called
+ * beside lk_app_model_reinstall_raster_charts, for the same reason: an alt
+ * style belongs to a lookout handle, and every open replaces the handle. */
+void lk_app_model_reapply_chart_link (LkAppModel *self);
 
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);

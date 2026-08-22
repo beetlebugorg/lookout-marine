@@ -27,6 +27,11 @@ typedef struct {
   GtkWidget *raster_list;
   guint      raster_refresh_id;
 
+  /* The chart-link list, rebuilt off an idle for the same reason: picking a
+   * radio here changes the links object, which signals straight back. */
+  GtkWidget *links_list;
+  guint      links_refresh_id;
+
   /* Depths tab widgets that have to react to each other. */
   GtkWidget *band_preview;
   GtkWidget *shallow_row;
@@ -62,6 +67,7 @@ lk_settings_free (gpointer data)
   LkSettings *settings = data;
 
   g_clear_handle_id (&settings->raster_refresh_id, g_source_remove);
+  g_clear_handle_id (&settings->links_refresh_id, g_source_remove);
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
   g_clear_pointer (&settings->status_labels, g_ptr_array_unref);
@@ -886,11 +892,193 @@ lk_settings_raster_changed (LkAppModel *model, gpointer user_data)
   settings->raster_refresh_id = g_idle_add (lk_settings_refill_raster, settings);
 }
 
+/* ---- charts by link ------------------------------------------------------ */
+
+static void
+lk_link_radio_toggled (GtkCheckButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  /* NULL data is the "Lookout chart" radio, and NULL is how the links object
+   * spells "lookout's own chart". */
+  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
+
+  if (settings->updating || !gtk_check_button_get_active (button))
+    return;
+  lk_chart_links_select (lk_app_model_get_chart_links (settings->model), url);
+}
+
+static void
+lk_link_refresh_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
+
+  lk_chart_links_refresh (lk_app_model_get_chart_links (settings->model), url);
+}
+
+static void
+lk_link_remove_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
+
+  lk_chart_links_remove (lk_app_model_get_chart_links (settings->model), url);
+}
+
+static void
+lk_link_add_from (LkSettings *settings, GtkEntry *entry)
+{
+  const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
+
+  if (text == NULL || text[0] == '\0')
+    return;
+  lk_chart_links_add (lk_app_model_get_chart_links (settings->model), text);
+  gtk_editable_set_text (GTK_EDITABLE (entry), "");
+}
+
+static void
+lk_link_entry_activated (GtkEntry *entry, gpointer user_data)
+{
+  lk_link_add_from (user_data, entry);
+}
+
+static void
+lk_link_add_clicked (GtkButton *button, gpointer user_data)
+{
+  lk_link_add_from (user_data, g_object_get_data (G_OBJECT (button), "lk-entry"));
+}
+
+/* The chart election: lookout's own chart, or one of the added links. One
+ * radio group — a linked chart is an entire separate chart, not an overlay,
+ * so exactly one of these is ever drawn. */
+static void
+lk_settings_fill_links_list (LkSettings *settings)
+{
+  GtkWidget *list = settings->links_list;
+  GtkWidget *child;
+  LkChartLinks *links = lk_app_model_get_chart_links (settings->model);
+  const char *active = lk_chart_links_active (links);
+  const char *error = lk_chart_links_error (links);
+
+  /* Programming a radio must not read back as a mariner picking it. */
+  settings->updating = TRUE;
+
+  while ((child = gtk_widget_get_first_child (list)) != NULL)
+    gtk_box_remove (GTK_BOX (list), child);
+
+  GtkWidget *own = gtk_check_button_new_with_label ("Lookout chart");
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (own), active == NULL);
+  g_signal_connect (own, "toggled", G_CALLBACK (lk_link_radio_toggled), settings);
+  gtk_box_append (GTK_BOX (list), own);
+
+  GPtrArray *all = lk_chart_links_list (links);
+  for (guint i = 0; i < all->len; i++)
+    {
+      const LkChartLink *link = g_ptr_array_index (all, i);
+      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+      GtkWidget *radio = gtk_check_button_new_with_label (link->name);
+      GtkWidget *refresh = gtk_button_new_from_icon_name ("view-refresh-symbolic");
+      GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
+
+      gtk_check_button_set_group (GTK_CHECK_BUTTON (radio), GTK_CHECK_BUTTON (own));
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (radio),
+                                   g_strcmp0 (active, link->url) == 0);
+      gtk_widget_set_hexpand (radio, TRUE);
+      gtk_widget_set_tooltip_text (radio, link->url);
+      g_object_set_data_full (G_OBJECT (radio), "lk-url", g_strdup (link->url), g_free);
+      g_signal_connect (radio, "toggled", G_CALLBACK (lk_link_radio_toggled), settings);
+
+      gtk_button_set_has_frame (GTK_BUTTON (refresh), FALSE);
+      gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
+      gtk_widget_set_tooltip_text (refresh,
+                                   "Re-read the link. A link that doesn't answer "
+                                   "leaves the chart as it is.");
+      g_object_set_data_full (G_OBJECT (refresh), "lk-url", g_strdup (link->url), g_free);
+      g_signal_connect (refresh, "clicked", G_CALLBACK (lk_link_refresh_clicked), settings);
+
+      gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
+      gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
+      gtk_widget_set_tooltip_text (remove, "Forget this link");
+      g_object_set_data_full (G_OBJECT (remove), "lk-url", g_strdup (link->url), g_free);
+      g_signal_connect (remove, "clicked", G_CALLBACK (lk_link_remove_clicked), settings);
+
+      gtk_box_append (GTK_BOX (row), radio);
+      gtk_box_append (GTK_BOX (row), refresh);
+      gtk_box_append (GTK_BOX (row), remove);
+      gtk_box_append (GTK_BOX (list), row);
+    }
+
+  if (error[0] != '\0')
+    {
+      GtkWidget *label = gtk_label_new (error);
+      gtk_widget_add_css_class (label, "error");
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_wrap (GTK_LABEL (label), TRUE);
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_box_append (GTK_BOX (list), label);
+    }
+  settings->updating = FALSE;
+}
+
+static gboolean
+lk_settings_refill_links (gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  settings->links_refresh_id = 0;
+  lk_settings_fill_links_list (settings);
+  return G_SOURCE_REMOVE;
+}
+
+/* Same idle deferral as the raster list: a radio here changes the links
+ * object, which signals straight back, and rebuilding now would destroy the
+ * radio that is still emitting. */
+static void
+lk_settings_links_changed (LkChartLinks *links, gpointer user_data)
+{
+  LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
+
+  if (settings == NULL || settings->links_list == NULL || settings->links_refresh_id != 0)
+    return;
+
+  settings->links_refresh_id = g_idle_add (lk_settings_refill_links, settings);
+}
+
 static void
 lk_build_charts_page (LkSettings *settings)
 {
   GtkWidget *page = lk_page_new (settings, "charts", "Charts",
                                  "lk-charts-symbolic");
+
+  /* WHICH chart is drawn, before where to get more of them. A chart by link
+   * is a different kind again — a publisher's live map drawn AS the chart —
+   * and picking one replaces the whole portrayal, so the election stands
+   * first, as it does on the other shells. */
+  GtkWidget *chart = lk_section (page, "Chart");
+  settings->links_list = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+  gtk_box_append (GTK_BOX (chart), settings->links_list);
+  lk_settings_fill_links_list (settings);
+
+  GtkWidget *link_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *link_entry = gtk_entry_new ();
+  GtkWidget *link_add = gtk_button_new_with_label ("Add Chart Link");
+
+  gtk_entry_set_placeholder_text (GTK_ENTRY (link_entry),
+                                  "Link to a MapLibre style or TileJSON…");
+  gtk_widget_set_hexpand (link_entry, TRUE);
+  g_signal_connect (link_entry, "activate", G_CALLBACK (lk_link_entry_activated), settings);
+  g_object_set_data (G_OBJECT (link_add), "lk-entry", link_entry);
+  g_signal_connect (link_add, "clicked", G_CALLBACK (lk_link_add_clicked), settings);
+  gtk_widget_set_margin_top (link_row, 6);
+  gtk_box_append (GTK_BOX (link_row), link_entry);
+  gtk_box_append (GTK_BOX (link_row), link_add);
+  gtk_box_append (GTK_BOX (chart), link_row);
+
+  lk_footer (chart,
+             "A chart by link is an online map drawn as the chart: paste the "
+             "style link a publisher shares and sail on their portrayal, tiles "
+             "fetched live. The Lookout chart and its display settings stand "
+             "aside while one is picked.");
 
   GtkWidget *open = lk_section (page, "Open");
   const char *path = lk_app_model_get_chart_path (settings->model);
@@ -2038,6 +2226,9 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
    * the handler with the window. */
   g_signal_connect_object (model, "raster-changed",
                            G_CALLBACK (lk_settings_raster_changed), window, 0);
+  /* Likewise a chart link resolving (or failing) while the panel is open. */
+  g_signal_connect_object (lk_app_model_get_chart_links (model), "changed",
+                           G_CALLBACK (lk_settings_links_changed), window, 0);
 
   /* A SIDEBAR OF SECTIONS beside the pane it chooses, as on the Mac. It is a
    * slot list, not a fixed menu: the four core sections, Plugins and Advanced
