@@ -3,7 +3,11 @@ package org.beetlebug.lookout
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
@@ -59,7 +63,12 @@ fun ChartsSection(
     controller: ChartController,
     onRequestAccess: () -> Unit,
 ) {
-    SectionHeader("Open charts", first = true)
+    // Which chart DRAWS is the tab's headline decision, so the picker leads;
+    // the library plumbing lives behind a row below it. The picker also
+    // works without storage access — links come off the network.
+    ChartLinksSection(controller)
+
+    SectionHeader("Lookout chart library")
     Footer(charts.activeLabel)
 
     if (!charts.storageAccess) {
@@ -79,7 +88,21 @@ fun ChartsSection(
         return
     }
 
-    FolderBrowser(charts)
+    // The browser opens as its own dialog: a directory tree embedded in the
+    // page pushed every other setting off screen.
+    var browsing by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TextButton(onClick = { browsing = true }) { Text("Choose library folder…") }
+        if (charts.selected != null) {
+            TextButton(onClick = charts::clearSelection) { Text("Use pushed / bundled charts") }
+        }
+    }
 
     charts.lastEmptyPick?.let {
         Footer(
@@ -89,16 +112,41 @@ fun ChartsSection(
         )
     }
 
-    if (charts.selected != null) {
-        SectionHeader("Fall back")
-        TextButton(
-            onClick = charts::clearSelection,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        ) { Text("Use pushed / bundled charts instead") }
+    // An import keeps running when the dialog closes; its progress must not
+    // vanish with it.
+    if (!browsing) {
+        charts.importer.state?.let { st ->
+            if (st.running) {
+                LinearProgressIndicator(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                )
+                Footer("Importing ${st.name}. What has landed already draws; a stop keeps it.")
+            }
+        }
+    }
+
+    if (browsing) {
+        AlertDialog(
+            onDismissRequest = { browsing = false },
+            confirmButton = {
+                TextButton(onClick = { browsing = false }) { Text("Done") }
+            },
+            title = { Text("Chart library") },
+            text = {
+                Column(
+                    Modifier
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    FolderBrowser(charts, onOpened = { browsing = false })
+                }
+            },
+        )
     }
 
     RasterChartsSection(controller)
-    ChartLinksSection(controller)
 }
 
 /**
@@ -109,7 +157,7 @@ fun ChartsSection(
  */
 @Composable
 private fun ChartLinksSection(controller: ChartController) {
-    SectionHeader("Chart")
+    SectionHeader("Chart", first = true)
     Footer(
         "A chart added by link draws INSTEAD of Lookout's own: the publisher " +
             "styles it and their tiles are fetched as you sail. While one is " +
@@ -351,7 +399,7 @@ private fun SwitchRow(
  * one directory per tap, with the parent as the first row.
  */
 @Composable
-private fun FolderBrowser(charts: ChartsModel) {
+private fun FolderBrowser(charts: ChartsModel, onOpened: () -> Unit = {}) {
     val roots = charts.roots
     var cur by remember { mutableStateOf(roots.firstOrNull()) }
     var kids by remember { mutableStateOf<List<File>>(emptyList()) }
@@ -375,7 +423,6 @@ private fun FolderBrowser(charts: ChartsModel) {
         hint = sniff
     }
 
-    SectionHeader("Choose a folder")
     Text(
         text = cur?.absolutePath ?: "Storage",
         style = MaterialTheme.typography.bodySmall,
@@ -417,7 +464,12 @@ private fun FolderBrowser(charts: ChartsModel) {
                 val dir = cur ?: return@Button
                 // select() walks the tree off the main thread and only then
                 // swaps the library, so a mis-pick never blanks the chart.
-                scope.launch { charts.select(dir) }
+                // The dialog closes once the library is open — the pick was
+                // the errand it opened for.
+                scope.launch {
+                    charts.select(dir)
+                    onOpened()
+                }
             },
         ) { Text(if (charts.scanning) "Scanning…" else "Open this folder") }
         // The import: bake what stands here — raw ENC cells, BSB/KAP sheets,
