@@ -1095,11 +1095,27 @@ pub const Lookout = struct {
             for (paths) |p| self.addChartPath(p);
             return;
         }
-        const slots = self.alloc.alloc(?*cc.tile57_chart, paths.len) catch {
+        const slots = self.openPathsToSlots(paths);
+        if (slots.len == 0) {
             for (paths) |p| self.addChartPath(p); // no room for the slots: serial
             return;
-        };
+        }
         defer self.alloc.free(slots);
+
+        for (slots, paths) |c, p| {
+            if (c) |ch| {
+                self.charts.append(self.alloc, ch) catch {};
+                self.noteChartDir(p);
+            } else std.debug.print("skip '{s}'\n", .{p});
+        }
+    }
+
+    /// Open every path in parallel into a slots array the caller owns and
+    /// frees. Touches nothing a build worker shares — safe WITHOUT the
+    /// engine lock, which is what lets a whole library arrive behind a
+    /// drawing chart. Empty on allocation failure: fall back to serial.
+    fn openPathsToSlots(self: *Lookout, paths: []const [:0]const u8) []?*cc.tile57_chart {
+        const slots = self.alloc.alloc(?*cc.tile57_chart, paths.len) catch return &.{};
         @memset(slots, null);
 
         const W = struct {
@@ -1124,13 +1140,7 @@ pub const Lookout = struct {
         }
         W.run(paths, slots, &next);
         for (threads[0..spawned]) |t| t.join();
-
-        for (slots, paths) |c, p| {
-            if (c) |ch| {
-                self.charts.append(self.alloc, ch) catch {};
-                self.noteChartDir(p);
-            } else std.debug.print("skip '{s}'\n", .{p});
-        }
+        return slots;
     }
 
     /// Add baked charts to the open library and compose again.
@@ -1144,11 +1154,30 @@ pub const Lookout = struct {
         // A build already running was started without these charts. Take it
         // first, then start one that has them.
         self.pollCompose(true);
-        // Under the engine lock: a build worker reads `charts` on its own
-        // thread, and appending can reallocate the list out from under it.
+        // The OPENS run outside BOTH locks: they are file reads that touch
+        // nothing a build worker or another api call shares, and a whole
+        // library arriving at once (the link-first startup adds thousands)
+        // must not freeze the frame loop for the duration. The api lock is
+        // dropped for the opens — the CALLER of the add must therefore keep
+        // the handle alive until it returns (the shells' close paths already
+        // serialize against it). Only the append mutates `charts`, which a
+        // build worker reads, so only the append relocks.
+        self.apiUnlock();
+        const opened = self.openPathsToSlots(paths);
+        self.apiLock();
+        defer if (opened.len > 0) self.alloc.free(opened);
         self.engine_mu.lock();
         const before = self.charts.items.len;
-        self.openChartPaths(paths);
+        if (opened.len == 0) {
+            // No room for the slots: serially, under the lock — slower,
+            // never wrong.
+            for (paths) |p| self.addChartPath(p);
+        } else for (opened, paths) |c, p| {
+            if (c) |ch| {
+                self.charts.append(self.alloc, ch) catch {};
+                self.noteChartDir(p);
+            } else std.debug.print("skip '{s}'\n", .{p});
+        }
         const added = self.charts.items.len - before;
         self.engine_mu.unlock();
         if (added == 0) return 0;
@@ -2576,6 +2605,11 @@ pub const Lookout = struct {
     }
 
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+        // An alt chart is a WHOLE chart, not an overlay: while one is up the
+        // ENC is not what the mariner is looking at, and answering a tap
+        // from it reports objects that are not on screen. No alt-chart
+        // feature pick exists yet, so the honest answer is nothing.
+        if (self.alt_style != null) return;
         self.engine_mu.lock();
         defer self.engine_mu.unlock();
         var err: cc.tile57_error = undefined;
