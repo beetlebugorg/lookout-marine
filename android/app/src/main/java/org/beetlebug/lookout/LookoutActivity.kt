@@ -149,11 +149,24 @@ class LookoutActivity : ComponentActivity() {
             try {
                 contentResolver.query(uri, null, null, null, null)?.use { c ->
                     val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (i >= 0 && c.moveToFirst()) c.getString(i)?.let { return it }
+                    if (i >= 0 && c.moveToFirst()) c.getString(i)?.let { return sanitizeName(it) }
                 }
             } catch (_: Exception) {}
         }
-        return uri.lastPathSegment?.substringAfterLast('/') ?: "opened.bin"
+        return sanitizeName(uri.lastPathSegment?.substringAfterLast('/') ?: "opened.bin")
+    }
+
+    /**
+     * The DISPLAY_NAME comes from the sending app's content provider, and a
+     * hostile provider can return a value like "../../files/plugins/evil.wasm"
+     * to walk the write out of the cache subdirectory and into the auto-loaded
+     * plugin directory. Keep only a bare file name: strip any path separators,
+     * and reject a name made only of dots.
+     */
+    private fun sanitizeName(raw: String): String {
+        val name = raw.substringAfterLast('/').substringAfterLast('\\')
+        if (name.isEmpty() || name.all { it == '.' }) return "opened.bin"
+        return name
     }
 
     /**

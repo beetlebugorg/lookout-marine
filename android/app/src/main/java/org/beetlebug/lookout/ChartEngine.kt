@@ -106,8 +106,12 @@ class ChartEngine private constructor() {
             }
             if (l != null && this.controller !== controller) {
                 // The Activity was destroyed and built again over a process
-                // that kept running. The ENGINE is already set up; only this
-                // new controller's own state is missing.
+                // that kept running. The engine is already set up; only this
+                // new controller's own state is missing. Stop the replaced
+                // controller's tile service first: two pollers would fight
+                // over one ring, and the old controller's thread pool would
+                // otherwise run for the rest of the process.
+                this.controller?.onReplaced()
                 this.controller = controller
                 controller.rebind(l, h)
             }

@@ -557,8 +557,24 @@ class ChartController(private val appContext: Context) {
             republish(l)
             publishAlerts(l)
             pushRaster(l)
+            // Push the chart link again from this controller. The push
+            // restores the on-map credit that the recreation dropped and
+            // starts this controller's tile service; the old controller's
+            // service was stopped in onReplaced.
+            if (activeChartLink != null) main.post { pushChartLink() }
             main.post { mariner.loadFrom(v, date) }
         }
+    }
+
+    /**
+     * Another controller is taking over the engine because the Activity was
+     * rebuilt over a running process. Only the tile service needs stopping;
+     * everything else here is released when this object is dropped.
+     *
+     * RENDER THREAD.
+     */
+    fun onReplaced() {
+        altTiles.stop()
     }
 
     /**
@@ -1133,7 +1149,8 @@ class ChartController(private val appContext: Context) {
             // fresh so their edits show up. The sprite packs ride along:
             // fetched here, off the main thread, so applying is instant.
             val raw = link?.doc ?: AltChartStyle.fetchText(active)
-            val resolved = raw?.let { AltChartStyle.resolve(it) }
+            val local = active.startsWith("file://") || active.startsWith("/")
+            val resolved = raw?.let { AltChartStyle.resolve(it, localStyle = local) }
             val packs = resolved?.let { AltChartStyle.fetchSpritePacks(it.spritePacks) } ?: emptyList()
             main.post { applyAltStyle(resolved, packs, active) }
         }.start()
@@ -1147,10 +1164,11 @@ class ChartController(private val appContext: Context) {
     private fun applyAltStyle(style: AltChartStyle?, packs: List<FetchedSpritePack>, url: String) {
         if (activeChartLink != url) return
         if (style == null) {
-            chartLinkError = "That chart didn't answer. Showing the Lookout chart."
-            activeChartLink = null
+            // A lost connection must not cost the user their picked chart.
+            // The selection is kept (the next open retries it) and the
+            // Lookout chart is shown in the meantime.
+            chartLinkError = "That chart didn't answer. Showing the Lookout chart until it does."
             chartLinkAttribution = null
-            saveChartLinks()
             onEngine { l ->
                 altTiles.stop()
                 l.altStyleSet(null)
@@ -1170,6 +1188,16 @@ class ChartController(private val appContext: Context) {
                 }
             } else {
                 Log.w(TAG, "alt chart style refused")
+                // The selection and the credit must not claim a chart that
+                // is not being drawn.
+                main.post {
+                    if (activeChartLink == url) {
+                        chartLinkError = "That style could not be drawn. Showing the Lookout chart."
+                        activeChartLink = null
+                        chartLinkAttribution = null
+                        saveChartLinks()
+                    }
+                }
             }
         }
     }

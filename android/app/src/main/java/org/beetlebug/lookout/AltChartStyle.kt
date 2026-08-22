@@ -21,8 +21,10 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import kotlin.math.abs
 
 /** Where one source's tiles come from, by the name the style gave it. */
@@ -59,7 +61,7 @@ class AltChartStyle(
 
         /** Read a style and resolve every source in it. Network work — call
          *  off the main thread. */
-        fun resolve(raw: String): AltChartStyle? {
+        fun resolve(raw: String, localStyle: Boolean = false): AltChartStyle? {
             val top = try { JSONObject(raw) } catch (_: Exception) { return null }
             val declared = top.optJSONObject("sources") ?: return null
             val resolved = HashMap<String, AltTileSource>()
@@ -69,7 +71,9 @@ class AltChartStyle(
                 // fold what it says into the source itself.
                 if (!src.has("tiles")) {
                     val link = src.optString("url")
-                    val doc = if (link.isNotEmpty()) fetchJson(link) else null
+                    // Only a style loaded from disk may read files its
+                    // sources name; one fetched from the network may not.
+                    val doc = if (link.isNotEmpty()) fetchJson(link, localStyle) else null
                     if (doc != null) {
                         for (key in listOf("tiles", "minzoom", "maxzoom", "bounds", "scheme", "attribution")) {
                             if (doc.has(key)) src.put(key, doc.get(key))
@@ -125,8 +129,8 @@ class AltChartStyle(
             for (p in packs) {
                 var got: FetchedSpritePack? = null
                 for (s in suffixes) {
-                    val j = fetchBytes(p.url + s + ".json") ?: continue
-                    val b = fetchBytes(p.url + s + ".png") ?: continue
+                    val j = fetchBytes(spriteVariant(p.url, s, ".json")) ?: continue
+                    val b = fetchBytes(spriteVariant(p.url, s, ".png")) ?: continue
                     got = FetchedSpritePack(p.prefix, j, b)
                     break
                 }
@@ -136,7 +140,24 @@ class AltChartStyle(
             return out
         }
 
+        /** "…/sprite" + "@2x" + ".json", keeping a query string at the
+         *  end: an API-keyed host serves …/sprite@2x.json?key=K, never
+         *  …?key=K@2x.json. */
+        private fun spriteVariant(base: String, density: String, ext: String): String {
+            val q = base.indexOf('?')
+            if (q < 0) return base + density + ext
+            return base.substring(0, q) + density + ext + base.substring(q)
+        }
+
+        /** Accept only web urls. A fetched style must not be able to point
+         *  a sub-resource at file:///data/... or another local scheme. The
+         *  HttpURLConnection cast below would already fail for those; this
+         *  makes the rule explicit. */
+        fun allowedUrl(link: String): Boolean =
+            link.startsWith("https://") || link.startsWith("http://")
+
         fun fetchBytes(link: String): ByteArray? {
+            if (!allowedUrl(link)) return null
             return try {
                 val conn = URL(link).openConnection() as HttpURLConnection
                 identify(conn)
@@ -168,6 +189,11 @@ class AltChartStyle(
                 val text = raw
                     .replace(Regex("<[^>]*>"), "")
                     .replace("&copy;", "©")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", "\"")
+                    .replace("&#39;", "'")
+                    .replace("&nbsp;", " ")
                     .replace("&amp;", "&")
                     .trim()
                 if (text.isNotEmpty()) seen.add(text)
@@ -196,7 +222,7 @@ class AltChartStyle(
                 val n = obj.optString("name").ifEmpty { stem }
                 return Triple(trimmed, n, fileText)
             }
-            val obj = fetchJson(trimmed) ?: return null
+            val obj = fetchJson(trimmed, allowFile = true) ?: return null
             val host = try { URL(trimmed).host ?: trimmed } catch (_: Exception) { trimmed }
             val named = obj.optString("name").ifEmpty { host }
             if (obj.has("layers") && obj.has("version")) return Triple(trimmed, named, null)
@@ -214,7 +240,7 @@ class AltChartStyle(
             val path = url.path.substringBeforeLast('/', "")
             val candidate = URL(url.protocol, url.host, url.port, "$path/style.json").toString()
             if (candidate == link) return null
-            val obj = fetchJson(candidate) ?: return null
+            val obj = fetchJson(candidate, allowFile = false) ?: return null
             if (!obj.has("layers") || !obj.has("version")) return null
             return candidate to obj.optString("name").ifEmpty { url.host ?: candidate }
         }
@@ -286,13 +312,16 @@ class AltChartStyle(
             return try { File(path).readText() } catch (_: Exception) { null }
         }
 
-        fun fetchJson(link: String): JSONObject? {
-            val text = fetchText(link) ?: return null
+        fun fetchJson(link: String, allowFile: Boolean): JSONObject? {
+            val text = fetchText(link, allowFile) ?: return null
             return try { JSONObject(text) } catch (_: Exception) { null }
         }
 
-        fun fetchText(link: String): String? {
-            readFileLink(link)?.let { return it }
+        /** allowFile marks a link the user typed, or one derived from it.
+         *  Only those may read the disk; a url found inside a document
+         *  fetched from the network must never reach the file branch. */
+        fun fetchText(link: String, allowFile: Boolean = true): String? {
+            if (allowFile) readFileLink(link)?.let { return it }
             return try {
                 val conn = URL(link).openConnection() as HttpURLConnection
                 identify(conn)
@@ -340,6 +369,14 @@ class AltChartStyle(
  */
 class AltChartTiles {
     @Volatile private var live = false
+    /** Serializes tileRespond against stop(). A fetch that has passed the
+     *  live check must finish its JNI call before stop() returns, so the
+     *  engine handle cannot be freed while an answer is still in flight. The
+     *  network read happens before the lock is taken, so stop() waits
+     *  milliseconds at most. */
+    private val respondLock = Any()
+    /** At most two concurrent downloads per host; see fetch(). */
+    private val hostLanes = ConcurrentHashMap<String, Semaphore>()
     @Volatile private var sources: Map<String, AltTileSource> = emptyMap()
     private var engine: Lookout? = null
     private var pool: ExecutorService? = null
@@ -349,6 +386,10 @@ class AltChartTiles {
     private val loggedAsk = HashSet<String>()
     private val loggedFail = HashSet<String>()
 
+    // start and stop are called from the main thread in the push flows and
+    // from the render thread when a controller is replaced, so both are
+    // synchronized.
+    @Synchronized
     fun start(l: Lookout, s: Map<String, AltTileSource>) {
         sources = s
         synchronized(loggedAsk) { loggedAsk.clear() }
@@ -381,26 +422,61 @@ class AltChartTiles {
         }, "lookout-alt-tiles").also { it.start() }
     }
 
+    @Synchronized
     fun stop() {
         live = false
         poller?.let { p -> p.interrupt(); try { p.join(1_000) } catch (_: InterruptedException) {} }
         poller = null
         pool?.shutdownNow()
         pool = null
+        // After this point no new respond can start, because live is read
+        // under the lock, and none is mid-call, because taking the lock
+        // waits for the last one to finish. Without this barrier a pool
+        // thread could call into an engine handle the caller is about to
+        // free.
+        synchronized(respondLock) {}
         engine = null
+    }
+
+    /** Every answer funnels through here; see respondLock. */
+    private fun respond(l: Lookout, id: Long, bytes: ByteArray?, status: Int) {
+        synchronized(respondLock) {
+            if (!live) return
+            l.tileRespond(id, bytes, status)
+        }
     }
 
     private fun fetch(l: Lookout, name: String, id: Long, z: Int, x: Int, y: Int) {
         val src = sources[name]
-        val link = src?.let { url(it, z, x, y) }
+        val link = src?.let { url(it, z, x, y) }?.takeIf { AltChartStyle.allowedUrl(it) }
         if (link == null) {
             if (noteFirst(loggedFail, name)) {
-                Log.w(TAG, "alt tiles: $name — no source or no url template; failing its tiles")
+                Log.w(TAG, "alt tiles: $name has no source, no url template, or not a web url; failing its tiles")
             }
-            l.tileRespond(id, null, FAILED)
+            respond(l, id, null, FAILED)
             return
         }
         if (noteFirst(loggedAsk, name)) Log.i(TAG, "alt tiles: $name -> $link")
+        try {
+            // Limit each host to two concurrent fetches. The pool's six
+            // threads shorten the tail across a multi-host style, but a
+            // single-host source such as OSM's tile server should see at
+            // most the two download threads its usage policy asks of one
+            // client.
+            val lane = hostLanes.computeIfAbsent(URL(link).host ?: "") { Semaphore(2) }
+            lane.acquire()
+            try {
+                fetchInto(l, name, id, z, x, y, link)
+            } finally {
+                lane.release()
+            }
+        } catch (e: Exception) {
+            if (noteFirst(loggedFail, name)) Log.w(TAG, "alt tiles: $name z$z/$x/$y -> $e")
+            respond(l, id, null, FAILED)
+        }
+    }
+
+    private fun fetchInto(l: Lookout, name: String, id: Long, z: Int, x: Int, y: Int, link: String) {
         try {
             val conn = URL(link).openConnection() as HttpURLConnection
             AltChartStyle.identify(conn)
@@ -411,17 +487,17 @@ class AltChartTiles {
                 when {
                     // The publisher genuinely has no tile there — a hole in
                     // their coverage, not a fault, and remembered as one.
-                    code == 404 || code == 204 -> l.tileRespond(id, null, NONE)
+                    code == 404 || code == 204 -> respond(l, id, null, NONE)
                     code == 200 -> {
                         val bytes = conn.inputStream.use { it.readBytes() }
-                        if (bytes.isEmpty()) l.tileRespond(id, null, NONE)
-                        else l.tileRespond(id, bytes, BYTES)
+                        if (bytes.isEmpty()) respond(l, id, null, NONE)
+                        else respond(l, id, bytes, BYTES)
                     }
                     else -> {
                         if (noteFirst(loggedFail, name)) {
                             Log.w(TAG, "alt tiles: $name z$z/$x/$y -> $code")
                         }
-                        l.tileRespond(id, null, FAILED)
+                        respond(l, id, null, FAILED)
                     }
                 }
             } finally {
@@ -429,7 +505,7 @@ class AltChartTiles {
             }
         } catch (e: Exception) {
             if (noteFirst(loggedFail, name)) Log.w(TAG, "alt tiles: $name z$z/$x/$y -> $e")
-            l.tileRespond(id, null, FAILED)
+            respond(l, id, null, FAILED)
         }
     }
 
