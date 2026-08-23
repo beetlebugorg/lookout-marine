@@ -999,7 +999,7 @@ namespace winrt::LookoutMarine::implementation
             // portrayal — Lookout's own chart is just the default entry in
             // the same list (the reference shell's Chart list, row for row).
             header(L"Chart");
-            auto link_row = [this](std::string const &url, std::string const &title,
+            auto link_row = [this, &stack](std::string const &url, std::string const &title,
                                    std::string const &sub, bool removable) {
                 Controls::Grid row;
                 Controls::ColumnDefinition c0, c1, c2, c3;
