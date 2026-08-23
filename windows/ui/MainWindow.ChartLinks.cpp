@@ -446,7 +446,17 @@ namespace winrt::LookoutMarine::implementation
             ScaleBarCredit().Text(winrt::to_hstring(credit));
             ScaleBarCredit().Visibility(Visibility::Visible);
         }
-        BuildSettingsPage();
+        // The list appears only in the Charts settings section. Rebuild the page
+        // solely when it is on screen there — a change with the settings window
+        // closed, or open on another section, has nothing to redraw. The members
+        // above are updated regardless, so the section is current the next time
+        // it is built. This runs on the readout tick, so an unconditional rebuild
+        // here churned the whole page while a link resolved.
+        bool charts_visible = SettingsOpen() && settings_tab >= 0 &&
+                              settings_tab < (int)settings_tabs.size() &&
+                              settings_tabs[settings_tab].id == "charts";
+        if (charts_visible)
+            BuildSettingsPage();
     }
 
     // ---- the management surface --------------------------------------------

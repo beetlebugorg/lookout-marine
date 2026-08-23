@@ -257,17 +257,39 @@ namespace winrt::LookoutMarine::implementation
         // navigation, so there is no way to collapse it away.
         auto list = SettingsTabs();
         list.Children().Clear();
+
+        // The highlight shades, as alpha over the pane's dark chrome (black
+        // tints, matching the existing selection): hover sits below the
+        // selection, and the selected row under the pointer a step above it —
+        // the ordering a Windows list uses, so hover and selection read apart.
+        auto tint = [](uint8_t a) { return Media::SolidColorBrush{ winrt::Windows::UI::Color{ a, 0x00, 0x00, 0x00 } }; };
+        constexpr uint8_t kHover = 0x14, kSelected = 0x28, kSelectedHover = 0x38;
+
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
         {
+            // A row stays a Button, for keyboard focus and narration, but the
+            // highlight is drawn on a child Border we own, and the button's own
+            // template fills are cleared. A default Button paints ButtonBackground-
+            // PointerOver over its Background whenever the pointer is on it; on
+            // this software-rendered VM that state flickered the highlight on and
+            // off under a still pointer. With the fills removed and the tint set
+            // by hand on enter and leave, hover holds while the pointer is on the
+            // row, distinct from the selected row.
             Controls::Button row;
             row.HorizontalAlignment(HorizontalAlignment::Stretch);
-            row.HorizontalContentAlignment(HorizontalAlignment::Left);
-            row.Padding({ 10, 7, 10, 7 });
-            row.CornerRadius({ 6, 6, 6, 6 });
+            row.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            row.VerticalContentAlignment(VerticalAlignment::Stretch);
+            row.Padding({ 0, 0, 0, 0 });
             row.BorderThickness({ 0, 0, 0, 0 });
-            row.Background(Media::SolidColorBrush{ i == settings_tab
-                                                      ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
-                                                      : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+            row.Background(tint(0));
+            for (auto key : { L"ButtonBackground", L"ButtonBackgroundPointerOver",
+                              L"ButtonBackgroundPressed", L"ButtonBackgroundDisabled" })
+                row.Resources().Insert(winrt::box_value(winrt::hstring{ key }), tint(0));
+
+            Controls::Border selection;
+            selection.CornerRadius({ 6, 6, 6, 6 });
+            selection.Padding({ 10, 7, 10, 7 });
+            selection.Background(tint(i == settings_tab ? kSelected : 0));
 
             Controls::StackPanel content;
             content.Orientation(Controls::Orientation::Horizontal);
@@ -282,15 +304,27 @@ namespace winrt::LookoutMarine::implementation
             label.FontSize(13);
             label.VerticalAlignment(VerticalAlignment::Center);
             content.Children().Append(label);
-            row.Content(content);
+            selection.Child(content);
+            row.Content(selection);
 
-            row.Click([this, i](auto &&, auto &&) {
+            row.PointerEntered([this, i, tint](auto &&s, auto &&) {
+                if (auto bg = s.template as<Controls::Button>().Content().try_as<Controls::Border>())
+                    bg.Background(tint(i == settings_tab ? kSelectedHover : kHover));
+            });
+            row.PointerExited([this, i, tint](auto &&s, auto &&) {
+                if (auto bg = s.template as<Controls::Button>().Content().try_as<Controls::Border>())
+                    bg.Background(tint(i == settings_tab ? kSelected : 0));
+            });
+
+            row.Click([this, i, tint](auto &&, auto &&) {
                 settings_tab = i;
                 for (uint32_t j = 0; j < SettingsTabs().Children().Size(); ++j)
                 {
                     auto b = SettingsTabs().Children().GetAt(j).as<Controls::Button>();
-                    b.Background(Media::SolidColorBrush{ (int)j == i ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
-                                                                     : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    if (auto bg = b.Content().try_as<Controls::Border>())
+                        // The clicked row is under the pointer, so it takes the
+                        // selected-and-hovered shade.
+                        bg.Background(tint((int)j == i ? kSelectedHover : 0));
                 }
                 BuildSettingsPage();
             });
