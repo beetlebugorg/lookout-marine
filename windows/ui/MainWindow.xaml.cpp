@@ -18,6 +18,51 @@
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 
+namespace
+{
+    // A frame must never take the whole app down. The per-frame UI work and the
+    // render thread call into WinRT and D3D, and either can fail under memory
+    // pressure — building a XAML element, an allocation for a world-view scene
+    // on the software rasterizer — as a thrown hresult_error. An exception that
+    // escapes a dispatcher callback, or a std::thread body, terminates the
+    // process; for a chartplotter a dropped frame must cost only that frame.
+    // Logged once so a persistent failure shows in the core log without a line
+    // every tick.
+    void SwallowFrameError(const char *where)
+    {
+        static bool logged = false;
+        try
+        {
+            throw;
+        }
+        catch (winrt::hresult_error const &e)
+        {
+            if (!logged)
+            {
+                logged = true;
+                fprintf(stderr, "shell: %s dropped a frame: hresult 0x%08X\n",
+                        where, static_cast<unsigned>(e.code()));
+            }
+        }
+        catch (std::exception const &e)
+        {
+            if (!logged)
+            {
+                logged = true;
+                fprintf(stderr, "shell: %s dropped a frame: %s\n", where, e.what());
+            }
+        }
+        catch (...)
+        {
+            if (!logged)
+            {
+                logged = true;
+                fprintf(stderr, "shell: %s dropped a frame: unknown exception\n", where);
+            }
+        }
+    }
+}
+
 namespace winrt::LookoutMarine::implementation
 {
     // The window's own icon. The ICON resource in LookoutMarine.rc is what
@@ -283,18 +328,31 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::OnRendering(Windows::Foundation::IInspectable const &,
                                  Windows::Foundation::IInspectable const &)
     {
-        if (controller == nullptr)
-            return;
-        if (!lk_controller_is_open(controller))
+        try
         {
-            TryOpen();
-            return;
+            if (controller == nullptr)
+                return;
+            if (!lk_controller_is_open(controller))
+            {
+                TryOpen();
+                return;
+            }
+            UpdateReadouts(false);
+            // The chart-link list, the credit and the error, from the core. A
+            // landing answer raises needs-redraw, so a resolve keeps the render
+            // loop ticking until it is done.
+            PollChartLinks();
         }
-        UpdateReadouts(false);
-        // The chart-link list, the credit and the error, from the core. A
-        // landing answer raises needs-redraw, so a resolve keeps the render
-        // loop ticking until it is done.
-        PollChartLinks();
+        catch (...)
+        {
+            // This runs on the readout timer, ~10 Hz. Every call in it touches
+            // WinRT — the readouts rebuild scale-bar segments and the chart
+            // link rows rebuild XAML — and any of those can throw under memory
+            // pressure. The next tick rebuilds the same chrome, so a lost one
+            // costs nothing; letting it escape the timer callback would end the
+            // process.
+            SwallowFrameError("OnRendering");
+        }
     }
 
     void MainWindow::StartRenderThread()
@@ -322,6 +380,8 @@ namespace winrt::LookoutMarine::implementation
         const bool prof = !frame_prof_path.empty();
         while (render_run.load())
         {
+          try
+          {
             LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
             if (prof_t0_qpc == 0)
@@ -372,6 +432,15 @@ namespace winrt::LookoutMarine::implementation
             else if (idle_wait_ms < 250)
                 idle_wait_ms = idle_wait_ms * 2 > 250 ? 250 : idle_wait_ms * 2;
             lk_controller_wait(drew ? 1 : idle_wait_ms);
+          }
+          catch (...)
+          {
+            // A frame that throws must not tear down the thread — an exception
+            // out of a std::thread body calls std::terminate. Drop the frame
+            // and pause so a persistent failure does not spin a hot loop.
+            SwallowFrameError("RenderLoop");
+            lk_controller_wait(50);
+          }
         }
         // Rewritten whole at every loop exit (a resize restarts the loop),
         // so the file on disk always holds the run so far.
