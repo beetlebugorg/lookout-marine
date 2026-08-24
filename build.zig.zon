@@ -11,15 +11,19 @@
         // dependency is fetched automatically, so a fresh clone of this repo
         // alone builds. Bump the commit + hash here to move the pin.
         .tile57 = .{
-            .url = "git+https://github.com/beetlebugorg/tile57#4cb599c2047e314a190211ebbbf7ca007e77dabd",
-            .hash = "tile57-0.3.0-SAveCCV1GwERcbB22pAvas_wfGXlL7UpwAF8B6UQ2nXw",
+            .url = "git+https://github.com/beetlebugorg/tile57#edcac132a2dad7cbb0144947bac7d1a838e7ee57",
+            .hash = "tile57-0.3.0-SAveCKovIAHJyCWwyAoY8vmdA_7LgbvEVpG9OK9nAmVH",
             .lazy = true,
         },
         .tile57_local = .{ .path = "../tile57", .lazy = true },
         // charttable draws the chart: it holds the style, the tile sources, the
-        // tessellators and the GPU. A sibling checkout while the two move
-        // together; it takes the pinned git form once its ABI settles.
-        .charttable = .{ .path = "../charttable" },
+        // tessellators and the GPU. Same local-or-pinned pair as tile57.
+        .charttable = .{
+            .url = "git+https://github.com/beetlebugorg/charttable#3dea11b274861816837e03991ee0128f444b083e",
+            .hash = "charttable-0.1.0-3P4mHruXGACalmkg_lIuYpFtnoAFwxRKO2a58rjp1daq",
+            .lazy = true,
+        },
+        .charttable_local = .{ .path = "../charttable", .lazy = true },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "shaders", "vendor", "include" },
 }

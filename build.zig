@@ -8,9 +8,9 @@ const std = @import("std");
 // Xcode targets consume everything from zig-out*/ with no tile57 checkout,
 // TILE57_DIR, or manual pre-build.
 
-/// True when a sibling tile57 checkout exists next to this repo.
-fn haveLocalTile57(b: *std.Build) bool {
-    const probe = b.pathFromRoot("../tile57/build.zig");
+/// True when a sibling checkout of `name` exists next to this repo.
+fn haveLocalDep(b: *std.Build, comptime name: []const u8) bool {
+    const probe = b.pathFromRoot("../" ++ name ++ "/build.zig");
     std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch return false;
     return true;
 }
@@ -237,7 +237,7 @@ pub fn build(b: *std.Build) void {
     const is_android = androidTriple(target) != null;
 
     const dep_args = .{ .target = target, .optimize = optimize, .@"android-ndk" = android_ndk, .@"android-api" = android_api };
-    const tile57_dep = (if (haveLocalTile57(b))
+    const tile57_dep = (if (haveLocalDep(b, "tile57"))
         b.lazyDependency("tile57_local", dep_args)
     else
         b.lazyDependency("tile57", dep_args)) orelse
@@ -270,13 +270,20 @@ pub fn build(b: *std.Build) void {
     const use_libpng = b.option(bool, "libpng", "Decode PNG with libpng") orelse true;
 
     // The renderer, as a Zig module: `@import("charttable")`. It carries its
-    // own Metal shim and frameworks, so nothing here declares them.
-    const charttable_mod = b.dependency("charttable", .{
+    // own Metal shim and frameworks, so nothing here declares them. Same
+    // local-or-pinned selection as tile57 above.
+    const charttable_args = .{
         .target = target,
         .optimize = optimize,
         .webp = use_webp,
         .libpng = use_libpng,
-    }).module("charttable");
+    };
+    const charttable_dep = (if (haveLocalDep(b, "charttable"))
+        b.lazyDependency("charttable_local", charttable_args)
+    else
+        b.lazyDependency("charttable", charttable_args)) orelse
+        return; // fetch scheduled; the runner downloads it and re-runs build()
+    const charttable_mod = charttable_dep.module("charttable");
 
     const Cfg = struct {
         b: *std.Build,
