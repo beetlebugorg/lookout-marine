@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # The demo executable links the Vulkan loader.
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan-dev
+
+      # vk is the Linux shell's backend. The default here would be sdl, and no
+      # runner image package provides SDL3 for pkg-config.
+      - run: zig build -Dbackend=vk
+
+      # `zig build` does not rebuild the plugin wasm; `plugins` does.
+      - run: zig build plugins
+
+      - run: zig build test -Dbackend=vk
+
+  linux:
+    name: Linux app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libvulkan-dev libx11-dev \
+                                  libwayland-dev meson ninja-build
+
+      # The plugin host links the WAMR archive for this architecture. Without
+      # it meson needs -Dplugins=false, and the app has no own ship, no traffic
+      # and no instrument input.
+      - name: Build WAMR
+        run: scripts/build-wamr.sh linux-x64
+
+      - name: Build
+        working-directory: linux
+        run: |
+          meson setup build --prefix=/usr -Dcore-optimize=Debug
+          ninja -C build
+          DESTDIR="$PWD/dist" meson install -C build
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lookout-marine-linux-x64
+          # The install tree only: dist also holds the core's staging prefix,
+          # which is static archives the app has already linked.
+          path: linux/dist/usr
+
+  apple:
+    name: macOS and iOS apps
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # The target's script phases build WAMR and the Zig cores, so xcodebuild
+      # is the whole build. There is no signing identity on a runner: ad-hoc
+      # for the Mac app, none at all for a simulator build.
+      - name: Build macOS
+        run: |
+          xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath macos/build-mac \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
+
+      - name: Build iOS
+        run: |
+          xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath macos/build-mac \
+            CODE_SIGNING_ALLOWED=NO build
+
+      # Tar first: an artifact zip drops the executable bit, which leaves an
+      # .app that will not launch.
+      - name: Package
+        run: |
+          products=macos/build-mac/Build/Products
+          tar -czf LookoutMarine-macos.tar.gz -C "$products/Debug" LookoutMarine.app
+          tar -czf LookoutMarine-iossimulator.tar.gz \
+            -C "$products/Debug-iphonesimulator" LookoutMarine.app
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lookout-marine-macos-arm64
+          path: LookoutMarine-macos.tar.gz
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lookout-marine-ios-simulator-arm64
+          path: LookoutMarine-iossimulator.tar.gz
+
+  windows:
+    name: Windows app
+    # x64, not ARM64: the aarch64-windows Zig 0.16.0 binary segfaults whenever
+    # it resolves the MSVC libc, which is every core and WAMR compile there.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: microsoft/setup-msbuild@v2
+
+      # Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, so a
+      # core without this archive is a chart with no boat and no traffic.
+      - name: Build WAMR
+        shell: bash
+        run: scripts/build-wamr.sh windows-x64
+
+      - name: Build core
+        run: pwsh windows/build-core.ps1 -Configuration Debug -Platform x64
+
+      - name: Build
+        run: |
+          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Debug /p:Platform=x64
+          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Debug /p:Platform=x64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lookout-marine-windows-x64
+          path: windows/x64/Debug
+
+  android:
+    name: Android app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+
+      # The versions android/app/build.gradle names. Gradle runs build-libs.sh
+      # for the core before the CMake link.
+      - name: Install NDK
+        run: sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lookout-marine-android-arm64
+          path: android/app/build/outputs/apk/debug/app-debug.apk
