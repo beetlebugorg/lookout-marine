@@ -7,6 +7,8 @@
 #define LK_GROUP_RASTER  "raster"
 #define LK_GROUP_MARINER "mariner.v1"
 #define LK_GROUP_PLUGINS "plugins.v1"
+#define LK_GROUP_CHARTLINKS "chartlinks"
+#define LK_GROUP_CHARTSETS "chartsets"
 
 #define LK_MAX_RECENTS 10
 
@@ -110,26 +112,38 @@ lk_store_note_recent (const char *path)
 /* ---- raster charts ------------------------------------------------------ */
 
 static char **
-lk_store_load_list (const char *key)
+lk_store_load_group_list (const char *group, const char *key)
 {
   g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  char **list = g_key_file_get_string_list (keyfile, LK_GROUP_RASTER, key, NULL, NULL);
+  char **list = g_key_file_get_string_list (keyfile, group, key, NULL, NULL);
 
   return list != NULL ? list : g_new0 (char *, 1);
 }
 
 static void
-lk_store_save_list (const char *key, const char *const *paths)
+lk_store_save_group_list (const char *group, const char *key, const char *const *paths)
 {
   g_autoptr (GKeyFile) keyfile = lk_store_load ();
   gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
 
   if (n == 0)
-    g_key_file_remove_key (keyfile, LK_GROUP_RASTER, key, NULL);
+    g_key_file_remove_key (keyfile, group, key, NULL);
   else
-    g_key_file_set_string_list (keyfile, LK_GROUP_RASTER, key, paths, n);
+    g_key_file_set_string_list (keyfile, group, key, paths, n);
 
   lk_store_flush (keyfile);
+}
+
+static char **
+lk_store_load_list (const char *key)
+{
+  return lk_store_load_group_list (LK_GROUP_RASTER, key);
+}
+
+static void
+lk_store_save_list (const char *key, const char *const *paths)
+{
+  lk_store_save_group_list (LK_GROUP_RASTER, key, paths);
 }
 
 char **
@@ -185,6 +199,96 @@ lk_store_save_chart_hidden (gboolean hidden)
 
   g_key_file_set_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", hidden);
   lk_store_flush (keyfile);
+}
+
+/* ---- chart sets ---------------------------------------------------------- */
+
+char **
+lk_store_load_chart_sets (void)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  /* Absent and empty are different answers: absent means this build has never
+   * saved a library here, and the caller seeds it from the recents once. */
+  if (!g_key_file_has_key (keyfile, LK_GROUP_CHARTSETS, "paths", NULL))
+    return NULL;
+
+  char **list = g_key_file_get_string_list (keyfile, LK_GROUP_CHARTSETS, "paths", NULL, NULL);
+  return list != NULL ? list : g_new0 (char *, 1);
+}
+
+void
+lk_store_save_chart_sets (const char *const *paths)
+{
+  /* Never back to "absent": an emptied library must stay empty rather than
+   * re-seeding from the recents at the next launch. */
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
+
+  g_key_file_set_string_list (keyfile, LK_GROUP_CHARTSETS, "paths",
+                              n == 0 ? (const char *const []) { NULL } : paths, n);
+  lk_store_flush (keyfile);
+}
+
+char **
+lk_store_load_chart_sets_off (void)
+{
+  return lk_store_load_group_list (LK_GROUP_CHARTSETS, "off");
+}
+
+void
+lk_store_save_chart_sets_off (const char *const *paths)
+{
+  lk_store_save_group_list (LK_GROUP_CHARTSETS, "off", paths);
+}
+
+/* ---- chart links --------------------------------------------------------- */
+
+static char *
+lk_store_load_string (const char *group, const char *key)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+  char *value = g_key_file_get_string (keyfile, group, key, NULL);
+
+  if (value != NULL && value[0] == '\0')
+    g_clear_pointer (&value, g_free);
+  return value;
+}
+
+static void
+lk_store_save_string (const char *group, const char *key, const char *value)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  if (value == NULL || value[0] == '\0')
+    g_key_file_remove_key (keyfile, group, key, NULL);
+  else
+    g_key_file_set_string (keyfile, group, key, value);
+  lk_store_flush (keyfile);
+}
+
+char *
+lk_store_load_chart_links (void)
+{
+  return lk_store_load_string (LK_GROUP_CHARTLINKS, "links");
+}
+
+void
+lk_store_save_chart_links (const char *json)
+{
+  lk_store_save_string (LK_GROUP_CHARTLINKS, "links", json);
+}
+
+char *
+lk_store_load_chart_link_active (void)
+{
+  return lk_store_load_string (LK_GROUP_CHARTLINKS, "active");
+}
+
+void
+lk_store_save_chart_link_active (const char *url)
+{
+  lk_store_save_string (LK_GROUP_CHARTLINKS, "active", url);
 }
 
 /* ---- mariner ------------------------------------------------------------ */

@@ -30,8 +30,8 @@ extension AppModel {
         panel.title = "Open Chart"
         let types = pluginFileTypes()
         panel.message = types.isEmpty
-            ? "Choose a baked .pmtiles chart, or a folder of cells."
-            : "Choose a baked .pmtiles chart, a folder of cells, or a data file: \(types.joined(separator: ", "))."
+            ? "Choose a folder of charts, a chart archive (.zip), or a single chart."
+            : "Choose a folder of charts, a chart archive (.zip), a single chart, or a data file: \(types.joined(separator: ", "))."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -69,6 +69,23 @@ extension AppModel {
         addRasterCharts(picked)
     }
 
+    /// Present the panel for a chart style file. One file, no folders: a style
+    /// is a document, not a library.
+    ///
+    /// No content-type restriction, for the same reason as the panels above —
+    /// a .json filter would grey out a style the mariner saved without the
+    /// extension, and what the file actually IS is checked on the way in.
+    func presentChartStylePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        panel.title = "Add Chart Style"
+        panel.message = "Choose a MapLibre style file (style.json). The chart is then drawn the way that style says."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importChartStyle(url)
+    }
 }
 #endif
 
@@ -90,6 +107,13 @@ extension AppModel {
             return
         }
         #endif
+        // An archive is a chart SET, not a chart: it holds a library the way a
+        // folder does, and the mariner adds it the same way. This is the shape
+        // a chart agency publishes in — NOAA's whole US library is one .zip.
+        if ChartScan.isArchive(path) {
+            addChartSet(path)
+            return
+        }
         if controller?.openFileForPlugins(path) == true { return }
         openChart(path)
     }

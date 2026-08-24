@@ -2,9 +2,14 @@
  *
  * Mirrors linux/src/lk-store.c: camera pose, recents, the full mariner state
  * (saved field-by-field, never raw struct bytes), and the DMS HUD pref. Stored
- * as an INI at %APPDATA%\lookout-marine\settings.ini via the Win32 profile API.
- * The mariner overlay applies each key only when present, so an older file
- * leaves newer fields at engine defaults. */
+ * as an INI at %APPDATA%\lookout-marine\settings.ini via the Win32 profile
+ * API, except the raster library, which lives in rasters.list beside it — the
+ * profile API truncates a section read at 32,767 chars, a fifth of the sheet
+ * bundles the store is sized for. The mariner overlay applies each key only
+ * when present, so an older file leaves newer fields at engine defaults.
+ *
+ * Thread-safe: one lock inside serializes every entry point, because the
+ * render thread saves the pose while the UI thread writes settings. */
 #ifndef LK_STORE_H
 #define LK_STORE_H
 
@@ -33,6 +38,12 @@ void lk_store_apply_saved_mariner(tile57_mariner *m);
 int  lk_store_load_settings_size(int *width, int *height);
 void lk_store_save_settings_size(int width, int height);
 
+/* One NAMED window frame (client size, physical px), for the windows that
+ * should open where they were left — the vessel tables, one per plugin
+ * table key. load returns 1 when a size was saved. */
+int  lk_store_load_frame(const char *name, int *width, int *height);
+void lk_store_save_frame(const char *name, int width, int height);
+
 /* Raster charts: the installed list survives a change of ENC and a restart —
  * the shell re-adds every stored path after each open. Each path carries its
  * own enabled flag (half-gigabyte downloads are switched off, not deleted).
@@ -50,6 +61,43 @@ void   lk_store_free_rasters(char **paths, int *enabled);
 void   lk_store_note_rasters(const char *const *paths, int n);
 void   lk_store_forget_rasters(const char *const *paths, int n);
 void   lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled);
+/* Forget the whole raster library, and the per-set hidden list with it:
+ * hidden entries are keyed by set name, and leaving them behind means the
+ * same file added again months later comes back not drawn with nothing on
+ * screen to say why. The open chart is untouched — this takes effect at the
+ * next open (the reference's clearRasterCharts). */
+void   lk_store_clear_rasters(void);
+
+/* Which raster SETS are not drawn, by set name — the pill's per-set choice,
+ * distinct from a path's enabled flag. load returns a NULL-terminated array
+ * of malloc'd names, freed with lk_store_free_recents. save replaces the
+ * whole list (entries for sets not installed this launch are kept by the
+ * caller). chart_hidden persists the "hide ENC over raster" toggle. */
+char **lk_store_load_hidden_sets(void);
+void   lk_store_save_hidden_sets(const char *const *names, int n);
+int    lk_store_chart_hidden(void);
+void   lk_store_set_chart_hidden(int hidden);
+
+/* Chart sets: the folders of charts the mariner has aboard, each with an
+ * on/off switch (switched off, not removed, when its water is not today's).
+ * load returns a NULL-terminated array of malloc'd paths freed with
+ * lk_store_free_rasters (same shape); *on_out (optional) receives a malloc'd
+ * flag per path. note appends switched on (an existing entry keeps its
+ * switch); forget removes. */
+char **lk_store_load_chartsets(int **on_out);
+void   lk_store_note_chartset(const char *path);
+void   lk_store_forget_chartset(const char *path);
+void   lk_store_set_chartset_on(const char *path, int on);
+
+/* Chart links (an online map AS the chart): the whole list as one JSON text
+ * the UI layer owns the shape of, plus the picked link's url. load returns a
+ * malloc'd NUL-terminated string or NULL; caller frees. Written whole through
+ * a temp file, like the raster library. */
+char *lk_store_load_chartlinks(void);
+void  lk_store_save_chartlinks(const char *json);
+/* The active link's url, or "" for the built-in chart. */
+int   lk_store_load_chartlink_active(char *out, int out_len);
+void  lk_store_save_chartlink_active(const char *url);
 
 /* Plugin settings, kept as the config object each plugin was last handed —
  * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per

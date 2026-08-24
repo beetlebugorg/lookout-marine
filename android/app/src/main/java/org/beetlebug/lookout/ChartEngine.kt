@@ -58,6 +58,11 @@ class ChartEngine private constructor() {
 
     /** The library this engine was opened on. RENDER THREAD. */
     private var paths: Array<String> = emptyArray()
+
+    /** The background library add of a link-first startup, joined before any
+     *  close: the add runs with the api lock dropped for its file opens, so
+     *  the handle has to outlive it. */
+    private var libraryAdd: Thread? = null
     private var lastFrameNs = 0L
     private var ticking = false
 
@@ -90,6 +95,9 @@ class ChartEngine private constructor() {
         }
         val h = queue ?: return
         frameHook = hook
+        // Before any path returns: every controller mutation must be able to
+        // wake an idled frame loop, whichever branch below runs.
+        controller.onMutated = ::kick
         h.post {
             var l = lookout
             if (l != null && !chartPaths.contentEquals(paths)) {
@@ -98,8 +106,12 @@ class ChartEngine private constructor() {
             }
             if (l != null && this.controller !== controller) {
                 // The Activity was destroyed and built again over a process
-                // that kept running. The ENGINE is already set up; only this
-                // new controller's own state is missing.
+                // that kept running. The engine is already set up; only this
+                // new controller's own state is missing. Stop the replaced
+                // controller's tile service first: two pollers would fight
+                // over one ring, and the old controller's thread pool would
+                // otherwise run for the rest of the process.
+                this.controller?.onReplaced()
                 this.controller = controller
                 controller.rebind(l, h)
             }
@@ -107,6 +119,11 @@ class ChartEngine private constructor() {
                 // A resize rebuilds the swapchain and the api lock it takes is
                 // held for a whole frame, which is why this is not done on the
                 // UI thread: there a rotation becomes an input-dispatch ANR.
+                // The density rides along: a fold or an external display
+                // recreates the Activity with a new one over the same engine,
+                // and symbols sized for the old glass mis-draw AND mis-pick.
+                l.setDensity(density)
+                l.setDeviceScale(density)
                 l.resize(wPts, hPts)
                 return@post
             }
@@ -119,11 +136,44 @@ class ChartEngine private constructor() {
             }
             if (l == null) {
                 this.controller = controller
-                l = openOn(surface, chartPaths, controller, density, wPx, hPx, wPts, hPts, h)
-                    ?: return@post
+                // The loader's honest phases: the one-time atlas bake shows
+                // only when the cache is cold, and the first-scene step takes
+                // over once the (synchronous) open returns.
+                controller.noteOpenPhase(
+                    if (Lookout.atlasCacheReady()) ChartController.LoadPhase.MAPPING
+                    else ChartController.LoadPhase.SYMBOLS
+                )
+                // An active chart link needs no cell library to paint. Open
+                // the engine EMPTY — about a second instead of the ten that
+                // mapping thousands of cells costs — so the link takes the
+                // screen first, and bring the library aboard behind it (the
+                // add drops the engine's locks for its file opens, so the
+                // chart keeps drawing). Without a link the library IS the
+                // first picture, and the loader stays honest about it.
+                val linkFirst = controller.linkFirstHint && chartPaths.isNotEmpty()
+                l = openOn(
+                    surface,
+                    if (linkFirst) emptyArray() else chartPaths,
+                    controller, density, wPx, hPx, wPts, hPts, h,
+                ) ?: return@post
+                // The TARGET library, whatever was opened so far: a re-attach
+                // must not close a still-loading engine over the difference.
+                paths = chartPaths
+                controller.noteOpenPhase(ChartController.LoadPhase.TESSELLATING)
+                if (linkFirst) {
+                    val engine = l
+                    libraryAdd = Thread({
+                        val n = engine.chartsAdd(chartPaths)
+                        Log.i(TAG, "library aboard behind the chart link: $n cells")
+                    }, "lookout-library-add").also { it.start() }
+                }
             }
             stopBackgroundTick()
             lastFrameNs = 0 // a new surface is not a continuation of the old
+            idleFrames = 0
+            idlePolling = false
+            frameLoopLive = true
+            Choreographer.getInstance().removeFrameCallback(frameCallback)
             Choreographer.getInstance().postFrameCallback(frameCallback)
         }
     }
@@ -143,17 +193,27 @@ class ChartEngine private constructor() {
         val done = CountDownLatch(1)
         h.post {
             Choreographer.getInstance().removeFrameCallback(frameCallback)
+            idlePolling = false
             frameHook = null
             controller?.onSurfaceDetached()
             l.detachSurface()
             startBackgroundTick()
             done.countDown()
         }
-        try {
-            done.await()
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
+        // NOT interruptible: the platform frees the surface the moment
+        // surfaceDestroyed returns, so returning early hands the render
+        // thread a freed surface — a native use-after-free. Remember the
+        // interrupt, finish the wait, re-assert it on the way out.
+        var interrupted = false
+        while (true) {
+            try {
+                done.await()
+                break
+            } catch (e: InterruptedException) {
+                interrupted = true
+            }
         }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     /** Hand the engine's reclaimable caches back. Safe on any thread. */
@@ -166,21 +226,108 @@ class ChartEngine private constructor() {
 
     private val frameCallback = Choreographer.FrameCallback { t -> doFrame(t) }
 
+    /** Quiet frames before the loop stands down. Two, like the Mac shell. */
+    private var idleFrames = 0
+    private var idlePolling = false
+
+    /** True while the frame callback is posted. A kick on a LIVE loop only
+     *  resets the idle counter: re-posting the callback per gesture event
+     *  churned the choreographer and zeroed the frame clock mid-drag. */
+    private var frameLoopLive = false
+
     private fun doFrame(frameTimeNanos: Long) {
-        val l = lookout ?: return
+        val l = lookout ?: run {
+            frameLoopLive = false
+            return
+        }
         // No surface to present on: stop rescheduling. attach starts it again.
-        if (!l.isAttached) return
+        if (!l.isAttached) {
+            frameLoopLive = false
+            return
+        }
         var dt = if (lastFrameNs == 0L) 0.0 else (frameTimeNanos - lastFrameNs) / 1e9
         lastFrameNs = frameTimeNanos
-        if (dt > 0.1) dt = 0.1 // resumed from pause: don't lurch the ease
+        if (dt > 0.05) dt = 0.05 // resumed from pause: don't lurch the ease (the reference's cap)
         // Before anything reads the camera: the view's share of this frame.
         frameHook?.onFrame(l, frameTimeNanos)
         val animating = l.animating()
         if (animating && dt > 0) l.tickAnim(dt)
-        if (animating || l.needsRedraw()) l.render()
+        val busy = animating || l.needsRedraw()
+        if (busy) l.render()
         // Sample the HUD here rather than on a timer: the readouts describe the
         // frame that was just presented. The controller throttles the push.
         controller?.onFrameRendered(frameTimeNanos)
+        // Idle means idle, and this is the platform it matters most on: a
+        // plotter left on the chart screen used to pace with vsync forever.
+        // After two quiet frames the loop stands down; kick() resumes it on
+        // input, and the idle poll watches for what the engine does on its
+        // own — a plugin drawing — at 4 Hz, only while plugins are up.
+        idleFrames = if (busy || gestureActive) 0 else idleFrames + 1
+        if (idleFrames > 2) {
+            frameLoopLive = false
+            lastFrameNs = 0L
+            startIdlePoll(l)
+            return
+        }
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    private val idlePoll = object : Runnable {
+        override fun run() {
+            if (!idlePolling) return
+            val l = lookout ?: return
+            if (!l.isAttached) {
+                idlePolling = false
+                return
+            }
+            if (l.animating() || l.needsRedraw()) {
+                idlePolling = false
+                resumeFrames()
+                return
+            }
+            queue?.postDelayed(this, IDLE_POLL_MS)
+        }
+    }
+
+    private fun startIdlePoll(l: Lookout) {
+        // With no plugins there is nothing that draws behind the shell's
+        // back, and every shell mutation kicks — so nothing to poll for.
+        if (!l.pluginsActive()) return
+        if (idlePolling) return
+        idlePolling = true
+        queue?.postDelayed(idlePoll, IDLE_POLL_MS)
+    }
+
+    /** True while a pointer is on the glass. The pan stream is consumed BY
+     *  the frame loop (the view's resampler hook), so the loop must not
+     *  stand down mid-gesture — it did, during the touch slop's quiet
+     *  frames, and the whole drag then landed at the lift. */
+    @Volatile private var gestureActive = false
+
+    /** UI thread, from the view's touch handler. Safe from any thread. */
+    fun setGestureActive(on: Boolean) {
+        gestureActive = on
+        if (on) kick()
+    }
+
+    /** Wake the frame loop: a mutation happened. Safe from any thread. */
+    fun kick() {
+        val h = queue ?: return
+        h.post {
+            idlePolling = false
+            resumeFrames()
+        }
+    }
+
+    /** Render thread. A live loop only has its idle counter reset; the
+     *  choreographer is touched solely on a true resume from stand-down. */
+    private fun resumeFrames() {
+        val l = lookout ?: return
+        if (!l.isAttached) return
+        idleFrames = 0
+        if (frameLoopLive) return
+        frameLoopLive = true
+        lastFrameNs = 0L
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
@@ -257,6 +404,14 @@ class ChartEngine private constructor() {
     private fun closeOn(l: Lookout) {
         stopBackgroundTick()
         Choreographer.getInstance().removeFrameCallback(frameCallback)
+        // The library add drops the engine's api lock for its file opens, so
+        // the handle must outlive the add: join it before closing.
+        libraryAdd?.let { t ->
+            while (true) {
+                try { t.join(); break } catch (_: InterruptedException) {}
+            }
+        }
+        libraryAdd = null
         controller?.detach(l)
         l.close()
         lookout = null
@@ -265,6 +420,9 @@ class ChartEngine private constructor() {
 
     companion object {
         private const val TAG = "lookout"
+        /* The idle watch for plugin-driven redraws: the AIS store coalesces
+         * at 2 Hz, so 4 Hz sees every change with one frame of slack. */
+        private const val IDLE_POLL_MS = 250L
 
         /**
          * One engine for the process. Not tied to the Activity: the point of

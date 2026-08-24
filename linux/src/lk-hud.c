@@ -1,4 +1,5 @@
 #include "lk-hud.h"
+#include "lk-tether.h"
 
 #include <math.h>
 #include <string.h>
@@ -421,6 +422,9 @@ lk_hud_capsule_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   LkHudCapsule *capsule = user_data;
   const char *name = g_param_spec_get_name (pspec);
 
+  if (gtk_widget_in_destruction (capsule->root))
+    return;
+
   if (g_str_equal (name, "fix-state") || g_str_equal (name, "fix-lon") ||
       g_str_equal (name, "fix-lat"))
     lk_hud_update_coord (capsule);
@@ -444,6 +448,26 @@ lk_hud_rule (void)
   return rule;
 }
 
+/* The credit a chart link's sources ask for. Public tile hosts make the
+ * visible credit a condition of service (openstreetmap.org's tile usage
+ * policy among them), so it stands with the scale readout whenever a linked
+ * chart is drawn, and only then. */
+static void
+lk_hud_credit_changed (LkChartLinks *links, gpointer user_data)
+{
+  GtkWidget *label = user_data;
+  const char *credit = lk_chart_links_attribution (links);
+
+  /* The tether cuts the handler when the column FINALIZES, which is after
+   * its children were disposed: a push resolving mid-teardown must not touch
+   * a dying label (lk-tether.h's contract). */
+  if (gtk_widget_in_destruction (label))
+    return;
+
+  gtk_label_set_text (GTK_LABEL (label), credit);
+  gtk_widget_set_visible (label, credit[0] != '\0');
+}
+
 GtkWidget *
 lk_hud_capsule_new (LkAppModel *model)
 {
@@ -456,11 +480,7 @@ lk_hud_capsule_new (LkAppModel *model)
   capsule->root = root;
   gtk_widget_add_css_class (root, "lk-capsule");
   gtk_widget_set_size_request (root, -1, LK_CHROME_CAPSULE);
-  /* The capsule is a control surface, so it takes the presses that land on it
-   * — as the WinUI pill and the Compose surface do. It is small and it sits at
-   * the bottom centre; the chart keeps everything around it. */
   gtk_widget_set_halign (root, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (root, GTK_ALIGN_END);
 
   /* The amber dot every shell leads the capsule with. It is CSS, not a
    * drawing: a 10pt circle of one colour is what a stylesheet is for. */
@@ -537,15 +557,40 @@ lk_hud_capsule_new (LkAppModel *model)
    * chart is in view, which is most water. */
   gtk_box_append (GTK_BOX (root), lk_raster_pill_new (model));
 
-  g_signal_connect_data (model, "notify", G_CALLBACK (lk_hud_capsule_notify), capsule,
-                         lk_hud_capsule_free, 0);
+  lk_tether (model,
+             g_signal_connect_data (model, "notify", G_CALLBACK (lk_hud_capsule_notify),
+                                    capsule, lk_hud_capsule_free, 0),
+             root);
 
   lk_hud_update_coord (capsule);
   lk_hud_update_scale (capsule);
   lk_hud_update_zoom (capsule);
   lk_hud_update_overscale (capsule);
   lk_hud_update_compact (capsule);
-  return root;
+
+  /* The capsule and, beneath it, the credit a linked chart's sources ask
+   * for. The column is what the window places; both parts sit at the bottom
+   * centre — as the WinUI pill and the Compose surface do — and the chart
+   * keeps everything around them. */
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+  gtk_widget_set_halign (column, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (column, GTK_ALIGN_END);
+  gtk_box_append (GTK_BOX (column), root);
+
+  GtkWidget *credit = gtk_label_new ("");
+  gtk_widget_add_css_class (credit, "caption");
+  gtk_widget_add_css_class (credit, "dim-label");
+  gtk_label_set_ellipsize (GTK_LABEL (credit), PANGO_ELLIPSIZE_END);
+  gtk_widget_set_halign (credit, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (column), credit);
+
+  LkChartLinks *links = lk_app_model_get_chart_links (model);
+  lk_tether (links,
+             g_signal_connect (links, "changed", G_CALLBACK (lk_hud_credit_changed), credit),
+             column);
+  lk_hud_credit_changed (links, credit);
+
+  return column;
 }
 
 /* ---- the raster chart pill ---------------------------------------------- */
@@ -817,9 +862,13 @@ lk_scale_bar_update (LkScaleBar *bar)
 static void
 lk_scale_bar_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
+  LkScaleBar *bar = user_data;
+
+  if (gtk_widget_in_destruction (bar->root))
+    return;
   if (g_str_equal (g_param_spec_get_name (pspec), "scale-denominator") ||
       g_str_equal (g_param_spec_get_name (pspec), "has-chart"))
-    lk_scale_bar_update (user_data);
+    lk_scale_bar_update (bar);
 }
 
 GtkWidget *
@@ -846,8 +895,10 @@ lk_scale_bar_new (LkAppModel *model)
   gtk_widget_set_halign (bar->root, GTK_ALIGN_START);
   gtk_widget_set_valign (bar->root, GTK_ALIGN_END);
 
-  g_signal_connect_data (model, "notify", G_CALLBACK (lk_scale_bar_notify), bar,
-                         lk_scale_bar_free, 0);
+  lk_tether (model,
+             g_signal_connect_data (model, "notify", G_CALLBACK (lk_scale_bar_notify),
+                                    bar, lk_scale_bar_free, 0),
+             bar->root);
   lk_scale_bar_update (bar);
   return bar->root;
 }
@@ -881,8 +932,110 @@ lk_building_pill_new (LkAppModel *model)
   gtk_widget_set_can_target (pill, FALSE);
   gtk_widget_set_visible (pill, lk_app_model_get_building (model));
 
-  g_signal_connect (model, "notify", G_CALLBACK (lk_building_notify), pill);
+  /* Data is the widget itself, so the object variant carries the lifetime. */
+  g_signal_connect_object (model, "notify", G_CALLBACK (lk_building_notify), pill, 0);
   return pill;
+}
+
+/* ---- preparing charts --------------------------------------------------- */
+
+typedef struct {
+  GtkWidget *root;
+  GtkWidget *title;
+  GtkWidget *bar;
+  GtkWidget *detail;
+} LkBakePill;
+
+static void
+lk_bake_pill_free (gpointer data, GClosure *closure)
+{
+  (void) closure;
+  g_free (data);
+}
+
+static void
+lk_bake_cancel_clicked (GtkButton *button, gpointer user_data)
+{
+  (void) button;
+  lk_app_model_cancel_bake (LK_APP_MODEL (user_data));
+}
+
+static void
+lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+  if (!g_str_equal (g_param_spec_get_name (pspec), "baking"))
+    return;
+
+  LkAppModel *model = LK_APP_MODEL (object);
+  LkBakePill *pill = user_data;
+
+  if (gtk_widget_in_destruction (pill->root))
+    return;
+  const LkBakeProgress *p = lk_app_model_get_bake_progress (model);
+
+  gtk_widget_set_visible (pill->root, p != NULL);
+  if (p == NULL)
+    return;
+
+  g_autofree char *title = lk_bake_progress_title (p);
+  gtk_label_set_text (GTK_LABEL (pill->title), title);
+  gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (pill->bar), lk_bake_progress_fraction (p));
+
+  /* The count is the mariner's unit: charts, not bytes or percent. The chart
+     that just finished rides along so the line moves even on a long cell. */
+  g_autofree char *remaining = lk_bake_progress_remaining (p);
+  g_autofree char *detail = NULL;
+  if (p->total > 0 && remaining != NULL)
+    detail = g_strdup_printf ("%d of %d  ·  %s", p->done, p->total, remaining);
+  else if (p->total > 0)
+    detail = g_strdup_printf ("%d of %d", p->done, p->total);
+  else
+    detail = g_strdup (p->cell != NULL ? p->cell : "");
+  gtk_label_set_text (GTK_LABEL (pill->detail), detail);
+}
+
+GtkWidget *
+lk_bake_pill_new (LkAppModel *model)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (model), NULL);
+
+  LkBakePill *pill = g_new0 (LkBakePill, 1);
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+  GtkWidget *text = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+
+  pill->root = row;
+  pill->title = gtk_label_new ("");
+  pill->detail = gtk_label_new ("");
+  pill->bar = gtk_progress_bar_new ();
+
+  gtk_widget_add_css_class (pill->title, "heading");
+  gtk_widget_add_css_class (pill->detail, "caption");
+  gtk_widget_add_css_class (pill->detail, "dim-label");
+  gtk_label_set_xalign (GTK_LABEL (pill->title), 0);
+  gtk_label_set_xalign (GTK_LABEL (pill->detail), 0);
+  gtk_widget_set_size_request (pill->bar, 180, -1);
+  gtk_widget_set_valign (pill->bar, GTK_ALIGN_CENTER);
+
+  gtk_box_append (GTK_BOX (text), pill->title);
+  gtk_box_append (GTK_BOX (text), pill->detail);
+  gtk_box_append (GTK_BOX (row), text);
+  gtk_box_append (GTK_BOX (row), pill->bar);
+
+  GtkWidget *stop = gtk_button_new_with_label ("Stop");
+  gtk_widget_set_valign (stop, GTK_ALIGN_CENTER);
+  g_signal_connect (stop, "clicked", G_CALLBACK (lk_bake_cancel_clicked), model);
+  gtk_box_append (GTK_BOX (row), stop);
+
+  gtk_widget_add_css_class (row, "lk-pill");
+  gtk_widget_set_halign (row, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (row, GTK_ALIGN_START);
+  gtk_widget_set_visible (row, lk_app_model_get_baking (model));
+
+  lk_tether (model,
+             g_signal_connect_data (model, "notify", G_CALLBACK (lk_bake_notify),
+                                    pill, lk_bake_pill_free, 0),
+             row);
+  return row;
 }
 
 /* ---- the bubbles -------------------------------------------------------- */

@@ -139,6 +139,15 @@ const Family = struct { prefix: []const u8, ms: i64 };
 /// scalar or a lat/lon pair is tens of bytes.
 pub const max_value_json = 512;
 
+/// A path is dotted words ("navigation.speedOverGround"); nothing legitimate
+/// approaches this.
+pub const max_path = 192;
+
+/// Entries are append-only for the store's life, so distinct paths are the
+/// one way a publisher grows host memory forever — the wire and log budgets
+/// never see it. A real vessel model is a few hundred paths.
+pub const max_entries = 4096;
+
 const Slot = struct {
     source: SourceId,
     value: Value,
@@ -351,6 +360,13 @@ pub const Store = struct {
         const id: SubId = @intCast(self.subs.items.len);
         var sub = Subscriber{ .owner = owner };
         errdefer {
+            // The back-references too: a dangling `id` in an entry's subs
+            // would alias the NEXT subscriber to take this id, handing it
+            // dirty marks for paths it never asked about.
+            for (sub.entries.items) |idx| {
+                const e = &self.entries.items[idx];
+                if (indexOfU32(e.subs.items, id)) |at| _ = e.subs.orderedRemove(at);
+            }
             sub.entries.deinit(self.alloc);
             sub.dirty.deinit(self.alloc);
         }
@@ -410,6 +426,8 @@ pub const Store = struct {
 
     fn entryIndexLocked(self: *Store, path: []const u8) !u32 {
         if (self.index.get(path)) |i| return i;
+        if (path.len == 0 or path.len > max_path) return error.PathTooLong;
+        if (self.entries.items.len >= max_entries) return error.StoreFull;
         const owned = try self.alloc.dupe(u8, path);
         errdefer self.alloc.free(owned);
         const idx: u32 = @intCast(self.entries.items.len);
@@ -465,6 +483,7 @@ pub const Store = struct {
         e.last = now;
         if (!changed) return false;
         for (e.subs.items) |sid| {
+            if (sid >= self.subs.items.len) continue;
             const sub = &(self.subs.items[sid] orelse continue);
             if (indexOfU32(sub.dirty.items, idx) != null) continue;
             // A dirty mark is a hint, and the dirty set is bounded by the
@@ -757,4 +776,14 @@ test "unsubscribing stops the changes" {
     try s.set("navigation.position", pos_a, 0, 1);
     try t.expect(!s.hasChanges(sub));
     s.unsubscribe(sub); // twice is a no-op
+}
+
+test "a path past the caps is refused; known paths keep working" {
+    var s = try Store.init(t.allocator);
+    defer s.deinit();
+    const long = "x" ** (max_path + 1);
+    try t.expectError(error.PathTooLong, s.set(long, "1", 0, 1));
+    try t.expectError(error.PathTooLong, s.set("", "1", 0, 1));
+    try s.set("navigation.position", pos_a, 0, 1);
+    try s.set("navigation.position", pos_b, 1, 1); // an existing path is never refused
 }

@@ -69,6 +69,12 @@ int  lk_controller_tick(lk_controller *self, double dt);
 /* 1 while the host should keep ticking (animating / needs redraw / building). */
 int  lk_controller_needs_tick(lk_controller *self);
 
+/* Park the render thread until a mutation kicks it or `ms` passes. Every
+ * mutating lk_controller_* call kicks, so the frame that shows a change
+ * starts at once; the timeout covers what the engine does on its own. */
+void lk_controller_wait(int ms);
+void lk_controller_kick(void);
+
 void lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt);
 void lk_controller_set_density(lk_controller *self, float density);
 
@@ -79,6 +85,59 @@ void lk_controller_zoom_centered(lk_controller *self, double dzoom, unsigned w_p
 void lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double x1, double y1);
 /* Geo to logical points (the inverse of geo_at) — anchors chart-pinned chrome. */
 int  lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y);
+
+/* ---- charts by link (an online map AS the chart) ------------------------- */
+
+/* One url lookout wants: the style, a TileJSON, a sprite pack, a tile. Called
+ * on the render thread with the core's lock held: copy the url, start the
+ * fetch, return. Answer from any thread with lk_controller_http_respond — the
+ * one call that is safe from there. `allow_file` is 1 only when the url may be
+ * read off local disk; see lookout.h (lookout_http_get). */
+typedef void (*lk_http_get)(void *user, unsigned long long req_id,
+                            const char *url, int allow_file);
+/* lookout no longer wants an answer. Advisory; same calling rules. */
+typedef void (*lk_http_cancel)(void *user, unsigned long long req_id);
+
+/* TRUE while a publisher's style is the chart being drawn. */
+int  lk_controller_alt_style_active(lk_controller *self);
+
+void lk_controller_set_http_provider(lk_controller *self, lk_http_get get,
+                                     lk_http_cancel cancel, void *user);
+/* `status` is the final HTTP status, or 0 for a transport failure; only 2xx
+ * carries a body the core reads. Lock-free. */
+void lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
+                                const void *bytes, size_t len, int status);
+
+/* The chart-link management surface, straight through to lookout. */
+void lk_controller_chart_link_add(lk_controller *self, const char *link);
+void lk_controller_chart_link_select(lk_controller *self, const char *url); /* NULL = own chart */
+void lk_controller_chart_link_remove(lk_controller *self, const char *url);
+void lk_controller_chart_link_refresh(lk_controller *self, const char *url);
+void lk_controller_chart_links_import(lk_controller *self, const char *json);
+/* Everything the chart list shows, or NULL when nothing changed since the last
+ * poll. Free with lk_controller_string_free. ONE consumer: whoever polls it
+ * clears the flag. */
+char *lk_controller_chart_links_changed_json(lk_controller *self);
+void  lk_controller_string_free(char *s);
+
+/* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
+
+typedef struct lk_marker {
+    uint64_t id;
+    double   lon, lat;
+    char     name[64]; /* copied out — the engine's string is borrowed */
+} lk_marker;
+
+/* Drop a marker, placed AND named by the core in one call ("Mark 1", …): the
+ * drop never waits for typing. Returns its id, or 0. */
+uint64_t lk_controller_marker_add(lk_controller *self, double lon, double lat);
+/* The marker nearest a LOGICAL point, within about 14 pt. 1 when found. This
+ * is what decides the chart menu's items: over a marker it offers Rename and
+ * Remove in place of Drop. */
+int  lk_controller_marker_at(lk_controller *self, double x_pt, double y_pt, lk_marker *out);
+/* An empty name keeps the old one (the core decides, so every shell agrees). */
+int  lk_controller_marker_rename(lk_controller *self, uint64_t id, const char *name);
+int  lk_controller_marker_remove(lk_controller *self, uint64_t id);
 void lk_controller_reset_rotation(lk_controller *self);
 void lk_controller_fling_start(lk_controller *self, double vx, double vy);
 int  lk_controller_geo_at(lk_controller *self, double x, double y, double *lon, double *lat);
@@ -212,6 +271,13 @@ int  lk_controller_raster_set_in_view(lk_controller *self, unsigned i);
 int  lk_controller_raster_active_index(lk_controller *self);
 int  lk_controller_raster_set_enabled(lk_controller *self, const char *path, int enabled);
 int  lk_controller_raster_enabled(lk_controller *self, const char *path);
+/* A set's own drawn state (not "drawn over this view"): what gets saved, and
+ * what set_shown restores by index without reference to the camera. */
+int  lk_controller_raster_shown(lk_controller *self, unsigned i);
+void lk_controller_raster_set_shown(lk_controller *self, unsigned i, int on);
+void lk_controller_set_chart_hidden(lk_controller *self, int hidden);
+/* How many vector charts are open. Zero is a library of pictures alone. */
+int  lk_controller_charts_count(lk_controller *self);
 /* Hide/show the ENC where a picture covers it (instant, never rebuilds). */
 void lk_controller_toggle_chart(lk_controller *self);
 int  lk_controller_chart_hidden(lk_controller *self);

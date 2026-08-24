@@ -9,6 +9,7 @@ const testing = @import("testing.zig");
 
 const vstore = @import("../store.zig");
 const ais_store = @import("../aisstore.zig");
+const net = @import("../net.zig");
 
 const Broker = broker.Broker;
 const Kind = caps.Kind;
@@ -50,6 +51,10 @@ pub const Queue = struct {
     dropped: u64 = 0,
     /// True while this plugin's sockets are not being read.
     paused: bool = false,
+    /// The plugin's dispatch thread parks on [0]; a push writes a byte to
+    /// [1]. Made with the queue; invalid when the host had no descriptors to
+    /// spare, in which case parking degrades to a bounded poll.
+    wake: [2]net.Socket = .{ net.invalid, net.invalid },
 
     pub fn depth(self: *const Queue) usize {
         return self.items.items.len - self.head;

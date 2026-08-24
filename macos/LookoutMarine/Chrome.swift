@@ -99,12 +99,21 @@ extension View {
     /// The WinUI 3 floating panel style: pick report, empty state, and loader.
     /// A report is opaque: the chart showing through a table of numbers makes
     /// both hard to read.
-    func panelSurface(cornerRadius r: CGFloat = 8, opaque: Bool = false) -> some View {
-        background(opaque ? Chrome.surface : Chrome.panel.opacity(0.95),
-                   in: RoundedRectangle(cornerRadius: r, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
-                .strokeBorder(Chrome.edge, lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+    /// `enabled` false leaves the content bare. A surface says something sits
+    /// OVER something else; a page that fills the window has nothing under it
+    /// to lift away from.
+    @ViewBuilder
+    func panelSurface(cornerRadius r: CGFloat = 8, opaque: Bool = false,
+                      enabled: Bool = true) -> some View {
+        if enabled {
+            background(opaque ? Chrome.surface : Chrome.panel.opacity(0.95),
+                       in: RoundedRectangle(cornerRadius: r, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
+                    .strokeBorder(Chrome.edge, lineWidth: 1))
+                .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        } else {
+            self
+        }
     }
 }
 
@@ -133,9 +142,6 @@ struct ChromeButtonStyle: ButtonStyle {
                 .background(fill, in: Circle())
                 .overlay(Circle().strokeBorder(Chrome.edge.opacity(hovering ? 0.5 : 0.35),
                                                lineWidth: 0.5))
-                .shadow(color: .black.opacity(configuration.isPressed ? 0.10 : 0.18),
-                        radius: configuration.isPressed ? 3 : 5,
-                        y: configuration.isPressed ? 1 : 2)
                 .scaleEffect(configuration.isPressed ? 0.94 : 1)
                 .opacity(isEnabled ? 1 : 0.45)
                 .onHover { hovering = $0 && isEnabled }
@@ -286,6 +292,10 @@ struct PickMarker: View {
 /// width comes from the 1:N scale.
 struct ScaleBarView: View {
     let scaleDenominator: Double
+    /// Source credits while a chart link draws — tile usage policies make
+    /// the visible credit a condition of service, so it rides the one HUD
+    /// element that is always on screen.
+    var credit: String? = nil
 
     private static let nice: [Double] = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
                                          10_000, 20_000, 50_000, 100_000, 200_000, 500_000]
@@ -320,6 +330,13 @@ struct ScaleBarView: View {
                     }
                 }
                 .overlay(Rectangle().stroke(Chrome.ink, lineWidth: 1))
+                if let credit {
+                    Text(credit)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Chrome.muted)
+                        .shadow(color: .white.opacity(0.9), radius: 2)
+                        .frame(maxWidth: 360, alignment: .leading)
+                }
             }
             .allowsHitTesting(false)
         }

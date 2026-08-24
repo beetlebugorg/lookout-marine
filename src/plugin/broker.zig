@@ -188,6 +188,8 @@ const ConnState = sockets.ConnState;
 const Conn = sockets.Conn;
 const Udp = sockets.Udp;
 const Timer = sockets.Timer;
+pub const max_timer_delay_ms = sockets.max_timer_delay_ms;
+pub const max_timers_per_plugin = sockets.max_timers_per_plugin;
 const Owner = sockets.Owner;
 const read_chunk = sockets.read_chunk;
 const resolver_stack_bytes = sockets.resolver_stack_bytes;
@@ -352,6 +354,9 @@ pub const Broker = struct {
         for (self.queues.items) |*q| {
             for (q.items.items[q.head..]) |e| self.alloc.free(e.payload);
             q.items.deinit(self.alloc);
+            for (q.wake) |fd| {
+                if (net.valid(fd)) net.close(fd);
+            }
         }
         self.queues.deinit(self.alloc);
         for (self.conns.items) |*c| {
@@ -427,10 +432,15 @@ pub const Broker = struct {
 
     // -- the queues ----------------------------------------------------------
 
-    /// This plugin's queue, created on first use.
+    /// This plugin's queue, created on first use, with the wake pair its
+    /// dispatch thread parks on. A pair that cannot be made stays invalid
+    /// and parking degrades to the bounded poll.
     fn queueForLocked(self: *Broker, plugin: u32) !*Queue {
         if (plugin >= max_plugins) return error.TooManyPlugins;
-        while (self.queues.items.len <= plugin) try self.queues.append(self.alloc, .{});
+        while (self.queues.items.len <= plugin) {
+            try self.queues.append(self.alloc, .{});
+            net.wakePair(&self.queues.items[self.queues.items.len - 1].wake) catch {};
+        }
         return &self.queues.items[plugin];
     }
 
@@ -465,7 +475,13 @@ pub const Broker = struct {
         }) catch {
             self.alloc.free(owned);
             self.dropLocked(q, plugin, kind);
+            return;
         };
+        // The plugin's dispatch thread may be parked on its wake pipe.
+        if (net.valid(q.wake[1])) {
+            const one = [_]u8{0};
+            _ = net.send(q.wake[1], &one);
+        }
     }
 
     /// A dropped event, counted and — for the first one, and then rarely —
@@ -524,6 +540,32 @@ pub const Broker = struct {
 
     pub fn freeEvent(self: *Broker, e: Event) void {
         self.alloc.free(e.payload);
+    }
+
+    /// Park one plugin's dispatch thread until an event lands in its queue,
+    /// or `timeout_ms` passes — the bounded fallback that lets the stop and
+    /// kill flags be seen even when no event ever comes. An idle plugin costs
+    /// one wakeup per timeout instead of a hundred a second.
+    pub fn waitEvents(self: *Broker, plugin: u32, timeout_ms: i32) void {
+        var fd: net.Socket = net.invalid;
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            if (plugin < self.queues.items.len) {
+                const q = &self.queues.items[plugin];
+                // A push between the pop that answered null and this park has
+                // its byte in the pipe already; the poll returns at once.
+                if (q.depth() != 0) return;
+                fd = q.wake[0];
+            }
+        }
+        if (!net.valid(fd)) {
+            sleepMs(8);
+            return;
+        }
+        var fds = [_]net.pollfd{.{ .fd = fd, .events = net.POLL.IN, .revents = 0 }};
+        _ = net.poll(&fds, timeout_ms);
+        if (fds[0].revents != 0) net.drainWake(fd);
     }
 
     /// Throw away everything queued for one plugin. Its dispatch thread calls
@@ -595,27 +637,24 @@ pub const Broker = struct {
             // Queued events for a plugin that will never run them again.
             self.clearQueueLocked(index);
 
+            // Marked and shut down, never closed here: the I/O thread may be
+            // between its locked lookup and a recv on the copied fd, and a
+            // descriptor number closed now can be reused before that recv —
+            // which would hand this plugin's queue another connection's
+            // bytes. Shutdown unblocks the recv; the I/O thread's reap does
+            // the close, the same division the Fetch and Ws paths use.
+            for (self.conns.items) |*c| {
+                if (c.plugin != index or c.closing) continue;
+                c.closing = true;
+                if (net.valid(c.fd)) net.shutdownBoth(c.fd);
+            }
+            for (self.udps.items) |*u| {
+                if (u.plugin != index or u.closing) continue;
+                u.closing = true;
+                if (net.valid(u.fd)) net.shutdownBoth(u.fd);
+            }
+            self.wakeIo();
             var i: usize = 0;
-            while (i < self.conns.items.len) {
-                if (self.conns.items[i].plugin != index) {
-                    i += 1;
-                    continue;
-                }
-                var c = self.conns.orderedRemove(i);
-                if (net.valid(c.fd)) net.close(c.fd);
-                c.out.deinit(self.alloc);
-                self.alloc.free(c.host);
-            }
-            i = 0;
-            while (i < self.udps.items.len) {
-                if (self.udps.items[i].plugin != index) {
-                    i += 1;
-                    continue;
-                }
-                const u = self.udps.orderedRemove(i);
-                if (net.valid(u.fd)) net.close(u.fd);
-            }
-            i = 0;
             while (i < self.timers.items.len) {
                 if (self.timers.items[i].plugin == index) {
                     _ = self.timers.orderedRemove(i);
@@ -1841,8 +1880,10 @@ pub const Broker = struct {
         if (notify) self.push(plugin, Kind.tcp_closed, @bitCast(id), "");
     }
 
-    /// Sockets tcp_close marked. Done outside the poll walk so a close cannot
-    /// invalidate the slot being serviced.
+    /// Sockets tcp_close, udp_close or a plugin drop marked. Done outside the
+    /// poll walk so a close cannot invalidate the slot being serviced, and
+    /// ONLY here for conns and udps: this thread is the one that reads them,
+    /// so a close here can never race its own recv.
     fn reapClosing(self: *Broker) void {
         while (true) {
             var id: i64 = 0;
@@ -1851,10 +1892,23 @@ pub const Broker = struct {
                 defer self.mu.unlock();
                 const c = for (self.conns.items) |*c| {
                     if (c.closing) break c;
-                } else return;
+                } else break;
                 id = c.id;
             }
             self.closeConn(id, 0, false);
+        }
+        self.mu.lock();
+        defer self.mu.unlock();
+        var i: usize = 0;
+        while (i < self.udps.items.len) {
+            if (!self.udps.items[i].closing) {
+                i += 1;
+                continue;
+            }
+            // Under mu, like closeConn: sendUdp holds mu across its send, so
+            // the descriptor cannot be closed and reused mid-send.
+            const u = self.udps.orderedRemove(i);
+            if (net.valid(u.fd)) net.close(u.fd);
         }
     }
 
@@ -1897,26 +1951,31 @@ pub const Broker = struct {
         for (self.udps.items) |u| {
             if (u.id == id and u.plugin == plugin and !u.closing) fd = u.fd;
         }
-        self.mu.unlock();
-        if (!net.valid(fd)) return -1;
-
+        if (!net.valid(fd)) {
+            self.mu.unlock();
+            return -1;
+        }
+        // Sent under mu: the send does not block, and the reap closes UDP
+        // descriptors under mu, so this one cannot be closed and reused
+        // between the lookup and the sendto.
         const wrote = net.udpSendTo(fd, data, &addrs[0]);
+        self.mu.unlock();
         if (wrote < 0) return -1;
         _ = n;
         return @intCast(wrote);
     }
 
-    /// Close a UDP port the plugin opened. Reaped by the I/O thread, with no
-    /// event: the plugin asked, so it already knows.
+    /// Close a UDP port the plugin opened. Marked here, closed by the I/O
+    /// thread's reap — a close on this thread races the recvfrom the I/O
+    /// thread may be inside. No event: the plugin asked, so it already knows.
     pub fn closeUdp(self: *Broker, plugin: u32, id: i64) void {
         self.mu.lock();
         defer self.mu.unlock();
-        var i: usize = 0;
-        while (i < self.udps.items.len) : (i += 1) {
-            const u = self.udps.items[i];
-            if (u.id != id or u.plugin != plugin) continue;
-            _ = self.udps.orderedRemove(i);
-            if (net.valid(u.fd)) net.close(u.fd);
+        for (self.udps.items) |*u| {
+            if (u.id != id or u.plugin != plugin or u.closing) continue;
+            u.closing = true;
+            if (net.valid(u.fd)) net.shutdownBoth(u.fd);
+            self.wakeIo();
             return;
         }
     }
@@ -2031,6 +2090,10 @@ pub const Broker = struct {
             return -1;
         };
         w.* = .{ .br = self, .id = 0, .plugin = plugin, .url = url, .protocols = protocols };
+        // Without the pair every send, close and shutdown waits out the full
+        // ws_poll_ms; the poll timeout stays as the fallback when a host has
+        // no descriptors to spare.
+        net.wakePair(&w.wake) catch {};
 
         self.mu.lock();
         const id = self.next_id;

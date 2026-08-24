@@ -7,6 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "lk-app-model.h"
+#include "lk-chart-bake.h"
 #include "lk-window.h"
 
 #define LK_APP_ID "org.beetlebug.LookoutMarine"
@@ -17,6 +18,17 @@
  * light or a dark desktop. Plain GTK lacks libadwaita's @window_bg_color, so
  * these mix against @theme_bg_color. */
 static const char *LK_CSS =
+    /* The accent, pinned. @accent_color is a libadwaita name, and where it
+     * resolves at all under plain GTK it comes back pale; the chrome uses it
+     * as a FILL under @accent_fg_color text, so the readouts came out white on
+     * near-white. A chartplotter is read in sunlight, so the accent is stated
+     * here instead of inherited: dark enough to carry white text, and to be
+     * read as text itself on the capsule. */
+    "@define-color accent_color #0a5bb5;"
+    "@define-color accent_fg_color #ffffff;"
+    /* Adwaita dims by opacity, which on the capsule's own light fill leaves the
+     * secondary readouts at about 1:1. They are secondary, not decorative. */
+    ".lk-capsule .dim-label { opacity: 1.0; color: #5f6b76; }"
     /* The chart window is transparent where the chart-view widget paints nothing,
      * so the below subsurface shows through and the chrome floats over it. */
     ".lk-chart-window { background: transparent; }"
@@ -255,7 +267,28 @@ static const char *LK_CSS =
     "}"
     ".lk-raster-pill > button:hover { background: alpha(@accent_color, 0.30); }"
     ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
-    ".lk-raster-bar { opacity: 0.5; }";
+    ".lk-raster-bar { opacity: 0.5; }"
+    /* Night. The dark-theme flip (lk-window.c, lk_window_apply_scheme) does
+     * most of the work — every chrome fill above rides @theme_bg_color — and
+     * this class quiets the surfaces further, so the brightest thing on deck
+     * is the chart, never the readouts floating over it. The fix pill keeps
+     * its state tints: they are the readout. */
+    ".lk-night .lk-capsule, .lk-night .lk-bubble, .lk-night .lk-card,"
+    ".lk-night .lk-pill, .lk-night .lk-panel {"
+    "  background: alpha(#0d1117, 0.92);"
+    "  border-color: alpha(#2c343f, 0.8);"
+    "}"
+    ".lk-night menubutton.lk-bubble > button { background: none; }"
+    ".lk-night .lk-capsule .dim-label { color: #7f8894; }"
+    /* The NOT FOR NAVIGATION block of the first-run page: amber, bordered,
+     * set apart from everything about getting started. */
+    ".lk-not-nav {"
+    "  background: alpha(#f59e0b, 0.14);"
+    "  border: 1px solid alpha(#f59e0b, 0.55);"
+    "  border-radius: 9px;"
+    "  padding: 12px;"
+    "}"
+    ".lk-not-nav-title { font-weight: bold; letter-spacing: 0.5px; font-size: 90%; }";
 
 static void
 lk_app_activate (GtkApplication *app, gpointer user_data)
@@ -323,8 +356,19 @@ main (int argc, char *argv[])
    * this; X11 does, and without it the window carries no icon at all. */
   gtk_window_set_default_icon_name (LK_APP_ID);
 
-  g_autoptr (GtkApplication) app =
-      gtk_application_new (LK_APP_ID, G_APPLICATION_DEFAULT_FLAGS);
+  /* Throw away what a previous run renamed but did not finish deleting.
+     Without this, quitting mid-delete leaves gigabytes on the disk that
+     nothing will ever mention again. */
+  lk_chart_bake_sweep_trash ();
+
+  /* One instance is the rule — a dock click focuses the chart already
+   * sailing. LOOKOUT_MULTI is the development escape hatch every shell keeps:
+   * a second live window for side-by-side comparison and recording. */
+  GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;
+  if (g_getenv ("LOOKOUT_MULTI") != NULL)
+    flags |= G_APPLICATION_NON_UNIQUE;
+
+  g_autoptr (GtkApplication) app = gtk_application_new (LK_APP_ID, flags);
   g_autoptr (LkAppModel) model = lk_app_model_new ();
 
   g_signal_connect (app, "startup", G_CALLBACK (lk_app_startup), model);

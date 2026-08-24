@@ -19,20 +19,25 @@ struct AppCommands: Commands {
                 .keyboardShortcut(",", modifiers: .command)
         }
 
-        // File → Open Chart… / Open Recent
+        // File → Open Chart… / Charts. The menu switches a set on and off
+        // rather than reopening it: the charts are already there, and the only
+        // question left is whether they are drawn.
         CommandGroup(replacing: .newItem) {
             Button("Open Chart…") { model.presentOpenPanel() }
                 .keyboardShortcut("o", modifiers: .command)
-            Menu("Open Recent") {
-                if model.recents.isEmpty {
-                    Text("No Recent Charts").foregroundStyle(.secondary)
+            Menu("Charts") {
+                if model.chartSets.isEmpty {
+                    Text("No charts").foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.recents, id: \.self) { path in
-                        Button((path as NSString).lastPathComponent) { model.openChart(path) }
+                    ForEach(model.chartSets) { set in
+                        Toggle(set.title, isOn: Binding(
+                            get: { set.on },
+                            set: { model.setChartSetOn(set.path, $0) }
+                        ))
                     }
                 }
             }
-            .disabled(model.recents.isEmpty)
+            .disabled(model.chartSets.isEmpty)
         }
 
         // Vessels: the shell's menu, holding the tables the plugins declare.

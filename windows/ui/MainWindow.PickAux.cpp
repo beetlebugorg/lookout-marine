@@ -58,12 +58,12 @@ namespace winrt::LookoutMarine::implementation
         Controls::FontIcon icon;
         icon.Glyph(is_image ? L"\uE8B9" : L"\uE8A5"); // photo / document
         icon.FontSize(12);
-        icon.Foreground(Brush(kMuted));
+        icon.Foreground(Brush(Muted(DarkChrome())));
         head.Children().Append(icon);
         Controls::TextBlock file_name;
         file_name.Text(name);
         file_name.FontSize(11);
-        file_name.Foreground(Brush(kMuted));
+        file_name.Foreground(Brush(Muted(DarkChrome())));
         file_name.IsTextSelectionEnabled(true);
         head.Children().Append(file_name);
         box.Children().Append(head);
@@ -73,7 +73,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock missing;
             missing.Text(L"The chart does not carry this file.");
             missing.FontSize(10);
-            missing.Foreground(Brush(kMuted));
+            missing.Foreground(Brush(Muted(DarkChrome())));
             box.Children().Append(missing);
         }
         else if (is_image)
@@ -104,7 +104,7 @@ namespace winrt::LookoutMarine::implementation
             text.Text(TextFromBytes(bytes, len));
             text.FontSize(11);
             text.FontFamily(Media::FontFamily{ L"Consolas" });
-            text.Foreground(Brush(kInk));
+            text.Foreground(Brush(Ink(DarkChrome())));
             text.TextWrapping(TextWrapping::Wrap);
             text.IsTextSelectionEnabled(true);
             sheet.Child(text);

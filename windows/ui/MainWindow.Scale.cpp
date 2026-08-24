@@ -67,7 +67,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock value;
             value.Text(lkw::FormatScale(kPresets[i].denom));
             value.FontSize(11);
-            value.Foreground(Brush(kMuted));
+            value.Foreground(Brush(Muted(DarkChrome())));
             value.HorizontalAlignment(HorizontalAlignment::Center);
             text.Children().Append(value);
             Controls::Button b;

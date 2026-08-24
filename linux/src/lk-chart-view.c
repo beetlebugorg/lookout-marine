@@ -2,12 +2,30 @@
 
 #include "lk-app-model.h"
 #include "lk-hud.h"
+#include "lk-json.h"
 
 /* S-52 NODATA, day scheme — what lookout's first frame clears to. */
 static const GdkRGBA LK_NODATA_COLOR = { 0.576f, 0.682f, 0.733f, 1.0f };
 
 /* A press travelling no further than this is a tap (identify), not a throw. */
 #define LK_TAP_SLOP 4.0
+/* Re-contact this soon after a lift, and this close to it, is the same finger
+   still dragging rather than a second tap. Measured off the AR1100: a drag
+   fragments into sequences a few milliseconds and a few pixels apart. */
+#define LK_TOUCH_STITCH_MS  220
+#define LK_TOUCH_STITCH_PX  72.0
+#define LK_TOUCH_PRESS_MS   550
+/* A fingertip covers far more than the pointer's few pixels, and a resistive
+   panel jitters under a still finger, so a touch has its own slop. Below it
+   the chart does not move at all: the contact is still a candidate tap. */
+#define LK_TOUCH_SLOP       22.0
+/* Below this the coast is jitter, not a throw. Pixels per second. */
+#define LK_TOUCH_FLING_MIN  120.0
+/* Two taps this close together, in time and in place, are one gesture. The
+   window has to outlast the stitch window below, because a tap cannot be
+   answered until it is known not to be the first half of a double tap. */
+#define LK_TOUCH_DOUBLE_MS  350
+#define LK_TOUCH_DOUBLE_PX  48.0
 
 /* Rotation stays inert until the fingers turn past this, so an incidental twist
  * during a pinch doesn't spin the chart. */
@@ -32,6 +50,17 @@ struct _LkChartView {
   double   last_x, last_y;
   double   vx, vy;
   gint64   last_sample_us;
+
+  /* Touch. The resistive panel breaks contact mid-drag, so one drag arrives as
+     a run of short sequences; these stitch them back into one. */
+  double   touch_x, touch_y;       /* last point seen, in either sequence */
+  double   touch_down_x, touch_down_y;
+  double   touch_moved;            /* path length since the first contact */
+  gint64   touch_us;               /* when that point was seen */
+  gboolean touch_taken;            /* a long press already answered for it */
+  gboolean touch_was_tap;          /* the last contact ended without moving */
+  guint    touch_settle_id;
+  guint    touch_press_id;
 
   /* pointer position, for scroll-anchored zoom */
   double   pointer_x, pointer_y;
@@ -132,7 +161,17 @@ lk_chart_view_do_auto_open (gpointer user_data)
     {
       g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
       if (paths != NULL && g_strv_length (paths) > 0)
-        lk_chart_controller_open (self->controller, (const char *const *) paths, GTK_WIDGET (self));
+        {
+          lk_chart_controller_open (self->controller, (const char *const *) paths, GTK_WIDGET (self));
+        }
+      else
+        {
+          /* Nothing here draws yet. It may still be charts: an exchange set as
+             an agency publishes it is raw cells, which bake first. */
+          g_autofree char *source = lk_app_model_initial_source (self->model);
+          if (source != NULL)
+            lk_app_model_open_chart_directory (self->model, source);
+        }
     }
 
   lk_app_model_set_opening (self->model, FALSE, FALSE);
@@ -158,12 +197,17 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
   lk_chart_view_get_point_size (self, &width, &height);
 
   g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
-  if (paths == NULL || g_strv_length (paths) == 0)
+  /* Nothing baked is not nothing to do: the path may be an exchange set of raw
+     cells, which the open below scans and bakes. Only a path with neither
+     stops here. */
+  g_autofree char *source = lk_app_model_initial_source (self->model);
+  if ((paths == NULL || g_strv_length (paths) == 0) && source == NULL)
     return;
 
   self->did_auto_open = TRUE;
-  /* Spinner up before the synchronous open; the flag marks a first-ever run,
+  /* Loader up before the synchronous open; the flag marks a first-ever run,
    * when the symbol/font atlases still have to be baked. */
+  lk_app_model_set_opening_cells (self->model, paths != NULL ? g_strv_length (paths) : 0);
   lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
   self->auto_open_id = g_idle_add (lk_chart_view_do_auto_open, self);
 }
@@ -229,6 +273,8 @@ lk_chart_view_unrealize (GtkWidget *widget)
   LkChartView *self = LK_CHART_VIEW (widget);
 
   g_clear_handle_id (&self->auto_open_id, g_source_remove);
+  g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+  g_clear_handle_id (&self->touch_press_id, g_source_remove);
   /* Close before the surface goes: lookout is presenting into it. */
   lk_chart_controller_close (self->controller);
   g_clear_pointer (&self->surface, lk_native_surface_free);
@@ -346,7 +392,7 @@ lk_chart_view_identify_at (LkChartView *self, double x, double y)
 
   lk_app_model_pin_overlay (self->model, NULL);
   lk_app_model_set_pick (self->model, lk_chart_controller_pick (self->controller, lon, lat),
-                         x, y);
+                         x, y, lon, lat);
 }
 
 /* ---- the chart menu ------------------------------------------------------ */
@@ -369,7 +415,7 @@ lk_chart_menu_pick (GtkButton *button, gpointer user_data)
   lk_app_model_set_pick (self->model,
                          lk_chart_controller_pick (self->controller,
                                                    self->menu_lon, self->menu_lat),
-                         self->menu_x, self->menu_y);
+                         self->menu_x, self->menu_y, self->menu_lon, self->menu_lat);
 }
 
 /* THE DROP NEVER WAITS FOR TYPING. The core places the mark and names it in one
@@ -570,6 +616,177 @@ lk_chart_view_released (GtkGestureClick *gesture,
     lk_chart_controller_fling_start (self->controller, self->vx, self->vy);
 }
 
+/* Touch, taken whole.
+ *
+ * A resistive panel does not hold contact through a drag: one finger crossing
+ * the chart arrives as a run of short sequences, each a begin, a couple of
+ * updates and an end, tens of milliseconds apart. Left to the gestures above
+ * that reads as repeated double taps, which zoom, and no sequence lives long
+ * enough to pass the drag threshold, so nothing pans.
+ *
+ * So touch is handled here instead, in the capture phase, and a begin that
+ * lands soon after and near the last lift continues the drag it belongs to.
+ * The decision between a tap and the end of a drag waits out the stitch
+ * window, because until it passes there is no telling which one this was. */
+static gboolean
+lk_chart_view_touch_settle (gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  self->touch_settle_id = 0;
+  self->touch_was_tap = FALSE;
+
+  if (self->touch_taken)
+    self->touch_taken = FALSE;
+  else if (self->touch_moved <= LK_TOUCH_SLOP)
+    lk_chart_view_identify_at (self, self->touch_down_x, self->touch_down_y);
+  else if (hypot (self->vx, self->vy) > LK_TOUCH_FLING_MIN)
+    lk_chart_controller_fling_start (self->controller, self->vx, self->vy);
+
+  return G_SOURCE_REMOVE;
+}
+
+/* A finger held still on the chart raises the menu a secondary click raises. */
+static gboolean
+lk_chart_view_touch_press (gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  self->touch_press_id = 0;
+
+  if (self->touch_moved <= LK_TOUCH_SLOP)
+    {
+      self->touch_taken = TRUE;
+      lk_chart_view_open_menu (self, self->touch_down_x, self->touch_down_y);
+    }
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpointer user_data)
+{
+  LkChartView *self = user_data;
+  GdkEventType type = gdk_event_get_event_type (event);
+  double x, y;
+  gint64 now;
+
+  if (type != GDK_TOUCH_BEGIN && type != GDK_TOUCH_UPDATE && type != GDK_TOUCH_END)
+    return GDK_EVENT_PROPAGATE;
+
+  if (!gdk_event_get_position (event, &x, &y))
+    return GDK_EVENT_PROPAGATE;
+
+  now = g_get_monotonic_time ();
+
+  switch ((int) type)
+    {
+    case GDK_TOUCH_BEGIN:
+      {
+        gint64 since = self->touch_us == 0 ? G_MAXINT64 : now - self->touch_us;
+        double moved_since = hypot (x - self->touch_x, y - self->touch_y);
+
+        /* Coming down again soon and nearby means one of two things, and which
+           one depends on what the LAST contact was. After a tap it is the
+           second half of a double tap. After a drag it is the same finger, which
+           this panel drops mid-stroke, coming back to carry on. */
+        gboolean double_tap = self->touch_was_tap &&
+                              since < LK_TOUCH_DOUBLE_MS * 1000 &&
+                              moved_since < LK_TOUCH_DOUBLE_PX;
+        gboolean same_finger = !self->touch_was_tap &&
+                               since < LK_TOUCH_STITCH_MS * 1000 &&
+                               moved_since < LK_TOUCH_STITCH_PX;
+
+        g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+
+        if (double_tap)
+          {
+            /* The first tap never got to identify anything: its settle was
+               still pending, and cancelling it above is what makes the double
+               tap read as one gesture rather than a pick and then a zoom. */
+            g_clear_handle_id (&self->touch_press_id, g_source_remove);
+            lk_chart_controller_fling_start (self->controller, 0, 0);
+            lk_chart_controller_zoom_at (self->controller, 1.0, x, y);
+
+            self->touch_was_tap = FALSE;
+            self->touch_taken = TRUE; /* this contact has had its answer */
+            self->touch_moved = 0;
+            self->touch_x = x;
+            self->touch_y = y;
+            self->touch_us = now;
+            return GDK_EVENT_STOP;
+          }
+
+        if (!same_finger)
+          {
+            g_clear_handle_id (&self->touch_press_id, g_source_remove);
+            self->touch_down_x = x;
+            self->touch_down_y = y;
+            self->touch_moved = 0;
+            self->touch_taken = FALSE;
+            self->vx = 0;
+            self->vy = 0;
+            self->last_sample_us = 0;
+            lk_chart_controller_fling_start (self->controller, 0, 0);
+            self->touch_press_id =
+                g_timeout_add (LK_TOUCH_PRESS_MS, lk_chart_view_touch_press, self);
+          }
+
+        self->touch_x = x;
+        self->touch_y = y;
+        self->touch_us = now;
+        gtk_widget_grab_focus (GTK_WIDGET (self));
+        return GDK_EVENT_STOP;
+      }
+
+    case GDK_TOUCH_UPDATE:
+      {
+        double dx = x - self->touch_x;
+        double dy = y - self->touch_y;
+        /* How far the contact has actually got from where it went down, NOT
+           the length of the path it wandered: a still finger on this panel
+           jitters, and a sum would call that a drag within a few samples. */
+        double moved = hypot (x - self->touch_down_x, y - self->touch_down_y);
+
+        if (moved > self->touch_moved)
+          self->touch_moved = moved;
+
+        self->touch_x = x;
+        self->touch_y = y;
+        self->touch_us = now;
+
+        /* Under the slop this is still a candidate tap, and the chart holds
+           still: panning here is what makes a stationary finger shake it. */
+        if (self->touch_moved <= LK_TOUCH_SLOP)
+          return GDK_EVENT_STOP;
+
+        g_clear_handle_id (&self->touch_press_id, g_source_remove);
+        lk_chart_controller_pan (self->controller, dx, dy);
+        lk_chart_view_sample_velocity (self, dx, dy);
+        return GDK_EVENT_STOP;
+      }
+
+    case GDK_TOUCH_END:
+      self->touch_x = x;
+      self->touch_y = y;
+      self->touch_us = now;
+      /* A contact already answered (a long press, or the zoom half of a double
+         tap) must not arm another one, or a third touch would zoom again. */
+      self->touch_was_tap = !self->touch_taken && self->touch_moved <= LK_TOUCH_SLOP;
+      g_clear_handle_id (&self->touch_press_id, g_source_remove);
+      g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+      /* A tap waits out the double-tap window before it identifies anything;
+         a drag only has to outlast this panel's dropouts. */
+      self->touch_settle_id =
+          g_timeout_add (self->touch_was_tap ? LK_TOUCH_DOUBLE_MS : LK_TOUCH_STITCH_MS,
+                         lk_chart_view_touch_settle, self);
+      return GDK_EVENT_STOP;
+
+    default:
+      return GDK_EVENT_PROPAGATE;
+    }
+}
+
 static void
 lk_chart_view_motion (GtkEventControllerMotion *controller,
                       double                    x,
@@ -619,6 +836,13 @@ lk_chart_view_scroll (GtkEventControllerScroll *controller,
 
   /* A wheel notch arrives as ±1; a touchpad's scroll is far larger per event. */
   GdkEvent *event = gtk_event_controller_get_current_event (GTK_EVENT_CONTROLLER (controller));
+
+  /* GTK synthesizes scroll from a one-finger drag on a touchscreen. The drag
+     gesture already pans for that, so honouring it here would zoom as well. */
+  GdkDevice *source = event != NULL ? gdk_event_get_device (event) : NULL;
+  if (source != NULL && gdk_device_get_source (source) == GDK_SOURCE_TOUCHSCREEN)
+    return GDK_EVENT_PROPAGATE;
+
   gboolean precise = event != NULL &&
                      gdk_scroll_event_get_unit (event) == GDK_SCROLL_UNIT_SURFACE;
   double factor = precise ? 0.01 : 0.25;
@@ -744,12 +968,67 @@ lk_chart_view_class_init (LkChartViewClass *klass)
   gtk_widget_class_set_css_name (widget_class, "chartview");
 }
 
+/* The hover tip over a plugin's symbol: a vessel's name, course and speed,
+ * formatted from the JSON lookout_overlay_at documents — title bold, then a
+ * dim key beside each value. FALSE (no tip) over open water. GTK owns the
+ * dwell and the re-query on movement, so the engine is asked only when a tip
+ * could actually show. */
+static gboolean
+lk_chart_view_query_tooltip (GtkWidget *widget, int x, int y, gboolean keyboard,
+                             GtkTooltip *tooltip, gpointer user_data)
+{
+  LkChartView *self = LK_CHART_VIEW (widget);
+
+  if (keyboard)
+    return FALSE;
+
+  g_autofree char *payload = lk_chart_controller_overlay_at (self->controller, x, y);
+  if (payload == NULL)
+    return FALSE;
+
+  g_autoptr (LkJson) root = lk_json_parse (payload);
+  const char *title = lk_json_member_string (root, "title");
+  const LkJson *rows = lk_json_member (root, "rows");
+  g_autoptr (GString) markup = g_string_new (NULL);
+
+  if (title != NULL)
+    {
+      g_autofree char *escaped = g_markup_escape_text (title, -1);
+      g_string_append_printf (markup, "<b>%s</b>", escaped);
+    }
+  for (guint i = 0; i < lk_json_length (rows); i++)
+    {
+      const LkJson *row = lk_json_at (rows, i);
+      const char *key = lk_json_text (lk_json_at (row, 0));
+      const char *value = lk_json_text (lk_json_at (row, 1));
+
+      if (key[0] == '\0' && value[0] == '\0')
+        continue;
+
+      g_autofree char *ekey = g_markup_escape_text (key, -1);
+      g_autofree char *evalue = g_markup_escape_text (value, -1);
+      if (markup->len > 0)
+        g_string_append_c (markup, '\n');
+      g_string_append_printf (markup, "<span alpha='55%%'>%s</span>  %s", ekey, evalue);
+    }
+  if (markup->len == 0)
+    return FALSE;
+
+  gtk_tooltip_set_markup (tooltip, markup->str);
+  return TRUE;
+}
+
 static void
 lk_chart_view_init (LkChartView *self)
 {
   gtk_widget_set_focusable (GTK_WIDGET (self), TRUE);
   gtk_widget_set_hexpand (GTK_WIDGET (self), TRUE);
   gtk_widget_set_vexpand (GTK_WIDGET (self), TRUE);
+
+  /* The overlay hover tip, through GTK's own tooltip machinery. */
+  gtk_widget_set_has_tooltip (GTK_WIDGET (self), TRUE);
+  g_signal_connect (self, "query-tooltip",
+                    G_CALLBACK (lk_chart_view_query_tooltip), NULL);
 
   GtkGesture *click = gtk_gesture_click_new ();
   gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), GDK_BUTTON_PRIMARY);
@@ -783,6 +1062,14 @@ lk_chart_view_init (LkChartView *self)
   g_signal_connect (rotate, "begin", G_CALLBACK (lk_chart_view_rotate_begin), self);
   g_signal_connect (rotate, "angle-changed", G_CALLBACK (lk_chart_view_rotate_changed), self);
   gtk_widget_add_controller (GTK_WIDGET (self), GTK_EVENT_CONTROLLER (rotate));
+
+  /* Touch is taken in the capture phase, ahead of the gestures above: a
+     resistive panel's stutter would otherwise read as a stream of double
+     taps. See lk_chart_view_touch. */
+  GtkEventController *touch = gtk_event_controller_legacy_new ();
+  gtk_event_controller_set_propagation_phase (touch, GTK_PHASE_CAPTURE);
+  g_signal_connect (touch, "event", G_CALLBACK (lk_chart_view_touch), self);
+  gtk_widget_add_controller (GTK_WIDGET (self), touch);
 }
 
 GtkWidget *

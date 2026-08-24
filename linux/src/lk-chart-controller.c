@@ -5,6 +5,8 @@
 #include "lk-plugins.h"
 #include "lk-store.h"
 
+#include <string.h>
+
 struct _LkChartController {
   GObject parent_instance;
 
@@ -23,6 +25,8 @@ struct _LkChartController {
 
   gint64 last_readouts_us;
   gint64 last_view_saved_us;
+  /* The pose as last written, so an unchanged one is not re-written. */
+  lookout_view last_saved_view;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -115,10 +119,25 @@ lk_chart_controller_push_readouts (LkChartController *self)
    * the pill is fed from the frame like every other readout. */
   lk_app_model_refresh_raster_state (self->model);
 
-  /* Persist periodically: a crash or kill -9 never reaches close(). */
-  if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC)
+  /* Under follow the CORE moves the camera without the shell; the pick's
+   * mark must ride its water, not its pixels. Only the mark moves — the
+   * report's frame is fixed for the report's life. */
+  double plon, plat;
+  if (lk_app_model_get_pick_geo (self->model, &plon, &plat))
+    {
+      double sx, sy;
+      if (lk_chart_controller_screen_of (self, plon, plat, &sx, &sy))
+        lk_app_model_move_pick (self->model, sx, sy);
+    }
+
+  /* Persist periodically — but only a pose that moved: AIS-driven redraws
+   * with a stationary camera were writing the disk every three seconds for
+   * nothing, and a boat computer's flash pays for that. */
+  if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC &&
+      memcmp (&view, &self->last_saved_view, sizeof view) != 0)
     {
       self->last_view_saved_us = now;
+      self->last_saved_view = view;
       lk_store_save_view (&view);
     }
 }
@@ -150,7 +169,13 @@ lk_chart_controller_tick (GtkWidget     *widget,
 
   gboolean building = lookout_is_building (self->handle) != 0;
   if (self->model != NULL)
-    lk_app_model_set_building (self->model, building);
+    {
+      lk_app_model_set_building (self->model, building);
+      /* The chart-link list, the credit and the error, from the core. A
+       * landing answer raises needs-redraw, so a resolve keeps this ticking
+       * until it is done. */
+      lk_app_model_poll_chart_links (self->model);
+    }
 
   if (animating || lookout_needs_redraw (self->handle) != 0)
     {
@@ -614,6 +639,23 @@ lk_chart_controller_overlay_hit (LkChartController *self, double x, double y)
   return lk_overlay_object_copy (&raw);
 }
 
+char *
+lk_chart_controller_overlay_at (LkChartController *self, double x, double y)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL)
+    return NULL;
+
+  /* Borrowed until the next overlay call, so copied before anything else
+   * runs. */
+  size_t length = 0;
+  const char *raw = lookout_overlay_at (self->handle, (float) x, (float) y, &length);
+  if (raw == NULL || length == 0)
+    return NULL;
+  return g_strndup (raw, length);
+}
+
 LkOverlayObject *
 lk_chart_controller_overlay_info (LkChartController *self, const char *id)
 {
@@ -812,6 +854,11 @@ lk_chart_controller_open (LkChartController *self,
   if (self->model != NULL)
     lk_app_model_reinstall_raster_charts (self->model);
 
+  /* The active chart link is replayed for the same reason: an alt style
+   * belongs to a handle, and this is a new one. */
+  if (self->model != NULL)
+    lk_app_model_reapply_chart_link (self->model);
+
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
@@ -887,6 +934,12 @@ lk_chart_controller_close (LkChartController *self)
   if (self->handle == NULL)
     return;
 
+  /* Before the handle: a fetch landing later must find the provider gone,
+   * never a dying engine. The respond wrapper below refuses a NULL handle,
+   * and the links layer cancels its in-flight fetches before the NEXT handle
+   * can ask for anything — a new handle reuses the old one's request ids. */
+  lookout_set_http_provider (self->handle, NULL, NULL, NULL);
+
   lookout_view view;
   lookout_get_view (self->handle, &view); /* the pose to reopen on, before the handle dies */
   lk_store_save_view (&view);
@@ -896,6 +949,111 @@ lk_chart_controller_close (LkChartController *self)
 
   if (self->model != NULL)
     lk_app_model_set_chart_open (self->model, FALSE, NULL);
+}
+
+/* ---- charts by link ------------------------------------------------------ */
+
+gboolean
+lk_chart_controller_alt_style_active (LkChartController *self)
+{
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return FALSE;
+  return lookout_alt_chart_style_active (self->handle) != 0;
+}
+
+void
+lk_chart_controller_set_http_provider (LkChartController *self,
+                                       lookout_http_get get,
+                                       lookout_http_cancel cancel,
+                                       gpointer user)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL)
+    return;
+  lookout_set_http_provider (self->handle, get, cancel, user);
+}
+
+void
+lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
+                                  const void *bytes, gsize len, int status)
+{
+  /* From soup completion callbacks, which may outlive the handle they were
+   * started for: a NULL handle swallows the answer, and the core ignores a
+   * request id it no longer knows. */
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return;
+  lookout_http_respond (self->handle, req_id, bytes, len, status);
+  /* An answer is adopted at the top of a frame, and the tick stands down when
+   * nothing is moving, so a resolve landing with no gesture behind it needs
+   * someone to ask for the next frame. */
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_add (LkChartController *self, const char *link)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || link == NULL)
+    return;
+  lookout_chart_link_add (self->handle, link);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_select (LkChartController *self, const char *url)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL)
+    return;
+  lookout_chart_link_select (self->handle, url);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_remove (LkChartController *self, const char *url)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || url == NULL)
+    return;
+  lookout_chart_link_remove (self->handle, url);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_link_refresh (LkChartController *self, const char *url)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || url == NULL)
+    return;
+  lookout_chart_link_refresh (self->handle, url);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_chart_links_import (LkChartController *self, const char *json)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+  if (self->handle == NULL || json == NULL)
+    return;
+  lookout_chart_links_import (self->handle, json);
+}
+
+char *
+lk_chart_controller_chart_links_changed_json (LkChartController *self)
+{
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return NULL;
+  if (lookout_chart_links_changed (self->handle) == 0)
+    return NULL;
+
+  char *owned = lookout_chart_links_json (self->handle);
+  if (owned == NULL)
+    return NULL;
+  /* lookout and GLib need not share a malloc, so the bytes are copied out and
+   * handed back to the allocator they came from. */
+  char *copy = g_strdup (owned);
+  lookout_string_free (owned);
+  return copy;
 }
 
 /* ---- view --------------------------------------------------------------- */

@@ -56,10 +56,15 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -127,6 +132,7 @@ fun SettingsSheet(
     controller: ChartController,
     onRequestAccess: () -> Unit,
     onDismiss: () -> Unit,
+    initialSection: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val registry = controller.pluginRegistry
@@ -137,7 +143,9 @@ fun SettingsSheet(
     // phone's width spent on navigation.
     val twoPane = LocalConfiguration.current.screenWidthDp >= 600
 
-    var open by remember { mutableStateOf<String?>(if (twoPane) "display" else null) }
+    var open by remember {
+        mutableStateOf(initialSection ?: if (twoPane) "display" else null)
+    }
     // A section can go away — a plugin that stopped takes its section with it —
     // so a stale selection falls back rather than showing a blank pane.
     val current = open?.takeIf { id -> sections.any { it.id == id } }
@@ -175,14 +183,14 @@ fun SettingsSheet(
                     VerticalDivider()
                     Box(Modifier.weight(1f)) {
                         current?.let {
-                            SectionPane(it, m, charts, controller, registry, onRequestAccess, null)
+                            SectionPane(it, m, charts, controller, registry, onRequestAccess, null, onDismiss)
                         }
                     }
                 }
             } else if (current == null) {
                 SectionList(sections = sections, selected = null, onOpen = { open = it })
             } else {
-                SectionPane(current, m, charts, controller, registry, onRequestAccess) { open = null }
+                SectionPane(current, m, charts, controller, registry, onRequestAccess, { open = null }, onDismiss)
             }
         }
     }
@@ -287,6 +295,7 @@ private fun SectionPane(
     registry: PluginRegistry,
     onRequestAccess: () -> Unit,
     onBack: (() -> Unit)?,
+    onCloseSheet: () -> Unit,
 ) {
     Column(Modifier.fillMaxHeight()) {
         val label = SettingsSection.all.firstOrNull { it.id == id }?.label ?: id
@@ -322,12 +331,30 @@ private fun SectionPane(
                 "depths" -> DepthsSection(m)
                 "text" -> SymbolsSection(m)
                 "charts" -> ChartsSection(charts, controller, onRequestAccess)
-                "plugins" -> PluginsManageSection(registry)
+                "plugins" -> PluginsManageSection(registry, controller)
                 "advanced" -> AdvancedSection(m)
             }
+            // The declared tables that belong to this section — the reference
+            // shell's Vessels menu, as rows. Opening one closes the sheet: the
+            // table sits over the chart, and a row's reveal needs it visible.
+            val tables = controller.tableSpecs.filter { it.menu.equals(id, ignoreCase = true) }
+            val hasTables = tables.isNotEmpty()
+            if (hasTables) {
+                SectionHeader("Tables", first = !core)
+                for (spec in tables) {
+                    TextButton(
+                        onClick = {
+                            onCloseSheet()
+                            controller.showTable(spec)
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    ) { Text("${spec.title}…") }
+                }
+                Footer("Live while it is open. Tap a row to find it on the chart.")
+            }
             val groups = registry.groups(id)
-            PluginGroups(groups, controller, first = !core)
-            PluginLists(registry, id, controller, first = !core && groups.isEmpty())
+            PluginGroups(groups, controller, first = !core && !hasTables)
+            PluginLists(registry, id, controller, first = !core && !hasTables && groups.isEmpty())
         }
     }
 }
@@ -697,10 +724,10 @@ private fun PluginGroups(groups: List<PluginGroup>, controller: ChartController,
         for (field in group.fields) {
             when (field.kind) {
                 PluginField.Kind.TOGGLE -> PluginToggleRow(field) { on ->
-                    controller.setPluginConfig(group.pluginId, jsonOf(field.key, on))
+                    controller.setPluginScalar(group.pluginId, field, if (on) 1.0 else 0.0)
                 }
                 PluginField.Kind.NUMBER -> PluginNumberRow(field) { v ->
-                    controller.setPluginConfig(group.pluginId, jsonOf(field.key, v))
+                    controller.setPluginScalar(group.pluginId, field, v)
                 }
                 // A text field only ever lives in a list row, where the row
                 // editor draws it. One declared loose is a manifest mistake,
@@ -1052,10 +1079,6 @@ private fun AddRowButton(schema: PluginListSchema, count: Int, onAdd: () -> Unit
     if (full) Footer("${schema.maxRows} is all this plugin holds.")
 }
 
-/** One key set on one plugin, as the object lookout_plugin_config_set takes. */
-private fun jsonOf(key: String, value: Any): String =
-    org.json.JSONObject().put(key, value).toString()
-
 /** The described-row pattern: the switch's title, and under it what it does. */
 @Composable
 private fun PluginToggleRow(field: PluginField, onChange: (Boolean) -> Unit) {
@@ -1138,8 +1161,34 @@ private fun PluginNumberRow(field: PluginField, onCommit: (Double) -> Unit) {
  * Stage A shows the standing state; the collapsible rows with their capability
  * grants are Stage B.
  */
+/**
+ * The status line as a sentence, never as the JSON a managed plugin writes it
+ * in: word + " · " + detail (the reference's word map). Null when the plugin
+ * says nothing.
+ */
+private fun statusCaption(p: PluginInfo): String? {
+    val raw = p.status.trim()
+    if (raw.isEmpty()) return null
+    if (!raw.startsWith("{")) return raw
+    return try {
+        val o = org.json.JSONObject(raw)
+        val word = when (o.optString("state")) {
+            "running", "" -> "Running"
+            "starting" -> "Starting"
+            "degraded" -> "Degraded"
+            "disabled" -> "Disabled"
+            "stopped" -> "Stopped"
+            else -> o.optString("state")
+        }
+        val detail = o.optString("detail")
+        if (detail.isEmpty()) word else "$word · $detail"
+    } catch (e: Exception) {
+        raw
+    }
+}
+
 @Composable
-private fun PluginsManageSection(registry: PluginRegistry) {
+private fun PluginsManageSection(registry: PluginRegistry, controller: ChartController) {
     SectionHeader("Installed plugins", first = true)
     val managed = registry.managed
     if (managed.isEmpty()) {
@@ -1147,32 +1196,243 @@ private fun PluginsManageSection(registry: PluginRegistry) {
             "No plugins installed. Own ship, AIS targets, laylines and the " +
                 "NMEA 0183 and Signal K sources come with Lookout and are always on."
         )
-        return
     }
+    var uninstalling by remember { mutableStateOf<PluginInfo?>(null) }
     for (p in managed) {
+        var open by remember(p.id) { mutableStateOf(false) }
         Row(
             Modifier
                 .fillMaxWidth()
+                .clickable { open = !open }
                 .padding(horizontal = 20.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
                 Text(p.name, style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    if (p.status.isNotEmpty()) p.status else p.id,
+                    (statusCaption(p) ?: p.id) +
+                        if (p.origin == "developer") " · developer copy" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (p.origin == "developer") {
-                Text(
-                    "developer",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+            Icon(
+                if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (open) {
+            // The grants, in the core's own consent wording, flipped LIVE:
+            // the plugin keeps running and a revoked call answers -1.
+            for (cap in p.capabilities) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 35.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        cap.sentence.ifEmpty { cap.cap },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = cap.granted,
+                        onCheckedChange = { controller.setPluginGrant(p.id, cap.cap, it) },
+                    )
+                }
+            }
+            if (p.capabilities.isEmpty()) {
+                Footer("This plugin only draws its own settings pages.")
+            }
+            if (p.origin == "installed") {
+                TextButton(
+                    onClick = { uninstalling = p },
+                    modifier = Modifier.padding(start = 23.dp),
+                ) { Text("Uninstall", color = MaterialTheme.colorScheme.error) }
             }
         }
     }
+
+    // The way a plugin file arrives on a tablet with no Finder: browse for it.
+    var picking by remember { mutableStateOf(false) }
+    TextButton(
+        onClick = { picking = true },
+        modifier = Modifier.padding(horizontal = 12.dp),
+    ) { Text("Install plugin…") }
+    Footer("Nothing is installed before its permissions are shown.")
+
+    if (picking) {
+        LkplugPickerDialog(
+            onPick = { path ->
+                picking = false
+                controller.beginPluginInstall(path)
+            },
+            onDismiss = { picking = false },
+        )
+    }
+    uninstalling?.let { p ->
+        AlertDialog(
+            onDismissRequest = { uninstalling = null },
+            title = { Text("Uninstall ${p.name}?") },
+            text = { Text("Removes the plugin and everything it drew.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    controller.uninstallPlugin(p.id)
+                    uninstalling = null
+                }) { Text("Uninstall", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { uninstalling = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * The consent and install-error dialogs. Composed at SCREEN level, not inside
+ * the Plugins pane: a .lkplug can arrive from another app with no settings
+ * sheet anywhere, and consent has to come up over the chart just the same.
+ */
+@Composable
+fun PluginInstallDialogs(controller: ChartController) {
+    controller.pluginConsent?.let { pkg ->
+        PluginConsentDialog(
+            pkg = pkg,
+            onInstall = { controller.confirmPluginInstall() },
+            onCancel = { controller.cancelPluginInstall() },
+        )
+    }
+    controller.installError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { controller.dismissInstallError() },
+            title = { Text("Couldn't install plugin") },
+            text = { Text(msg) },
+            confirmButton = {
+                TextButton(onClick = { controller.dismissInstallError() }) { Text("OK") }
+            },
+        )
+    }
+}
+
+/**
+ * The consent sheet: what the package can do, called out against the running
+ * copy on a reinstall. Cancel is the default; nothing touches disk before
+ * Install.
+ */
+@Composable
+private fun PluginConsentDialog(
+    pkg: ChartController.PluginPackage,
+    onInstall: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Install ${pkg.name}?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    if (pkg.version.isEmpty()) pkg.id else "${pkg.id} · Version ${pkg.version}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                pkg.installedVersion?.let { v ->
+                    Text(
+                        "Replaces the installed version $v." +
+                            (if (pkg.downgrade) " This is a downgrade." else "") +
+                            if (pkg.installedOrigin == "developer")
+                                " The developer copy keeps running until its override is dropped."
+                            else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (pkg.downgrade) Chrome.amber
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    if (pkg.installedVersion == null) "This plugin can:" else "After this install it can:",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                if (pkg.sentences.isEmpty()) {
+                    Text(
+                        "This plugin only draws its own settings pages.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                for (s in pkg.sentences) Text("· $s", style = MaterialTheme.typography.bodySmall)
+                if (pkg.adds.isNotEmpty()) {
+                    Text("New since the installed version:", style = MaterialTheme.typography.labelMedium)
+                    for (s in pkg.adds) Text("+ $s", style = MaterialTheme.typography.bodySmall, color = Chrome.amber)
+                }
+                if (pkg.drops.isNotEmpty()) {
+                    Text("No longer asks to:", style = MaterialTheme.typography.labelMedium)
+                    for (s in pkg.drops) Text("− $s", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onInstall) { Text("Install") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
+}
+
+/** Browse for a .lkplug: directories descend, plugin files pick. */
+@Composable
+private fun LkplugPickerDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    var cur by remember {
+        mutableStateOf(android.os.Environment.getExternalStorageDirectory())
+    }
+    var entries by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
+    LaunchedEffect(cur) {
+        entries = withContext(Dispatchers.IO) {
+            (cur.listFiles() ?: emptyArray())
+                .filter { (it.isDirectory && it.canRead()) || it.name.endsWith(".lkplug", true) }
+                .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose a plugin file") },
+        text = {
+            Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                Text(
+                    cur.absolutePath,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                cur.parentFile?.let { parent ->
+                    if (parent.canRead()) {
+                        Text(
+                            "⬑ ${parent.name.ifEmpty { "/" }}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { cur = parent }
+                                .padding(vertical = 8.dp),
+                        )
+                    }
+                }
+                for (f in entries) {
+                    Text(
+                        if (f.isDirectory) "${f.name}/" else f.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (f.isDirectory) Color.Unspecified else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (f.isDirectory) cur = f else onPick(f.absolutePath)
+                            }
+                            .padding(vertical = 8.dp),
+                    )
+                }
+                if (entries.isEmpty()) {
+                    Text(
+                        "Nothing to read here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 // ---- rows -------------------------------------------------------------------

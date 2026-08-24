@@ -104,7 +104,7 @@
       <!-- user32: LoadImageW/SendMessageW/GetSystemMetrics, for the window icon
            (MinimalCoreWin trims the default link libraries, so the Win32 ones
            this shell uses are all named explicitly). -->
-      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;winmm.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>lookout_marine.lib;tile57.lib;ntdll.lib;gdi32.lib;shell32.lib;user32.lib;winmm.lib;CoreMessaging.lib;d3d12.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- The WAMR interpreter, when build-core.ps1 built a core with the plugin
            host in it. The static core does not embed the archive off Apple (a
            COFF linker rejects an archive nested inside an archive), so the exe
@@ -136,6 +136,7 @@
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
     <ClCompile Include="ui\MainWindow.Open.cpp" />
+    <ClCompile Include="ui\MainWindow.Bake.cpp" />
     <ClCompile Include="ui\MainWindow.Input.cpp" />
     <ClCompile Include="ui\MainWindow.Hud.cpp" />
     <ClCompile Include="ui\MainWindow.Loader.cpp" />
@@ -144,6 +145,9 @@
     <ClCompile Include="ui\MainWindow.Alerts.cpp" />
     <ClCompile Include="ui\MainWindow.Vessels.cpp" />
     <ClCompile Include="ui\MainWindow.Menu.cpp" />
+    <ClCompile Include="ui\MainWindow.ChartLinks.cpp" />
+    <ClCompile Include="ui\MainWindow.ChartSets.cpp" />
+    <ClCompile Include="ui\MainWindow.Markers.cpp" />
     <ClCompile Include="ui\MainWindow.PluginInstall.cpp" />
     <ClCompile Include="ui\MainWindow.Overlay.cpp" />
     <ClCompile Include="ui\MainWindow.Raster.cpp" />
@@ -151,6 +155,7 @@
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
     <ClCompile Include="ui\MainWindow.Plugins.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
+    <ClCompile Include="src\lk_bake.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_pick.cpp" />
     <ClCompile Include="src\lk_backdrop.cpp" />

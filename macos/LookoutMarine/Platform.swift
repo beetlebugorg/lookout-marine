@@ -29,10 +29,30 @@ typealias PlatformViewRepresentable = UIViewRepresentable
 #endif
 
 /// Lightweight log — stderr (terminal runs) + NSLog (unified log for .app runs).
+///
+/// $LOOKOUT_LOG=<path> adds a third sink, appending to that file. An .app
+/// launched with `open` has no stderr to read, and its NSLog does not reliably
+/// come back out of the unified log on every machine — which leaves a dev run
+/// with no way to see what the app just did. A file always works.
 func lkLog(_ message: String) {
-    FileHandle.standardError.write(Data("[lookout] \(message)\n".utf8))
+    let line = "[lookout] \(message)\n"
+    FileHandle.standardError.write(Data(line.utf8))
     NSLog("[lookout] %@", message)
+    guard let path = ProcessInfo.processInfo.environment["LOOKOUT_LOG"], !path.isEmpty else { return }
+    lkLogFileQueue.async {
+        guard let h = FileHandle(forWritingAtPath: path) else {
+            try? line.write(toFile: path, atomically: false, encoding: .utf8)
+            return
+        }
+        defer { try? h.close() }
+        _ = try? h.seekToEnd()
+        try? h.write(contentsOf: Data(line.utf8))
+    }
 }
+
+/// Serializes the file sink: lkLog is called from the main thread, the render
+/// thread and URLSession completions, and interleaved appends lose lines.
+private let lkLogFileQueue = DispatchQueue(label: "lookout.log.file")
 
 /// The frames of the chrome controls, in the `Chrome.space` coordinate space.
 /// The chromeHitRegion modifier writes them. The pass-through hosts of both

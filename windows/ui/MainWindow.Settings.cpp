@@ -5,15 +5,104 @@
 
 #include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <map>
 
+#include "lk_format.h"
 #include "lk_paths.h"
 #include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
+
+namespace
+{
+    /* The chart colours of one scheme: the presentation library's own sRGB
+     * values (S-101 colour profile, tokens DEPDW/DEPMD/DEPMS/DEPVS/LANDA/
+     * CSTLN), copied so a swatch can be drawn without opening a chart. A
+     * legend of the palette, not the palette itself — the engine draws from
+     * the tables in the chart (the reference's SchemePalette, hex for hex). */
+    struct SchemePalette
+    {
+        winrt::Windows::UI::Color deep, medium, shallow, very_shallow, land, coastline;
+    };
+
+    winrt::Windows::UI::Color Hex(uint32_t v)
+    {
+        return { 0xFF, (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
+    }
+
+    SchemePalette PaletteOf(int scheme)
+    {
+        switch (scheme)
+        {
+        case 1: // dusk
+            return { Hex(0x000000), Hex(0x0f1b21), Hex(0x1d3246),
+                     Hex(0x1e4165), Hex(0x40402e), Hex(0x6b7f89) };
+        case 2: // night
+            return { Hex(0x000000), Hex(0x03070a), Hex(0x050e16),
+                     Hex(0x071727), Hex(0x17160e), Hex(0x252d31) };
+        default: // day
+            return { Hex(0xc9edff), Hex(0xa7d9fb), Hex(0x82caff),
+                     Hex(0x61b7ff), Hex(0xbfbe8f), Hex(0x4c5b63) };
+        }
+    }
+
+    /* A shore in one scheme: the four depth shades out to deep water, then
+     * land behind a curved coastline. A piece of chart, not a colour chip.
+     * Drawn at a fixed design size and stretched by a Viewbox, so the Bezier
+     * needs no size handling. */
+    Controls::Viewbox SchemeSwatch(SchemePalette const &p)
+    {
+        Controls::Grid design;
+        design.Width(100);
+        design.Height(78);
+
+        Controls::StackPanel bands;
+        auto band = [&](winrt::Windows::UI::Color c, double h) {
+            Controls::Border b;
+            b.Background(Media::SolidColorBrush{ c });
+            b.Height(h);
+            bands.Children().Append(b);
+        };
+        band(p.deep, 78 * 0.36);
+        band(p.medium, 78 * 0.18);
+        band(p.shallow, 78 * 0.16);
+        band(p.very_shallow, 78 * 0.30);
+        design.Children().Append(bands);
+
+        // The shoreline: a bay open to the top-left, land filling the corner.
+        Media::PathFigure fig;
+        fig.StartPoint({ 0, 78 });
+        fig.IsClosed(true);
+        Media::LineSegment l1;
+        l1.Point({ 0, 78 * 0.80f });
+        Media::BezierSegment bez;
+        bez.Point1({ 100 * 0.35f, 78 * 0.74f });
+        bez.Point2({ 100 * 0.60f, 78 * 0.44f });
+        bez.Point3({ 100, 78 * 0.52f });
+        Media::LineSegment l2;
+        l2.Point({ 100, 78 });
+        fig.Segments().Append(l1);
+        fig.Segments().Append(bez);
+        fig.Segments().Append(l2);
+        Media::PathGeometry geo;
+        geo.Figures().Append(fig);
+        Shapes::Path shore;
+        shore.Data(geo);
+        shore.Fill(Media::SolidColorBrush{ p.land });
+        shore.Stroke(Media::SolidColorBrush{ p.coastline });
+        shore.StrokeThickness(1.5);
+        design.Children().Append(shore);
+
+        Controls::Viewbox vb;
+        vb.Stretch(Media::Stretch::Fill);
+        vb.Child(design);
+        return vb;
+    }
+}
 
 namespace winrt::LookoutMarine::implementation
 {
@@ -79,16 +168,22 @@ namespace winrt::LookoutMarine::implementation
         }
         app_window.ResizeClient({ width, height });
 
+        // Remembered per event, WRITTEN once at close: a drag fires a size
+        // change per mouse move, and each store write is a synchronous file
+        // write under the store lock.
         app_window.Changed([this](auto &&sender, auto &&args) {
             if (args.DidSizeChange())
             {
                 auto size = sender.ClientSize();
-                lk_store_save_settings_size(size.Width, size.Height);
+                settings_size_w = size.Width;
+                settings_size_h = size.Height;
             }
         });
 
         w.Closed([this](auto &&, auto &&) {
             StopPluginStatusPoll();
+            if (settings_size_w > 0 && settings_size_h > 0)
+                lk_store_save_settings_size(settings_size_w, settings_size_h);
             if (settings_window != nullptr)
                 settings_window.Content(nullptr); // the markup outlives the window
             settings_window = nullptr;
@@ -162,17 +257,39 @@ namespace winrt::LookoutMarine::implementation
         // navigation, so there is no way to collapse it away.
         auto list = SettingsTabs();
         list.Children().Clear();
+
+        // The highlight shades, as alpha over the pane's dark chrome (black
+        // tints, matching the existing selection): hover sits below the
+        // selection, and the selected row under the pointer a step above it —
+        // the ordering a Windows list uses, so hover and selection read apart.
+        auto tint = [](uint8_t a) { return Media::SolidColorBrush{ winrt::Windows::UI::Color{ a, 0x00, 0x00, 0x00 } }; };
+        constexpr uint8_t kHover = 0x14, kSelected = 0x28, kSelectedHover = 0x38;
+
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
         {
+            // A row stays a Button, for keyboard focus and narration, but the
+            // highlight is drawn on a child Border we own, and the button's own
+            // template fills are cleared. A default Button paints ButtonBackground-
+            // PointerOver over its Background whenever the pointer is on it; on
+            // this software-rendered VM that state flickered the highlight on and
+            // off under a still pointer. With the fills removed and the tint set
+            // by hand on enter and leave, hover holds while the pointer is on the
+            // row, distinct from the selected row.
             Controls::Button row;
             row.HorizontalAlignment(HorizontalAlignment::Stretch);
-            row.HorizontalContentAlignment(HorizontalAlignment::Left);
-            row.Padding({ 10, 7, 10, 7 });
-            row.CornerRadius({ 6, 6, 6, 6 });
+            row.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            row.VerticalContentAlignment(VerticalAlignment::Stretch);
+            row.Padding({ 0, 0, 0, 0 });
             row.BorderThickness({ 0, 0, 0, 0 });
-            row.Background(Media::SolidColorBrush{ i == settings_tab
-                                                      ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
-                                                      : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+            row.Background(tint(0));
+            for (auto key : { L"ButtonBackground", L"ButtonBackgroundPointerOver",
+                              L"ButtonBackgroundPressed", L"ButtonBackgroundDisabled" })
+                row.Resources().Insert(winrt::box_value(winrt::hstring{ key }), tint(0));
+
+            Controls::Border selection;
+            selection.CornerRadius({ 6, 6, 6, 6 });
+            selection.Padding({ 10, 7, 10, 7 });
+            selection.Background(tint(i == settings_tab ? kSelected : 0));
 
             Controls::StackPanel content;
             content.Orientation(Controls::Orientation::Horizontal);
@@ -187,15 +304,27 @@ namespace winrt::LookoutMarine::implementation
             label.FontSize(13);
             label.VerticalAlignment(VerticalAlignment::Center);
             content.Children().Append(label);
-            row.Content(content);
+            selection.Child(content);
+            row.Content(selection);
 
-            row.Click([this, i](auto &&, auto &&) {
+            row.PointerEntered([this, i, tint](auto &&s, auto &&) {
+                if (auto bg = s.template as<Controls::Button>().Content().try_as<Controls::Border>())
+                    bg.Background(tint(i == settings_tab ? kSelectedHover : kHover));
+            });
+            row.PointerExited([this, i, tint](auto &&s, auto &&) {
+                if (auto bg = s.template as<Controls::Button>().Content().try_as<Controls::Border>())
+                    bg.Background(tint(i == settings_tab ? kSelected : 0));
+            });
+
+            row.Click([this, i, tint](auto &&, auto &&) {
                 settings_tab = i;
                 for (uint32_t j = 0; j < SettingsTabs().Children().Size(); ++j)
                 {
                     auto b = SettingsTabs().Children().GetAt(j).as<Controls::Button>();
-                    b.Background(Media::SolidColorBrush{ (int)j == i ? winrt::Windows::UI::Color{ 0x28, 0x00, 0x00, 0x00 }
-                                                                     : winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    if (auto bg = b.Content().try_as<Controls::Border>())
+                        // The clicked row is under the pointer, so it takes the
+                        // selected-and-hovered shade.
+                        bg.Background(tint((int)j == i ? kSelectedHover : 0));
                 }
                 BuildSettingsPage();
             });
@@ -234,6 +363,77 @@ namespace winrt::LookoutMarine::implementation
         apply_timer.Start();
     }
 
+    // The band strip, redrawn in place: which shades exist for the current
+    // settings and which contour separates each pair, labelled in the
+    // mariner's unit. Colours approximate the day palette — a legend, not
+    // the palette itself.
+    void MainWindow::RefreshBandPreview()
+    {
+        if (band_preview == nullptr)
+            return;
+        band_preview.Children().Clear();
+        band_preview.ColumnDefinitions().Clear();
+
+        const double ft = 3.28084;
+        bool feet = pending.depth_unit == 1;
+        auto label = [&](double metres) -> std::wstring {
+            wchar_t buf[32];
+            if (feet)
+                swprintf_s(buf, L"%d ft", (int)std::lround(metres * ft));
+            else
+                swprintf_s(buf, L"%g m", metres);
+            return buf;
+        };
+
+        struct Band
+        {
+            winrt::Windows::UI::Color c;
+            std::wstring text;
+        };
+        const winrt::Windows::UI::Color drying{ 0xFF, 0x8C, 0xCC, 0x99 };
+        const winrt::Windows::UI::Color very_shallow{ 0xFF, 0x73, 0xBF, 0xED };
+        const winrt::Windows::UI::Color shallow{ 0xFF, 0x8C, 0xD1, 0xF7 };
+        const winrt::Windows::UI::Color medium{ 0xFF, 0xBF, 0xE5, 0xFC };
+        const winrt::Windows::UI::Color deep{ 0xFF, 0xFF, 0xFF, 0xFF };
+        std::vector<Band> bands;
+        if (pending.four_shade_water)
+        {
+            bands.push_back({ drying, L"drying" });
+            bands.push_back({ very_shallow,
+                              L"0\u2013" + label(std::min(pending.shallow_contour, pending.safety_contour)) });
+            bands.push_back({ shallow, L"\u2013" + label(pending.safety_contour) });
+            bands.push_back({ medium,
+                              L"\u2013" + label(std::max(pending.deep_contour, pending.safety_contour)) });
+            bands.push_back({ deep, L"deeper" });
+        }
+        else
+        {
+            bands.push_back({ drying, L"drying" });
+            bands.push_back({ very_shallow, L"0\u2013" + label(pending.safety_contour) });
+            bands.push_back({ deep, L"deeper" });
+        }
+
+        for (size_t i = 0; i < bands.size(); ++i)
+        {
+            Controls::ColumnDefinition cd;
+            cd.Width({ 1, GridUnitType::Star });
+            band_preview.ColumnDefinitions().Append(cd);
+            Controls::Border b;
+            b.Background(Media::SolidColorBrush{ bands[i].c });
+            Controls::TextBlock t;
+            t.Text(winrt::hstring{ bands[i].text });
+            t.FontSize(9);
+            t.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xBF, 0x00, 0x00, 0x00 } });
+            t.HorizontalAlignment(HorizontalAlignment::Center);
+            t.VerticalAlignment(VerticalAlignment::Bottom);
+            t.TextTrimming(TextTrimming::CharacterEllipsis);
+            t.Margin({ 2, 0, 2, 2 });
+            b.Child(t);
+            Controls::Grid::SetColumn(b, (int)i);
+            band_preview.Children().Append(b);
+        }
+    }
+
     void MainWindow::LoadSettings()
     {
         lk_controller_get_mariner(controller, &pending);
@@ -259,6 +459,9 @@ namespace winrt::LookoutMarine::implementation
 
         auto stack = SettingsContent();
         stack.Children().Clear();
+        // The controls the status poll updates in place died with that Clear.
+        plugin_status_ui.clear();
+        band_preview = nullptr; // died with the Clear too; depths re-makes it
 
         const double ft = 3.28084;
         bool feet = pending.depth_unit == 1;
@@ -323,6 +526,17 @@ namespace winrt::LookoutMarine::implementation
             });
             stack.Children().Append(nb);
         };
+        // The reference's section footers: the sentence that explains what a
+        // setting MEANS, part of the pane rather than a tooltip nobody finds.
+        auto footer = [&](winrt::hstring const &text) {
+            Controls::TextBlock tb;
+            tb.Text(text);
+            tb.FontSize(11.5);
+            tb.TextWrapping(TextWrapping::Wrap);
+            tb.Opacity(0.65);
+            tb.Margin({ 0, 2, 0, 6 });
+            stack.Children().Append(tb);
+        };
         auto slider = [&](wchar_t const *label, double value, auto &&set) {
             Controls::TextBlock tb;
             tb.Text(label);
@@ -348,14 +562,80 @@ namespace winrt::LookoutMarine::implementation
 
         if (tab == "display")
         {
-            combo(L"Color scheme", { L"Day", L"Dusk", L"Night" }, (int)pending.scheme,
-                  [this](int i) { pending.scheme = (tile57_scheme)i; });
+            // The three schemes DRAWN, not named: each swatch is a piece of
+            // chart in that scheme's own colours, so the choice is made by
+            // eye — day is unreadable at night and night by day, and the
+            // swatches say so without words (the reference's SchemeSwatches).
+            {
+                Controls::TextBlock tb;
+                tb.Text(L"Color scheme");
+                tb.FontSize(12);
+                stack.Children().Append(tb);
+
+                Controls::Grid row;
+                wchar_t const *names[] = { L"Day", L"Dusk", L"Night" };
+                for (int i = 0; i < 3; ++i)
+                {
+                    Controls::ColumnDefinition cd;
+                    cd.Width({ 1, GridUnitType::Star });
+                    row.ColumnDefinitions().Append(cd);
+                }
+                for (int i = 0; i < 3; ++i)
+                {
+                    bool sel = (int)pending.scheme == i;
+                    Controls::StackPanel cell;
+                    cell.Spacing(4);
+                    cell.Margin({ i == 0 ? 0.0 : 4.0, 4, i == 2 ? 0.0 : 4.0, 0 });
+
+                    Controls::Border frame;
+                    frame.Height(64);
+                    frame.CornerRadius({ 8, 8, 8, 8 });
+                    frame.BorderThickness(sel ? Thickness{ 3, 3, 3, 3 } : Thickness{ 1, 1, 1, 1 });
+                    frame.BorderBrush(Media::SolidColorBrush{
+                        sel ? winrt::Windows::UI::Color{ 0xFF, 0x1B, 0x49, 0xC4 }
+                            : winrt::Windows::UI::Color{ 0x40, 0x80, 0x80, 0x80 } });
+                    frame.Child(SchemeSwatch(PaletteOf(i)));
+                    cell.Children().Append(frame);
+
+                    Controls::TextBlock name;
+                    name.Text(names[i]);
+                    name.FontSize(12);
+                    name.HorizontalAlignment(HorizontalAlignment::Center);
+                    if (sel)
+                        name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+                    else
+                        name.Opacity(0.65);
+                    cell.Children().Append(name);
+
+                    Controls::Grid::SetColumn(cell, i);
+                    // A tap picks the scheme; the page rebuilds so the ring
+                    // moves, and the pane takes the new scheme's chrome —
+                    // WITHOUT re-reading `pending` (LoadSettings would
+                    // discard the change the apply timer has not pushed yet).
+                    cell.Tapped([this, i](auto &&, auto &&) {
+                        if (settings_loading)
+                            return;
+                        pending.scheme = (tile57_scheme)i;
+                        ScheduleApply();
+                        bool dark = pending.scheme != 0;
+                        SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
+                        SettingsPane().Background(Media::SolidColorBrush{
+                            dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x24, 0x28 }
+                                 : winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
+                        BuildSettingsPage();
+                    });
+                    row.Children().Append(cell);
+                }
+                stack.Children().Append(row);
+            }
+            footer(L"The palettes switch instantly. Night keeps your eyes dark-adapted.");
             int cat = pending.display_other ? 2 : (pending.display_standard ? 1 : 0);
             combo(L"Display category", { L"Base", L"Standard", L"Other" }, cat, [this](int i) {
                 pending.display_base = true;
                 pending.display_standard = i != 0;
                 pending.display_other = i == 2;
             });
+            footer(L"Each category contains the one before it.");
             combo(L"Soundings", { L"Follow category", L"Always on", L"Always off" }, (int)pending.soundings,
                   [this](int i) { pending.soundings = (uint8_t)i; });
         }
@@ -370,16 +650,31 @@ namespace winrt::LookoutMarine::implementation
                       pending.four_shade_water = i == 1;
                       BuildSettingsPage();
                   });
+            footer(pending.four_shade_water
+                       ? L"Four shades: white (safe) water starts at the DEEP contour; the safety contour separates the two middle blues."
+                       : L"Two shades: water deeper than the safety contour is white (safe), everything shallower is blue.");
+            // Schematic of the S-52 depth bands for the CURRENT settings:
+            // which shades exist, and which contour separates each pair. A
+            // legend, not the palette (the reference's BandPreview). Redrawn
+            // in place as the contour fields change.
+            band_preview = Controls::Grid{};
+            band_preview.Height(34);
+            band_preview.CornerRadius({ 6, 6, 6, 6 });
+            band_preview.Margin({ 0, 6, 0, 0 });
+            stack.Children().Append(band_preview);
+            RefreshBandPreview();
+            footer(L"Shading follows the depth areas in the chart: the effective safety contour is the next DEEPER contour available in the data, drawn bold.");
             if (pending.four_shade_water)
                 number(feet ? L"Shallow contour (ft)" : L"Shallow contour (m)", pending.shallow_contour,
-                       [this](double v) { pending.shallow_contour = v; });
+                       [this](double v) { pending.shallow_contour = v; RefreshBandPreview(); });
             number(feet ? L"Safety contour (ft)" : L"Safety contour (m)", pending.safety_contour,
-                   [this](double v) { pending.safety_contour = v; });
+                   [this](double v) { pending.safety_contour = v; RefreshBandPreview(); });
             if (pending.four_shade_water)
                 number(feet ? L"Deep contour (ft)" : L"Deep contour (m)", pending.deep_contour,
-                       [this](double v) { pending.deep_contour = v; });
+                       [this](double v) { pending.deep_contour = v; RefreshBandPreview(); });
             number(feet ? L"Safety depth (ft)" : L"Safety depth (m)", pending.safety_depth,
                    [this](double v) { pending.safety_depth = v; });
+            footer(L"Safety depth bolds soundings at or shallower than it; it does not shade water.");
         }
         else if (tab == "text")
         {
@@ -406,12 +701,89 @@ namespace winrt::LookoutMarine::implementation
             open_tb.FontSize(12);
             stack.Children().Append(open_tb);
 
+            // ---- the sets aboard: each folder of charts with its own
+            // switch. What draws is the union of the switched-on ones; a set
+            // whose water is not today's water is switched off, not removed.
+            if (!chart_sets.empty())
+            {
+                header(L"Charts aboard");
+                for (auto const &set : chart_sets)
+                {
+                    Controls::Grid srow;
+                    Controls::ColumnDefinition sc0, sc1, sc2, sc3;
+                    sc0.Width({ 0, GridUnitType::Auto });
+                    sc1.Width({ 1, GridUnitType::Star });
+                    sc2.Width({ 0, GridUnitType::Auto });
+                    sc3.Width({ 0, GridUnitType::Auto });
+                    srow.ColumnDefinitions().ReplaceAll({ sc0, sc1, sc2, sc3 });
+
+                    Controls::ToggleSwitch sts;
+                    sts.OnContent(nullptr);
+                    sts.OffContent(nullptr);
+                    sts.MinWidth(0);
+                    sts.IsOn(set.on);
+                    std::string spath = set.path;
+                    sts.Toggled([this, spath](auto &&sw, auto &&) {
+                        if (settings_loading)
+                            return;
+                        SetChartSetOn(spath, sw.template as<Controls::ToggleSwitch>().IsOn());
+                    });
+                    srow.Children().Append(sts);
+
+                    Controls::StackPanel stext;
+                    Controls::TextBlock sname;
+                    sname.Text(winrt::to_hstring(set.title));
+                    sname.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
+                    sname.Opacity(set.on ? 1.0 : 0.6);
+                    sname.TextTrimming(TextTrimming::CharacterEllipsis);
+                    stext.Children().Append(sname);
+                    Controls::TextBlock ssum;
+                    std::string sum;
+                    if (!set.cells.empty())
+                        sum = std::to_string(set.cells.size()) + (set.cells.size() == 1 ? " chart" : " charts");
+                    if (!set.rasters.empty())
+                        sum += (sum.empty() ? "" : ", ") + std::to_string(set.rasters.size()) +
+                               (set.rasters.size() == 1 ? " picture" : " pictures");
+                    if (sum.empty())
+                        sum = "not answering (drive unplugged?)";
+                    ssum.Text(winrt::to_hstring(sum));
+                    ssum.FontSize(11);
+                    ssum.Opacity(0.7);
+                    stext.Children().Append(ssum);
+                    stext.VerticalAlignment(VerticalAlignment::Center);
+                    Controls::Grid::SetColumn(stext, 1);
+                    srow.Children().Append(stext);
+
+                    Controls::Button srm;
+                    Controls::FontIcon sminus;
+                    sminus.Glyph(L""); // Remove
+                    sminus.FontSize(12);
+                    srm.Content(sminus);
+                    srm.Padding({ 4, 2, 4, 2 });
+                    srm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    srm.BorderThickness({ 0, 0, 0, 0 });
+                    Automation::AutomationProperties::SetName(srm,
+                        L"Take this set off the list. The folder itself is not touched.");
+                    srm.Click([this, spath](auto &&, auto &&) { RemoveChartSet(spath); });
+                    Controls::Grid::SetColumn(srm, 3);
+                    srow.Children().Append(srm);
+                    stack.Children().Append(srow);
+                }
+            }
+
             header(L"Recent");
             char **recents = lk_store_load_recents();
             for (int i = 0; recents != nullptr && recents[i] != nullptr; ++i)
             {
                 std::string path = recents[i];
                 std::string name = std::filesystem::path(path).filename().string();
+                // Same naming as the Open Recent menu: the library's entry is
+                // the office whose charts are open, never "Charts".
+                if (path == lkw::ChartLibraryDir())
+                    name = (!open_chart_label.empty() &&
+                            open_chart_label.find_first_of("\\/") == std::string::npos)
+                               ? open_chart_label
+                               : "Chart Library";
                 Controls::Button b;
                 b.Content(winrt::box_value(winrt::to_hstring(name.empty() ? path : name)));
                 b.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -655,6 +1027,125 @@ namespace winrt::LookoutMarine::implementation
             raster_foot.Opacity(0.7);
             raster_foot.TextWrapping(TextWrapping::Wrap);
             stack.Children().Append(raster_foot);
+
+            // ---- charts by link: an online map AS the chart. Picking one
+            // renders that publisher's MapLibre style instead of the built-in
+            // portrayal — Lookout's own chart is just the default entry in
+            // the same list (the reference shell's Chart list, row for row).
+            header(L"Chart");
+            auto link_row = [this, &stack](std::string const &url, std::string const &title,
+                                   std::string const &sub, bool removable) {
+                Controls::Grid row;
+                Controls::ColumnDefinition c0, c1, c2, c3;
+                c0.Width({ 0, GridUnitType::Auto });
+                c1.Width({ 1, GridUnitType::Star });
+                c2.Width({ 0, GridUnitType::Auto });
+                c3.Width({ 0, GridUnitType::Auto });
+                row.ColumnDefinitions().ReplaceAll({ c0, c1, c2, c3 });
+
+                Controls::RadioButton pick;
+                pick.GroupName(L"chartlink");
+                pick.IsChecked(active_chart_link == url);
+                pick.MinWidth(0);
+                pick.Checked([this, url](auto &&, auto &&) {
+                    if (!settings_loading && active_chart_link != url)
+                        SelectChartLink(url);
+                });
+                row.Children().Append(pick);
+
+                Controls::StackPanel text;
+                Controls::TextBlock name;
+                name.Text(winrt::to_hstring(title));
+                name.TextTrimming(TextTrimming::CharacterEllipsis);
+                text.Children().Append(name);
+                if (!sub.empty())
+                {
+                    Controls::TextBlock s;
+                    s.Text(winrt::to_hstring(sub));
+                    s.FontSize(11);
+                    s.Opacity(0.7);
+                    s.TextTrimming(TextTrimming::CharacterEllipsis);
+                    text.Children().Append(s);
+                }
+                text.VerticalAlignment(VerticalAlignment::Center);
+                Controls::Grid::SetColumn(text, 1);
+                row.Children().Append(text);
+
+                if (removable)
+                {
+                    Controls::Button refresh;
+                    refresh.Content(winrt::box_value(L"Refresh"));
+                    refresh.FontSize(11);
+                    refresh.Padding({ 6, 2, 6, 2 });
+                    refresh.Click([this, url](auto &&, auto &&) { RefreshChartLink(url); });
+                    Controls::Grid::SetColumn(refresh, 2);
+                    row.Children().Append(refresh);
+
+                    Controls::Button rm;
+                    Controls::FontIcon minus;
+                    minus.Glyph(L"");
+                    minus.FontSize(12);
+                    rm.Content(minus);
+                    rm.Padding({ 4, 2, 4, 2 });
+                    rm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+                    rm.BorderThickness({ 0, 0, 0, 0 });
+                    rm.Click([this, url](auto &&, auto &&) { RemoveChartLink(url); });
+                    Controls::Grid::SetColumn(rm, 3);
+                    row.Children().Append(rm);
+                }
+                stack.Children().Append(row);
+            };
+            link_row("", "Lookout chart", "The built-in portrayal of your opened cells.", false);
+            for (auto const &l : chart_links)
+                link_row(l.url, l.name.empty() ? l.url : l.name, l.url, true);
+
+            // Add by link, committed on Enter like every other field.
+            Controls::TextBox link_box;
+            link_box.PlaceholderText(L"https://…/style.json");
+            link_box.Margin({ 0, 6, 0, 0 });
+            link_box.KeyDown([this](auto &&s, auto &&e) {
+                if (e.Key() != Windows::System::VirtualKey::Enter)
+                    return;
+                auto box = s.template as<Controls::TextBox>();
+                auto text = winrt::to_string(box.Text());
+                if (!text.empty())
+                {
+                    AddChartLink(text);
+                    box.Text(L"");
+                }
+            });
+            stack.Children().Append(link_box);
+
+            // A resolve is several fetches deep, so say so rather than leave
+            // the list looking as though the click did nothing.
+            if (chart_link_busy)
+            {
+                Controls::TextBlock working;
+                working.Text(L"Reading the chart\u2026");
+                working.FontSize(11);
+                working.Opacity(0.7);
+                stack.Children().Append(working);
+            }
+
+            if (!chart_link_error.empty())
+            {
+                Controls::TextBlock err;
+                err.Text(winrt::to_hstring(chart_link_error));
+                err.FontSize(11);
+                err.Foreground(lkw::Brush(lkw::chrome::kAmber));
+                err.TextWrapping(TextWrapping::Wrap);
+                stack.Children().Append(err);
+            }
+
+            Controls::TextBlock link_foot;
+            link_foot.Text(L"A chart added by link draws INSTEAD of Lookout's own: the "
+                           L"publisher styles it and their tiles are fetched as you sail. "
+                           L"A style link or a TileJSON tile source; also a style.json "
+                           L"on this machine by path.");
+            link_foot.FontSize(11);
+            link_foot.Opacity(0.7);
+            link_foot.TextWrapping(TextWrapping::Wrap);
+            stack.Children().Append(link_foot);
         }
         else if (tab == "advanced")
         {
@@ -686,13 +1177,22 @@ namespace winrt::LookoutMarine::implementation
                 Controls::TextBox date;
                 date.Text(winrt::to_hstring(pending.date_view));
                 date.MaxLength(8);
-                date.TextChanged([this](auto &&s, auto &&) {
+                /* Commits on Enter or focus loss, never per keystroke — half
+                 * a date is not a date the chart should redraw against. */
+                auto commit_date = [this](Controls::TextBox const &b) {
                     if (settings_loading)
                         return;
-                    std::string t = winrt::to_string(s.template as<Controls::TextBox>().Text());
+                    std::string t = winrt::to_string(b.Text());
                     memset(pending.date_view, 0, sizeof pending.date_view);
                     strncpy_s(pending.date_view, t.c_str(), sizeof pending.date_view - 1);
                     ScheduleApply();
+                };
+                date.LostFocus([commit_date](auto &&s, auto &&) {
+                    commit_date(s.template as<Controls::TextBox>());
+                });
+                date.KeyDown([commit_date](auto &&s, auto &&e) {
+                    if (e.Key() == Windows::System::VirtualKey::Enter)
+                        commit_date(s.template as<Controls::TextBox>());
                 });
                 stack.Children().Append(date);
             }

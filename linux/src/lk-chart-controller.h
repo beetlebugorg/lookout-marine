@@ -146,6 +146,34 @@ void     lk_chart_controller_toggle_chart (LkChartController *self);
 void     lk_chart_controller_set_chart_hidden (LkChartController *self, gboolean hidden);
 gboolean lk_chart_controller_chart_hidden (LkChartController *self);
 
+/* ---- charts by link ------------------------------------------------------ */
+
+/* TRUE while a publisher's style is the chart being drawn. */
+gboolean lk_chart_controller_alt_style_active (LkChartController *self);
+
+/* The url fetcher lookout drives for the style, TileJSON, sprite packs and
+ * every tile. The callback fires with lookout's lock held: start the fetch and
+ * return. See include/lookout.h (lookout_set_http_provider). */
+void lk_chart_controller_set_http_provider (LkChartController *self,
+                                            lookout_http_get get,
+                                            lookout_http_cancel cancel,
+                                            gpointer user);
+
+/* Answer one ask: `status` is the final HTTP status, or 0 for a transport
+ * failure. Safe after the handle closed — the answer is dropped. */
+void lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
+                                       const void *bytes, gsize len, int status);
+
+/* The chart-link management surface, straight through to lookout. */
+void  lk_chart_controller_chart_link_add (LkChartController *self, const char *link);
+void  lk_chart_controller_chart_link_select (LkChartController *self, const char *url);
+void  lk_chart_controller_chart_link_remove (LkChartController *self, const char *url);
+void  lk_chart_controller_chart_link_refresh (LkChartController *self, const char *url);
+void  lk_chart_controller_chart_links_import (LkChartController *self, const char *json);
+/* Everything the chart list shows, or NULL when nothing changed since the last
+ * poll. Transfer full. ONE consumer: whoever polls clears the flag. */
+char *lk_chart_controller_chart_links_changed_json (LkChartController *self);
+
 /* ---- wasm plugins -------------------------------------------------------- */
 
 /* TRUE while a plugin layer is running. Own ship, AIS, NMEA 0183, Signal K and
@@ -270,6 +298,11 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (LkOverlayObject, lk_overlay_object_free)
 LkOverlayObject *lk_chart_controller_overlay_hit (LkChartController *self,
                                                   double             x,
                                                   double             y);
+
+/* What the symbol nearest a logical point says, for a hover: the JSON
+ * lookout_overlay_at documents ({"title":…,"rows":[[key,value],…]}), or NULL
+ * when nothing is within about 14 pt. Transfer full. */
+char *lk_chart_controller_overlay_at (LkChartController *self, double x, double y);
 
 /* What that object says now, or NULL once it is gone: the target aged out, or
  * its plugin stopped. A pinned bubble re-reads this every tick to move itself

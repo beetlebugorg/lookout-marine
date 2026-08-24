@@ -53,6 +53,16 @@ class LookoutActivity : ComponentActivity() {
         // every launch (~1s), having no cache path in the environment.
         Lookout.setCacheDir(cacheDir.absolutePath)
 
+        // Tiles are the one thing this app fetches in bulk (a chart link's
+        // sources). The response cache spares the pan back over water already
+        // crossed and survives a relaunch on the same chart — the reference
+        // shell's URLCache, in Android's clothes.
+        try {
+            android.net.http.HttpResponseCache.install(File(cacheDir, "http"), 256L * 1024 * 1024)
+        } catch (e: Exception) {
+            Log.w(TAG, "http cache: $e")
+        }
+
         // The foreground service's notification is the mariner's only sight of
         // what is holding the process up, and their only way to stop it. On API
         // 33 and up it needs a grant; refused, the service still runs and the
@@ -99,6 +109,64 @@ class LookoutActivity : ComponentActivity() {
                 )
             }
         }
+        routeOpenedFile(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        routeOpenedFile(intent)
+    }
+
+    /**
+     * A file another app opened into us. A content: uri has no path the core
+     * can mmap, so the stream is copied into the cache dir first; then the
+     * NAME routes it — a .lkplug goes to the install consent sheet, anything
+     * else is offered to the plugins ([ChartController.openFile]).
+     */
+    private fun routeOpenedFile(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        Thread {
+            val name = openedFileName(uri)
+            val out = File(cacheDir, "opened/$name")
+            out.parentFile?.mkdirs()
+            try {
+                contentResolver.openInputStream(uri).use { input ->
+                    if (input == null) return@Thread
+                    FileOutputStream(out).use { input.copyTo(it) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "opened file unreadable: $uri: $e")
+                return@Thread
+            }
+            runOnUiThread { controller.openFile(out.absolutePath) }
+        }.start()
+    }
+
+    /** The display name a content uri carries, or the uri's last segment. */
+    private fun openedFileName(uri: Uri): String {
+        if (uri.scheme == "content") {
+            try {
+                contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (i >= 0 && c.moveToFirst()) c.getString(i)?.let { return sanitizeName(it) }
+                }
+            } catch (_: Exception) {}
+        }
+        return sanitizeName(uri.lastPathSegment?.substringAfterLast('/') ?: "opened.bin")
+    }
+
+    /**
+     * The DISPLAY_NAME comes from the sending app's content provider, and a
+     * hostile provider can return a value like "../../files/plugins/evil.wasm"
+     * to walk the write out of the cache subdirectory and into the auto-loaded
+     * plugin directory. Keep only a bare file name: strip any path separators,
+     * and reject a name made only of dots.
+     */
+    private fun sanitizeName(raw: String): String {
+        val name = raw.substringAfterLast('/').substringAfterLast('\\')
+        if (name.isEmpty() || name.all { it == '.' }) return "opened.bin"
+        return name
     }
 
     /**

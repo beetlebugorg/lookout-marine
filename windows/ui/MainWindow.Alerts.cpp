@@ -29,6 +29,26 @@ namespace
     constexpr winrt::Windows::UI::Color kInk{ 0xFF, 0x1A, 0x1A, 0x1A };
     constexpr winrt::Windows::UI::Color kMuted{ 0xFF, 0x6B, 0x6B, 0x6B };
     constexpr winrt::Windows::UI::Color kRule{ 0xFF, 0xDD, 0xDD, 0xDD };
+    // Theme-resolved ink for the strip's rows: the chrome wears the chart's
+    // scheme, and the rows rebuild when the alert set changes.
+    winrt::Windows::UI::Color ThemeInk(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark
+                   ? winrt::Windows::UI::Color{ 0xFF, 0xDD, 0xE4, 0xEA } : kInk;
+    }
+
+    winrt::Windows::UI::Color ThemeMuted(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark
+                   ? winrt::Windows::UI::Color{ 0xFF, 0x9F, 0xB0, 0xBD } : kMuted;
+    }
+
+    winrt::Windows::UI::Color ThemeRule(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark
+                   ? winrt::Windows::UI::Color{ 0xFF, 0x33, 0x41, 0x4D } : kRule;
+    }
+
 
     winrt::Windows::UI::Color SeverityColor(int severity)
     {
@@ -169,7 +189,7 @@ namespace winrt::LookoutMarine::implementation
             {
                 Controls::Border rule;
                 rule.Height(1);
-                rule.Background(Media::SolidColorBrush{ kRule });
+                rule.Background(Media::SolidColorBrush{ ThemeRule(AlertStrip()) });
                 rows.Children().Append(rule);
             }
 
@@ -206,7 +226,7 @@ namespace winrt::LookoutMarine::implementation
             title.Text(a.title);
             title.FontSize(13);
             title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            title.Foreground(Media::SolidColorBrush{ kInk });
+            title.Foreground(Media::SolidColorBrush{ ThemeInk(AlertStrip()) });
             title.VerticalAlignment(VerticalAlignment::Center);
             Controls::Grid::SetColumn(title, 1);
             line.Children().Append(title);
@@ -216,7 +236,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock body;
             body.Text(a.body);
             body.FontSize(12);
-            body.Foreground(Media::SolidColorBrush{ kMuted });
+            body.Foreground(Media::SolidColorBrush{ ThemeMuted(AlertStrip()) });
             body.VerticalAlignment(VerticalAlignment::Center);
             body.TextTrimming(TextTrimming::CharacterEllipsis);
             body.TextWrapping(TextWrapping::NoWrap);
@@ -247,13 +267,13 @@ namespace winrt::LookoutMarine::implementation
         {
             Controls::Border rule;
             rule.Height(1);
-            rule.Background(Media::SolidColorBrush{ kRule });
+            rule.Background(Media::SolidColorBrush{ ThemeRule(AlertStrip()) });
             rows.Children().Append(rule);
 
             Controls::TextBlock more;
             more.Text(winrt::to_hstring(std::to_string(hidden) + " more"));
             more.FontSize(12);
-            more.Foreground(Media::SolidColorBrush{ kMuted });
+            more.Foreground(Media::SolidColorBrush{ ThemeMuted(AlertStrip()) });
             more.Padding({ 12, 6, 12, 6 });
             rows.Children().Append(more);
         }

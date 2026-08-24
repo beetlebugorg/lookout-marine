@@ -19,6 +19,15 @@ gtk_dep = dependency('gtk4', version: '>= 4.10')
 # The core is a static library that deliberately leaves the loader to its host,
 # so the executable is what resolves libvulkan.
 vulkan_dep = dependency('vulkan')
+# charttable decodes raster tiles and writes snapshots through these, so the
+# core archive carries the references and the app has to name the libraries.
+png_dep = dependency('libpng16')
+webp_dep = dependency('libwebp')
+# Chart links: the shell fetches a publisher's MapLibre style and serves its
+# tiles (lookout does no networking), which takes an HTTP client and a JSON
+# writer — lk-json.c only reads.
+soup_dep = dependency('libsoup-3.0')
+json_dep = dependency('json-glib-1.0')
 m_dep = cc.find_library('m', required: false)
 
 # X11 and Wayland are both optional and both compiled in by default: which one
@@ -33,7 +42,7 @@ if not x11_dep.found() and not wayland_dep.found()
 endif
 
 c_args = []
-deps = [gtk_dep, vulkan_dep, m_dep]
+deps = [gtk_dep, vulkan_dep, png_dep, webp_dep, soup_dep, json_dep, m_dep]
 
 # Where installed data lands. Named here rather than in the desktop-integration
 # section below because the plugin directory is BAKED INTO the binary, so the
@@ -110,7 +119,10 @@ sources = files(
   'src/main.c',
   'src/lk-alerts.c',
   'src/lk-app-model.c',
+  'src/lk-chart-bake.c',
   'src/lk-chart-controller.c',
+  'src/lk-chart-links.c',
+  'src/lk-chart-scan.c',
   'src/lk-chart-view.c',
   'src/lk-hud.c',
   'src/lk-json.c',

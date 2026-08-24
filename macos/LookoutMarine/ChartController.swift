@@ -96,6 +96,26 @@ final class ChartController: NSObject {
     /// at ~half the link rate exactly during interaction.
     private let renderGate = DispatchSemaphore(value: 1)
 
+    /// $LOOKOUT_FRAME_PROF=<path>: one CSV row per display-link tick, so the
+    /// INTERACTIVE path can be measured on the app. The offscreen harnesses
+    /// (--bench, --sweep) render from a settled camera with tiles resident and
+    /// cannot show what a moving camera costs, which is the whole of what
+    /// "pan/zoom feels bad" turned out to be.
+    ///
+    /// Columns: ms since start, tick gap ms, whether the tick dispatched a
+    /// render, whether the gate was shut (the frame was DROPPED), the render's
+    /// own ms, and whether a build was outstanding.
+    private var frameProf: FrameProfiler?
+
+    /// $LOOKOUT_GESTURE_BENCH=pan|zoom|both: drive a scripted gesture through
+    /// the same entry points a finger uses, so a run is repeatable and needs
+    /// no one at the trackpad. Writes the frame profile above and quits.
+    private var gestureBench: GestureBench?
+
+    /// This shell's whole part in charts by link: fetch bytes for a url the
+    /// core hands it. See ChartLinkFetch.swift.
+    private let linkFetch = ChartLinkFetch()
+
     // MARK: - Lifecycle
 
     /// Open (or re-open) a single baked `.pmtiles` chart into `view`.
@@ -107,9 +127,10 @@ final class ChartController: NSObject {
     /// Open one or more baked charts into `view` and compose them (a chart
     /// library / a directory of cells). Returns false on failure. Recreates the
     /// handle if one already exists.
+    /// An empty list is not a failure: a set of raster charts alone opens with
+    /// no vector chart, and the pictures are installed below.
     @discardableResult
     func open(charts paths: [String], in view: PlatformView) -> Bool {
-        guard !paths.isEmpty else { return false }
         close()
         self.view = view
         model?.firstBuildDone = false
@@ -144,9 +165,14 @@ final class ChartController: NSObject {
         lkLog("open OK")
         model?.openError = nil
         handle = h
-        chartPath = paths.count == 1
-            ? paths[0]
-            : ((paths[0] as NSString).deletingLastPathComponent)
+        // The fetch door, before anything can ask through it. Installing it
+        // also resolves whatever chart link the mariner left selected: the core
+        // read the list at open and has been waiting for a way to fetch.
+        linkFetch.attach(to: h) { [weak self] in self?.kick() }
+        // Empty is legal: a library of pictures alone opens with no cell, and
+        // then there is no chart path to report.
+        chartPath = paths.isEmpty ? nil
+            : (paths.count == 1 ? paths[0] : (paths[0] as NSString).deletingLastPathComponent)
 
         // Re-install the mariner's raster charts. A raster chart is attached to a
         // lookout handle, and `close()` above destroyed the old one, so every
@@ -168,6 +194,9 @@ final class ChartController: NSObject {
         // does anything where a picture covers, so it is safe to put back before
         // knowing whether one does.
         if model?.chartHiddenSaved == true { setChartHidden(true) }
+        // A linked chart, if one was picked. Its style is re-fetched, so this
+        // lands a moment later than the rest of the replay.
+        model?.chartDidOpen()
 
         // Reopen where we left off. With nothing saved the opening view is the
         // engine's own (lookout_default_view) — the same policy every host gets,
@@ -192,6 +221,15 @@ final class ChartController: NSObject {
             } else {
                 lkLog("ignoring malformed LOOKOUT_VIEW '\(spec)' (want lon,lat,zoom[,rot])")
             }
+        }
+
+        // Dev hooks for the interactive-path profile. Both off unless
+        // asked for; see FrameProfiler / GestureBench at the end of this file.
+        if let p = ProcessInfo.processInfo.environment["LOOKOUT_FRAME_PROF"], !p.isEmpty {
+            frameProf = FrameProfiler(path: p)
+        }
+        if let spec = ProcessInfo.processInfo.environment["LOOKOUT_GESTURE_BENCH"], !spec.isEmpty {
+            gestureBench = GestureBench(spec: spec)
         }
 
         // HiDPI physical sizing: the engine reads pixel density from the swapchain,
@@ -246,6 +284,28 @@ final class ChartController: NSObject {
         if view == nil { view = v }
     }
 
+    /// True once a chart is open, so a caller can tell adding from opening.
+    var hasHandle: Bool { handle != nil }
+
+    /// Add charts to the library that is already open, keeping the view and
+    /// what is drawn. Answers how many opened.
+    ///
+    /// This is not a reopen. The composition is rebuilt on a worker and swapped
+    /// in when ready, so the charts already on screen keep drawing meanwhile.
+    @discardableResult
+    func addCharts(_ paths: [String]) -> Int {
+        guard let h = handle, !paths.isEmpty else { return 0 }
+        var c = paths.map { strdup($0) }
+        defer { c.forEach { free($0) } }
+        let added = c.withUnsafeMutableBufferPointer { buf in
+            buf.withMemoryRebound(to: UnsafePointer<CChar>?.self) { p in
+                lookout_charts_add(h, p.baseAddress, paths.count)
+            }
+        }
+        if added > 0 { kick() }
+        return Int(added)
+    }
+
     /// Re-open into the view we already render into (menu/search/panel opens
     /// after the first open — the AppModel calls this directly because SwiftUI
     /// stops updating the wrapped content view). False when no view yet.
@@ -263,6 +323,10 @@ final class ChartController: NSObject {
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
+        // Before the barrier: this answers the fetches still out, clears the
+        // core's callback and cancels the transfers, so nothing can answer into
+        // a handle that is about to be destroyed.
+        linkFetch.detach()
         let h = handle
         handle = nil
         renderQueue.sync {}
@@ -306,7 +370,7 @@ final class ChartController: NSObject {
     }
 
     /// Resume ticking after any state change (mutating calls funnel through here).
-    private func kick() {
+    func kick() {
         stopIdlePoll()
         idleTicks = 0
         if let link = displayLink {
@@ -425,6 +489,26 @@ final class ChartController: NSObject {
 
     private func step(_ link: CADisplayLink) {
         guard let h = handle else { return }
+
+        // Claim the render slot BEFORE touching the core. Every lookout_* call
+        // takes the engine's api lock, and a render holds it for its whole
+        // span — including the present, which blocks on the swapchain drawable
+        // (measured: 0.2 ms typical, 73 ms at p99). A tick that cannot render
+        // anyway must not go and wait on that lock: doing so stalled the main
+        // thread, and with it the display link and every queued gesture, for
+        // the length of someone else's frame.
+        //
+        // Skipping is safe for the animation: `dt` is measured from the last
+        // tick that RAN, so the next one advances by the whole elapsed time
+        // rather than losing it.
+        guard renderGate.wait(timeout: .now()) == .success else {
+            frameProf?.tick(gap: link.timestamp - lastTimestamp, dispatched: false,
+                            dropped: true, building: true, zoom: 0)
+            return
+        }
+        var slotHeld = true
+        defer { if slotHeld { renderGate.signal() } }
+
         let now = link.timestamp
         var dt = lastTimestamp == 0 ? 0 : now - lastTimestamp
         lastTimestamp = now
@@ -436,15 +520,28 @@ final class ChartController: NSObject {
         let building = lookout_is_building(h) != 0
         if model?.isBuilding != building { model?.isBuilding = building }
 
+        gestureBench?.step(self)
+
+        var zoomNow: Double = 0
+        if frameProf != nil {
+            var v = lookout_view()
+            lookout_get_view(h, &v)
+            zoomNow = v.zoom
+        }
+
         if animating || lookout_needs_redraw(h) != 0 {
-            if renderGate.wait(timeout: .now()) == .success {
-                renderQueue.async { [weak self] in
-                    _ = lookout_render(h)
-                    self?.renderGate.signal()
-                    DispatchQueue.main.async {
-                        self?.syncGeoChrome()
-                        self?.pushReadouts()
-                    }
+            let prof = frameProf
+            prof?.tick(gap: dt, dispatched: true, dropped: false, building: building, zoom: zoomNow)
+            // The slot passes to the render; it signals the gate when done.
+            slotHeld = false
+            renderQueue.async { [weak self] in
+                let t0 = CACurrentMediaTime()
+                _ = lookout_render(h)
+                prof?.rendered(ms: (CACurrentMediaTime() - t0) * 1000)
+                self?.renderGate.signal()
+                DispatchQueue.main.async {
+                    self?.syncGeoChrome()
+                    self?.pushReadouts()
                 }
             }
             idleTicks = 0
@@ -461,7 +558,9 @@ final class ChartController: NSObject {
             // rendered — retire the startup loader.
             if model?.firstBuildDone == false { model?.firstBuildDone = true }
             idleTicks += 1
-            if idleTicks > 2 {
+            // A gesture bench drives from this tick, so pausing would strand it
+            // in whatever phase it had reached.
+            if idleTicks > 2 && gestureBench == nil {
                 link.isPaused = true
                 startIdlePoll()
             }
@@ -530,6 +629,32 @@ final class ChartController: NSObject {
         lookout_zoom_at_logical(h, dz, Float(pt.x), Float(pt.y))
         retireChartChrome()
         kick()
+    }
+
+    /// True while a scene rebuild is outstanding, or tiles it needs are still
+    /// being composed. What "the chart has finished" means.
+    var stillBuilding: Bool {
+        guard let h = handle else { return false }
+        return lookout_is_building(h) != 0
+    }
+
+    /// True while the camera is easing a zoom or coasting a fling.
+    var isAnimating: Bool {
+        guard let h = handle else { return false }
+        return lookout_animating(h) != 0
+    }
+
+    /// End of a $LOOKOUT_GESTURE_BENCH run: write the profile and quit, so a
+    /// run is one command with a file at the end of it.
+    func finishGestureBench() {
+        gestureBench = nil
+        frameProf?.write()
+        frameProf = nil
+        #if canImport(AppKit)
+        NSApplication.shared.terminate(nil)
+        #else
+        exit(0)
+        #endif
     }
 
     /// Center-anchored zoom (menu / buttons).
@@ -811,6 +936,12 @@ final class ChartController: NSObject {
     }
 
     /// View point (top-left origin) for a chart lon/lat.
+    /// The middle of the chart view, in points.
+    var viewCentrePt: CGPoint {
+        guard let v = view else { return .zero }
+        return CGPoint(x: v.bounds.midX, y: v.bounds.midY)
+    }
+
     func screenPoint(forGeoLon lon: Double, lat: Double) -> CGPoint {
         guard let h = handle else { return .zero }
         var x: Float = 0, y: Float = 0
@@ -958,6 +1089,63 @@ final class ChartController: NSObject {
     /// Hide or show the vector chart. The picture beneath it stays.
     func toggleChart()        { guard let h = handle else { return }; lookout_toggle_chart(h); kick(); pushReadouts() }
     func setChartHidden(_ hidden: Bool) { guard let h = handle else { return }; lookout_set_chart_hidden(h, hidden ? 1 : 0) }
+
+    // MARK: - Charts by link
+
+    /// Add a chart by link. The core resolves it through this shell's fetcher
+    /// and, on success, keeps it and selects it. Non-blocking: what happened
+    /// arrives in the snapshot below.
+    func addChartLink(_ link: String) {
+        guard let h = handle else { return }
+        link.withCString { lookout_chart_link_add(h, $0) }
+        kick()
+    }
+
+    /// Draw one of the carried charts, or nil for Lookout's own.
+    func selectChartLink(_ url: String?) {
+        guard let h = handle else { return }
+        if let url {
+            url.withCString { lookout_chart_link_select(h, $0) }
+        } else {
+            lookout_chart_link_select(h, nil)
+        }
+        kick()
+    }
+
+    func removeChartLink(_ url: String) {
+        guard let h = handle else { return }
+        url.withCString { lookout_chart_link_remove(h, $0) }
+        kick()
+    }
+
+    func refreshChartLink(_ url: String) {
+        guard let h = handle else { return }
+        url.withCString { lookout_chart_link_refresh(h, $0) }
+        kick()
+    }
+
+    /// Hand the mariner's old UserDefaults list to the core, once. See
+    /// AppModel.migrateChartLinks.
+    func importChartLinks(_ json: String) {
+        guard let h = handle else { return }
+        json.withCString { lookout_chart_links_import(h, $0) }
+    }
+
+    /// Everything the chart list shows, or nil when nothing changed since the
+    /// last poll. The flag has ONE consumer, so this is called from exactly one
+    /// place: pushReadouts.
+    func chartLinksSnapshot() -> String? {
+        guard let h = handle, lookout_chart_links_changed(h) != 0 else { return nil }
+        guard let c = lookout_chart_links_json(h) else { return nil }
+        defer { lookout_string_free(c) }
+        return String(cString: c)
+    }
+
+    /// Is a publisher's style the one being drawn?
+    var altChartStyleActive: Bool {
+        guard let h = handle else { return false }
+        return lookout_alt_chart_style_active(h) != 0
+    }
     func chartHidden() -> Bool { guard let h = handle else { return false }; return lookout_chart_hidden(h) != 0 }
     /// Every set, with whether it is in view and whether it is drawn. This is
     /// what the pill's menu is built from — a mariner has to see what they
@@ -1006,6 +1194,28 @@ final class ChartController: NSObject {
         guard !sets.isEmpty else { return }
         for s in sets where hidden.contains(s.name) { rasterSetShown(s.id, false) }
         for s in sets where !hidden.contains(s.name) { rasterSetShown(s.id, true) }
+
+        // With no survey open, the imagery IS the chart, and switching a set
+        // off no longer means what it meant when it was said. The mariner hid
+        // it to see the ENC underneath; with the ENC gone, obeying that leaves
+        // them a blank sea and no way to read what they are looking at — so
+        // the set covering this water comes back on. It is named in the pill
+        // and one click from off again, which a blank screen is not.
+        //
+        // What they saved is NOT rewritten. This overrides the choice while
+        // there is no survey to see under; add ENC charts back and the set
+        // they hid is hidden again, which is what they asked for.
+        guard chartCount() == 0 else { return }
+        let here = rasterSets().filter(\.inView)
+        guard !here.isEmpty, !here.contains(where: \.shown), let pick = here.first else { return }
+        rasterSetShown(pick.id, true)
+        lkLog("raster: nothing drawn and no survey aboard — showing \(pick.name)")
+    }
+
+    /// How many vector charts are open. Zero is a library of pictures alone.
+    func chartCount() -> Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_charts_count(h))
     }
 
     /// Turn one raster chart on or off without removing it.
@@ -1122,6 +1332,10 @@ final class ChartController: NSObject {
         if model.courseUpState != cup { model.courseUpState = cup }
         let plugged = pluginsActive
         if model.pluginsActive != plugged { model.pluginsActive = plugged }
+        // The chart-link list, the credit and the error, from the core. A
+        // landing answer raises needs-redraw, so a resolve keeps this ticking
+        // until it is done.
+        model.pollChartLinks()
         // Own ship, for the position readout. The state and the numbers move
         // together: a readout that kept the last position through a lost fix
         // would be presenting a stale one as live.
@@ -1170,4 +1384,297 @@ private func withCStrings<R>(_ strings: [String], _ body: ([UnsafePointer<CChar>
     let dups: [UnsafeMutablePointer<CChar>?] = strings.map { strdup($0) }
     defer { dups.forEach { free($0) } }
     return body(dups.map { UnsafePointer($0) })
+}
+
+// MARK: - Interactive-path profiling
+//
+// The offscreen harnesses measure a settled camera with its tiles resident:
+// 5.68 ms a frame, rebuilds at a 6 ms median. Neither reproduces what a
+// MOVING camera costs, which is the whole of the complaint. These two run in
+// the app, on the real display link, through the real gesture entry points.
+
+/// One row per display-link tick, written as CSV at the end of the run.
+final class FrameProfiler: @unchecked Sendable {
+    struct Row {
+        var t: Double // ms since the first tick
+        var gap: Double // ms since the previous tick — the FELT frame rate
+        var dispatched: Bool
+        var dropped: Bool // the render gate was shut: this slot was skipped
+        var building: Bool
+        var zoom: Double // so cost can be read against the LEVEL, not the clock
+        var renderMs: Double = -1 // filled in when the render returns
+    }
+
+    private let path: String
+    private let lock = NSLock()
+    private var rows: [Row] = []
+    private var t0: Double = 0
+    /// Index of the row whose render is in flight. One at a time, by the gate.
+    private var pending: Int?
+
+    init(path: String) {
+        self.path = path
+        rows.reserveCapacity(8192)
+    }
+
+    func tick(gap: Double, dispatched: Bool, dropped: Bool, building: Bool, zoom: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = CACurrentMediaTime()
+        if t0 == 0 { t0 = now }
+        rows.append(.init(t: (now - t0) * 1000, gap: gap * 1000,
+                          dispatched: dispatched, dropped: dropped, building: building,
+                          zoom: zoom))
+        if dispatched { pending = rows.count - 1 }
+    }
+
+    /// Called on the render queue when lookout_render returns.
+    func rendered(ms: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let i = pending, i < rows.count { rows[i].renderMs = ms }
+        pending = nil
+    }
+
+    func write() {
+        lock.lock()
+        let snapshot = rows
+        lock.unlock()
+        var out = "t_ms,gap_ms,dispatched,dropped,building,zoom,render_ms\n"
+        for r in snapshot {
+            out += String(format: "%.2f,%.2f,%d,%d,%d,%.4f,%.3f\n",
+                          r.t, r.gap, r.dispatched ? 1 : 0, r.dropped ? 1 : 0,
+                          r.building ? 1 : 0, r.zoom, r.renderMs)
+        }
+        try? out.write(toFile: path, atomically: true, encoding: .utf8)
+        lkLog("frame profile: \(snapshot.count) ticks -> \(path)")
+    }
+}
+
+/// A scripted pan/zoom through the controller's own entry points, so the
+/// interactive path can be measured without anyone at the trackpad — and the
+/// same run twice.
+@MainActor
+final class GestureBench {
+    private enum Phase { case settle, pan, rest, zoom, fill, rest2, flickPan, rest3, flickZoom, cursor, tour, done }
+
+    /// The tour: at each stop, zoom all the way in, then all the way out, then
+    /// pan (at the wide zoom) to the next coast. It crosses the whole library,
+    /// every zoom level, and the band handoffs between them, which is the run
+    /// that finds what a single sweep at one place never does.
+    private struct Stop { let lon: Double; let lat: Double; let name: String }
+    private let tourStops = [
+        Stop(lon: -76.44, lat: 38.956, name: "Chesapeake"),
+        Stop(lon: -122.44, lat: 37.80, name: "San Francisco"),
+        Stop(lon: -70.90, lat: 42.35, name: "Boston"),
+        Stop(lon: -81.78, lat: 24.55, name: "Key West"),
+        Stop(lon: -87.56, lat: 41.89, name: "Chicago"),
+    ]
+    private var tourStop = 0
+    /// Flick-and-settle bookkeeping (see .flickPan).
+    private var flicksDone = 0
+    private var quiet = 0
+    private enum Leg { case zoomIn, zoomOut, panTo }
+    private var leg: Leg = .zoomIn
+    private var legStart: CFTimeInterval = 0
+    private var lastZoom: Double = -1
+    private var legStall = 0
+    private var phase: Phase = .settle
+    private var frames = 0
+    private let doPan: Bool
+    private let doZoom: Bool
+    /// Long enough for the first build and its tiles to land.
+    private let settleFrames = 120
+    private let panFrames = 240
+    /// 240 out + 240 back at 0.05 a frame = six levels each way.
+    private let zoomFrames = 480
+
+    private let doCursor: Bool
+    private let doTour: Bool
+    /// The point a cursor-anchored zoom must hold still, deliberately well off
+    /// centre so a zoom that quietly falls back to centre-anchored shows up.
+    private var anchorPt = CGPoint(x: 320, y: 200)
+    private var anchorGeo: (lon: Double, lat: Double)?
+    private var fillStart: CFTimeInterval = 0
+    private(set) var anchorDriftM: Double = 0
+
+    init(spec: String) {
+        let s = spec.lowercased()
+        doPan = (s == "1" || s == "pan" || s == "both")
+        doZoom = (s == "1" || s == "zoom" || s == "both")
+        doCursor = (s == "1" || s == "both" || s == "cursor")
+        doTour = (s == "tour")
+    }
+
+    /// One tick of the tour. Each leg runs until the camera stops responding
+    /// (the zoom clamped, or the pan arrived), then reports how long it took
+    /// and how long the chart went on working after it.
+    private func stepTour(_ c: ChartController) {
+        let v = c.currentView
+        switch leg {
+        case .zoomIn, .zoomOut:
+            let dz = leg == .zoomIn ? 0.35 : -0.35
+            c.zoomCentered(dz)
+            // Clamped when the zoom stops moving for a few frames running.
+            if abs(v.zoom - lastZoom) < 0.001 { legStall += 1 } else { legStall = 0 }
+            lastZoom = v.zoom
+            // z18 is as deep as the survey goes; past it the chart is only
+            // magnified, so a test that runs on to z21 is measuring overscale
+            // rather than the chart.
+            let atLimit = leg == .zoomIn && v.zoom >= 18.0
+            if legStall >= 8 || atLimit || frames > 1200 {
+                report(c, "\(leg == .zoomIn ? "zoom in " : "zoom out")@\(tourStops[tourStop].name) -> z\(String(format: "%.1f", v.zoom))")
+                if leg == .zoomIn { beginLeg(.zoomOut) } else {
+                    if tourStop + 1 < tourStops.count { tourStop += 1; beginLeg(.panTo) }
+                    else { phase = .done; frames = 0 }
+                }
+            }
+        case .panTo:
+            // Steer by where the destination actually IS on screen, both axes
+            // at once. Testing longitude alone stopped the pan the moment the
+            // meridian matched and left the latitude wherever it had got to,
+            // which put "Key West" and "Chicago" in the middle of the country.
+            let want = tourStops[tourStop]
+            let p = c.screenPoint(forGeoLon: want.lon, lat: want.lat)
+            let centre = c.viewCentrePt
+            var dx = centre.x - p.x
+            var dy = centre.y - p.y
+            let dist = (dx * dx + dy * dy).squareRoot()
+            if dist < 24 || frames > 2400 {
+                report(c, "pan -> \(want.name)")
+                beginLeg(.zoomIn)
+                return
+            }
+            // Brisk but not a jump, so the pan is a real gesture over real
+            // ground rather than a teleport the tile path never sees.
+            let step = min(dist, 160)
+            dx = dx / dist * step
+            dy = dy / dist * step
+            c.pan(dxPt: dx, dyPt: dy)
+        }
+    }
+
+    private func beginLeg(_ l: Leg) {
+        leg = l; frames = 0; legStall = 0; lastZoom = -1
+        legStart = CACurrentMediaTime()
+    }
+
+    private func report(_ c: ChartController, _ what: String) {
+        let ms = (CACurrentMediaTime() - legStart) * 1000
+        lkLog(String(format: "tour: %@ in %.0f ms (%d frames)", what, ms, frames))
+    }
+
+    func step(_ c: ChartController) {
+        frames += 1
+        switch phase {
+        case .settle:
+            // Wait for the chart to be OPEN and settled, not just for a frame
+            // count: a chart library takes tens of seconds to compose, and a
+            // bench that starts on frame 120 measures the loading screen.
+            if c.model?.firstBuildDone != true || c.stillBuilding { frames = 0; return }
+            if frames >= settleFrames {
+                if doTour { beginLeg(.zoomIn); phase = .tour; return }
+                phase = doPan ? .pan : (doZoom ? .zoom : (doCursor ? .cursor : .done))
+                frames = 0
+            }
+        case .pan:
+            // A steady drag: 4 pt a frame is an ordinary finger, and it keeps
+            // crossing into new tiles, which is the case the settled
+            // benchmarks cannot produce. (8 pt was a race, not a pan — the
+            // gentler drag is the cadence the complaint describes.)
+            c.pan(dxPt: -4, dyPt: -1.5)
+            if frames >= panFrames { phase = .rest; frames = 0 }
+        case .rest:
+            if frames >= 60 { phase = doZoom ? .zoom : .done; frames = 0 }
+        case .zoom:
+            // Out six whole zoom levels and back in. Crossing LEVELS is where
+            // the work is: each one changes which tiles cover the view, so the
+            // compositor is asked for a fresh set and every resident tile is
+            // re-laid-out. A shallow pinch inside one level measures almost
+            // nothing by comparison.
+            // Zoom IN only: every level needs tiles the view has never
+            // held, which is the case that waits on the compositor.
+            c.zoomCentered(0.05)
+            if frames >= zoomFrames { phase = .fill; frames = 0; fillStart = CACurrentMediaTime() }
+        case .fill:
+            // How long the chart takes to FINISH after the gesture stops: the
+            // tiles a zoom asked for still have to be composed and tessellated,
+            // and that wait is what reads as "it fills in ages later".
+            if !c.stillBuilding || frames > 900 {
+                let ms = (CACurrentMediaTime() - fillStart) * 1000
+                lkLog(String(format: "fill after zoom: %.0f ms (%d frames)", ms, frames))
+                phase = .rest2; frames = 0
+            }
+        case .rest2:
+            if frames >= 60 { phase = .flickPan; frames = 0 }
+        case .flickPan:
+            // A FLICK, then wait for the chart to SETTLE — coast ended, build
+            // landed, three quarters of a second of quiet — then flick again.
+            // That is the cadence of a real hand, and the settle boundary is
+            // the path a fixed spacing never ran: each throw used to land in
+            // the previous coast, so the first-frame-after-idle work was
+            // measured zero times. Three throws, coasts and settles both.
+            //
+            // Thrown into water that NEEDS tiles. The pan and zoom phases
+            // warmed everything around the start view, and a coast over
+            // resident tiles measures nothing about supply — so this jumps to
+            // a coast the run has not touched, lets it build, and every throw
+            // after that keeps entering cold water.
+            if frames == 1 {
+                var v = c.currentView
+                v.lon = -76.61
+                v.lat = 39.27 // Baltimore approaches, untouched by the run
+                c.setView(v)
+                return
+            }
+            let settled = !c.isAnimating && !c.stillBuilding
+            quiet = settled ? quiet + 1 : 0
+            if flicksDone < 3 {
+                if quiet >= 45 { // the first throw waits for the jump to build
+                    c.flingStart(vx: -2600, vy: -900)
+                    flicksDone += 1
+                    quiet = 0
+                }
+            } else if quiet >= 45 || frames >= 1800 {
+                flicksDone = 0
+                quiet = 0
+                phase = .rest3
+                frames = 0
+            }
+        case .rest3:
+            if frames >= 60 { phase = .flickZoom; frames = 0 }
+        case .flickZoom:
+            // A snap zoom: one big step, eased by the camera. Same coast path.
+            if frames % 60 == 1 {
+                c.zoomCentered(frames < 180 ? -1.0 : 1.0)
+            }
+            if frames >= 360 { phase = doCursor ? .cursor : .done; frames = 0 }
+        case .cursor:
+            // Zoom-to-cursor is a CONTRACT, not a feel: the world point under
+            // the pointer must not move while the zoom eases. Record the geo
+            // under the anchor, wheel in and back out at that point, and
+            // measure how far it drifted. Anything past a few metres at harbor
+            // scale means the anchor is being lost — which reads to a mariner
+            // as "it zooms to the middle, not to where I'm pointing".
+            if frames == 1 { anchorGeo = c.geo(atPoint: anchorPt) }
+            if frames % 3 == 1 { c.zoom(frames <= 180 ? 0.15 : -0.15, atPt: anchorPt) }
+            if frames >= 360 {
+                if let want = anchorGeo, let got = c.geo(atPoint: anchorPt) {
+                    // Metres on the ground, at this latitude.
+                    let dLat = (got.lat - want.lat) * 111_320
+                    let dLon = (got.lon - want.lon) * 111_320 * cos(want.lat * .pi / 180)
+                    anchorDriftM = (dLat * dLat + dLon * dLon).squareRoot()
+                    lkLog(String(format: "cursor anchor drift: %.1f m (want %.6f,%.6f got %.6f,%.6f)",
+                                 anchorDriftM, want.lon, want.lat, got.lon, got.lat))
+                }
+                phase = .done; frames = 0
+            }
+        case .tour:
+            stepTour(c)
+        case .done:
+            if frames == 30 {
+                c.finishGestureBench()
+            }
+        }
+    }
 }

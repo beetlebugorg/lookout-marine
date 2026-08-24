@@ -56,6 +56,9 @@ fun ChartScreen(
     onViewCreated: (LookoutView) -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
+    // The section the settings sheet opens on: "Configure GPS" goes straight
+    // to Connections; everything else starts at the list or Display.
+    var settingsSection by remember { mutableStateOf<String?>(null) }
     var showSearch by remember { mutableStateOf(false) }
     var showScaleEntry by remember { mutableStateOf(false) }
     // The chart's size, tracked so the zoom buttons can zoom about its centre
@@ -115,7 +118,9 @@ fun ChartScreen(
         // ---- top right: north ------------------------------------------------
         NorthBubble(
             rotationDeg = controller.readouts.rotationDeg,
-            onReset = { controller.resetRotation() },
+            followState = controller.readouts.followState,
+            courseUp = controller.readouts.courseUp,
+            onCycle = { controller.cycleOrientation() },
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
@@ -148,6 +153,7 @@ fun ChartScreen(
                 .align(Alignment.BottomStart)
                 .navigationBarsPadding()
                 .padding(start = Chrome.margin, bottom = Chrome.gap + capsuleH + Chrome.gap),
+            attribution = controller.chartLinkAttribution,
         )
 
         // ---- a tapped overlay object, in a bubble pinned to it ---------------
@@ -220,6 +226,7 @@ fun ChartScreen(
                 onDismiss = { controller.dismissIdentify() },
                 width = width,
                 maxHeight = place.room,
+                onAuxFile = { cell, name -> controller.openAuxFile(cell, name) },
                 modifier = Modifier
                     .align(alignment)
                     .padding(
@@ -243,6 +250,7 @@ fun ChartScreen(
             )
             StartupLoader(
                 cells = charts.chartPaths.size,
+                phase = controller.loadPhase,
                 modifier = Modifier.align(Alignment.Center),
             )
         } else if (controller.readouts.building) {
@@ -283,7 +291,38 @@ fun ChartScreen(
             // The Charts tab is where charts are added; the pill's item goes
             // there rather than growing a second file browser.
             onAddRasterCharts = { showSettings = true },
+            onConfigureGps = {
+                settingsSection = "connections"
+                showSettings = true
+            },
         )
+
+        controller.chartMenu?.let { menu ->
+            ChartMenuPanel(
+                menu = menu,
+                onPick = { controller.menuPick() },
+                onDropMarker = { controller.dropMarker() },
+                onRenameMarker = { controller.beginRenameMarker() },
+                onRemoveMarker = { controller.removeMarker() },
+                onDismiss = { controller.dismissChartMenu() },
+            )
+        }
+        controller.renamingMarker?.let { m ->
+            MarkerRenameDialog(
+                current = m.markerName,
+                onCommit = { controller.commitRenameMarker(it) },
+                onCancel = { controller.cancelRenameMarker() },
+            )
+        }
+        controller.auxFile?.let { f ->
+            AuxFileDialog(file = f, onDismiss = { controller.dismissAuxFile() })
+        }
+        // A plugin's declared table (AIS targets), over the chart so a row's
+        // reveal lands on a visible chart.
+        PluginTableDialog(controller)
+        // Consent for a .lkplug that arrived from another app; also serves
+        // the settings sheet's install flow.
+        PluginInstallDialogs(controller)
     }
 
     if (showSearch) {
@@ -313,7 +352,11 @@ fun ChartScreen(
             charts = charts,
             controller = controller,
             onRequestAccess = onRequestFileAccess,
-            onDismiss = { showSettings = false },
+            onDismiss = {
+                showSettings = false
+                settingsSection = null
+            },
+            initialSection = settingsSection,
         )
     }
 }

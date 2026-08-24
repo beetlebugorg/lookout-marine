@@ -116,6 +116,7 @@ namespace winrt::LookoutMarine::implementation
             it.IsChecked(i == active);
             it.Click([this, i](auto &&, auto &&) {
                 lk_controller_raster_select(controller, i);
+                SaveRasterShown();
                 UpdateReadouts(true);
             });
             menu.Items().Append(it);
@@ -126,6 +127,7 @@ namespace winrt::LookoutMarine::implementation
         none.IsChecked(active < 0);
         none.Click([this](auto &&, auto &&) {
             lk_controller_raster_select(controller, -1);
+            SaveRasterShown();
             UpdateReadouts(true);
         });
         menu.Items().Append(none);
@@ -137,6 +139,7 @@ namespace winrt::LookoutMarine::implementation
                                                         : L"Hide ENC Over Raster");
         enc.Click([this](auto &&, auto &&) {
             lk_controller_toggle_chart(controller);
+            lk_store_set_chart_hidden(lk_controller_chart_hidden(controller));
             UpdateReadouts(true);
         });
         menu.Items().Append(enc);
@@ -159,6 +162,7 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
         lk_controller_raster_cycle(controller);
+        SaveRasterShown();
     }
 
     // ---- adding -------------------------------------------------------------
@@ -168,10 +172,24 @@ namespace winrt::LookoutMarine::implementation
         if (paths.empty() || !lk_controller_is_open(controller))
             return;
 
+        /* A BSB/KAP sheet is a picture of a chart, not a chart the engine can
+         * serve tiles from: it bakes first (decode and warp, tile57), and the
+         * baked output comes back through this function. Ready files carry on
+         * below in the same call — picking a mixed folder must add what can be
+         * added and bake the rest, not fail half of it. */
+        std::vector<std::string> ready;
+        std::vector<std::string> sources;
+        for (auto const &p : paths)
+            (lkw::IsRasterSource(p) ? sources : ready).push_back(p);
+        if (!sources.empty())
+            BakeRasterSources(sources);
+        if (ready.empty())
+            return;
+
         std::vector<std::string> failed;
         std::vector<std::string> added;
         std::string last_added;
-        for (auto const &p : paths)
+        for (auto const &p : ready)
         {
             if (std::find(raster_paths.begin(), raster_paths.end(), p) != raster_paths.end())
                 continue;
@@ -209,6 +227,7 @@ namespace winrt::LookoutMarine::implementation
                 if (want == name && lk_controller_raster_set_in_view(controller, (unsigned)i))
                 {
                     lk_controller_raster_select(controller, i);
+                    SaveRasterShown();
                     break;
                 }
             }
@@ -227,7 +246,7 @@ namespace winrt::LookoutMarine::implementation
         else if (!failed.empty())
         {
             std::string msg = "Couldn't open " + std::to_string(failed.size()) + " of " +
-                              std::to_string(paths.size()) + " files:";
+                              std::to_string(ready.size()) + " files:";
             for (auto const &f : failed)
                 msg += "\n" + f;
             ShowRasterError(winrt::to_hstring(msg));
@@ -244,6 +263,9 @@ namespace winrt::LookoutMarine::implementation
         // would be worse than letting it say no.
         picker.FileTypeFilter().Append(L".mbtiles");
         picker.FileTypeFilter().Append(L".pmtiles");
+        // A paper chart as scanned: bakes on the way in (tile57_bake_rasters).
+        picker.FileTypeFilter().Append(L".kap");
+        picker.FileTypeFilter().Append(L".bsb");
         picker.FileTypeFilter().Append(L"*");
         auto files = co_await picker.PickMultipleFilesAsync();
         if (files == nullptr || files.Size() == 0)
@@ -266,7 +288,7 @@ namespace winrt::LookoutMarine::implementation
         auto paths = lkw::CollectRasterCharts(winrt::to_string(folder.Path()));
         if (paths.empty())
         {
-            ShowRasterError(L"No raster charts (.mbtiles or baked .pmtiles) in that folder.");
+            ShowRasterError(L"No raster charts (.mbtiles, baked .pmtiles, or BSB/KAP sheets) in that folder.");
             co_return;
         }
         AddRasterPaths(paths);
@@ -290,6 +312,16 @@ namespace winrt::LookoutMarine::implementation
     // which is also what carries it across a restart. Failures are logged,
     // never alerted: a missing SD card must not become a dialog at every
     // launch.
+    /* Forget every stored raster chart, and the per-set hidden state with it
+     * (the reference's clearRasterCharts). The picture on screen is left
+     * alone — the store is what the NEXT open re-installs from, and that is
+     * the moment this takes effect. */
+    void MainWindow::ForgetRasterCharts()
+    {
+        lk_store_clear_rasters();
+        raster_paths.clear();
+    }
+
     void MainWindow::InstallStoredRasters()
     {
         raster_paths.clear();
@@ -316,5 +348,102 @@ namespace winrt::LookoutMarine::implementation
         lk_store_free_rasters(paths, enabled);
         if (total > 0)
             fprintf(stderr, "shell: raster %d/%d source(s) re-installed\n", ok, total);
+    }
+
+    // Put back which raster sets the mariner had drawn, then the saved
+    // ENC-hidden switch. Adding a source draws its set, which is right for a
+    // chart just picked and wrong for one being re-installed at launch, so
+    // every open has to correct it — before the first frame, or a set the
+    // mariner switched off flashes on screen.
+    //
+    // Two passes. Hiding first and showing second is what keeps the election:
+    // where two providers cover one coast, the sources were added in an order
+    // that drew the first of them, so showing the mariner's pick before
+    // hiding its rival would leave the rival to turn the pick straight back
+    // off.
+    void MainWindow::RestoreRasterShown()
+    {
+        raster_hidden.clear();
+        if (char **names = lk_store_load_hidden_sets())
+        {
+            for (int i = 0; names[i] != nullptr; ++i)
+                raster_hidden.insert(names[i]);
+            lk_store_free_recents(names);
+        }
+
+        int count = lk_controller_raster_set_count(controller);
+        if (count > 0)
+        {
+            char name[192];
+            for (int i = 0; i < count; ++i)
+            {
+                lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+                if (raster_hidden.count(name))
+                    lk_controller_raster_set_shown(controller, (unsigned)i, 0);
+            }
+            for (int i = 0; i < count; ++i)
+            {
+                lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+                if (!raster_hidden.count(name))
+                    lk_controller_raster_set_shown(controller, (unsigned)i, 1);
+            }
+
+            // With no survey open, the imagery IS the chart, and switching a
+            // set off no longer means what it meant when it was said: the
+            // mariner hid it to see the ENC underneath, and obeying that now
+            // leaves a blank sea. The set covering this water comes back on —
+            // named in the pill and one click from off again, which a blank
+            // screen is not. What they SAVED is not rewritten; add ENC charts
+            // back and the set they hid is hidden again.
+            if (lk_controller_charts_count(controller) == 0)
+            {
+                bool any_shown = false;
+                int first_here = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    if (!lk_controller_raster_set_in_view(controller, (unsigned)i))
+                        continue;
+                    if (first_here < 0)
+                        first_here = i;
+                    if (lk_controller_raster_shown(controller, (unsigned)i))
+                        any_shown = true;
+                }
+                if (!any_shown && first_here >= 0)
+                    lk_controller_raster_set_shown(controller, (unsigned)first_here, 1);
+            }
+        }
+
+        if (lk_store_chart_hidden())
+            lk_controller_set_chart_hidden(controller, 1);
+    }
+
+    // Record the engine's per-set drawn state, by name. Read back from the
+    // engine rather than tracked here: it owns the election — showing one set
+    // turns off the sets covering the same water — so what it says after the
+    // change is the only account that can be right.
+    void MainWindow::SaveRasterShown()
+    {
+        int count = lk_controller_raster_set_count(controller);
+        if (count <= 0)
+            return;
+        auto hidden = raster_hidden;
+        char name[192];
+        for (int i = 0; i < count; ++i)
+        {
+            lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
+            if (name[0] == '\0')
+                continue;
+            if (lk_controller_raster_shown(controller, (unsigned)i))
+                hidden.erase(name);
+            else
+                hidden.insert(name);
+        }
+        if (hidden == raster_hidden)
+            return;
+        raster_hidden = std::move(hidden);
+        std::vector<const char *> cps;
+        for (auto const &n : raster_hidden)
+            cps.push_back(n.c_str());
+        lk_store_save_hidden_sets(cps.data(), (int)cps.size());
     }
 }

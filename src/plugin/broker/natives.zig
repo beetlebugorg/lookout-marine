@@ -157,6 +157,10 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
     if (targets != .array) return -1;
     const source = batchSource(p, parsed.value.object, "ais_upsert");
 
+    // Eviction measures `now - ts`, so a plugin-stamped future `ts` would
+    // make its target immortal. Clamped here because the store itself reads
+    // no wall clock.
+    const now = wallMs();
     var applied: i32 = 0;
     for (targets.array.items) |tv| {
         if (tv != .object) continue;
@@ -182,7 +186,7 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jsonBool(o.get("virtual")),
             .off_position = jsonBool(o.get("off_position")),
-            .ts_ms = jsonInt(o.get("ts")) orelse wallMs(),
+            .ts_ms = @min(jsonInt(o.get("ts")) orelse now, now),
         };
         p.broker.ais.upsert(upd, source) catch |e| {
             p.broker.say(level_warn, p.id, "ais_upsert {d}: {s}", .{ mmsi, @errorName(e) });
@@ -281,10 +285,15 @@ fn hostTcpClose(env: wasm.c.wasm_exec_env_t, id: i64) callconv(.c) void {
 fn hostTimerSet(env: wasm.c.wasm_exec_env_t, delay_ms: i64, periodic: u32) callconv(.c) i64 {
     const p = caller(env) orelse return -1;
     const b = p.broker;
-    // A zero or negative delay would spin the I/O thread; 1 ms is the floor.
-    const delay = @max(delay_ms, 1);
+    // Clamped both ways: see max_timer_delay_ms.
+    const delay = std.math.clamp(delay_ms, 1, broker.max_timer_delay_ms);
     b.mu.lock();
     defer b.mu.unlock();
+    var held: usize = 0;
+    for (b.timers.items) |tm| {
+        if (tm.plugin == p.index) held += 1;
+    }
+    if (held >= broker.max_timers_per_plugin) return -1;
     const id = b.next_timer;
     b.next_timer += 1;
     b.timers.append(b.alloc, .{

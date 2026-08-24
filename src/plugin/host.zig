@@ -476,9 +476,12 @@ pub const Host = struct {
     /// the list growing while dispatch threads and the watchdog hold it.
     entries: std.ArrayList(*Entry) = .empty,
     /// Guards the LIST itself — append on install, the tombstone flip on
-    /// uninstall — against the watchdog iterating it on the I/O thread.
-    /// Everything else that walks the registry runs on the shell's API
-    /// thread, which the C ABI already serializes.
+    /// uninstall — against every thread that indexes it while it can grow:
+    /// the watchdog on the I/O thread, and each plugin's dispatch thread,
+    /// which go through `entryAt`. Entry POINTERS are stable for the host's
+    /// life; it is the items slice that moves under an append. Walkers on the
+    /// shell's API thread need no lock — the C ABI already serializes them
+    /// with the append.
     reg_mu: store.Lock = .{},
     /// True between `start` and `stop`, while the dispatch threads exist.
     started: bool = false,
@@ -1710,6 +1713,15 @@ pub const Host = struct {
         }
     }
 
+    /// The entry at `index`, fetched under reg_mu. For any thread that is not
+    /// the API thread: a hot install can move the items slice under a bare
+    /// index, while the *Entry it holds never moves.
+    fn entryAt(self: *Host, index: u32) *Entry {
+        self.reg_mu.lock();
+        defer self.reg_mu.unlock();
+        return self.entries.items[index];
+    }
+
     /// One plugin's dispatch thread, spawned at `start` or the moment a hot
     /// install appends it.
     fn spawnDispatch(self: *Host, index: u32) void {
@@ -1814,7 +1826,7 @@ pub const Host = struct {
     /// as the backoff says, and goes when the schedule runs out or the host
     /// stops.
     fn dispatchMain(self: *Host, index: u32) void {
-        const e = self.entries.items[index];
+        const e = self.entryAt(index);
         // WAMR keeps the interpreter's native stack boundary per THREAD, and
         // the load thread got its own from initRuntime. Cheap, and the
         // documented way to enter wasm from a thread the runtime has not seen;
@@ -1843,12 +1855,7 @@ pub const Host = struct {
 
     /// Deliver this plugin's events until it stops, faults or is told to stop.
     fn serveEvents(self: *Host, index: u32) void {
-        const e = self.entries.items[index];
-        // Polled rather than waited on a condition variable, for the same
-        // reason raster.zig's worker is: Zig 0.16 has no std.Thread.Condition
-        // outside an Io. The backoff keeps an idle plugin off the CPU; the
-        // broker's fanout tick lands every 100 ms anyway.
-        var idle_ms: u32 = 1;
+        const e = self.entryAt(index);
         while (!e.stopping.load(.acquire) and e.isLive()) {
             // The watchdog may have terminated this instance while the thread
             // was between events, or just after a call returned. Either way the
@@ -1861,11 +1868,13 @@ pub const Host = struct {
             // is written here, where the status line has one writer.
             e.state.drainQueueBudget();
             const ev = self.br.popFor(index) orelse {
-                broker.sleepMs(idle_ms);
-                if (idle_ms < 8) idle_ms *= 2;
+                // Parked on the queue's wake pipe, not polled: an idle plugin
+                // used to wake ~125 times a second for nothing. The bounded
+                // timeout is only so the stop and kill flags above get a look
+                // when no event ever comes.
+                self.br.waitEvents(index, 250);
                 continue;
             };
-            idle_ms = 1;
             defer self.br.freeEvent(ev);
             self.deliverTo(index, ev.kind, ev.handle, ev.payload);
         }
@@ -1885,7 +1894,7 @@ pub const Host = struct {
     /// is one more failed attempt: the schedule decides whether there is
     /// another.
     fn restart(self: *Host, index: u32) bool {
-        const e = self.entries.items[index];
+        const e = self.entryAt(index);
         e.restarts += 1;
         // The clean run is over the moment an attempt begins. Without this a
         // plugin that ran for hours and then could not come up at all would
@@ -1972,7 +1981,7 @@ pub const Host = struct {
     /// Called from that thread, right after `retire`, so a plugin with no
     /// thread to serve the restart is never promised one.
     fn scheduleRestart(self: *Host, index: u32, reason: []const u8) void {
-        const e = self.entries.items[index];
+        const e = self.entryAt(index);
         const schedule = self.opts.restart_backoff_ms;
         // Nothing to promise: the schedule is switched off, the host is
         // stopping, or this plugin has had every attempt it is going to get.
@@ -2019,7 +2028,7 @@ pub const Host = struct {
     /// the mariner reads says why in as many words. Nothing is restarted after
     /// this without a relaunch.
     fn giveUp(self: *Host, index: u32, reason: []const u8) void {
-        const e = self.entries.items[index];
+        const e = self.entryAt(index);
         e.restart_at.store(0, .release);
         self.br.say(
             broker.level_err,
@@ -2031,8 +2040,12 @@ pub const Host = struct {
     }
 
     fn deliverTo(self: *Host, index: u32, kind: u32, handle: u64, payload: []const u8) void {
-        if (index >= self.entries.items.len) return;
-        const e = self.entries.items[index];
+        const e = blk: {
+            self.reg_mu.lock();
+            defer self.reg_mu.unlock();
+            if (index >= self.entries.items.len) break :blk null;
+            break :blk self.entries.items[index];
+        } orelse return;
         if (e.removed or !e.isLive()) return;
         // SHUTDOWN is the last thing a plugin ever sees, whatever it returns.
         if (kind == broker.Kind.shutdown) e.live.store(false, .release);
@@ -2084,7 +2097,7 @@ pub const Host = struct {
     /// about why, so it is dropped in favour of the budget it blew. Every other
     /// trap keeps its original exception text.
     fn disableStuck(self: *Host, index: u32) void {
-        const e = self.entries.items[index];
+        const e = self.entryAt(index);
         e.inst.clearException();
         var buf: [max_reason]u8 = undefined;
         const reason = std.fmt.bufPrint(
@@ -2105,7 +2118,7 @@ pub const Host = struct {
     /// logged as an error, status line replaced with the reason — from one that
     /// was shut down, which keeps whatever it last said about itself.
     fn retire(self: *Host, index: u32, fault: bool, reason: []const u8) void {
-        const e = self.entries.items[index];
+        const e = self.entryAt(index);
         e.live.store(false, .release);
         if (e.retired.swap(true, .acq_rel)) return;
         if (fault) {

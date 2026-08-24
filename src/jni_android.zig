@@ -29,6 +29,7 @@ const cc = @import("c.zig").c;
 const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 };
 extern fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_path: [*:0]const u8, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
 extern fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*anyopaque;
+extern fn lookout_charts_add(h: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize) c_int;
 extern fn lookout_close(h: ?*anyopaque) void;
 extern fn lookout_detach_surface(h: ?*anyopaque) void;
 extern fn lookout_attach_surface(h: ?*anyopaque, kind: c_int, native_handle: ?*anyopaque, width: u32, height: u32) c_int;
@@ -122,31 +123,71 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpen(env: [*c]j.JNIEnv, cls: j.jcl
 ///
 /// The compose+partition build is slow for a big library, so the engine runs it
 /// on a worker and shows its loader; the first cell renders immediately.
-export fn Java_org_beetlebug_lookout_Lookout_nOpenCharts(env: [*c]j.JNIEnv, cls: j.jclass, paths: j.jobjectArray, surface: j.jobject, w_px: j.jint, h_px: j.jint, w_pts: j.jint, h_pts: j.jint, msaa: j.jboolean) j.jlong {
-    _ = cls;
-    const count = env_(env).GetArrayLength.?(env, paths);
-    if (count <= 0) return 0;
-    const n: usize = @intCast(count);
-    // Both arrays are needed to RELEASE: ReleaseStringUTFChars wants the
-    // jstring its chars came from, so the local refs are kept alongside.
-    const strs = gpa.alloc(j.jstring, n) catch return 0;
-    defer gpa.free(strs);
-    const cs = gpa.alloc([*:0]const u8, n) catch return 0;
-    defer gpa.free(cs);
+/// Copy a Java String[] of paths to NUL-terminated C strings. Each element's
+/// ref is dropped inside the loop: a real library is thousands of paths, and
+/// ART's local reference table holds 512 — keeping a ref and a pinned string
+/// per element until the call returned overflowed the table and aborted the
+/// process. Free with freePathArray.
+fn copyPathArray(env: [*c]j.JNIEnv, paths: j.jobjectArray, n: usize) ?[][*:0]const u8 {
+    const cs = gpa.alloc([*:0]const u8, n) catch return null;
     var got: usize = 0;
-    defer for (0..got) |i| env_(env).ReleaseStringUTFChars.?(env, strs[i], @ptrCast(cs[i]));
     while (got < n) : (got += 1) {
         const s: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, paths, @intCast(got)));
-        const c = env_(env).GetStringUTFChars.?(env, s, null) orelse return 0;
-        strs[got] = s;
-        cs[got] = @ptrCast(c);
+        const c = env_(env).GetStringUTFChars.?(env, s, null) orelse {
+            for (cs[0..got]) |p| gpa.free(std.mem.span(p));
+            gpa.free(cs);
+            return null;
+        };
+        const copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(c)))) catch {
+            env_(env).ReleaseStringUTFChars.?(env, s, c);
+            env_(env).DeleteLocalRef.?(env, s);
+            for (cs[0..got]) |p| gpa.free(std.mem.span(p));
+            gpa.free(cs);
+            return null;
+        };
+        env_(env).ReleaseStringUTFChars.?(env, s, c);
+        env_(env).DeleteLocalRef.?(env, s);
+        cs[got] = copy.ptr;
     }
+    return cs;
+}
+
+fn freePathArray(cs: [][*:0]const u8) void {
+    for (cs) |p| gpa.free(std.mem.span(p));
+    gpa.free(cs);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nOpenCharts(env: [*c]j.JNIEnv, cls: j.jclass, paths: j.jobjectArray, surface: j.jobject, w_px: j.jint, h_px: j.jint, w_pts: j.jint, h_pts: j.jint, msaa: j.jboolean) j.jlong {
+    _ = cls;
+    // ZERO paths is a real open: the link-first startup brings the engine up
+    // empty so an active chart link can paint, and adds the library behind
+    // it (nChartsAdd).
+    const count = env_(env).GetArrayLength.?(env, paths);
+    if (count < 0) return 0;
+    const n: usize = @intCast(count);
+    const cs = copyPathArray(env, paths, n) orelse return 0;
+    defer freePathArray(cs);
     const win = j.ANativeWindow_fromSurface(env, surface) orelse return 0;
     const l = lookout_open_charts_in_window(LOOKOUT_NATIVE_ANDROID_WINDOW, win, cs.ptr, n, @intCast(w_px), @intCast(h_px), if (msaa != 0) 1 else 0) orelse {
         j.ANativeWindow_release(win);
         return 0;
     };
     return finishOpen(l, win, w_pts, h_pts);
+}
+
+/// int nChartsAdd(long h, String[] paths): add baked charts to the open
+/// library. The heavy opens run OFF the engine lock (root.chartsAdd), so a
+/// background thread calls this while the chart draws — the link-first
+/// startup's second half.
+export fn Java_org_beetlebug_lookout_Lookout_nChartsAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, paths: j.jobjectArray) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const count = env_(env).GetArrayLength.?(env, paths);
+    if (count <= 0) return 0;
+    const n: usize = @intCast(count);
+    const cs = copyPathArray(env, paths, n) orelse return 0;
+    defer freePathArray(cs);
+    return @intCast(lookout_charts_add(h.l, cs.ptr, n));
 }
 
 /// The tail both opens share: hand the camera its LOGICAL size (so the core can
@@ -393,6 +434,16 @@ export fn Java_org_beetlebug_lookout_Lookout_nMemoryWarning(env: [*c]j.JNIEnv, c
     _ = cls;
     const h = fromLong(hl) orelse return;
     lookout_memory_warning(h.l);
+}
+
+extern fn lookout_atlas_cache_ready() c_int;
+
+/// boolean nAtlasCacheReady() -- whether the next open skips the one-time
+/// symbol rasterize, so the loader says "preparing symbols" only on first run.
+export fn Java_org_beetlebug_lookout_Lookout_nAtlasCacheReady(env: [*c]j.JNIEnv, cls: j.jclass) j.jboolean {
+    _ = env;
+    _ = cls;
+    return if (lookout_atlas_cache_ready() != 0) 1 else 0;
 }
 
 // ---- mariner settings ------------------------------------------------------
@@ -974,4 +1025,884 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigSet(env: [*c]j.JNIEnv,
     const cjson = env_(env).GetStringUTFChars.?(env, json, null) orelse return 0;
     defer env_(env).ReleaseStringUTFChars.?(env, json, cjson);
     return if (lookout_plugin_config_set(h.l, @ptrCast(cid), @ptrCast(cjson)) == 0) 1 else 0;
+}
+
+// ---- follow mode and own ship ----------------------------------------------
+//
+// The engine owns follow: a pan drops it, so the shell POLLS the state per
+// readout tick and never remembers a tap (ChartController.swift does the
+// same). Own ship's numbers are published only while the fix is live.
+
+extern fn lookout_follow_set(h: ?*anyopaque, on: c_int) void;
+extern fn lookout_follow_active(h: ?*anyopaque) c_int;
+extern fn lookout_course_up_set(h: ?*anyopaque, on: c_int) void;
+extern fn lookout_course_up_active(h: ?*anyopaque) c_int;
+extern fn lookout_own_ship(h: ?*anyopaque, lon: *f64, lat: *f64) c_int;
+
+/// void nFollowSet(long h, boolean on)
+export fn Java_org_beetlebug_lookout_Lookout_nFollowSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, on: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_follow_set(h.l, if (on != 0) 1 else 0);
+}
+
+/// int nFollowActive(long h) -- 0 off, 1 following, 2 armed and waiting.
+export fn Java_org_beetlebug_lookout_Lookout_nFollowActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return lookout_follow_active(h.l);
+}
+
+/// void nCourseUpSet(long h, boolean on)
+export fn Java_org_beetlebug_lookout_Lookout_nCourseUpSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, on: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_course_up_set(h.l, if (on != 0) 1 else 0);
+}
+
+/// int nCourseUpActive(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nCourseUpActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return lookout_course_up_active(h.l);
+}
+
+/// int nOwnShip(long h, double[] out) -- fix state; out[0]=lon, out[1]=lat.
+export fn Java_org_beetlebug_lookout_Lookout_nOwnShip(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, out: j.jdoubleArray) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    if (env_(env).GetArrayLength.?(env, out) < 2) return 0;
+    var buf: [2]f64 = .{ 0, 0 };
+    const state = lookout_own_ship(h.l, &buf[0], &buf[1]);
+    env_(env).SetDoubleArrayRegion.?(env, out, 0, 2, &buf);
+    return state;
+}
+
+// ---- raster shown state and the ENC switch ---------------------------------
+//
+// The election is the engine's; these let the shell SAVE a choice by set and
+// put it back at the next open (AppModel.restoreRasterShown's two passes).
+
+extern fn lookout_raster_shown(h: ?*anyopaque, i: u32) c_int;
+extern fn lookout_raster_set_shown(h: ?*anyopaque, i: u32, shown: c_int) void;
+extern fn lookout_set_chart_hidden(h: ?*anyopaque, hidden: c_int) void;
+extern fn lookout_charts_count(h: ?*anyopaque) u32;
+
+/// boolean nRasterShown(long h, int i)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterShown(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    if (i < 0) return 0;
+    return if (lookout_raster_shown(h.l, @intCast(i)) != 0) 1 else 0;
+}
+
+/// void nRasterSetShown(long h, int i, boolean shown)
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetShown(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, i: j.jint, shown: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    if (i < 0) return;
+    lookout_raster_set_shown(h.l, @intCast(i), if (shown != 0) 1 else 0);
+}
+
+/// void nSetChartHidden(long h, boolean hidden)
+export fn Java_org_beetlebug_lookout_Lookout_nSetChartHidden(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, hidden: j.jboolean) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_set_chart_hidden(h.l, if (hidden != 0) 1 else 0);
+}
+
+/// int nChartsCount(long h) -- 0 means no survey: "hidden" loses its meaning.
+export fn Java_org_beetlebug_lookout_Lookout_nChartsCount(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return @intCast(lookout_charts_count(h.l));
+}
+
+// ---- markers ----------------------------------------------------------------
+//
+// Core-owned and chart-independent; the shell stores nothing and draws
+// nothing. THE DROP NEVER WAITS FOR TYPING: the core names the mark.
+
+const lookout_marker = extern struct {
+    id: u64,
+    lon: f64,
+    lat: f64,
+    name: [*:0]const u8,
+    name_len: usize,
+    dropped_ms: i64,
+};
+
+extern fn lookout_marker_add(h: ?*anyopaque, lon: f64, lat: f64) u64;
+extern fn lookout_marker_by_id(h: ?*anyopaque, id: u64, out: *lookout_marker) c_int;
+extern fn lookout_marker_at(h: ?*anyopaque, x_pt: f32, y_pt: f32, out: *lookout_marker) c_int;
+extern fn lookout_marker_rename(h: ?*anyopaque, id: u64, name: [*:0]const u8) c_int;
+extern fn lookout_marker_remove(h: ?*anyopaque, id: u64) c_int;
+
+/// long nMarkerAdd(long h, double lon, double lat) -- the id, 0 refused.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, lon: j.jdouble, lat: j.jdouble) j.jlong {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return @bitCast(lookout_marker_add(h.l, lon, lat));
+}
+
+/// String nMarkerName(long h, long id) -- null once the marker is gone. The
+/// name is borrowed from the core and copied by NewStringUTF before return.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerName(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var m: lookout_marker = undefined;
+    if (lookout_marker_by_id(h.l, @bitCast(id), &m) == 0) return null;
+    return env_(env).NewStringUTF.?(env, m.name);
+}
+
+/// long nMarkerAt(long h, float xPt, float yPt) -- the marker within reach of
+/// a LOGICAL point (about 14 pt), or 0. Decides the chart menu's items.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerAt(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, x_pt: j.jfloat, y_pt: j.jfloat) j.jlong {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    var m: lookout_marker = undefined;
+    if (lookout_marker_at(h.l, x_pt, y_pt, &m) == 0) return 0;
+    return @bitCast(m.id);
+}
+
+/// boolean nMarkerRename(long h, long id, String name) -- empty keeps the old
+/// name; the core clips at 32 characters, so shells agree.
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerRename(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, name: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cname = env_(env).GetStringUTFChars.?(env, name, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, name, cname);
+    return if (lookout_marker_rename(h.l, @bitCast(id), @ptrCast(cname)) == 0) 1 else 0;
+}
+
+/// boolean nMarkerRemove(long h, long id)
+export fn Java_org_beetlebug_lookout_Lookout_nMarkerRemove(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_marker_remove(h.l, @bitCast(id)) == 0) 1 else 0;
+}
+
+// ---- the chart's own files and the library ---------------------------------
+
+extern fn lookout_aux_file(h: ?*anyopaque, cell: [*:0]const u8, name: [*:0]const u8, bytes: *[*c]const u8, len: *usize, mime: *[*c]const u8) void;
+extern fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
+extern fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
+
+/// byte[] nAuxFile(long h, String cell, String name, String[] mimeOut) --
+/// null when the chart does not carry the file. The bytes are borrowed from
+/// the engine's scratch and copied into the array before return.
+export fn Java_org_beetlebug_lookout_Lookout_nAuxFile(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, cell: j.jstring, name: j.jstring, mime_out: j.jobjectArray) j.jbyteArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const ccell = env_(env).GetStringUTFChars.?(env, cell, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, cell, ccell);
+    const cname = env_(env).GetStringUTFChars.?(env, name, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, name, cname);
+
+    var bytes: [*c]const u8 = null;
+    var len: usize = 0;
+    var mime: [*c]const u8 = null;
+    lookout_aux_file(h.l, @ptrCast(ccell), @ptrCast(cname), &bytes, &len, &mime);
+    if (bytes == null or len == 0) return null;
+
+    const arr = env_(env).NewByteArray.?(env, @intCast(len)) orelse return null;
+    env_(env).SetByteArrayRegion.?(env, arr, 0, @intCast(len), @ptrCast(bytes));
+    if (mime != null and mime_out != null and env_(env).GetArrayLength.?(env, mime_out) >= 1) {
+        const ms = env_(env).NewStringUTF.?(env, mime);
+        env_(env).SetObjectArrayElement.?(env, mime_out, 0, ms);
+    }
+    return arr;
+}
+
+/// String nScanCharts(String path) -- the scan JSON, or null. NOT REENTRANT:
+/// the two scan calls share one buffer in the core; the shell serializes.
+export fn Java_org_beetlebug_lookout_Lookout_nScanCharts(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring, zip: j.jboolean) j.jstring {
+    _ = cls;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+
+    var len: usize = 0;
+    const json = if (zip != 0)
+        lookout_scan_zip(@ptrCast(cpath), &len)
+    else
+        lookout_scan_charts(@ptrCast(cpath), &len);
+    if (json == null or len == 0) return null;
+
+    // A COUNTED buffer, decoded by length, never as a C string — but
+    // NewStringUTF wants a terminator, so copy through one.
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+// ---- portrayal quick toggles ------------------------------------------------
+
+extern fn lookout_toggle_text(h: ?*anyopaque) void;
+extern fn lookout_toggle_soundings(h: ?*anyopaque) void;
+extern fn lookout_toggle_other_category(h: ?*anyopaque) void;
+
+/// void nToggleText(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nToggleText(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_text(h.l);
+}
+
+/// void nToggleSoundings(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nToggleSoundings(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_soundings(h.l);
+}
+
+/// void nToggleOtherCategory(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nToggleOtherCategory(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return;
+    lookout_toggle_other_category(h.l);
+}
+
+// ---- the bake ---------------------------------------------------------------
+//
+// The import pipeline's engine half: run the phased bake — cells, then
+// sheets, then the lift — on a thread of its own and let Java POLL a
+// snapshot, the way the Windows shell's BakeJob does. No callback ever
+// crosses into the JVM: a bake worker is not an attached thread and must
+// not become one just to move a progress bar.
+
+const BakeJob = struct {
+    thread: ?std.Thread = null,
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    baked: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    phase_offset: u32 = 0,
+    total: u32 = 0,
+
+    source: [:0]u8,
+    ins: [][:0]u8,
+    outs: [][:0]u8,
+    cells: usize,
+    sheets: usize,
+    lifts: usize,
+    archive: bool,
+
+    fn free(self: *BakeJob) void {
+        for (self.ins) |s| gpa.free(s);
+        for (self.outs) |s| gpa.free(s);
+        gpa.free(self.ins);
+        gpa.free(self.outs);
+        gpa.free(self.source);
+        gpa.destroy(self);
+    }
+};
+
+fn bakeProgress(ctx: ?*anyopaque, done: u32, total: u32) callconv(.c) bool {
+    _ = total;
+    const job: *BakeJob = @ptrCast(@alignCast(ctx.?));
+    job.done.store(job.phase_offset + done, .release);
+    return !job.cancelled.load(.acquire);
+}
+
+fn bakeWorker(job: *BakeJob) void {
+    const cpus = std.Thread.getCpuCount() catch 4;
+    // A MEMORY bound, not a speed dial: each worker holds a whole cell.
+    const workers: u32 = @intCast(@max(1, @min(8, cpus)));
+
+    const ins_c = gpa.alloc([*c]const u8, job.ins.len) catch {
+        job.running.store(false, .release);
+        return;
+    };
+    defer gpa.free(ins_c);
+    const outs_c = gpa.alloc([*c]const u8, job.outs.len) catch {
+        job.running.store(false, .release);
+        return;
+    };
+    defer gpa.free(outs_c);
+    for (job.ins, 0..) |s, i| ins_c[i] = s.ptr;
+    for (job.outs, 0..) |s, i| outs_c[i] = s.ptr;
+
+    var st: cc.tile57_status = cc.TILE57_OK;
+    var err: cc.tile57_error = undefined;
+    var total_baked: u32 = 0;
+
+    // Sorted by kind upstream, so each phase is one contiguous run.
+    if (job.cells > 0 and !job.cancelled.load(.acquire)) {
+        job.phase_offset = 0;
+        var n: u32 = 0;
+        st = if (job.archive)
+            cc.tile57_bake_zip_charts(job.source.ptr, ins_c.ptr, outs_c.ptr, job.cells, workers, bakeProgress, null, job, &n, &err)
+        else
+            cc.tile57_bake_files(ins_c.ptr, outs_c.ptr, job.cells, workers, bakeProgress, null, job, &n, &err);
+        total_baked += n;
+    }
+    if (st == cc.TILE57_OK and job.sheets > 0 and !job.cancelled.load(.acquire)) {
+        job.phase_offset = @intCast(job.cells);
+        var n: u32 = 0;
+        st = if (job.archive)
+            cc.tile57_bake_zip_rasters(job.source.ptr, ins_c.ptr + job.cells, outs_c.ptr + job.cells, job.sheets, workers, bakeProgress, null, job, &n, &err)
+        else
+            cc.tile57_bake_rasters(ins_c.ptr + job.cells, outs_c.ptr + job.cells, job.sheets, workers, bakeProgress, null, job, &n, &err);
+        total_baked += n;
+    }
+    // Only an archive holds anything to lift; in a folder those files are
+    // already where the engine can read them.
+    if (st == cc.TILE57_OK and job.archive and job.lifts > 0 and !job.cancelled.load(.acquire)) {
+        job.phase_offset = @intCast(job.cells + job.sheets);
+        const off = job.cells + job.sheets;
+        var n: u32 = 0;
+        st = cc.tile57_zip_extract(job.source.ptr, ins_c.ptr + off, outs_c.ptr + off, job.lifts, bakeProgress, job, &n, &err);
+        total_baked += n;
+    }
+
+    job.baked.store(total_baked, .release);
+    // A cancelled bake is not a failure: whatever landed is a usable library.
+    job.ok.store(st == cc.TILE57_OK, .release);
+    job.running.store(false, .release);
+}
+
+/// long nBakeStart(String source, String[] ins, String[] outs, int cells,
+///                 int sheets, int lifts, boolean zip) -- 0 when nothing
+/// starts. `ins`/`outs` are kind-contiguous: cells, then sheets, then lifts.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeStart(env: [*c]j.JNIEnv, cls: j.jclass, source: j.jstring, ins: j.jobjectArray, outs: j.jobjectArray, cells: j.jint, sheets: j.jint, lifts: j.jint, zip: j.jboolean) j.jlong {
+    _ = cls;
+    const n_ins: usize = @intCast(env_(env).GetArrayLength.?(env, ins));
+    const n_outs: usize = @intCast(env_(env).GetArrayLength.?(env, outs));
+    const want: usize = @intCast(cells + sheets + lifts);
+    if (n_ins != want or n_outs != want or want == 0) return 0;
+
+    const csrc = env_(env).GetStringUTFChars.?(env, source, null) orelse return 0;
+    const src_copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(csrc)))) catch {
+        env_(env).ReleaseStringUTFChars.?(env, source, csrc);
+        return 0;
+    };
+    env_(env).ReleaseStringUTFChars.?(env, source, csrc);
+
+    // Copy-and-release per element, the nOpenCharts lesson: ART's local
+    // reference table holds 512 and an archive holds thousands of entries.
+    const takeAll = struct {
+        fn take(e: [*c]j.JNIEnv, arr: j.jobjectArray, n: usize) ?[][:0]u8 {
+            const out = gpa.alloc([:0]u8, n) catch return null;
+            var got: usize = 0;
+            while (got < n) : (got += 1) {
+                const s: j.jstring = @ptrCast(env_(e).GetObjectArrayElement.?(e, arr, @intCast(got)));
+                const c = env_(e).GetStringUTFChars.?(e, s, null) orelse {
+                    for (out[0..got]) |x| gpa.free(x);
+                    gpa.free(out);
+                    return null;
+                };
+                const copy = gpa.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(c)))) catch {
+                    env_(e).ReleaseStringUTFChars.?(e, s, c);
+                    env_(e).DeleteLocalRef.?(e, s);
+                    for (out[0..got]) |x| gpa.free(x);
+                    gpa.free(out);
+                    return null;
+                };
+                env_(e).ReleaseStringUTFChars.?(e, s, c);
+                env_(e).DeleteLocalRef.?(e, s);
+                out[got] = copy;
+            }
+            return out;
+        }
+    }.take;
+
+    const ins_z = takeAll(env, ins, want) orelse {
+        gpa.free(src_copy);
+        return 0;
+    };
+    const outs_z = takeAll(env, outs, want) orelse {
+        for (ins_z) |s| gpa.free(s);
+        gpa.free(ins_z);
+        gpa.free(src_copy);
+        return 0;
+    };
+
+    const job = gpa.create(BakeJob) catch {
+        for (ins_z) |s| gpa.free(s);
+        gpa.free(ins_z);
+        for (outs_z) |s| gpa.free(s);
+        gpa.free(outs_z);
+        gpa.free(src_copy);
+        return 0;
+    };
+    job.* = .{
+        .source = src_copy,
+        .ins = ins_z,
+        .outs = outs_z,
+        .cells = @intCast(cells),
+        .sheets = @intCast(sheets),
+        .lifts = @intCast(lifts),
+        .archive = zip != 0,
+        .total = @intCast(want),
+    };
+    job.thread = std.Thread.spawn(.{}, bakeWorker, .{job}) catch {
+        job.free();
+        return 0;
+    };
+    return @bitCast(@intFromPtr(job));
+}
+
+/// boolean nBakePoll(long job, int[] out) -- true while running;
+/// out[0] = done, out[1] = total, out[2] = baked, out[3] = ok.
+export fn Java_org_beetlebug_lookout_Lookout_nBakePoll(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong, out: j.jintArray) j.jboolean {
+    _ = cls;
+    if (jl == 0) return 0;
+    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    if (env_(env).GetArrayLength.?(env, out) >= 4) {
+        var buf: [4]j.jint = .{
+            @intCast(job.done.load(.acquire)),
+            @intCast(job.total),
+            @intCast(job.baked.load(.acquire)),
+            if (job.ok.load(.acquire)) 1 else 0,
+        };
+        env_(env).SetIntArrayRegion.?(env, out, 0, 4, &buf);
+    }
+    return if (job.running.load(.acquire)) 1 else 0;
+}
+
+/// void nBakeCancel(long job) -- tile57 stops at the next chart boundary.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeCancel(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    if (jl == 0) return;
+    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    job.cancelled.store(true, .release);
+}
+
+/// void nBakeFree(long job) -- joins the worker; cancel a running bake first
+/// or this blocks about one chart's bake time.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeFree(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    if (jl == 0) return;
+    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    if (job.thread) |t| t.join();
+    job.free();
+}
+
+// ---- plugin install and consent ---------------------------------------------
+//
+// NOTHING IS INSTALLED BEFORE ITS PERMISSIONS ARE SHOWN. The consent
+// sentences come from the core (lookout_plugin_inspect), so every shell
+// shows the same words. Also lookout_plugins_load_installed, so the set a
+// mariner installed comes back at every open like the other shells' does.
+
+extern fn lookout_plugins_install_root(h: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn lookout_plugin_tables_json(h: ?*anyopaque, out_len: ?*usize) [*c]const u8;
+extern fn lookout_plugin_table_rows(h: ?*anyopaque, id: [*:0]const u8, key: [*:0]const u8, sort_key: ?[*:0]const u8, ascending: c_int, out_len: ?*usize) [*c]const u8;
+extern fn lookout_plugin_table_open(h: ?*anyopaque, id: [*:0]const u8, key: [*:0]const u8, open: c_int) c_int;
+extern fn lookout_plugins_load_installed(h: ?*anyopaque) c_int;
+extern fn lookout_plugin_inspect(h: ?*anyopaque, path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
+extern fn lookout_plugin_install(h: ?*anyopaque, path: [*:0]const u8) [*c]const u8;
+extern fn lookout_plugin_uninstall(h: ?*anyopaque, id: [*:0]const u8) c_int;
+extern fn lookout_plugin_grant_set(h: ?*anyopaque, id: [*:0]const u8, cap: [*:0]const u8, on: c_int) c_int;
+
+/// boolean nPluginsInstallRoot(long h, String path) -- Android's files dir
+/// has no path in the environment, so the shell names the install root here,
+/// before any other plugin call.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsInstallRoot(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return if (lookout_plugins_install_root(h.l, @ptrCast(cpath)) == 0) 1 else 0;
+}
+
+/// boolean nPluginsLoadInstalled(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsLoadInstalled(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = cls;
+    _ = env;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_plugins_load_installed(h.l) == 0) 1 else 0;
+}
+
+/// String nPluginInspect(long h, String path) -- the consent JSON, or null
+/// when no plugin layer can come up. Borrowed, so copied out here.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginInspect(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    var len: usize = 0;
+    const json = lookout_plugin_inspect(h.l, @ptrCast(cpath), &len);
+    if (json == null or len == 0) return null;
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+/// String nPluginInstall(long h, String path) -- null on success, else one
+/// sentence saying why, ready to show.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginInstall(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return env_(env).NewStringUTF.?(env, "The plugin layer could not start.");
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    const msg = lookout_plugin_install(h.l, @ptrCast(cpath));
+    if (msg == null) return null;
+    return env_(env).NewStringUTF.?(env, msg);
+}
+
+/// String nPluginTables(long h) -- every table the loaded plugins declare,
+/// or null when no layer is up. Borrowed, so copied out here.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginTables(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    var len: usize = 0;
+    const json = lookout_plugin_tables_json(h.l, &len);
+    if (json == null or len == 0) return null;
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+/// String nPluginTableRows(long h, String id, String key, String sortKey,
+/// boolean ascending) -- one table's rows, already in shown order; null when
+/// the plugin or the table is unknown.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginTableRows(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, sort_key: j.jstring, ascending: j.jboolean) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const ckey = env_(env).GetStringUTFChars.?(env, key, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, key, ckey);
+    const csort = if (sort_key != null) env_(env).GetStringUTFChars.?(env, sort_key, null) else null;
+    defer if (csort) |s| env_(env).ReleaseStringUTFChars.?(env, sort_key, s);
+    var len: usize = 0;
+    const json = lookout_plugin_table_rows(h.l, @ptrCast(cid), @ptrCast(ckey), @ptrCast(csort), if (ascending != 0) 1 else 0, &len);
+    if (json == null or len == 0) return null;
+    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
+    defer gpa.free(copy);
+    @memcpy(copy[0..len], json[0..len]);
+    return env_(env).NewStringUTF.?(env, copy.ptr);
+}
+
+/// boolean nPluginTableOpen(long h, String id, String key, boolean open) --
+/// tell the plugin its table is on screen: it builds no rows until then.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginTableOpen(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, open: j.jboolean) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const ckey = env_(env).GetStringUTFChars.?(env, key, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, key, ckey);
+    return if (lookout_plugin_table_open(h.l, @ptrCast(cid), @ptrCast(ckey), if (open != 0) 1 else 0) == 0) 1 else 0;
+}
+
+/// boolean nPluginUninstall(long h, String id)
+export fn Java_org_beetlebug_lookout_Lookout_nPluginUninstall(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    return if (lookout_plugin_uninstall(h.l, @ptrCast(cid)) == 0) 1 else 0;
+}
+
+/// boolean nPluginGrantSet(long h, String id, String cap, boolean on) -- a
+/// live revoke; the plugin keeps running and the lost call answers -1.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginGrantSet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, cap: j.jstring, on: j.jboolean) j.jboolean {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
+    const ccap = env_(env).GetStringUTFChars.?(env, cap, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, cap, ccap);
+    return if (lookout_plugin_grant_set(h.l, @ptrCast(cid), @ptrCast(ccap), if (on != 0) 1 else 0) == 0) 1 else 0;
+}
+
+// ---- charts by link (an online map AS the chart) ----------------------------
+//
+// The core owns the whole feature and asks back for every url it needs — the
+// style, a TileJSON, a sprite pack, every tile. The ask lands on the render
+// thread with the api lock held, so nothing here may touch the JVM: asks are
+// parked in a ring the Java side drains through nHttpPoll — the same no-upcall
+// pattern as the bake job — and answered from any thread with nHttpRespond,
+// which the C ABI documents as lock-free.
+
+extern fn lookout_alt_chart_style_active(h: ?*anyopaque) c_int;
+
+const HttpGetFn = *const fn (user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void;
+const HttpCancelFn = *const fn (user: ?*anyopaque, req_id: u64) callconv(.c) void;
+extern fn lookout_set_http_provider(h: ?*anyopaque, get: ?HttpGetFn, cancel: ?HttpCancelFn, user: ?*anyopaque) void;
+extern fn lookout_http_respond(h: ?*anyopaque, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int) void;
+extern fn lookout_chart_link_add(h: ?*anyopaque, link: [*:0]const u8) void;
+extern fn lookout_chart_link_select(h: ?*anyopaque, url: ?[*:0]const u8) void;
+extern fn lookout_chart_link_remove(h: ?*anyopaque, url: [*:0]const u8) void;
+extern fn lookout_chart_link_refresh(h: ?*anyopaque, url: [*:0]const u8) void;
+extern fn lookout_chart_links_json(h: ?*anyopaque) ?[*:0]u8;
+extern fn lookout_chart_links_changed(h: ?*anyopaque) c_int;
+extern fn lookout_chart_links_import(h: ?*anyopaque, links_json: [*:0]const u8) void;
+extern fn lookout_string_free(s: ?[*:0]u8) void;
+
+/// The longest url this can carry to Java. A tile template with a key and a
+/// deep path stays well inside it; anything longer is failed rather than
+/// truncated, because a truncated url is a request to the wrong place.
+const MAX_URL = 1024;
+
+const HttpAsk = struct {
+    id: u64,
+    allow_file: c_int,
+    url: [MAX_URL]u8,
+    ulen: u16,
+};
+
+/// One engine at a time on Android, so the rings are globals. Guarded by a
+/// spinlock: both sides hold it for a few loads and stores.
+var http_lock = std.atomic.Value(bool).init(false);
+var http_ring: [64]HttpAsk = undefined;
+var http_count: usize = 0;
+var cancel_ring: [64]u64 = undefined;
+var cancel_count: usize = 0;
+
+fn httpLockAcquire() void {
+    while (http_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn httpLockRelease() void {
+    http_lock.store(false, .release);
+}
+
+fn httpGetCb(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+    const len = std.mem.len(url);
+    if (len >= MAX_URL) {
+        lookout_http_respond(user, req_id, null, 0, 0);
+        return;
+    }
+    httpLockAcquire();
+    if (http_count >= http_ring.len) {
+        httpLockRelease();
+        // Answered, not dropped: an id that is neither answered nor cancelled
+        // holds one of the core's outstanding-request slots. http_respond is
+        // the one call allowed from here.
+        lookout_http_respond(user, req_id, null, 0, 0);
+        return;
+    }
+    const ask = &http_ring[http_count];
+    ask.id = req_id;
+    ask.allow_file = allow_file;
+    @memcpy(ask.url[0..len], url[0..len]);
+    ask.ulen = @intCast(len);
+    http_count += 1;
+    httpLockRelease();
+}
+
+fn httpCancelCb(user: ?*anyopaque, req_id: u64) callconv(.c) void {
+    _ = user;
+    httpLockAcquire();
+    defer httpLockRelease();
+    // Advisory, so a full ring simply drops it: the transfer runs to the end
+    // and its answer is ignored.
+    if (cancel_count >= cancel_ring.len) return;
+    cancel_ring[cancel_count] = req_id;
+    cancel_count += 1;
+}
+
+/// void nHttpProvider(long h, boolean on) -- install or remove the shell's url
+/// fetcher. Removing it also drops what was parked; the core answers its own
+/// outstanding requests.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpProvider(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, on: j.jboolean) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (on == 0) {
+        lookout_set_http_provider(h.l, null, null, null);
+        httpLockAcquire();
+        http_count = 0;
+        cancel_count = 0;
+        httpLockRelease();
+        return;
+    }
+    lookout_set_http_provider(h.l, httpGetCb, httpCancelCb, h.l);
+}
+
+/// int nHttpPoll(long h, long[] ids, int[] allow, String[] urls) -- drain up to
+/// ids.length parked asks. Returns how many were taken.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpPoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jlongArray, allow: j.jintArray, urls: j.jobjectArray) j.jint {
+    _ = cls;
+    if (fromLong(hl) == null) return 0;
+    const cap: usize = @intCast(env_(env).GetArrayLength.?(env, ids));
+    if (cap == 0) return 0;
+
+    // Copy out under the lock, release, THEN touch the JVM: NewStringUTF can
+    // trigger a GC pause, and the render thread must never spin behind one.
+    var taken: [16]HttpAsk = undefined;
+    var n: usize = 0;
+    httpLockAcquire();
+    while (n < http_count and n < cap and n < taken.len) : (n += 1) taken[n] = http_ring[n];
+    const left = http_count - n;
+    var i: usize = 0;
+    while (i < left) : (i += 1) http_ring[i] = http_ring[i + n];
+    http_count = left;
+    httpLockRelease();
+    if (n == 0) return 0;
+
+    var jids: [16]j.jlong = undefined;
+    var jallow: [16]j.jint = undefined;
+    for (taken[0..n], 0..) |ask, k| {
+        jids[k] = @bitCast(ask.id);
+        jallow[k] = ask.allow_file;
+        var url: [MAX_URL:0]u8 = undefined;
+        @memcpy(url[0..ask.ulen], ask.url[0..ask.ulen]);
+        url[ask.ulen] = 0;
+        const s = env_(env).NewStringUTF.?(env, &url);
+        env_(env).SetObjectArrayElement.?(env, urls, @intCast(k), s);
+        env_(env).DeleteLocalRef.?(env, s);
+    }
+    env_(env).SetLongArrayRegion.?(env, ids, 0, @intCast(n), &jids);
+    env_(env).SetIntArrayRegion.?(env, allow, 0, @intCast(n), &jallow);
+    return @intCast(n);
+}
+
+/// int nHttpCancelPoll(long h, long[] ids) -- drain the ids the core has given
+/// up on. Advisory: the shell may abort those transfers to save bandwidth, and
+/// answering anyway is harmless.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpCancelPoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jlongArray) j.jint {
+    _ = cls;
+    if (fromLong(hl) == null) return 0;
+    const cap: usize = @intCast(env_(env).GetArrayLength.?(env, ids));
+    if (cap == 0) return 0;
+
+    var taken: [64]j.jlong = undefined;
+    var n: usize = 0;
+    httpLockAcquire();
+    while (n < cancel_count and n < cap and n < taken.len) : (n += 1) taken[n] = @bitCast(cancel_ring[n]);
+    const left = cancel_count - n;
+    var i: usize = 0;
+    while (i < left) : (i += 1) cancel_ring[i] = cancel_ring[i + n];
+    cancel_count = left;
+    httpLockRelease();
+    if (n == 0) return 0;
+    env_(env).SetLongArrayRegion.?(env, ids, 0, @intCast(n), &taken);
+    return @intCast(n);
+}
+
+/// void nHttpRespond(long h, long id, byte[] bytes, int status) -- answer one
+/// ask from any thread. `status` is the final HTTP status, or 0 for a transport
+/// failure; only 2xx carries a body the core reads.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpRespond(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, bytes: j.jbyteArray, status: j.jint) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    const req: u64 = @bitCast(id);
+    if (bytes == null) {
+        lookout_http_respond(h.l, req, null, 0, status);
+        return;
+    }
+    const len: usize = @intCast(env_(env).GetArrayLength.?(env, bytes));
+    const p = env_(env).GetByteArrayElements.?(env, bytes, null) orelse {
+        lookout_http_respond(h.l, req, null, 0, 0);
+        return;
+    };
+    defer env_(env).ReleaseByteArrayElements.?(env, bytes, p, j.JNI_ABORT);
+    lookout_http_respond(h.l, req, p, len, status);
+}
+
+/// void nChartLinkAdd(long h, String link)
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkAdd(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, link: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (link == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, link, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, link, c);
+    lookout_chart_link_add(h.l, @ptrCast(c));
+}
+
+/// void nChartLinkSelect(long h, String url) -- null draws lookout's own chart.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkSelect(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) {
+        lookout_chart_link_select(h.l, null);
+        return;
+    }
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    lookout_chart_link_select(h.l, @ptrCast(c));
+}
+
+/// void nChartLinkRemove(long h, String url)
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkRemove(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    lookout_chart_link_remove(h.l, @ptrCast(c));
+}
+
+/// void nChartLinkRefresh(long h, String url)
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkRefresh(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (url == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    lookout_chart_link_refresh(h.l, @ptrCast(c));
+}
+
+/// String nChartLinksJson(long h) -- everything the chart list shows.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinksJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const s = lookout_chart_links_json(h.l) orelse return null;
+    defer lookout_string_free(s);
+    return env_(env).NewStringUTF.?(env, s);
+}
+
+/// boolean nChartLinksChanged(long h) -- 1 since the last poll, then clears.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinksChanged(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_chart_links_changed(h.l) != 0) 1 else 0;
+}
+
+/// void nChartLinksImport(long h, String json) -- one-time migration from the
+/// shell's old store.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinksImport(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, json: j.jstring) void {
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    if (json == null) return;
+    const c = env_(env).GetStringUTFChars.?(env, json, null) orelse return;
+    defer env_(env).ReleaseStringUTFChars.?(env, json, c);
+    lookout_chart_links_import(h.l, @ptrCast(c));
+}
+
+/// boolean nAltStyleActive(long h)
+export fn Java_org_beetlebug_lookout_Lookout_nAltStyleActive(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    return if (lookout_alt_chart_style_active(h.l) != 0) 1 else 0;
+}
+
+extern fn lookout_open_file(h: ?*anyopaque, path: [*:0]const u8) c_int;
+
+/// int nOpenFile(long h, String path) -- offer a file the mariner opened to
+/// the plugins: 1 claimed, 0 none does, -1 claimed but could not be given.
+export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, path: j.jstring) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
+    return lookout_open_file(h.l, @ptrCast(cpath));
 }

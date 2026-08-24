@@ -25,6 +25,8 @@ private val DarkColors = darkColorScheme(
     onSurface = Color(0xFFDDE4EA),
     onSurfaceVariant = Color(0xFF9FB0BD),
     error = Color(0xFFFFB4A6),
+    // The overscale red-orange, per theme — the reference's Chrome.overscale.
+    tertiary = Color(0xFFF46A34),
 )
 
 private val LightColors = lightColorScheme(
@@ -36,6 +38,8 @@ private val LightColors = lightColorScheme(
     onSurface = Color(0xFF161D22),
     onSurfaceVariant = Color(0xFF48606E),
     error = Color(0xFFB3261E),
+    // The overscale red-orange, per theme — the reference's Chrome.overscale.
+    tertiary = Color(0xFFD83B01),
 )
 
 @Composable

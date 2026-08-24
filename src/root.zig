@@ -1,21 +1,34 @@
 //! lookout-core: a chart-rendering widget. Open a baked tile57 chart, drive the
 //! view (pan/zoom/rotate), set the full S-52 mariner state, and render — to a
-//! window or offscreen. Build (tessellation) is lazy and automatic: you set
-//! state and render; the widget re-tessellates only when it must.
+//! window or offscreen. Tiles, tessellation and the GPU belong to charttable,
+//! which this drives through src/ct/: you set state and render, and it rebuilds
+//! only what it must.
 //!
 //! The API is deliberately small and orthogonal so a chartplotter (boat marker,
 //! routes, tap-to-identify) can be built on top:
 //!   open/close · fitChart/setView/view/resize · pan/zoom/screen<->geo ·
 //!   getMariner/setMariner (ALL S-52 settings) · render/snapshot · pick.
+//!
+//! WHAT LIVES WHERE. Everything the mariner reads out of the chart — the
+//! library, picks, aux files, the marks, the plugin layer — is here. Everything
+//! that reaches the screen is charttable's: the style decides the portrayal,
+//! the tile sources feed it, and its camera is the one camera. This file holds
+//! no scene and no GPU handle.
 const std = @import("std");
 const builtin = @import("builtin");
 const cc = @import("c.zig").c;
-const gpu = @import("gpu.zig");
-const rasterlayer = @import("raster.zig");
-const camera = @import("camera.zig");
+const cthost = @import("ct/host.zig"); // the renderer, behind one struct
+const cstyle = @import("ct/style.zig");
+const craster = @import("ct/raster.zig"); // the raster underlay's data half
+const ctprovided = @import("ct/provided.zig");
+const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
+const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
-const atlas = @import("atlas.zig");
+pub const library = @import("library.zig"); // what a folder of charts holds
 const png = @import("png.zig");
+const ctpng = @import("charttable").png; // the renderer's decoder, for the glyph sheet
+const ctglyphs = @import("charttable").glyphs;
+const ctscene = @import("charttable").scene;
 const ov = @import("overlay.zig");
 const marks = @import("markers.zig"); // the mariner's own marks on the water
 
@@ -29,17 +42,6 @@ pub const Scheme = cc.tile57_scheme;
 const plugins_on = @import("build_options").plugins;
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
-
-// The async build's WORKER runs tessellation (runJob — pure engine, no GPU) on
-// every backend: a rebuild takes ~1s on a phone and must never sit inside
-// render(), where it would hold the api lock against the gesture thread.
-// STAGING (GPU buffer creation + upload submit) is backend-dependent: Metal
-// tolerates it on the worker thread; the Vulkan-flavoured backends do not —
-// queue submission is externally synchronized, a worker-thread submit races
-// the render thread's and the rebuilt scene swaps in blank. There the worker
-// hands the C scene back and pollBuild stages it on the render thread, ordered
-// before the draw that reads it.
-const async_stage = !(@import("build_options").gpu_sdl or @import("build_options").gpu_vk);
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
@@ -64,16 +66,23 @@ pub const OverlayHit = ov.Store.Hit;
 /// forced permissive so EVERY feature reaches the surface tagged, then gated
 /// per-frame in the shader. Geometry-affecting fields (contours,
 /// units, dates, groups…) pass through unchanged.
+/// The mariner the STYLE is built from: the mariner's own settings, with only
+/// the fields the style build owns rather than the mariner.
+///
+/// This used to force display_base/standard/other, the three text switches and
+/// soundings ON. That was bring-up scaffolding — draw everything while the
+/// renderer was being stood up — and it outlived its purpose: every one of
+/// those is a switch in the settings pane, and forcing them here made the pane
+/// lie. Turning "Other" off still drew the OTHER category, which is where the
+/// data-quality overlay, the info callouts and the meta boundaries live, so
+/// they stayed on screen after being switched off.
+///
+/// What the mariner wants ON at chart open is the OPEN path's business (see the
+/// paper-chart preset in finishOpen, which sets these on `self.mariner`), not
+/// this function's. Setting it there leaves the switch honest afterwards.
 fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_mariner {
     var m = base;
     m.scheme = sch;
-    m.display_base = true;
-    m.display_standard = true;
-    m.display_other = true;
-    m.text_names = true;
-    m.show_light_descriptions = true;
-    m.text_other = true;
-    m.soundings = 1;
     m.size_scale = 1.0; // runtime size lives in the shader uniform
     return m;
 }
@@ -131,21 +140,6 @@ pub fn atlasCacheReady(alloc: std.mem.Allocator) bool {
     return true;
 }
 
-fn hexColor(s: []const u8) ?gpu.Color {
-    var t = s;
-    if (t.len > 0 and t[0] == '#') t = t[1..];
-    if (t.len < 6) return null;
-    const r = std.fmt.parseInt(u8, t[0..2], 16) catch return null;
-    const g = std.fmt.parseInt(u8, t[2..4], 16) catch return null;
-    const b = std.fmt.parseInt(u8, t[4..6], 16) catch return null;
-    return .{
-        .r = @as(f32, @floatFromInt(r)) / 255.0,
-        .g = @as(f32, @floatFromInt(g)) / 255.0,
-        .b = @as(f32, @floatFromInt(b)) / 255.0,
-        .a = 1.0,
-    };
-}
-
 fn fileExists(path: []const u8) bool {
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
@@ -166,12 +160,14 @@ pub const OpenOptions = struct {
     /// toolkit and event loop. Then just call render() each frame and feed
     /// input via pan/zoom/setView/resize.
     native_handle: ?*anyopaque = null,
-    native_kind: gpu.NativeKind = .none,
+    native_kind: cthost.NativeKind = .none,
 };
 
-pub const NativeKind = gpu.NativeKind;
+pub const NativeKind = cthost.NativeKind;
 
 const Lock = @import("lock.zig").Lock;
+const RwLock = @import("lock.zig").RwLock;
+const sleepMs = @import("lock.zig").sleepMs;
 
 /// Everything the plugin layer needs from the core, in one heap allocation:
 /// the vessel store, the AIS store, the broker that implements the ABI over
@@ -193,7 +189,7 @@ const PluginSystem = if (plugins_on) struct {
     /// by the caller until the next such call, like every other query here.
     json: std.ArrayList(u8) = .empty,
 
-    fn create(alloc: std.mem.Allocator, overlay: *ov.Store) !*@This() {
+    fn create(alloc: std.mem.Allocator, overlay: *ov.Store, install_root: []const u8) !*@This() {
         const self = try alloc.create(@This());
         errdefer alloc.destroy(self);
         self.* = .{
@@ -208,7 +204,10 @@ const PluginSystem = if (plugins_on) struct {
             .applyFn = applyOverlay,
             .removeFn = removeOverlay,
         });
-        self.host = phost.Host.init(alloc, &self.br, optionsFromEnv());
+        var opts = optionsFromEnv();
+        // Borrowed for the host's life; the Lookout's copy outlives it.
+        opts.install_root = install_root;
+        self.host = phost.Host.init(alloc, &self.br, opts);
         return self;
     }
 
@@ -554,6 +553,76 @@ const Follow = struct {
     }
 };
 
+/// Per-frame phase timings for $LOOKOUT_PHASE_PROF. Rows accumulate in a fixed
+/// buffer and the whole file is rewritten every `flush_every` frames, because
+/// nothing tells a renderer when the run has ended — an .app has no stderr to
+/// stream to and no natural place to close a file.
+pub const FrameProf = struct {
+    pub const Row = struct {
+        prepare_us: i64,
+        style_us: i64,
+        trim_us: i64,
+        overlay_us: i64,
+        ct_us: i64,
+        /// ct_us split three ways (ct/host.zig renderPrepare/renderPresent):
+        /// the map/tile pump, the GPU upload of a changed scene, and the
+        /// encode+present that blocks on the swapchain's drawable.
+        ct_update_us: i64,
+        ct_upload_us: i64,
+        ct_present_us: i64,
+        /// ct_update_us split further, from charttable's own tick: adopting a
+        /// finished build, cache adoption/eviction, choosing the wanted set,
+        /// the zoom-only paint refill, and starting a build.
+        ct_finish_us: i64,
+        ct_cache_us: i64,
+        ct_want_us: i64,
+        ct_refill_us: i64,
+        ct_start_us: i64,
+        /// The host's own share of the update span: the tile/provider pumps,
+        /// the missing-symbol batch, and the atlas sync.
+        ct_pump_us: i64,
+        ct_serve_us: i64,
+        ct_atlas_us: i64,
+    };
+    const cap = 4096;
+    const flush_every = 60;
+
+    path: []const u8,
+    rows: [cap]Row = undefined,
+    n: usize = 0,
+    since_flush: usize = 0,
+
+    pub fn record(self: *FrameProf, row: Row) void {
+        if (self.n < cap) {
+            self.rows[self.n] = row;
+            self.n += 1;
+        }
+        self.since_flush += 1;
+        if (self.since_flush >= flush_every) {
+            self.since_flush = 0;
+            self.write();
+        }
+    }
+
+    pub fn write(self: *FrameProf) void {
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(std.heap.c_allocator);
+        buf.appendSlice(std.heap.c_allocator, "prepare_us,style_us,trim_us,overlay_us,ct_us,ct_update_us,ct_upload_us,ct_present_us,ct_finish_us,ct_cache_us,ct_want_us,ct_refill_us,ct_start_us,ct_pump_us,ct_serve_us,ct_atlas_us\n") catch return;
+        var line: [320]u8 = undefined;
+        for (self.rows[0..self.n]) |r| {
+            const s = std.fmt.bufPrint(&line, "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
+                r.prepare_us,   r.style_us,     r.trim_us,       r.overlay_us,  r.ct_us,
+                r.ct_update_us, r.ct_upload_us, r.ct_present_us, r.ct_finish_us, r.ct_cache_us,
+                r.ct_want_us,   r.ct_refill_us, r.ct_start_us,   r.ct_pump_us,  r.ct_serve_us,
+                r.ct_atlas_us,
+            }) catch continue;
+            buf.appendSlice(std.heap.c_allocator, s) catch return;
+        }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.path, .data = buf.items }) catch {};
+    }
+};
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -561,11 +630,18 @@ pub const Lookout = struct {
     /// and pictures live there (see tile57_aux_*), and a pick report names the
     /// cell, so this is what turns that name into files.
     chart_dirs: std.StringHashMapUnmanaged([]u8) = .empty,
+    /// Every opened archive's path, in the order the charts were opened.
+    chart_paths: std.ArrayList([:0]u8) = .empty,
     /// The aux handles already opened, by cell name. Opened on first ask.
     aux: std.StringHashMapUnmanaged(?*cc.tile57_aux) = .empty,
     compose: ?*cc.tile57_compose = null, // set when >1 chart (ENC_ROOT / library)
-    g: gpu.Gpu,
-    built: bool = false, // GPU holds a current scene
+    /// The renderer: charttable's map, surface, style, atlases and sources.
+    ct: cthost.Host,
+    /// charttable's camera, borrowed. There is only ever one camera, and it is
+    /// the one the renderer projects with — a copy here would drift within a
+    /// frame. Its zoom is in charttable's convention; the ABI's is converted in
+    /// ct/host.zig, and nothing between the two touches it.
+    cam: *camera.Camera = undefined,
 
     // The ownership-partition build (compose_open over the whole library) is slow
     // — run it on a worker thread and show a loader so the window isn't frozen.
@@ -573,23 +649,39 @@ pub const Lookout = struct {
     compose_thread: ?std.Thread = null,
     compose_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     compose_result: ?*cc.tile57_compose = null,
+    /// Open with no vector chart: the raster layer is the whole display.
+    /// Nothing tessellates, and every path that reads a cell steps aside.
+    raster_only: bool = false,
+    /// The composition the last one replaced. Closed once the new one is
+    /// adopted: the render thread may still be drawing from it until then.
+    compose_prev: ?*cc.tile57_compose = null,
+    /// A composition is being rebuilt over a library that is already drawing.
+    /// Unlike `loading` this leaves the chart on screen.
+    recomposing: bool = false,
+    /// True while a chartsAdd is in flight. The api lock is dropped during
+    /// its file opens, and a second add entering that window would race the
+    /// compose worker. Read and written under the api lock.
+    adding: bool = false,
 
-    // Coverage of the currently-built (overscanned) scene: rebuild only when the
-    // view pans/zooms out of it, so panning within the margin never re-portrays.
-    cov_origin: camera.Vec2 = .{ .x = 0, .y = 0 },
-    cov_zoom: f64 = 0,
-    cov_hw: f64 = 0, // half-width / half-height of coverage, world units
-    cov_hh: f64 = 0,
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
     last_change_ms: i64 = 0, // when the view last moved
+    /// When a frame last went out for own ship's own motion (see SHIP_FRAME_MS).
+    last_ship_frame_ms: i64 = 0,
+    /// A style the host supplied, drawn instead of the engine's portrayal.
+    /// Null means the chart is lookout's own. While one is set, the mariner's
+    /// display settings do not shape the chart: it is the publisher's.
+    alt_style: ?[]u8 = null,
+    /// The alt style's sprite packs (index JSON + sheet PNG, bytes as the
+    /// host fetched them), kept so a scheme change — which rebakes the S-52
+    /// sheet and REPLACES the atlas — can fold them back in. They belong to
+    /// the current alt style: setAltStyle clears them, and the host re-sends
+    /// the new style's packs after.
+    alt_packs: std.ArrayListUnmanaged(AltPack) = .empty,
+    /// Charts by link: the whole feature, from the mariner's typed link to the
+    /// tiles the style names. The shell keeps one job, fetching bytes for a
+    /// url. See src/chartlinks.zig.
+    links: clinks.Links = undefined,
 
-    // Async rebuild: the engine call (portray + assemble) runs on a worker so a
-    // pan/zoom gesture never blocks; the current scene keeps drawing (the MVP just
-    // scales it — low-res but live) until the new one is uploaded, which lands
-    // mid-gesture. A PREDICTIVE prefetch warms the engine's per-tile cache for the
-    // zoom level we're heading toward, so crossing that boundary is a cache hit,
-    // not a fresh portray.
-    build_thread: ?std.Thread = null,
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
     // which serializes ENGINE access between API calls and the build worker;
@@ -602,44 +694,17 @@ pub const Lookout = struct {
     // engine call; a tap during a slow build waits rather than corrupting.
     // os_unfair_lock (kernel-blocking, not a spin) because Zig 0.16 puts
     // std's mutex behind an Io, which this layer does not take.
-    engine_mu: Lock = .{},
-    build_active: bool = false, // a worker is in flight (main-thread only)
-    build_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    build_job: BuildJob = .{},
-    pending_ok: bool = false,
+    engine_mu: RwLock = .{},
     // viewMaxZoom cache (see there).
     zl_valid: bool = false,
     zl_center: camera.Vec2 = .{ .x = 0, .y = 0 },
     zl_zoom: f64 = 0,
     zl_max: f64 = 22,
-    // GPU scene STAGED by the worker (buffers already created off-thread; the
-    // render thread only swaps pointers in applyStaged). Null when the build
-    // failed, was a prefetch, or staging itself failed (retried via dirty).
-    pending_scene: ?gpu.Gpu.Scene = null,
-    // !async_stage backends: the worker's raw C scene, staged by pollBuild on
-    // the render thread instead (Vulkan queue submits are render-thread-only).
-    pending_cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene),
-    pending_cs_valid: bool = false,
-    last_zoom: f64 = -1, // for zoom-velocity prediction
-    last_zoom_ms: i64 = 0,
-    /// Wall-clock of the last engine build (worker-written, main-read): the
-    /// prefetch gate — on hardware where a build takes seconds, the single
-    /// worker is too precious to spend on a speculative warm.
-    last_build_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
-    /// Set by the host on an OS memory warning; trimmed at the next safe point
-    /// (no build in flight). See serviceTrim for where that point is.
+    /// Set by the host on an OS memory warning; served at the next safe point.
     trim_requested: bool = false,
     /// True while a host surface is attached and frames can run. False between
-    /// detachSurface and attachSurface, when the engine stands with no view:
-    /// nothing renders, nothing calls tickBuild, and the work tickBuild would
-    /// have done at its next safe point has to be done elsewhere.
+    /// detachSurface and attachSurface, when the core stands with no view.
     surface_attached: bool = false,
-    /// When the last build FAILED (0 = never): tickBuild backs off rather than
-    /// respawning the identical failing build every frame — a hot loop that
-    /// keeps the exact pressure that made it fail.
-    last_fail_ms: i64 = 0,
-    prefetched_level: i32 = -1, // the round-zoom level last prefetched (fire once per approach)
-    cam: camera.Camera,
     /// The host's declared logical viewport, and authoritative over anything
     /// derived from the surface: across a rotation a swapchain keeps reporting
     /// the OLD extent, which inverts the aspect and skews every rotated frame.
@@ -650,48 +715,43 @@ pub const Lookout = struct {
 
     /// The authoritative S-52 display state. Edit via get/setMariner.
     mariner: Mariner = undefined,
-    dirty: bool = true, // scene needs a (re)build before the next render
-    sprite_atlas: ?atlas.SpriteAtlas = null, // shared S-52 symbol atlas
-    /// The palette the symbol atlas was last loaded FOR. A symbol carries its
-    /// colours in its artwork, so the sheet is what decides whether symbols and
-    /// complex line styles are day-bright or night-dim, and a scheme change has
-    /// to load the sheet for the new palette. Null until the first load. Cell
-    /// sizes are palette-independent, so the scene's UVs index every sheet and
-    /// no rebuild is owed to the swap.
+    /// The style is stale and has to be rebuilt before the next frame. Set by
+    /// any mariner change: in charttable the mariner lives in the STYLE, not in
+    /// a uniform, so applying one means building the style again and setting
+    /// it. That is a relayout of the resident tiles and no more — the tiles
+    /// themselves carry tokens and raw depths and never change.
+    style_dirty: bool = true,
+    /// The palette the sprite sheet was baked FOR. A symbol carries its colours
+    /// in its artwork, so the sheet is what decides whether symbols and complex
+    /// line styles are day-bright or night-dim, and a scheme change has to load
+    /// the sheet for the new palette.
     sprite_scheme: ?Scheme = null,
+    /// The density the sprite sheet was baked at, and the one runtime symbol
+    /// runs are rendered at so they match it.
+    sprite_density: f32 = 0,
     /// The app's atlas cache dir ($HOME/Library/Caches/lookout/...), or null.
     assets_root: ?[]u8 = null,
-    /// The density the sprite atlas was actually baked at. Usually the display
-    /// pixel density, but reduced when the full-density atlas would exceed the
-    /// device's max texture dimension (loadSpriteAtlas). Scene builds must pass
-    /// THIS ratio so sprite UVs index the atlas we uploaded.
-    atlas_scale: f32 = 1.0,
     atlases_ready: bool = false, // see ensureAtlases: loaded at first use, not at open
-    glyph_atlas: ?atlas.GlyphAtlas = null, // shared SDF label-font atlas
-    /// The bold face's metrics, kept (pixels freed) so plugin canvas text can
-    /// lay out bold runs against the bold texture. The italic face stays
-    /// texture-only: the canvas API has no slant.
-    glyph_bold_atlas: ?atlas.GlyphAtlas = null,
-    engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves; beyond
-    //                            it we overscale (build stays here, camera scales up)
-    // Deepest zoom a build actually produced geometry for. A chart's declared
-    // max_zoom can overreport: a tile exists there in metadata but carries no
-    // features under the view, so building at that level returns OK-but-empty.
-    // Adopting that blanks a good scene. Capping engine_max_zoom to the last
-    // level that DID draw keeps buildTargetZoom on servable data, so a zoom-in
-    // overscales the good scene (the intended behaviour) instead of going blank.
-    // Reset on a new view (setView/fitChart) so a different area re-probes.
-    served_max_zoom: f64 = 1e9,
-
-    /// The raster underlay: satellite imagery and other picture charts the
-    /// mariner supplies, drawn beneath the vector chart. Its own cache, worker
-    /// and memory ceiling — nothing here touches the scene (see raster.zig).
-    raster: rasterlayer.Layer = undefined,
+    engine_max_zoom: f64 = 24, // deepest zoom the chart/compositor serves
+    /// The distinct SCAMIN denominators the open library carries, ascending.
+    /// The style splits its `_scamin` layers into one bucket per value, each
+    /// with a native fractional minzoom, so a feature appears at its exact
+    /// display scale with no per-frame work. Collected once per composition.
+    scamin: []i32 = &.{},
+    /// The glyph face handed to the overlay store, and the em size its pixel
+    /// metrics are measured at (tile57 writes it into the sheet's index).
+    glyph_face: GlyphFace = undefined,
+    glyph_em_px: f32 = 24,
 
     /// The wasm plugin layer, once something has asked for it (LOOKOUT_PLUGINS
     /// at open, or lookout_plugins_load). Null costs nothing: no threads, no
     /// stores, no runtime.
     plugins: ?*PluginSystem = null,
+    /// Where installed plugins live, on platforms whose environment names no
+    /// place (Android: the files dir has no path in the environment). Set by
+    /// the shell before the plugin layer comes up; null takes the platform
+    /// default in plugin/host/install.zig.
+    plugin_install_root: ?[]u8 = null,
 
     /// The retained chart overlay: what plugins post and what the core draws
     /// over the chart. The handle owns it, because the marks below go into it
@@ -699,6 +759,11 @@ pub const Lookout = struct {
     overlay: ov.Store = undefined,
     /// The mariner's markers, read at open and written on every change.
     markers: marks.Store = undefined,
+    /// The raster underlay: the mariner's picture charts, served to charttable
+    /// as raster sources (ct/raster.zig).
+    rasters: craster.Rasters = undefined,
+    /// Host.raster_bindings points into this; refilled by ensureStyle.
+    raster_bind_buf: [craster.MAX_SETS]cthost.RasterBinding = undefined,
     /// The palette the marker geometry was posted for. The marks carry their
     /// colour as RGBA rather than a plugin palette token, so a scheme change
     /// has to re-post them; comparing here is what notices.
@@ -717,12 +782,18 @@ pub const Lookout = struct {
     /// the picture.
     chart_hidden: bool = false,
 
-    // derived live (uniform-only) state
-    cat_mask: u32 = 0b111,
-    text_on: bool = true, // draw text ranges (labels)
-    sound_on: bool = true, // draw sounding ranges
+    /// The physical size multiplier for symbols and text (S-52 sizes are in
+    /// millimetres). Uniform-only in charttable, so it never rebuilds a style.
     render_size_scale: f32 = 1.0,
-    nodata: [MAX_SCHEMES]gpu.Color = [_]gpu.Color{.{ .r = 0.576, .g = 0.682, .b = 0.733, .a = 1.0 }} ** MAX_SCHEMES,
+
+    /// $LOOKOUT_PHASE_PROF=<path>: per-frame phase timings, written as CSV.
+    /// Null unless asked for, and every probe is behind `if (prof)`.
+    frame_prof: ?FrameProf = null,
+    prof_checked: bool = false,
+    /// The SCAMIN latitude the current style was built at. See STYLE_LAT_DRIFT.
+    style_lat: f64 = 0,
+    /// ensureStyle's own microseconds, handed up from prepareFrame.
+    prof_style_us: i64 = 0,
 
     // ---- lifecycle ----------------------------------------------------------
     /// Open ONE baked chart (.pmtiles).
@@ -735,62 +806,70 @@ pub const Lookout = struct {
     pub fn openCharts(alloc: std.mem.Allocator, paths: []const [:0]const u8, opts: OpenOptions) !*Lookout {
         const self = try create(alloc, opts);
         errdefer self.close();
-        const t0 = gpu.ticksMs();
+        const t0 = clock.ticksMs();
         self.openChartPaths(paths);
-        const t1 = gpu.ticksMs();
+        const t1 = clock.ticksMs();
         try self.finishOpen();
-        const t2 = gpu.ticksMs();
+        const t2 = clock.ticksMs();
         std.debug.print("open: {d} charts opened in {d} ms, compose+partition in {d} ms\n", .{ self.charts.items.len, t1 - t0, t2 - t1 });
         return self;
     }
 
     fn create(alloc: std.mem.Allocator, opts: OpenOptions) !*Lookout {
         const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
-        var t = gpu.ticksMs();
-        // ABI gate: a header/library skew in the GPU structs renders GARBAGE
-        // (a sheared vertex stream — wrong colours everywhere, junk triangles,
-        // single-digit fps), not an error. Refuse loudly instead. A tile57 too
-        // old to export this fails at LINK time, which is better still.
-        const want: u32 = @as(u32, @sizeOf(cc.tile57_gpu_vertex)) |
-            (@as(u32, @sizeOf(cc.tile57_gpu_quad)) << 8) |
-            (@as(u32, @sizeOf(cc.tile57_gpu_range)) << 16) |
-            (@as(u32, @sizeOf(cc.tile57_gpu_uniforms)) << 24);
-        const got = cc.tile57_abi_gpu_layout();
-        if (got != want) {
-            std.debug.print("FATAL: tile57 GPU ABI mismatch — header says vertex/quad/range/uniforms = {d}/{d}/{d}/{d} B, linked engine says {d}/{d}/{d}/{d} B. Rebuild BOTH repos at matching commits.\n", .{
-                @sizeOf(cc.tile57_gpu_vertex), @sizeOf(cc.tile57_gpu_quad), @sizeOf(cc.tile57_gpu_range), @sizeOf(cc.tile57_gpu_uniforms),
-                got & 0xff,                    (got >> 8) & 0xff,           (got >> 16) & 0xff,           (got >> 24) & 0xff,
-            });
-            return error.EngineAbiMismatch;
-        }
+        var t = clock.ticksMs();
         cc.tile57_warmup();
         if (dbg) {
-            std.debug.print("  warmup {d} ms\n", .{gpu.ticksMs() - t});
-            t = gpu.ticksMs();
+            std.debug.print("  warmup {d} ms\n", .{clock.ticksMs() - t});
+            t = clock.ticksMs();
         }
         const self = try alloc.create(Lookout);
         self.* = .{
             .alloc = alloc,
-            .g = try gpu.Gpu.init(.{
-                .width = opts.width,
-                .height = opts.height,
-                .want_window = opts.want_window,
-                .want_msaa = opts.want_msaa,
-                .native_handle = opts.native_handle,
-                .native_kind = opts.native_kind,
-            }),
-            .cam = undefined,
+            .ct = undefined,
             .surface_attached = opts.want_window or opts.native_handle != null,
-            .raster = rasterlayer.Layer.init(alloc),
             .overlay = ov.Store.init(alloc),
             .markers = if (marks.defaultPathAlloc(alloc)) |p| blk: {
                 defer alloc.free(p);
                 break :blk marks.Store.open(alloc, p);
             } else marks.Store.init(alloc),
+            .rasters = craster.Rasters.init(alloc),
         };
+        // After the struct is in place: the tile workers take a pointer to the
+        // engine lock that lives in it, so the Host cannot be built before its
+        // home address exists. Nothing owns anything yet if it fails, except
+        // the two stores just built, so they go back by hand — close() cannot
+        // run against a handle whose renderer was never created.
+        self.ct = cthost.Host.init(alloc, &self.engine_mu, .{
+            .width = opts.width,
+            .height = opts.height,
+            .want_window = opts.want_window,
+            .want_msaa = opts.want_msaa,
+            .native_handle = opts.native_handle,
+            .native_kind = opts.native_kind,
+        }) catch |e| {
+            self.overlay.deinit();
+            self.markers.deinit();
+            self.rasters.deinit();
+            alloc.destroy(self);
+            return e;
+        };
+        self.cam = self.ct.camera();
+        // The underlay's drain rides the map's own update tick.
+        self.ct.raster_pump = rasterPump;
+        self.ct.raster_pump_ctx = self;
+        // The mariner's chart links, read before the shell can have asked for
+        // anything. Beside the marks, because both are the mariner's own state
+        // and neither belongs to a chart. Nothing resolves until the shell
+        // supplies a fetcher (setHttpProvider).
+        self.links = clinks.Links.init(alloc, self.linksSink());
+        if (marks.supportDirAlloc(alloc)) |d| {
+            defer alloc.free(d);
+            self.links.openStore(d);
+        }
         if (dbg) {
-            std.debug.print("  gpu.init (Metal device+shaders+pipelines) {d} ms\n", .{gpu.ticksMs() - t});
-            t = gpu.ticksMs();
+            std.debug.print("  charttable init (Metal device+shaders+pipelines) {d} ms\n", .{clock.ticksMs() - t});
+            t = clock.ticksMs();
         }
         self.n_schemes = @min(opts.schemes.len, MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
@@ -815,7 +894,6 @@ pub const Lookout = struct {
         // of the palette it names.
         self.postMarkers();
         self.assets_root = atlasCacheDir(self.alloc);
-        self.loadNodataColors();
         // NOT the atlases: they bake at the display density, and nothing has
         // told us what that is yet — the host cannot call resize() or
         // setPixelDensity() until this returns a handle. Baking here pinned
@@ -833,18 +911,21 @@ pub const Lookout = struct {
     /// palette-independent and the scene tints each text range.
     fn ensureAtlases(self: *Lookout) void {
         const dbg = std.c.getenv("LOOKOUT_TIMING") != null;
-        var t = gpu.ticksMs();
-        if (self.sprite_scheme == null or self.sprite_scheme.? != self.mariner.scheme) {
-            self.loadSpriteAtlas();
+        var t = clock.ticksMs();
+        const density = self.ct.pixelDensity();
+        if (self.sprite_scheme == null or self.sprite_scheme.? != self.mariner.scheme or
+            self.sprite_density != density)
+        {
+            self.loadSpriteSheet(density);
             if (dbg) {
-                std.debug.print("  loadSpriteAtlas {d} ms\n", .{gpu.ticksMs() - t});
-                t = gpu.ticksMs();
+                std.debug.print("  loadSpriteSheet {d} ms\n", .{clock.ticksMs() - t});
+                t = clock.ticksMs();
             }
         }
         if (self.atlases_ready) return;
         self.atlases_ready = true;
-        self.loadGlyphAtlas();
-        if (dbg) std.debug.print("  loadGlyphAtlas {d} ms\n", .{gpu.ticksMs() - t});
+        self.loadGlyphSheet();
+        if (dbg) std.debug.print("  loadGlyphSheet {d} ms\n", .{clock.ticksMs() - t});
     }
 
     /// Read `<cache>/<name>` (the app's own atlas cache), or null on any miss.
@@ -866,23 +947,22 @@ pub const Lookout = struct {
         std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes }) catch {};
     }
 
-    // Load the SDF label-glyph atlas: from the app cache if present, else bake
-    // it once (from the embedded catalogue) and cache it. Text then draws as SDF
-    // quads (crisp at any zoom) instead of tessellated glyph outlines. The SDF
-    // atlas is resolution-independent, so one cached copy serves every density.
-    fn loadGlyphAtlas(self: *Lookout) void {
+    // The SDF label-glyph sheet: from the app cache if present, else baked
+    // once from the embedded catalogue and cached. charttable takes the sheet
+    // as pixels plus tile57's own index JSON — the two agree on the format
+    // already (em_px, pad, per-glyph UVs and EM-unit metrics), so nothing is
+    // converted here and no fontnik PBFs exist anywhere in this stack.
+    //
+    // ONE FACE. charttable's assets carry one atlas, so bold and italic
+    // labels draw in the regular face until it grows them.
+    fn loadGlyphSheet(self: *Lookout) void {
         if (self.readCache("glyph.png")) |png_b| {
             defer self.alloc.free(png_b);
             if (self.readCache("glyph.json")) |json| {
                 defer self.alloc.free(json);
-                if (self.uploadGlyphRegular(png_b, json)) {
-                    self.loadGlyphFace(1, true);
-                    self.loadGlyphFace(2, false);
-                    return;
-                }
+                if (self.giveGlyphSheet(png_b, json)) return;
             }
         }
-        // Bake + cache.
         var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
         var err: cc.tile57_error = undefined;
         if (cc.tile57_bake_glyph_sdf(&assets, &err) != cc.TILE57_OK) return;
@@ -890,111 +970,41 @@ pub const Lookout = struct {
         if (assets.sprite_png == null or assets.sprite_json == null) return;
         const png_b = assets.sprite_png[0..assets.sprite_png_len];
         const json = assets.sprite_json[0..assets.sprite_json_len];
-        if (self.uploadGlyphRegular(png_b, json)) {
+        if (self.giveGlyphSheet(png_b, json)) {
             self.writeCache("glyph.png", png_b);
             self.writeCache("glyph.json", json);
         }
-        self.loadGlyphFace(1, true);
-        self.loadGlyphFace(2, false);
     }
 
-    fn uploadGlyphRegular(self: *Lookout, png_b: []const u8, json: []const u8) bool {
-        const a = atlas.loadGlyph(self.alloc, png_b, json) catch return false;
-        self.glyph_atlas = a;
-        self.g.uploadGlyphAtlas(a.rgba(), a.width, a.height) catch {
-            self.glyph_atlas.?.deinit();
-            self.glyph_atlas = null;
+    /// Decode the sheet and hand it over. The decode is ours because
+    /// charttable's glyph door takes pixels, not a PNG. It is one sheet at
+    /// startup, so the cost is paid once.
+    fn giveGlyphSheet(self: *Lookout, png_bytes: []const u8, json: []const u8) bool {
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const img = ctpng.read(arena.allocator(), png_bytes) catch |e| {
+            std.debug.print("glyph sheet: {s}\n", .{@errorName(e)});
             return false;
         };
-        self.glyph_atlas.?.freePixels(); // GPU has its copy
-        std.debug.print("glyph atlas: {d}x{d}, {d} glyphs, em {d:.0}\n", .{ a.width, a.height, a.glyphs.count(), a.em_px });
+        if (!self.ct.setGlyphSheet(json, img.rgba, img.w, img.h)) return false;
+        // The em size the sheet's metrics are measured at. The overlay store
+        // lays canvas text out in EM units and the atlas answers in pixels, so
+        // without this every plugin label would be the wrong size.
+        if (std.json.parseFromSlice(std.json.Value, self.alloc, json, .{})) |parsed| {
+            defer parsed.deinit();
+            if (parsed.value == .object) {
+                if (parsed.value.object.get("em_px")) |v| switch (v) {
+                    .integer => |i| self.glyph_em_px = @floatFromInt(i),
+                    .float => |f| self.glyph_em_px = @floatCast(f),
+                    else => {},
+                };
+            }
+        } else |_| {}
+        std.debug.print("glyph sheet: {d}x{d}, em {d:.0}\n", .{ img.w, img.h, self.glyph_em_px });
         return true;
     }
 
-    /// Load one label-tier face atlas (1 bold, 2 italic) — sidecar or live bake —
-    /// decode, upload its texture. Metrics ride the GPU-scene quad UVs, so only
-    /// the texture is kept.
-    fn loadGlyphFace(self: *Lookout, face: i32, bold: bool) void {
-        const png_name = if (bold) "glyph-bold.png" else "glyph-italic.png";
-        const json_name = if (bold) "glyph-bold.json" else "glyph-italic.json";
-        if (self.readCache(png_name)) |png_b| {
-            defer self.alloc.free(png_b);
-            if (self.readCache(json_name)) |json| {
-                defer self.alloc.free(json);
-                if (self.uploadGlyphFace(png_b, json, bold)) return;
-            }
-        }
-        var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
-        var err: cc.tile57_error = undefined;
-        if (cc.tile57_bake_glyph_sdf_face(&assets, face, &err) != cc.TILE57_OK) return;
-        defer cc.tile57_assets_free(&assets);
-        if (assets.sprite_png == null or assets.sprite_json == null) return;
-        const png_b = assets.sprite_png[0..assets.sprite_png_len];
-        const json = assets.sprite_json[0..assets.sprite_json_len];
-        if (self.uploadGlyphFace(png_b, json, bold)) {
-            self.writeCache(png_name, png_b);
-            self.writeCache(json_name, json);
-        }
-    }
-
-    fn uploadGlyphFace(self: *Lookout, png_b: []const u8, json: []const u8, bold: bool) bool {
-        var a = atlas.loadGlyph(self.alloc, png_b, json) catch return false;
-        if (bold) {
-            self.g.uploadGlyphAtlasBold(a.rgba(), a.width, a.height) catch {
-                a.deinit();
-                return false;
-            };
-            // Keep the metrics for canvas text; the GPU has the pixels.
-            a.freePixels();
-            if (self.glyph_bold_atlas) |*old| old.deinit();
-            self.glyph_bold_atlas = a;
-        } else {
-            defer a.deinit();
-            self.g.uploadGlyphAtlasItalic(a.rgba(), a.width, a.height) catch return false;
-        }
-        return true;
-    }
-
-    // Load the S-52 sprite-symbol atlas for the mariner's scheme: from the app
-    // cache if present, else bake it at the display density and cache it. The
-    // cache key includes the density (a Retina 2x bake differs from 1x) AND the
-    // palette (the artwork is coloured), so each scheme keeps its own sheet and
-    // a scheme change re-reads rather than re-bakes. The scale that actually fit
-    // (see below) rides a small sidecar so the load matches the scene UVs.
-    fn loadSpriteAtlas(self: *Lookout) void {
-        const scheme = self.mariner.scheme;
-        // Claimed before the work, not after it: a bake that fails (no memory
-        // for the sheet, a texture the device will not take) must not be
-        // retried on every frame that follows.
-        self.sprite_scheme = scheme;
-        var keybuf: [32]u8 = undefined;
-        const key = std.fmt.bufPrint(&keybuf, "sprite-{s}@{d:.2}", .{ schemeName(scheme), self.g.pixel_density }) catch "sprite-day@x";
-        var pn: [40]u8 = undefined;
-        var jn: [40]u8 = undefined;
-        var sn: [40]u8 = undefined;
-        const png_name = std.fmt.bufPrint(&pn, "{s}.png", .{key}) catch return;
-        const json_name = std.fmt.bufPrint(&jn, "{s}.json", .{key}) catch return;
-        const scale_name = std.fmt.bufPrint(&sn, "{s}.scale", .{key}) catch return;
-
-        if (self.readCache(png_name)) |png_b| {
-            defer self.alloc.free(png_b);
-            if (self.readCache(json_name)) |json| {
-                defer self.alloc.free(json);
-                var scale: f32 = self.g.pixel_density;
-                if (self.readCache(scale_name)) |sb| {
-                    defer self.alloc.free(sb);
-                    scale = std.fmt.parseFloat(f32, std.mem.trim(u8, sb, " \n\r\t")) catch scale;
-                }
-                if (self.uploadSprite(png_b, json, scale, false)) {
-                    std.debug.print("sprite atlas {s} @ {d:.2}x (cache)\n", .{ schemeName(scheme), scale });
-                    return;
-                }
-            }
-        }
-        self.bakeAndCacheSprite(scheme, png_name, json_name, scale_name);
-    }
-
-    /// The largest sprite-atlas texture dimension this platform can hold as ONE
+    /// The largest sprite-sheet texture dimension this platform can hold as ONE
     /// texture. Real iOS devices report 16384, but a 3x symbol atlas is ~10.9k px
     /// tall (~268 MB RGBA) and such a texture UPLOADS ONLY PARTIALLY on device —
     /// the un-populated rows sample black, so symbols and line-style patterns
@@ -1008,43 +1018,70 @@ pub const Lookout = struct {
         return if (bi.os.tag == .ios or bi.os.tag == .tvos) 8192 else 16384;
     }
 
-    /// Decode a sprite atlas PNG+JSON and upload it. `atlas_scale := scale` (the
-    /// bake ratio) so the scene's sprite UVs match. Rejects an atlas larger than
-    /// this platform can upload as one texture (a stale oversized CACHE entry) so
-    /// the caller falls through to a fresh, fit-to-size bake.
-    fn uploadSprite(self: *Lookout, png_b: []const u8, json: []const u8, scale: f32, note: bool) bool {
-        _ = note;
-        const a = atlas.loadSprite(self.alloc, png_b, json) catch return false;
-        if (@max(a.width, a.height) > spriteMaxDim()) {
-            var m = a;
-            m.deinit();
-            std.debug.print("cached sprite atlas {d}x{d} exceeds max {d}; rebaking\n", .{ a.width, a.height, spriteMaxDim() });
-            return false;
-        }
-        // A scheme change loads a second sheet over the first, so the outgoing
-        // one's cell map goes back now (its pixels went at the last freePixels).
-        if (self.sprite_atlas) |*old| old.deinit();
-        self.sprite_atlas = a;
-        self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
-            self.sprite_atlas.?.deinit();
-            self.sprite_atlas = null;
-            return false;
-        };
-        self.sprite_atlas.?.freePixels(); // GPU has its copy; ~150 MB back
-        self.atlas_scale = scale;
-        return true;
+    /// A PNG's declared size, straight out of the IHDR. The whole sheet does
+    /// not have to be decoded to find out whether the device will take it —
+    /// charttable decodes it if we accept it.
+    fn pngSize(bytes: []const u8) ?[2]u32 {
+        if (bytes.len < 24) return null;
+        const w = std.mem.readInt(u32, bytes[16..20], .big);
+        const h = std.mem.readInt(u32, bytes[20..24], .big);
+        if (w == 0 or h == 0) return null;
+        return .{ w, h };
     }
 
-    // Bake the S-52 sprite-symbol atlas at the display density, upload it, and
-    // write it to the app cache so later opens skip the (slow) rasterize. iOS
-    // can't take the full-density result as one texture (a 3x bake is ~10.9k px
-    // tall / ~268 MB and uploads only partially on device — the rest samples
-    // black), so shrink the bake scale until it fits spriteMaxDim() and remember
-    // it (atlas_scale) so scene UVs stay in step.
-    fn bakeAndCacheSprite(self: *Lookout, scheme: Scheme, png_name: []const u8, json_name: []const u8, scale_name: []const u8) void {
+    // The S-52 sprite sheet for the mariner's scheme: from the app cache if
+    // present, else baked at the display density and cached. The cache key
+    // carries the density (a Retina 2x bake differs from 1x) AND the palette
+    // (the artwork is coloured), so each scheme keeps its own sheet and a
+    // scheme change re-reads rather than re-bakes.
+    fn loadSpriteSheet(self: *Lookout, density: f32) void {
+        const scheme = self.mariner.scheme;
+        // Claimed before the work, not after it: a bake that fails must not be
+        // retried on every frame that follows.
+        self.sprite_scheme = scheme;
+        self.sprite_density = density;
+        // "sprite-mln-", not "sprite-": the GPU-path atlas cached under
+        // `sprite-<scheme>@<density>` is baked at 8 px/mm, this sheet at 2.83.
+        // Sharing the key draws every symbol 2.8x too large.
+        var keybuf: [40]u8 = undefined;
+        const key = std.fmt.bufPrint(&keybuf, "sprite-mln-{s}@{d:.2}", .{ schemeName(scheme), density }) catch "sprite-mln-day@x";
+        var pn: [40]u8 = undefined;
+        var jn: [40]u8 = undefined;
+        var sn: [40]u8 = undefined;
+        const png_name = std.fmt.bufPrint(&pn, "{s}.png", .{key}) catch return;
+        const json_name = std.fmt.bufPrint(&jn, "{s}.json", .{key}) catch return;
+        const scale_name = std.fmt.bufPrint(&sn, "{s}.scale", .{key}) catch return;
+
+        if (self.readCache(png_name)) |png_b| {
+            defer self.alloc.free(png_b);
+            if (self.readCache(json_name)) |json| {
+                defer self.alloc.free(json);
+                var scale: f32 = density;
+                if (self.readCache(scale_name)) |sb| {
+                    defer self.alloc.free(sb);
+                    scale = std.fmt.parseFloat(f32, std.mem.trim(u8, sb, " \n\r\t")) catch scale;
+                }
+                const size = pngSize(png_b) orelse [2]u32{ 0, 0 };
+                if (@max(size[0], size[1]) <= spriteMaxDim() and
+                    self.ct.setSprite(json, png_b, scale, scheme))
+                {
+                    self.sprite_density = scale;
+                    self.reapplyAltSprites(); // the new sheet lost the alt style's cells
+                    std.debug.print("sprite sheet {s} @ {d:.2}x (cache)\n", .{ schemeName(scheme), scale });
+                    return;
+                }
+            }
+        }
+        self.bakeAndCacheSprite(scheme, density, png_name, json_name, scale_name);
+    }
+
+    // Bake the sheet at the display density, hand it over, and write it to the
+    // app cache so later opens skip the (slow) rasterize. iOS cannot take the
+    // full-density result as one texture, so shrink the bake scale until it
+    // fits spriteMaxDim() and remember which scale that was.
+    fn bakeAndCacheSprite(self: *Lookout, scheme: Scheme, density: f32, png_name: []const u8, json_name: []const u8, scale_name: []const u8) void {
         const max_dim: u32 = spriteMaxDim();
-        var scale: f32 = self.g.pixel_density;
-        self.atlas_scale = scale;
+        var scale: f32 = density;
         var attempts: u8 = 0;
         while (attempts < 4) : (attempts += 1) {
             var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
@@ -1054,52 +1091,23 @@ pub const Lookout = struct {
             if (assets.sprite_png == null or assets.sprite_json == null) return;
             const png_bytes = assets.sprite_png[0..assets.sprite_png_len];
             const json = assets.sprite_json[0..assets.sprite_json_len];
-            var a = atlas.loadSprite(self.alloc, png_bytes, json) catch return;
-            const largest = @max(a.width, a.height);
+            const size = pngSize(png_bytes) orelse return;
+            const largest = @max(size[0], size[1]);
             if (largest > max_dim) {
-                a.deinit();
                 const fit = @as(f32, @floatFromInt(max_dim)) / @as(f32, @floatFromInt(largest));
                 scale = @max(1.0, scale * fit * 0.98); // 2% slack for packer variance
-                std.debug.print("sprite atlas {d}x{d} exceeds max texture {d}; rebaking at {d:.2}x\n", .{ a.width, a.height, max_dim, scale });
+                std.debug.print("sprite sheet {d}x{d} exceeds max texture {d}; rebaking at {d:.2}x\n", .{ size[0], size[1], max_dim, scale });
                 continue;
             }
-            if (self.sprite_atlas) |*old| old.deinit(); // see uploadSprite
-            self.sprite_atlas = a;
-            self.g.uploadSpriteAtlas(a.rgba(), a.width, a.height) catch {
-                self.sprite_atlas.?.deinit();
-                self.sprite_atlas = null;
-                return;
-            };
-            self.sprite_atlas.?.freePixels(); // GPU has its copy
-            self.atlas_scale = scale;
-            std.debug.print("sprite atlas: {s} {d}x{d} @ {d:.2}x, {d} cells (baked)\n", .{ schemeName(scheme), a.width, a.height, scale, a.cells.count() });
-            // Cache the fit result (the on-disk PNG/JSON are the baked bytes).
+            if (!self.ct.setSprite(json, png_bytes, scale, scheme)) return;
+            self.sprite_density = scale;
+            self.reapplyAltSprites(); // the new sheet lost the alt style's cells
+            std.debug.print("sprite sheet: {s} {d}x{d} @ {d:.2}x (baked)\n", .{ schemeName(scheme), size[0], size[1], scale });
             self.writeCache(png_name, png_bytes);
             self.writeCache(json_name, json);
             var sbuf: [16]u8 = undefined;
             if (std.fmt.bufPrint(&sbuf, "{d:.4}", .{scale})) |s| self.writeCache(scale_name, s) else |_| {}
             return;
-        }
-    }
-
-    // Pull the S-52 NODATA (NODTA) color per captured scheme from tile57's
-    // colortables, so the uncovered background matches the palette.
-    fn loadNodataColors(self: *Lookout) void {
-        var out: [*c]u8 = null;
-        var len: usize = 0;
-        var err: cc.tile57_error = undefined;
-        if (cc.tile57_colortables_default(&out, &len, &err) != cc.TILE57_OK or out == null) return;
-        defer cc.tile57_free(out);
-        const parsed = std.json.parseFromSlice(std.json.Value, self.alloc, out[0..len], .{}) catch return;
-        defer parsed.deinit();
-        const root_obj = switch (parsed.value) {
-            .object => |o| o,
-            else => return,
-        };
-        for (0..self.n_schemes) |i| {
-            const scheme_obj = (root_obj.get(schemeName(self.schemes[i])) orelse continue).object;
-            const hex = (scheme_obj.get("NODTA") orelse continue).string;
-            if (hexColor(hex)) |c| self.nodata[i] = c;
         }
     }
 
@@ -1114,11 +1122,27 @@ pub const Lookout = struct {
             for (paths) |p| self.addChartPath(p);
             return;
         }
-        const slots = self.alloc.alloc(?*cc.tile57_chart, paths.len) catch {
+        const slots = self.openPathsToSlots(paths);
+        if (slots.len == 0) {
             for (paths) |p| self.addChartPath(p); // no room for the slots: serial
             return;
-        };
+        }
         defer self.alloc.free(slots);
+
+        for (slots, paths) |c, p| {
+            if (c) |ch| {
+                self.charts.append(self.alloc, ch) catch {};
+                self.noteChartDir(p);
+            } else std.debug.print("skip '{s}'\n", .{p});
+        }
+    }
+
+    /// Open every path in parallel into a slots array the caller owns and
+    /// frees. Touches nothing a build worker shares — safe WITHOUT the
+    /// engine lock, which is what lets a whole library arrive behind a
+    /// drawing chart. Empty on allocation failure: fall back to serial.
+    fn openPathsToSlots(self: *Lookout, paths: []const [:0]const u8) []?*cc.tile57_chart {
+        const slots = self.alloc.alloc(?*cc.tile57_chart, paths.len) catch return &.{};
         @memset(slots, null);
 
         const W = struct {
@@ -1143,13 +1167,79 @@ pub const Lookout = struct {
         }
         W.run(paths, slots, &next);
         for (threads[0..spawned]) |t| t.join();
+        return slots;
+    }
 
-        for (slots, paths) |c, p| {
+    /// Add baked charts to the open library and compose again.
+    ///
+    /// Answers how many opened. A chart that does not open is skipped, as at
+    /// open. The composition is rebuilt on a worker, so the chart on screen
+    /// keeps drawing from the old one until the new one lands: charts arriving
+    /// must never blank the display of the charts already there.
+    pub fn chartsAdd(self: *Lookout, paths: []const [:0]const u8) usize {
+        if (paths.len == 0) return 0;
+        // Only one add may run at a time. The api lock is dropped during
+        // the file opens below, so without this flag a second add could pass
+        // the entry poll while the first is still running, leaving two
+        // compose workers over one chart list and an unjoined thread. The
+        // wait releases the api lock so the in-flight add can reacquire it
+        // and finish.
+        while (self.adding) {
+            self.apiUnlock();
+            sleepMs(2);
+            self.apiLock();
+        }
+        self.adding = true;
+        defer self.adding = false;
+        // A build already running was started without these charts. Take it
+        // first, then start one that has them.
+        self.pollCompose(true);
+        // The OPENS run outside BOTH locks: they are file reads that touch
+        // nothing a build worker or another api call shares, and a whole
+        // library arriving at once (the link-first startup adds thousands)
+        // must not freeze the frame loop for the duration. The api lock is
+        // dropped for the opens — the CALLER of the add must therefore keep
+        // the handle alive until it returns (the shells' close paths already
+        // serialize against it). Only the append mutates `charts`, which a
+        // build worker reads, so only the append relocks.
+        self.apiUnlock();
+        const opened = self.openPathsToSlots(paths);
+        self.apiLock();
+        defer if (opened.len > 0) self.alloc.free(opened);
+        self.engine_mu.lock();
+        const before = self.charts.items.len;
+        if (opened.len == 0) {
+            // No room for the slots: serially, under the lock — slower,
+            // never wrong.
+            for (paths) |p| self.addChartPath(p);
+        } else for (opened, paths) |c, p| {
             if (c) |ch| {
-                self.charts.append(self.alloc, ch) catch {};
+                self.charts.append(self.alloc, ch) catch {
+                    cc.tile57_chart_close(ch);
+                    std.debug.print("skip '{s}': no memory to hold it\n", .{p});
+                    continue;
+                };
                 self.noteChartDir(p);
             } else std.debug.print("skip '{s}'\n", .{p});
         }
+        const added = self.charts.items.len - before;
+        self.engine_mu.unlock();
+        if (added == 0) return 0;
+
+        // NOT `loading`. That flag means there is nothing to draw yet, and it
+        // frees the scene and paints the loader pulse over the window. The
+        // charts already open are still drawable, and a mariner adding charts
+        // must not lose the chart under the boat while the rest arrive.
+        self.compose_prev = self.compose;
+        self.recomposing = true;
+        self.compose_done.store(false, .release);
+        self.compose_result = null;
+        self.compose_thread = std.Thread.spawn(.{}, composeWorker, .{self}) catch blk: {
+            self.composeWorker();
+            break :blk null;
+        };
+        self.pollCompose(self.compose_thread == null);
+        return added;
     }
 
     fn addChartPath(self: *Lookout, path: [:0]const u8) void {
@@ -1163,8 +1253,18 @@ pub const Lookout = struct {
         self.noteChartDir(path);
     }
 
-    /// Record cell name -> directory for one opened archive.
+    /// The archive path of the chart at `i`, as it was opened.
+    fn chartPath(self: *Lookout, i: usize) ?[:0]const u8 {
+        if (i >= self.chart_paths.items.len) return null;
+        return self.chart_paths.items[i];
+    }
+
+    /// Record cell name -> directory for one opened archive, and keep the path
+    /// itself: a single-chart open binds that archive to the renderer.
     fn noteChartDir(self: *Lookout, path: []const u8) void {
+        if (self.alloc.dupeZ(u8, path)) |owned| {
+            self.chart_paths.append(self.alloc, owned) catch self.alloc.free(owned);
+        } else |_| {}
         const base = std.fs.path.basename(path);
         const stem = std.fs.path.stem(base);
         const dir = std.fs.path.dirname(path) orelse ".";
@@ -1218,10 +1318,30 @@ pub const Lookout = struct {
         return handle;
     }
     fn finishOpen(self: *Lookout) !void {
-        if (self.charts.items.len == 0) return error.NoCharts;
+        // A library of raster charts alone is a library. A mariner whose water
+        // the ENC covers badly may carry only photographs of it, and the app
+        // has to open for them. There is no vector scene in that state: the
+        // raster layer draws and the chart layer has nothing to say. The host
+        // adds the pictures after the open, so an empty set is not an error.
+        if (self.charts.items.len == 0) {
+            self.raster_only = true;
+            return;
+        }
         // Set an immediate view + zoom clamps from the FIRST cell — no compositor
         // needed — so the window can render right away.
         self.applyZoomAndView();
+        // What the renderer draws from. ONE chart binds straight to its archive
+        // and never touches the compositor: charttable reads pmtiles itself, so
+        // the whole tile path for a single cell is inside it. A library goes
+        // through tile57's compositor below, once the partition is built.
+        self.refreshScamin();
+        if (self.charts.items.len == 1) {
+            if (self.chartPath(0)) |p| {
+                self.ct.bindChart(p) catch |e| {
+                    std.debug.print("chart source: {s}\n", .{@errorName(e)});
+                };
+            }
+        }
         // Compose over the whole library (the slow ownership-partition build) on a
         // worker thread; the window shows a loader until it lands (see tick).
         if (self.charts.items.len > 1) {
@@ -1254,7 +1374,7 @@ pub const Lookout = struct {
     pub fn loadPlugins(self: *Lookout, dir: []const u8) !void {
         if (plugins_on) {
             const ps = self.plugins orelse blk: {
-                const created = try PluginSystem.create(self.alloc, &self.overlay);
+                const created = try PluginSystem.create(self.alloc, &self.overlay, self.plugin_install_root orelse "");
                 self.plugins = created;
                 break :blk created;
             };
@@ -1264,21 +1384,38 @@ pub const Lookout = struct {
         } else return error.PluginsUnavailable;
     }
 
-    /// The overlay store's view of a loaded glyph atlas: one metrics lookup,
-    /// no C types across the boundary.
+    /// Name the per-user plugin directory. Only before the plugin layer is up:
+    /// the host reads it once at creation and caches what it resolves.
+    pub fn setPluginInstallRoot(self: *Lookout, path: []const u8) !void {
+        if (self.plugins != null) return error.PluginsUnavailable;
+        const dup = try self.alloc.dupe(u8, path);
+        if (self.plugin_install_root) |old| self.alloc.free(old);
+        self.plugin_install_root = dup;
+    }
+
+    /// The overlay store's view of the renderer's glyph atlas: one metrics
+    /// lookup, in the EM units the store lays out in. charttable keeps the
+    /// same metrics in PIXELS at the sheet's em size, so the conversion is one
+    /// divide — and `top` is y-up there against the store's y-down.
+    const GlyphFace = struct {
+        atlas: *const ctglyphs.GlyphAtlas,
+        em_px: f32,
+    };
+
     fn overlayGlyphLookup(ctx: *const anyopaque, cp: u21) ?ov.Glyph {
-        const a: *const atlas.GlyphAtlas = @ptrCast(@alignCast(ctx));
-        const g = a.lookup(cp) orelse return null;
+        const face: *const GlyphFace = @ptrCast(@alignCast(ctx));
+        const g = face.atlas.get(cp) orelse return null;
+        const s: f32 = if (face.em_px > 0) 1.0 / face.em_px else 0;
         return .{
             .u0 = g.u0,
             .v0 = g.v0,
             .u1 = g.u1,
             .v1 = g.v1,
-            .off_x = g.off_x,
-            .off_y = g.off_y,
-            .w = g.w,
-            .h = g.h,
-            .advance = g.advance,
+            .off_x = g.left * s,
+            .off_y = -g.top * s,
+            .w = g.w * s,
+            .h = g.h * s,
+            .advance = g.advance * s,
         };
     }
 
@@ -1305,13 +1442,15 @@ pub const Lookout = struct {
         // several, and one that forgot would leave a day-bright magenta on a
         // night chart.
         if (self.markers_scheme != self.overlayScheme()) self.postMarkers();
-        // Hand the store whatever glyph faces are loaded, so canvas text lays
-        // out against the same atlases the labels draw with. Idempotent: only
-        // a change marks the store dirty.
-        self.overlay.setFonts(
-            if (self.glyph_atlas != null) .{ .ctx = @ptrCast(&self.glyph_atlas.?), .lookup = overlayGlyphLookup } else null,
-            if (self.glyph_bold_atlas != null) .{ .ctx = @ptrCast(&self.glyph_bold_atlas.?), .lookup = overlayGlyphLookup } else null,
-        );
+        // Hand the store the glyph face, so canvas text lays out against the
+        // same atlas the labels draw with. Idempotent: only a change marks the
+        // store dirty. One face for both slots — the renderer holds a single
+        // atlas, so bold canvas text draws in the regular face.
+        if (self.ct.glyph_atlas != null) {
+            self.glyph_face = .{ .atlas = &self.ct.glyph_atlas.?, .em_px = self.glyph_em_px };
+            const src = ov.Font{ .ctx = @ptrCast(&self.glyph_face), .lookup = overlayGlyphLookup };
+            self.overlay.setFonts(src, src);
+        }
         // The view rotation goes in because a canvas may hold a readout level
         // on screen; the store ignores it unless one does.
         const frame = self.overlay.buildIfNeeded(self.cam.zoom, self.cam.rotation, self.overlayScheme(), self.ship_at) catch |e| {
@@ -1321,10 +1460,15 @@ pub const Lookout = struct {
         // The overlay pass draws from the frame's OWN origin. Its vertices are
         // relative to it, so the MVP and the antimeridian wrap must be too.
         // The camera does not move between here and this frame's draw.
-        var u = self.uniforms();
+        var u = self.ct.m.uniforms();
         u.mvp = self.cam.mvpOrigin(frame.origin);
-        u.wrap_x = @floatCast(self.cam.center.x - frame.origin.x);
-        self.g.setOverlay(frame, u) catch |e| {
+        u.wrap_x = @floatCast(camera.wrapDx(self.cam.center.x, frame.origin.x));
+        // The store's vertex and the renderer's overlay vertex are the same
+        // 24 bytes in the same order — asserted, because a silent skew here
+        // would draw the mariner's marks as noise rather than fail.
+        comptime std.debug.assert(@sizeOf(ov.Vertex) == @sizeOf(ctscene.OverlayVertex));
+        const verts: []const ctscene.OverlayVertex = @ptrCast(frame.verts);
+        self.ct.setOverlay(verts, frame.generation, u) catch |e| {
             std.debug.print("overlay upload failed: {s}\n", .{@errorName(e)});
         };
     }
@@ -1351,14 +1495,14 @@ pub const Lookout = struct {
     /// null. Logical points, the same unit as every other pointer entry point.
     /// Borrowed: valid until the next call.
     pub fn overlayAt(self: *Lookout, x_pt: f32, y_pt: f32) ?[]const u8 {
-        return self.overlay.pickAt(self.cam, x_pt, y_pt, self.ship_at);
+        return self.overlay.pickAt(self.cam.*, x_pt, y_pt, self.ship_at);
     }
 
     /// The overlay symbol nearest a logical point, with its id and the anchor
     /// it draws at. A shell pins a bubble to the id and asks `overlayInfo` for
     /// it every frame. Borrowed until the next overlay query.
     pub fn overlayHit(self: *Lookout, x_pt: f32, y_pt: f32) ?ov.Store.Hit {
-        return self.overlay.hitAt(self.cam, x_pt, y_pt, self.ship_at);
+        return self.overlay.hitAt(self.cam.*, x_pt, y_pt, self.ship_at);
     }
 
     /// What that object says now, or null once it is gone.
@@ -1599,8 +1743,8 @@ pub const Lookout = struct {
     /// heading. The display position moves every frame, so this runs every
     /// frame; when nothing moved it costs one comparison.
     fn followTick(self: *Lookout) void {
-        var moved = self.follow.rotate(&self.cam, self.ship.upDeg());
-        if (self.follow.apply(&self.cam, self.shipWorld())) moved = true;
+        var moved = self.follow.rotate(self.cam, self.ship.upDeg());
+        if (self.follow.apply(self.cam, self.shipWorld())) moved = true;
         if (moved) self.markDirty();
     }
 
@@ -1610,8 +1754,8 @@ pub const Lookout = struct {
     fn followWantsFrame(self: *Lookout) bool {
         if (!self.follow.on and !self.follow.course_up) return false;
         self.tickShip();
-        if (self.follow.rotatePending(self.cam, self.ship.upDeg())) return true;
-        return self.follow.pending(self.cam, self.shipWorld());
+        if (self.follow.rotatePending(self.cam.*, self.ship.upDeg())) return true;
+        return self.follow.pending(self.cam.*, self.shipWorld());
     }
 
     fn composeWorker(self: *Lookout) void {
@@ -1621,6 +1765,11 @@ pub const Lookout = struct {
         // to the archives, and builds one in memory if there is none. Where that
         // file lives, and whether it is reusable, is the engine's business.
         if (cc.tile57_compose_open(self.charts.items.ptr, self.charts.items.len, &c, &err) == cc.TILE57_OK and c != null) {
+            // charttable follows the style spec's 512 px world tile, while
+            // S-101 lays its linestyle figures out in 256-px-per-tile space.
+            // The composed tiles' linestyle rhythms are restated in ours. The
+            // same seam ct/host.zig's toCt converts.
+            cc.tile57_compose_set_px_per_tile(c, 512);
             self.compose_result = c;
         } else {
             std.debug.print("compose_open failed: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
@@ -1630,18 +1779,42 @@ pub const Lookout = struct {
 
     // Adopt the composed set once its partition build finishes. `block` waits.
     fn pollCompose(self: *Lookout, block: bool) void {
-        if (!self.loading) return;
+        if (!self.loading and !self.recomposing) return;
         if (!block and !self.compose_done.load(.acquire)) return;
         if (self.compose_thread) |t| {
             t.join();
             self.compose_thread = null;
         }
         self.loading = false;
+        self.recomposing = false;
         if (self.compose_result) |c| {
+            // The engine lock, not the API lock. A build worker reads
+            // `compose` on its own thread and holds this lock while tile57
+            // walks it, so the swap and the close of the old one belong
+            // inside it. Closing outside it frees a composition a worker is
+            // in the middle of reading.
+            self.engine_mu.lock();
             self.compose = c;
+            const replaced = self.compose_prev;
+            self.compose_prev = null;
+            if (replaced) |old| cc.tile57_compose_close(old);
+            self.engine_mu.unlock();
+
             self.zl_valid = false; // new partition — the cached per-view max is stale
             self.updateZoomLimits(); // refresh the zoom band; DON'T touch the view
             std.debug.print("composed {d} charts\n", .{self.charts.items.len});
+            // The tiles on screen came from the old composition, so they hold
+            // none of the charts just added. Point the tile workers at the new
+            // one: the charts that were already there re-compose identically,
+            // and the new ones fill in as their tiles land.
+            //
+            // The compositor serves RAW MLT, whatever the archives underneath
+            // it hold, so the source's encoding is fixed at the seam.
+            self.ct.bindComposed(c, .mlt) catch |e| {
+                std.debug.print("chart source: {s}\n", .{@errorName(e)});
+            };
+            self.refreshScamin();
+            if (replaced != null) self.style_dirty = true;
         }
         // The loader animated self.g.clear to a dark pulse (see render()); now that
         // we're drawing the chart again, re-derive the live state so the clear goes
@@ -1655,10 +1828,29 @@ pub const Lookout = struct {
     // + one fill-up overscale level. buildZoom clamps the scene to this, so letting
     // cam.zoom run past it only MVP-magnifies that scene into nodata-ish blur; cap
     // exactly there so cam.zoom == buildZoom at the limit and the chart stays crisp.
+    /// All of these are in the RENDERER's zoom convention, because that is what
+    /// they are compared against: a chart's declared min/max are tile levels,
+    /// and a tile level is a charttable zoom.
     const MIN_ZOOM_FLOOR = 4.0;
     fn updateZoomLimits(self: *Lookout) void {
+        // An alt chart is the publisher's map, not the library's: its own
+        // sources say how deep it goes, and the ENC's coverage must not
+        // clamp it — behind a link-first startup the library is still
+        // loading, and clamping to it pinned the zoom two levels past
+        // whatever had composed so far. Runs every frame, so clearing the
+        // alt style restores the library band by itself.
+        if (self.alt_style != null) {
+            const deep = self.ct.deepestSourceZoom();
+            self.engine_max_zoom = deep;
+            // Web maps show the whole world; below 2 the mercator square is
+            // smaller than the screen.
+            self.cam.min_zoom = 2.0;
+            self.cam.max_zoom = deep + OVERSCALE_ALLOW;
+            self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
+            return;
+        }
         const zr = self.zoomRange();
-        self.engine_max_zoom = @min(zr[1], self.served_max_zoom);
+        self.engine_max_zoom = zr[1];
         self.cam.min_zoom = @max(MIN_ZOOM_FLOOR, zr[0]);
         // Per-view cap: the deepest zoom the chart UNDER THE VIEW CENTRE can serve.
         // Over a coarse-only area every covering cell's reach is low, so the
@@ -1668,8 +1860,22 @@ pub const Lookout = struct {
         // stays built at the data's max zoom and the MVP magnifies it (same
         // path as a pinch between rebuilds), with the HUD showing an overscale
         // badge (lookout_overscale). S-52 permits overscale WITH indication.
-        self.cam.max_zoom = self.viewMaxZoom() + OVERSCALE_ALLOW;
-        self.cam.target_zoom = std.math.clamp(self.cam.target_zoom, self.cam.min_zoom, self.cam.max_zoom);
+        const cap = self.viewMaxZoom();
+        self.cam.max_zoom = cap + OVERSCALE_ALLOW;
+        // ZOOMING is capped at the data plus the overscale allowance, above.
+        // PANNING is not, up to a far looser ceiling.
+        //
+        // This ran unconditionally, so crossing into a coarser area changed the
+        // zoom under a mariner who had not asked for it: throw the chart and
+        // the scale moves. The point of the cap is to stop them ending up
+        // magnifying nothing, and the overscale badge already says when they
+        // are past the survey, so panning may leave the scale alone until the
+        // magnification is genuinely useless.
+        self.cam.target_zoom = std.math.clamp(
+            self.cam.target_zoom,
+            self.cam.min_zoom,
+            @max(self.cam.max_zoom, cap + PAN_OVERSCALE_ALLOW),
+        );
     }
 
     /// Deepest servable zoom at the current view centre (tile57_compose_max_zoom_at),
@@ -1679,8 +1885,12 @@ pub const Lookout = struct {
     /// gesture profile. Recomputed after ~32 screen px of pan or half a zoom
     /// level; compose adoption invalidates (zl_valid).
     fn viewMaxZoom(self: *Lookout) f64 {
+        // The alt chart's depth is its sources', wherever the view sits —
+        // the ENC partition under it is not what is being drawn, and its
+        // answer put an overscale badge on a chart with levels to spare.
+        if (self.alt_style != null) return self.ct.deepestSourceZoom();
         const c = self.compose orelse return self.zoomRange()[1];
-        const thresh = 32.0 / (std.math.exp2(self.cam.zoom) * 256.0);
+        const thresh = 32.0 / (std.math.exp2(self.cam.zoom) * 512.0);
         if (self.zl_valid and
             @abs(self.cam.center.x - self.zl_center.x) <= thresh and
             @abs(self.cam.center.y - self.zl_center.y) <= thresh and
@@ -1698,12 +1908,27 @@ pub const Lookout = struct {
     fn applyZoomAndView(self: *Lookout) void {
         const v = self.fitChart();
         const lw, const lh = self.logicalSize();
-        self.cam = viewToCamera(v, lw, lh);
+        self.ct.m.setViewport(lw, lh);
+        // The band before the pose: setView clamps into it, and a view fitted
+        // to a cell outside the old band would be pulled back otherwise.
         self.updateZoomLimits();
+        self.setView(v);
         self.deriveLive();
     }
 
+    /// Re-read the library's SCAMIN denominators and rebuild the style with
+    /// them. The manifest decides how the style's `_scamin` layers are split,
+    /// so charts arriving with new denominators need a fresh style, not just a
+    /// fresh composition.
+    fn refreshScamin(self: *Lookout) void {
+        if (self.scamin.len != 0) self.alloc.free(self.scamin);
+        self.scamin = cstyle.collectScamin(self.alloc, self.charts.items);
+        self.style_dirty = true;
+    }
+
     fn zoomRange(self: *Lookout) [2]f64 {
+        // The pictures decide the range when there is no survey to ask.
+        if (self.charts.items.len == 0) return .{ 2, 19 };
         if (self.compose) |c| {
             var m: cc.tile57_compose_meta = undefined;
             cc.tile57_compose_get_meta(c, &m);
@@ -1724,18 +1949,26 @@ pub const Lookout = struct {
                 self.plugins = null;
             }
         }
+        // AFTER the host: it borrows this slice for its life.
+        if (self.plugin_install_root) |r| self.alloc.free(r);
         // Now that nothing else can post into them.
         self.overlay.deinit();
         self.markers.deinit();
+        // BEFORE the renderer: standing the link machine down answers the
+        // tiles it has outstanding, and those answers go through the renderer.
+        self.links.deinit();
         self.pollCompose(true); // finish any in-flight partition build first
-        self.joinBuild(); // and any in-flight async rebuild (it touches the engine)
-        // Before g.deinit(): the layer hands its textures back to the GPU.
-        self.raster.deinit(&self.g);
-        if (self.sprite_atlas) |*sa| sa.deinit();
-        if (self.glyph_atlas) |*ga| ga.deinit();
-        if (self.glyph_bold_atlas) |*gb| gb.deinit();
+        // BEFORE the composition and the charts: the renderer's tile workers
+        // read the compositor, and its deinit is what stops them.
+        self.ct.deinit();
+        // AFTER the renderer: its cache workers hold pointers into the
+        // underlay's providers until the map above has stopped.
+        self.rasters.deinit();
         if (self.assets_root) |r| self.alloc.free(r);
-        self.g.deinit();
+        if (self.alt_style) |s| self.alloc.free(s);
+        self.clearAltPacks();
+        self.alt_packs.deinit(self.alloc);
+        if (self.scamin.len != 0) self.alloc.free(self.scamin);
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
         self.charts.deinit(self.alloc);
@@ -1751,6 +1984,8 @@ pub const Lookout = struct {
             self.alloc.free(kv.value_ptr.*);
         }
         self.chart_dirs.deinit(self.alloc);
+        for (self.chart_paths.items) |p| self.alloc.free(p);
+        self.chart_paths.deinit(self.alloc);
         self.alloc.destroy(self);
     }
 
@@ -1767,10 +2002,10 @@ pub const Lookout = struct {
     /// For a library we fit the MOST DETAILED cell (smallest bounds area), not
     /// the first alphabetically: a US ENC's first cell is usually a tiny-scale
     /// EEZ overview (e.g. US1EEZ1M) that opens as an empty ocean rectangle. A
-    /// harbour/approach cell lands the user on actual chart content instead.
+    /// harbor/approach cell lands the user on actual chart content instead.
     /// The pose a host should open with when it has nothing saved. fitChart
     /// alone lands on the smallest bounded CELL, which in a 2500-cell library
-    /// is an arbitrary harbour; keep that centre but pull back to an overview.
+    /// is an arbitrary harbor; keep that centre but pull back to an overview.
     /// Hosts persist the pose themselves (each has its own store) — this is
     /// the one piece of the policy worth having in a single place.
     const DEFAULT_VIEW_ZOOM = 5.0;
@@ -1789,7 +2024,20 @@ pub const Lookout = struct {
         var has_bounds = false;
         var min_zoom: u8 = 0;
         var max_zoom: u8 = 22;
-        {
+        if (self.charts.items.len == 0) {
+            // No survey to frame from, so the pictures decide where to look.
+            // Without this a raster-only library opens wherever the camera
+            // happened to start, which is nowhere near the charts.
+            if (self.rasters.coverage()) |b| {
+                return .{
+                    .lon = (b[0] + b[2]) * 0.5,
+                    .lat = (b[1] + b[3]) * 0.5,
+                    .zoom = 8,
+                };
+            }
+            // No survey and no pictures: the opening view is the whole world.
+            return .{ .lon = 0, .lat = 0, .zoom = 2 };
+        } else {
             // Pick the smallest-area bounded cell as the opening view. Falls back
             // to the first cell's anchor (or the first cell) when none is bounded.
             var best_area: f64 = std.math.floatMax(f64);
@@ -1823,20 +2071,22 @@ pub const Lookout = struct {
         const lw, const lh = self.logicalSize();
         const vw: f64 = lw;
         const vh: f64 = lh;
-        const zx = std.math.log2(vw / (256.0 * @max(@abs(wr.x - wl.x), 1e-12)));
-        const zy = std.math.log2(vh / (256.0 * @max(@abs(wr.y - wl.y), 1e-12)));
+        // Fitted in the RENDERER's convention (a 512 px world tile), because
+        // the bounds it is clamped against are tile levels. The result crosses
+        // back to the ABI's convention on the way out, once.
+        const zx = std.math.log2(vw / (512.0 * @max(@abs(wr.x - wl.x), 1e-12)));
+        const zy = std.math.log2(vh / (512.0 * @max(@abs(wr.y - wl.y), 1e-12)));
         var z = @min(zx, zy) - 0.15;
         z = std.math.clamp(z, @as(f64, @floatFromInt(min_zoom)), @as(f64, @floatFromInt(max_zoom)) + 1.0);
-        return .{ .lon = (west + east) * 0.5, .lat = (south + north) * 0.5, .zoom = z };
+        return .{ .lon = (west + east) * 0.5, .lat = (south + north) * 0.5, .zoom = cthost.fromCt(z) };
     }
 
     /// Move the camera. Pan/zoom/rotate never re-tessellate; a big jump to new
     /// ground may want build() for fresh detail.
     pub fn setView(self: *Lookout, v: View) void {
         self.cam.center = camera.lonLatToWorld(v.lon, v.lat);
-        self.cam.zoom = v.zoom;
+        self.cam.zoom = cthost.toCt(v.zoom);
         self.cam.rotation = v.rotation_deg * std.math.pi / 180.0;
-        self.served_max_zoom = 1e9; // new ground: re-probe how deep it serves
         // Pin the animation target to the new pose: otherwise the zoom easer
         // still aims at the PREVIOUS target and drags the view back (about a
         // stale cursor pivot) on the next frames.
@@ -1846,17 +2096,16 @@ pub const Lookout = struct {
     }
     pub fn view(self: *Lookout) View {
         const ll = camera.worldToLonLat(self.cam.center);
-        return .{ .lon = ll.x, .lat = ll.y, .zoom = self.cam.zoom, .rotation_deg = self.cam.rotation * 180.0 / std.math.pi };
+        return .{ .lon = ll.x, .lat = ll.y, .zoom = cthost.fromCt(self.cam.zoom), .rotation_deg = self.cam.rotation * 180.0 / std.math.pi };
     }
 
     /// Resize the render surface (points; HiDPI density is applied internally).
     pub fn resize(self: *Lookout, width: u32, height: u32) !void {
         self.host_pt_w = @floatFromInt(width);
         self.host_pt_h = @floatFromInt(height);
-        try self.g.resize(width, height);
+        self.ct.resize(width, height);
         const lw, const lh = self.logicalSize();
-        self.cam.vw = lw;
-        self.cam.vh = lh;
+        self.ct.m.setViewport(lw, lh);
         self.markDirty();
     }
 
@@ -1871,13 +2120,12 @@ pub const Lookout = struct {
     /// flight, and must not render again until attachSurface returns.
     pub fn detachSurface(self: *Lookout) void {
         if (!self.surface_attached) return;
-        if (@hasDecl(gpu.Gpu, "detachSurface")) self.g.detachSurface();
+        self.ct.detachSurface();
         self.surface_attached = false;
         // The next attach presents a frame even if nothing else moved.
         self.view_dirty = true;
-        // Detached, tickBuild is the safe point that never arrives: stop the
-        // worker and hand the caches back now, while the memory still matters.
-        self.joinBuild();
+        // Detached there is no frame to serve a trim at, and a warning that
+        // frees nothing is exactly why the process gets killed next.
         self.serviceTrim();
     }
 
@@ -1888,17 +2136,19 @@ pub const Lookout = struct {
     /// Errors leave the engine detached rather than half-attached, so a host
     /// that cannot show a chart without a view can fall back to a reopen.
     pub fn attachSurface(self: *Lookout, kind: NativeKind, handle: *anyopaque, width: u32, height: u32) !void {
-        if (!@hasDecl(gpu.Gpu, "attachSurface")) return error.SurfaceAttachUnsupported;
         if (self.surface_attached) return error.SurfaceAlreadyAttached;
-        try self.g.attachSurface(.{
+        try self.ct.attachSurface(.{
             .width = width,
             .height = height,
             .want_window = false,
-            .want_msaa = self.g.msaa_used,
+            .want_msaa = true,
             .native_handle = handle,
             .native_kind = kind,
         });
         self.surface_attached = true;
+        // A fresh device holds no sheets: they go up again with the next frame.
+        self.atlases_ready = false;
+        self.sprite_scheme = null;
         // The new window is rarely the old one's size (a rotation while the app
         // was away), and the camera has to hear about it before the first frame.
         try self.resize(width, height);
@@ -1911,35 +2161,36 @@ pub const Lookout = struct {
     /// projection, and never multiplied into a size again.
     fn logicalSize(self: *const Lookout) struct { f32, f32 } {
         if (self.host_pt_w > 0 and self.host_pt_h > 0) return .{ self.host_pt_w, self.host_pt_h };
-        const d = if (self.g.pixel_density > 0) self.g.pixel_density else 1.0;
-        return .{ @as(f32, @floatFromInt(self.g.width)) / d, @as(f32, @floatFromInt(self.g.height)) / d };
+        const d = if (self.ct.pixelDensity() > 0) self.ct.pixelDensity() else 1.0;
+        return .{ @as(f32, @floatFromInt(self.ct.width())) / d, @as(f32, @floatFromInt(self.ct.height())) / d };
     }
     pub fn pixelDensity(self: *Lookout) f32 {
-        return self.g.pixel_density;
+        return self.ct.pixelDensity();
     }
 
     /// Declare the host's scale factor instead of letting the backend infer it
     /// from the surface. Set before the first build.
     pub fn setPixelDensity(self: *Lookout, d: f32) void {
-        // Density-baked sprite atlas must rebake on a late density change (else it aliases).
-        if (self.atlases_ready and d != self.g.pixel_density) self.atlases_ready = false;
-        self.g.setPixelDensity(d);
+        // The density-baked sprite sheet must rebake on a late density change,
+        // or every symbol samples upscaled. ensureAtlases notices by itself
+        // (it compares the baked density), so nothing is forced here.
+        self.ct.setPixelDensity(d);
     }
 
     // ---- interaction --------------------------------------------------------
     // Pan and zoom go through the follow controller: a pan turns follow off, a
     // zoom keeps it on and pivots on own ship.
     pub fn panPixels(self: *Lookout, dx: f32, dy: f32) void {
-        self.follow.pan(&self.cam, dx, dy);
+        self.follow.pan(self.cam, dx, dy);
         self.markDirty();
     }
     pub fn zoomAt(self: *Lookout, dzoom: f64, x_px: f32, y_px: f32) void {
-        self.follow.zoomAbout(&self.cam, dzoom, x_px, y_px);
+        self.follow.zoomAbout(self.cam, dzoom, x_px, y_px);
         self.markDirty();
     }
     pub fn screenToGeo(self: *Lookout, x_px: f32, y_px: f32) View {
         const ll = camera.worldToLonLat(self.cam.screenToWorld(x_px, y_px));
-        return .{ .lon = ll.x, .lat = ll.y, .zoom = self.cam.zoom };
+        return .{ .lon = ll.x, .lat = ll.y, .zoom = cthost.fromCt(self.cam.zoom) };
     }
     pub fn geoToScreen(self: *Lookout, lon: f64, lat: f64) [2]f32 {
         const s = self.cam.worldToScreen(camera.lonLatToWorld(lon, lat));
@@ -1948,11 +2199,11 @@ pub const Lookout = struct {
     // Mouse coords from a HiDPI window arrive in logical points — which is the
     // camera's own unit now, so they pass straight through.
     pub fn panLogical(self: *Lookout, dx_pt: f32, dy_pt: f32) void {
-        self.follow.pan(&self.cam, dx_pt, dy_pt);
+        self.follow.pan(self.cam, dx_pt, dy_pt);
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        self.follow.zoomToward(&self.cam, dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
+        self.follow.zoomToward(self.cam, dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
         self.markDirty();
     }
 
@@ -1992,9 +2243,23 @@ pub const Lookout = struct {
     }
 
     /// Advance camera animations by `dt` seconds; call each frame while animating.
+    ///
+    /// This does NOT touch the style. It used to call deriveLive() "to refresh
+    /// the SCAMIN / display-scale gates", which sets `style_dirty` — so an
+    /// eased zoom or a coasting fling rebuilt the whole style and re-laid-out
+    /// every resident tile, sixty times a second. Measured on the app over a
+    /// six-level zoom sweep, that was 17.3 ms of a 20 ms frame, against 2.5 ms
+    /// for the render itself.
+    ///
+    /// The premise was wrong: nothing in the style depends on the camera's
+    /// ZOOM. SCAMIN is carried as one bucket layer per denominator with a
+    /// native fractional minzoom, which the layout bakes into each vertex's
+    /// zoom window and the shader gates against a uniform — which is exactly
+    /// why buckets were chosen over a filter gate that WOULD have needed a
+    /// rebuild at each crossing. The one camera-dependent style input is
+    /// scaminLat, and `styleLatMoved` handles that.
     pub fn tickAnim(self: *Lookout, dt: f64) void {
         self.cam.tick(dt);
-        self.deriveLive(); // zoom moved: refresh SCAMIN / display-scale gates
         self.markDirty();
     }
 
@@ -2008,123 +2273,54 @@ pub const Lookout = struct {
     pub fn getMariner(self: *Lookout) Mariner {
         return self.mariner;
     }
-    /// Apply the full S-52 state. Visibility-only changes (scheme, display
-    /// categories, text, soundings, size) apply live; anything that changes what
-    /// the engine emits (contours, units, dates, viewing groups, point/boundary
-    /// style, overscale, extra size scales…) marks the scene for a rebuild, done
-    /// lazily on the next render.
+    /// Apply the full S-52 state.
+    ///
+    /// Every setting lands in the STYLE here — display categories and text
+    /// groups as filters, the palette as colours, the safety contour and the
+    /// depth units as the values the shading and the labels are built from. So
+    /// there is one path for all of them and no "live" shortcut: the style is
+    /// rebuilt before the next frame and the resident tiles are laid out again.
+    /// The tiles are untouched, which is what keeps this affordable.
     pub fn setMariner(self: *Lookout, m: Mariner) void {
-        // A scheme change or any geometry-affecting field needs a fresh scene;
-        // category / text / sounding / size changes apply live (see deriveLive).
-        // `dirty` forces the rebuild even though the view didn't move.
-        if (self.mariner.scheme != m.scheme or marinerNeedsRebuild(self.mariner, m)) self.dirty = true;
+        const scheme_changed = self.mariner.scheme != m.scheme;
         self.mariner = m;
+        // The symbol artwork carries its own colours, so a palette change is a
+        // different sheet, not a different uniform.
+        if (scheme_changed) self.sprite_scheme = null;
         self.deriveLive();
     }
 
     fn deriveLive(self: *Lookout) void {
-        self.cat_mask = (@as(u32, @intFromBool(self.mariner.display_base)) << 0) |
-            (@as(u32, @intFromBool(self.mariner.display_standard)) << 1) |
-            (@as(u32, @intFromBool(self.mariner.display_other)) << 2);
-        // Text + soundings gate live by SKIPPING their ranges — the scene carries
-        // them (permissive build) so a toggle needs no rebuild.
-        self.text_on = self.mariner.text_names or self.mariner.show_light_descriptions or self.mariner.text_other;
-        self.sound_on = self.mariner.soundings == 1 or (self.mariner.soundings == 0 and self.mariner.display_other);
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
-        const si: usize = @min(@as(usize, @intCast(self.mariner.scheme)), MAX_SCHEMES - 1);
-        self.g.clear = self.nodata[si]; // background NODATA follows the palette
+        self.style_dirty = true;
         self.markDirty();
     }
 
-    // ---- build + render -----------------------------------------------------
-    // The engine (tile57) portrays + tessellates the whole view into ONE
-    // draw-ready scene that OVERSCANS the viewport; the host uploads it and only
-    // rebuilds when the view pans/zooms out of that coverage, so panning within
-    // the margin just re-transforms the same buffers (a uniform change).
-    const OVERSCAN = 1.25;
-    const ZOOM_REBUILD = 0.3; // zoom drift that forces a fresh build (2^0.3 < OVERSCAN)
+    // ---- the frame ----------------------------------------------------------
+    // charttable owns tiles, tessellation and coverage: it decides when the
+    // scene has to be rebuilt and does it on its own worker. What is left here
+    // is the state ABOVE the renderer — the mariner's style, the zoom band, the
+    // overlay, the loader — and the order those are applied in around a draw.
 
-    // The zoom to BUILD at — the camera zoom clamped to the deepest band the
-    // engine serves; zooming past it keeps this fixed (overscale) and the camera
-    // scales the deepest-band geometry up.
+    /// Zoom levels the camera may run past the deepest servable data.
+    const OVERSCALE_ALLOW = 2.0;
+    /// How far past the data a PAN may leave the view before it eases in. Four
+    /// doublings is 16x magnification: past that the display is a smear and
+    /// easing in is a kindness, short of that it is the mariner's business.
+    const PAN_OVERSCALE_ALLOW = 4.0;
+
+    // The zoom the chart is drawn at, clamped to the deepest band the library
+    // serves. Zooming past it magnifies the deepest data (overscale) rather
+    // than showing nothing.
     fn buildZoom(self: *Lookout) f64 {
         return @min(self.cam.zoom, self.engine_max_zoom);
     }
 
-    // The zoom the NEXT scene should be built FOR: where the camera is HEADING
-    // (target_zoom — a pinch/wheel moves it ahead of the eased zoom), clamped
-    // like buildZoom. A build takes seconds on a phone; building for the zoom
-    // the user is LEAVING guarantees the scene lands already stale, and during
-    // a continuous zoom-out the stale coverage shrinks to a patch in NODATA
-    // until the next build lands. Building for the target lands on (or much
-    // nearer) the settle zoom. Idle or panning, target == zoom, so this is
-    // exactly buildZoom.
-    fn buildTargetZoom(self: *Lookout) f64 {
-        return @min(self.cam.target_zoom, self.engine_max_zoom);
-    }
-
     fn markDirty(self: *Lookout) void {
         self.view_dirty = true;
-        self.last_change_ms = gpu.ticksMs();
+        self.last_change_ms = clock.ticksMs();
     }
 
-    // Record the coverage of the scene just built, so needsRebuild can tell when
-    // the view has left it.
-    fn recordCoverage(self: *Lookout, origin: camera.Vec2, zoom: f64, w_px: f64, h_px: f64) void {
-        const wp = camera.Camera.worldToPx(.{ .origin = origin, .center = origin, .zoom = zoom, .vw = 1, .vh = 1 });
-        self.cov_origin = origin;
-        self.cov_zoom = zoom;
-        self.cov_hw = w_px * 0.5 / wp;
-        self.cov_hh = h_px * 0.5 / wp;
-    }
-
-    // True when the current view has panned/zoomed out of the built coverage.
-    // The x distance wraps: panning across the antimeridian is a short hop, not
-    // a world-width jump. The zoom test compares the coverage against the zoom
-    // the next build WOULD use (the target) — comparing against the still-easing
-    // camera zoom would re-spawn identical builds all the way through the ease.
-    fn needsRebuild(self: *Lookout) bool {
-        if (!self.built) return true;
-        if (@abs(self.buildTargetZoom() - self.cov_zoom) > ZOOM_REBUILD) return true;
-        const he = self.cam.halfExtents();
-        return @abs(camera.wrapDx(self.cam.center.x, self.cov_origin.x)) + he.x > self.cov_hw or
-            @abs(self.cam.center.y - self.cov_origin.y) + he.y > self.cov_hh;
-    }
-
-    /// The immutable inputs a build needs, captured up front so a worker never
-    /// races the live camera / mariner.
-    pub const BuildJob = struct {
-        origin: camera.Vec2 = .{ .x = 0, .y = 0 },
-        zoom: f64 = 0,
-        ow: u32 = 0,
-        oh: u32 = 0,
-        mariner: cc.tile57_mariner = std.mem.zeroes(cc.tile57_mariner),
-        prefetch: bool = false, // warm the engine's tile cache only; don't upload/swap
-    };
-
-    fn jobFor(self: *Lookout, origin: camera.Vec2, zoom: f64, prefetch: bool) BuildJob {
-        const lw, const lh = self.logicalSize();
-        var m0 = buildMarinerFrom(self.mariner, self.mariner.scheme);
-        m0.size_scale = self.render_size_scale;
-        m0.device_scale = 1.0; // camera is in LOGICAL px; density lives in the projection
-        // The scene is built axis-aligned in world space and the camera turns
-        // it at draw time. A turned view therefore needs the box that HOLDS it:
-        // a build of the plain width and height leaves the corners empty.
-        const ext = camera.rotatedExtent(lw, lh, self.cam.rotation);
-        return .{
-            .origin = origin,
-            .zoom = zoom,
-            .ow = @intFromFloat(@max(1.0, ext[0] * OVERSCAN)),
-            .oh = @intFromFloat(@max(1.0, ext[1] * OVERSCAN)),
-            .mariner = m0,
-            .prefetch = prefetch,
-        };
-    }
-
-    // The pure engine call: portray the job's view into a draw-ready scene. No
-    // `self` mutation and no GPU — safe on a worker thread. A library (many
-    // cells) goes through the compositor so seams stitch; a single chart to its
-    // own archive.
     pub fn apiLock(self: *Lookout) void {
         self.api_mu.lock();
     }
@@ -2132,392 +2328,413 @@ pub const Lookout = struct {
         self.api_mu.unlock();
     }
 
-    fn runJob(self: *Lookout, job: BuildJob, out: *cc.tile57_gpu_scene) bool {
-        self.engine_mu.lock();
-        defer self.engine_mu.unlock();
-        const t0 = gpu.ticksMs();
-        const ll = camera.worldToLonLat(job.origin);
-        var m0 = job.mariner;
-        var err: cc.tile57_error = undefined;
-        // The sprite quads' UVs must match the atlas texture we actually baked —
-        // atlas_scale is the display density unless the atlas had to shrink to
-        // fit the device's max texture dimension (loadSpriteAtlas).
-        const ratio: f64 = @floatCast(self.atlas_scale);
-        const st = if (self.compose) |c|
-            cc.tile57_compose_gpu_scene(c, ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err)
-        else
-            cc.tile57_chart_gpu_scene(self.charts.items[0], ll.x, ll.y, job.zoom, job.ow, job.oh, &m0, ratio, out, &err);
-        if (st != cc.TILE57_OK) std.debug.print("build ERROR: {s}\n", .{@as([*:0]const u8, @ptrCast(&err.message))});
-        const dt = gpu.ticksMs() - t0;
-        self.last_build_ms.store(dt, .monotonic);
-        // tri= is a content hash of the triangle geometry — density- and
-        // atlas-independent, so a device build of a view is directly comparable
-        // against a Mac build of the same ll/zoom/ow/oh.
-        var th: u64 = 0;
-        if (st == cc.TILE57_OK) {
-            var h = std.hash.Wyhash.init(0);
-            if (out.vertex_count > 0) h.update(std.mem.sliceAsBytes(out.vertices[0..out.vertex_count]));
-            if (out.index_count > 0) h.update(std.mem.sliceAsBytes(out.indices[0..out.index_count]));
-            th = h.final();
-        }
-        const ll2 = camera.worldToLonLat(job.origin);
-        std.debug.print("build z{d:.2} {s} {d} ms ok={} verts={d} quads={d} ranges={d} ow={d} oh={d} density={d:.2} ll=({d:.5},{d:.5}) tri={x} mset={x}\n", .{ job.zoom, if (job.prefetch) "prefetch" else "scene", dt, st == cc.TILE57_OK, out.vertex_count, out.quad_count, out.range_count, job.ow, job.oh, self.g.pixel_density, ll2.x, ll2.y, th, marinerGeomHash(&job.mariner) });
-        return st == cc.TILE57_OK;
-    }
+    /// One sprite pack of the active alt style, held as fetched.
+    pub const AltPack = struct {
+        prefix: []u8,
+        json: []u8,
+        png: []u8,
+    };
 
-    /// Hash of every geometry-affecting mariner field a build depends on (the
-    /// marinerNeedsRebuild list + scheme + size scale). Two builds with the same
-    /// mset and view are comparable across machines; differing msets explain a
-    /// scene difference before anything else is suspected.
-    fn marinerGeomHash(m: *const cc.tile57_mariner) u64 {
-        var h = std.hash.Wyhash.init(0);
-        inline for (.{
-            "scheme",                   "size_scale",           "shallow_contour",        "safety_contour",
-            "deep_contour",             "safety_depth",         "four_shade_water",       "depth_unit",
-            "data_quality",             "show_inform_callouts", "show_meta_bounds",       "show_isolated_dangers_shallow",
-            "boundary_style",           "simplified_points",    "show_full_sector_lines", "date_dependent",
-            "highlight_date_dependent", "ignore_scamin",        "scamin_filter_gate",     "show_overscale",
-            "text_size_scale",          "sounding_size_scale",
-        }) |f| h.update(std.mem.asBytes(&@field(m.*, f)));
-        h.update(&m.date_view);
-        if (m.viewing_groups_off_len > 0 and m.viewing_groups_off != null)
-            h.update(std.mem.sliceAsBytes(m.viewing_groups_off[0..m.viewing_groups_off_len]));
-        return h.final();
-    }
-
-    // Adopt a STAGED scene on the render thread: a prefetch only warmed the
-    // engine cache (nothing staged); a real rebuild swaps the staged buffers in
-    // and records coverage. The engine C scene was already freed by whoever
-    // staged (worker or sync path) — this touches only host state.
-    fn applyStaged(self: *Lookout, job: BuildJob, ok: bool, staged: ?gpu.Gpu.Scene) void {
-        self.last_fail_ms = if (!ok and !job.prefetch) gpu.ticksMs() else 0;
-        if (!ok or job.prefetch) {
-            if (staged) |sc| {
-                var v = sc;
-                self.g.freeStagedScene(&v);
-            }
-            return;
-        }
-        const sc = staged orelse {
-            // Staging can fail transiently (e.g. buffer pool during a window
-            // transition). Do NOT record coverage or clear dirty: with a null
-            // scene but satisfied coverage the chart would stay blank forever.
-            // Leaving dirty set retries the build next frame.
-            std.debug.print("scene upload failed; retrying\n", .{});
-            self.dirty = true;
-            return;
-        };
-        // A zoom-in that built empty: the chart's declared max_zoom overreports
-        // and there is no geometry this deep under the view. Don't blank the good
-        // scene — keep it, cap the servable max here so buildTargetZoom stops
-        // chasing the empty level, and let cam.zoom overscale (MVP-magnify) it.
-        if (self.built and sc.ranges.len == 0 and job.zoom > self.cov_zoom + ZOOM_REBUILD) {
-            var v = sc;
-            self.g.freeStagedScene(&v);
-            self.served_max_zoom = self.cov_zoom;
-            self.updateZoomLimits(); // re-clamp target/max to the corrected max
-            self.dirty = false; // don't respin the same empty build
-            return;
-        }
-        self.g.adoptScene(sc);
-        self.recordCoverage(job.origin, job.zoom, @floatFromInt(job.ow), @floatFromInt(job.oh));
-        self.built = true;
-        self.dirty = false;
-        // The fresh scene must actually be DRAWN: without this an async rebuild
-        // that lands after the host's loop went idle (e.g. at the end of a
-        // full-screen transition) sits uploaded but never presented.
+    /// Draw a host-supplied style instead of the engine's portrayal, or null
+    /// for lookout's own chart. The bytes are copied. Any sprite packs
+    /// belong to the style they came with, so they go here — the host sends
+    /// the new style's packs after (altSpritePack).
+    pub fn setAltStyle(self: *Lookout, json: ?[]const u8) !void {
+        if (self.alt_style) |old| self.alloc.free(old);
+        self.alt_style = null;
+        self.clearAltPacks();
+        if (json) |j| self.alt_style = try self.alloc.dupe(u8, j);
+        self.style_dirty = true;
         self.markDirty();
     }
 
-    // Stage a finished engine scene into GPU buffers + free the engine scene.
-    // Runs on WHICHEVER thread ran the build (worker or sync) — resource
-    // creation is thread-safe; only applyStaged's swap belongs to the render
-    // thread. Also home of the LOOKOUT_SCENE_DEBUG hash line, which needs the
-    // C scene alive.
-    fn stageJob(self: *Lookout, job: BuildJob, cs: *cc.tile57_gpu_scene, ok: bool) ?gpu.Gpu.Scene {
-        defer cc.tile57_gpu_scene_free(cs);
-        if (std.c.getenv("LOOKOUT_SCENE_DEBUG") != null) {
-            const ll = camera.worldToLonLat(job.origin);
-            // Content hashes: compare a device's scene against a Mac build of the
-            // SAME view (lon/lat/integer zoom via go-to-coordinate + zoom buttons,
-            // --width/--height for ow/oh, LOOKOUT_DENSITY/LOOKOUT_MAXDIM to match
-            // density + atlas scale). Identical hashes with different pictures
-            // convict the draw layer; different hashes convict the engine build.
-            var th: u64 = 0;
-            var qh: u64 = 0;
-            if (ok) {
-                var h = std.hash.Wyhash.init(0);
-                if (cs.vertex_count > 0) h.update(std.mem.sliceAsBytes(cs.vertices[0..cs.vertex_count]));
-                if (cs.index_count > 0) h.update(std.mem.sliceAsBytes(cs.indices[0..cs.index_count]));
-                th = h.final();
-                var h2 = std.hash.Wyhash.init(0);
-                if (cs.quad_count > 0) h2.update(std.mem.sliceAsBytes(cs.quads[0..cs.quad_count]));
-                qh = h2.final();
+    fn clearAltPacks(self: *Lookout) void {
+        for (self.alt_packs.items) |p| {
+            self.alloc.free(p.prefix);
+            self.alloc.free(p.json);
+            self.alloc.free(p.png);
+        }
+        self.alt_packs.clearRetainingCapacity();
+    }
+
+    /// One MapLibre sprite pack for the active alt style: the pack's id as
+    /// the icon-name prefix ("" for the spec's "default"), the index JSON
+    /// and the sheet PNG as the host fetched them. Folded into the resident
+    /// atlas at once, kept so a scheme change can fold it back in, and the
+    /// scene rebuilt so icons that were missing resolve. Answers how many
+    /// cells landed.
+    pub fn altSpritePack(self: *Lookout, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        // Sprite packs only apply while an alt style is active. Without one
+        // there is no style to resolve their icons against, and storing them
+        // anyway would grow the S-52 atlas again on every scheme change.
+        if (self.alt_style == null) return 0;
+        const p = self.alloc.dupe(u8, prefix) catch return 0;
+        const j = self.alloc.dupe(u8, index_json) catch {
+            self.alloc.free(p);
+            return 0;
+        };
+        const b = self.alloc.dupe(u8, png_bytes) catch {
+            self.alloc.free(p);
+            self.alloc.free(j);
+            return 0;
+        };
+        // Replace a pack re-sent under the same prefix rather than stacking
+        // copies for the scheme-change replay.
+        for (self.alt_packs.items, 0..) |old, i| {
+            if (std.mem.eql(u8, old.prefix, prefix)) {
+                self.alloc.free(old.prefix);
+                self.alloc.free(old.json);
+                self.alloc.free(old.png);
+                _ = self.alt_packs.swapRemove(i);
+                break;
             }
-            std.debug.print("applyJob ok={} prefetch={} ll=({d:.4},{d:.4}) z={d:.2} ow={d} oh={d} verts={d} ranges={d} tri_hash={x} quad_hash={x}\n", .{ ok, job.prefetch, ll.x, ll.y, job.zoom, job.ow, job.oh, cs.vertex_count, cs.range_count, th, qh });
         }
-        if (!ok or job.prefetch) return null;
-        return self.g.makeScene(self.alloc, cs) catch null;
+        self.alt_packs.append(self.alloc, .{ .prefix = p, .json = j, .png = b }) catch {
+            self.alloc.free(p);
+            self.alloc.free(j);
+            self.alloc.free(b);
+            return 0;
+        };
+        const added = self.ct.addSpritePack(prefix, index_json, png_bytes);
+        if (added > 0) self.markDirty();
+        return added;
     }
 
-    // Synchronous build (snapshots, and the very first frame so there is
-    // something to draw immediately).
-    fn buildGpuScene(self: *Lookout) void {
-        self.ensureAtlases(); // runJob reads atlas_scale for the sprite UVs
-        const job = self.jobFor(self.cam.center, self.buildZoom(), false);
-        var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
-        const ok = self.runJob(job, &cs);
-        self.applyStaged(job, ok, self.stageJob(job, &cs, ok));
+    /// Fold the active alt style's packs back into a freshly (re)loaded
+    /// sheet — a scheme change replaces the atlas out from under them.
+    fn reapplyAltSprites(self: *Lookout) void {
+        for (self.alt_packs.items) |p|
+            _ = self.ct.addSpritePack(p.prefix, p.json, p.png);
     }
 
-    /// Force a build now (snapshots have no frame loop).
-    pub fn build(self: *Lookout) !void {
-        self.pollCompose(true);
-        self.buildGpuScene();
+    pub fn altStyleActive(self: *const Lookout) bool {
+        return self.alt_style != null;
     }
 
-    // ---- async build --------------------------------------------------------
-    fn buildWorker(self: *Lookout) void {
-        var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
-        self.pending_ok = self.runJob(self.build_job, &cs);
-        if (async_stage) {
-            // Stage the GPU buffers HERE, off the render thread: creating them
-            // copies the whole scene (tens of MB — ~40% of active CPU in a
-            // gesture profile when it ran on the render thread). Frees the
-            // engine scene.
-            self.pending_scene = self.stageJob(self.build_job, &cs, self.pending_ok);
-        } else {
-            // Vulkan backends: GPU work is render-thread-only. Hand the raw C
-            // scene over; pollBuild stages it there.
-            self.pending_cs = cs;
-            self.pending_cs_valid = true;
-        }
-        self.build_done.store(true, .release); // publishes pending_* to the main thread
-    }
+    // ---- charts by link ------------------------------------------------------
 
-    fn spawnBuild(self: *Lookout, job: BuildJob) void {
-        self.build_job = job;
-        self.build_active = true;
-        self.build_done.store(false, .release);
-        self.build_thread = std.Thread.spawn(.{}, buildWorker, .{self}) catch {
-            // No thread: fall back to a blocking build so we never stall forever.
-            self.build_active = false;
-            var cs: cc.tile57_gpu_scene = std.mem.zeroes(cc.tile57_gpu_scene);
-            const ok = self.runJob(job, &cs);
-            self.applyStaged(job, ok, self.stageJob(job, &cs, ok));
-            return;
+    /// The renderer's half of the chart-link machine. Three calls, so the
+    /// machine itself needs no renderer to be driven in a test.
+    fn linksSink(self: *Lookout) clinks.Sink {
+        return .{
+            .ctx = self,
+            .setStyle = linkSetStyle,
+            .spritePack = linkSpritePack,
+            .tileRespond = linkTileRespond,
         };
     }
 
-    // Advance the async build (render thread). Adopts a finished worker's
-    // scene — staging it here first on backends where the worker couldn't.
-    fn pollBuild(self: *Lookout) void {
-        if (!self.build_active or !self.build_done.load(.acquire)) return;
-        if (self.build_thread) |t| {
-            t.join();
-            self.build_thread = null;
-        }
-        if (!async_stage and self.pending_cs_valid) {
-            self.pending_scene = self.stageJob(self.build_job, &self.pending_cs, self.pending_ok);
-            self.pending_cs_valid = false; // stageJob freed the C scene
-        }
-        self.applyStaged(self.build_job, self.pending_ok, self.pending_scene);
-        self.pending_scene = null;
-        self.build_active = false;
+    /// Set a link's style and hand it to the renderer AT ONCE, answering
+    /// whether the renderer took it. The machine needs the verdict now: a
+    /// style the core refuses drops the mariner's pick, and a refusal noticed
+    /// a frame later would already have claimed the publisher's credit.
+    fn linkSetStyle(ctx: *anyopaque, json: ?[]const u8) bool {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.setAltStyle(json) catch return false;
+        const j = json orelse return true; // lookout's own chart always draws
+        self.style_dirty = false;
+        self.style_lat = self.scaminLat();
+        self.ct.setStyleJson(j) catch |e| {
+            std.debug.print("chart link style: {s}\n", .{@errorName(e)});
+            return false;
+        };
+        return true;
     }
 
-    fn joinBuild(self: *Lookout) void {
-        if (self.build_thread) |t| {
-            t.join();
-            self.build_thread = null;
-            if (self.pending_scene) |sc| {
-                var v = sc;
-                self.g.freeStagedScene(&v);
-                self.pending_scene = null;
-            }
-            if (!async_stage and self.pending_cs_valid) {
-                cc.tile57_gpu_scene_free(&self.pending_cs);
-                self.pending_cs_valid = false;
-            }
-        }
-        self.build_active = false;
+    fn linkSpritePack(ctx: *anyopaque, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        return self.altSpritePack(prefix, index_json, png_bytes);
     }
 
-    // Kick off whatever build the current view needs, async. A geometry-affecting
-    // change (`dirty`) or a coverage-exit rebuilds the current view; otherwise, if
-    // a zoom is heading toward a level boundary, PREFETCH that level so the
-    // crossing is a cache hit. Rebuilds target the camera's TARGET zoom (where
-    // the gesture is heading), not the eased position — on hardware where a
-    // build takes seconds, building for the zoom being left behind lands stale
-    // and the view outruns its coverage into NODATA. The prefetch is skipped on
-    // such hardware too: it occupies the one worker for seconds exactly when a
-    // real rebuild is about to be needed.
-    /// Zoom levels the camera may run past the deepest servable data.
-    const OVERSCALE_ALLOW = 2.0;
-    const PREFETCH_MAX_BUILD_MS = 600;
-    const FAIL_BACKOFF_MS = 400;
-    /// OS memory warning: drop what can be rebuilt. Engine caches go at the
-    /// next safe point (between builds); the CPU-side scene copy stays (it IS
-    /// the picture).
+    fn linkTileRespond(ctx: *anyopaque, req_id: u64, bytes: []const u8, status: clinks.TileStatus) void {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.ct.respondTile(req_id, bytes, switch (status) {
+            .ok => .ok,
+            .empty => .empty,
+            .failed => .failed,
+        });
+    }
+
+    /// What the renderer wants, on its way to the core's templating.
+    fn linkAskTile(ctx: *anyopaque, source: []const u8, req_id: u64, z: i32, x: i32, y: i32) void {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.links.askTile(source, req_id, z, x, y);
+    }
+
+    pub const HttpGetFn = clinks.HttpGetFn;
+    pub const HttpCancelFn = clinks.HttpCancelFn;
+
+    /// Adopt the shell's url fetcher, and take over tile serving with it. With
+    /// none set the older per-shell tile provider path stands.
+    pub fn setHttpProvider(self: *Lookout, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, user: ?*anyopaque) void {
+        self.ct.setCoreTileSink(if (get != null) linkAskTile else null, self);
+        self.links.setProvider(get, cancel, user);
+    }
+
+    pub const TileStatus = ctprovided.Status;
+
+    /// Rebuild the style and hand it to charttable, if the mariner moved.
     ///
-    /// With no surface there is no frame loop and so no next safe point, and a
-    /// warning that frees nothing is exactly why the process then gets killed.
-    /// Detached, nothing is rendering, so the build worker can be waited out
-    /// and the caches handed back here.
+    /// This is the whole cost of a mariner change on this renderer: the tiles
+    /// carry tokens and raw depths and never change, so a scheme flip or a
+    /// safety-contour nudge is a style swap and a relayout of the resident
+    /// tiles. Nothing is refetched and nothing is re-composed.
+    fn ensureStyle(self: *Lookout) void {
+        if (!self.style_dirty) return;
+        self.style_dirty = false;
+        // Stamped for BOTH paths, before the alt-style return: it is what stops
+        // styleLatMoved re-dirtying the style every frame, and an alt style is
+        // pushed through the same flag.
+        self.style_lat = self.scaminLat();
+        if (self.alt_style) |j| {
+            self.ct.setStyleJson(j) catch |e| {
+                std.debug.print("alt style: {s}\n", .{@errorName(e)});
+            };
+            return;
+        }
+        var m = buildMarinerFrom(self.mariner, self.mariner.scheme);
+        // size_scale is the style's physical calibration and ct/style.zig owns
+        // it. The mariner's own multiplier goes to the renderer's uniform
+        // below, so changing it never rebuilds the style.
+        m.device_scale = 1.0; // the camera is in LOGICAL px; density lives in the projection
+        // The raster underlay's sets ride the style, and their providers are
+        // re-bound after every parse (Host.raster_bindings).
+        var rbuf: [craster.MAX_SETS]craster.StyleInfo = undefined;
+        const rsets = self.rasters.styleInfos(&rbuf, self.chart_hidden);
+        for (rsets, 0..) |s, i| {
+            self.raster_bind_buf[i] = .{ .name = s.source_name, .provider = self.rasters.providerAt(i) };
+        }
+        self.ct.raster_bindings = self.raster_bind_buf[0..rsets.len];
+        self.ct.setStyle(.{
+            .mariner = m,
+            .tile_encoding = self.tileEncoding(),
+            .scamin = self.scamin,
+            .scamin_lat = self.scaminLat(),
+            .rasters = rsets,
+        }) catch |e| {
+            std.debug.print("style: {s}\n", .{@errorName(e)});
+            return;
+        };
+        self.ct.setSizeScale(self.render_size_scale);
+    }
+
+    /// What the bound source serves. A composed set hands back raw MLT; a
+    /// single archive says so in its own header, which charttable reads.
+    fn tileEncoding(self: *Lookout) u8 {
+        return if (self.compose != null) cc.TILE57_TILE_TYPE_MLT else cc.TILE57_TILE_TYPE_MVT;
+    }
+
+    /// A representative latitude for the SCAMIN denominators, which are
+    /// latitude-dependent. The library centre, or the view when there is none.
+    fn scaminLat(self: *Lookout) f64 {
+        if (self.compose) |c| {
+            var m: cc.tile57_compose_meta = std.mem.zeroes(cc.tile57_compose_meta);
+            cc.tile57_compose_get_meta(c, &m);
+            if (m.north != 0 or m.south != 0) return (m.north + m.south) * 0.5;
+        }
+        return camera.worldToLonLat(self.cam.center).y;
+    }
+
+    /// OS memory warning: drop what can be rebuilt.
     pub fn memoryWarning(self: *Lookout) void {
         self.trim_requested = true;
         if (self.surface_attached) return;
-        self.joinBuild();
         self.serviceTrim();
     }
 
     /// Hand back the engine's reclaimable caches, if a warning asked for them.
-    /// The caller must have no build in flight: a build reads the caches.
     fn serviceTrim(self: *Lookout) void {
         if (!self.trim_requested) return;
         self.trim_requested = false;
+        self.engine_mu.lock();
         cc.tile57_trim_caches();
+        self.engine_mu.unlock();
     }
 
-    fn tickBuild(self: *Lookout) void {
-        self.ensureAtlases(); // before any worker reads atlas_scale
-        self.pollBuild();
-        if (self.build_active) return;
-        self.serviceTrim();
-        if (self.last_fail_ms != 0 and gpu.ticksMs() - self.last_fail_ms < FAIL_BACKOFF_MS) return;
-        if (self.dirty or self.needsRebuild()) {
-            self.spawnBuild(self.jobFor(self.cam.center, self.buildTargetZoom(), false));
-        } else if (self.last_build_ms.load(.monotonic) < PREFETCH_MAX_BUILD_MS) {
-            if (self.predictPrefetchLevel()) |lvl| {
-                if (lvl != self.prefetched_level) {
-                    self.prefetched_level = lvl;
-                    self.spawnBuild(self.jobFor(self.cam.center, @floatFromInt(lvl), true));
-                }
+    /// Build whatever the current view needs, and wait for it. The frame loop
+    /// never calls this — charttable rebuilds on its own worker — but a
+    /// snapshot has to have the picture before it reads the pixels.
+    /// How long `build` will wait for the renderer to go idle, in 2 ms polls.
+    /// A ceiling, not a budget: reaching it means something never settled, and
+    /// the frame goes out with whatever HAS landed rather than hanging.
+    const BUILD_SPIN_MAX: u32 = 5000;
+
+    pub fn build(self: *Lookout) !void {
+        self.ensureAtlases();
+        self.ensureStyle();
+        self.ct.update();
+        const t0 = clock.ticksMs();
+        var spins: u32 = 0;
+        while (!self.ct.idle() and spins < BUILD_SPIN_MAX) : (spins += 1) {
+            self.ct.update();
+            @import("lock.zig").sleepMs(2);
+        }
+        // $LOOKOUT_TIMING=1: say how long that took and, crucially, WHICH WAY
+        // it ended. Hitting the ceiling is a stall, not slow work, and the two
+        // are indistinguishable from the outside — both just show the mariner
+        // a spinner.
+        if (std.c.getenv("LOOKOUT_TIMING") != null) {
+            std.debug.print("timing: build {d} ms, {d} spins{s}\n", .{
+                clock.ticksMs() - t0,
+                spins,
+                if (spins >= BUILD_SPIN_MAX) " — HIT THE CEILING, never went idle" else "",
+            });
+            // WHICH condition held it open. "Not idle" is six different bugs
+            // and they are not distinguishable from the outside.
+            if (spins >= BUILD_SPIN_MAX) {
+                const m = &self.ct.m;
+                std.debug.print(
+                    "timing:   building={} dirty={} partial={} animating={} needsRebuild={} pendingWanted={d} tilesBusy={}\n",
+                    .{
+                        m.building,           m.dirty,
+                        m.partial,            m.cam.animating(),
+                        m.needsRebuild(),     m.pendingWanted(),
+                        self.ct.tiles.busy(),
+                    },
+                );
+                std.debug.print("timing:   camZoom={d:.3} buildZoom={d:.3} covZoom={d:.3}\n", .{
+                    m.cam.zoom, m.buildZoom(), m.cov_zoom,
+                });
             }
         }
     }
 
-    // Zoom-velocity heuristic: if zooming and within ~0.35 of the boundary where
-    // round(zoom) changes, return the level being approached (clamped to what the
-    // engine serves) so it can be prefetched. Null when not zooming toward one.
-    fn predictPrefetchLevel(self: *Lookout) ?i32 {
-        const now: i64 = gpu.ticksMs();
-        const dz = self.cam.zoom - self.last_zoom;
-        const recent = self.last_zoom >= 0 and now - self.last_zoom_ms < 250;
-        if (!recent or @abs(dz) < 0.01) return null;
-        // The next integer level in the zoom direction, and how far the boundary
-        // (X.5) is. round() flips at .5, so distance to the flip:
-        const bz = self.buildZoom();
-        const frac = bz - @floor(bz);
-        const to_boundary = if (dz > 0) 0.5 - frac else frac - 0.5;
-        if (to_boundary <= 0 or to_boundary > 0.35) return null;
-        const next: f64 = @round(bz) + (if (dz > 0) @as(f64, 1) else -1);
-        const lvl = std.math.clamp(next, self.cam.min_zoom, self.engine_max_zoom);
-        return @intFromFloat(lvl);
-    }
-
-    fn ensureBuilt(self: *Lookout) void {
-        if (self.dirty or self.needsRebuild()) self.buildGpuScene();
-    }
-
-    // The frame uniform: absolute-world MVP (the engine hands world [0,1]), the
-    // live gates, and the pattern phase anchor (framebuffer px of the coverage
-    // origin, a world-fixed point between rebuilds so patterns don't swim).
-    fn uniforms(self: *Lookout) gpu.Uniforms {
-        const rsc = self.cam.rotSinCos();
-        const d = self.g.pixel_density;
-        const a = self.cam.worldToScreen(self.cov_origin);
-        // Every field spelled out: the block is the engine's C type now, and a C
-        // struct carries no Zig defaults — an omitted field would be undefined,
-        // not the zero it used to be.
-        return .{
-            .mvp = self.cam.mvpOrigin(.{ .x = 0, .y = 0 }),
-            .px_to_clip = self.cam.pxToClip(),
-            .size_scale = self.render_size_scale,
-            .current_scale = self.cam.displayScale(),
-            .cat_mask = self.cat_mask,
-            .wrap_x = @floatCast(self.cam.center.x),
-            .rot_sin = rsc[0],
-            .rot_cos = rsc[1],
-            .color = .{ 0, 0, 0, 1 }, // per-SDF-range; the backends overwrite it
-            .anchor_px = .{ @as(f32, @floatCast(a.x)) * d, @as(f32, @floatCast(a.y)) * d },
-            .cell_px = .{ 1, 1 }, // per-pattern-range, likewise
-        };
-    }
-
-    /// Render one frame to the window and present.
     /// The pulse drawn while a chart library is opening; true means still loading.
     fn loadingPulse(self: *Lookout) bool {
-        if (!self.loading) return false;
-        self.pollCompose(false);
-        if (!self.loading) return false;
-        const ph = @as(f32, @floatFromInt(@mod(gpu.ticksMs(), 1600))) / 1600.0;
-        const p = 0.14 + 0.10 * @abs(1.0 - 2.0 * ph);
-        self.g.clear = .{ .r = p * 0.6, .g = p * 0.8, .b = p, .a = 1.0 };
-        self.g.freeScene();
-        return true;
+        // Adopt a finished compose from the frame loop, whether it came
+        // from the initial open or from a background add. chartsAdd returns
+        // before its worker finishes, and without this poll a finished
+        // recompose would not be adopted until the next blocking API call:
+        // the building indicator would spin forever and switching back to
+        // the ENC would draw a blank chart.
+        if (self.loading or self.recomposing) self.pollCompose(false);
+        return self.loading;
     }
 
-    /// Per-frame setup before the draw (drawable size, zoom clamps, scene,
-    /// pattern scale). Shared by the surface and texture paths.
+    /// Per-frame setup before the draw: follow the drawable, refresh the zoom
+    /// clamps, and make sure the style and atlases the scene needs are current.
     fn prepareFrame(self: *Lookout) void {
-        // The GPU layer adopts the real swapchain drawable size at acquire (a
-        // wrapped native view can be laid out or rescaled behind our back) —
-        // follow it here so the camera's logical viewport always matches what
-        // is actually on screen. Force a full REBUILD, not just a redraw: a
-        // scene uploaded while the drawable was mid-transition (full screen)
-        // can be lost with the old swapchain, and its coverage would otherwise
-        // satisfy the settled view forever, leaving a blank chart.
+        // FIRST: answers the shell's fetch threads enqueued while the last
+        // frame ran. A resolve that completes here sets its style before
+        // ensureStyle below, so the chart it assembled draws in THIS frame.
+        self.links.adopt();
+        // charttable adopts the real drawable size at acquire (a wrapped native
+        // view can be laid out or rescaled behind our back) — follow it here so
+        // the camera's logical viewport always matches what is on screen.
         const lw, const lh = self.logicalSize();
         if (self.cam.vw != lw or self.cam.vh != lh) {
-            self.cam.vw = lw;
-            self.cam.vh = lh;
-            self.dirty = true;
-            self.markDirty();
-        }
-        // Draw state around a swapchain recreation is unreliable on the macOS
-        // stack (a scene built/uploaded then can verify byte-perfect on the GPU
-        // yet rasterize nothing) — keep rebuilding until safely past it; the
-        // first post-window build displays and ends the churn.
-        if (gpu.ticksMs() - self.g.size_changed_ms < 1500) {
-            self.dirty = true;
+            self.ct.m.setViewport(lw, lh);
             self.markDirty();
         }
         // Refresh the zoom clamps for the current view centre each frame (cheap):
         // panning into a coarser area lowers the per-view max and eases the zoom in.
         self.updateZoomLimits();
-        if (@abs(self.cam.zoom - self.last_zoom) > 1e-6) self.last_zoom_ms = gpu.ticksMs();
-        if (!self.built) {
-            self.buildGpuScene(); // first frame: synchronous, so there is something to draw now
-        } else {
-            self.tickBuild(); // subsequent rebuilds run on the worker; prefetch warms the next level
-        }
-        self.last_zoom = self.cam.zoom;
-        // Pattern cells track the geometry through a zoom (the scene is tessellated
-        // at cov_zoom; the MVP renders it at cam.zoom): scale the cell by the same
-        // factor so a constant-screen fill doesn't swim mid-zoom.
-        self.g.pattern_scale = @floatCast(std.math.pow(f64, 2.0, self.cam.zoom - self.cov_zoom));
+        self.ensureAtlases();
+        if (self.styleLatMoved()) self.style_dirty = true;
+        const ts = if (self.frame_prof != null) clock.ticksUs() else 0;
+        self.ensureStyle();
+        self.prof_style_us = if (self.frame_prof != null) clock.ticksUs() - ts else 0;
+    }
+
+    /// How far the SCAMIN latitude may drift before the style is stale.
+    ///
+    /// SCAMIN cutoffs are latitude-dependent, so the built style is only right
+    /// for the latitude it was built at. Over a COMPOSED library that is the
+    /// library centre and never moves; with a single chart open it follows the
+    /// view, which is why this exists at all. A degree changes cos(lat) by well
+    /// under a percent at any working latitude — far less than the gap between
+    /// adjacent SCAMIN denominators — so this fires when a mariner has genuinely
+    /// travelled, not while they pan around a harbor.
+    const STYLE_LAT_DRIFT = 1.0;
+
+    fn styleLatMoved(self: *Lookout) bool {
+        return @abs(self.scaminLat() - self.style_lat) > STYLE_LAT_DRIFT;
     }
 
     pub fn render(self: *Lookout) !bool {
-        self.ensureAtlases();
-        if (self.loadingPulse()) return self.g.renderWindow(self.uniforms(), false, false);
-        self.syncRasterMode(); // before prepareFrame: it decides what gets built
+        if (self.loadingPulse()) return false;
+        // $LOOKOUT_PHASE_PROF splits the frame into its four phases. The
+        // offscreen harnesses measure a settled camera and report 5.68 ms; the
+        // app under a moving camera measures 18 ms median, and this says which
+        // phase the difference is in. Read once, here, because a host creates
+        // the handle through several entry points and this is the one they all
+        // reach.
+        if (!self.prof_checked) {
+            self.prof_checked = true;
+            if (std.c.getenv("LOOKOUT_PHASE_PROF")) |p| {
+                self.frame_prof = .{ .path = std.mem.span(p) };
+            }
+        }
+        const prof = self.frame_prof != null;
+        const t0 = if (prof) clock.ticksUs() else 0;
         self.prepareFrame();
-        self.raster.prepare(&self.g, self.cam);
+        const t1 = if (prof) clock.ticksUs() else 0;
+        self.serviceTrim();
+        const t2 = if (prof) clock.ticksUs() else 0;
         self.updateOverlay();
-        const ok = try self.g.renderWindow(self.uniforms(), self.text_on, self.sound_on);
-        // A SKIPPED frame (swapchain saturated) must not clear the flag: the
-        // pending content still needs a successful present.
-        if (ok) self.view_dirty = false;
+        const t3 = if (prof) clock.ticksUs() else 0;
+        // The frame in two halves, with the api lock DROPPED around the second.
+        // The present blocks on the swapchain's drawable — 0.2 ms typical, and
+        // ~400 ms was measured on a wedged GPU — and every gesture and per-tick
+        // query the host makes takes this lock, so holding it across the block
+        // froze the input thread for exactly that long. The
+        // prepared half is all the map work; the present touches only the
+        // surface, under the host's gpu lock.
+        var ok = false;
+        if (self.ct.renderPrepare()) |uniforms| {
+            // Captured while the lock is held: what this frame actually shows.
+            // A gesture landing mid-present moves the camera, and marking THAT
+            // view drawn would swallow its frame.
+            const shows = self.ct.m.drawnView();
+            const was_dirty = self.view_dirty;
+            self.view_dirty = false;
+            self.apiUnlock();
+            ok = self.ct.renderPresent(uniforms);
+            self.apiLock();
+            if (ok) {
+                self.ct.m.markDrawnAs(shows);
+                // Own ship is drawn in EVERY frame, whatever raised it, so any
+                // frame that lands restarts the ship clock (see SHIP_FRAME_MS).
+                // Stamping only the ship's own frames would let a panning
+                // gesture and the boat interleave into double the frames.
+                self.last_ship_frame_ms = clock.ticksMs();
+            } else if (was_dirty) {
+                // A SKIPPED frame (swapchain saturated) must not clear the
+                // flag: the pending content still needs a successful present.
+                self.view_dirty = true;
+            }
+        }
+        if (self.frame_prof) |*p| p.record(.{
+            .prepare_us = t1 - t0,
+            .style_us = self.prof_style_us,
+            .trim_us = t2 - t1,
+            .overlay_us = t3 - t2,
+            .ct_us = clock.ticksUs() - t3,
+            .ct_update_us = self.ct.prof_update_us,
+            .ct_upload_us = self.ct.prof_upload_us,
+            .ct_present_us = self.ct.prof_present_us,
+            .ct_finish_us = self.ct.tick.finish_us,
+            .ct_cache_us = self.ct.tick.cache_us,
+            .ct_want_us = self.ct.tick.want_us,
+            .ct_refill_us = self.ct.tick.refill_us,
+            .ct_start_us = self.ct.tick.start_us,
+            .ct_pump_us = self.ct.prof_pump_us,
+            .ct_serve_us = self.ct.prof_serve_us,
+            .ct_atlas_us = self.ct.prof_atlas_us,
+        });
         return ok;
     }
 
-    /// The core-owned composition swapchain (d3d12 backend; null elsewhere).
-    pub fn d3d12Swapchain(self: *Lookout) ?*anyopaque {
-        if (!@hasDecl(gpu.Gpu, "swapchainPtr")) return null;
-        return self.g.swapchainPtr();
-    }
+    /// How often own ship's own motion is allowed to raise a frame. 10 Hz is
+    /// what a chartplotter shows and is far more than the mariner can see: at
+    /// 6 knots the boat covers 0.3 m in 100 ms, which is under a pixel at any
+    /// harbor scale. Drawing it at display rate instead cost 11% of a core
+    /// for motion nobody could perceive.
+    ///
+    /// This gates the BOAT only. A gesture, a landing tile, a style change and
+    /// a resize are all still immediate — those are the mariner's own actions
+    /// and any delay in them is felt at once.
+    const SHIP_FRAME_MS: i64 = 100;
 
     /// True while the view needs another frame (state changed, building, loading).
     pub fn needsRedraw(self: *Lookout) bool {
@@ -2527,44 +2744,58 @@ pub const Lookout = struct {
         // (and the rebuild it forces) would never run.
         const lw, const lh = self.logicalSize();
         if (self.cam.vw != lw or self.cam.vh != lh) return true;
-        // The underlay streams its tiles in on a worker, and they land AFTER the
-        // frame that asked for them. Without this the mariner keeps whatever
-        // strip of imagery had loaded when they stopped panning.
-        if (self.raster.wantsFrame()) return true;
-        // A plugin can post geometry at any moment, from its own thread, with
-        // no gesture behind it.
-        // Own ship's display position walks between fixes: the symbol moves,
-        // and while following the chart slides under it. No gesture behind it.
+        // Everything the mariner did, and everything the renderer owes: no gate.
+        if (self.loading or self.recomposing or self.view_dirty or self.style_dirty) return true;
+        // A chart-link answer waiting to be adopted. Without this a shell that
+        // draws on demand would never tick, and a resolve would stall on its
+        // first answer.
+        if (self.links.pending()) return true;
+        if (self.ct.needsRedraw()) return true;
+        // What the BOAT did. Own ship's display position walks between fixes,
+        // a plugin can post geometry from its own thread, and under follow the
+        // chart slides beneath the boat — none of it with a gesture behind it,
+        // and all of it paced rather than drawn as fast as the display allows.
         self.tickShip();
-        if (self.overlayWantsFrame()) return true;
-        if (self.followWantsFrame()) return true;
-        return self.loading or self.view_dirty or !self.built or self.build_active or self.dirty or self.needsRebuild();
+        if (self.overlayWantsFrame() or self.followWantsFrame()) {
+            return clock.ticksMs() - self.last_ship_frame_ms >= SHIP_FRAME_MS;
+        }
+        return false;
     }
+
     pub fn isBuilding(self: *Lookout) bool {
-        return self.loading or self.build_active;
+        if (self.loading) return true;
+        // An alt style's tiles stream from the host and never fully stop over
+        // a web map — an overscan edge is always in flight — so the ENC's
+        // "not idle" test would leave the indicator up for as long as the
+        // chart is looked at. What the pill means here is narrower: is there
+        // a picture yet, or is one being tessellated. `buildingScene` answers
+        // that and ignores tiles in flight.
+        if (self.alt_style != null) return self.ct.buildingScene();
+        // `recomposing` counts only while the ENC is what is on screen:
+        // switching back from a chart link while the library is still
+        // composing behind it (the link-first startup) showed a blank chart
+        // with nothing saying why. Over a live link the same recompose is
+        // background work nobody is waiting on, and the pill would just be
+        // noise on a complete picture.
+        return self.recomposing or !self.ct.idle();
     }
 
     /// Render offscreen and write a PNG.
     pub fn snapshotPng(self: *Lookout, path: []const u8) !void {
         self.pollCompose(true);
-        self.syncRasterMode();
-        self.buildGpuScene();
-        // A snapshot cannot show a tile that lands next frame, so wait for the
-        // underlay's worker rather than writing a half-filled picture.
-        self.raster.prepareBlocking(&self.g, self.cam, 5000);
+        try self.build();
         self.updateOverlay();
-        const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
+        const px = try self.ct.snapshotRgba();
         defer self.alloc.free(px);
-        try png.write(self.alloc, path, px, self.g.width, self.g.height);
+        try png.write(self.alloc, path, px, self.ct.width(), self.ct.height());
     }
+
     /// Render offscreen into a caller RGBA8 buffer (len must be width*height*4).
     pub fn snapshotRgba(self: *Lookout, dst: []u8) !void {
         self.pollCompose(true);
-        self.syncRasterMode();
-        self.buildGpuScene();
-        self.raster.prepareBlocking(&self.g, self.cam, 5000);
+        try self.build();
         self.updateOverlay();
-        const px = try self.g.renderOffscreen(self.alloc, self.uniforms(), self.text_on, self.sound_on);
+        const px = try self.ct.snapshotRgba();
         defer self.alloc.free(px);
         if (dst.len < px.len) return error.BufferTooSmall;
         @memcpy(dst[0..px.len], px);
@@ -2581,12 +2812,18 @@ pub const Lookout = struct {
     }
 
     pub fn pick(self: *Lookout, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void {
+        // An alt chart is a WHOLE chart, not an overlay: while one is up the
+        // ENC is not what the mariner is looking at, and answering a tap
+        // from it reports objects that are not on screen. No alt-chart
+        // feature pick exists yet, so the honest answer is nothing.
+        if (self.alt_style != null) return;
         self.engine_mu.lock();
         defer self.engine_mu.unlock();
         var err: cc.tile57_error = undefined;
         if (self.compose) |c| {
             _ = cc.tile57_compose_query(c, lon, lat, self.cam.zoom, cb, &err);
         } else {
+            if (self.charts.items.len == 0) return;
             _ = cc.tile57_chart_query(self.charts.items[0], lon, lat, self.cam.zoom, cb, &err);
         }
     }
@@ -2664,77 +2901,69 @@ pub const Lookout = struct {
         }
     }
 
-    // ---- convenience live toggles (mutate mariner, apply live) --------------
-    // ---- the raster underlay ----------------------------------------------
+    // ---- the raster underlay --------------------------------------------------
+    //
+    // The mariner's picture charts, held by ct/raster.zig as SETS and served
+    // to charttable as raster sources: one source and one raster layer per
+    // set, spliced into the style above the area fills and below every line,
+    // symbol and label (ct/style.zig). Set state changes (shown, enabled)
+    // reach the screen as layer-visibility diffs; adding a chart is a style
+    // rebuild, because the style has to grow a source.
 
-    /// Open a raster chart the mariner supplied and add it to its set. False when
-    /// the file will not open; the caller carries on with the charts it has.
-    pub fn addRaster(self: *Lookout, path: [:0]const u8) bool {
-        const ok = self.raster.addSource(path);
-        if (ok) self.rasterChanged();
-        return ok;
+    /// The renderer's per-update hook (Host.raster_pump): drain charttable's
+    /// raster asks onto the serving pool, on the map-driving thread.
+    fn rasterPump(ctx: *anyopaque) void {
+        const self: *Lookout = @ptrCast(@alignCast(ctx));
+        self.rasters.pump();
     }
 
-    /// Step to the next raster chart set, with "no picture" as one position. Moves no
-    /// camera and rebuilds no scene — the whole point is that a mariner comparing
-    /// two providers over a reef can flip between them without losing their fix.
-    pub fn cycleRaster(self: *Lookout) void {
-        self.raster.cycle(self.cam);
-        self.rasterChanged();
-    }
-
-    /// Keep the chart in step with what is beneath it. With a picture active the
-    /// chart draws in CHART-OVER-PICTURE mode — its opaque water and land fills
-    /// drop out, or the mariner would see none of the raster chart they installed.
-    /// That is a real reduction in what the chart tells them, so a shell must
-    /// show that it is on (see rasterName / lookout_raster_active_name).
-    ///
-    /// The fills live in the scene's vertices, so this is a rebuild — the one
-    /// place the underlay does touch the scene, and only when the mariner turns
-    /// the picture on or off, never while they pan.
-    fn rasterChanged(self: *Lookout) void {
-        self.syncRasterMode();
-        self.applyRasterTint();
+    /// Push every set's current visibility to the renderer — a diff, not a
+    /// restyle. The style rebuild carries the same state, so the two agree.
+    fn syncRasterVisibility(self: *Lookout) void {
+        var buf: [craster.MAX_SETS]craster.StyleInfo = undefined;
+        for (self.rasters.styleInfos(&buf, self.chart_hidden)) |s| {
+            self.ct.setRasterLayerVisible(s.source_name, "-underlay", s.visible);
+            self.ct.setRasterLayerVisible(s.source_name, "-overlay", s.visible_over);
+        }
         self.view_dirty = true;
     }
 
-    /// Keep `mariner.chart_over_image` OFF. The chart draws complete, and the
-    /// underlay hides its area fills PER PIXEL by writing depth immediately in
-    /// front of them (see gpu.Gpu.rasterDepth). So the chart keeps its depth
-    /// shading everywhere the mariner has no picture — across a coverage edge,
-    /// and around every hole in a pyramid clipped to a coastline — and loses it
-    /// only where a picture actually is. No scene rebuild, and no all-or-nothing
-    /// decision about a whole view.
-    ///
-    /// The engine setting stays for the outputs that have no depth buffer to do
-    /// this with: the png / pdf / canvas paths.
-    fn syncRasterMode(self: *Lookout) void {
-        if (!self.mariner.chart_over_image) return;
-        self.mariner.chart_over_image = false;
-        self.dirty = true;
-        self.deriveLive();
+    /// Open a raster chart the mariner supplied and add it to its set. The
+    /// style must grow a source and a layer for a NEW set, so the style is
+    /// rebuilt rather than diffed.
+    pub fn addRaster(self: *Lookout, path: [:0]const u8) bool {
+        if (!self.rasters.add(path)) return false;
+        self.style_dirty = true;
+        self.view_dirty = true;
+        return true;
+    }
+
+    pub fn cycleRaster(self: *Lookout) void {
+        self.rasters.cycle(self.cam.*);
+        self.syncRasterVisibility();
     }
 
     /// The name of the set drawn over this view, or "" for no picture.
     pub fn rasterName(self: *Lookout) [:0]const u8 {
-        return self.raster.activeNameFor(self.cam);
+        return self.rasters.activeNameFor(self.cam.*);
     }
 
-    /// Is the chart actually drawing WITHOUT its opaque fills right now? That is
-    /// not the same as "a set is selected": the mode only engages where a picture
-    /// is really beneath the view, so a mariner carrying Croatian imagery gets a
-    /// normal chart in Chesapeake Bay.
+    /// Is a picture drawn beneath THIS view? Keys the host's "the chart is
+    /// reduced" reporting, so it engages only where imagery actually covers.
     pub fn rasterOverChart(self: *Lookout) bool {
-        return self.raster.coversView(self.cam);
+        return self.rasters.shownIndex(self.cam.*) != null;
     }
 
-    /// Show or hide the vector chart. The picture beneath it stays.
+    /// Hide the vector chart where a picture covers it, or show it again.
+    /// Not a chart-layer sweep: each drawn set swaps its underlay for its
+    /// overlay, so the picture covers the ENC exactly where its tiles exist
+    /// and the chart stands wherever they do not. With no picture drawn this
+    /// changes nothing on screen, which is the mode's contract — it engages
+    /// only where imagery actually covers.
     pub fn setChartHidden(self: *Lookout, hidden: bool) void {
         if (self.chart_hidden == hidden) return;
         self.chart_hidden = hidden;
-        self.raster.hide_chart = hidden;
-        self.raster.built_valid = false; // the depth rides in the vertices
-        self.view_dirty = true;
+        self.syncRasterVisibility();
     }
 
     pub fn toggleChart(self: *Lookout) void {
@@ -2745,67 +2974,53 @@ pub const Lookout = struct {
         return self.chart_hidden;
     }
 
-    /// The set that covers this view, drawn or not. A host shows this so a
-    /// mariner sailing into coverage can see there is a picture to turn on.
+    /// The set that covers this view, drawn or not.
     pub fn rasterAvailableName(self: *Lookout) [:0]const u8 {
-        return self.raster.availableName(self.cam);
+        return self.rasters.availableName(self.cam.*);
     }
 
-    /// Turn one raster chart on or off without removing it.
+    /// Turn one chart on or off by path, without removing it. A change moves
+    /// which picture a tile answers with, so the style is rebuilt and the
+    /// source refetches.
     pub fn setRasterEnabled(self: *Lookout, path: []const u8, on: bool) bool {
-        const ok = self.raster.setEnabled(&self.g, path, on);
-        if (ok) self.view_dirty = true;
-        return ok;
+        if (!self.rasters.setEnabled(path, on)) return false;
+        self.style_dirty = true;
+        self.view_dirty = true;
+        return true;
     }
 
     pub fn rasterEnabled(self: *Lookout, path: []const u8) bool {
-        return self.raster.isEnabled(path);
+        return self.rasters.isEnabled(path);
     }
 
     pub fn rasterSetName(self: *Lookout, i: usize) [:0]const u8 {
-        return self.raster.setNameAt(i);
+        return self.rasters.setNameAt(i);
     }
 
     pub fn rasterSetInView(self: *Lookout, i: usize) bool {
-        return self.raster.setInView(i, self.cam);
+        return self.rasters.setInView(i, self.cam.*);
     }
 
     pub fn rasterActiveIndex(self: *Lookout) ?usize {
-        return self.raster.shownIndex(self.cam);
+        return self.rasters.shownIndex(self.cam.*);
     }
 
     pub fn rasterSelect(self: *Lookout, i: ?usize) void {
-        self.raster.selectSet(self.cam, i);
-        self.rasterChanged();
+        self.rasters.selectSet(self.cam.*, i);
+        self.syncRasterVisibility();
     }
 
-    /// Read and write one set's drawn state by index, with no camera in it. A
-    /// host that saves the mariner's selection needs both: `rasterActiveIndex`
-    /// only describes the view on screen, and `rasterSelect` can only turn off
-    /// what is drawn over it.
     pub fn rasterShown(self: *Lookout, i: usize) bool {
-        return self.raster.isShown(i);
+        return self.rasters.isShown(i);
     }
 
     pub fn rasterSetShown(self: *Lookout, i: usize, on: bool) void {
-        self.raster.setShown(i, on);
-        self.rasterChanged();
+        self.rasters.setShown(i, on);
+        self.syncRasterVisibility();
     }
 
     pub fn rasterSetCount(self: *Lookout) usize {
-        return self.raster.setCount();
-    }
-
-    /// Dim the picture with the colour scheme. A daylight photograph at full
-    /// brightness costs the mariner dark adaptation, which is the whole reason
-    /// the dusk and night schemes exist; the chart drawn over it would then be
-    /// the only dark thing on a bright display.
-    fn applyRasterTint(self: *Lookout) void {
-        // The engine states the factor so every host dims a picture identically.
-        const f = cc.tile57_mariner_image_dim(&self.mariner);
-        const v: u8 = @intFromFloat(@max(0.0, @min(255.0, f * 255.0)));
-        self.raster.tint = .{ v, v, v, 255 };
-        self.raster.built_valid = false; // the tint lives in the vertices
+        return self.rasters.setCount();
     }
 
     pub fn cycleScheme(self: *Lookout) void {
@@ -2815,8 +3030,9 @@ pub const Lookout = struct {
             idx = i;
         };
         self.mariner.scheme = order[(idx + 1) % order.len];
-        self.dirty = true; // a new palette is a fresh scene (colours are per-range)
-        self.applyRasterTint();
+        // The symbol artwork carries its own colours, so a palette change is a
+        // different sheet as well as a different style.
+        self.sprite_scheme = null;
         self.deriveLive();
     }
     pub fn toggleText(self: *Lookout) void {
@@ -2827,7 +3043,11 @@ pub const Lookout = struct {
         self.deriveLive();
     }
     pub fn toggleSoundings(self: *Lookout) void {
-        self.mariner.soundings = if (self.sound_on) 2 else 1;
+        // 1 = always shown, 2 = never; 0 follows the OTHER category. Anything
+        // that is currently drawing soundings turns them off.
+        const on = self.mariner.soundings == 1 or
+            (self.mariner.soundings == 0 and self.mariner.display_other);
+        self.mariner.soundings = if (on) 2 else 1;
         self.deriveLive();
     }
     pub fn toggleOtherCategory(self: *Lookout) void {
@@ -2841,17 +3061,17 @@ pub const Lookout = struct {
             cc.TILE57_DEPTH_METERS
         else
             cc.TILE57_DEPTH_FEET;
-        self.dirty = true; // sym_s vs sym_s_ft, metres vs feet contour labels
-        self.markDirty();
+        self.deriveLive();
     }
     pub fn nudgeSafetyContour(self: *Lookout, delta: f64) void {
         self.mariner.safety_contour = std.math.clamp(self.mariner.safety_contour + delta, 0, 200);
-        self.dirty = true; // geometry-affecting -> fresh scene
-        self.markDirty();
+        self.deriveLive();
     }
     pub fn adjustSize(self: *Lookout, factor: f32) void {
         self.render_size_scale *= factor;
-        self.dirty = true; // sizes are baked into the geometry
+        // Symbol placement is measured in DRAWN px, so a size change decides
+        // which labels win a collision: charttable lays out again for it.
+        self.ct.setSizeScale(self.render_size_scale);
         self.markDirty();
     }
 };
@@ -2874,16 +3094,84 @@ fn marinerNeedsRebuild(a: Mariner, b: Mariner) bool {
         a.text_size_scale != b.text_size_scale or a.sounding_size_scale != b.sounding_size_scale;
 }
 
+// ---- the chart library ------------------------------------------------------
+
+/// tile57's verdict on one baked archive. A picture archive and a foreign
+/// archive both open, so the answer needs the archive's own metadata.
+fn verifyArchive(_: ?*anyopaque, path: [:0]const u8, out: *library.Facts) library.Verdict {
+    var chart: ?*cc.tile57_chart = null;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_chart_open(path.ptr, &chart, &err) != cc.TILE57_OK) return .no;
+    defer cc.tile57_chart_close(chart);
+    var info: cc.tile57_info = undefined;
+    cc.tile57_chart_get_info(chart, &info);
+    if (info.is_raster) return .raster;
+    // A bake embeds the compilation scale and the bands it wrote. An archive
+    // with neither is not one of ours.
+    if (info.bands == 0 and info.native_scale == 0) return .no;
+    out.* = .{
+        .scale = info.native_scale,
+        .bounds = if (info.has_bounds)
+            .{ info.west, info.south, info.east, info.north }
+        else
+            null,
+    };
+    return .chart;
+}
+
+/// Look through `path` for charts this build draws. The caller owns the Scan.
+pub fn scanCharts(alloc: std.mem.Allocator, io: std.Io, path: []const u8) !library.Scan {
+    return library.scan(alloc, io, path, verifyArchive, null);
+}
+
+/// The same, for a chart set that arrives as one .zip. The archive is listed
+/// (its central directory, nothing inflated) and the names are classified by
+/// the same rules a folder's files are, so a host sees one kind of answer
+/// whichever the mariner picked.
+///
+/// Each chart's `path` is its ENTRY NAME. That is what the engine's zip bake
+/// takes back, and it is deliberately not a filesystem path: there is no file
+/// to open until something asks for one.
+pub fn scanZip(alloc: std.mem.Allocator, path: []const u8) !library.Scan {
+    const pz = try alloc.dupeZ(u8, path);
+    defer alloc.free(pz);
+
+    var out: ?[*]u8 = null;
+    var len: usize = 0;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_zip_list(pz, &out, &len, &err) != cc.TILE57_OK) return error.NotAnArchive;
+    const listing = out orelse return error.NotAnArchive;
+    defer cc.tile57_free(listing);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, listing[0..len], .{}) catch
+        return error.NotAnArchive;
+    defer parsed.deinit();
+
+    var entries: std.ArrayList(library.Entry) = .empty;
+    defer entries.deinit(alloc);
+    for (parsed.value.array.items) |item| {
+        const o = item.object;
+        const name = (o.get("name") orelse continue).string;
+        const bytes: u64 = switch (o.get("size") orelse std.json.Value{ .integer = 0 }) {
+            .integer => |i| if (i > 0) @intCast(i) else 0,
+            else => 0,
+        };
+        try entries.append(alloc, .{ .name = name, .bytes = bytes });
+    }
+    return library.scanEntries(alloc, path, entries.items);
+}
+
 test {
     // Collect the pick rules' own tests. Only pickRanked reaches pick.zig, and a
     // test build never analyzes it, so without this the file's tests never run.
     _ = pick_rules;
-    // Same for the raster underlay: a test build reaches the Layer type but not
-    // its body, so the set-name and election tests were never running.
-    _ = rasterlayer;
-    // The camera's own round trips. root.zig calls two of its functions, which
-    // is not enough to collect the file's tests.
-    _ = camera;
+    // The renderer's own layers, so a test build analyses them: the style
+    // builder and the composed-tile provider carry their tests.
+    _ = cstyle;
+    _ = @import("ct/tiles.zig");
+    _ = ctprovided;
+    _ = cthost;
+    _ = craster;
 }
 
 test "camera roundtrip" {
@@ -3128,4 +3416,33 @@ test "the marker magenta is dim at night and differs by scheme" {
     try t.expect(lum < 0.35);
     for (day) |ch| try t.expect(ch >= 0 and ch <= 1);
     for (night) |ch| try t.expect(ch >= 0 and ch <= 1);
+}
+
+// The settings pane is only honest if the style is built from what the mariner
+// actually chose. Forcing a switch on here is invisible in the UI: the toggle
+// reads off, the chart keeps drawing it. That is what put the data-quality
+// overlay on screen after it was disabled — it lives in the OTHER display
+// category, and display_other was forced on for every style build.
+test "the style mariner keeps the mariner's own switches" {
+    const t = std.testing;
+    var base: cc.tile57_mariner = undefined;
+    cc.tile57_mariner_defaults(&base);
+    base.display_base = true;
+    base.display_standard = false;
+    base.display_other = false;
+    base.text_names = false;
+    base.show_light_descriptions = false;
+    base.text_other = false;
+    base.soundings = 0;
+
+    const m = buildMarinerFrom(base, base.scheme);
+    try t.expect(!m.display_other);
+    try t.expect(!m.display_standard);
+    try t.expect(!m.text_names);
+    try t.expect(!m.show_light_descriptions);
+    try t.expect(!m.text_other);
+    try t.expectEqual(@as(u8, 0), m.soundings);
+    // And the two the style build does own are still stamped.
+    try t.expectEqual(base.scheme, m.scheme);
+    try t.expectEqual(@as(f64, 1.0), m.size_scale);
 }

@@ -42,7 +42,9 @@ $plugins = Test-Path $wamr
 
 Push-Location $repo
 try {
-    $args = @('lib', '-Dbackend=d3d12', "-Dtarget=$zigTarget", "-Doptimize=$opt")
+    # No -Dbackend option exists in build.zig: the D3D12 backend is selected by
+    # the windows target itself (charttable's build). Passing one fails the build.
+    $args = @('lib', "-Dtarget=$zigTarget", "-Doptimize=$opt")
     if ($plugins) {
         $args += '-Dplugins=true'
     }

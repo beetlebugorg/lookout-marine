@@ -101,6 +101,8 @@ export fn lookout_open_in_window(kind: c_int, native_handle: ?*anyopaque, chart_
 /// EMBED a composed chart LIBRARY into your app's view: like
 /// lookout_open_in_window, but takes MANY baked charts (a directory of cells)
 /// and composes them, presenting into your CAMetalLayer. NULL on error.
+/// n may be 0: a library of raster charts alone opens with no vector chart,
+/// and the host adds the pictures with lookout_raster_add afterwards.
 export fn lookout_open_charts_in_window(kind: c_int, native_handle: ?*anyopaque, paths: [*]const [*:0]const u8, n: usize, width: u32, height: u32, want_msaa: c_int) ?*lookout {
     const list = gpa.alloc([:0]const u8, n) catch return null;
     defer gpa.free(list);
@@ -134,8 +136,9 @@ fn nativeKind(kind: c_int) ?lk.NativeKind {
 /// The core-owned IDXGISwapChain* for the host's SwapChainPanel
 /// (LOOKOUT_NATIVE_D3D12_PANEL only; NULL on any other kind or backend).
 export fn lookout_d3d12_swapchain(h: ?*lookout) ?*anyopaque {
-    const x = cast(h orelse return null);
-    return x.d3d12Swapchain();
+    const l = locked(h orelse return null);
+    defer l.apiUnlock();
+    return l.ct.swapchainPtr();
 }
 
 /// Give up the host's surface WITHOUT closing the chart, for a shell whose
@@ -236,6 +239,19 @@ export fn lookout_plugins_load_installed(h: ?*lookout) c_int {
     const l = locked(h);
     defer l.apiUnlock();
     return if (ensureInstalledPlugins(l)) 0 else -1;
+}
+
+/// Name the per-user plugin directory, for platforms whose environment cannot
+/// (Android: the app's files dir has no path in the environment; every other
+/// platform resolves a default and never needs this). Call before any other
+/// plugin call — the layer reads it once at creation. 0 on success, -1 once
+/// the layer is already up.
+export fn lookout_plugins_install_root(h: ?*lookout, path: [*:0]const u8) c_int {
+    if (comptime !plugins_enabled) return -1;
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setPluginInstallRoot(std.mem.span(path)) catch return -1;
+    return 0;
 }
 
 /// Read a .lkplug without installing it: everything the consent sheet shows,
@@ -387,7 +403,10 @@ export fn lookout_plugin_alert_ack(h: ?*lookout, id: u64) c_int {
 /// rather than treated as an error: a first install has nothing yet.
 fn ensureInstalledPlugins(l: *lk.Lookout) bool {
     if (comptime !plugins_enabled) return false;
-    const root = phost.installRootAlloc(gpa) orelse return l.plugins != null;
+    const root: []u8 = if (l.plugin_install_root) |r|
+        gpa.dupe(u8, r) catch return l.plugins != null
+    else
+        phost.installRootAlloc(gpa) orelse return l.plugins != null;
     defer gpa.free(root);
     std.Io.Dir.cwd().createDirPath(capi_io, root) catch {};
     l.loadPlugins(root) catch return l.plugins != null;
@@ -479,6 +498,60 @@ export fn lookout_atlas_cache_ready() c_int {
 /// HOME apply); Android MUST call it, having no cache path in the environment.
 export fn lookout_set_cache_dir(path: [*:0]const u8) void {
     lk.setCacheRoot(std.mem.span(path));
+}
+
+// ---- the chart library ------------------------------------------------------
+
+/// The last scan's JSON. Held so the pointer the shell reads stays good until
+/// the next scan.
+var scan_json: ?[:0]u8 = null;
+
+/// Add baked charts to the open library. See lookout.h.
+export fn lookout_charts_add(h: ?*lookout, paths: [*]const [*:0]const u8, n: usize) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const list = gpa.alloc([:0]const u8, n) catch return -1;
+    defer gpa.free(list);
+    for (0..n) |i| list[i] = std.mem.span(paths[i]);
+    return @intCast(l.chartsAdd(list));
+}
+
+/// True while the library's ownership partition is being built. See lookout.h.
+export fn lookout_composing(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.loading or l.recomposing) 1 else 0;
+}
+
+/// How many charts the library holds. See lookout.h.
+export fn lookout_charts_count(h: ?*lookout) u32 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return @intCast(l.charts.items.len);
+}
+
+/// Look through `path` for charts. See lookout.h.
+export fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    if (scan_json) |old| gpa.free(old);
+    scan_json = null;
+    var s = lk.scanCharts(gpa, capi_io, std.mem.span(path)) catch return null;
+    defer s.deinit();
+    const json = lk.library.toJson(gpa, &s) catch return null;
+    scan_json = json;
+    if (out_len) |p| p.* = json.len;
+    return json.ptr;
+}
+
+/// lookout_scan_charts for a chart set that arrives as one .zip. See lookout.h.
+export fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    if (scan_json) |old| gpa.free(old);
+    scan_json = null;
+    var s = lk.scanZip(gpa, std.mem.span(path)) catch return null;
+    defer s.deinit();
+    const json = lk.library.toJson(gpa, &s) catch return null;
+    scan_json = json;
+    if (out_len) |p| p.* = json.len;
+    return json.ptr;
 }
 
 // ---- view ------------------------------------------------------------------
@@ -644,6 +717,111 @@ export fn lookout_aux_file(h: ?*lookout, cell: [*:0]const u8, name: [*:0]const u
 }
 
 // ---- convenience live toggles ----------------------------------------------
+/// Draw a host-supplied style instead of lookout's portrayal. See lookout.h.
+export fn lookout_alt_chart_style_json(h: ?*lookout, json: ?[*]const u8, len: usize) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const bytes: ?[]const u8 = if (json != null and len != 0) json.?[0..len] else null;
+    l.setAltStyle(bytes) catch return 0;
+    return 1;
+}
+
+export fn lookout_alt_chart_style_active(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.altStyleActive()) 1 else 0;
+}
+
+/// One sprite pack of the active alt style. See lookout.h.
+export fn lookout_alt_sprite_pack(h: ?*lookout, prefix: ?[*:0]const u8, index_json: [*]const u8, json_len: usize, png: [*]const u8, png_len: usize) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (json_len == 0 or png_len == 0) return 0;
+    const p: []const u8 = if (prefix) |pp| std.mem.span(pp) else "";
+    return @intCast(l.altSpritePack(p, index_json[0..json_len], png[0..png_len]));
+}
+
+// ---- charts by link --------------------------------------------------------
+/// Adopt the shell's url fetcher. See lookout.h.
+export fn lookout_set_http_provider(h: ?*lookout, get: ?lk.Lookout.HttpGetFn, cancel: ?lk.Lookout.HttpCancelFn, user: ?*anyopaque) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.setHttpProvider(get, cancel, user);
+}
+
+/// Answer one GET, from any thread. See lookout.h.
+///
+/// Like lookout_tile_respond, this does NOT hold the api lock: the shell
+/// answers from whatever thread its networking finished on, and that thread
+/// must not queue behind a frame in flight. It enqueues and raises the
+/// needs-redraw flag; the frame loop adopts it. That is also why a shell may
+/// call this from inside its own http_get callback, which runs with the api
+/// lock already held.
+export fn lookout_http_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
+    if (h == null) return;
+    const slice: []const u8 = if (bytes != null and len != 0) bytes.?[0..len] else &.{};
+    cast(h).links.respond(req_id, slice, status);
+}
+
+/// Add a chart by link. See lookout.h.
+export fn lookout_chart_link_add(h: ?*lookout, link: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = link orelse return;
+    l.links.add(std.mem.span(s));
+}
+
+/// Draw one of the carried charts, or NULL for lookout's own. See lookout.h.
+export fn lookout_chart_link_select(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.links.select(if (url) |u| std.mem.span(u) else null);
+}
+
+export fn lookout_chart_link_remove(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = url orelse return;
+    l.links.remove(std.mem.span(s));
+}
+
+export fn lookout_chart_link_refresh(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = url orelse return;
+    l.links.refresh(std.mem.span(s));
+}
+
+/// Everything the UI renders, as one transfer-full document. See lookout.h.
+export fn lookout_chart_links_json(h: ?*lookout) ?[*:0]u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = l.links.snapshotAlloc(gpa) orelse return null;
+    return s.ptr;
+}
+
+/// Has the snapshot changed since the last poll? See lookout.h.
+export fn lookout_chart_links_changed(h: ?*lookout) c_int {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return if (l.links.takeChanged()) 1 else 0;
+}
+
+/// One-time migration from a shell's old store. See lookout.h.
+export fn lookout_chart_links_import(h: ?*lookout, links_json: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = links_json orelse return;
+    l.links.import(std.mem.span(s));
+}
+
+/// Free a string the API handed over. See lookout.h. Takes no handle and no
+/// lock: it only returns bytes to the allocator they came from.
+export fn lookout_string_free(s: ?[*:0]u8) void {
+    const p = s orelse return;
+    gpa.free(std.mem.span(p));
+}
+
 /// Open a raster chart (satellite imagery or another picture chart the mariner
 /// supplied) and add it beneath the vector chart. See lookout.h.
 export fn lookout_raster_add(h: ?*lookout, path: ?[*:0]const u8) c_int {
@@ -1012,10 +1190,11 @@ export fn lookout_marker_remove(h: ?*lookout, id: u64) c_int {
 
 comptime {
     _ = lookout_open;
-    // The Android Java shell's JNI natives ride in the same archive on vk
-    // builds (they wrap this C ABI for org.beetlebug.lookout.Lookout). Gate on
-    // the platform too: vk also serves desktop shells, which have no <jni.h>.
-    const t = @import("builtin").target;
-    const android = t.abi == .android or t.abi == .androideabi;
-    if (@import("build_options").gpu_vk and android) _ = @import("jni_android.zig");
+    // The Android Java shell's JNI natives ride in the same archive (they
+    // wrap this C ABI for org.beetlebug.lookout.Lookout). Only an android
+    // target analyzes the file: it @cImports the NDK's jni.h, which only the
+    // NDK sysroot holds.
+    if (builtin.abi.isAndroid()) {
+        _ = @import("jni_android.zig");
+    }
 }

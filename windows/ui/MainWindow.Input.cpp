@@ -8,6 +8,7 @@
 
 #include "lk_coord.h"
 #include "lk_format.h"
+#include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -74,13 +75,36 @@ namespace winrt::LookoutMarine::implementation
         double moved = std::hypot(x - down_x, y - down_y);
         if (moved <= kTapSlopPt)
         {
-            // A tap on an overlay symbol pins its bubble and never also opens
-            // the chart pick report; a tap on open water retires the bubble.
-            if (!TryPinOverlayAt(x, y))
+            // Held back one double-tap interval: the first release of a
+            // double-tap must not flash the pick report open (or pin a
+            // bubble) before the second tap zooms. A lone tap lands when the
+            // timer fires; a double-tap cancels it.
+            tap_x = x;
+            tap_y = y;
+            if (tap_timer == nullptr)
             {
-                CloseOverlayBubble();
-                ShowPick(x, y);
+                tap_timer = DispatcherTimer{};
+                tap_timer.Tick([this](auto &&, auto &&) {
+                    tap_timer.Stop();
+                    // A tap on an overlay symbol pins its bubble and never
+                    // also opens the chart pick report; a tap on open water
+                    // retires the bubble.
+                    bool pinned = TryPinOverlayAt(tap_x, tap_y);
+                    // $LOOKOUT_HITMAP: what a tap resolved to, for chasing a
+                    // pick that lands somewhere the eye disagrees with.
+                    if (hitmap_log)
+                        fprintf(stderr, "[hitmap] tap (%.0f, %.0f) overlay=%d\n",
+                                tap_x, tap_y, pinned ? 1 : 0);
+                    if (!pinned)
+                    {
+                        CloseOverlayBubble();
+                        ShowPick(tap_x, tap_y);
+                    }
+                });
             }
+            tap_timer.Interval(std::chrono::milliseconds{ ::GetDoubleClickTime() });
+            tap_timer.Stop();
+            tap_timer.Start();
         }
         else
             lk_controller_fling_start(controller, vx, vy);
@@ -94,6 +118,9 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::GestureDoubleTap(double x, double y)
     {
+        // The parked first tap belongs to this gesture, not to the chart.
+        if (tap_timer != nullptr)
+            tap_timer.Stop();
         if (lk_controller_is_open(controller))
             lk_controller_zoom_at(controller, 1.0, x, y);
     }
@@ -120,14 +147,22 @@ namespace winrt::LookoutMarine::implementation
         case 'd': lk_controller_toggle_other_category(controller); break;
         case 'i': CycleRaster(); break;
         case 'I': AddRasterFiles(); break;
-        case 'H': lk_controller_toggle_chart(controller); break;
+        case 'H':
+            lk_controller_toggle_chart(controller);
+            lk_store_set_chart_hidden(lk_controller_chart_hidden(controller));
+            break;
         case 'f':
         {
             bool open = SearchBox().Visibility() == Visibility::Visible;
             SearchBox().Visibility(open ? Visibility::Collapsed : Visibility::Visible);
             SearchIcon().Glyph(open ? L"\uE721" : L"\uE711");
-            if (!open)
+            if (open)
+                SearchResults().Visibility(Visibility::Collapsed);
+            else
+            {
                 SearchBox().Focus(FocusState::Programmatic);
+                UpdateSearchResults();
+            }
             break;
         }
         case ',':
@@ -147,7 +182,72 @@ namespace winrt::LookoutMarine::implementation
         {
             lk_controller_set_center(controller, lon, lat);
             SearchBox().Text(L"");
-            Command('f'); // collapse
+            Command('f'); // collapse (also hides the results row)
         }
+    }
+
+    // The results row under the field, live as the mariner types: a parsed
+    // coordinate previews as a go-to they can click; anything else says
+    // honestly that feature/place search is not here yet. Never faked
+    // results (the reference's SearchField dropdown, row for row).
+    void MainWindow::UpdateSearchResults()
+    {
+        std::string text = winrt::to_string(SearchBox().Text());
+        if (SearchBox().Visibility() != Visibility::Visible || text.empty())
+        {
+            SearchResults().Visibility(Visibility::Collapsed);
+            return;
+        }
+
+        SearchResultRows().Children().Clear();
+        double lat = 0, lon = 0;
+        if (lk_coord_parse(text.c_str(), &lat, &lon))
+        {
+            Controls::Button go;
+            go.HorizontalAlignment(HorizontalAlignment::Stretch);
+            go.HorizontalContentAlignment(HorizontalAlignment::Left);
+            go.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
+            go.BorderThickness({ 0, 0, 0, 0 });
+            go.Padding({ 12, 10, 12, 10 });
+            Controls::StackPanel row;
+            row.Orientation(Controls::Orientation::Horizontal);
+            row.Spacing(8);
+            Controls::FontIcon pin;
+            pin.Glyph(L""); // map pin
+            pin.FontSize(14);
+            row.Children().Append(pin);
+            Controls::TextBlock label;
+            label.Text(hstring{ L"Go to " } + lkw::FormatCoord(lat, lon));
+            label.FontSize(13);
+            row.Children().Append(label);
+            go.Content(row);
+            go.Click([this](auto &&, auto &&) { SubmitSearch(); });
+            SearchResultRows().Children().Append(go);
+        }
+        else
+        {
+            Controls::StackPanel row;
+            row.Orientation(Controls::Orientation::Horizontal);
+            row.Spacing(8);
+            row.Padding({ 12, 10, 12, 10 });
+            Controls::FontIcon q;
+            q.Glyph(L""); // question ring
+            q.FontSize(14);
+            q.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x6B, 0x6B, 0x6B } });
+            row.Children().Append(q);
+            Controls::StackPanel lines;
+            Controls::TextBlock title;
+            title.Text(L"Feature & place search");
+            title.FontSize(13);
+            lines.Children().Append(title);
+            Controls::TextBlock note;
+            note.Text(L"Coming soon. Needs a chart name index.");
+            note.FontSize(11);
+            note.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x6B, 0x6B, 0x6B } });
+            lines.Children().Append(note);
+            row.Children().Append(lines);
+            SearchResultRows().Children().Append(row);
+        }
+        SearchResults().Visibility(Visibility::Visible);
     }
 }

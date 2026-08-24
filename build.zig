@@ -8,9 +8,9 @@ const std = @import("std");
 // Xcode targets consume everything from zig-out*/ with no tile57 checkout,
 // TILE57_DIR, or manual pre-build.
 
-/// True when a sibling tile57 checkout exists next to this repo.
-fn haveLocalTile57(b: *std.Build) bool {
-    const probe = b.pathFromRoot("../tile57/build.zig");
+/// True when a sibling checkout of `name` exists next to this repo.
+fn haveLocalDep(b: *std.Build, comptime name: []const u8) bool {
+    const probe = b.pathFromRoot("../" ++ name ++ "/build.zig");
     std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch return false;
     return true;
 }
@@ -110,7 +110,12 @@ fn checkTestCoverage(b: *std.Build, step: *std.Build.Step, roots: []const []cons
         defer walker.deinit();
         while (walker.next(io) catch null) |entry| {
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+            // The walker yields entry.path with the PLATFORM separator, and
+            // both declared lists are written with '/'. Left as-is every file
+            // under a subdirectory compares unequal on Windows, so every one
+            // of them is reported as uncollected and the test step never runs.
             const rel = b.fmt("{s}/{s}", .{ tree, entry.path });
+            std.mem.replaceScalar(u8, rel, '\\', '/');
             const text = std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(rel), b.allocator, .limited(4 * 1024 * 1024)) catch continue;
             if (!carriesTests(text)) continue;
             var declared = false;
@@ -180,26 +185,13 @@ pub fn build(b: *std.Build) void {
     // standardOptimizeOption, which would keep the no-flag default at Debug.)
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse .ReleaseFast;
 
-    // Renderer backend: native everywhere —
-    //   * metal: Apple (macOS / iOS), direct Metal
-    //   * vk:    Android and Linux, direct Vulkan onto the shell's surface
-    //   * d3d12: Windows, direct D3D12 into a composition swapchain
-    //   * sdl:   the SDL_GPU fallback, `-Dbackend=sdl` anywhere
-    // Default by platform; see src/gpu.zig.
-    const Backend = enum { metal, sdl, vk, d3d12 };
+    // charttable draws the chart. It owns the style, the tile sources, the
+    // tessellators and the GPU; src/ct/ drives it and the host keeps only what
+    // is above the renderer (the library, picks, overlays, the plugin layer).
+    // charttable picks its backend off the target: Metal on Apple, Vulkan
+    // everywhere else (charttable src/gpu/gpu.zig). Nothing to select here —
+    // the shells link the loader their platform uses.
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
-    const is_windows = target.result.os.tag == .windows;
-    const target_android = target.result.abi == .android or target.result.abi == .androideabi;
-    const backend = b.option(Backend, "backend", "renderer backend: metal | sdl | vk | d3d12") orelse
-        (if (is_apple) Backend.metal else if (target_android) Backend.vk else if (is_windows) Backend.d3d12 else Backend.sdl);
-    const use_sdl = backend == .sdl;
-    const use_vk = backend == .vk;
-    const use_d3d12 = backend == .d3d12;
-    // vk serves Android and the desktop shells; Apple stays on metal.
-    if (use_vk and is_apple)
-        @panic("-Dbackend=vk targets Android, Linux and Windows; use metal on Apple");
-    if (use_d3d12 and !is_windows)
-        @panic("-Dbackend=d3d12 targets Windows only");
     // The wasm plugin host (src/plugin/). It builds for any target
     // scripts/build-wamr.sh has an archive for, and it is ON BY DEFAULT ON
     // APPLE ONLY. The Apple app links the runtime through the Xcode project
@@ -230,9 +222,6 @@ pub fn build(b: *std.Build) void {
     if (plugins_fail) |fail| b.getInstallStep().dependOn(fail);
 
     const build_opts = b.addOptions();
-    build_opts.addOption(bool, "gpu_sdl", use_sdl);
-    build_opts.addOption(bool, "gpu_vk", use_vk);
-    build_opts.addOption(bool, "gpu_d3d12", use_d3d12);
     build_opts.addOption(bool, "plugins", plugins);
     const build_opts_mod = build_opts.createModule();
 
@@ -241,7 +230,6 @@ pub fn build(b: *std.Build) void {
     // (SDL itself is linked by the android gradle/CMake build, not here).
     const android_ndk = b.option([]const u8, "android-ndk", "Android NDK root (for -Dtarget=*-linux-android)");
     const android_api = b.option(u32, "android-api", "Android API level (default 24)") orelse 24;
-    const sdl_include = b.option([]const u8, "sdl-include", "SDL3 include dir for the android sdl backend (e.g. SDL/include)");
     const android_libc: ?std.Build.LazyPath = if (androidTriple(target)) |triple|
         (if (android_ndk) |ndk| androidLibcFile(b, ndk, triple, android_api) else null)
     else
@@ -249,7 +237,7 @@ pub fn build(b: *std.Build) void {
     const is_android = androidTriple(target) != null;
 
     const dep_args = .{ .target = target, .optimize = optimize, .@"android-ndk" = android_ndk, .@"android-api" = android_api };
-    const tile57_dep = (if (haveLocalTile57(b))
+    const tile57_dep = (if (haveLocalDep(b, "tile57"))
         b.lazyDependency("tile57_local", dep_args)
     else
         b.lazyDependency("tile57", dep_args)) orelse
@@ -264,21 +252,45 @@ pub fn build(b: *std.Build) void {
     const tile57_lib = tile57_dep.builder.named_lazy_paths.get("libtile57_a") orelse return;
     const tile57_inc = tile57_dep.path("include");
 
+    // System image codecs, handed to charttable.
+    //
+    // WebP is not a nicety here: elevation tiles are commonly served as WebP
+    // (Open Waters' seascape DEM is), and without libwebp those tiles fetch
+    // fine, fail to decode, and the hillshade and colour-relief layers built
+    // from them simply never appear — with nothing said anywhere. libpng
+    // likewise reads the PNG shapes charttable's own reader declines
+    // (interlaced, 16-bit).
+    //
+    // Default ON, unlike charttable's own build, where they default off so an
+    // embedder is never forced into a system dependency. Lookout HAS an
+    // embedder — this repo's Apple app — and it would rather have the codecs
+    // than a chart with a hole in it. `-Dwebp=false -Dlibpng=false` builds
+    // without them on a host that has neither.
+    const use_webp = b.option(bool, "webp", "Decode WebP tiles with libwebp") orelse true;
+    const use_libpng = b.option(bool, "libpng", "Decode PNG with libpng") orelse true;
+
+    // The renderer, as a Zig module: `@import("charttable")`. It carries its
+    // own Metal shim and frameworks, so nothing here declares them. Same
+    // local-or-pinned selection as tile57 above.
+    const charttable_args = .{
+        .target = target,
+        .optimize = optimize,
+        .webp = use_webp,
+        .libpng = use_libpng,
+    };
+    const charttable_dep = (if (haveLocalDep(b, "charttable"))
+        b.lazyDependency("charttable_local", charttable_args)
+    else
+        b.lazyDependency("charttable", charttable_args)) orelse
+        return; // fetch scheduled; the runner downloads it and re-runs build()
+    const charttable_mod = charttable_dep.module("charttable");
+
     const Cfg = struct {
         b: *std.Build,
         tile57_inc: std.Build.LazyPath,
         tile57_lib: std.Build.LazyPath,
-        // The shaders come from the engine too (tile57 shaders/): they read the
-        // vertex/quad/uniform layouts it defines, so it owns them. Two hand-synced
-        // copies here — one per shading language — had already drifted.
-        tile57_dep: *std.Build.Dependency,
-        use_sdl: bool,
-        use_vk: bool,
-        use_d3d12: bool,
+        charttable_mod: *std.Build.Module,
         android: bool,
-        apple: bool,
-        windows: bool,
-        sdl_include: ?[]const u8,
         build_opts_mod: *std.Build.Module,
         plugins: bool,
         /// The vendor/wamr-dist* directory for this target (see wamrDist).
@@ -288,7 +300,8 @@ pub fn build(b: *std.Build) void {
         /// only where the linker copes with it (see addObjectFile below).
         fn apply(self: @This(), mod: *std.Build.Module, link_archives: bool) void {
             const bb = self.b;
-            mod.addImport("build_options", self.build_opts_mod); // src/gpu.zig backend switch
+            mod.addImport("build_options", self.build_opts_mod); // the plugin-host switch
+            mod.addImport("charttable", self.charttable_mod);
             if (self.android) {
                 // Neutralise bionic's nullability keywords for OUR parse: clang's
                 // translate-c (@cImport of stb_image.h -> stdlib.h) rejects
@@ -308,10 +321,8 @@ pub fn build(b: *std.Build) void {
             }
             mod.addIncludePath(self.tile57_inc);
             mod.addIncludePath(bb.path("vendor/stb"));
-            mod.addIncludePath(bb.path("src")); // metal_shim.h / c_sdl.zig for the @cImport
-            // Tessellation, sprite/SDF quad building and paint order all live
-            // in tile57 (the GPU-scene ABI hands back draw-ready buffers), so
-            // the host vendors no tessellator. stb stays for atlas PNG decode.
+            // The chart's geometry and paint come from charttable, so the host
+            // vendors no tessellator. stb stays for PNG decode.
             // -std=gnu99: under the newer clang default, Android's bionic
             // stdlib.h `_Nonnull`-on-array declarations error; gnu99 accepts them
             // (matches tile57's C flags). Harmless for stb elsewhere.
@@ -330,52 +341,9 @@ pub fn build(b: *std.Build) void {
                 mod.addIncludePath(bb.path(bb.fmt("{s}/include", .{self.wamr_dir})));
                 if (link_archives) mod.addObjectFile(bb.path(bb.fmt("{s}/lib/libvmlib.a", .{self.wamr_dir})));
             }
-            if (self.use_sdl) {
-                if (self.android) {
-                    // Android: the gradle/CMake build links SDL3; here we only need
-                    // its headers so c_sdl.zig's @cInclude("SDL3/SDL.h") resolves.
-                    if (self.sdl_include) |inc| mod.addSystemIncludePath(.{ .cwd_relative = inc });
-                } else {
-                    // Native: pkg-config gives include + link.
-                    mod.linkSystemLibrary("SDL3", .{});
-                }
-            }
-            if (self.use_sdl or self.use_vk) {
-                // Precompiled SPIR-V, embedded (no runtime shader toolchain).
-                // Shared by both Vulkan-flavoured backends: the raw-vk pipeline
-                // layout mirrors SDL_GPU's set numbering (vtx UBO set 1, frag
-                // sampler set 2, frag UBO set 3), so one .spv set serves both.
-                const spv = [_][2][]const u8{
-                    .{ "chart_vert_spv", "shaders/vk/chart.vert.spv" },
-                    .{ "chart_frag_spv", "shaders/vk/chart.frag.spv" },
-                    .{ "sprite_vert_spv", "shaders/vk/sprite.vert.spv" },
-                    .{ "sprite_frag_spv", "shaders/vk/sprite.frag.spv" },
-                    .{ "sdf_frag_spv", "shaders/vk/sdf.frag.spv" },
-                    .{ "pattern_vert_spv", "shaders/vk/pattern.vert.spv" },
-                    .{ "pattern_frag_spv", "shaders/vk/pattern.frag.spv" },
-                };
-                for (spv) |e| mod.addAnonymousImport(e[0], .{ .root_source_file = self.tile57_dep.path(e[1]) });
-            }
-            if (self.use_vk and !self.android) {
-                // Vendored headers only (the exe links the loader); Android uses the NDK sysroot.
-                mod.addIncludePath(bb.path("vendor/vulkan/include"));
-            }
-            if (self.use_d3d12) {
-                // The D3D12 transport (COM in C behind a C face). Shader source
-                // compiled by the shim at runtime (D3DCompile).
-                mod.addCSourceFile(.{ .file = bb.path("src/d3d12_shim.c"), .flags = &.{ "-O2", "-fno-sanitize=undefined" } });
-                mod.addAnonymousImport("hlsl_src", .{ .root_source_file = self.tile57_dep.path("shaders/lookout.hlsl") });
-            }
-            if (!self.use_sdl and !self.use_vk and !self.use_d3d12) {
-                // The Metal transport (ObjC behind a C face). Manual
-                // retain/release on purpose — objects live in C structs.
-                mod.addCSourceFile(.{ .file = bb.path("src/metal_shim.m"), .flags = &.{ "-O2", "-fno-objc-arc", "-fno-sanitize=undefined" } });
-                // Metal shader source, compiled by the shim at runtime.
-                mod.addAnonymousImport("metal_src", .{ .root_source_file = self.tile57_dep.path("shaders/lookout.metal") });
-            }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .tile57_dep = tile57_dep, .use_sdl = use_sdl, .use_vk = use_vk, .use_d3d12 = use_d3d12, .android = is_android, .apple = is_apple, .windows = is_windows, .sdl_include = sdl_include, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -433,15 +401,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(exe_mod, true);
-    // An executable resolves the Vulkan loader; the static lib leaves it open.
-    if (use_vk) exe_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
-    if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
-        exe_mod.linkSystemLibrary(l, .{});
-    if (backend == .metal) {
-        exe_mod.linkFramework("Metal", .{});
-        exe_mod.linkFramework("QuartzCore", .{});
-        exe_mod.linkFramework("Foundation", .{});
-    }
     const exe = b.addExecutable(.{ .name = "lookout-marine-demo", .root_module = exe_mod });
     b.installArtifact(exe);
 
@@ -463,14 +422,6 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         });
         cfg.apply(dev_mod, true);
-        if (use_vk) dev_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
-        if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
-            dev_mod.linkSystemLibrary(l, .{});
-        if (backend == .metal) {
-            dev_mod.linkFramework("Metal", .{});
-            dev_mod.linkFramework("QuartzCore", .{});
-            dev_mod.linkFramework("Foundation", .{});
-        }
         const dev = b.addExecutable(.{ .name = "lookout-plugin-dev", .root_module = dev_mod });
         b.installArtifact(dev);
         dev_step.dependOn(&b.addInstallArtifact(dev, .{}).step);
@@ -493,14 +444,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cfg.apply(test_mod, true);
-    if (use_vk) test_mod.linkSystemLibrary(if (target.result.os.tag == .windows) "vulkan-1" else "vulkan", .{});
-    if (use_d3d12) for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler", "dxguid" }) |l|
-        test_mod.linkSystemLibrary(l, .{});
-    if (backend == .metal) {
-        test_mod.linkFramework("Metal", .{});
-        test_mod.linkFramework("QuartzCore", .{});
-        test_mod.linkFramework("Foundation", .{});
-    }
     const tests = b.addTest(.{ .root_module = test_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
@@ -514,6 +457,8 @@ pub fn build(b: *std.Build) void {
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
         "src/markers.zig",
+        "src/chartlinks.zig",
+        "src/library.zig",
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
@@ -562,6 +507,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }));
+        // overlay.zig and markers.zig do their geometry in the renderer's
+        // world space, so they take its camera. Cheap for the roots that do
+        // not: an unimported module is not analysed.
+        mod.addImport("charttable", cfg.charttable_mod);
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
 
@@ -747,6 +696,10 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            // The store builds its geometry in the renderer's world space, so
+            // it takes the renderer's camera even in a host test that never
+            // draws anything.
+            ov_mod.addImport("charttable", cfg.charttable_mod);
 
             const host_smoke_mod = b.createModule(.{
                 .root_source_file = b.path("test/host_smoke.zig"),
@@ -919,12 +872,15 @@ pub fn build(b: *std.Build) void {
     // there. checkTestCoverage fails the test step for a test-bearing file on
     // neither list.
     const reached_test_files = [_][]const u8{
-        // The test module's root, and the core files it reaches. camera, pick
-        // and raster are reached only through root.zig's `test` block.
+        // The test module's root, and the core files it reaches. pick and the
+        // renderer layer are reached only through root.zig's `test` block.
         "src/root.zig",
-        "src/camera.zig",
         "src/pick.zig",
-        "src/raster.zig",
+        "src/ct/host.zig",
+        "src/ct/style.zig",
+        "src/ct/tiles.zig",
+        "src/ct/provided.zig",
+        "src/ct/raster.zig",
         // The host test module's root, and the plugin layer under it. The
         // host's and the broker's parts are reached through the comptime block
         // in host.zig and broker.zig.

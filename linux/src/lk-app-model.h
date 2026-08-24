@@ -3,9 +3,12 @@
  * through it. Readouts are GObject properties the HUD tracks via notify::. */
 #pragma once
 
+#include "lk-chart-bake.h"
+
 #include <gtk/gtk.h>
 
 #include "lk-chart-controller.h"
+#include "lk-chart-links.h"
 #include "lk-raster.h"
 
 G_BEGIN_DECLS
@@ -22,6 +25,9 @@ LkChartController *lk_app_model_get_controller (LkAppModel *self);
  * demo default. Transfer full strv; empty when nothing is available. */
 char **lk_app_model_initial_chart_paths (LkAppModel *self);
 
+/* The path the app would open on its own, drawable or not. Free with g_free. */
+char *lk_app_model_initial_source (LkAppModel *self);
+
 /* Every baked cell under a directory, sorted. */
 char **lk_app_model_chart_paths_in_dir (const char *dir);
 
@@ -30,6 +36,35 @@ void lk_app_model_open_chart (LkAppModel *self, const char *path);
 void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
 const char *const *lk_app_model_get_recents (LkAppModel *self);
+
+/* ---- the chart library: sets aboard -------------------------------------- */
+
+/* A SET is a folder the mariner added, or one .zip — how a chart agency
+ * publishes them. The list answers what is aboard and what is being sailed
+ * on: switching a set off keeps it aboard and takes it out of the chart, and
+ * the chart is composed as the UNION of the sets switched on. */
+typedef struct {
+  char    *path;
+  char    *title;  /* the agency when the charts agree on one, else the folder name */
+  char    *detail; /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB";
+                    * "" until the background scan lands */
+  gboolean on;
+} LkChartSetRow;
+
+void lk_chart_set_row_free (LkChartSetRow *row);
+
+/* Every set aboard, in the order added. Transfer full: a GPtrArray of
+ * LkChartSetRow. Titles and details fill in as the background scans land;
+ * ::chart-sets-changed says when to ask again. */
+GPtrArray *lk_app_model_get_chart_sets (LkAppModel *self);
+
+/* Switch one set into or out of the chart. Persists, and recomposes the open
+ * chart from the sets that remain on — all of them off closes it. */
+void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean on);
+
+/* Take a set off the list. What Lookout prepared from it is deleted — it can
+ * be made again — and the mariner's own folder is never touched. */
+void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
 
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
@@ -109,6 +144,21 @@ void lk_app_model_toggle_chart (LkAppModel *self);
  * that is standing still. Emits ::raster-changed when something moved. */
 void lk_app_model_refresh_raster_state (LkAppModel *self);
 
+/* ---- charts by link ------------------------------------------------------ */
+
+/* The mariner's linked charts (an online map AS the chart). Owned here so the
+ * settings section and the HUD credit read one object. */
+LkChartLinks *lk_app_model_get_chart_links (LkAppModel *self);
+
+/* Re-push the active link into a chart the engine has just opened. Called
+ * beside lk_app_model_reinstall_raster_charts, for the same reason: an alt
+ * style belongs to a lookout handle, and every open replaces the handle. */
+void lk_app_model_reapply_chart_link (LkAppModel *self);
+
+/* Take lookout's chart-link snapshot if it changed. Called once per render
+ * tick: the changed flag has ONE consumer. */
+void lk_app_model_poll_chart_links (LkAppModel *self);
+
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
 int         lk_app_model_get_raster_active (LkAppModel *self);
@@ -135,6 +185,21 @@ void lk_app_model_push_readouts (LkAppModel *self,
                                  double overscale,
                                  int scheme);
 void lk_app_model_set_building (LkAppModel *self, gboolean building);
+
+/* ---- preparing charts ---------------------------------------------------- */
+/* A folder or a .zip of raw S-57 cells has to be baked before it can be drawn.
+ * The open path does that itself, so a mariner picks the charts an agency
+ * published and the app deals with what that means. */
+
+/* Where the bake has got to, or NULL when nothing is being prepared. */
+const LkBakeProgress *lk_app_model_get_bake_progress (LkAppModel *self);
+
+/* True while a set is being prepared. */
+gboolean lk_app_model_get_baking (LkAppModel *self);
+
+/* Ask the running bake to stop. What already landed stays: it is a usable
+ * library, just a smaller one. */
+void lk_app_model_cancel_bake (LkAppModel *self);
 /* The chart view's size in logical points, pushed on every allocation. */
 void lk_app_model_set_view_size (LkAppModel *self, int width, int height);
 void lk_app_model_set_first_build_done (LkAppModel *self, gboolean done);
@@ -143,13 +208,24 @@ void lk_app_model_set_first_build_done (LkAppModel *self, gboolean done);
 void lk_app_model_set_opening (LkAppModel *self, gboolean opening, gboolean preparing_symbols);
 gboolean lk_app_model_get_show_startup_loader (LkAppModel *self);
 gboolean lk_app_model_get_preparing_symbols (LkAppModel *self);
+gboolean lk_app_model_get_opening (LkAppModel *self);
+/* How many charts that open covers, when known; 0 otherwise. The loader page
+ * says "Opening 7,217 charts" from it. */
+void  lk_app_model_set_opening_cells (LkAppModel *self, guint cells);
+guint lk_app_model_get_opening_cells (LkAppModel *self);
 void lk_app_model_set_chart_open (LkAppModel *self, gboolean open, const char *path);
 void lk_app_model_set_open_error (LkAppModel *self, const char *message);
 
 /* The pick from the last tap, and where on the chart it landed (logical points
  * in the chart view — the report stands beside the mark there). Transfer full;
  * emits ::pick-results, which is what rebuilds the report. */
-void       lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y);
+void       lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y,
+                                  double lon, double lat);
+/* The water the open pick describes; FALSE when no pick is open. */
+gboolean   lk_app_model_get_pick_geo (LkAppModel *self, double *out_lon, double *out_lat);
+/* Re-place the open pick's mark. Emits "pick-moved" (the mark alone; the
+ * report's frame never moves) and only when it moved at least half a point. */
+void       lk_app_model_move_pick (LkAppModel *self, double x, double y);
 void       lk_app_model_clear_pick (LkAppModel *self);
 GPtrArray *lk_app_model_get_pick_results (LkAppModel *self);
 gboolean   lk_app_model_get_pick_point (LkAppModel *self, double *out_x, double *out_y);

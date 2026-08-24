@@ -1,11 +1,16 @@
 #pragma once
 #include "MainWindow.g.h"
 
+#include "lk_bake.h"
 #include "lk_controller.h"
 #include "lk_pick.h"
 #include "lk_plugin_model.h"
 
 #include <atomic>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <functional>
@@ -28,6 +33,10 @@ namespace winrt::LookoutMarine::implementation
         // Centre the chart on a vessel a table row named (follow comes off
         // first). Public: the table windows live outside this class.
         void RevealOnChart(double lon, double lat);
+
+        // One tile lookout wants. Public: the C tile-provider thunk (a free
+        // function — the engine takes a plain function pointer) calls it.
+        void TileRequest(std::string source, uint64_t id, int z, int x, int y);
 
     private:
         void WireChrome();
@@ -54,6 +63,15 @@ namespace winrt::LookoutMarine::implementation
         static void ApplyWindowIcon(HWND hwnd);
         Microsoft::UI::Xaml::XamlRoot DialogRoot(); // the window a dialog belongs to
         void BuildSettingsPage(); // rebuilds the rows for the selected tab
+        void RefreshBandPreview(); // redraw the depth-band legend in place
+        /// The depths tab's band legend, redrawn as the contour fields
+        /// change without rebuilding the page (a rebuild would steal the
+        /// NumberBox focus mid-typing). Null on every other tab.
+        winrt::Microsoft::UI::Xaml::Controls::Grid band_preview{ nullptr };
+        /* Refresh the registered status texts and dots in place. The status
+         * moves once a second while data flows; rebuilding the page for that
+         * flickers every control and resets the expanders. */
+        void UpdatePluginStatusUi();
         void ScheduleApply();     // 60 ms debounce, then set + save
         // wasm plugin settings (MainWindow.Plugins.cpp)
         bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
@@ -72,6 +90,8 @@ namespace winrt::LookoutMarine::implementation
         std::string PluginConfigJson(lkw::PluginInfo const &p);
         void SchedulePluginApply();
         lkw::PluginInfo *FindPlugin(std::string const &id);
+        bool PluginItemStatusLine(lkw::PluginInfo const &p, std::string const &row_id,
+                                  std::string *line_out, std::string *state_out);
         lkw::PluginCell *FindCell(std::string const &plugin_id, std::string const &list_key,
                                   std::string const &row_id, std::string const &key);
         void SetPluginValue(std::string const &plugin_id, std::string const &key, double v);
@@ -96,8 +116,12 @@ namespace winrt::LookoutMarine::implementation
         void RenderLoop();
         void UpdateReadouts(bool force);
         void UpdateScaleBar(double denom);
-        void OpenPaths(std::vector<std::string> const &paths, std::string const &recent);
-        void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent);
+        // `label` is what Settings ▸ Charts calls the set ("NOAA"); the recent
+        // stays a path. Empty falls back to the recent, then the first cell.
+        void OpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                       std::string const &label = {});
+        void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                         std::string const &label = {});
         // startup loader (MainWindow.Loader.cpp)
         void ShowStartupLoader(size_t cells);
         void SetLoaderTessellating();
@@ -105,7 +129,21 @@ namespace winrt::LookoutMarine::implementation
         void LoaderTick(int building);
         fire_and_forget PickChartFile();
         fire_and_forget PickChartFolder();
+        // chart import: scan, bake what is raw, then open (MainWindow.Bake.cpp)
+        fire_and_forget PickChartArchive();
+        void ImportCharts(std::string const &path);
+        /* The half of an import that runs after the scan came back. */
+        void FinishImport(std::string const &path, lkw::ScanResult const &scan);
+        /* Bake picked BSB/KAP sheets into the raster library, then add them to
+         * the raster underlay. The same BakeJob and panel as a chart import. */
+        void BakeRasterSources(std::vector<std::string> const &sources);
+        /* Baked sheets join the underlay: noted for the coming open, or added
+         * to the chart on screen when no open follows. */
+        void AdoptBakedRasters(std::vector<std::string> const &rasters, bool opening);
+        void TickBake();
+        static std::string BakeOutputDir();
         void SubmitSearch();
+        void UpdateSearchResults(); // the live row under the field
         // overlay bubbles, position source, follow lock (MainWindow.Overlay.cpp)
         bool TryPinOverlayAt(double x, double y); // a tap; true = it took it
         void UpdateOverlayBubble();               // per readout tick
@@ -118,6 +156,9 @@ namespace winrt::LookoutMarine::implementation
 
         // plugin install + file routing (MainWindow.PluginInstall.cpp)
         fire_and_forget InstallPluginFromPath(std::string path); // consent first
+        // A .lkplug that arrived before any chart was open: installed (with
+        // consent) the moment one is, instead of erroring at the empty state.
+        std::string pending_plugin_install;
         fire_and_forget PickPluginFile();
         fire_and_forget ShowPluginError(winrt::hstring msg);
         void OpenDroppedPath(std::string const &path);
@@ -127,6 +168,7 @@ namespace winrt::LookoutMarine::implementation
         // plugin tables (MainWindow.Vessels.cpp)
         void RefreshPluginTables(); // re-read the declarations at open
         void OpenPluginTable(lkw::TableSpec const &spec);
+        void ShowTableHook(std::string const &spec); // LOOKOUT_SHOW=table[:…]
         void CloseVesselWindows(); // the tables belong to the chart handle
 
         // plugin alerts (MainWindow.Alerts.cpp)
@@ -140,6 +182,9 @@ namespace winrt::LookoutMarine::implementation
 
         // raster underlay (MainWindow.Raster.cpp)
         void InstallStoredRasters();  // re-add the stored list after each open
+        void ForgetRasterCharts();    // clear the stored library; next open loses them
+        void RestoreRasterShown();    // put back which sets were drawn, then the saved ENC-hidden
+        void SaveRasterShown();       // record the engine's per-set drawn state by name
         void AddRasterPaths(std::vector<std::string> const &paths);
         fire_and_forget AddRasterFiles();
         fire_and_forget AddRasterFolder();
@@ -147,6 +192,74 @@ namespace winrt::LookoutMarine::implementation
         void ShowRasterMenu();
         void UpdateRasterPill(lk_readout const &r);
         fire_and_forget ShowRasterError(winrt::hstring msg);
+        fire_and_forget ShowImportError(winrt::hstring msg);
+
+        // The chart context menu and the mariner's markers (right-click).
+        void ShowChartMenu(double x, double y);
+        fire_and_forget RenameMarkerDialog(uint64_t id, winrt::hstring current);
+
+        // True while the chrome wears the dark (dusk/night) dictionaries.
+        // Code-built cards pick their ink through lkw::chrome::Ink(dark).
+        bool DarkChrome()
+        {
+            return Root().ActualTheme() == Microsoft::UI::Xaml::ElementTheme::Dark;
+        }
+
+        // ---- chart sets (the folders of charts aboard) ----------------------
+        // A set is a folder — the baked library, a folder of .pmtiles, a
+        // folder of pictures — with an on/off switch. What opens is the UNION
+        // of the switched-on sets. Mirrors the macOS "sets aboard" model.
+        struct ChartSetRow
+        {
+            std::string path;
+            bool on{ true };
+            std::vector<std::string> cells;
+            std::vector<std::string> rasters;
+            std::string title; // the agency whose charts these are, else the folder
+        };
+        void LoadChartSets(std::function<void()> then);
+        std::vector<std::string> ChartSetOpenPaths() const;
+        void AdoptChartSet(std::string const &path);
+        void SetChartSetOn(std::string const &path, bool on);
+        void RemoveChartSet(std::string const &path);
+        std::vector<ChartSetRow> chart_sets;
+
+        // ---- charts by link (an online map AS the chart) --------------------
+        // One chart added by link: a MapLibre style url. Picking it renders
+        // that style INSTEAD of the built-in chart.
+        //
+        // THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON
+        // sources, generates a wrapper style for bare tiles, fetches the
+        // sprite packs, builds the credit line, templates the tile urls and
+        // persists the list. This shell renders the snapshot and fetches urls
+        // (MainWindow.ChartLinks.cpp).
+        struct ChartLink
+        {
+            std::string url;
+            std::string name;
+        };
+        void SelectChartLink(std::string const &url); // "" = the built-in chart
+        void AddChartLink(std::string const &raw);
+        void RefreshChartLink(std::string const &url);
+        void RemoveChartLink(std::string const &url);
+        void ChartLinksAttach();  // on the handle just opened
+        void ChartLinksDetach();  // before the handle closes
+        void MigrateChartLinks(); // the old store, handed over once
+        void PollChartLinks();    // the snapshot; UI thread, one consumer
+        void ChartLinkRespond(uint64_t id, void const *bytes, size_t len, int status);
+        static void HttpGetThunk(void *user, unsigned long long req_id,
+                                 const char *url, int allow_file);
+        static void HttpCancelThunk(void *user, unsigned long long req_id);
+
+        std::vector<ChartLink> chart_links;
+        std::string active_chart_link; // "" draws the built-in chart
+        std::string chart_link_error;
+        bool chart_link_busy{ false };
+        bool chart_links_imported{ false };
+        // Answers are given under this lock, so a closing handle is never
+        // answered into.
+        std::mutex link_mu;
+        bool link_live{ false };
         // zoom-to-scale panel (MainWindow.Scale.cpp)
         void WireScale();
         void ToggleScalePanel();
@@ -178,14 +291,37 @@ namespace winrt::LookoutMarine::implementation
         Microsoft::UI::Xaml::Controls::SwapChainPanel chart_panel{ nullptr };
         lk_controller *controller{ nullptr };
 
-        winrt::event_token rendering_token{};
+        /* 10 Hz: the readout poll and the open retry. A DispatcherTimer, not
+         * CompositionTarget::Rendering — that subscription ticked the UI
+         * thread at refresh rate for the process life, idle or not. */
+        Microsoft::UI::Xaml::DispatcherTimer readout_timer{ nullptr };
         // Software (WARP) frames can take tens of ms: rendering runs on its
         // own thread (the core locks internally), never on the UI thread.
         std::thread render_thread;
         std::atomic<bool> render_run{ false };
         std::atomic<int> warmup_frames{ 0 }; // force presents while DWM starts composing us
+
+        // Dev hooks — the interactive-path profile (MainWindow.xaml.cpp):
+        // $LOOKOUT_FRAME_PROF rows append on the render thread and the CSV
+        // rewrites at every loop exit; $LOOKOUT_GESTURE_BENCH steps a
+        // scripted gesture once per tick; $LOOKOUT_HITMAP logs hit tests.
+        struct FrameProfRow
+        {
+            double t, gap;
+            int drew, building;
+            double zoom, render_ms;
+        };
+        std::vector<FrameProfRow> frame_prof;
+        std::string frame_prof_path;
+        long long prof_t0_qpc{ 0 };
+        int bench_mode{ 0 };  // 0 off; 1 pan, 2 zoom, 3 both
+        int bench_phase{ 0 }; // settle, pan, rest, zoom, fill, done
+        int bench_frames{ 0 };
+        double bench_fill_t0{ 0 };
+        bool hitmap_log{ false };
+        void BenchStep();
+        void WriteFrameProfile();
         long long last_tick_qpc{ 0 };
-        long long last_readout_qpc{ 0 };
         double scalebar_pt{ 0 }, scalebar_m{ 0 };
         bool open_attempted{ false };
         std::string open_chart_label; // what Settings ▸ Charts names as open
@@ -221,9 +357,21 @@ namespace winrt::LookoutMarine::implementation
         // the lookout handle the open destroyed). UI thread only.
         std::vector<std::string> raster_paths;
         std::wstring raster_pill_shown; // change-detect: last pill text ("" = hidden)
+        // Which raster SETS are not drawn, by set name — the saved per-set
+        // choice. Entries for sets not installed this launch are kept: a
+        // mariner who unplugs the drive holding one has not changed their
+        // mind about it.
+        std::set<std::string> raster_hidden;
 
         // startup loader state
         bool open_pending{ false };      // an OpenPaths is deferred/running
+        // the running import, its panel timer, and what it was asked to import
+        std::unique_ptr<lkw::BakeJob> bake_job;
+        bool import_scanning{ false }; // a scan worker is out; one at a time
+        Microsoft::UI::Xaml::DispatcherTimer bake_timer{ nullptr };
+        std::string bake_source;
+        bool bake_rasters_only{ false }; // this job is the raster add flow's
+        bool bake_cancel_wired{ false };
         bool loader_waiting{ false };    // loader up, waiting on the first build
         bool loader_saw_building{ false };
         int loader_idle_ticks{ 0 };
@@ -244,6 +392,9 @@ namespace winrt::LookoutMarine::implementation
         std::vector<SettingsTab> settings_tabs;
         int settings_tab{ 0 };
         Microsoft::UI::Xaml::Window settings_window{ nullptr };
+        // The settings window's last client size, written once at close.
+        int settings_size_w{ 0 };
+        int settings_size_h{ 0 };
         Microsoft::UI::Xaml::DispatcherTimer apply_timer{ nullptr };
 
         // wasm plugin settings. The schemas are read when the pane opens; only
@@ -251,6 +402,17 @@ namespace winrt::LookoutMarine::implementation
         std::vector<lkw::PluginInfo> plugins;
         Microsoft::UI::Xaml::DispatcherTimer plugin_apply_timer{ nullptr };
         Microsoft::UI::Xaml::DispatcherTimer plugin_poll_timer{ nullptr };
+        // The live status texts on the built page, updated in place by the
+        // poll. row_id empty = the plugin's own header line (with its dot).
+        // Cleared and re-registered by every BuildSettingsPage.
+        struct PluginStatusUi
+        {
+            std::string plugin_id;
+            std::string row_id;
+            Microsoft::UI::Xaml::Controls::TextBlock text{ nullptr };
+            Microsoft::UI::Xaml::Shapes::Ellipse dot{ nullptr };
+        };
+        std::vector<PluginStatusUi> plugin_status_ui;
 
         // gesture state (logical points)
         bool dragging{ false }, rotating{ false };
@@ -267,6 +429,11 @@ namespace winrt::LookoutMarine::implementation
         double pick_x{ 0 }, pick_y{ 0 }; // the mark, logical points
         lk_readout pick_pose{};          // the camera pose the report describes
         bool pick_pose_valid{ false };
+        // A tap parked one double-tap interval, so the first release of a
+        // double-tap never flashes the pick report before the zoom.
+        Microsoft::UI::Xaml::DispatcherTimer tap_timer{ nullptr };
+        double tap_x{ 0 };
+        double tap_y{ 0 };
         // The tallest the card has stood for this pick; it never shrinks
         // below this (capped by the placement room), so the controls and the
         // chart under the pointer never move as the selection changes.

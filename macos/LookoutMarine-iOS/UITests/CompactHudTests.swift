@@ -12,7 +12,7 @@
 import XCTest
 
 final class CompactHudTests: XCTestCase {
-    private let bands = ["Overview", "General", "Coastal", "Approach", "Harbour", "Berthing"]
+    private let bands = ["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"]
 
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()

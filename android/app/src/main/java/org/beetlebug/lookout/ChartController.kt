@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.io.File
 
 /** One feature under the cursor: S-57 object class, its acronym, source cell. */
 data class PickFeature(val cls: String, val s57: String, val chart: String)
@@ -59,6 +60,14 @@ data class Readouts(
     val overscale: Double = 1.0,
     val scaleDenominator: Double = 0.0,
     val building: Boolean = false,
+    /** 0 off, 1 following own ship, 2 armed and waiting for a fix. Polled,
+     *  never remembered from a tap: the engine drops follow on a pan. */
+    val followState: Int = 0,
+    val courseUp: Boolean = false,
+    /** A [Lookout] FIX_* state. The ship numbers mean nothing off FIX_LIVE. */
+    val fixState: Int = Lookout.FIX_NONE,
+    val shipLon: Double = 0.0,
+    val shipLat: Double = 0.0,
 )
 
 /**
@@ -112,6 +121,19 @@ class ChartController(private val appContext: Context) {
     }
 
     /**
+     * Apply one scalar field and persist it, so an alarm range raised at the
+     * helm survives the next launch and the next library switch. Lists have
+     * [setPluginList]; this is their twin for toggles and numbers.
+     */
+    fun setPluginScalar(pluginId: String, field: PluginField, value: Double) {
+        PluginPrefs.saveScalar(appContext, pluginId, field.key, value)
+        val body = org.json.JSONObject()
+            .put(field.key, if (field.kind == PluginField.Kind.TOGGLE) value != 0.0 else value)
+            .toString()
+        setPluginConfig(pluginId, body)
+    }
+
+    /**
      * Replace one repeating list whole and persist it — the shape the core takes
      * (see `normalizeRows` in src/plugin/host.zig): every edit sends the entire
      * array, and what comes back is what is in force after the host clamped it.
@@ -134,13 +156,37 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD only: [lastPluginsJson] is its own.
      */
     private var lastPluginsJson: String? = null
+    private var pluginsJsonWasNull = false
 
     private fun republish(l: Lookout) {
         val json = l.pluginsJson()
-        if (json != null && json == lastPluginsJson) return
+        if (json == null) {
+            // A null read is the plugin layer mid-restart, not an empty
+            // registry. Publishing it would empty Vessels, Alarms and
+            // Connections until the next good read; keep the last one and
+            // say so once each way.
+            if (!pluginsJsonWasNull) Log.w(TAG, "plugins registry unreadable; keeping the last one")
+            pluginsJsonWasNull = true
+            return
+        }
+        if (pluginsJsonWasNull) {
+            Log.w(TAG, "plugins registry is back")
+            pluginsJsonWasNull = false
+        }
+        if (json == lastPluginsJson) return
         lastPluginsJson = json
         val reg = PluginRegistry.parse(json)
-        main.post { pluginRegistry = reg }
+        // The declared tables ride the same refresh: they follow the loaded
+        // set, so a plugin that unloads takes its table with it.
+        val specs = parseTableSpecs(l.pluginTables())
+        main.post {
+            pluginRegistry = reg
+            tableSpecs = specs
+            if (openTable?.let { o -> specs.none { it.id == o.id } } == true) {
+                openTable = null
+                tableBatch = null
+            }
+        }
     }
 
     // ---- live plugin status -------------------------------------------------
@@ -177,12 +223,21 @@ class ChartController(private val appContext: Context) {
     @Volatile private var engine: Handler? = null
 
     /** Run [block] on the render thread, or drop it if there is no engine. */
+    /** Set by the engine: wakes its idled frame loop after a mutation lands.
+     * A spurious wake — a read posted through here — costs one needsRedraw
+     * check. */
+    var onMutated: (() -> Unit)? = null
+
     private fun onEngine(block: (Lookout) -> Unit) {
         val h = engine ?: return
-        h.post { lk?.let(block) }
+        h.post {
+            lk?.let(block)
+            onMutated?.invoke()
+        }
     }
     private val readoutBuf = DoubleArray(Lookout.READOUTS_LEN)
     private val geoBuf = DoubleArray(2)
+    private val shipBuf = DoubleArray(2)
 
     // The pinned bubble is re-read every frame, so its two crossings reuse
     // their buffers rather than allocating on the frame loop. Both are touched
@@ -201,6 +256,18 @@ class ChartController(private val appContext: Context) {
      */
     var rendering by mutableStateOf(false)
         private set
+
+    /** The startup loader's steps, the reference's LoadPhase: the one-time
+     *  symbol atlas bake, the open (one chart open per cell), then the first
+     *  scene build. */
+    enum class LoadPhase { SYMBOLS, MAPPING, TESSELLATING }
+    var loadPhase by mutableStateOf(LoadPhase.MAPPING)
+        private set
+
+    /** Called around the open on the render thread; the loader recomposes. */
+    fun noteOpenPhase(p: LoadPhase) {
+        main.post { loadPhase = p }
+    }
 
     /** Result of the last tap-to-identify; empty hides the report. */
     var identify by mutableStateOf<List<PickFeature>>(emptyList())
@@ -301,10 +368,20 @@ class ChartController(private val appContext: Context) {
             if (!l.rasterAdd(p)) Log.w(TAG, "raster chart will not open: $p")
             else if (!rasterCharts.isEnabled(p)) l.rasterSetEnabled(p, false)
         }
+        restoreRasterShown(l)
+        if (rasterCharts.chartHidden) l.setChartHidden(true)
         pushRaster(l)
         loadPlugins(l)
+        // The core reads its chart-link list at open and resolves the selected
+        // one as soon as this installs the fetcher, so nothing is replayed
+        // here — only the mariner's old SharedPreferences list, once.
+        migrateChartLinks(l)
+        linkFetch.start(l) { onMutated?.invoke() }
         val loaded = date
-        main.post { mariner.loadFrom(v, loaded) }
+        main.post {
+            mariner.loadFrom(v, loaded)
+            drainOpenFiles()
+        }
     }
 
     /**
@@ -318,15 +395,24 @@ class ChartController(private val appContext: Context) {
      */
     private fun loadPlugins(l: Lookout) {
         val dir = pluginDir ?: return
+        // Android's files dir has no path in the environment, so the core
+        // cannot resolve an install root itself. Before the layer comes up.
+        l.pluginsInstallRoot(File(appContext.filesDir, "plugins").absolutePath)
         if (!l.pluginsLoad(dir)) {
             Log.w(TAG, "plugins: none loaded from $dir (no host in this build?)")
             return
         }
+        // Then the set the mariner installed: bundled first, installed after,
+        // so on an id collision the application's copy wins (the documented
+        // precedence every shell follows).
+        l.pluginsLoadInstalled()
         // What actually came up, by id — the answer to "did the module load"
         // that a screenshot cannot give.
         val json = l.pluginsJson()
         Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
-        val restored = restoreLists(l, PluginRegistry.parse(json))
+        val loadedReg = PluginRegistry.parse(json)
+        val restored = restoreLists(l, loadedReg)
+        restoreScalars(l, loadedReg)
         // The developer override, and only where the mariner has said nothing:
         // a list they have edited is the truth, empty or not.
         nmeaAddress?.let { addr ->
@@ -371,6 +457,33 @@ class ChartController(private val appContext: Context) {
             }
         }
         return done
+    }
+
+    /**
+     * Push the mariner's saved toggles and numbers back into the plugins that
+     * just came up, one composed body per plugin. Runs on every open for the
+     * same reason [restoreLists] does: a new engine handle starts from the
+     * manifests' defaults. The live schema decides each field's JSON shape —
+     * a toggle must arrive as a bool — and a key the schema no longer declares
+     * is dropped by the core on the way in.
+     */
+    private fun restoreScalars(l: Lookout, reg: PluginRegistry) {
+        val saved = PluginPrefs.savedScalars(appContext)
+        if (saved.isEmpty()) return
+        for (p in reg.plugins) {
+            val body = org.json.JSONObject()
+            for (f in p.fields) {
+                val v = saved["${p.id}/${f.key}"] ?: continue
+                when (f.kind) {
+                    PluginField.Kind.TOGGLE -> body.put(f.key, v != 0.0)
+                    PluginField.Kind.NUMBER -> body.put(f.key, v)
+                    else -> {}
+                }
+            }
+            if (body.length() == 0) continue
+            val ok = l.pluginConfigSet(p.id, body.toString())
+            Log.i(TAG, "plugins: ${p.id} scalars restored ${if (ok) "ok" else "REFUSED"}")
+        }
     }
 
     /**
@@ -446,8 +559,23 @@ class ChartController(private val appContext: Context) {
             republish(l)
             publishAlerts(l)
             pushRaster(l)
+            // This controller's own fetcher, and its own snapshot poll: the
+            // old controller's was stopped in onReplaced, and the credit the
+            // recreation dropped comes back with the next snapshot.
+            linkFetch.start(l) { onMutated?.invoke() }
             main.post { mariner.loadFrom(v, date) }
         }
+    }
+
+    /**
+     * Another controller is taking over the engine because the Activity was
+     * rebuilt over a running process. Only the tile service needs stopping;
+     * everything else here is released when this object is dropped.
+     *
+     * RENDER THREAD.
+     */
+    fun onReplaced() {
+        linkFetch.stop()
     }
 
     /**
@@ -471,16 +599,31 @@ class ChartController(private val appContext: Context) {
     fun detach(l: Lookout?) {
         if (l != null && lk !== l) return
         saveView() // last known pose; the handle is about to close
+        // Before the handle closes: a fetch landing later must find the
+        // provider gone, not a dying engine.
+        linkFetch.stop()
         engine = null
         lk = null
-        rendering = false
-        identify = emptyList()
-        // The chart is going away with the plugins that raised the alarms, so
-        // nothing is left to acknowledge and nothing may go on sounding.
-        alerts = emptyList()
-        siren.setSounding(false)
-        // And nothing left to hold the process up for.
-        stopService()
+        // Everything below is the MAIN thread's: Compose state, the siren
+        // (whose strike runnable lives on the main handler and whose flag is
+        // not volatile), and the service. Called here from the render thread
+        // inside closeOn, so it hops — the race let one more strike sound
+        // after the engine and its alarm were gone.
+        main.post {
+            rendering = false
+            identify = emptyList()
+            // The chart is going away with the plugins that raised the
+            // alarms, so nothing is left to acknowledge and nothing may go
+            // on sounding.
+            alerts = emptyList()
+            siren.setSounding(false)
+            // The plugins' declared tables went with them.
+            tableSpecs = emptyList()
+            openTable = null
+            tableBatch = null
+            // And nothing left to hold the process up for.
+            stopService()
+        }
     }
 
     /** Persist the last sampled pose. No native call — [lastPushed] has it. */
@@ -509,6 +652,7 @@ class ChartController(private val appContext: Context) {
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
+        val fix = l.ownShip(shipBuf)
         val r = Readouts(
             lon = readoutBuf[Lookout.R_LON],
             lat = readoutBuf[Lookout.R_LAT],
@@ -517,6 +661,13 @@ class ChartController(private val appContext: Context) {
             overscale = readoutBuf[Lookout.R_OVERSCALE],
             scaleDenominator = readoutBuf[Lookout.R_SCALE_DENOM],
             building = readoutBuf[Lookout.R_BUILDING] != 0.0,
+            followState = l.followActive(),
+            courseUp = l.courseUpActive(),
+            fixState = fix,
+            // Published only when live — the readout never falls back to the
+            // map centre or a dead-reckoned number.
+            shipLon = if (fix == Lookout.FIX_LIVE) shipBuf[0] else 0.0,
+            shipLat = if (fix == Lookout.FIX_LIVE) shipBuf[1] else 0.0,
         )
         // The chart moved under an open report, so retire the report. This
         // covers every move, including the pan and the fling, which run on
@@ -526,13 +677,22 @@ class ChartController(private val appContext: Context) {
                 r.zoom != pose.zoom || r.rotationDeg != pose.rotationDeg
             ) {
                 pickPose = null
-                main.post { dismissIdentify() }
+                main.post {
+                    dismissIdentify()
+                    // A camera move retires the chart menu with the report:
+                    // both describe a point the chart has slid out from under.
+                    chartMenu = null
+                }
             }
         }
         // The pill appears and goes as the mariner sails in and out of the
         // coverage, so this is read on the frame, not only when something is
         // pressed. Cheap: a handful of calls over a handful of sets.
         pushRaster(l)
+        // The chart-link list, the credit and the error, from the core. A
+        // landing answer raises needs-redraw, so a resolve keeps this ticking
+        // until it is done.
+        pollChartLinks(l)
         if (r == lastPushed) return
         lastPushed = r
         main.post {
@@ -589,6 +749,10 @@ class ChartController(private val appContext: Context) {
     /** Whether the process is currently being held up. RENDER THREAD. */
     private var serviceOn = false
     private var lastLiveMs = 0L
+    /** When a refused foreground start may be tried again. The platform
+     *  refuses from the background (API 31+); one attempt per backoff keeps
+     *  the log quiet, and a foreground return heals it on the next tick. */
+    private var serviceRetryAtMs = 0L
 
     /**
      * Start or stop the service from what the connections say. Live means the
@@ -608,8 +772,16 @@ class ChartController(private val appContext: Context) {
         if (c.live) lastLiveMs = now
         val want = c.live || (serviceOn && now - lastLiveMs < SERVICE_LINGER_MS)
         if (want == serviceOn) return
-        serviceOn = want
-        if (want) ChartService.start(appContext) else ChartService.stop(appContext)
+        if (want) {
+            if (now < serviceRetryAtMs) return
+            // Only believe the service is up when the platform took the start;
+            // a refused start is retried, not recorded as running.
+            serviceOn = ChartService.start(appContext)
+            if (!serviceOn) serviceRetryAtMs = now + SERVICE_RETRY_MS
+        } else {
+            serviceOn = false
+            ChartService.stop(appContext)
+        }
     }
 
     /** The engine is going, so nothing is left to hold the process up for. */
@@ -702,6 +874,272 @@ class ChartController(private val appContext: Context) {
         publishAlerts(l)
     }
 
+    // ---- plugin tables ------------------------------------------------------
+    //
+    // A plugin declares a table in its manifest: a key, a title, typed
+    // columns. The core hands the declaration and the rows over as JSON, and
+    // the shell knows nothing about what any plugin does. PluginTable.kt
+    // formats and draws; this owns which table is open, the sort the mariner
+    // chose, and the seq-gated poll.
+
+    data class TableColumn(val key: String, val label: String, val type: String) {
+        /** True when the column holds a number, which is what gets right
+         *  aligned and what the mariner scans down a column of. */
+        val numeric: Boolean get() = type != "text" && type != "flag"
+    }
+
+    /** One table a plugin declares. */
+    data class TableSpec(
+        val plugin: String,
+        val key: String,
+        val title: String,
+        val menu: String,
+        val columns: List<TableColumn>,
+        val sortKey: String,
+        val sortAscending: Boolean,
+        /** True when the declaration's `at` named a position, so a row can be
+         *  found on the chart. */
+        val locatable: Boolean,
+    ) {
+        val id: String get() = "$plugin/$key"
+    }
+
+    data class TableRow(
+        val id: String,
+        val band: Int,
+        val lon: Double?,
+        val lat: Double?,
+        val cells: List<Any?>,
+    )
+
+    data class TableBatch(val seq: Int, val rows: List<TableRow>)
+
+    /** Every table the loaded plugins declare, in declaration order. The
+     *  Vessels pane lists them, so a plugin that unloads takes its row too. */
+    var tableSpecs by mutableStateOf<List<TableSpec>>(emptyList())
+        private set
+
+    /** The declared table on screen, or null. */
+    var openTable by mutableStateOf<TableSpec?>(null)
+        private set
+    var tableBatch by mutableStateOf<TableBatch?>(null)
+        private set
+    var tableSortKey by mutableStateOf("")
+        private set
+    var tableSortAscending by mutableStateOf(true)
+        private set
+
+    /** The last batch the core reported. Rows are rebuilt only when it moves,
+     *  so a table nobody is feeding does not churn once a second. */
+    @Volatile private var tableSeq = -1
+
+    fun showTable(spec: TableSpec) {
+        openTable = spec
+        tableBatch = null
+        tableSortKey = spec.sortKey
+        tableSortAscending = spec.sortAscending
+        tableSeq = -1
+        // The plugin is told before the first read: it builds no rows until
+        // somebody is looking, so the first read would otherwise find none.
+        onEngine { l ->
+            l.pluginTableOpen(spec.plugin, spec.key, true)
+            refreshTableRows(l, force = true)
+        }
+    }
+
+    fun dismissTable() {
+        val spec = openTable ?: return
+        openTable = null
+        tableBatch = null
+        onEngine { l -> l.pluginTableOpen(spec.plugin, spec.key, false) }
+    }
+
+    /** A header tap: same column flips the way, a new column starts
+     *  ascending. The core sorts WITHIN each band; this only says which
+     *  column and which way. */
+    fun setTableSort(key: String) {
+        tableSortAscending = if (key == tableSortKey) !tableSortAscending else true
+        tableSortKey = key
+        onEngine { l -> refreshTableRows(l, force = true) }
+    }
+
+    /** The dialog's once-a-second read. Skipped when the batch has not moved. */
+    fun pollTable() = onEngine { l -> refreshTableRows(l, force = false) }
+
+    private fun refreshTableRows(l: Lookout, force: Boolean) {
+        val spec = openTable ?: return
+        val json = l.pluginTableRows(spec.plugin, spec.key, tableSortKey, tableSortAscending)
+        if (json == null) {
+            // The plugin has gone, and the table with it. Better an empty
+            // dialog than a picture nobody is keeping up to date.
+            tableSeq = -1
+            main.post { if (openTable?.id == spec.id) tableBatch = TableBatch(0, emptyList()) }
+            return
+        }
+        val batch = parseTableRows(json, spec.columns.size) ?: return
+        if (!force && batch.seq == tableSeq) return
+        tableSeq = batch.seq
+        main.post { if (openTable?.id == spec.id) tableBatch = batch }
+    }
+
+    /** Centre the chart on a table row and shut the dialog over it. Follow is
+     *  switched off first: a chart that slides back to own ship a moment
+     *  later has not shown the mariner the target they asked for. */
+    fun revealOnChart(lon: Double, lat: Double) {
+        dismissTable()
+        onEngine { l ->
+            if (l.followActive() != 0) l.followSet(false)
+            val r = lastPushed
+            l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
+        }
+    }
+
+    // ---- chart links (an online map AS the chart) ----------------------------
+    //
+    // One chart added by link: a MapLibre style url. Picking it renders that
+    // style INSTEAD of the built-in chart — Lookout's own chart is just the
+    // default entry in the same list.
+    //
+    // THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON sources,
+    // generates a wrapper style for bare tiles, fetches the sprite packs,
+    // builds the credit line, templates the tile urls and persists the list.
+    // This shell renders the snapshot and fetches urls (ChartLinkFetch.kt).
+
+    data class ChartLink(val url: String, val name: String)
+
+    var chartLinks by mutableStateOf<List<ChartLink>>(emptyList())
+        private set
+    /** The picked link's url; null draws the built-in chart. */
+    var activeChartLink by mutableStateOf<String?>(null)
+        private set
+    var chartLinkBusy by mutableStateOf(false)
+        private set
+    var chartLinkError by mutableStateOf<String?>(null)
+
+    /** The active chart link's source credits, shown by the scale bar while
+     *  the link draws (tile usage policies make the credit a condition of
+     *  service). Null when the Lookout chart is up. */
+    var chartLinkAttribution by mutableStateOf<String?>(null)
+        private set
+
+    private val linkFetch = ChartLinkFetch()
+    private val linkPrefs = appContext.getSharedPreferences("chartlinks.v1", Context.MODE_PRIVATE)
+
+    /**
+     * Whether a chart link was the drawn chart last time. One boolean, not a
+     * second store: the engine chooses between opening link-first and opening
+     * the cell library BEFORE a handle exists, and the list itself is the
+     * core's. Rewritten from every snapshot.
+     */
+    val linkFirstHint: Boolean get() = linkPrefs.getBoolean(LINK_ACTIVE_HINT, false)
+
+    /**
+     * Hand the old SharedPreferences list to the core, once, and then drop it.
+     *
+     * The core ignores the import when it already has a list of its own, so the
+     * window between handing it over and clearing the prefs replays harmlessly
+     * if the process dies in it.
+     *
+     * RENDER THREAD, on every open; a no-op once the prefs are gone.
+     */
+    private fun migrateChartLinks(l: Lookout) {
+        val raw = linkPrefs.getString("links", null) ?: return
+        val doc = org.json.JSONObject()
+        try {
+            doc.put("links", org.json.JSONArray(raw))
+        } catch (_: Exception) {
+            linkPrefs.edit().remove("links").remove("active").apply()
+            return
+        }
+        linkPrefs.getString("active", null)?.let { doc.put("active", it) }
+        Log.i(TAG, "chart links: handing ${raw.length} B of the old store to the core")
+        l.chartLinksImport(doc.toString())
+        linkPrefs.edit().remove("links").remove("active").apply()
+    }
+
+    /**
+     * Take the core's snapshot, if it changed. RENDER THREAD, off the readout
+     * tick: the changed flag has one consumer.
+     */
+    private fun pollChartLinks(l: Lookout) {
+        if (!l.chartLinksChanged()) return
+        val json = l.chartLinksJson() ?: return
+        val links = ArrayList<ChartLink>()
+        var active: String? = null
+        var credit: String? = null
+        var err: String? = null
+        var busy = false
+        try {
+            val top = org.json.JSONObject(json)
+            val arr = top.optJSONArray("links")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val url = o.optString("url")
+                    if (url.isEmpty()) continue
+                    links.add(ChartLink(url, o.optString("name")))
+                }
+            }
+            active = if (top.isNull("active")) null else top.optString("active").ifEmpty { null }
+            credit = top.optString("attribution").ifEmpty { null }
+            err = top.optString("error").ifEmpty { null }
+            busy = top.optBoolean("busy")
+        } catch (e: Exception) {
+            Log.w(TAG, "chart links snapshot: $e")
+            return
+        }
+        val hint = active != null
+        main.post {
+            chartLinks = links
+            activeChartLink = active
+            chartLinkAttribution = credit
+            chartLinkError = err
+            chartLinkBusy = busy
+            if (linkPrefs.getBoolean(LINK_ACTIVE_HINT, false) != hint) {
+                linkPrefs.edit().putBoolean(LINK_ACTIVE_HINT, hint).apply()
+            }
+        }
+    }
+
+    /**
+     * Add a chart by its style link. The core reads it once and refuses a dead
+     * or non-style link, which surfaces as [chartLinkError]. The new chart is
+     * picked immediately: adding it is the request to sail on it.
+     */
+    fun addChartLink(raw: String) {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return
+        chartLinkError = null
+        chartLinkBusy = true
+        onEngine { l -> l.chartLinkAdd(trimmed) }
+    }
+
+    fun selectChartLink(url: String?) {
+        // Selecting the link that is already drawn is a no-op: the settings row
+        // fires on every tap, and re-selecting would re-resolve the style and
+        // every sprite pack for nothing. A selection whose last resolve failed
+        // does retry.
+        if (url != null && url == activeChartLink && chartLinkError == null) return
+        chartLinkError = null
+        if (url != null) chartLinkBusy = true
+        onEngine { l -> l.chartLinkSelect(url) }
+    }
+
+    fun removeChartLink(url: String) {
+        onEngine { l -> l.chartLinkRemove(url) }
+    }
+
+    /**
+     * Read a linked chart again — its tile urls, zooms, sprites and credit. A
+     * link that does not answer leaves the chart as it was: a lost connection
+     * must not cost the mariner the chart they are sailing on.
+     */
+    fun refreshChartLink(url: String) {
+        chartLinkError = null
+        chartLinkBusy = true
+        onEngine { l -> l.chartLinkRefresh(url) }
+    }
+
     // ---- raster charts -----------------------------------------------------
 
     @Volatile private var lastRaster: RasterState? = null
@@ -710,12 +1148,49 @@ class ChartController(private val appContext: Context) {
      * Read the pill's state off the engine. RENDER THREAD ONLY, like the
      * readouts: these are native calls, and the api lock is held for a frame.
      */
+    /**
+     * Put the mariner's per-set choice back after an open, TWO passes — hide
+     * first, then show — or the election (showing a set turns off same-water
+     * rivals) loses the pick. Then the no-survey override: with no ENC aboard
+     * "hidden" no longer means what it meant, and obeying it leaves a blank
+     * sea, so the first covering set draws anyway. The SAVED choice is not
+     * rewritten (the reference's restoreRasterShown, move for move).
+     */
+    private fun restoreRasterShown(l: Lookout) {
+        val hidden = rasterCharts.hidden
+        if (hidden.isNotEmpty()) {
+            val n = l.rasterSetCount()
+            for (i in 0 until n) if (l.rasterSetName(i) in hidden) l.rasterSetShown(i, false)
+            for (i in 0 until n) if (l.rasterSetName(i) !in hidden) l.rasterSetShown(i, true)
+        }
+        if (l.chartsCount() == 0) {
+            val n = l.rasterSetCount()
+            var shownInView = false
+            for (i in 0 until n) {
+                if (l.rasterSetInView(i) && l.rasterShown(i)) shownInView = true
+            }
+            if (!shownInView) {
+                for (i in 0 until n) {
+                    if (l.rasterSetInView(i)) {
+                        Log.i(TAG, "no survey aboard; drawing ${l.rasterSetName(i)} over the blank sea")
+                        l.rasterSetShown(i, true)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
     private fun pushRaster(l: Lookout) {
         val n = l.rasterSetCount()
         val sets = ArrayList<RasterSet>(n)
         for (i in 0 until n) {
-            sets.add(RasterSet(i, l.rasterSetName(i), l.rasterSetInView(i)))
+            sets.add(RasterSet(i, l.rasterSetName(i), l.rasterSetInView(i), l.rasterShown(i)))
         }
+        // Read back from the engine and remembered, never tracked here: the
+        // engine owns the election.
+        rasterCharts.noteShown(sets.map { it.name to it.shown })
+        rasterCharts.setChartHidden(l.chartHidden())
         val s = RasterState(
             name = l.rasterActiveName(),
             available = l.rasterAvailableName(),
@@ -739,10 +1214,14 @@ class ChartController(private val appContext: Context) {
             var opened = 0
             for (p in added) if (l.rasterAdd(p)) opened++
             if (opened > 0) {
-                val name = RasterCharts.providerLabel(added.last())
+                // The newest covering set is the one the mariner just added
+                // while looking at this water. By INDEX from the top — the
+                // engine appends sets in add order — not by re-deriving the
+                // engine's name from the path: the two label tables disagreed
+                // and the pick silently missed.
                 val n = l.rasterSetCount()
-                for (i in 0 until n) {
-                    if (l.rasterSetName(i) == name && l.rasterSetInView(i)) {
+                for (i in n - 1 downTo 0) {
+                    if (l.rasterSetInView(i)) {
                         l.rasterSelect(i)
                         break
                     }
@@ -842,6 +1321,242 @@ class ChartController(private val appContext: Context) {
     }
 
     fun resetRotation() = onEngine { it.resetRotation() }
+
+    // ---- the chart menu and markers -----------------------------------------
+
+    /** The long-press chart menu: what stands where it was raised. */
+    data class ChartMenu(
+        val at: Offset,
+        val lon: Double,
+        val lat: Double,
+        /** 0 over open water; else the mark under the finger. */
+        val markerId: Long = 0,
+        val markerName: String = "",
+    )
+
+    var chartMenu by mutableStateOf<ChartMenu?>(null)
+        private set
+
+    /** The mark being renamed, holding the menu's place data. */
+    var renamingMarker by mutableStateOf<ChartMenu?>(null)
+        private set
+
+    /**
+     * Raise the chart menu. Over a mark it renames and removes; over water it
+     * drops. The mark is core-owned and chart-independent — the shell stores
+     * nothing and draws nothing.
+     */
+    fun showChartMenu(xPts: Float, yPts: Float) = onEngine { l ->
+        l.screenToGeo(xPts, yPts, geoBuf)
+        val id = l.markerAt(xPts, yPts)
+        val name = if (id != 0L) l.markerName(id).orEmpty() else ""
+        val menu = ChartMenu(Offset(xPts, yPts), geoBuf[0], geoBuf[1], id, name)
+        main.post { chartMenu = menu }
+    }
+
+    fun dismissChartMenu() {
+        chartMenu = null
+    }
+
+    /** A file the chart carries (TXTDSC text, PICREP picture), fetched. */
+    class AuxFile(val name: String, val bytes: ByteArray, val mime: String)
+
+    var auxFile by mutableStateOf<AuxFile?>(null)
+        private set
+
+    fun openAuxFile(cell: String, name: String) = onEngine { l ->
+        val mime = arrayOfNulls<String>(1)
+        val bytes = l.auxFile(cell, name, mime)
+        if (bytes == null) {
+            Log.w(TAG, "aux file not carried: $cell/$name")
+            return@onEngine
+        }
+        val out = AuxFile(name, bytes, mime[0] ?: "")
+        main.post { auxFile = out }
+    }
+
+    fun dismissAuxFile() {
+        auxFile = null
+    }
+
+    // ---- plugin install ------------------------------------------------------
+    //
+    // NOTHING IS INSTALLED BEFORE ITS PERMISSIONS ARE SHOWN. The sentences
+    // come from the core, so every shell shows the same words.
+
+    /** What the consent sheet shows for a .lkplug the mariner picked. */
+    data class PluginPackage(
+        val path: String,
+        val id: String,
+        val name: String,
+        val version: String,
+        val sentences: List<String>,
+        val installedVersion: String?,
+        val installedOrigin: String?,
+        val adds: List<String>,
+        val drops: List<String>,
+        val downgrade: Boolean,
+    )
+
+    var pluginConsent by mutableStateOf<PluginPackage?>(null)
+        private set
+
+    /** One sentence from the core, ready to show. */
+    var installError by mutableStateOf<String?>(null)
+
+    /**
+     * A file another app opened into us, by NAME: a .lkplug is a plugin
+     * package and goes to the consent sheet; anything else is offered to the
+     * plugins, which take what they already claim (a GPX to a route plugin).
+     *
+     * A file that arrives BEFORE the engine is up — the usual case, since an
+     * opened file often launches the app — is parked and routed again the
+     * moment the open finishes.
+     */
+    fun openFile(path: String) {
+        if (engine == null) {
+            synchronized(pendingOpenFiles) { pendingOpenFiles.add(path) }
+            return
+        }
+        if (path.endsWith(".lkplug", ignoreCase = true)) {
+            beginPluginInstall(path)
+            return
+        }
+        onEngine { l ->
+            when (l.openFile(path)) {
+                1 -> Log.i(TAG, "opened file taken by a plugin: $path")
+                -1 -> Log.w(TAG, "opened file claimed but not taken: $path")
+                else -> Log.i(TAG, "opened file claimed by nothing: $path")
+            }
+        }
+    }
+
+    private val pendingOpenFiles = mutableListOf<String>()
+
+    /** Route what arrived while there was no engine. Main thread, post-attach. */
+    private fun drainOpenFiles() {
+        val parked = synchronized(pendingOpenFiles) {
+            val copy = pendingOpenFiles.toList()
+            pendingOpenFiles.clear()
+            copy
+        }
+        for (p in parked) openFile(p)
+    }
+
+    fun beginPluginInstall(path: String) = onEngine { l ->
+        val json = l.pluginInspect(path)
+        if (json == null) {
+            main.post { installError = "The plugin layer could not start." }
+            return@onEngine
+        }
+        try {
+            val o = org.json.JSONObject(json)
+            val err = o.optString("error")
+            if (err.isNotEmpty()) {
+                main.post { installError = err }
+                return@onEngine
+            }
+            fun arr(a: org.json.JSONArray?): List<String> =
+                if (a == null) emptyList() else List(a.length()) { a.optString(it) }
+            val inst = o.optJSONObject("installed")
+            val pkg = PluginPackage(
+                path = path,
+                id = o.optString("id"),
+                name = o.optString("name"),
+                version = o.optString("version"),
+                sentences = arr(o.optJSONArray("sentences")),
+                installedVersion = inst?.optString("version"),
+                installedOrigin = inst?.optString("origin"),
+                adds = arr(inst?.optJSONArray("adds")),
+                drops = arr(inst?.optJSONArray("drops")),
+                downgrade = inst?.optBoolean("downgrade") ?: false,
+            )
+            main.post { pluginConsent = pkg }
+        } catch (e: Exception) {
+            main.post { installError = "That file is not a plugin package." }
+        }
+    }
+
+    /** The Install button; nothing touched disk before this. */
+    fun confirmPluginInstall() {
+        val pkg = pluginConsent ?: return
+        pluginConsent = null
+        onEngine { l ->
+            val msg = l.pluginInstall(pkg.path)
+            if (msg != null) main.post { installError = msg }
+            republish(l)
+        }
+    }
+
+    fun cancelPluginInstall() {
+        pluginConsent = null
+    }
+
+    fun dismissInstallError() {
+        installError = null
+    }
+
+    fun uninstallPlugin(id: String) = onEngine { l ->
+        if (!l.pluginUninstall(id)) Log.w(TAG, "uninstall refused: $id")
+        republish(l)
+    }
+
+    /** A live grant flip; the registry re-read carries the new truth. */
+    fun setPluginGrant(id: String, cap: String, on: Boolean) = onEngine { l ->
+        if (!l.pluginGrantSet(id, cap, on)) Log.w(TAG, "grant flip refused: $id/$cap")
+        republish(l)
+    }
+
+    fun menuPick() {
+        val m = chartMenu ?: return
+        chartMenu = null
+        identifyAt(m.at.x, m.at.y)
+    }
+
+    /** THE DROP NEVER WAITS FOR TYPING: the core places and names the mark. */
+    fun dropMarker() {
+        val m = chartMenu ?: return
+        chartMenu = null
+        onEngine { l ->
+            if (l.markerAdd(m.lon, m.lat) == 0L) Log.w(TAG, "marker refused")
+        }
+    }
+
+    fun removeMarker() {
+        val m = chartMenu ?: return
+        chartMenu = null
+        onEngine { l -> l.markerRemove(m.markerId) }
+    }
+
+    fun beginRenameMarker() {
+        renamingMarker = chartMenu
+        chartMenu = null
+    }
+
+    /** Empty keeps the old name — the core decides, so shells agree. */
+    fun commitRenameMarker(name: String) {
+        val m = renamingMarker ?: return
+        renamingMarker = null
+        onEngine { l -> l.markerRename(m.markerId, name) }
+    }
+
+    fun cancelRenameMarker() {
+        renamingMarker = null
+    }
+
+    /**
+     * The compass tap walks the orientation ladder, exactly the reference's
+     * `cycleOrientation`: off → follow; following north-up → course-up; else
+     * back to north-up, still locked. The STATE is never remembered here — the
+     * engine drops follow on a pan, and the readouts poll it back.
+     */
+    fun cycleOrientation() = onEngine { l ->
+        when {
+            l.followActive() == 0 -> l.followSet(true)
+            !l.courseUpActive() -> l.courseUpSet(true)
+            else -> l.resetRotation()
+        }
+    }
 
     fun memoryWarning() = onEngine { it.memoryWarning() }
 
@@ -965,6 +1680,9 @@ class ChartController(private val appContext: Context) {
     private companion object {
         const val TAG = "lookout"
 
+        /** See linkFirstHint. */
+        const val LINK_ACTIVE_HINT = "active_hint"
+
         /** ~10 Hz: fast enough to feel live, slow enough not to drive layout. */
         const val PUSH_INTERVAL_NS = 100_000_000L
 
@@ -1006,6 +1724,8 @@ class ChartController(private val appContext: Context) {
          * go within the minute.
          */
         const val SERVICE_LINGER_MS = 45_000L
+        /** Backoff after the platform refuses a foreground start. */
+        const val SERVICE_RETRY_MS = 30_000L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
         const val SAVE_INTERVAL_NS = 3_000_000_000L

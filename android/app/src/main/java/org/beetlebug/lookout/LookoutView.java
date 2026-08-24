@@ -90,6 +90,8 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
         h.post(() -> {
             Lookout l = engine.getLookout();
             if (l != null) t.run(l);
+            // The frame loop may have stood down; a gesture is a frame.
+            engine.kick();
         });
     }
 
@@ -131,13 +133,13 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 return true;
             }
 
-            /** Through the controller, not the handle: a scheme change has to
-             *  land in the settings state and be SAVED, or a scheme picked by
-             *  long-press is lost on relaunch while the same scheme picked in
-             *  the sheet survives. */
+            /** The chart menu, as the reference's right-click raises it: the
+             *  place's coordinates, the pick, and the marker verbs. The scheme
+             *  cycle this gesture used to spend itself on lives in Settings ›
+             *  Display, where the pick persists either way. */
             @Override
             public void onLongPress(MotionEvent e) {
-                controller.cycleScheme();
+                controller.showChartMenu(e.getX() / density, e.getY() / density);
             }
 
             @Override
@@ -183,8 +185,16 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
     private static final float MIN_TWIST_SPAN_DP = 96f;
     // Engaged, a held-still pinch should not creep.
     private static final float TWIST_DEADBAND_DEG = 0.25f;
+    // Once the gesture is clearly a ZOOM — the finger span has changed by
+    // this ratio either way — rotation stays out for the rest of it. A long
+    // pinch drifts a degree here and a degree there, and the accumulated
+    // drift used to cross the engage angle mid-zoom: the chart turned when
+    // nobody asked. A deliberate twist reaches the engage angle long before
+    // its span changes this much.
+    private static final float TWIST_ZOOM_LOCKOUT_RATIO = 1.25f;
     private boolean rotating;
-    private float twistPrevDeg, twistAccumDeg;
+    private boolean twistLocked;
+    private float twistPrevDeg, twistAccumDeg, twistDownSpan;
 
     /** Angle of the vector between the first two pointers, in degrees. */
     private static float twistAngle(MotionEvent e) {
@@ -245,6 +255,11 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
     public boolean onTouchEvent(MotionEvent e) {
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                // The pan stream is consumed BY the frame loop (the resampler
+                // hook), so the loop must run for the whole touch. Without
+                // this it stood down during the slop's quiet frames and the
+                // entire drag applied at the lift.
+                engine.setGestureActive(true);
                 breakTrack();
                 dragging = false;
                 downX = e.getX();
@@ -258,6 +273,8 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                     twoMidY = (e.getY(0) + e.getY(1)) * 0.5f;
                     twistPrevDeg = twistAngle(e);
                     twistAccumDeg = 0;
+                    twistDownSpan = (float) Math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0));
+                    twistLocked = false;
                     rotating = false;
                 } else {
                     twoTap = false; // third finger: not a two-finger tap
@@ -265,7 +282,14 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 breakTrack(); // the focus moves to the mean of one more finger
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (dragging) {
+                // With TWO fingers down the pan stands aside, as the
+                // reference shell's pinch cancels its pan: the zoom's own
+                // anchor keeps the chart under the fingers, and feeding the
+                // focus drift to the pan AS WELL fights that correction
+                // frame by frame — the chart visibly shakes while zooming.
+                if (e.getPointerCount() >= 2) {
+                    // nothing recorded: applyPan sees no track and sits out
+                } else if (dragging) {
                     recordTouch(e);
                 } else if (Math.hypot(e.getX() - downX, e.getY() - downY) > touchSlop) {
                     // Past the slop: start the track HERE, so the pan doesn't
@@ -281,6 +305,7 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 if (e.getPointerCount() >= 2) trackTwist(e);
                 break;
             case MotionEvent.ACTION_UP:
+                engine.setGestureActive(false);
                 if (twoTap && e.getEventTime() - twoDownMs < 300) {
                     final float mx = twoMidX / density, my = twoMidY / density;
                     onEngine(l -> l.zoomAt(-1.0, mx, my));
@@ -294,6 +319,7 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 breakTrack(); // and the focus jumps back onto that finger
                 break;
             case MotionEvent.ACTION_CANCEL:
+                engine.setGestureActive(false);
                 twoTap = false;
                 rotating = false;
                 dragging = false;
@@ -323,6 +349,16 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
         if (span < MIN_TWIST_SPAN_DP * density) return;
 
         if (!rotating) {
+            if (twistLocked) return;
+            // The zoom lockout: the span moving is the pinch announcing
+            // itself, and from then on this gesture does not rotate.
+            if (twistDownSpan > 0) {
+                float ratio = span / twistDownSpan;
+                if (ratio > TWIST_ZOOM_LOCKOUT_RATIO || ratio < 1f / TWIST_ZOOM_LOCKOUT_RATIO) {
+                    twistLocked = true;
+                    return;
+                }
+            }
             twistAccumDeg += d;
             if (Math.abs(twistAccumDeg) < ROTATE_ENGAGE_DEG) return;
             rotating = true; // engaged: from here the twist tracks 1:1
@@ -343,8 +379,6 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
         if (e.getActionMasked() != MotionEvent.ACTION_SCROLL || engine.getLookout() == null) return false;
         float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
         if (v == 0) v = e.getAxisValue(MotionEvent.AXIS_SCROLL); // rotary encoders
-        android.util.Log.i("lookout", "scroll: src=0x" + Integer.toHexString(e.getSource())
-                + " v=" + v + " at (" + e.getX() + "," + e.getY() + ")");
         if (v == 0) return false;
         float x = e.getX(), y = e.getY();
         if (x <= 0 && y <= 0) { // no cursor position (rotary): zoom about center

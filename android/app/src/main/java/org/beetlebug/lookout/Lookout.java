@@ -55,6 +55,14 @@ public final class Lookout implements AutoCloseable {
         return h == 0 ? null : new Lookout(h);
     }
 
+    /**
+     * Add baked charts to the open library; answers how many opened. The
+     * heavy per-cell opens run off the engine lock, so a background thread
+     * may call this while the chart draws — how the link-first startup
+     * brings the library aboard behind an already-drawing chart link.
+     */
+    public int chartsAdd(String[] paths) { return h == 0 ? 0 : nChartsAdd(h, paths); }
+
     @Override
     public void close() {
         if (h != 0) {
@@ -161,6 +169,10 @@ public final class Lookout implements AutoCloseable {
 
     /** onTrimMemory: drop reclaimable engine caches. */
     public void memoryWarning()                   { if (h != 0) nMemoryWarning(h); }
+    /** Whether the next open skips the one-time symbol rasterize. */
+    public static boolean atlasCacheReady()       { return nAtlasCacheReady(); }
+    /** Offer an opened file to the plugins: 1 claimed, 0 none, -1 failed. */
+    public int openFile(String path)              { return h == 0 ? 0 : nOpenFile(h, path); }
 
     // ---- mariner (all S-52 display settings) -------------------------------
 
@@ -197,6 +209,7 @@ public final class Lookout implements AutoCloseable {
     private static native long nOpen(String chartPath, Surface surface,
                                      int widthPx, int heightPx,
                                      int widthPts, int heightPts, boolean msaa);
+    private static native int nChartsAdd(long h, String[] paths);
     private static native long nOpenCharts(String[] chartPaths, Surface surface,
                                            int widthPx, int heightPx,
                                            int widthPts, int heightPts, boolean msaa);
@@ -223,6 +236,8 @@ public final class Lookout implements AutoCloseable {
     private static native void nRotateDrag(long h, float x0, float y0, float x1, float y1);
     private static native void nFlingStart(long h, double vx, double vy);
     private static native void nMemoryWarning(long h);
+    private static native boolean nAtlasCacheReady();
+    private static native int nOpenFile(long h, String path);
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
@@ -389,4 +404,185 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nPluginConfigSet(long h, String id, String json);
     private static native String nPluginAlertsJson(long h);
     private static native boolean nPluginAlertAck(long h, long id);
+    // ---- follow mode and own ship ------------------------------------------
+
+    /** Fix states {@link #ownShip} answers. */
+    public static final int FIX_NONE = 0;
+    public static final int FIX_LOST = 1;
+    public static final int FIX_LIVE = 2;
+
+    /** Centre the chart on own ship and keep it there. The engine drops
+     *  follow on a pan, so poll {@link #followActive}, never remember a tap. */
+    public void followSet(boolean on)            { if (h != 0) nFollowSet(h, on); }
+    /** 0 off, 1 following, 2 armed and waiting for a fix. */
+    public int followActive()                    { return h == 0 ? 0 : nFollowActive(h); }
+    public void courseUpSet(boolean on)          { if (h != 0) nCourseUpSet(h, on); }
+    public boolean courseUpActive()              { return h != 0 && nCourseUpActive(h) != 0; }
+
+    /** The reported fix into {@code out} (length >= 2: lon, lat); answers a
+     *  FIX_* state. The numbers mean nothing unless it answers FIX_LIVE. */
+    public int ownShip(double[] out)             { return h == 0 ? FIX_NONE : nOwnShip(h, out); }
+
+    // ---- raster shown state and the ENC switch -----------------------------
+
+    /** Whether set {@code i} is drawn where it covers. The engine owns the
+     *  election; this is read back to SAVE the mariner's choice by set. */
+    public boolean rasterShown(int i)            { return h != 0 && nRasterShown(h, i); }
+    public void rasterSetShown(int i, boolean on){ if (h != 0) nRasterSetShown(h, i, on); }
+    public void setChartHidden(boolean hidden)   { if (h != 0) nSetChartHidden(h, hidden); }
+    /** How many survey cells are aboard. 0 means no ENC: a raster set saved
+     *  hidden must draw anyway, or the sea is blank. */
+    public int chartsCount()                     { return h == 0 ? 0 : nChartsCount(h); }
+
+    // ---- markers -----------------------------------------------------------
+
+    /** Drop a mark; the CORE names it ("Mark 1"), so the drop never waits for
+     *  typing. Answers the id, 0 refused. */
+    public long markerAdd(double lon, double lat){ return h == 0 ? 0 : nMarkerAdd(h, lon, lat); }
+    /** The marker's name, or null once it is gone. */
+    public String markerName(long id)            { return h == 0 ? null : nMarkerName(h, id); }
+    /** The marker within about 14 pt of a LOGICAL point, or 0. Decides the
+     *  chart menu's items: over a mark it renames and removes. */
+    public long markerAt(float xPts, float yPts) { return h == 0 ? 0 : nMarkerAt(h, xPts, yPts); }
+    /** Empty keeps the old name; the core clips at 32 characters. */
+    public boolean markerRename(long id, String name) { return h != 0 && nMarkerRename(h, id, name); }
+    public boolean markerRemove(long id)         { return h != 0 && nMarkerRemove(h, id); }
+
+    // ---- the chart's own files and the library -----------------------------
+
+    /** A file the chart carries (TXTDSC text, PICREP picture), or null.
+     *  {@code mimeOut} (length >= 1, may be null) receives the mime type. */
+    public byte[] auxFile(String cell, String name, String[] mimeOut) {
+        return h == 0 ? null : nAuxFile(h, cell, name, mimeOut);
+    }
+
+    /** Look through a folder or archive for charts; the engine's scan JSON,
+     *  or null. NOT REENTRANT — serialize callers — and handle-less: the
+     *  scan reads the filesystem, not the open chart. */
+    public static String scanCharts(String path, boolean zip) { return nScanCharts(path, zip); }
+
+    // ---- portrayal quick toggles -------------------------------------------
+
+    public void toggleText()                     { if (h != 0) nToggleText(h); }
+    public void toggleSoundings()                { if (h != 0) nToggleSoundings(h); }
+    public void toggleOtherCategory()            { if (h != 0) nToggleOtherCategory(h); }
+
+    private static native void nFollowSet(long h, boolean on);
+    private static native int nFollowActive(long h);
+    private static native void nCourseUpSet(long h, boolean on);
+    private static native int nCourseUpActive(long h);
+    private static native int nOwnShip(long h, double[] out);
+    private static native boolean nRasterShown(long h, int i);
+    private static native void nRasterSetShown(long h, int i, boolean shown);
+    private static native void nSetChartHidden(long h, boolean hidden);
+    private static native int nChartsCount(long h);
+    private static native long nMarkerAdd(long h, double lon, double lat);
+    private static native String nMarkerName(long h, long id);
+    private static native long nMarkerAt(long h, float xPts, float yPts);
+    private static native boolean nMarkerRename(long h, long id, String name);
+    private static native boolean nMarkerRemove(long h, long id);
+    private static native byte[] nAuxFile(long h, String cell, String name, String[] mimeOut);
+    private static native String nScanCharts(String path, boolean zip);
+    private static native void nToggleText(long h);
+    private static native void nToggleSoundings(long h);
+    private static native void nToggleOtherCategory(long h);
+    // ---- the bake ----------------------------------------------------------
+
+    /** Start the phased bake (cells, sheets, lift; kind-contiguous lists).
+     *  0 when nothing starts. Poll with {@link #bakePoll}; free when done. */
+    public static long bakeStart(String source, String[] ins, String[] outs,
+                                 int cells, int sheets, int lifts, boolean zip) {
+        return nBakeStart(source, ins, outs, cells, sheets, lifts, zip);
+    }
+    /** True while running; out (length >= 4) gets done, total, baked, ok. */
+    public static boolean bakePoll(long job, int[] out) { return nBakePoll(job, out); }
+    /** tile57 stops at the next chart boundary, not instantly. */
+    public static void bakeCancel(long job) { nBakeCancel(job); }
+    /** Joins the worker: cancel a running bake first. */
+    public static void bakeFree(long job) { nBakeFree(job); }
+
+    private static native long nBakeStart(String source, String[] ins, String[] outs, int cells, int sheets, int lifts, boolean zip);
+    private static native boolean nBakePoll(long job, int[] out);
+    private static native void nBakeCancel(long job);
+    private static native void nBakeFree(long job);
+    // ---- plugin install and consent ----------------------------------------
+
+    /** Name the install root (the app's files dir): before any plugin call. */
+    public boolean pluginsInstallRoot(String path) { return h != 0 && nPluginsInstallRoot(h, path); }
+    /** Load the set the mariner installed. Call after the bundled load. */
+    public boolean pluginsLoadInstalled()        { return h != 0 && nPluginsLoadInstalled(h); }
+    /** The consent JSON for a .lkplug, or null when no layer can come up. */
+    public String pluginInspect(String path)     { return h == 0 ? null : nPluginInspect(h, path); }
+    /** Install a consented .lkplug: null on success, else one sentence why. */
+    public String pluginInstall(String path) {
+        return h == 0 ? "The plugin layer could not start." : nPluginInstall(h, path);
+    }
+    public boolean pluginUninstall(String id)    { return h != 0 && nPluginUninstall(h, id); }
+    /** Every table the loaded plugins declare, as JSON; null when none is up. */
+    public String pluginTables()                 { return h == 0 ? null : nPluginTables(h); }
+    /** One table's rows in shown order; null for an unknown plugin or table. */
+    public String pluginTableRows(String id, String key, String sortKey, boolean ascending) {
+        return h == 0 ? null : nPluginTableRows(h, id, key, sortKey, ascending);
+    }
+    /** Tell the plugin its table is on screen: it builds no rows until then. */
+    public boolean pluginTableOpen(String id, String key, boolean open) {
+        return h != 0 && nPluginTableOpen(h, id, key, open);
+    }
+
+    // ---- charts by link -----------------------------------------------------
+
+    /** Install or remove this shell's url fetcher. lookout drives it for the
+     *  style, TileJSON, sprite packs and every tile; see lookout.h. */
+    public void httpProvider(boolean on)         { if (h != 0) nHttpProvider(h, on); }
+    /** Drain up to ids.length parked asks. allow[i] is 1 when the url may be
+     *  read off local disk, 0 when it must not be. */
+    public int httpPoll(long[] ids, int[] allow, String[] urls) {
+        return h == 0 ? 0 : nHttpPoll(h, ids, allow, urls);
+    }
+    /** Drain the ids lookout has given up on. Advisory. */
+    public int httpCancelPoll(long[] ids)        { return h == 0 ? 0 : nHttpCancelPoll(h, ids); }
+    /** Answer one ask, from any thread. status is the final HTTP status, or 0
+     *  for a transport failure; only 2xx carries a body. */
+    public void httpRespond(long id, byte[] bytes, int status) {
+        if (h != 0) nHttpRespond(h, id, bytes, status);
+    }
+    public void chartLinkAdd(String link)        { if (h != 0) nChartLinkAdd(h, link); }
+    /** null draws lookout's own chart. */
+    public void chartLinkSelect(String url)      { if (h != 0) nChartLinkSelect(h, url); }
+    public void chartLinkRemove(String url)      { if (h != 0) nChartLinkRemove(h, url); }
+    public void chartLinkRefresh(String url)     { if (h != 0) nChartLinkRefresh(h, url); }
+    /** Everything the chart list shows, as one document. */
+    public String chartLinksJson()               { return h == 0 ? null : nChartLinksJson(h); }
+    /** 1 since the last poll, then clears. ONE consumer. */
+    public boolean chartLinksChanged()           { return h != 0 && nChartLinksChanged(h); }
+    /** One-time migration from the shell's old store. */
+    public void chartLinksImport(String json)    { if (h != 0) nChartLinksImport(h, json); }
+    /** Is a chart link the one being drawn? */
+    public boolean altStyleActive()              { return h != 0 && nAltStyleActive(h); }
+    /** A live grant flip; a revoked call answers -1 to the running plugin. */
+    public boolean pluginGrantSet(String id, String cap, boolean on) {
+        return h != 0 && nPluginGrantSet(h, id, cap, on);
+    }
+
+    private static native boolean nPluginsInstallRoot(long h, String path);
+    private static native boolean nPluginsLoadInstalled(long h);
+    private static native String nPluginInspect(long h, String path);
+    private static native String nPluginInstall(long h, String path);
+    private static native boolean nPluginUninstall(long h, String id);
+    private static native boolean nAltStyleActive(long h);
+    private static native void nHttpProvider(long h, boolean on);
+    private static native int nHttpPoll(long h, long[] ids, int[] allow, String[] urls);
+    private static native int nHttpCancelPoll(long h, long[] ids);
+    private static native void nHttpRespond(long h, long id, byte[] bytes, int status);
+    private static native void nChartLinkAdd(long h, String link);
+    private static native void nChartLinkSelect(long h, String url);
+    private static native void nChartLinkRemove(long h, String url);
+    private static native void nChartLinkRefresh(long h, String url);
+    private static native String nChartLinksJson(long h);
+    private static native boolean nChartLinksChanged(long h);
+    private static native void nChartLinksImport(long h, String json);
+    private static native String nPluginTables(long h);
+    private static native String nPluginTableRows(long h, String id, String key, String sortKey, boolean ascending);
+    private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);
+    private static native boolean nPluginGrantSet(long h, String id, String cap, boolean on);
 }

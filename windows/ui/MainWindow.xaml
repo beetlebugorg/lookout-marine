@@ -11,15 +11,49 @@
          gets input everywhere else. -->
     <Grid x:Name="Root" Background="Transparent">
         <Grid.Resources>
-            <Style x:Key="Bubble" TargetType="Button">
-                <Setter Property="Width" Value="48" />
-                <Setter Property="Height" Value="48" />
-                <Setter Property="CornerRadius" Value="24" />
-                <Setter Property="Padding" Value="0" />
-                <Setter Property="Background" Value="White" />
-                <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="Foreground" Value="#1A1A1A" />
-            </Style>
+            <!-- The chrome wears the CHART's scheme, not the system's: a white
+                 pick card at night would undo the night palette's whole point.
+                 Day chrome is light; dusk and night flip Root's RequestedTheme
+                 to Dark (MainWindow.Hud.cpp) and these dictionaries carry the
+                 rest — menus and dialogs follow the element theme on their
+                 own. -->
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Light">
+                        <SolidColorBrush x:Key="LkCardBrush" Color="White" />
+                        <SolidColorBrush x:Key="LkPanelBrush" Color="#F8F8F8" />
+                        <SolidColorBrush x:Key="LkPanelTranslucentBrush" Color="#E6F8F8F8" />
+                        <SolidColorBrush x:Key="LkPanelStrongBrush" Color="#F2F8F8F8" />
+                        <SolidColorBrush x:Key="LkPanelOpaqueBrush" Color="#FFF8F8F8" />
+                        <SolidColorBrush x:Key="LkListPaneBrush" Color="#80F0F0F0" />
+                        <SolidColorBrush x:Key="LkInkBrush" Color="#1A1A1A" />
+                        <SolidColorBrush x:Key="LkMutedBrush" Color="#6B6B6B" />
+                        <SolidColorBrush x:Key="LkHairlineBrush" Color="#33000000" />
+                        <SolidColorBrush x:Key="LkAccentBrush" Color="#1B49C4" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <SolidColorBrush x:Key="LkCardBrush" Color="#FF121C24" />
+                        <SolidColorBrush x:Key="LkPanelBrush" Color="#FF16202A" />
+                        <SolidColorBrush x:Key="LkPanelTranslucentBrush" Color="#E6121C24" />
+                        <SolidColorBrush x:Key="LkPanelStrongBrush" Color="#F2121C24" />
+                        <SolidColorBrush x:Key="LkPanelOpaqueBrush" Color="#FF0F171E" />
+                        <SolidColorBrush x:Key="LkListPaneBrush" Color="#4014202C" />
+                        <SolidColorBrush x:Key="LkInkBrush" Color="#DDE4EA" />
+                        <SolidColorBrush x:Key="LkMutedBrush" Color="#9FB0BD" />
+                        <SolidColorBrush x:Key="LkHairlineBrush" Color="#33FFFFFF" />
+                        <SolidColorBrush x:Key="LkAccentBrush" Color="#7EA1F5" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+                <Style x:Key="Bubble" TargetType="Button">
+                    <Setter Property="Width" Value="48" />
+                    <Setter Property="Height" Value="48" />
+                    <Setter Property="CornerRadius" Value="24" />
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Background" Value="{ThemeResource LkCardBrush}" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="Foreground" Value="{ThemeResource LkInkBrush}" />
+                </Style>
+            </ResourceDictionary>
         </Grid.Resources>
 
         <!-- DXGI mode inserts a SwapChainPanel here at index 0 in code. A panel
@@ -44,6 +78,17 @@
                          VerticalAlignment="Center" Visibility="Collapsed"
                          PlaceholderText="Go to coordinate  (e.g. 38.978, -76.492)" />
             </StackPanel>
+            <!-- The results row under the field: a parsed coordinate previews
+                 as a go-to; anything else says honestly that name search is
+                 not here yet. Built in code (MainWindow.Input.cpp); never
+                 faked results. -->
+            <Border x:Name="SearchResults" Width="320" CornerRadius="12"
+                    HorizontalAlignment="Left" Margin="58,0,0,0"
+                    Background="{ThemeResource LkCardBrush}"
+                    BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
+                    Visibility="Collapsed">
+                <StackPanel x:Name="SearchResultRows" />
+            </Border>
             <Button x:Name="MenuBtn" Style="{StaticResource Bubble}"
                     HorizontalAlignment="Left"
                     AutomationProperties.Name="Menu">
@@ -88,6 +133,13 @@
                     Margin="16,0,0,16" Spacing="3">
             <TextBlock x:Name="ScaleBarLabel" FontSize="12" FontWeight="SemiBold" Text="" />
             <StackPanel x:Name="ScaleBarSegs" Orientation="Horizontal" Height="6" />
+            <!-- source credits while a chart link draws: tile usage policies
+                 (openstreetmap.org's among them) make the visible credit a
+                 condition of service, so it rides the one HUD element that
+                 is always on screen (MainWindow.ChartLinks.cpp fills it). -->
+            <TextBlock x:Name="ScaleBarCredit" FontSize="10.5" Text=""
+                       Foreground="{ThemeResource LkMutedBrush}"
+                       Visibility="Collapsed" MaxWidth="360" TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- top-center: the plugin alert strip above the build pill, so an
@@ -97,12 +149,12 @@
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Top"
                     Margin="0,10,0,0" Spacing="8">
             <Border x:Name="AlertStrip" MaxWidth="560" CornerRadius="8"
-                    Background="#F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                    Background="{ThemeResource LkPanelBrush}" BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
                     Visibility="Collapsed">
                 <StackPanel x:Name="AlertRows" />
             </Border>
             <Border x:Name="BuildingPill" CornerRadius="14" Padding="12,6"
-                    Background="#E6F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+                    Background="{ThemeResource LkPanelTranslucentBrush}" BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
                     HorizontalAlignment="Center" Visibility="Collapsed">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <ProgressRing IsActive="True" Width="16" Height="16" />
@@ -122,15 +174,15 @@
         <!-- pick report card: a callout placed beside the mark in code. The
              list column shows only when the pick found more than one object;
              every dynamic row is built in MainWindow.Pick.cpp. -->
-        <Border x:Name="PickCard" CornerRadius="12" Background="White"
-                BorderBrush="#33000000" BorderThickness="1" Visibility="Collapsed"
+        <Border x:Name="PickCard" CornerRadius="12" Background="{ThemeResource LkCardBrush}"
+                BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1" Visibility="Collapsed"
                 HorizontalAlignment="Left" VerticalAlignment="Top">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Grid x:Name="PickListPane" Width="200" Background="#80F0F0F0"
+                <Grid x:Name="PickListPane" Width="200" Background="{ThemeResource LkListPaneBrush}"
                       Visibility="Collapsed" CornerRadius="12,0,0,12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -138,7 +190,7 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <TextBlock x:Name="PickListHeader" FontSize="11" FontWeight="SemiBold"
-                               CharacterSpacing="80" Foreground="#6B6B6B"
+                               CharacterSpacing="80" Foreground="{ThemeResource LkMutedBrush}"
                                Margin="14,12,14,6" Text="OBJECTS" />
                     <ScrollViewer x:Name="PickListScroll" Grid.Row="1"
                                   VerticalScrollBarVisibility="Auto">
@@ -170,11 +222,11 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock x:Name="PickTitle" FontSize="19" FontWeight="Bold"
-                                       Foreground="#1A1A1A" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource LkInkBrush}" TextTrimming="CharacterEllipsis"
                                        MaxLines="1" Text="" />
                             <!-- reserved even when empty: the header keeps one
                                  height for every object so rows never shift -->
-                            <TextBlock x:Name="PickSubtitle" FontSize="13" Foreground="#6B6B6B"
+                            <TextBlock x:Name="PickSubtitle" FontSize="13" Foreground="{ThemeResource LkMutedBrush}"
                                        TextTrimming="CharacterEllipsis" MaxLines="1"
                                        Text=" " />
                         </StackPanel>
@@ -195,15 +247,15 @@
                     </ScrollViewer>
                     <Rectangle Grid.Row="3" Height="1" Fill="#DDDDDD" />
                     <TextBlock x:Name="PickFootnote" Grid.Row="4" FontSize="11"
-                               Foreground="#6B6B6B" TextWrapping="Wrap"
+                               Foreground="{ThemeResource LkMutedBrush}" TextWrapping="Wrap"
                                IsTextSelectionEnabled="True" Margin="16,6,16,4" Text="" />
                     <Button x:Name="PickFoldBtn" Grid.Row="5" HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left" Padding="14,6,14,8"
                             Background="Transparent" BorderThickness="0">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon x:Name="PickFoldIcon" Glyph="&#xE76C;" FontSize="10"
-                                      Foreground="#6B6B6B" />
-                            <TextBlock x:Name="PickFoldLabel" FontSize="12" Foreground="#6B6B6B"
+                                      Foreground="{ThemeResource LkMutedBrush}" />
+                            <TextBlock x:Name="PickFoldLabel" FontSize="12" Foreground="{ThemeResource LkMutedBrush}"
                                        Text="S-57 source attributes" />
                         </StackPanel>
                     </Button>
@@ -212,16 +264,40 @@
         </Border>
 
         <!-- empty state -->
-        <Border x:Name="EmptyState" CornerRadius="12" Padding="24"
-                Background="#F2F8F8F8" BorderBrush="#33000000" BorderThickness="1"
+        <Border x:Name="EmptyState" CornerRadius="12" Padding="24" MaxWidth="560"
+                Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Visibility="Collapsed">
-            <StackPanel Spacing="10" HorizontalAlignment="Center">
-                <TextBlock Text="No chart open" FontSize="18" FontWeight="SemiBold"
-                           HorizontalAlignment="Center" />
-                <TextBlock Text="Open a baked chart (.pmtiles) or a folder of cells."
-                           FontSize="13" Opacity="0.7" HorizontalAlignment="Center" />
-                <Button x:Name="EmptyOpenBtn" Content="Open Charts…" HorizontalAlignment="Center" />
+            <StackPanel Spacing="10">
+                <TextBlock Text="No chart open" FontSize="18" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button x:Name="EmptyOpenBtn" Content="Choose Charts…" />
+                    <TextBlock Text="or drop them anywhere in this window"
+                               FontSize="12" Opacity="0.7" VerticalAlignment="Center" />
+                </StackPanel>
+                <!-- Where the charts come from goes first: a mariner with none
+                     needs that before a list of file extensions. -->
+                <TextBlock FontSize="12" Opacity="0.85" TextWrapping="Wrap">
+                    <Run>NOAA publishes every United States chart at no cost, at</Run>
+                    <Hyperlink NavigateUri="https://www.charts.noaa.gov/ENCs/ENCs.shtml">charts.noaa.gov</Hyperlink><Run>. Most other offices sell theirs.</Run>
+                </TextBlock>
+                <TextBlock Text="A folder of cells (.000), prepared charts (.pmtiles), imagery (.mbtiles) or BSB/KAP sheets. Cells and sheets are converted once on the way in, a few seconds each."
+                           FontSize="12" Opacity="0.85" TextWrapping="Wrap" />
+                <!-- Last, and set apart: the one thing on this page not about
+                     getting started, and the one a mariner must not skim. -->
+                <Border CornerRadius="9" Padding="12" Background="#24F59E0B"
+                        BorderBrush="#8CF59E0B" BorderThickness="1" Margin="0,6,0,0">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="NOT FOR NAVIGATION" FontSize="12" FontWeight="Bold"
+                                   CharacterSpacing="50" />
+                        <TextBlock Text="By importing charts you accept that Lookout is a prototype and not a certified navigation system, and that the charts it prepares are processed for display and are not the official ENC. They do not meet chart carriage regulations. You remain responsible for the safe navigation of your vessel and for keeping clear of every danger. Verify everything shown here against official, up-to-date charts and publications, and keep a paper backup."
+                                   FontSize="12" TextWrapping="Wrap" />
+                        <TextBlock FontSize="11" Opacity="0.8" TextWrapping="Wrap">
+                            <Run>NOAA ENC® charts come from the NOAA Office of Coast Survey and are updated weekly on a best-efforts basis; you are responsible for holding the current edition and the latest updates. NOAA makes no warranty and assumes no liability for their use. See the</Run>
+                            <Hyperlink NavigateUri="https://www.charts.noaa.gov/ENCs/ENC_Agreement.shtml">NOAA ENC User Agreement</Hyperlink><Run>.</Run>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
 
@@ -233,7 +309,7 @@
              there at construction). A pane over the chart had to dodge the
              HUD and the corner bubbles, which left it too narrow for a
              two-column form and put it under the chrome it was covering. -->
-        <Border x:Name="SettingsPane" Background="#FFF8F8F8" Visibility="Collapsed">
+        <Border x:Name="SettingsPane" Background="{ThemeResource LkPanelOpaqueBrush}" Visibility="Collapsed">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="178" />
@@ -265,16 +341,16 @@
 
         <!-- bottom-center: the zoom-to-scale panel, above the readout capsule.
              Presets are built in code (MainWindow.Scale.cpp). -->
-        <Border x:Name="ScalePanel" Width="340" CornerRadius="12" Background="White"
-                BorderBrush="#33000000" BorderThickness="1" Padding="14"
+        <Border x:Name="ScalePanel" Width="340" CornerRadius="12" Background="{ThemeResource LkCardBrush}"
+                BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1" Padding="14"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
                 Margin="0,0,0,70" Visibility="Collapsed">
             <StackPanel Spacing="10">
                 <Grid>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <TextBlock Text="Zoom to scale" FontSize="14" FontWeight="SemiBold"
-                                   Foreground="#1A1A1A" />
-                        <TextBlock x:Name="ScaleNow" FontSize="12" Foreground="#6B6B6B"
+                                   Foreground="{ThemeResource LkInkBrush}" />
+                        <TextBlock x:Name="ScaleNow" FontSize="12" Foreground="{ThemeResource LkMutedBrush}"
                                    VerticalAlignment="Center" Text="" />
                     </StackPanel>
                     <Button x:Name="ScaleClose" HorizontalAlignment="Right" Padding="4"
@@ -289,36 +365,36 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="1:" FontSize="17" FontWeight="SemiBold"
-                               Foreground="#1A1A1A" VerticalAlignment="Center" />
+                               Foreground="{ThemeResource LkInkBrush}" VerticalAlignment="Center" />
                     <TextBox x:Name="ScaleBox" Grid.Column="1" FontSize="17"
                              FontWeight="SemiBold" PlaceholderText="25,000" />
                     <Button x:Name="ScaleGo" Grid.Column="2" Content="Go" IsEnabled="False"
                             VerticalAlignment="Stretch" />
                 </Grid>
-                <TextBlock x:Name="ScaleHint" FontSize="12" Foreground="#6B6B6B"
+                <TextBlock x:Name="ScaleHint" FontSize="12" Foreground="{ThemeResource LkMutedBrush}"
                            TextWrapping="Wrap" Text="Type a scale, for example 25,000 or 1:25k." />
                 <StackPanel x:Name="ScalePresetRows" Spacing="6" />
             </StackPanel>
         </Border>
 
         <!-- bottom-center: readout capsule -->
-        <Border x:Name="HudPill" Height="44" CornerRadius="22" Background="White"
+        <Border x:Name="HudPill" Height="44" CornerRadius="22" Background="{ThemeResource LkCardBrush}"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
                 Margin="0,0,0,16" Padding="18,0">
             <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
                 <Ellipse Width="10" Height="10" Fill="#F59E0B" VerticalAlignment="Center" />
                 <TextBlock x:Name="HudBand" FontSize="14" FontWeight="SemiBold"
-                           Foreground="#1A1A1A" VerticalAlignment="Center" Text="—" />
+                           Foreground="{ThemeResource LkInkBrush}" VerticalAlignment="Center" Text="—" />
                 <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
                 <!-- the one control in the capsule: click to zoom to a scale -->
                 <Button x:Name="HudScaleBtn" Padding="4,2" Background="Transparent"
                         BorderThickness="0" CornerRadius="6" VerticalAlignment="Center"
                         AutomationProperties.Name="Zoom to a scale">
                     <TextBlock x:Name="HudScale" FontSize="14" FontWeight="SemiBold"
-                               Foreground="#1B49C4" Text="1:—" />
+                               Foreground="{ThemeResource LkAccentBrush}" Text="1:—" />
                 </Button>
                 <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
-                <TextBlock x:Name="HudZoom" FontSize="14" Foreground="#6B6B6B"
+                <TextBlock x:Name="HudZoom" FontSize="14" Foreground="{ThemeResource LkMutedBrush}"
                            VerticalAlignment="Center" Text="z—" />
                 <Rectangle Width="1" Height="20" Fill="#DDDDDD" />
                 <!-- position source, beside the position it qualifies: GPS
@@ -334,7 +410,7 @@
                         <TextBlock x:Name="GpsText" FontSize="12" FontWeight="Bold" Text="GPS" />
                     </StackPanel>
                 </Button>
-                <TextBlock x:Name="HudCoord" FontSize="14" Foreground="#1A1A1A"
+                <TextBlock x:Name="HudCoord" FontSize="14" Foreground="{ThemeResource LkInkBrush}"
                            VerticalAlignment="Center" Text="—" />
                 <Border x:Name="HudOverscale" CornerRadius="8" Padding="6,2"
                         Background="#33D83B01" VerticalAlignment="Center"
@@ -365,7 +441,7 @@
              MainWindow.Loader.cpp. -->
         <Grid x:Name="StartupLoader" Background="#FF93AEBB" Visibility="Collapsed">
             <Grid Background="#38000000" />
-            <Border CornerRadius="12" Background="#F2F8F8F8" BorderBrush="#33000000"
+            <Border CornerRadius="12" Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}"
                     BorderThickness="1" Padding="28,22"
                     HorizontalAlignment="Center" VerticalAlignment="Center">
                 <StackPanel Spacing="12" HorizontalAlignment="Center">
@@ -383,12 +459,35 @@
                         <Polygon Points="28,13 23,31 33,31" Fill="#D42E2E" />
                     </Grid>
                     <TextBlock Text="Lookout Marine" FontSize="20" FontWeight="SemiBold"
-                               Foreground="#1A1A1A" HorizontalAlignment="Center" />
+                               Foreground="{ThemeResource LkInkBrush}" HorizontalAlignment="Center" />
                     <TextBlock x:Name="LoaderPhase" FontSize="13" FontWeight="Medium"
-                               Foreground="#1A1A1A" HorizontalAlignment="Center" Text="" />
+                               Foreground="{ThemeResource LkInkBrush}" HorizontalAlignment="Center" Text="" />
                     <ProgressBar Width="240" IsIndeterminate="True" />
-                    <TextBlock x:Name="LoaderNote" FontSize="12" Foreground="#6B6B6B"
+                    <TextBlock x:Name="LoaderNote" FontSize="12" Foreground="{ThemeResource LkMutedBrush}"
                                HorizontalAlignment="Center" Visibility="Collapsed" Text="" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- chart import: raw S-57 cells being baked into charts the app can
+             draw. Same surface as the startup loader, but the count is known,
+             so the bar is determinate and the mariner can stop. Driven on a
+             timer from the job's snapshot in MainWindow.Bake.cpp. -->
+        <Grid x:Name="BakePanel" Background="#FF93AEBB" Visibility="Collapsed">
+            <Grid Background="#38000000" />
+            <Border CornerRadius="12" Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}"
+                    BorderThickness="1" Padding="28,22"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="12" HorizontalAlignment="Center" MinWidth="320">
+                    <TextBlock x:Name="BakeTitle" FontSize="16" FontWeight="SemiBold"
+                               Foreground="{ThemeResource LkInkBrush}" HorizontalAlignment="Center" Text="" />
+                    <ProgressBar x:Name="BakeBar" Width="300" Minimum="0" Maximum="1"
+                                 IsIndeterminate="True" />
+                    <TextBlock x:Name="BakeCount" FontSize="13" Foreground="{ThemeResource LkInkBrush}"
+                               HorizontalAlignment="Center" Text="" />
+                    <TextBlock x:Name="BakeEta" FontSize="12" Foreground="{ThemeResource LkMutedBrush}"
+                               HorizontalAlignment="Center" Text="" />
+                    <Button x:Name="BakeCancel" Content="Cancel" HorizontalAlignment="Center" />
                 </StackPanel>
             </Border>
         </Grid>
@@ -397,13 +496,13 @@
              refreshed per tick in MainWindow.Overlay.cpp, closed when the
              object goes. The hover tip is its one-shot cousin under the
              pointer. -->
-        <Border x:Name="OverlayBubble" CornerRadius="10" Background="White"
-                BorderBrush="#33000000" BorderThickness="1" Padding="12,8"
+        <Border x:Name="OverlayBubble" CornerRadius="10" Background="{ThemeResource LkCardBrush}"
+                BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1" Padding="12,8"
                 Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top">
             <StackPanel x:Name="OverlayBubbleBody" Spacing="2" />
         </Border>
         <Border x:Name="HoverTip" CornerRadius="8" Background="#F2FFFFFF"
-                BorderBrush="#33000000" BorderThickness="1" Padding="10,6"
+                BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1" Padding="10,6"
                 Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top"
                 IsHitTestVisible="False">
             <StackPanel x:Name="HoverTipBody" Spacing="1" />

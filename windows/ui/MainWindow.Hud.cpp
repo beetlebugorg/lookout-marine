@@ -18,14 +18,51 @@ namespace winrt::LookoutMarine::implementation
         lk_readout r{};
         lk_controller_readout(controller, &r);
 
+        // The chrome wears the CHART's scheme: dusk and night take the dark
+        // dictionaries (see the XAML ThemeDictionaries), and menus and
+        // dialogs follow the element theme on their own.
+        ElementTheme want = r.scheme != 0 ? ElementTheme::Dark : ElementTheme::Light;
+        if (Root().RequestedTheme() != want)
+        {
+            Root().RequestedTheme(want);
+            // The change-detected chrome re-resolves its colours on its next
+            // build; force one, or the pills keep the old theme's ink.
+            fix_state_shown = -2;
+            follow_state_shown = -2;
+            raster_pill_shown.clear();
+        }
+
         // A pick report describes the objects under one point of one view:
-        // any camera move — pan, fling, zoom, rotate — retires it.
-        if (pick_pose_valid &&
-            (r.lon != pick_pose.lon || r.lat != pick_pose.lat ||
-             r.zoom != pick_pose.zoom || r.rotation_deg != pick_pose.rotation_deg))
+        // any camera move the MARINER makes — pan, fling, zoom, rotate —
+        // retires it. Follow moving the chart under way does not: the core
+        // drops follow the moment they pan, so while follow is active every
+        // pose change is the boat's, and a report they just opened must stay
+        // readable (the report rides the water, like the pick mark).
+        if (pick_pose_valid && lk_controller_follow_active(controller))
+        {
+            // Ride along: when follow later drops, the comparison below must
+            // start from where the boat left the camera, not from where the
+            // report was opened, or the first still tick retires it.
+            pick_pose.lon = r.lon;
+            pick_pose.lat = r.lat;
+            pick_pose.zoom = r.zoom;
+            pick_pose.rotation_deg = r.rotation_deg;
+        }
+        else if (pick_pose_valid &&
+                 (r.lon != pick_pose.lon || r.lat != pick_pose.lat ||
+                  r.zoom != pick_pose.zoom || r.rotation_deg != pick_pose.rotation_deg))
             DismissPick();
 
-        HudCoord().Text(lkw::FormatCoord(r.lat, r.lon));
+        // The position slot is own ship's REPORTED fix or nothing (the
+        // ship-or-nothing rule): the map centre here is a wrong position a
+        // mariner may write in a log. With no live fix the GPS pill alone
+        // carries the state.
+        {
+            double slon = 0, slat = 0;
+            bool live = lk_controller_own_ship(controller, &slon, &slat) == 2;
+            HudCoord().Text(live ? lkw::FormatCoord(slat, slon) : winrt::hstring{});
+            HudCoord().Visibility(live ? Visibility::Visible : Visibility::Collapsed);
+        }
         HudScale().Text(lkw::FormatScale(r.scale_denom));
         HudBand().Text(lkw::BandForDenom(r.scale_denom));
         wchar_t z[16];

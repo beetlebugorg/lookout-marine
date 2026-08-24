@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -68,6 +69,7 @@ fun PickReportCard(
     width: Dp,
     maxHeight: Dp,
     modifier: Modifier = Modifier,
+    onAuxFile: (cell: String, name: String) -> Unit = { _, _ -> },
 ) {
     val feature = results.getOrNull(selected) ?: return
     val decoded = remember(feature) { PickDecoded(feature) }
@@ -107,7 +109,7 @@ fun PickReportCard(
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    Body(decoded)
+                    Body(decoded, onFile = { name -> onAuxFile(feature.chart, name) })
                     if (foldOpen) RawRows(decoded)
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -165,7 +167,7 @@ private fun Header(decoded: PickDecoded, onCopy: () -> Unit, onDismiss: () -> Un
 
 /** The notes first, then the decoded rows. */
 @Composable
-private fun Body(decoded: PickDecoded) {
+private fun Body(decoded: PickDecoded, onFile: (String) -> Unit) {
     Column(Modifier.padding(vertical = 6.dp)) {
         for (note in decoded.notes) NoteCallout(note)
         // The engine's verdict. A body with nothing to read says why, because
@@ -182,13 +184,13 @@ private fun Body(decoded: PickDecoded) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             )
         }
-        for (row in decoded.reportRows) DecodedRow(row)
+        for (row in decoded.reportRows) DecodedRow(row, onFile)
     }
 }
 
 /** The label on the left, the value beside it. The engine decoded both. */
 @Composable
-private fun DecodedRow(row: PickDecoded.ReportRow) {
+private fun DecodedRow(row: PickDecoded.ReportRow, onFile: (String) -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -205,10 +207,21 @@ private fun DecodedRow(row: PickDecoded.ReportRow) {
             // ("Depth range minimum") to sit on one line.
             modifier = Modifier.width((132 - row.depth * 12).dp),
         )
+        // A row naming a file the chart carries opens it: the accent and the
+        // tap are the affordance, because a chart note or a bridge picture is
+        // the whole reason the row exists.
+        val opens = row.file || row.picture
         Text(
             text = row.value,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
+            color = if (opens) MaterialTheme.colorScheme.primary else Color.Unspecified,
+            modifier = if (opens) {
+                Modifier
+                    .weight(1f)
+                    .clickable { onFile(row.value) }
+            } else {
+                Modifier.weight(1f)
+            },
         )
     }
 }
@@ -374,7 +387,7 @@ private fun VerticalRule() {
     Box(
         Modifier
             .width(1.dp)
-            .fillMaxWidth()
+            .fillMaxHeight()
             .background(MaterialTheme.colorScheme.outlineVariant),
     )
 }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -20,6 +21,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
@@ -102,28 +104,41 @@ fun ChromeBubble(
 }
 
 /**
- * The north bubble. The mark turns with the view and a tap sets the chart
- * north-up. It is always visible: a mariner reads the chart's orientation from
- * it, so it must not appear only once the chart is already turned.
+ * The compass bubble. The mark turns with the view; a tap walks the
+ * orientation ladder (north-up → follow → course-up → north-up, still
+ * locked). Always visible: a mariner reads the chart's orientation from it.
+ *
+ * The states draw like the reference's NorthBubble: locked fills with the
+ * accent and inverts the ink; armed (waiting for a fix) draws a ring and no
+ * fill; the letter is "C" under course-up — and stands still, the ROTATION is
+ * the information then — else "N" turned with the chart.
  */
 @Composable
-fun NorthBubble(rotationDeg: Double, onReset: () -> Unit, modifier: Modifier = Modifier) {
+fun NorthBubble(
+    rotationDeg: Double,
+    followState: Int,
+    courseUp: Boolean,
+    onCycle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val locked = followState == 1
+    val armed = followState == 2
+    val accent = MaterialTheme.colorScheme.primary
     Surface(
         modifier = modifier
             .size(Chrome.bubble)
             .clip(CircleShape)
-            .clickable(onClick = onReset),
+            .clickable(onClick = onCycle),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        color = if (locked) accent else MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        border = if (armed) androidx.compose.foundation.BorderStroke(2.dp, accent) else null,
         tonalElevation = 2.dp,
         shadowElevation = 3.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .rotate(-rotationDeg.toFloat())
-                    .semanticsNorth(),
+                modifier = if (courseUp) Modifier else Modifier.rotate(-rotationDeg.toFloat()),
             ) {
                 Canvas(Modifier.size(9.dp)) {
                     // The pointer: a filled triangle over the letter.
@@ -136,17 +151,16 @@ fun NorthBubble(rotationDeg: Double, onReset: () -> Unit, modifier: Modifier = M
                     drawPath(p, Color(0xFFE53935))
                 }
                 Text(
-                    "N",
+                    if (courseUp) "C" else "N",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (locked) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
     }
 }
-
-private fun Modifier.semanticsNorth(): Modifier = this
 
 /**
  * The distance bar: four alternating segments under a label. The width comes
@@ -154,7 +168,14 @@ private fun Modifier.semanticsNorth(): Modifier = this
  * label always reads as one.
  */
 @Composable
-fun ScaleBar(scaleDenominator: Double, modifier: Modifier = Modifier) {
+fun ScaleBar(
+    scaleDenominator: Double,
+    modifier: Modifier = Modifier,
+    /** Source credits for an active chart link — tile usage policies make
+     *  the visible credit a condition of service, so it rides the one HUD
+     *  element that is always on screen. */
+    attribution: String? = null,
+) {
     if (scaleDenominator <= 0) return
     val metresPerDp = scaleDenominator * Chrome.METRES_PER_DP_AT_1_TO_1
     val target = TARGET_DP * metresPerDp
@@ -185,6 +206,18 @@ fun ScaleBar(scaleDenominator: Double, modifier: Modifier = Modifier) {
                     content = {},
                 )
             }
+        }
+        if (attribution != null) {
+            Text(
+                text = attribution,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                // One line only: the credit is untrusted style text and
+                // must not grow over the chart.
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }
