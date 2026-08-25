@@ -99,10 +99,12 @@ def zigAbis = android.defaultConfig.externalNativeBuild.cmake.abiFilters
         // avoids fragile up-to-date checks across the lookout + sibling tile57 trees.
     }
     // AGP names the native tasks buildCMake<Variant>[<abi>] / configureCMake…
-    // (older AGP used externalNativeBuild…) — cover both, matched to this variant.
+    // (older AGP used externalNativeBuild…) — cover both, matched to this
+    // variant. The release variant's CMake config is RelWithDebInfo.
+    def cmakeName = bt == 'release' ? 'relwithdebinfo' : bt
     tasks.matching {
         (it.name.contains('CMake') || it.name.startsWith('externalNativeBuild')) &&
-        it.name.toLowerCase().contains(bt)
+        (it.name.toLowerCase().contains(bt) || it.name.toLowerCase().contains(cmakeName))
     }.configureEach {
         dependsOn t
     }
