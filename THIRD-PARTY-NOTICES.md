@@ -1,43 +1,133 @@
 # Third party notices
 
-Lookout Marine is MIT licensed. Refer to [LICENSE](LICENSE). The app carries the components below, each under its own terms.
+Lookout Marine is MIT licensed. Refer to [LICENSE](LICENSE). The app carries the
+components below, each under its own terms.
 
-## GSHHG
+This file is written from
+[vendor/licenses/licenses.json](vendor/licenses/licenses.json), which carries the
+full text of every license and is what the app's Licenses screen reads. A change
+to one belongs in the other.
 
-A low resolution extract of the Global Self-consistent, Hierarchical, High-resolution Geography Database, baked into the world basemap the app embeds.
+## Chart and rendering
 
-Copyright Paul Wessel (SOEST, University of Hawaii) and Walter H. F. Smith (NOAA Laboratory for Satellite Altimetry). Released under the GNU Lesser General Public License. <https://www.soest.hawaii.edu/pwessel/gshhg/>
+### tile57
 
-Cite as: Wessel, P., and W. H. F. Smith, A Global Self-consistent, Hierarchical, High-resolution Shoreline Database, *J. Geophys. Res.*, 101(B4), 8741-8743, 1996.
+The S-57, S-101 and raster chart engine.
 
-The data and the full statement are in [vendor/gshhg](vendor/gshhg/README.md).
+- License: MIT
+- Commit: `edcac132a2dad7cbb0144947bac7d1a838e7ee57`
+- Copyright: © 2026 Jeremy Collins
+- Pinned in: `build.zig.zon`
+- Upstream: <https://github.com/beetlebugorg/tile57>
+- Ships on: macOS, iOS, Android, Linux, Windows
 
-## WebAssembly Micro Runtime
+### charttable
 
-The runtime that executes the wasm plugins, linked into the core.
+Renders the chart.
 
-Copyright the Intel Corporation and the WAMR contributors. Apache License 2.0 with the LLVM exception (`Apache-2.0 WITH LLVM-exception`). Full text, including the exception, in [vendor/wamr/LICENSE](vendor/wamr/LICENSE). <https://github.com/bytecodealliance/wasm-micro-runtime>
+- License: MIT
+- Commit: `0d137fa893e3215d02d0237c7d3112136734d4bd`
+- Copyright: © 2026 Jeremy Collins
+- Pinned in: `build.zig.zon`
+- Upstream: <https://github.com/beetlebugorg/charttable>
+- Ships on: macOS, iOS, Android, Linux, Windows
 
-## stb_image
+### IHO S-101 Portrayal Catalogue
 
-PNG and JPEG decode for the sprite and raster paths.
+The portrayal rules: which symbol, which color, which text, at which scale.
 
-By Sean Barrett. Dual licensed: MIT, or public domain under the Unlicense, at your option. Both texts are at the end of [vendor/stb/stb_image.h](vendor/stb/stb_image.h). <https://github.com/nothings/stb>
+- License: Not resolved
+- Commit: `62f7773a5641fb22ad88e5508a58d668ad2a7b98`
+- Copyright: International Hydrographic Organization
+- Pinned in: `tile57's build.zig.zon`
+- Upstream: <https://github.com/iho-ohi/S-101_Portrayal-Catalogue>
+- Ships on: macOS, iOS, Android, Linux, Windows
 
-## Vulkan headers
+No license stated. IHO publications are subject to the IHO's own terms.
+
+## Plugins
+
+### WebAssembly Micro Runtime
+
+The runtime the plugins execute in.
+
+- License: Apache 2.0 with the LLVM exception
+- Version: WAMR-2.4.5
+- Commit: `25bd7eb63e828e4bd242cc9b38d260b4b31c6605`
+- Copyright: Intel Corporation and the WAMR contributors
+- Pinned in: `scripts/build-wamr.sh`
+- Upstream: <https://github.com/bytecodealliance/wasm-micro-runtime>
+- Ships on: macOS, iOS, Android, Linux, Windows
+
+Apache License 2.0 with the LLVM exception appended.
+
+## Images and data
+
+### stb_image
+
+Reads the PNG and JPEG files a chart carries.
+
+- License: MIT or the Unlicense, at your option
+- Version: 2.30
+- Copyright: © 2017 Sean Barrett
+- Pinned in: `vendor/stb/stb_image.h`
+- Upstream: <https://github.com/nothings/stb>
+- Ships on: macOS, iOS, Android, Linux, Windows
+
+### GSHHG coastline
+
+The world coastline baked into the basemap.
+
+- License: GNU Lesser General Public License
+- Copyright: © Paul Wessel (SOEST, University of Hawaii) and Walter H. F. Smith (NOAA Laboratory for Satellite Altimetry)
+- Pinned in: `vendor/gshhg/coastline.geojson.gz`
+- Upstream: <https://www.soest.hawaii.edu/pwessel/gshhg/>
+- Ships on: macOS, iOS, Android, Linux, Windows
+
+Upstream states no version. Text is LGPL 3 and the GPL 3 it incorporates. Cite as: Wessel, P., and W. H. F. Smith, A Global Self-consistent, Hierarchical, High-resolution Shoreline Database, J. Geophys. Res., 101(B4), 8741-8743, 1996.
+
+### libwebp
+
+Decodes the WebP tiles a chart link serves.
+
+- License: BSD 3-Clause
+- Version: 1.4.0
+- Copyright: © 2010 Google Inc.
+- Pinned in: `charttable's build.zig.zon`
+- Upstream: <https://github.com/webmproject/libwebp>
+- Ships on: macOS, iOS, Android, Linux, Windows
+
+### libpng
+
+Reads interlaced and 16-bit PNGs.
+
+- License: PNG Reference Library License version 2
+- Version: 1.6.44
+- Copyright: © 1995-2024 The PNG Reference Library Authors
+- Pinned in: `charttable's build.zig.zon`
+- Upstream: <https://github.com/pnggroup/libpng>
+- Ships on: macOS, iOS, Android, Linux, Windows
+
+### zlib
+
+Deflate compression.
+
+- License: zlib License
+- Version: 1.3.1
+- Copyright: © 1995-2024 Jean-loup Gailly and Mark Adler
+- Pinned in: `charttable's build.zig.zon`
+- Upstream: <https://github.com/madler/zlib>
+- Ships on: macOS, iOS, Android, Linux, Windows
+
+## Platform
+
+### Vulkan headers
 
 The Vulkan API headers the Linux and Android builds compile against.
 
-Copyright 2015-2026 The Khronos Group Inc. Apache License 2.0. Headers in [vendor/vulkan/include](vendor/vulkan/include). <https://github.com/KhronosGroup/Vulkan-Headers>
-
-## IHO S-101 Portrayal Catalogue
-
-The portrayal rules the chart is rendered with. It reaches the binary through the tile57 engine, which fetches it from <https://github.com/iho-ohi/S-101_Portrayal-Catalogue>.
-
-Published by the International Hydrographic Organization. That repository states no license, and IHO publications are subject to the IHO's own terms.
-
-## tile57 and charttable
-
-The chart engine and the renderer, both compiled into the core.
-
-Copyright 2026 Jeremy Collins. MIT. <https://github.com/beetlebugorg/tile57> and <https://github.com/beetlebugorg/charttable>
+- License: Apache 2.0
+- Version: VK_HEADER_VERSION 350
+- Copyright: © 2015-2026 The Khronos Group Inc.
+- Pinned in: `vendor/vulkan/include/vulkan/vulkan_core.h`
+- Upstream: <https://github.com/KhronosGroup/Vulkan-Headers>
+- Ships on: Android, Linux

@@ -530,6 +530,14 @@ export fn lookout_charts_count(h: ?*lookout) u32 {
     return @intCast(l.charts.items.len);
 }
 
+/// The license manifest baked into this build. See lookout.h. Static, so it
+/// takes no handle and outlives every call.
+export fn lookout_licenses_json(out_len: ?*usize) [*]const u8 {
+    const json = @import("licenses.zig").json;
+    if (out_len) |p| p.* = json.len;
+    return json.ptr;
+}
+
 /// Look through `path` for charts. See lookout.h.
 export fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
     if (scan_json) |old| gpa.free(old);

@@ -12,6 +12,14 @@ struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
+        // The app's own About panel, which the AppKit standard one replaces.
+        // It carries the button to the licenses; the standard panel takes no
+        // button, and a legal obligation has to be reachable from here.
+        CommandGroup(replacing: .appInfo) {
+            Button("About Lookout Marine") { AboutWindowController.shared.show() }
+            Button("Licenses…") { LicensesWindowController.shared.show() }
+        }
+
         // The app owns the settings window (SettingsWindowController), so ⌘,
         // takes the same route as the gear bubble.
         CommandGroup(replacing: .appSettings) {
