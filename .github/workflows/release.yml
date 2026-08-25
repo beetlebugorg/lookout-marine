@@ -259,16 +259,20 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      # Not assets/: the repo has one, and the upload glob must see only the
+      # built artifacts.
       - uses: actions/download-artifact@v8
         with:
-          path: assets
+          path: dist
           merge-multiple: true
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
           case "$GITHUB_REF_NAME" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
-          gh release create "$GITHUB_REF_NAME" $PRE --verify-tag \
-            --title "$GITHUB_REF_NAME" --generate-notes assets/*
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" $PRE --verify-tag \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
 
   homebrew:
     name: Homebrew cask
