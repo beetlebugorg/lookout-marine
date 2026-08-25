@@ -36,7 +36,7 @@ Downloads are on the [latest release](https://github.com/beetlebugorg/lookout-ma
 
 Open NOAA's `All_ENCs.zip`, or a folder of cells. Lookout prepares the whole download itself, with no separate tool to run, and opens it as one library, then renders the most detailed chart at each point and stitches the seams. Any unencrypted S-57 cell works. S-63 does not, yet.
 
-- **ENC cells.** [NOAA](https://charts.noaa.gov/InteractiveCatalog/nrnc.shtml) publishes United States waters at no cost.
+- **ENC cells.** [NOAA](https://charts.noaa.gov/ENCs/ENCs.shtml) publishes United States waters at no cost.
 - **Satellite imagery and raster sheets.** MBTiles and BSB/KAP render under the ENC, which drops its depth shading where they cover. Cruisers publish MBTiles for the coasts the ENC covers poorly. Two large free collections are [The Chart Locker](https://chartlocker.brucebalan.com/) and [SV Ocelot](https://hackingfamily.com/Cruise_Info/Equipment/Chart_Downloads.htm).
 - **MapLibre styles.** Paste a style link and Lookout renders that map as the chart. For [Seascape](https://openwaters.io/charts/seascape/), global open bathymetry with a nautical style, the link is [tiles.openwaters.io/seascape/style.json](https://tiles.openwaters.io/seascape/style.json).
 
