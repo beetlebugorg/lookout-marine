@@ -185,7 +185,10 @@ jobs:
 
       - name: Build
         working-directory: android
-        run: ./gradlew assembleRelease
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          ./gradlew assembleRelease -PversionName="$VERSION" -PversionCode="$GITHUB_RUN_NUMBER"
 
       # Signed when the keystore secrets exist. Without them the unsigned APK
       # still ships, named so nobody mistakes it for something installable.
