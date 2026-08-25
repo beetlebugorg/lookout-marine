@@ -28,7 +28,7 @@
 | Ubuntu 24.04 or later, amd64 or arm64 | `sudo apt install ./lookout-marine_0.1.0_amd64.deb` |
 | Windows 10 1809 or later, x64 | Unzip `LookoutMarine-0.1.0-windows-x64.zip`, run `LookoutMarine.exe` |
 | Android 7 or later, arm64 | Install `LookoutMarine-0.1.0-android-arm64.apk` |
-| iPhone and iPad | Build it with Xcode. Refer to [macos/README.md](macos/README.md) |
+| iPhone and iPad | Build it with Xcode. Refer to [the build notes](https://beetlebugorg.github.io/lookout-marine/developer-guide/macos) |
 
 Downloads are on the [latest release](https://github.com/beetlebugorg/lookout-marine/releases/latest).
 
@@ -50,7 +50,7 @@ A boat runs off a battery, so power is a rule throughout: nothing repaints witho
 
 Lookout runs the S-101 Portrayal Catalogue, the standard's own Lua rules, against the features in the cell. Those rules decide every symbol, color and label on the chart.
 
-You get the settings that go with them: day, dusk and night palettes, display categories, two or four depth shades, your safety contour and safety depth, text and light-sector switches, a data-quality overlay. Refer to [mariner settings](docs/docs/user-guide/mariner-settings.md).
+You get the settings that go with them: day, dusk and night palettes, display categories, two or four depth shades, your safety contour and safety depth, text and light-sector switches, a data-quality overlay. Refer to [mariner settings](https://beetlebugorg.github.io/lookout-marine/user-guide/mariner-settings).
 
 ## Ready for S-101 before the charts are
 
@@ -60,13 +60,13 @@ A native S-101 dataset renders directly. An S-57 cell converts into the same mod
 
 Lookout ships with plugins for own ship, AIS, NMEA 0183, Signal K and laylines, so a gateway on the boat's network puts your position, your instruments and the traffic around you on the chart, with an alarm for a vessel that will pass close.
 
-A plugin is a WebAssembly module in a sandbox, with a manifest stating what it may reach. It can read the boat's data, publish its own, and render its own geometry on the chart. Write one in Zig, Go or Rust. Refer to [the plugin guide](docs/docs/developer-guide/plugins/index.md).
+A plugin is a WebAssembly module in a sandbox, with a manifest stating what it may reach. It can read the boat's data, publish its own, and render its own geometry on the chart. Write one in Zig, Go or Rust. Refer to [the plugin guide](https://beetlebugorg.github.io/lookout-marine/developer-guide/plugins/).
 
 ## Six native apps, written with AI
 
 A single cross-platform toolkit feels slightly wrong on every platform, and separate native apps drift apart as soon as one gains a feature first. AI removes that trade-off. Everything portable sits in a Zig core behind one C ABI, and above it each platform gets a real native app, written and kept in step with AI: SwiftUI on Apple, WinUI 3 on Windows, GTK4 on Linux, Compose on Android. There is no shared widget layer and no web view.
 
-Every app is then captured under [one protocol](docs/docs/developer-guide/screenshots.md), the same chart at the same camera and window size, so the platforms are compared frame to frame.
+Every app is then captured under [one protocol](https://beetlebugorg.github.io/lookout-marine/developer-guide/screenshots), the same chart at the same camera and window size, so the platforms are compared frame to frame.
 
 ## For developers
 
@@ -74,10 +74,13 @@ Every app is then captured under [one protocol](docs/docs/developer-guide/screen
 zig build && zig build plugins && zig build test
 ```
 
-The core is a static library with a C ABI ([`include/lookout.h`](include/lookout.h)), so you can put a chart in your own native app. The chart engine is a separate project, [tile57]. The architecture, the host notes and the plugin guide are in [the documentation](https://beetlebugorg.github.io/lookout-marine/).
+The core is a static library with a C ABI ([`include/lookout.h`](include/lookout.h)), so you can put a chart in your own native app. The architecture, the host notes and the plugin guide are in [the documentation](https://beetlebugorg.github.io/lookout-marine/).
+
+Two pieces of it are projects of their own, each a Zig library behind its own C ABI. [tile57] is the chart engine: ISO 8211 and S-57 decode, the conversion to S-101, the portrayal catalog, and the tiles it bakes from a cell. [charttable] is the renderer: it renders a MapLibre style and its vector tiles on the GPU through Metal, Vulkan or Direct3D 12, which is also what puts a pasted style link on screen as the chart.
 
 Contributions are welcome, and so are AI tools. A clear set of requirements, or a rough prototype of what you want, is more useful than a patch.
 
 MIT licensed. Refer to [LICENSE](LICENSE).
 
 [tile57]: https://github.com/beetlebugorg/tile57
+[charttable]: https://github.com/beetlebugorg/charttable
