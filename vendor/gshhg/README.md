@@ -15,4 +15,4 @@ This extract was copied from `web/basemap/` in [beetlebugorg/chartplotter](https
 
 ## License
 
-GSHHG is released under the GNU Lesser General Public License. The data are redistributed here unmodified. The rest of this repository is MIT; this directory is not.
+GSHHG is released under the GNU Lesser General Public License. The data are redistributed here unmodified. The rest of this repository is MIT; this directory is not. It is listed in [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md).
