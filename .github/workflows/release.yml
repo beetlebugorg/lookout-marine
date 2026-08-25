@@ -1,0 +1,305 @@
+name: Release
+
+# Cut a release by pushing a tag:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# Every platform builds its artifact, a GitHub release publishes them, and the
+# Homebrew tap picks up the dmg. A tag carrying a suffix (v0.2.0-rc1) publishes
+# as a prerelease and leaves the tap alone. A workflow_dispatch run builds the
+# artifacts (versioned 0.0.0) without touching a release, for trying the
+# pipeline from a branch.
+#
+# Secrets, all in the repository settings:
+#   MACOS_CERT_P12             base64 of the exported Developer ID Application .p12
+#   MACOS_CERT_PASSWORD        the passphrase on that export
+#   APPLE_TEAM_ID              the ten-character team id
+#   NOTARY_KEY_P8              the App Store Connect API key, the .p8 as is
+#                              (team key, Developer role — it can notarize and
+#                              nothing account-wide)
+#   NOTARY_KEY_ID              its key id
+#   NOTARY_ISSUER_ID           the issuer id shown on the keys page
+#   ANDROID_KEYSTORE_B64       base64 of the release keystore; without it the
+#                              APK ships unsigned and says so in its name
+#   ANDROID_KEYSTORE_PASSWORD  the keystore password
+#   ANDROID_KEY_ALIAS          the key alias inside it
+#   HOMEBREW_TAP_TOKEN         write access to the homebrew-tap repo; without
+#                              it the release stands and the tap goes stale
+#
+# Windows ships unsigned: there is no Windows certificate yet, so SmartScreen
+# warns on first run. iOS has no artifact here — it needs App Store Connect.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  macos:
+    name: macOS dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # A throwaway keychain holding the Developer ID Application certificate,
+      # on the search list so codesign resolves the identity by name.
+      - name: Import the signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Build, notarize and package
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          NOTARY_KEY_FILE="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$NOTARY_KEY_P8" > "$NOTARY_KEY_FILE"
+          export NOTARY_KEY_FILE
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          macos/release.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos-dmg
+          path: macos/build-mac/LookoutMarine-*.dmg
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        # aarch64 builds natively on the arm runner image; a GTK app wants the
+        # platform's own dev packages, not a cross sysroot.
+        include:
+          - { arch: x86_64, deb_arch: amd64, runner: ubuntu-24.04, wamr: linux-x64 }
+          - { arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm, wamr: linux-arm64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libvulkan-dev libx11-dev \
+                                  libwayland-dev libsoup-3.0-dev \
+                                  libjson-glib-dev libpng-dev libwebp-dev \
+                                  meson ninja-build
+
+      # The plugin host links the WAMR archive for this architecture.
+      - name: Build WAMR
+        run: scripts/build-wamr.sh ${{ matrix.wamr }}
+
+      - name: Build
+        working-directory: linux
+        run: |
+          meson setup build --buildtype=release --prefix=/usr
+          ninja -C build
+          DESTDIR="$PWD/dist" meson install -C build
+
+      # Two packages from one install tree: a tarball (tar keeps the
+      # executable bit) and a deb, its Depends read off the binary by
+      # dpkg-shlibdeps.
+      - name: Package
+        env:
+          ARCH: ${{ matrix.arch }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          tar -czf "LookoutMarine-$VERSION-linux-$ARCH.tar.gz" -C linux/dist usr
+          STAGE=deb-stage
+          mkdir -p "$STAGE/DEBIAN"
+          cp -a linux/dist/usr "$STAGE/usr"
+          mkdir -p debian && : > debian/control
+          DEPS="$(dpkg-shlibdeps -O "$STAGE/usr/bin/lookout-marine" | sed 's/^shlibs:Depends=//')"
+          cat > "$STAGE/DEBIAN/control" <<EOF
+          Package: lookout-marine
+          Version: $VERSION
+          Architecture: $DEB_ARCH
+          Maintainer: Jeremy Collins <jeremy.collins@beetlebug.org>
+          Section: misc
+          Priority: optional
+          Depends: $DEPS
+          Description: S-57/S-101 chartplotter
+           A native GTK4 chartplotter: the Lookout Marine chart core with wasm
+           plugins for own ship, AIS, NMEA 0183, Signal K and laylines.
+          EOF
+          dpkg-deb --build --root-owner-group "$STAGE" "lookout-marine_${VERSION}_${DEB_ARCH}.deb"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            LookoutMarine-*-linux-*.tar.gz
+            lookout-marine_*.deb
+
+  windows:
+    name: Windows zip
+    # x64, not ARM64: the aarch64-windows Zig 0.16.0 binary segfaults whenever
+    # it resolves the MSVC libc, which is every core and WAMR compile there.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build WAMR
+        shell: bash
+        run: scripts/build-wamr.sh windows-x64
+
+      - name: Build core
+        run: pwsh windows/build-core.ps1 -Configuration Release -Platform x64
+
+      - name: Build
+        run: |
+          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Release /p:Platform=x64
+          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=x64
+
+      # The build is self-contained: the Windows App SDK runtime and the
+      # plugins already sit beside the exe in the output directory.
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($env:GITHUB_REF_TYPE -ne 'tag') { $version = '0.0.0' }
+          Compress-Archive -Path windows\x64\Release\* `
+            -DestinationPath "LookoutMarine-$version-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows-zip
+          path: LookoutMarine-*-windows-x64.zip
+
+  android:
+    name: Android apk
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+
+      # The versions android/app/build.gradle names.
+      - name: Install NDK
+        run: sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build
+        working-directory: android
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          ./gradlew assembleRelease -PversionName="$VERSION" -PversionCode="$GITHUB_RUN_NUMBER"
+
+      # Signed when the keystore secrets exist. Without them the unsigned APK
+      # still ships, named so nobody mistakes it for something installable.
+      - name: Package
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            "$TOOLS/zipalign" -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+            "$TOOLS/apksigner" sign --ks "$RUNNER_TEMP/release.jks" \
+              --ks-pass env:KEYSTORE_PASSWORD --ks-key-alias "$KEY_ALIAS" \
+              --out "LookoutMarine-$VERSION-android-arm64.apk" "$RUNNER_TEMP/aligned.apk"
+          else
+            cp "$APK" "LookoutMarine-$VERSION-android-arm64-unsigned.apk"
+          fi
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: android-apk
+          path: LookoutMarine-*-android-arm64*.apk
+
+  publish:
+    name: Release
+    if: github.ref_type == 'tag'
+    needs: [macos, linux, windows, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REF_NAME" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
+          gh release create "$GITHUB_REF_NAME" $PRE --verify-tag \
+            --title "$GITHUB_REF_NAME" --generate-notes assets/*
+
+  homebrew:
+    name: Homebrew cask
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A token with write access to the tap repo. Without it the release
+      # still stands; only the tap goes stale.
+      - name: Update the Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set — skipping the tap update"
+            exit 0
+          fi
+          v="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 \
+            "https://x-access-token:$TAP_TOKEN@github.com/${{ github.repository_owner }}/homebrew-tap" tap
+          mkdir -p tap/Casks
+          scripts/brew-cask.sh "$v" dist > tap/Casks/lookout-marine.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/lookout-marine.rb
+          git diff --cached --quiet || git commit -m "lookout-marine $v"
+          git push

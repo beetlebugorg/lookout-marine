@@ -192,6 +192,7 @@ pub fn build(b: *std.Build) void {
     // everywhere else (charttable src/gpu/gpu.zig). Nothing to select here —
     // the shells link the loader their platform uses.
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
+    const is_linux = target.result.os.tag == .linux;
     // The wasm plugin host (src/plugin/). It builds for any target
     // scripts/build-wamr.sh has an archive for, and it is ON BY DEFAULT ON
     // APPLE ONLY. The Apple app links the runtime through the Xcode project
@@ -295,6 +296,10 @@ pub fn build(b: *std.Build) void {
         plugins: bool,
         /// The vendor/wamr-dist* directory for this target (see wamrDist).
         wamr_dir: []const u8,
+        /// charttable leaves the Vulkan loader to its host, so every
+        /// executable on a Vulkan target links it (the meson and gradle
+        /// shells do the same for theirs).
+        vk_loader: bool,
         /// `link_archives` adds the prebuilt archives (tile57, and WAMR when
         /// the plugin host is on): always for an exe, but for a static lib
         /// only where the linker copes with it (see addObjectFile below).
@@ -332,6 +337,7 @@ pub fn build(b: *std.Build) void {
             // reject it, so off Apple the host links libtile57.a alongside (both
             // are installed to <prefix>/lib below). Exes always link it.
             if (link_archives) mod.addObjectFile(self.tile57_lib);
+            if (link_archives and self.vk_loader) mod.linkSystemLibrary("vulkan", .{});
             if (self.plugins) {
                 // WAMR: wasm_export.h for the @cImport in src/plugin/wasm.zig,
                 // libvmlib.a for the interpreter itself. Both come from this
@@ -343,7 +349,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .vk_loader = is_android or is_linux };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -511,6 +517,7 @@ pub fn build(b: *std.Build) void {
         // world space, so they take its camera. Cheap for the roots that do
         // not: an unimported module is not analysed.
         mod.addImport("charttable", cfg.charttable_mod);
+        if (cfg.vk_loader) mod.linkSystemLibrary("vulkan", .{});
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
 

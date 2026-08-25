@@ -166,14 +166,21 @@ pub const Tiles = struct {
     /// Take charttable's outstanding asks and hand them to the workers. Call
     /// once per frame, from whichever thread drives the map.
     pub fn pump(self: *Tiles) void {
+        if (self.enqueueAsks() == 0) return;
+        // The pool may have stood down since the last ask.
+        self.start();
+    }
+
+    /// The drain half of pump, so a test can look at the queue with no
+    /// workers racing it.
+    fn enqueueAsks(self: *Tiles) usize {
         self.asks.clearRetainingCapacity();
         self.provider.drain(&self.asks, self.alloc);
-        if (self.asks.items.len == 0) return;
+        if (self.asks.items.len == 0) return 0;
         self.mu.lock();
         self.queue.appendSlice(self.alloc, self.asks.items) catch {};
         self.mu.unlock();
-        // The pool may have stood down since the last ask.
-        self.start();
+        return self.asks.items.len;
     }
 
     /// True while any tile is queued or being composed. The caller waits on
@@ -299,7 +306,7 @@ test "tiles: an ask with no composition is answered, not dropped" {
     const id = ct.coord.TileId{ .z = 5, .x = 9, .y = 12 };
     try std.testing.expect(src.fetch(src.ptr, arena.allocator(), id) == .not_ready);
 
-    t.pump();
+    _ = t.enqueueAsks();
     const job = t.take() orelse return error.NothingQueued;
     t.serve(job);
     try std.testing.expect(src.fetch(src.ptr, arena.allocator(), id) == .failed);
@@ -317,7 +324,7 @@ test "tiles: pump moves every ask onto the queue" {
         const id = ct.coord.TileId{ .z = 6, .x = @intCast(i), .y = 1 };
         try std.testing.expect(src.fetch(src.ptr, arena.allocator(), id) == .not_ready);
     }
-    t.pump();
+    _ = t.enqueueAsks();
     try std.testing.expectEqual(@as(usize, 3), t.queue.items.len);
     try std.testing.expect(t.busy());
 }

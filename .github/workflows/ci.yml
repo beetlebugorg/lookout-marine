@@ -26,17 +26,17 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      # The demo executable links the Vulkan loader.
-      - run: sudo apt-get update && sudo apt-get install -y libvulkan-dev
+      # The demo executable links the Vulkan loader; the system codecs decode
+      # the PNG and WebP raster tiles.
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan-dev libpng-dev libwebp-dev
 
-      # vk is the Linux shell's backend. The default here would be sdl, and no
-      # runner image package provides SDL3 for pkg-config.
-      - run: zig build -Dbackend=vk
+      # No -Dbackend: charttable picks the renderer off the target, Vulkan here.
+      - run: zig build
 
       # `zig build` does not rebuild the plugin wasm; `plugins` does.
       - run: zig build plugins
 
-      - run: zig build test -Dbackend=vk
+      - run: zig build test
 
   linux:
     name: Linux app
@@ -51,7 +51,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libvulkan-dev libx11-dev \
-                                  libwayland-dev meson ninja-build
+                                  libwayland-dev libsoup-3.0-dev \
+                                  libjson-glib-dev libpng-dev libwebp-dev \
+                                  meson ninja-build
 
       # The plugin host links the WAMR archive for this architecture. Without
       # it meson needs -Dplugins=false, and the app has no own ship, no traffic

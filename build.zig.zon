@@ -19,8 +19,8 @@
         // charttable draws the chart: it holds the style, the tile sources, the
         // tessellators and the GPU. Same local-or-pinned pair as tile57.
         .charttable = .{
-            .url = "git+https://github.com/beetlebugorg/charttable#3dea11b274861816837e03991ee0128f444b083e",
-            .hash = "charttable-0.1.0-3P4mHruXGACalmkg_lIuYpFtnoAFwxRKO2a58rjp1daq",
+            .url = "git+https://github.com/beetlebugorg/charttable#0d137fa893e3215d02d0237c7d3112136734d4bd",
+            .hash = "charttable-0.0.0-dev-3P4mHoutGAA3ROfBFD4ciNuSgIIZuMei65EQhPfKmQaD",
             .lazy = true,
         },
         .charttable_local = .{ .path = "../charttable", .lazy = true },
