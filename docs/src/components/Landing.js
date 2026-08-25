@@ -201,7 +201,7 @@ export function DepthLadderHero() {
         </div>
         <div className="lm-hero__actions">
           <Link className="lm-btn lm-btn--primary" to="/user-guide/getting-started">
-            Download and get started
+            Getting started
           </Link>
           <Link className="lm-btn" to="/developer-guide/architecture#building-the-core">
             Build from source
