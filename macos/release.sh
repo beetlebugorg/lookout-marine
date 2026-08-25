@@ -33,12 +33,12 @@ NOTARY=(--key "$NOTARY_KEY_FILE" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISS
 # is anything but Accepted. The status is read from the JSON output rather
 # than the exit code, which does not carry the verdict.
 notarize() {
-  local out id status
+  local out id verdict
   out=$(xcrun notarytool submit "$1" "${NOTARY[@]}" --wait --output-format json)
   id=$(echo "$out" | plutil -extract id raw -o - -)
-  status=$(echo "$out" | plutil -extract status raw -o - -)
-  echo "notary: ${1:t} $status ($id)"
-  if [[ "$status" != "Accepted" ]]; then
+  verdict=$(echo "$out" | plutil -extract status raw -o - -)
+  echo "notary: ${1:t} $verdict ($id)"
+  if [[ "$verdict" != "Accepted" ]]; then
     xcrun notarytool log "$id" "${NOTARY[@]}" >&2
     return 1
   fi
