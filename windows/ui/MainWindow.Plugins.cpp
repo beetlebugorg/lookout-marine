@@ -345,7 +345,10 @@ namespace winrt::LookoutMarine::implementation
                         {
                             // Kept as text and typed again when a row takes it,
                             // which is what a cell of a row is here anyway.
-                            JsonValue value = cell.Value();
+                            // A JsonObject iterates as IJsonValue, which reads
+                            // every kind here without asking for the concrete
+                            // JsonValue.
+                            IJsonValue value = cell.Value();
                             std::string text;
                             switch (value.ValueType())
                             {
