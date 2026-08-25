@@ -278,9 +278,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .webp = use_webp,
         .libpng = use_libpng,
-        // From source on Apple: iOS has no package manager, and the Xcode
-        // cross builds must not lean on the machine's Homebrew set.
-        .@"codec-source" = is_apple,
     };
     const charttable_dep = (if (haveLocalDep(b, "charttable"))
         b.lazyDependency("charttable_local", charttable_args)
