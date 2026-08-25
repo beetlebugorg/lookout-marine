@@ -12,7 +12,7 @@ reads two kinds:
 - **MBTiles.** Satellite imagery, or another vendor's chart rendered to tiles.
   Cruisers publish these for coasts the ENC covers poorly.
 - **BSB/KAP.** Raster nautical charts, such as the discontinued NOAA RNC
-  sheets, baked with tile57.
+  sheets. Lookout converts a sheet when you add it, the same as an ENC cell.
 
 The ENC gives you the depths, the aids and the hazards. It cannot show you what
 is there now: the coral heads, the sand bar across the entrance, the breakwater
