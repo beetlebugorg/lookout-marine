@@ -29,6 +29,7 @@
 
 const std = @import("std");
 const cc = @import("../c.zig").c;
+const basemap = @import("../basemap.zig");
 
 /// The style source name the template writes, and the name the host binds its
 /// tile provider to. Kept here so the template and the binding cannot drift.
@@ -180,6 +181,16 @@ pub fn build(inputs: Inputs) Error!Style {
         style = .{ .json = spliced, .alloc = std.heap.c_allocator };
     }
 
+    // The world coastline, under every chart layer and above the style's own
+    // background. It renders wherever the chart does not reach, which is the
+    // whole window until a chart opens.
+    {
+        const spliced = spliceBasemap(std.heap.c_allocator, style.json, inputs.mariner.scheme) catch
+            return Error.SpliceFailed;
+        style.deinit();
+        style = .{ .json = spliced, .alloc = std.heap.c_allocator };
+    }
+
     // LOOKOUT_STYLE_DUMP=<path>: write the built style out. The sizes in it
     // (icon-size, line-width, text-size) are the only way to see what unit the
     // engine is speaking, and guessing at that is what made the symbols wrong
@@ -190,6 +201,75 @@ pub fn build(inputs: Inputs) Error!Style {
     }
 
     return style;
+}
+
+/// Splice the basemap's source and layers into a built style. Same scanner
+/// approach as the raster splice below, at a different insertion point: the
+/// layers go in front of the first layer that is not a `background`, so the
+/// coastline covers the style's own backdrop and every chart layer covers the
+/// coastline.
+fn spliceBasemap(alloc: std.mem.Allocator, json: []const u8, scheme: cc.tile57_scheme) ![]u8 {
+    const src = try basemap.sourceJson(alloc);
+    defer alloc.free(src);
+    const lyrs = try basemap.layersJson(alloc, scheme);
+    defer alloc.free(lyrs);
+
+    const src_tag = "\"sources\":{";
+    const src_at = (std.mem.indexOf(u8, json, src_tag) orelse return error.NoSources) + src_tag.len;
+    const lyr_tag = "\"layers\":[";
+    const lyr_start = (std.mem.indexOf(u8, json, lyr_tag) orelse return error.NoLayers) + lyr_tag.len;
+    const lyr_at = layerInsertAfterBackground(json, lyr_start);
+    if (lyr_at < src_at) return error.NoLayers; // generator order: sources first
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    try out.appendSlice(alloc, json[0..src_at]);
+    try out.appendSlice(alloc, src);
+    try out.appendSlice(alloc, json[src_at..lyr_at]);
+    try out.appendSlice(alloc, lyrs);
+    try out.appendSlice(alloc, json[lyr_at..]);
+    return out.toOwnedSlice(alloc);
+}
+
+/// Scanning from just past `"layers":[`: the offset of the first layer object
+/// whose "type" is not "background", or the array's closing bracket when they
+/// all are.
+fn layerInsertAfterBackground(json: []const u8, start: usize) usize {
+    var i = start;
+    var depth: usize = 0;
+    var in_str = false;
+    var esc = false;
+    var obj_start: usize = start;
+    while (i < json.len) : (i += 1) {
+        const ch = json[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (ch == '\\') {
+                esc = true;
+            } else if (ch == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        switch (ch) {
+            '"' => in_str = true,
+            '{' => {
+                if (depth == 0) obj_start = i;
+                depth += 1;
+            },
+            '}' => {
+                depth -= 1;
+                if (depth == 0 and std.mem.indexOf(u8, json[obj_start .. i + 1], "\"type\":\"background\"") == null)
+                    return obj_start;
+            },
+            ']' => {
+                if (depth == 0) return i;
+            },
+            else => {},
+        }
+    }
+    return json.len;
 }
 
 /// Splice the raster underlay's sources and layers into a built style.
@@ -442,4 +522,37 @@ test "the template names the source the host binds" {
     // The two must agree, or every tile request goes to a source charttable
     // has never heard of and the chart stays empty.
     try std.testing.expect(std.mem.startsWith(u8, tiles_url, source_name ++ "/"));
+}
+
+test "the basemap splices above the background and below the chart" {
+    // The order is the whole point: the coastline must cover the style's own
+    // backdrop and be covered by every chart layer.
+    const json =
+        \\{"version":8,
+        \\ "sources":{"chart":{"type":"vector","tiles":["chart/{z}/{x}/{y}"]}},
+        \\ "layers":[{"id":"bg","type":"background"},
+        \\           {"id":"depare","type":"fill","source":"chart"},
+        \\           {"id":"coalne","type":"line","source":"chart"}]}
+    ;
+    const out = try spliceBasemap(std.testing.allocator, json, cc.TILE57_SCHEME_DAY);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"basemap\":{\"type\":\"vector\"") != null);
+    const bg = std.mem.indexOf(u8, out, "\"id\":\"bg\"").?;
+    const land = std.mem.indexOf(u8, out, "\"id\":\"basemap-land\"").?;
+    const coast = std.mem.indexOf(u8, out, "\"id\":\"basemap-coast\"").?;
+    const depare = std.mem.indexOf(u8, out, "\"id\":\"depare\"").?;
+    try std.testing.expect(bg < land);
+    try std.testing.expect(land < coast);
+    try std.testing.expect(coast < depare);
+}
+
+test "the basemap dims with the colour scheme" {
+    // A night chart with daylight-grey land in it costs the dark adaptation
+    // the palette exists to protect.
+    const day = try basemap.layersJson(std.testing.allocator, cc.TILE57_SCHEME_DAY);
+    defer std.testing.allocator.free(day);
+    const night = try basemap.layersJson(std.testing.allocator, cc.TILE57_SCHEME_NIGHT);
+    defer std.testing.allocator.free(night);
+    try std.testing.expect(!std.mem.eql(u8, day, night));
 }
