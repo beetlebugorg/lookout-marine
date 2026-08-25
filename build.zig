@@ -520,6 +520,7 @@ pub fn build(b: *std.Build) void {
         // world space, so they take its camera. Cheap for the roots that do
         // not: an unimported module is not analysed.
         mod.addImport("charttable", cfg.charttable_mod);
+        if (cfg.vk_loader) mod.linkSystemLibrary("vulkan", .{});
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
 
