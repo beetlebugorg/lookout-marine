@@ -16,7 +16,7 @@ The data and the full statement are in [vendor/gshhg](vendor/gshhg/README.md).
 
 The runtime that executes the wasm plugins, linked into the core.
 
-Copyright the Intel Corporation and the WAMR contributors. Apache License 2.0. Full text in [vendor/wamr/LICENSE](vendor/wamr/LICENSE). <https://github.com/bytecodealliance/wasm-micro-runtime>
+Copyright the Intel Corporation and the WAMR contributors. Apache License 2.0 with the LLVM exception (`Apache-2.0 WITH LLVM-exception`). Full text, including the exception, in [vendor/wamr/LICENSE](vendor/wamr/LICENSE). <https://github.com/bytecodealliance/wasm-micro-runtime>
 
 ## stb_image
 
