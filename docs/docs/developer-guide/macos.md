@@ -16,7 +16,7 @@ link, the backing scale and the raw input are behind `#if os(...)`.
 
 ## Before you build
 
-- **Xcode.** The deployment targets are macOS 14 and iOS 15.
+- **Xcode.** The deployment targets are macOS 26 and iOS 26.
 - **Zig 0.16** and **XcodeGen** (`brew install zig xcodegen`).
 
 tile57 is not a prerequisite. It is a Zig package dependency of the core.

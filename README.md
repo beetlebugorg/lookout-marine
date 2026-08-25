@@ -30,7 +30,7 @@
 | Android 7 or later, arm64 | Install `LookoutMarine-0.1.0-android-arm64.apk` |
 | iPhone and iPad | Build it with Xcode. Refer to [the build notes](https://beetlebugorg.github.io/lookout-marine/developer-guide/macos) |
 
-Downloads are on the [latest release](https://github.com/beetlebugorg/lookout-marine/releases/latest).
+Downloads are on the [latest release](https://github.com/beetlebugorg/lookout-marine/releases/latest). [Getting started](https://beetlebugorg.github.io/lookout-marine/user-guide/getting-started) has the steps for each platform.
 
 ## Getting charts
 

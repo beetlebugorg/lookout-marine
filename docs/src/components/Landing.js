@@ -201,9 +201,9 @@ export function DepthLadderHero() {
         </div>
         <div className="lm-hero__actions">
           <Link className="lm-btn lm-btn--primary" to="/user-guide/getting-started">
-            Getting started
+            Download and get started
           </Link>
-          <Link className="lm-btn" to="/developer-guide/architecture">
+          <Link className="lm-btn" to="/developer-guide/architecture#building-the-core">
             Build from source
           </Link>
         </div>
@@ -268,7 +268,7 @@ const GUIDES = [
       'var(--chart-depms)',
       'var(--chart-depvs)',
     ],
-    body: 'Turn ENC cells into a chart, open it, and find your way around the display. Getting started, the chart window, moving the chart, mariner settings, raster charts.',
+    body: 'Install the app, open a folder of ENC cells as one chart, and find your way around the display. Getting started, the chart window, moving the chart, mariner settings, raster charts.',
   },
   {
     to: '/developer-guide/architecture',
