@@ -38,6 +38,10 @@ android {
             .dependsOn("externalNativeBuild${variant.name.capitalize()}",
                        "stageBundledPlugins")
     }
+    // The release lint tasks read the staged plugin assets too.
+    tasks.matching { it.name.toLowerCase().contains('lintvital') }.configureEach {
+        dependsOn 'stageBundledPlugins'
+    }
     sourceSets.main {
         jniLibs.srcDir 'libs'
         // The plugin assets' generated source dir is registered beside the
