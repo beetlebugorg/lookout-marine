@@ -14,6 +14,12 @@
 //!
 //! Geometry below a display pixel is dropped rather than encoded, which is
 //! what keeps the world at z0 to a few kilobytes.
+//!
+//! Every tile in the zoom range is written, including the ones with nothing in
+//! them. A gap is not the same as an empty tile: charttable answers a missing
+//! tile from its parent, so an ocean tile left out comes back as whatever the
+//! parent had there, which is a continent's worth of fill over open water.
+//! Empty tiles all hash alike and cost one blob between them.
 
 const std = @import("std");
 const tiles = @import("tiles");
@@ -61,16 +67,14 @@ pub fn main(init: std.process.Init) !void {
     const arena = arena_state.allocator();
 
     const polys = try readPolys(arena, text);
-    std.debug.print("polygons {d}\n", .{polys.len});
 
     var w = pmtiles.StreamWriter.init(gpa);
     defer w.deinit();
 
+    // Quiet on success: a build step that writes to stderr is reported as a
+    // failed command even when it exits 0.
     var z: u8 = 0;
-    while (z <= MAX_ZOOM) : (z += 1) {
-        const n = try bakeZoom(gpa, arena, &w, polys, z);
-        std.debug.print("z{d} tiles {d}\n", .{ z, n });
-    }
+    while (z <= MAX_ZOOM) : (z += 1) try bakeZoom(gpa, arena, &w, polys, z);
 
     const out = try w.finishBytes(.{
         .metadata_json =
@@ -79,17 +83,28 @@ pub fn main(init: std.process.Init) !void {
     });
     defer gpa.free(out);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args[2], .data = out });
-    std.debug.print("{s} {d} bytes\n", .{ args[2], out.len });
 }
 
 /// The GeoJSON as projected polygons. Every GSHHG feature is a single closed
 /// ring, so a feature is one polygon and no hole handling arises.
+///
+/// A ring that crosses the antimeridian arrives as one ring that steps from
+/// +180 straight to -180. Taken literally that step is a segment across the
+/// whole world, which floods a continent's worth of fill and leaves horizontal
+/// lines behind it. So longitudes are unwrapped first, and a ring that then
+/// reaches past the seam is emitted a second time, shifted a full turn, for
+/// the tiles on the other side.
 fn readPolys(arena: std.mem.Allocator, text: []const u8) ![]Poly {
     var parsed = try std.json.parseFromSlice(std.json.Value, arena, text, .{});
     defer parsed.deinit();
 
     const feats = parsed.value.object.get("features") orelse return error.NoFeatures;
     var out: std.ArrayList(Poly) = .empty;
+    var lons: std.ArrayList(f64) = .empty;
+    defer lons.deinit(arena);
+    var lats: std.ArrayList(f64) = .empty;
+    defer lats.deinit(arena);
+
     for (feats.array.items) |f| {
         const geom = f.object.get("geometry") orelse continue;
         const rings = geom.object.get("coordinates") orelse continue;
@@ -107,20 +122,45 @@ fn readPolys(arena: std.mem.Allocator, text: []const u8) ![]Poly {
         };
         if (level != 1 and level != 2) continue;
 
-        const pts = try arena.alloc([2]f64, ring.len);
-        var min = [2]f64{ 1, 1 };
-        var max = [2]f64{ 0, 0 };
-        for (ring, 0..) |p, i| {
+        lons.clearRetainingCapacity();
+        lats.clearRetainingCapacity();
+        var lo: f64 = 180;
+        var hi: f64 = -180;
+        for (ring) |p| {
             const c = p.array.items;
-            pts[i] = tmath.lonLatToWorld(num(c[0]), num(c[1]));
-            min[0] = @min(min[0], pts[i][0]);
-            min[1] = @min(min[1], pts[i][1]);
-            max[0] = @max(max[0], pts[i][0]);
-            max[1] = @max(max[1], pts[i][1]);
+            var lon = num(c[0]);
+            if (lons.items.len != 0) {
+                const prev = lons.items[lons.items.len - 1];
+                while (lon - prev > 180) lon -= 360;
+                while (prev - lon > 180) lon += 360;
+            }
+            try lons.append(arena, lon);
+            try lats.append(arena, num(c[1]));
+            lo = @min(lo, lon);
+            hi = @max(hi, lon);
         }
-        try out.append(arena, .{ .level = level, .pts = pts, .min = min, .max = max });
+
+        try out.append(arena, try project(arena, level, lons.items, lats.items, 0));
+        // The part that ran off one end of the world belongs at the other.
+        if (hi > 180) try out.append(arena, try project(arena, level, lons.items, lats.items, -360));
+        if (lo < -180) try out.append(arena, try project(arena, level, lons.items, lats.items, 360));
     }
     return out.toOwnedSlice(arena);
+}
+
+/// One ring in normalised web-mercator, `shift` degrees of longitude along.
+fn project(arena: std.mem.Allocator, level: u8, lons: []const f64, lats: []const f64, shift: f64) !Poly {
+    const pts = try arena.alloc([2]f64, lons.len);
+    var min = [2]f64{ std.math.floatMax(f64), std.math.floatMax(f64) };
+    var max = [2]f64{ -std.math.floatMax(f64), -std.math.floatMax(f64) };
+    for (lons, lats, 0..) |lon, lat, i| {
+        pts[i] = tmath.lonLatToWorld(lon + shift, lat);
+        min[0] = @min(min[0], pts[i][0]);
+        min[1] = @min(min[1], pts[i][1]);
+        max[0] = @max(max[0], pts[i][0]);
+        max[1] = @max(max[1], pts[i][1]);
+    }
+    return .{ .level = level, .pts = pts, .min = min, .max = max };
 }
 
 fn num(v: std.json.Value) f64 {
@@ -131,14 +171,14 @@ fn num(v: std.json.Value) f64 {
     };
 }
 
-/// Write every non-empty tile of one zoom. Answers how many were written.
+/// Write every non-empty tile of one zoom.
 fn bakeZoom(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     w: *pmtiles.StreamWriter,
     polys: []const Poly,
     z: u8,
-) !usize {
+) !void {
     const side: u32 = @as(u32, 1) << @intCast(z);
     const sidef: f64 = @floatFromInt(side);
     // The clip box reaches one buffer past the tile, so a polygon whose bounds
@@ -171,7 +211,10 @@ fn bakeZoom(
         }
     }
 
-    var written: usize = 0;
+    // The tiles that got geometry, so the gaps can be filled below.
+    var written = std.AutoHashMap(u64, void).init(gpa);
+    defer written.deinit();
+
     var it = buckets.iterator();
     while (it.next()) |e| {
         const tx: u32 = @truncate(e.key_ptr.*);
@@ -217,10 +260,22 @@ fn bakeZoom(
         const bytes = try mvt.encode(gpa, .{ .layers = layers.items });
         defer gpa.free(bytes);
         try w.add(z, tx, ty, bytes);
-        written += 1;
+        try written.put(e.key_ptr.*, {});
+    }
+
+    // One layer, no features: a tile that says "nothing here" rather than one
+    // the map has to guess at.
+    const empty = try mvt.encode(gpa, .{ .layers = &.{.{ .name = "land", .features = &.{} }} });
+    defer gpa.free(empty);
+    var y: u32 = 0;
+    while (y < side) : (y += 1) {
+        var x: u32 = 0;
+        while (x < side) : (x += 1) {
+            if (written.contains((@as(u64, y) << 32) | x)) continue;
+            try w.add(z, x, y, empty);
+        }
     }
     _ = arena;
-    return written;
 }
 
 /// One polygon in this tile's coordinates, with the points the quantisation
