@@ -52,13 +52,12 @@ final class Discovery: NSObject, ObservableObject {
     /// caller may hand it the same list on every pass.
     func browse(_ services: [String]) {
         let want = Set(services.map(Self.normalize))
-        for (type, browser) in browsers where !want.contains(type) {
-            browser.stop()
-            browsers[type] = nil
+        for type in browsers.keys.filter({ !want.contains($0) }) {
+            browsers.removeValue(forKey: type)?.stop()
             found.removeAll { $0.service == type }
             // A resolve in flight for this type would otherwise answer after
             // the browse stopped and put the find back.
-            for service in resolving where Self.normalize(service.type) == type {
+            for service in resolving.filter({ Self.normalize($0.type) == type }) {
                 service.stop()
                 resolving.remove(service)
             }
