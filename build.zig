@@ -287,37 +287,37 @@ pub fn build(b: *std.Build) void {
     const charttable_mod = charttable_dep.module("charttable");
 
     // ---- the basemap bake ----
-    // vendor/gshhg/coastline.geojson.gz -> basemap.pmtiles, which
-    // src/basemap.zig embeds. Generated rather than committed, so the source
-    // data is the only copy of the coastline in the tree. tile57 is
-    // instantiated for the HOST here: the bake is a build-time tool, and the
-    // app's target may be a phone.
-    const host_t57 = (if (haveLocalDep(b, "tile57"))
+    // vendor/gshhg/coastline.geojson.gz -> vendor/gshhg/basemap.pmtiles, which
+    // src/basemap.zig embeds. The archive is committed and this step is the
+    // only thing that writes it, so an app build never compiles the tool.
+    //
+    // It CANNOT ride an ordinary build. The Apple targets pass --sysroot for
+    // their cross compile, that flag reaches every compile in the invocation,
+    // and a host tool built under a phone's SDK has no libc to link against.
+    const basemap_step = b.step("basemap", "Bake vendor/gshhg/coastline.geojson.gz into basemap.pmtiles");
+    if (if (haveLocalDep(b, "tile57"))
         b.lazyDependency("tile57_local", .{ .target = b.graph.host, .optimize = .ReleaseFast })
     else
-        b.lazyDependency("tile57", .{ .target = b.graph.host, .optimize = .ReleaseFast })) orelse
-        return; // fetch scheduled; the runner downloads it and re-runs build()
-    const bake_mod = b.createModule(.{
-        .root_source_file = b.path("tools/basemap.zig"),
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
-        .link_libc = true,
-    });
-    bake_mod.addImport("tiles", host_t57.module("tiles"));
-    const bake = b.addRunArtifact(b.addExecutable(.{ .name = "lookout-basemap", .root_module = bake_mod }));
-    bake.addFileArg(b.path("vendor/gshhg/coastline.geojson.gz"));
-    const basemap_pmtiles = bake.addOutputFileArg("basemap.pmtiles");
-    // `zig build basemap` puts a copy where it can be looked at; the app
-    // build never needs this step, it takes the file straight from the cache.
-    const basemap_step = b.step("basemap", "Bake the world basemap and install a copy in zig-out");
-    basemap_step.dependOn(&b.addInstallFileWithDir(basemap_pmtiles, .prefix, "basemap.pmtiles").step);
+        b.lazyDependency("tile57", .{ .target = b.graph.host, .optimize = .ReleaseFast })) |host_t57|
+    {
+        const bake_mod = b.createModule(.{
+            .root_source_file = b.path("tools/basemap.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .link_libc = true,
+        });
+        bake_mod.addImport("tiles", host_t57.module("tiles"));
+        const bake = b.addRunArtifact(b.addExecutable(.{ .name = "lookout-basemap", .root_module = bake_mod }));
+        bake.addFileArg(b.path("vendor/gshhg/coastline.geojson.gz"));
+        bake.addArg("vendor/gshhg/basemap.pmtiles");
+        basemap_step.dependOn(&bake.step);
+    }
 
     const Cfg = struct {
         b: *std.Build,
         tile57_inc: std.Build.LazyPath,
         tile57_lib: std.Build.LazyPath,
         charttable_mod: *std.Build.Module,
-        basemap_pmtiles: std.Build.LazyPath,
         android: bool,
         build_opts_mod: *std.Build.Module,
         plugins: bool,
@@ -334,11 +334,13 @@ pub fn build(b: *std.Build) void {
             const bb = self.b;
             mod.addImport("build_options", self.build_opts_mod); // the plugin-host switch
             mod.addImport("charttable", self.charttable_mod);
-            // The world coastline src/basemap.zig embeds, as the bake wrote
-            // it. An anonymous import rather than a path: @embedFile cannot
-            // reach outside the module's own directory, and a generated file
-            // is not in one.
-            mod.addAnonymousImport("basemap_pmtiles", .{ .root_source_file = self.basemap_pmtiles });
+            // The world coastline src/basemap.zig embeds. An anonymous import
+            // rather than a path: @embedFile cannot reach outside the module's
+            // own directory, and the archive sits in vendor/ beside the source
+            // data it was baked from.
+            mod.addAnonymousImport("basemap_pmtiles", .{
+                .root_source_file = bb.path("vendor/gshhg/basemap.pmtiles"),
+            });
             if (self.android) {
                 // Neutralise bionic's nullability keywords for OUR parse: clang's
                 // translate-c (@cImport of stb_image.h -> stdlib.h) rejects
@@ -381,7 +383,7 @@ pub fn build(b: *std.Build) void {
             }
         }
     };
-    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .basemap_pmtiles = basemap_pmtiles, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .vk_loader = is_android or is_linux };
+    const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .vk_loader = is_android or is_linux };
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{

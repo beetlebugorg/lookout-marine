@@ -1,6 +1,8 @@
-//! Bakes the vendored GSHHG coastline into the PMTiles archive the core
-//! embeds. The build runs this: the archive is generated, not committed, and
-//! `zig build basemap` writes a copy out for inspection.
+//! Bakes the vendored GSHHG coastline into vendor/gshhg/basemap.pmtiles, the
+//! archive the core embeds. `zig build basemap` is the only thing that runs
+//! it, and the archive is committed: an app build cannot bake, because the
+//! Apple targets hand zig a phone SDK as the sysroot and a host tool built
+//! under that has no libc.
 //!
 //! The input is the vendored GeoJSON, gzipped or plain.
 //!

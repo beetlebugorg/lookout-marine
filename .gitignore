@@ -43,7 +43,3 @@ test/annapolis.nmea
 
 # Claude Code agent worktrees / session data
 .claude/
-
-# The world basemap is baked from vendor/gshhg/coastline.geojson.gz at build
-# time, not committed.
-vendor/gshhg/basemap.pmtiles

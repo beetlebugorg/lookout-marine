@@ -2,7 +2,7 @@
 
 `coastline.geojson` is a low-resolution extract of the Global Self-consistent, Hierarchical, High-resolution Geography Database (GSHHG). It holds 10,107 polygons: `level` 1 is the land/ocean boundary, `level` 2 is the lake/land boundary.
 
-`tools/basemap.zig` bakes it into `basemap.pmtiles`, the vector tiles the core embeds.
+`tools/basemap.zig` bakes it into `basemap.pmtiles`, the vector tiles the core embeds. That archive is committed beside it; `zig build basemap` writes it again after a change to the data or the baker.
 
 ## Source
 
