@@ -286,6 +286,33 @@ pub fn build(b: *std.Build) void {
         return; // fetch scheduled; the runner downloads it and re-runs build()
     const charttable_mod = charttable_dep.module("charttable");
 
+    // ---- the basemap bake ----
+    // vendor/gshhg/coastline.geojson.gz -> vendor/gshhg/basemap.pmtiles, which
+    // src/basemap.zig embeds. The archive is committed and this step is the
+    // only thing that writes it, so an app build never compiles the tool.
+    //
+    // It CANNOT ride an ordinary build. The Apple targets pass --sysroot for
+    // their cross compile, that flag reaches every compile in the invocation,
+    // and a host tool built under a phone's SDK has no libc to link against.
+    const basemap_step = b.step("basemap", "Bake vendor/gshhg/coastline.geojson.gz into basemap.pmtiles");
+    if (if (haveLocalDep(b, "tile57"))
+        b.lazyDependency("tile57_local", .{ .target = b.graph.host, .optimize = .ReleaseFast })
+    else
+        b.lazyDependency("tile57", .{ .target = b.graph.host, .optimize = .ReleaseFast })) |host_t57|
+    {
+        const bake_mod = b.createModule(.{
+            .root_source_file = b.path("tools/basemap.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .link_libc = true,
+        });
+        bake_mod.addImport("tiles", host_t57.module("tiles"));
+        const bake = b.addRunArtifact(b.addExecutable(.{ .name = "lookout-basemap", .root_module = bake_mod }));
+        bake.addFileArg(b.path("vendor/gshhg/coastline.geojson.gz"));
+        bake.addArg("vendor/gshhg/basemap.pmtiles");
+        basemap_step.dependOn(&bake.step);
+    }
+
     const Cfg = struct {
         b: *std.Build,
         tile57_inc: std.Build.LazyPath,
@@ -307,6 +334,13 @@ pub fn build(b: *std.Build) void {
             const bb = self.b;
             mod.addImport("build_options", self.build_opts_mod); // the plugin-host switch
             mod.addImport("charttable", self.charttable_mod);
+            // The world coastline src/basemap.zig embeds. An anonymous import
+            // rather than a path: @embedFile cannot reach outside the module's
+            // own directory, and the archive sits in vendor/ beside the source
+            // data it was baked from.
+            mod.addAnonymousImport("basemap_pmtiles", .{
+                .root_source_file = bb.path("vendor/gshhg/basemap.pmtiles"),
+            });
             if (self.android) {
                 // Neutralise bionic's nullability keywords for OUR parse: clang's
                 // translate-c (@cImport of stb_image.h -> stdlib.h) rejects

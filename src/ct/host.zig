@@ -31,6 +31,7 @@ const ct = @import("charttable");
 const cstyle = @import("style.zig");
 const ctiles = @import("tiles.zig");
 const cprovided = @import("provided.zig");
+const cbasemap = @import("../basemap.zig");
 const Lock = @import("../lock.zig").Lock;
 const RwLock = @import("../lock.zig").RwLock;
 const clock = @import("../clock.zig");
@@ -84,6 +85,10 @@ pub const Host = struct {
     provided: cprovided.Provided,
     /// The single-chart path: charttable reads the archive itself.
     archive: ?*Archive = null,
+    /// The embedded world coastline, bound once and re-bound after every
+    /// style set. Held for the host's life: it is the same archive whatever
+    /// chart is open.
+    basemap: ?*cbasemap.Basemap = null,
 
     /// The raster underlay's providers, re-bound by name after every setStyle
     /// (a new style is a new parse, and bindings do not survive it). The
@@ -172,6 +177,10 @@ pub const Host = struct {
         var it = self.reported.keyIterator();
         while (it.next()) |k| self.alloc.free(k.*);
         self.reported.deinit(self.alloc);
+        // After the map has stopped: it holds the source this binds, and the
+        // chart archive below, for as long as it runs.
+        if (self.basemap) |b| b.destroy(self.alloc);
+        self.basemap = null;
         self.closeArchive();
     }
 
@@ -288,6 +297,8 @@ pub const Host = struct {
                 std.debug.print("raster: bind '{s}' failed\n", .{b.name});
             };
         }
+        // The basemap's archive, for the same reason.
+        try self.bindBasemap();
         // A new style re-lays-out everything, so nothing the GPU holds is
         // current.
         self.uploaded = .{};
@@ -318,6 +329,18 @@ pub const Host = struct {
             const s = self.provided.source(name) catch return Error.OutOfMemory;
             _ = self.m.bindProvider(name, &s.provider) catch return Error.SourceFailed;
         }
+    }
+
+    /// Point the basemap source at the embedded archive. Only ever called for
+    /// the engine's own style: an alt style that happens to name a source
+    /// "basemap" means the publisher's, and that one is the host's to serve.
+    fn bindBasemap(self: *Host) Error!void {
+        const st = self.m.style orelse return;
+        if (!st.sources.contains(cbasemap.source_name)) return;
+        if (self.basemap == null)
+            self.basemap = cbasemap.Basemap.create(self.alloc) catch return Error.SourceFailed;
+        _ = self.m.bindPmtiles(cbasemap.source_name, &self.basemap.?.src) catch
+            return Error.SourceFailed;
     }
 
     /// Whether a style source name is the HOST's to serve. The mariner's chart

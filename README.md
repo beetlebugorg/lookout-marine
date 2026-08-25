@@ -80,7 +80,7 @@ Two pieces of it are projects of their own, each a Zig library behind its own C 
 
 Contributions are welcome, and so are AI tools. A clear set of requirements, or a rough prototype of what you want, is more useful than a patch.
 
-MIT licensed. Refer to [LICENSE](LICENSE).
+MIT licensed. Refer to [LICENSE](LICENSE). The components the app carries, and their terms, are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 [tile57]: https://github.com/beetlebugorg/tile57
 [charttable]: https://github.com/beetlebugorg/charttable
