@@ -1,0 +1,233 @@
+name: Release
+
+# Cut a release by pushing a tag:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# Every platform builds its artifact and a draft GitHub release collects them;
+# publishing the draft is a manual step. A workflow_dispatch run builds the
+# artifacts (versioned 0.0.0) without touching a release, for trying the
+# pipeline from a branch.
+#
+# Secrets, all in the repository settings:
+#   MACOS_CERT_P12             base64 of the exported Developer ID Application .p12
+#   MACOS_CERT_PASSWORD        the passphrase on that export
+#   APPLE_TEAM_ID              the ten-character team id
+#   NOTARY_KEY_P8              the App Store Connect API key, the .p8 as is
+#                              (team key, Developer role — it can notarize and
+#                              nothing account-wide)
+#   NOTARY_KEY_ID              its key id
+#   NOTARY_ISSUER_ID           the issuer id shown on the keys page
+#   ANDROID_KEYSTORE_B64       base64 of the release keystore; without it the
+#                              APK ships unsigned and says so in its name
+#   ANDROID_KEYSTORE_PASSWORD  the keystore password
+#   ANDROID_KEY_ALIAS          the key alias inside it
+#
+# Windows ships unsigned: there is no Windows certificate yet, so SmartScreen
+# warns on first run. iOS has no artifact here — it needs App Store Connect.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  macos:
+    name: macOS dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # A throwaway keychain holding the Developer ID Application certificate,
+      # on the search list so codesign resolves the identity by name.
+      - name: Import the signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Build, notarize and package
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          NOTARY_KEY_FILE="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$NOTARY_KEY_P8" > "$NOTARY_KEY_FILE"
+          export NOTARY_KEY_FILE
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          macos/release.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos-dmg
+          path: macos/build-mac/LookoutMarine-*.dmg
+
+  linux:
+    name: Linux tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libvulkan-dev libx11-dev \
+                                  libwayland-dev libsoup-3.0-dev \
+                                  libjson-glib-dev libpng-dev libwebp-dev \
+                                  meson ninja-build
+
+      # The plugin host links the WAMR archive for this architecture.
+      - name: Build WAMR
+        run: scripts/build-wamr.sh linux-x64
+
+      - name: Build
+        working-directory: linux
+        run: |
+          meson setup build --buildtype=release --prefix=/usr
+          ninja -C build
+          DESTDIR="$PWD/dist" meson install -C build
+
+      # Tar keeps the executable bit; the archive unpacks as usr/{bin,share}.
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          tar -czf "LookoutMarine-$VERSION-linux-x86_64.tar.gz" -C linux/dist usr
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-tarball
+          path: LookoutMarine-*-linux-x86_64.tar.gz
+
+  windows:
+    name: Windows zip
+    # x64, not ARM64: the aarch64-windows Zig 0.16.0 binary segfaults whenever
+    # it resolves the MSVC libc, which is every core and WAMR compile there.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build WAMR
+        shell: bash
+        run: scripts/build-wamr.sh windows-x64
+
+      - name: Build core
+        run: pwsh windows/build-core.ps1 -Configuration Release -Platform x64
+
+      - name: Build
+        run: |
+          msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Release /p:Platform=x64
+          msbuild windows/LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=x64
+
+      # The build is self-contained: the Windows App SDK runtime and the
+      # plugins already sit beside the exe in the output directory.
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($env:GITHUB_REF_TYPE -ne 'tag') { $version = '0.0.0' }
+          Compress-Archive -Path windows\x64\Release\* `
+            -DestinationPath "LookoutMarine-$version-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows-zip
+          path: LookoutMarine-*-windows-x64.zip
+
+  android:
+    name: Android apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+
+      # The versions android/app/build.gradle names.
+      - name: Install NDK
+        run: sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build
+        working-directory: android
+        run: ./gradlew assembleRelease
+
+      # Signed when the keystore secrets exist. Without them the unsigned APK
+      # still ships, named so nobody mistakes it for something installable.
+      - name: Package
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
+          APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            "$TOOLS/zipalign" -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+            "$TOOLS/apksigner" sign --ks "$RUNNER_TEMP/release.jks" \
+              --ks-pass env:KEYSTORE_PASSWORD --ks-key-alias "$KEY_ALIAS" \
+              --out "LookoutMarine-$VERSION-android-arm64.apk" "$RUNNER_TEMP/aligned.apk"
+          else
+            cp "$APK" "LookoutMarine-$VERSION-android-arm64-unsigned.apk"
+          fi
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: android-apk
+          path: LookoutMarine-*-android-arm64*.apk
+
+  # A draft, so the generated notes are read before anyone else sees them.
+  publish:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: [macos, linux, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v5
+        with:
+          path: assets
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "$GITHUB_REF_NAME" --generate-notes assets/*
