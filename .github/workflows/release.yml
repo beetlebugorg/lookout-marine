@@ -90,8 +90,15 @@ jobs:
           path: macos/build-mac/LookoutMarine-*.dmg
 
   linux:
-    name: Linux tarball
-    runs-on: ubuntu-latest
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        # aarch64 builds natively on the arm runner image; a GTK app wants the
+        # platform's own dev packages, not a cross sysroot.
+        include:
+          - { arch: x86_64, deb_arch: amd64, runner: ubuntu-24.04, wamr: linux-x64 }
+          - { arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm, wamr: linux-arm64 }
     steps:
       - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
@@ -108,7 +115,7 @@ jobs:
 
       # The plugin host links the WAMR archive for this architecture.
       - name: Build WAMR
-        run: scripts/build-wamr.sh linux-x64
+        run: scripts/build-wamr.sh ${{ matrix.wamr }}
 
       - name: Build
         working-directory: linux
@@ -121,10 +128,13 @@ jobs:
       # executable bit) and a deb, its Depends read off the binary by
       # dpkg-shlibdeps.
       - name: Package
+        env:
+          ARCH: ${{ matrix.arch }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0"
-          tar -czf "LookoutMarine-$VERSION-linux-x86_64.tar.gz" -C linux/dist usr
+          tar -czf "LookoutMarine-$VERSION-linux-$ARCH.tar.gz" -C linux/dist usr
           STAGE=deb-stage
           mkdir -p "$STAGE/DEBIAN"
           cp -a linux/dist/usr "$STAGE/usr"
@@ -133,7 +143,7 @@ jobs:
           cat > "$STAGE/DEBIAN/control" <<EOF
           Package: lookout-marine
           Version: $VERSION
-          Architecture: amd64
+          Architecture: $DEB_ARCH
           Maintainer: Jeremy Collins <jeremy.collins@beetlebug.org>
           Section: misc
           Priority: optional
@@ -142,14 +152,14 @@ jobs:
            A native GTK4 chartplotter: the Lookout Marine chart core with wasm
            plugins for own ship, AIS, NMEA 0183, Signal K and laylines.
           EOF
-          dpkg-deb --build --root-owner-group "$STAGE" "lookout-marine_${VERSION}_amd64.deb"
+          dpkg-deb --build --root-owner-group "$STAGE" "lookout-marine_${VERSION}_${DEB_ARCH}.deb"
 
       - uses: actions/upload-artifact@v5
         with:
-          name: linux-packages
+          name: linux-${{ matrix.arch }}
           path: |
-            LookoutMarine-*-linux-x86_64.tar.gz
-            lookout-marine_*_amd64.deb
+            LookoutMarine-*-linux-*.tar.gz
+            lookout-marine_*.deb
 
   windows:
     name: Windows zip
@@ -192,7 +202,7 @@ jobs:
 
   android:
     name: Android apk
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
@@ -246,7 +256,7 @@ jobs:
     name: Release
     if: github.ref_type == 'tag'
     needs: [macos, linux, windows, android]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -264,7 +274,7 @@ jobs:
     name: Homebrew cask
     needs: publish
     if: ${{ !contains(github.ref_name, '-') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
