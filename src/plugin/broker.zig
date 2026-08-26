@@ -2706,7 +2706,7 @@ test "dropping a plugin takes its queued events and its store contributions" {
     for ([_]SourceId{ 1, 2, 3 }) |sid| {
         try vessels.registerSource(sid);
         try vessels.set("navigation.position", "{\"lat\":1,\"lon\":2}", 0, sid);
-        try ais.upsert(.{ .mmsi = 5 + sid, .lat = 1, .lon = 2, .ts_ms = 0 }, sid);
+        _ = try ais.upsert(.{ .mmsi = 5 + sid, .lat = 1, .lon = 2, .ts_ms = 0 }, sid);
     }
 
     b.push(0, Kind.timer, 1, "");
@@ -2827,7 +2827,7 @@ test "withdrawing a grant takes back every source the plugin owns" {
     for ([_]SourceId{ 1, 2, 3, 4 }) |sid| {
         try vessels.registerSource(sid);
         try vessels.set("navigation.position", "{\"lat\":1,\"lon\":2}", 0, sid);
-        try ais.upsert(.{ .mmsi = 899000100 + sid, .lat = 1, .lon = 2, .ts_ms = 0 }, sid);
+        _ = try ais.upsert(.{ .mmsi = 899000100 + sid, .lat = 1, .lon = 2, .ts_ms = 0 }, sid);
     }
 
     // The mariner switches the plugin's publishing grant off. Every id it

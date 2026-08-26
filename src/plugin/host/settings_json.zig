@@ -295,7 +295,7 @@ test "a list group parses, and its rows are policed like any other setting" {
     try json.append(a, '}');
     try t.expectEqualStrings(
         "{\"key\":\"host\",\"label\":\"Address\",\"desc\":\"The gateway on your network.\"," ++
-            "\"kind\":\"text\",\"default\":\"127.0.0.1\",\"max_len\":128}",
+            "\"kind\":\"text\",\"default\":\"127.0.0.1\",\"max_len\":256}",
         json.items,
     );
 

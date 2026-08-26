@@ -37,6 +37,7 @@ pub const Targets = lk.table(.{
         .{ .key = "sog", .label = "SOG", .type = .speed },
         .{ .key = "cpa", .label = "CPA", .type = .distance },
         .{ .key = "tcpa", .label = "TCPA", .type = .duration },
+        .{ .key = "via", .label = "Via", .type = .text },
         .{ .key = "state", .label = "", .type = .flag },
     },
     // The mariner opens this dialog to find out what is closing on the boat.
@@ -82,6 +83,7 @@ pub fn vessel(
         .sog = t.sog_mps,
         .cpa = cpa_m,
         .tcpa = tcpa_s,
+        .via = via(t),
         .state = @as(?[]const u8, if (in_gate) "alarm" else null),
         .lat = at.lat,
         .lon = at.lon,
@@ -101,12 +103,19 @@ pub fn aid(t: *const lk.Target, at: lk.Point, own: ?cpa.State) void {
         .mmsi = id,
         .range = rangeTo(own, at),
         .brg = bearingTo(own, at),
+        .via = via(t),
         // An aid that says it has drifted is worth a coloured row: it is in
         // the wrong place, and the mariner is steering by it.
         .state = @as(?[]const u8, if (t.off_position orelse false) "warning" else null),
         .lat = at.lat,
         .lon = at.lon,
     });
+}
+
+/// Internet AIS is relayed and can be stale or patchy; a mariner weighing an
+/// approach has to know it is not the receiver talking.
+fn via(t: *const lk.Target) ?[]const u8 {
+    return if (t.net) "Internet" else null;
 }
 
 fn rangeTo(own: ?cpa.State, at: lk.Point) ?f64 {
