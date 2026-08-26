@@ -113,7 +113,7 @@ fn publishTarget(
     north_m: f64,
     east_m: f64,
 ) !void {
-    try ais.upsert(.{
+    _ = try ais.upsert(.{
         .mmsi = mmsi,
         .lat = latAt(north_m),
         .lon = lonAt(east_m),

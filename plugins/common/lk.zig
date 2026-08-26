@@ -59,6 +59,7 @@ pub const api_version: u32 = 1;
 const host = if (builtin.is_test) TestHost else struct {
     extern "lookout" fn log(level: u32, ptr: [*]const u8, len: u32) void;
     extern "lookout" fn now_ms() i64;
+    extern "lookout" fn rand_bytes(ptr: [*]u8, cap: u32) i32;
     extern "lookout" fn mono_ms() i64;
     extern "lookout" fn publish(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn ais_upsert(ptr: [*]const u8, len: u32) i32;
@@ -205,6 +206,13 @@ pub fn subscribePaths(paths: []const []const u8) i32 {
     w.writeByte(']') catch return -1;
     const json = w.buffered();
     return host.subscribe(json.ptr, @intCast(json.len));
+}
+
+/// Fill `out` with cryptographically secure random bytes from the host. The
+/// sandbox has no entropy of its own; a plugin minting an identity key needs
+/// some. Capability-free, like the clocks. Returns the bytes written, or -1.
+pub fn randBytes(out: []u8) i32 {
+    return host.rand_bytes(out.ptr, @intCast(out.len));
 }
 
 /// Ask for the AIS target set. The whole snapshot arrives as `.ais_changed`,
@@ -982,6 +990,9 @@ pub const Target = struct {
     /// True when the aid reports itself off its charted position; null when it
     /// has never said either way.
     off_position: ?bool = null,
+    /// True when the target's last report came over the internet rather than
+    /// from a receiver on the boat.
+    net: bool = false,
     ts_ms: i64 = 0,
     age_ms: i64 = 0,
 
@@ -1016,6 +1027,7 @@ pub fn targets(payload: []const u8) []const Target {
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jboolOpt(o.get("virtual")) orelse false,
             .off_position = jboolOpt(o.get("off_position")),
+            .net = jboolOpt(o.get("net")) orelse false,
             .ts_ms = jintOpt(o.get("ts")) orelse 0,
             .age_ms = jintOpt(o.get("age_ms")) orelse 0,
         };
@@ -1093,12 +1105,16 @@ pub fn jbool(v: std.json.Value) ?bool {
     };
 }
 
-fn jnumOpt(v: ?std.json.Value) ?f64 {
+pub fn jnumOpt(v: ?std.json.Value) ?f64 {
     return jnum(v orelse return null);
 }
 
-fn jboolOpt(v: ?std.json.Value) ?bool {
+pub fn jboolOpt(v: ?std.json.Value) ?bool {
     return jbool(v orelse return null);
+}
+
+pub fn jstrOpt(v: ?std.json.Value) ?[]const u8 {
+    return jstr(v orelse return null);
 }
 
 /// A navaid type code. Anything outside 0..31 loses the type, not the target.
@@ -1107,7 +1123,7 @@ fn atonType(v: ?std.json.Value) ?u8 {
     return if (n >= 0 and n <= 31) @intCast(n) else null;
 }
 
-fn jintOpt(v: ?std.json.Value) ?i64 {
+pub fn jintOpt(v: ?std.json.Value) ?i64 {
     return jint(v orelse return null);
 }
 
@@ -1247,7 +1263,7 @@ pub const AisUpsert = struct {
     n: usize = 0,
 
     pub fn init(buffer: []u8) AisUpsert {
-        return initFrom(buffer, 0);
+        return initFrom(buffer, 0, false);
     }
 
     /// Targets heard by one of the plugin's connections rather than by the
@@ -1255,13 +1271,16 @@ pub const AisUpsert = struct {
     /// list, counting from one; zero is the plugin itself. A target belongs to
     /// whichever source last updated it, so this is what lets one receiver be
     /// switched off without taking the other's targets with it.
-    pub fn initFrom(buffer: []u8, place: u32) AisUpsert {
+    ///
+    /// `net` marks the whole batch as heard over the internet rather than by
+    /// a receiver on the boat — display provenance that follows each target
+    /// to the target list.
+    pub fn initFrom(buffer: []u8, place: u32, net: bool) AisUpsert {
         var u = AisUpsert{ .b = Buf.init(buffer) };
-        if (place > 0) {
-            u.b.print("{{\"source\":{d},\"targets\":[", .{place});
-        } else {
-            u.b.raw("{\"targets\":[");
-        }
+        u.b.raw("{");
+        if (place > 0) u.b.print("\"source\":{d},", .{place});
+        if (net) u.b.raw("\"net\":true,");
+        u.b.raw("\"targets\":[");
         return u;
     }
 
@@ -1299,6 +1318,9 @@ pub const AisUpsert = struct {
             if (t.virtual_aton) self.b.raw(",\"virtual\":true");
             if (t.off_position) |v| self.b.print(",\"off_position\":{s}", .{if (v) "true" else "false"});
         }
+        // Per target so a bridge re-publishing a parsed set keeps each
+        // target's provenance; the batch header covers whole feeds.
+        if (t.net) self.b.raw(",\"net\":true");
         self.b.print(",\"ts\":{d}}}", .{t.ts_ms});
     }
 
@@ -1582,6 +1604,7 @@ const TestHost = struct {
     const Name = enum {
         log,
         now_ms,
+        rand_bytes,
         mono_ms,
         publish,
         ais_upsert,
@@ -1688,6 +1711,14 @@ const TestHost = struct {
 
     fn log(level: u32, ptr: [*]const u8, len: u32) void {
         record(.log, .{ .num = level, .payload = ptr[0..@intCast(len)] });
+    }
+
+    fn rand_bytes(ptr: [*]u8, cap: u32) i32 {
+        // Deterministic on purpose: a test asserting on a minted key needs
+        // the same bytes every run.
+        for (0..cap) |i| ptr[i] = @intCast((i * 37 + 11) & 0xff);
+        record(.rand_bytes, .{ .num = cap });
+        return @intCast(cap);
     }
 
     fn now_ms() i64 {

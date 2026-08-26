@@ -503,8 +503,8 @@ pub fn build(b: *std.Build) void {
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
         "plugins/nmea0183/config.zig",
-        // The raw-line TAG framing for the bus rides in the plugin's root,
-        // and it is pure byte math, so the file tests natively.
+        // The raw-line TAG framing for the bus rides in the plugin's root; it
+        // is pure byte math, so the file tests natively like aiscast's.
         "plugins/nmea0183/main.zig",
         "plugins/signalk/delta.zig",
         "plugins/signalk/transport.zig",
@@ -517,6 +517,10 @@ pub fn build(b: *std.Build) void {
         "plugins/ais/aton.zig",
         "plugins/laylines/geo.zig",
         "plugins/laylines/config.zig",
+        "plugins/aiscast/config.zig",
+        // The box, hysteresis and time math ride in the plugin's root: they
+        // touch nothing but arithmetic, so the file tests natively.
+        "plugins/aiscast/main.zig",
         // lk v2. The surface has no wasm builtin on any path a test reaches,
         // so the geodesy, the settings schema and the manifest checks run
         // natively beside everything else.
@@ -582,10 +586,10 @@ pub fn build(b: *std.Build) void {
     // example and is never bundled.
     const shipped_prefix = "org.beetlebug.";
     // `echo` is BUILT but not installed: it is the host tests' fixture, not a
-    // plugin anybody runs. Installed beside the four real ones it would be
-    // loaded by the harness and draw its own symbol over own ship. The other
-    // four are PROTOTYPE.md's. A name with no main.zig yet is skipped, so a
-    // plugin agent adds one file and it builds.
+    // plugin anybody runs. Installed beside the real ones it would be
+    // loaded by the harness and draw its own symbol over own ship. A name
+    // with no main.zig yet is skipped, so a plugin agent adds one file and it
+    // builds.
     var echo_wasm: ?std.Build.LazyPath = null;
     // The nmea0183 module is installed like the other three AND handed to the
     // multi-connection test below.
@@ -600,7 +604,10 @@ pub fn build(b: *std.Build) void {
     // The windline module is the install test's payload: the walkthrough's
     // downwind plugin under the id its package carries.
     var windline_wasm: ?std.Build.LazyPath = null;
-    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline", "canvasdemo" }) |name| {
+    // The aiscast module is installed like the others AND handed to the
+    // Open Waters AIS host test below.
+    var aiscast_wasm: ?std.Build.LazyPath = null;
+    for ([_][]const u8{ "echo", "nmea0183", "signalk", "ownship", "ais", "laylines", "windline", "canvasdemo", "aiscast" }) |name| {
         const main_rel = b.fmt("plugins/{s}/main.zig", .{name});
         if (!haveFile(b, main_rel)) continue;
         const mod = b.createModule(.{
@@ -619,7 +626,7 @@ pub fn build(b: *std.Build) void {
             continue;
         }
         // `windline` is BUILT but not installed, for the same reason as echo:
-        // it is the documentation's worked example, and beside the five real
+        // it is the documentation's worked example, and beside the real
         // ones the harness would load it and draw a second line off own ship.
         // Building it keeps the recipes compiling — and hands the install test
         // below its module, which it packs as the doc's org.example.downwind.
@@ -647,6 +654,7 @@ pub fn build(b: *std.Build) void {
         if (std.mem.eql(u8, name, "nmea0183")) nmea_wasm = wasm_exe.getEmittedBin();
         if (std.mem.eql(u8, name, "signalk")) signalk_wasm = wasm_exe.getEmittedBin();
         if (std.mem.eql(u8, name, "ais")) ais_wasm = wasm_exe.getEmittedBin();
+        if (std.mem.eql(u8, name, "aiscast")) aiscast_wasm = wasm_exe.getEmittedBin();
 
         const id = manifestId(b, name);
         const manifest_rel = b.fmt("plugins/{s}/manifest.json", .{name});
@@ -811,6 +819,29 @@ pub fn build(b: *std.Build) void {
                 }
             }
 
+            // The aiscast plugin against a loopback relay speaking the Open
+            // Waters v1 protocol: the view fanout, the bbox subscription with
+            // its hysteresis, the net provenance, and — beside the real
+            // nmea0183 plugin — the bus-carried sharing path, end to end.
+            if (aiscast_wasm) |acbin| {
+                if (nmea_wasm) |nbin| {
+                    const ac_mod = b.createModule(.{
+                        .root_source_file = b.path("test/aiscast_host.zig"),
+                        .target = target,
+                        .optimize = optimize,
+                        .link_libc = true,
+                    });
+                    ac_mod.addImport("host", host_mod);
+                    ac_mod.addAnonymousImport("aiscast_plugin_wasm", .{ .root_source_file = acbin });
+                    ac_mod.addAnonymousImport("aiscast_manifest", .{ .root_source_file = b.path("plugins/aiscast/manifest.json") });
+                    ac_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
+                    ac_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
+                    const ac_run = b.addRunArtifact(b.addTest(.{ .root_module = ac_mod }));
+                    b.step("aiscast-host", "Run the Open Waters AIS relay test").dependOn(&ac_run.step);
+                    test_step.dependOn(&ac_run.step);
+                }
+            }
+
             // The ais module's collision alarm on the data path: the real
             // stores driven by hand, no gateway and no sockets. The overlay
             // store comes too, to prove what did and did not reach the chart.
@@ -952,6 +983,7 @@ pub fn build(b: *std.Build) void {
         "test/host_smoke.zig",
         "test/nmea_multi.zig",
         "test/signalk_host.zig",
+        "test/aiscast_host.zig",
         "test/install_host.zig",
         "test/host_isolation.zig",
         "test/host_restart.zig",

@@ -107,6 +107,7 @@ not trap.
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
 | `view_subscribe` | `() -> i32` | `view.read` | 0, or -1. The current view arrives as `VIEW_CHANGED` on the next fanout tick rather than when the mariner next pans. |
 | `bus_publish` | `(topic_ptr, topic_len, ptr, len) -> i32` | `bus.publish` + its topic list | Subscribers reached (never the publisher itself), or -1. Frames over 64 KiB are refused. There is no `bus_subscribe`: a `bus.read` grant IS the subscription. |
+| `rand_bytes` | `(ptr, cap) -> i32` | none | Fills the buffer with cryptographically secure random bytes and returns how many. The sandbox has no entropy of its own; a plugin minting an identity key needs some. |
 | `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. The port must be one your manifest's `net.udp` grant names, so port 0 is refused: an ephemeral port is not a port the mariner consented to. |
 | `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** (the host resolves no name here), so `255.255.255.255` works and `gateway.local` does not. |
 | `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
@@ -340,6 +341,18 @@ list of the connection that heard these targets. A target belongs to whichever
 source last updated it, so naming the receiver is what lets one of them be
 switched off without taking the other's targets with it.
 
+A batch-level `"net":true` marks every target in it as heard **over the
+internet** rather than by a receiver on the boat; a per-target `"net"` key
+overrides the batch, so a bridge re-publishing a mixed set keeps each
+target's provenance. It is display provenance — the target list shows it —
+and follows each target to its next update, like `source` does. It carries no
+precedence: the store arbitrates by `ts` alone, dropping an update MATERIALLY
+older (more than a few seconds) than the target it would overwrite, while
+near-ties still merge — a static report seconds behind a position race keeps
+its name. Stamp `ts` honestly — a receiver with its wall clock at receipt, an
+internet feed with the message's own time — or the freshest report cannot
+win. The host clamps `ts` into the eviction window ending at now.
+
 ### STORE_CHANGED
 
 ```json
@@ -372,7 +385,8 @@ The **whole** target set, at most twice a second and only when something moved.
 An unknown field is left out rather than sent as null, because "never heard" and
 "heard as zero" are different facts. Targets are evicted from the store after
 600 s, and an aid to navigation after 1800 s, because an aid transmits about
-every three minutes.
+every three minutes. A target whose last report came over the internet carries
+`"net":true`; the field is absent otherwise.
 
 ### overlay
 

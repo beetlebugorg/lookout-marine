@@ -1,0 +1,81 @@
+{
+  "id": "org.beetlebug.aiscast",
+  "name": "Internet AIS",
+  "api": 1,
+  "capabilities": [
+    {
+      "net.ws": [
+        "ais.openwaters.io"
+      ]
+    },
+    "ais.publish",
+    "view.read",
+    {
+      "bus.read": [
+        "nmea0183"
+      ]
+    },
+    "storage"
+  ],
+  "settings": {
+    "groups": [
+      {
+        "label": "Internet AIS",
+        "tab": "connections",
+        "list": {
+          "key": "servers",
+          "footer": "Send and receive AIS over the internet via the AISCast protocol.",
+          "empty": "No servers yet.",
+          "add_label": "Add Server",
+          "switch_key": "enabled",
+          "item_fields": [
+            {
+              "key": "name",
+              "label": "Name",
+              "desc": "What you call this server. Leave it empty to show the address.",
+              "kind": "text",
+              "default": "Open Waters AIS"
+            },
+            {
+              "key": "host",
+              "label": "Address",
+              "desc": "The AIS relay to connect to.",
+              "kind": "text",
+              "default": "ais.openwaters.io"
+            },
+            {
+              "key": "port",
+              "label": "Port",
+              "desc": "The relay streams over TLS on port 443.",
+              "kind": "number",
+              "min": 1,
+              "max": 65535,
+              "default": 443
+            },
+            {
+              "key": "share",
+              "label": "Share AIS",
+              "desc": "Send everything heard by the AIS receiver on a connected NMEA network back to the relay, this boat's own transponder reports included, so others see it too. Feeding earns higher limits.",
+              "kind": "toggle",
+              "default": true
+            },
+            {
+              "key": "token",
+              "label": "Token",
+              "desc": "An access token from the relay. Leave it empty to use an identity minted automatically.",
+              "kind": "text",
+              "optional": true
+            },
+            {
+              "key": "enabled",
+              "label": "On",
+              "desc": "Off closes the stream and stops reconnecting.",
+              "kind": "toggle",
+              "default": true
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

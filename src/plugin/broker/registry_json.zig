@@ -56,6 +56,7 @@ pub fn writeAisChanged(out: *std.ArrayList(u8), alloc: std.mem.Allocator, target
             if (tg.virtual_aton) try out.appendSlice(alloc, ",\"virtual\":true");
             if (tg.off_position) |v| try out.print(alloc, ",\"off_position\":{s}", .{if (v) "true" else "false"});
         }
+        if (tg.net) try out.appendSlice(alloc, ",\"net\":true");
         try out.print(alloc, ",\"ts\":{d},\"age_ms\":{d}}}", .{ tg.ts_ms, now - tg.ts_ms });
     }
     try out.appendSlice(alloc, "]}");
@@ -200,12 +201,12 @@ test "AIS_CHANGED omits fields never heard and always carries age" {
     var named = ais_store.Target{ .mmsi = 899000404, .lat = 38.98, .lon = -76.47, .sog = 2.6, .ts_ms = 1_000 };
     @memcpy(named.name_buf[0..15], "TANGERINE OTTER");
     named.name_len = 15;
-    const targets = [_]ais_store.Target{ named, .{ .mmsi = 7, .ts_ms = 500 } };
+    const targets = [_]ais_store.Target{ named, .{ .mmsi = 7, .ts_ms = 500, .net = true } };
     try writeAisChanged(&out, a, &targets, 2_000);
     try t.expectEqualStrings(
         "{\"targets\":[" ++
             "{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.6,\"name\":\"TANGERINE OTTER\",\"ts\":1000,\"age_ms\":1000}," ++
-            "{\"mmsi\":7,\"ts\":500,\"age_ms\":1500}]}",
+            "{\"mmsi\":7,\"net\":true,\"ts\":500,\"age_ms\":1500}]}",
         out.items,
     );
 }

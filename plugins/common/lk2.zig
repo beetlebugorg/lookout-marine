@@ -243,6 +243,20 @@ pub const Point = struct {
     }
 };
 
+/// Days between 1970-01-01 and a civil date; Howard Hinnant's
+/// days_from_civil (http://howardhinnant.github.io/date_algorithms.html).
+/// nmea0183's parser keeps a private copy: that file imports only std by
+/// design.
+pub fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
+    const y = if (month <= 2) year - 1 else year;
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const mp = if (month > 2) month - 3 else month + 9;
+    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    return era * 146097 + doe - 719468;
+}
+
 /// A bearing folded into 0..360.
 pub fn normalizeDeg(deg: f64) f64 {
     if (!std.math.isFinite(deg)) return 0;
@@ -502,8 +516,15 @@ pub const Target = struct {
     aton_type: ?u8 = null,
     virtual_aton: bool = false,
     off_position: ?bool = null,
+    /// True when the target's last report came over the internet rather than
+    /// from a receiver on the boat.
+    net: bool = false,
     /// How old the report is, carried forward from delivery.
     age_ms: i64 = 0,
+    /// When publishing: the report's own time, epoch ms. Null takes the batch
+    /// stamp (now). An internet feed passes the message's time here so the
+    /// store's freshest-wins arbitration is honest.
+    ts_ms: ?i64 = null,
     name_str: Str(32) = .{},
 
     pub fn name(self: *const Target) []const u8 {
@@ -569,6 +590,7 @@ pub fn subscribeAis(comptime opts: AisOpts) type {
                     .aton_type = src.aton_type,
                     .virtual_aton = src.virtual_aton,
                     .off_position = src.off_position,
+                    .net = src.net,
                     .age_ms = src.age_ms,
                 };
                 if (src.name) |n| dst.name_str.set(n);
@@ -1448,7 +1470,14 @@ pub const Upsert = struct {
     /// updated it, so switching one receiver off leaves the other's targets on
     /// the chart.
     pub fn from(c: anytype) Upsert {
-        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place()), .ts = nowMs() };
+        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place(), false), .ts = nowMs() };
+    }
+
+    /// Targets one connection heard OVER THE INTERNET rather than by a
+    /// receiver on the boat. The batch is marked `net`, which follows each
+    /// target to the target list as display provenance.
+    pub fn fromNet(c: anytype) Upsert {
+        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place(), true), .ts = nowMs() };
     }
 
     pub fn target(self: *Upsert, t: Target) void {
@@ -1464,7 +1493,8 @@ pub const Upsert = struct {
             .aton_type = t.aton_type,
             .virtual_aton = t.virtual_aton,
             .off_position = t.off_position,
-            .ts_ms = self.ts,
+            .net = t.net,
+            .ts_ms = t.ts_ms orelse self.ts,
         });
     }
 

@@ -69,7 +69,7 @@ pub const Text = struct {
 };
 
 /// Longest text value the host keeps.
-pub const max_text_bytes = 128;
+pub const max_text_bytes = 256;
 
 /// A short string kept by value. A plugin has no allocator that outlives an
 /// event, so everything held between events is a fixed buffer.
