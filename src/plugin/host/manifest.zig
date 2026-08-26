@@ -83,7 +83,7 @@ pub const max_fields = 16;
 
 /// Longest text value the host keeps. A host name is 253 bytes at most; this
 /// holds any of them plus a name a mariner would type.
-pub const max_text_bytes = 256;
+pub const max_text_bytes = 512;
 
 /// A group the mariner adds ROWS to — connections, waypoints, anything there
 /// can be more than one of. The config value of `key` is a JSON array of row

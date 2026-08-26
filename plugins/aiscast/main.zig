@@ -69,9 +69,14 @@ var view: ?lk.ViewBox = null;
 var retry_timer: i64 = -1;
 
 /// The relay identity, one per plugin however many rows share it: a bearer
-/// token any socket may present. Loaded from storage at start, minted in-band
-/// when sharing first needs it.
-var token_buf: [256]u8 = undefined;
+/// token any socket may present. Loaded from storage at start, registered
+/// in-band when sharing first needs it.
+///
+/// A token is `ak1.<claims>.<signature>`, so its length follows the claims it
+/// carries: a personal one measures a little over 300 bytes, and one carrying
+/// bbox or cidr claims is longer. Sized well past that, because a token that
+/// does not fit is a token silently thrown away.
+var token_buf: [512]u8 = undefined;
 var token_len: usize = 0;
 
 fn token() []const u8 {
@@ -79,7 +84,7 @@ fn token() []const u8 {
 }
 
 pub fn onStart(_: lk.raw.Start) !void {
-    var buf: [512]u8 = undefined;
+    var buf: [token_buf.len + 64]u8 = undefined;
     const val = lk.raw.storageGet("identity", &buf) orelse return;
     const root = std.json.parseFromSliceLeaky(std.json.Value, lk.scratch(), val, .{}) catch return;
     if (root != .object) return;
@@ -521,7 +526,7 @@ fn maybeRegister(conn: *Connection) void {
 /// The token is the whole identity: a bearer the relay never challenges, so
 /// nothing else is worth keeping. Losing it just mints a fresh one.
 fn storeIdentity() void {
-    var buf: [320]u8 = undefined;
+    var buf: [token_buf.len + 64]u8 = undefined;
     const json = std.fmt.bufPrint(&buf, "{{\"token\":\"{s}\"}}", .{token()}) catch return;
     if (lk.raw.storagePut("identity", json) < 0) lk.log(.warn, "identity not stored; sharing lasts this session", .{});
 }
