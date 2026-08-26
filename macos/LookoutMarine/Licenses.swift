@@ -181,8 +181,20 @@ struct LicensesView: View {
 
     // MARK: List
 
+    /// The selection the list draws highlighted. Only the Mac has one: there
+    /// the selection IS the navigation, and the detail follows it. iOS pushes
+    /// instead, so a bound selection only left the app's own row sitting
+    /// permanently grey, as though it had been tapped and nothing happened.
+    private var listSelection: Binding<LicenseSelection?> {
+        #if os(macOS)
+        return $nav.selection
+        #else
+        return .constant(nil)
+        #endif
+    }
+
     private var sidebar: some View {
-        let list = List(selection: $nav.selection) {
+        let list = List(selection: listSelection) {
             Section("This app") {
                 rowLink(.app) {
                     row(name: manifest.app.name,
@@ -220,13 +232,7 @@ struct LicensesView: View {
             }
         }
 
-        #if os(iOS)
-        return searched.navigationDestination(for: LicenseSelection.self) { sel in
-            detailFor(sel).navigationTitle(titleFor(sel)).navigationBarTitleDisplayMode(.inline)
-        }
-        #else
         return searched
-        #endif
     }
 
     @ViewBuilder
@@ -244,12 +250,22 @@ struct LicensesView: View {
 
     /// How a row reaches its detail: the split view's selection on the Mac,
     /// a push on the phone.
+    ///
+    /// The push carries its destination rather than a value. A value-based
+    /// link needs the enclosing NavigationStack to hold this type, and the one
+    /// the licenses land in is the settings form's, whose path is [String] for
+    /// its own sections. A LicenseSelection has nowhere to go in that path, so
+    /// every row was inert: it highlighted on touch and stayed where it was.
     @ViewBuilder
     private func rowLink(_ sel: LicenseSelection, @ViewBuilder label: () -> some View) -> some View {
         #if os(macOS)
         label().tag(sel)
         #else
-        NavigationLink(value: sel) { label() }
+        NavigationLink {
+            detailFor(sel).navigationTitle(titleFor(sel)).navigationBarTitleDisplayMode(.inline)
+        } label: {
+            label()
+        }
         #endif
     }
 

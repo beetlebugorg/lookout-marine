@@ -54,6 +54,7 @@
 		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
+		7E1C9A41B2D34F5A81C0AA12 /* LicensesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1C9A40B2D34F5A81C0AA11 /* LicensesTests.swift */; };
 		C8844DCDBFFB759DC10B3DBB /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7093D68AB566DD20CAA67D /* About.swift */; };
 		CADC1E15181EEA0D5D9CE684 /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */; };
 		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
@@ -125,6 +126,7 @@
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterChartTests.swift; sourceTree = "<group>"; };
+		7E1C9A40B2D34F5A81C0AA11 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
 		F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartInteractionTests.swift; sourceTree = "<group>"; };
 		FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LookoutMarine.entitlements; sourceTree = "<group>"; };
 		FF4CDAEE17FBF230AF39737A /* Licenses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Licenses.swift; sourceTree = "<group>"; };
@@ -162,6 +164,7 @@
 			children = (
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
+				7E1C9A40B2D34F5A81C0AA11 /* LicensesTests.swift */,
 				F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */,
 			);
 			path = UITests;
@@ -521,6 +524,7 @@
 			files = (
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
+				7E1C9A41B2D34F5A81C0AA12 /* LicensesTests.swift in Sources */,
 				50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
