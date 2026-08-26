@@ -27,6 +27,7 @@ pub const Kind = struct {
     pub const table_open: u32 = 15;
     pub const table_closed: u32 = 16;
     pub const grants_changed: u32 = 17;
+    pub const bus_data: u32 = 18;
     pub const shutdown: u32 = 99;
 };
 
@@ -71,6 +72,8 @@ pub const Cap = enum {
     view_read,
     overlay_draw,
     alerts_raise,
+    bus_publish,
+    bus_read,
     storage,
     files,
 
@@ -87,6 +90,8 @@ pub const Cap = enum {
             .view_read => "view.read",
             .overlay_draw => "overlay.draw",
             .alerts_raise => "alerts.raise",
+            .bus_publish => "bus.publish",
+            .bus_read => "bus.read",
             .storage => "storage",
             .files => "files",
         };
@@ -106,12 +111,16 @@ pub const Cap = enum {
         addresses,
         /// Port numbers.
         ports,
+        /// Bus topic names. The host validates only their shape, never their
+        /// meaning, so a new topic needs no host change.
+        topics,
     };
 
     pub fn carries(self: Cap) Carries {
         return switch (self) {
             .net_tcp_client, .net_http, .net_ws => .addresses,
             .net_udp => .ports,
+            .bus_publish, .bus_read => .topics,
             else => .nothing,
         };
     }
@@ -125,6 +134,12 @@ pub const Cap = enum {
 };
 
 pub const Caps = std.EnumSet(Cap);
+
+/// True when the topic list contains this topic, matched exactly.
+pub fn topicListed(topics: []const []const u8, topic: []const u8) bool {
+    for (topics) |entry| if (std.mem.eql(u8, entry, topic)) return true;
+    return false;
+}
 
 const t = std.testing;
 

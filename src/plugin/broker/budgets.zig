@@ -146,6 +146,12 @@ pub const Plugin = struct {
     tcp_addrs: []const []const u8 = &.{},
     /// The ports `udp_open` may bind, from the `net.udp` grant.
     udp_ports: []const u16 = &.{},
+    /// The bus topics this plugin may publish and read, from the
+    /// `bus.publish` and `bus.read` grants. The read list is the
+    /// subscription: fanout consults it directly, so there is no subscribe
+    /// call and a revoked grant stops delivery by itself.
+    pub_topics: []const []const u8 = &.{},
+    sub_topics: []const []const u8 = &.{},
     /// The table keys the manifest declared, borrowed from the host like `id`.
     /// `declareTable` refuses anything else: a table the mariner never saw on
     /// the consent sheet does not appear in a menu because the module asked

@@ -408,6 +408,12 @@ null: never heard and heard as zero are different values.
 A target that stops being heard drops out of the set. Draw from the set each
 call and Lookout takes the symbol off the chart for you.
 
+## The bus
+
+Plugins exchange frames on named topics. Declare `pub fn onBus(topic: []const u8, from: []const u8, bytes: []const u8) void` to receive every frame published on the topics in the manifest's `bus.read` grant; the grant is the subscription, so there is no subscribe call. `lk.busPublish(topic, bytes)` publishes to a topic in the `bus.publish` grant. A publisher never receives its own frame. `from` is the publishing plugin's manifest id.
+
+The bus is fire-and-forget and retains nothing: a late subscriber hears nothing until the next frame. Keep state in the vessel store and datasets in plugin storage; the bus carries events — raw NMEA sentences (topic `nmea0183`, one frame per socket read, each line prefixed with a NMEA 4.10 TAG block naming its source), a man-overboard event, a "new dataset ready" ping. A topic's payload format is a contract between the plugins that use it, documented where the topic is introduced.
+
 ## Reading the chart view
 
 Declaring `pub fn onView(v: lk.ViewBox) void` subscribes the plugin to the
