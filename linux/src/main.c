@@ -166,6 +166,17 @@ static const char *LK_CSS =
     "  padding: 8px;"
     "}"
     ".lk-aux-picture { border-radius: 6px; }"
+    /* The licenses screen. The facts, the NOTICE and each license text sit on
+     * their own shaded block, so a page of terms reads as a page of blocks and
+     * not as a wall. */
+    ".lk-license-block {"
+    "  background: alpha(currentColor, 0.05);"
+    "  border-radius: 8px;"
+    "  padding: 12px;"
+    "}"
+    /* A license is hard-wrapped at 80 columns by whoever wrote it. This is the
+     * size at which the pane holds one without wrapping it again. */
+    ".lk-license-text { font-size: 0.8em; }"
     /* The plugin alert strip, at the top centre. It is opaque, like the pick
      * report: an alarm read through the chart is an alarm somebody misses. The
      * severity colours are the chrome's own tokens, so the strip follows a

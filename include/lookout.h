@@ -498,6 +498,7 @@ const char *lookout_scan_zip(const char *path, size_t *out_len);
  *    "components":[
  *      {"id":"wamr","name":"WebAssembly Micro Runtime","group":"Plugins",
  *       "summary":"...","license":"Apache 2.0 with the LLVM exception",
+ *       "license_short":"Apache-2.0",
  *       "license_note":"...","version":"WAMR-2.4.5","commit":"25bd7eb...",
  *       "pinned_in":"scripts/build-wamr.sh","copyright":"...","url":"...",
  *       "shells":["macos","ios","android","linux","windows"],
@@ -509,6 +510,10 @@ const char *lookout_scan_zip(const char *path, size_t *out_len);
  * `shells` is which builds carry that component: "macos", "ios", "android",
  * "linux" or "windows". One manifest serves every build, so a shell draws the
  * entries that name it and no others.
+ *
+ * `license_short` names the same terms in twenty characters or less, for the
+ * narrow column a list of components is read down. `license` is what a detail
+ * pane says.
  *
  * `text` is the license, whole and unmodified, hard-wrapped as upstream wrote
  * it. Never truncate it or summarize it on screen.

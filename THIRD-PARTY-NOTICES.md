@@ -131,3 +131,80 @@ The Vulkan API headers the Linux and Android builds compile against.
 - Pinned in: `vendor/vulkan/include/vulkan/vulkan_core.h`
 - Upstream: <https://github.com/KhronosGroup/Vulkan-Headers>
 - Ships on: Android, Linux
+
+### Vulkan loader
+
+Finds the graphics driver and dispatches every Vulkan call the chart draws with. The Linux build links the copy the system provides.
+
+- License: Apache 2.0
+- Version: the system copy
+- Copyright: © The Khronos Group Inc., LunarG, Inc., Valve Corporation and the Vulkan-Loader contributors
+- Pinned in: `linux/meson.build`
+- Upstream: <https://github.com/KhronosGroup/Vulkan-Loader>
+- Ships on: Linux
+
+### libX11
+
+The X11 connection the chart surface is presented on. The Linux build links the copy the system provides.
+
+- License: MIT
+- Version: the system copy
+- Copyright: © The Open Group, the X.Org Foundation and the libX11 contributors
+- Pinned in: `linux/meson.build`
+- Upstream: <https://gitlab.freedesktop.org/xorg/lib/libx11>
+- Ships on: Linux
+
+### Wayland
+
+The Wayland connection the chart subsurface is presented on. The Linux build links the copy the system provides.
+
+- License: MIT
+- Version: the system copy
+- Copyright: © Kristian Høgsberg, Intel Corporation, Benjamin Franzke and Collabora, Ltd.
+- Pinned in: `linux/meson.build`
+- Upstream: <https://gitlab.freedesktop.org/wayland/wayland>
+- Ships on: Linux
+
+### GTK
+
+The toolkit the Linux shell is built with: its windows, its controls and its input. The build links the copy the system provides.
+
+- License: GNU Lesser General Public License version 2.1 or later
+- Version: 4.10 or later
+- Copyright: © The GTK Team and the GTK contributors
+- Pinned in: `linux/meson.build`
+- Upstream: <https://gitlab.gnome.org/GNOME/gtk>
+- Ships on: Linux
+
+### GLib
+
+The object system, the main loop and the data structures GTK and the shell are built on. The build links the copy the system provides.
+
+- License: GNU Lesser General Public License version 2.1 or later
+- Version: 2.0 or later
+- Copyright: © Peter Mattis, Spencer Kimball, Josh MacDonald and the GLib contributors
+- Pinned in: `linux/meson.build`
+- Upstream: <https://gitlab.gnome.org/GNOME/glib>
+- Ships on: Linux
+
+### libsoup
+
+The HTTP client that fetches a chart link's style and its tiles. The build links the copy the system provides.
+
+- License: GNU Lesser General Public License version 2.1 or later
+- Version: 3.0 or later
+- Copyright: © Ximian, Inc., Red Hat, Inc. and the libsoup contributors
+- Pinned in: `linux/meson.build`
+- Upstream: <https://gitlab.gnome.org/GNOME/libsoup>
+- Ships on: Linux
+
+### JSON-GLib
+
+Writes the JSON a chart link's tile server answers with. The shell's own reader only reads. The build links the copy the system provides.
+
+- License: GNU Lesser General Public License version 2.1 or later
+- Version: 1.0 or later
+- Copyright: © OpenedHand Ltd, Intel Corporation, Emmanuele Bassi and the JSON-GLib contributors
+- Pinned in: `linux/meson.build`
+- Upstream: <https://gitlab.gnome.org/GNOME/json-glib>
+- Ships on: Linux

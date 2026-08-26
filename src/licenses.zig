@@ -31,6 +31,7 @@ const Manifest = struct {
         group: []const u8,
         summary: []const u8,
         license: []const u8,
+        license_short: []const u8,
         license_note: []const u8,
         version: []const u8,
         commit: []const u8,
@@ -72,6 +73,20 @@ test "every component that names a license carries its text" {
         if (c.license.len == 0) continue;
         std.testing.expect(c.text.len > 0) catch |e| {
             std.debug.print("{s} names a license and carries no text\n", .{c.id});
+            return e;
+        };
+    }
+}
+
+// The column a shell lists a component in is narrow, so the terms are named
+// there in short. Twenty characters is what fits beside the version.
+test "every component that names a license names it in short" {
+    const p = try parse(std.testing.allocator);
+    defer p.deinit();
+    for (p.value.components) |c| {
+        if (c.license.len == 0) continue;
+        std.testing.expect(c.license_short.len > 0 and c.license_short.len <= 20) catch |e| {
+            std.debug.print("{s} has no short license name, or one too long\n", .{c.id});
             return e;
         };
     }
