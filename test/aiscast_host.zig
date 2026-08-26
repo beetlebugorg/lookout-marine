@@ -38,6 +38,11 @@ const io = std.Io.Threaded.global_single_threaded.io();
 
 const deadline_ms: i64 = 8_000;
 
+/// A token the length the real relay issues. A short stand-in would fit any
+/// buffer and prove nothing: the live relay's personal token is a little over
+/// 300 bytes, and one that does not fit is silently discarded.
+const loopback_token = "ak1." ++ "L" ** 310 ++ ".sig";
+
 /// What the loopback relay streams once subscribed, over and over. One frame
 /// per line. The `time`-less events take the receipt stamp; the OLD-timed one
 /// for MMSI 111 must always lose to the fresher target the test planted.
@@ -164,7 +169,7 @@ const Relay = struct {
                 // in-place upgrade with a fresh welcome carrying the personal
                 // tier's limits, which is what the real relay does.
                 _ = self.registers.fetchAdd(1, .monotonic);
-                _ = writeWsText(peer, "{\"type\":\"key\",\"token\":\"ak1.loopback.token\",\"claims\":{\"role\":\"personal\"}}");
+                _ = writeWsText(peer, "{\"type\":\"key\",\"token\":\"" ++ loopback_token ++ "\",\"claims\":{\"role\":\"personal\"}}");
                 _ = writeWsText(peer, "{\"type\":\"welcome\",\"sub\":\"ed25519:loopback\",\"role\":\"personal\",\"feeder\":false," ++
                     "\"limits\":{\"conns\":2,\"rate\":50,\"area\":400,\"mmsis\":50,\"publish\":true,\"publish_per_min\":6000,\"publish_frame\":1000,\"connects_per_min\":20}}");
             } else if (std.mem.indexOf(u8, r.text, "\"publish\"") != null) {
@@ -617,6 +622,28 @@ test "the receiver's sentences ride the bus to the relay, minted and acked" {
     try waitFor("the boat's own report at the relay", &relay, struct {
         fn ready(r: *Relay) bool {
             return r.saw_vdo.load(.acquire);
+        }
+    }.ready);
+
+    // The identity was KEPT, not just used. A token too big for the plugin's
+    // buffer would still publish this session — the welcome is what opens the
+    // gate — and then register again on every start, so only the stored file
+    // proves the token survived.
+    try waitFor("the identity in plugin storage", &tmp, struct {
+        fn ready(d: *std.testing.TmpDir) bool {
+            var buf: [4096]u8 = undefined;
+            const text = d.dir.readFile(io, ac_id ++ ".json", &buf) catch return false;
+            // The store keeps values base64-encoded, a value being bytes, so
+            // the token is only findable once it is decoded back.
+            const at = std.mem.indexOf(u8, text, "\"b64\":\"") orelse return false;
+            const rest = text[at + 7 ..];
+            const end = std.mem.indexOfScalar(u8, rest, '"') orelse return false;
+            const dec = std.base64.standard.Decoder;
+            var out: [2048]u8 = undefined;
+            const n = dec.calcSizeForSlice(rest[0..end]) catch return false;
+            if (n > out.len) return false;
+            dec.decode(out[0..n], rest[0..end]) catch return false;
+            return std.mem.indexOf(u8, out[0..n], loopback_token) != null;
         }
     }.ready);
 
