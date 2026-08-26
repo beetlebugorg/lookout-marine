@@ -63,6 +63,7 @@ func newServers() *Conns {
 		Columns: RowColumns{
 			Port: NumSpec{Label: "Port", Desc: "Most Signal K servers stream on port 8375.", Min: 1, Max: 65535, Default: 8375},
 		},
+		Discover:       []Discover{{Service: "_signalk-ws._tcp", Set: `{"websocket":true}`}},
 		State:          func() any { return &server{} },
 		StatusEmpty:    "no servers",
 		RefusedDetail:  "websocket refused; the server is not on this boat's network",
@@ -317,7 +318,9 @@ func TestTheListDeclaresTheSchemaTheManifestCarries(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameSchema(t, got, `{"groups":[{"label":"Signal K servers","tab":"connections","list":{
-		"key":"servers","add_label":"Add Server","switch_key":"enabled","item_fields":[
+		"key":"servers","add_label":"Add Server",
+		"discover":[{"service":"_signalk-ws._tcp","set":{"websocket":true}}],
+		"switch_key":"enabled","item_fields":[
 		{"key":"name","label":"Name","desc":"What you call this source. Leave it empty to show the address.","kind":"text","optional":true},
 		{"key":"host","label":"Address","desc":"The name or IP address to connect to.","kind":"text","default":""},
 		{"key":"port","label":"Port","desc":"Most Signal K servers stream on port 8375.","kind":"number","min":1,"max":65535,"default":8375},

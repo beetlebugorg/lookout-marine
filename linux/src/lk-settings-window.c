@@ -1,3 +1,4 @@
+#include "lk-discovery.h"
 #include "lk-settings-window.h"
 
 #include "lk-licenses.h"
@@ -52,6 +53,11 @@ typedef struct {
    * the mariner's hands. */
   LkPlugins *plugins;
   GPtrArray *status_labels; /* GtkLabel*, not owned: the page owns them */
+
+  /* What is answering on the boat's network, browsed only while this window is
+   * up. A browse nobody is watching is a radio left on. */
+  LkDiscovery *discovery;
+  GPtrArray   *discover_lists; /* const LkPluginList*, the ones that browse */
   guint      status_poll_id;
   /* The row boxes of every list, so adding or removing a row refills one list
    * instead of the window. Keyed "<plugin id>/<list key>". */
@@ -76,6 +82,8 @@ lk_settings_free (gpointer data)
   g_clear_handle_id (&settings->sets_refresh_id, g_source_remove);
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
+  g_clear_pointer (&settings->discovery, lk_discovery_free);
+  g_clear_pointer (&settings->discover_lists, g_ptr_array_unref);
   g_clear_pointer (&settings->status_labels, g_ptr_array_unref);
   g_clear_pointer (&settings->pending_lists, g_ptr_array_unref);
   g_clear_pointer (&settings->list_boxes, g_hash_table_unref);
@@ -1962,6 +1970,122 @@ lk_plugin_forget_status_labels (LkSettings *settings, const LkPluginList *list)
     }
 }
 
+/* One find, and the list it would be added to. */
+typedef struct {
+  LkSettings         *settings;
+  const LkPluginList *list;
+  char               *service;
+  char               *name;
+  char               *host;
+  int                 port;
+} LkNearbyBinding;
+
+static void
+lk_nearby_binding_free (gpointer data, GClosure *closure)
+{
+  LkNearbyBinding *binding = data;
+
+  g_free (binding->service);
+  g_free (binding->name);
+  g_free (binding->host);
+  g_free (binding);
+}
+
+static void
+lk_plugin_nearby_add_clicked (GtkButton *button, gpointer user_data)
+{
+  LkNearbyBinding *binding = user_data;
+
+  lk_plugins_add_row_from (binding->settings->plugins, binding->list, binding->service,
+                           binding->name, binding->host, binding->port);
+  lk_plugin_schedule_refill (binding->settings, binding->list);
+}
+
+/* Is this find already in the list?
+ *
+ * A HOST the list points at is not offered again, whatever port the row uses.
+ * One machine announces the port it wants to be reached on and is often
+ * reachable on another — a Signal K server announces its websocket on 3000 and
+ * carries the same boat on 8375 — so a second row to it would send everything
+ * twice. */
+static gboolean
+lk_plugin_holds_host (LkSettings *settings, const LkPluginList *list, const char *host)
+{
+  g_autoptr (GPtrArray) rows = lk_plugins_rows (settings->plugins, list);
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const char *row_id = g_ptr_array_index (rows, i);
+      const char *held = lk_plugins_row_text (settings->plugins, list, row_id, "host");
+
+      if (g_ascii_strcasecmp (held, host) == 0)
+        return TRUE;
+    }
+  return FALSE;
+}
+
+/* What is answering on the network for this list's service types, offered ready
+ * to add. Nothing found draws nothing: at a desk that is the ordinary case, and
+ * an empty heading is a question nobody asked. */
+static void
+lk_plugin_fill_nearby (LkSettings *settings, const LkPluginList *list, GtkWidget *box)
+{
+  if (settings->discovery == NULL || list->discover->len == 0
+      || lk_plugins_list_is_full (settings->plugins, list))
+    return;
+
+  const GPtrArray *found = lk_discovery_found (settings->discovery);
+
+  for (guint i = 0; i < found->len; i++)
+    {
+      const LkDiscovered *service = g_ptr_array_index (found, i);
+      gboolean wanted = FALSE;
+
+      for (guint d = 0; d < list->discover->len; d++)
+        {
+          const LkPluginDiscover *want = g_ptr_array_index (list->discover, d);
+
+          if (g_strcmp0 (want->service, service->service) == 0)
+            {
+              wanted = TRUE;
+              break;
+            }
+        }
+      if (!wanted || lk_plugin_holds_host (settings, list, service->host))
+        continue;
+
+      GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      GtkWidget *text = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+      GtkWidget *name = gtk_label_new (service->name);
+      g_autofree char *where = g_strdup_printf ("%s:%d", service->host, service->port);
+      GtkWidget *address = gtk_label_new (where);
+      GtkWidget *add = gtk_button_new_from_icon_name ("list-add-symbolic");
+      LkNearbyBinding *binding = g_new0 (LkNearbyBinding, 1);
+
+      gtk_label_set_xalign (GTK_LABEL (name), 0.0);
+      gtk_label_set_xalign (GTK_LABEL (address), 0.0);
+      gtk_widget_add_css_class (address, "dim-label");
+      gtk_box_append (GTK_BOX (text), name);
+      gtk_box_append (GTK_BOX (text), address);
+      gtk_widget_set_hexpand (text, TRUE);
+      gtk_box_append (GTK_BOX (line), text);
+
+      binding->settings = settings;
+      binding->list = list;
+      binding->service = g_strdup (service->service);
+      binding->name = g_strdup (service->name);
+      binding->host = g_strdup (service->host);
+      binding->port = service->port;
+
+      gtk_widget_set_tooltip_text (add, "Add this source");
+      gtk_widget_set_valign (add, GTK_ALIGN_CENTER);
+      g_signal_connect_data (add, "clicked", G_CALLBACK (lk_plugin_nearby_add_clicked), binding,
+                             lk_nearby_binding_free, 0);
+      gtk_box_append (GTK_BOX (line), add);
+      gtk_box_append (GTK_BOX (box), line);
+    }
+}
+
 static void
 lk_plugin_fill_rows (LkSettings *settings, const LkPluginList *list, GtkWidget *box)
 {
@@ -1984,6 +2108,8 @@ lk_plugin_fill_rows (LkSettings *settings, const LkPluginList *list, GtkWidget *
 
   for (guint i = 0; i < rows->len; i++)
     lk_plugin_fill_row (settings, box, list, g_ptr_array_index (rows, i));
+
+  lk_plugin_fill_nearby (settings, list, box);
 
   GtkWidget *add = gtk_button_new_with_label (list->add_label);
   gboolean full = lk_plugins_list_is_full (settings->plugins, list);
@@ -2089,6 +2215,8 @@ lk_plugin_fill_tab (GtkWidget *page, LkSettings *settings, const char *tab)
       gtk_box_append (GTK_BOX (section), box);
       g_hash_table_insert (settings->list_boxes,
                            g_strdup_printf ("%s/%s", list->plugin_id, list->key), box);
+      if (list->discover->len > 0)
+        g_ptr_array_add (settings->discover_lists, (gpointer) list);
       lk_plugin_fill_rows (settings, list, box);
 
       /* The plugin's own sentence, never the window's. Connections holds two
@@ -2098,6 +2226,42 @@ lk_plugin_fill_tab (GtkWidget *page, LkSettings *settings, const char *tab)
       if (list->footer[0] != '\0')
         lk_footer (section, list->footer);
     }
+}
+
+/* What was found moved, so every list that browses shows it again. */
+static void
+lk_settings_discovery_changed (gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  for (guint i = 0; i < settings->discover_lists->len; i++)
+    lk_plugin_schedule_refill (settings, g_ptr_array_index (settings->discover_lists, i));
+}
+
+/* Browse for what the loaded lists declare, and for nothing else. A window with
+ * no list that browses starts nothing at all. */
+static void
+lk_settings_start_discovery (LkSettings *settings)
+{
+  if (settings->discover_lists->len == 0)
+    return;
+
+  g_autoptr (GPtrArray) services = g_ptr_array_new ();
+
+  for (guint i = 0; i < settings->discover_lists->len; i++)
+    {
+      const LkPluginList *list = g_ptr_array_index (settings->discover_lists, i);
+
+      for (guint d = 0; d < list->discover->len; d++)
+        {
+          const LkPluginDiscover *want = g_ptr_array_index (list->discover, d);
+
+          g_ptr_array_add (services, (gpointer) want->service);
+        }
+    }
+
+  settings->discovery = lk_discovery_new (lk_settings_discovery_changed, settings);
+  lk_discovery_browse (settings->discovery, services);
 }
 
 /* ---- the Plugins page ---------------------------------------------------- */
@@ -2373,6 +2537,8 @@ lk_settings_window_destroyed (GtkWidget *window, gpointer user_data)
   /* The raster refill too: a toggle queues it, and a window destroyed before
      the idle runs would have it write into freed rows. */
   g_clear_handle_id (&settings->raster_refresh_id, g_source_remove);
+  g_clear_pointer (&settings->discovery, lk_discovery_free);
+  g_ptr_array_set_size (settings->discover_lists, 0);
   g_ptr_array_set_size (settings->status_labels, 0);
   g_ptr_array_set_size (settings->pending_lists, 0);
   g_hash_table_remove_all (settings->list_boxes);
@@ -2409,6 +2575,7 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
   settings->plugins = lk_plugins_new (lk_app_model_get_controller (model));
   settings->status_labels = g_ptr_array_new ();
   settings->pending_lists = g_ptr_array_new ();
+  settings->discover_lists = g_ptr_array_new ();
   settings->list_boxes = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
   GtkWidget *window = gtk_window_new ();
@@ -2519,6 +2686,8 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 
   /* While the window is up, the connection lines move on their own. */
   settings->status_poll_id = g_timeout_add_seconds (1, lk_plugin_status_poll, settings);
+
+  lk_settings_start_discovery (settings);
 
   return window;
 }

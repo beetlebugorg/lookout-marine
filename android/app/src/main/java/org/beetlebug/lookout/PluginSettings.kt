@@ -53,6 +53,14 @@ data class PluginField(
 }
 
 /** A repeating group's schema — the NMEA gateways, the Signal K servers. */
+/**
+ * One DNS-SD service a list is browsed for. [set] is the columns a discovered
+ * row takes beyond its name, address and port: a Signal K server announces its
+ * websocket, so a row added from one arrives with that column on. The values
+ * are text, like every other cell this shell holds.
+ */
+data class PluginDiscover(val service: String, val set: Map<String, String>)
+
 data class PluginListSchema(
     val pluginId: String,
     val key: String,
@@ -64,6 +72,11 @@ data class PluginListSchema(
     val addLabel: String,
     /** The item field that switches a row on and off, if it has one. */
     val switchKey: String,
+    /**
+     * What a shell browses the boat's network for on this list's behalf, so a
+     * source already running can be added without typing its address.
+     */
+    val discover: List<PluginDiscover>,
     /**
      * How many rows the HOST will keep. Anything past it is dropped on the way
      * in, so the editor stops offering Add at the cap rather than letting the
@@ -360,7 +373,17 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
                 empty = o.optString("empty"),
                 addLabel = o.optString("add_label"),
                 switchKey = o.optString("switch_key"),
+                discover = o.optJSONArray("discover").objects().mapNotNull { discover(it) },
                 maxRows = o.optInt("max_rows", 8),
+            )
+        }
+
+        private fun discover(o: JSONObject): PluginDiscover? {
+            val service = o.optString("service").ifEmpty { return null }
+            val set = o.optJSONObject("set")
+            return PluginDiscover(
+                service = service,
+                set = set?.keys()?.asSequence()?.associateWith { set.optString(it) }.orEmpty(),
             )
         }
 
@@ -450,6 +473,23 @@ fun PluginListSchema.newRow(): PluginRow {
     // Short and unique: the host keeps 32 bytes of it, and it only has to be
     // distinct within one plugin's list.
     return PluginRow("row-" + java.util.UUID.randomUUID().toString().take(8), cells)
+}
+
+/**
+ * A row filled in from what the network answered: the schema's defaults, the
+ * address the service answered on, its name and port, and whatever else the
+ * service type says a row of this list takes.
+ */
+fun PluginListSchema.rowFrom(service: DiscoveredService): PluginRow {
+    val fresh = newRow()
+    val cells = fresh.cells.toMutableMap()
+    for ((key, value) in discover.firstOrNull { it.service == service.service }?.set.orEmpty()) {
+        if (itemFields.any { it.key == key }) cells[key] = value
+    }
+    addressField?.let { cells[it.key] = service.host }
+    portField?.let { cells[it.key] = service.port.toString() }
+    nameField?.let { cells[it.key] = service.name }
+    return fresh.copy(cells = cells)
 }
 
 /**

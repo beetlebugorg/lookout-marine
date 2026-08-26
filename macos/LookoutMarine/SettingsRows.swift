@@ -218,6 +218,32 @@ struct PluginListSections: View {
                     PluginRowEditor(p: p, list: list, rowID: row.id,
                                     startOpen: row.text("host").isEmpty)
                 }
+                // WHAT IS ALREADY ANSWERING on the boat's network, offered
+                // ready to add. A Signal K server announces itself, so the
+                // mariner should not have to find out its address to use it.
+                // Nothing found shows nothing: at a desk that is the ordinary
+                // case, and an empty "Nearby" heading is a question nobody
+                // asked.
+                ForEach(p.nearby(list)) { service in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(service.name)
+                            // String(port), not the port itself: a number
+                            // interpolated into a Text is localised, and a
+                            // port is not a quantity — 10110 read "10,110".
+                            Text("\(service.host):" + String(service.port))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            p.addRow(list, from: service)
+                        } label: {
+                            Label("Add \(service.name)", systemImage: "plus.circle")
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                    }
+                }
                 Button {
                     p.addRow(list)
                 } label: {

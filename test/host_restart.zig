@@ -58,7 +58,8 @@ fn fixtureManifest(comptime id: []const u8, comptime trap_at_start: []const u8) 
         "{\"key\":\"trap_at_start\",\"label\":\"Trap at start\",\"kind\":\"toggle\",\"default\":" ++ trap_at_start ++ "}," ++
         "{\"key\":\"trap_at_shutdown\",\"label\":\"Trap at shutdown\",\"kind\":\"toggle\",\"default\":false}]}," ++
         "{\"label\":\"Connections\",\"tab\":\"connections\",\"list\":{\"key\":\"connections\"," ++
-        "\"add_label\":\"Add Gateway\",\"item_fields\":[" ++
+        "\"add_label\":\"Add Gateway\"," ++
+        "\"discover\":[{\"service\":\"_nmea-0183._tcp\",\"set\":{\"port\":10111}}],\"item_fields\":[" ++
         "{\"key\":\"host\",\"label\":\"Address\",\"kind\":\"text\",\"default\":\"\"}," ++
         "{\"key\":\"port\",\"label\":\"Port\",\"kind\":\"number\",\"min\":1,\"max\":65535,\"default\":10110}," ++
         "{\"key\":\"enabled\",\"label\":\"On\",\"kind\":\"toggle\",\"default\":true}]}}]}}";
@@ -290,6 +291,12 @@ test "a plugin that traps inside lk_start leaves every other schema whole" {
     // offering Add at the cap instead of letting the mariner add a row the host
     // will drop.
     try std.testing.expect(std.mem.indexOf(u8, s, "\"max_rows\":8") != null);
+
+    // WHAT TO BROWSE FOR travels with it, so a shell can offer a source that
+    // is already answering on the boat's network without anyone typing an
+    // address. `set` rides along: what a discovered row takes beyond it.
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"discover\":[{\"service\":\"_nmea-0183._tcp\"," ++
+        "\"set\":{\"port\":10111}}]") != null);
 
     // And the two that did start still work: settings go in, the plugin hears
     // them, and the schema reads back the same.
