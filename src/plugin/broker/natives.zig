@@ -57,7 +57,15 @@ fn allow(p: *Plugin, cap: Cap, call: []const u8) bool {
     if (p.caps.contains(cap)) return true;
     p.denied += 1;
     p.broker.denied += 1;
-    p.broker.say(level_err, p.id, "denied {s}: manifest does not request capability {s}", .{ call, cap.name() });
+    // Which refusal this is decides where the reader goes looking: a manifest
+    // to edit, or a switch to turn back on. Saying "the manifest does not
+    // request it" about a capability the manifest DOES request sends them to
+    // the wrong file.
+    if (p.asked.contains(cap)) {
+        p.broker.say(level_err, p.id, "denied {s}: capability {s} is switched off for this plugin", .{ call, cap.name() });
+    } else {
+        p.broker.say(level_err, p.id, "denied {s}: manifest does not request capability {s}", .{ call, cap.name() });
+    }
     return false;
 }
 
@@ -950,6 +958,25 @@ test "every mediated call is refused without its capability, and named in the lo
     p.caps.insert(.storage);
     try t.expect(allow(&p, .storage, "storage_get"));
     try t.expectEqual(@as(u32, gated.len), p.denied);
+
+    // Nothing above was in the manifest, so every refusal said so.
+    try t.expect(fx.sink.has("denied net.udp: manifest does not request capability net.udp"));
+
+    // A capability the manifest DOES ask for, switched off by the mariner,
+    // reads differently: the reader has a switch to find, not a manifest to
+    // edit.
+    var asked = Caps.initEmpty();
+    asked.insert(.alerts_raise);
+    var q = Plugin{
+        .broker = b,
+        .index = 1,
+        .id = "org.beetlebug.revoked",
+        .source = 2,
+        .caps = Caps.initEmpty(),
+        .asked = asked,
+    };
+    try t.expect(!allow(&q, .alerts_raise, "alert"));
+    try t.expect(fx.sink.has("denied alert: capability alerts.raise is switched off for this plugin"));
 }
 
 test "a URL outside the manifest's host list is refused before a socket opens" {
