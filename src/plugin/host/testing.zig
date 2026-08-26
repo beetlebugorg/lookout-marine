@@ -30,7 +30,7 @@ pub const list_manifest =
     \\   "footer":"Most WiFi gateways serve NMEA 0183 on port 10110.",
     \\   "empty":"No gateways yet.","add_label":"Add Gateway","switch_key":"enabled",
     \\   "item_fields":[
-    \\   {"key":"name","label":"Name","kind":"text","optional":true},
+    \\   {"key":"name","label":"Name","kind":"text","optional":true,"placeholder":"The gateway's own name"},
     \\   {"key":"host","label":"Address","desc":"The gateway on your network.","kind":"text","default":"127.0.0.1"},
     \\   {"key":"port","label":"Port","kind":"number","min":1,"max":65535,"default":10110},
     \\   {"key":"enabled","label":"On","kind":"toggle","default":true}]}}]}}

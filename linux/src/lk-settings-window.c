@@ -1837,7 +1837,9 @@ lk_plugin_fill_row (LkSettings *settings, GtkWidget *box,
           control = gtk_entry_new ();
           gtk_editable_set_text (GTK_EDITABLE (control),
                                  lk_plugins_row_text (settings->plugins, list, row_id, field->key));
-          if (field->optional)
+          if (field->placeholder[0] != '\0')
+            gtk_entry_set_placeholder_text (GTK_ENTRY (control), field->placeholder);
+          else if (field->optional)
             gtk_entry_set_placeholder_text (GTK_ENTRY (control), "Optional");
           g_object_set_data_full (G_OBJECT (control), "lk-cell-binding",
                                   lk_plugin_row_binding_new (settings, list, row_id, field->key),
