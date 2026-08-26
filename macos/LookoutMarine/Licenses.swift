@@ -24,6 +24,8 @@ struct LicenseComponent: Decodable, Identifiable, Hashable {
     let summary: String
     /// Empty when the build could not determine the terms.
     let license: String
+    /// A short form for a tight column. Empty when it is no shorter than `license`.
+    let licenseShort: String
     let licenseNote: String
     let version: String
     let commit: String
@@ -37,11 +39,18 @@ struct LicenseComponent: Decodable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, group, summary, license, version, commit, copyright, url, shells, text, notice
+        case licenseShort = "license_short"
         case licenseNote = "license_note"
         case pinnedIn = "pinned_in"
     }
 
     var licenseLabel: String { license.isEmpty ? "Not resolved" : license }
+
+    /// The short form for the list column, falling back to the full label.
+    var licenseColumnLabel: String {
+        if license.isEmpty { return "Not resolved" }
+        return licenseShort.isEmpty ? license : licenseShort
+    }
 
     /// The version, or the commit when a component is pinned to one.
     var pinLabel: String {
@@ -96,21 +105,6 @@ struct LicenseManifest: Decodable {
         return order.map { ($0, byGroup[$0] ?? []) }
     }
 
-    /// The whole screen as one document, for the clipboard.
-    var wholeText: String {
-        var out = "\(app.name)\n\(app.license)\n\(app.copyright)\n\(app.url)\n\n\(app.text)\n"
-        for c in components {
-            out += "\n\(String(repeating: "=", count: 72))\n\n"
-            out += "\(c.name)\n\(c.licenseLabel)\n"
-            if !c.version.isEmpty { out += "Version \(c.version)\n" }
-            if !c.commit.isEmpty { out += "Commit \(c.commit)\n" }
-            out += "\(c.copyright)\n\(c.url)\n"
-            if !c.licenseNote.isEmpty { out += "\n\(c.licenseNote)\n" }
-            if !c.notice.isEmpty { out += "\nNOTICE\n\n\(c.notice)\n" }
-            if !c.text.isEmpty { out += "\n\(c.text)\n" }
-        }
-        return out
-    }
 }
 
 // MARK: - What a row can be
@@ -214,10 +208,9 @@ struct LicensesView: View {
             }
         }
         .navigationTitle("Licenses")
-        .toolbar {
-            Button("Copy all licenses") { copy(manifest.wholeText) }
-                .help("Copy every license")
-        }
+        #if os(macOS)
+        .toolbar(removing: .sidebarToggle)
+        #endif
 
         let searched = Group {
             if searchable {
@@ -242,7 +235,7 @@ struct LicensesView: View {
             rowLink(.component(c.id)) {
                 row(name: c.name,
                     summary: c.summary,
-                    trailing: c.licenseLabel,
+                    trailing: c.licenseColumnLabel,
                     pin: c.pinLabel,
                     unresolved: c.license.isEmpty)
             }
@@ -350,7 +343,6 @@ private struct AppLicenseDetail: View {
             LicenseBody(title: app.license, note: "", text: app.text)
         }
         .navigationTitle(app.name)
-        .toolbar { CopyButton(text: app.text) }
     }
 }
 
@@ -395,7 +387,6 @@ private struct ComponentLicenseDetail: View {
                         text: component.text)
         }
         .navigationTitle(component.name)
-        .toolbar { CopyButton(text: component.text.isEmpty ? component.url : component.text) }
     }
 
 }
@@ -415,6 +406,10 @@ private struct LicenseScroll<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
         }
+        // Forces SwiftUI to clear the content past the toolbar's glass
+        // material instead of letting the first rows render (and blur)
+        // underneath it.
+        .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: 0) }
     }
 }
 
@@ -546,19 +541,6 @@ private struct LicenseBody: View {
                     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             }
         }
-    }
-}
-
-private struct CopyButton: View {
-    let text: String
-
-    var body: some View {
-        Button {
-            copy(text)
-        } label: {
-            Label("Copy", systemImage: "doc.on.doc")
-        }
-        .help("Copy this license")
     }
 }
 
