@@ -173,6 +173,9 @@ public final class Lookout implements AutoCloseable {
     public static boolean atlasCacheReady()       { return nAtlasCacheReady(); }
     /** Offer an opened file to the plugins: 1 claimed, 0 none, -1 failed. */
     public int openFile(String path)              { return h == 0 ? 0 : nOpenFile(h, path); }
+    /** This app's terms and every component it ships, as JSON. Baked into the
+     *  binary, so it needs no chart open. */
+    public static String licensesJson()           { return nLicensesJson(); }
 
     // ---- mariner (all S-52 display settings) -------------------------------
 
@@ -238,6 +241,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nMemoryWarning(long h);
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
+    private static native String nLicensesJson();
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
