@@ -56,6 +56,7 @@ what lets the host add an event without breaking a module built today.
 | 15 | `TABLE_OPEN` | 0 | `{"key":"targets"}`. A shell has put one of your declared tables on screen. Build its rows from here on; before this nobody was looking. Send the first batch from inside this call, or the dialog sits empty. |
 | 16 | `TABLE_CLOSED` | 0 | `{"key":"targets"}`. The shell closed it and the host has already dropped the rows. |
 | 17 | `GRANTS_CHANGED` | 0 | `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities you hold right now. |
+| 18 | `BUS_DATA` | 0 | One bus frame another plugin published on a topic your `bus.read` grant lists: `u32 json_len`, then `{"topic":"nmea0183","from":"org.beetlebug.nmea0183"}`, then the raw bytes — the HTTP_RESPONSE envelope shape. The payload's meaning is the topic's contract, not the host's. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
 
 `SHUTDOWN` ignores the queue cap, so a plugin whose queue
@@ -105,6 +106,7 @@ not trap.
 | `subscribe` | `(ptr, len) -> i32` | `vessel.read` | The number of paths, or -1. The payload is `["navigation.position",…]`. **One subscription per plugin**: calling again replaces the list. |
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
 | `view_subscribe` | `() -> i32` | `view.read` | 0, or -1. The current view arrives as `VIEW_CHANGED` on the next fanout tick rather than when the mariner next pans. |
+| `bus_publish` | `(topic_ptr, topic_len, ptr, len) -> i32` | `bus.publish` + its topic list | Subscribers reached (never the publisher itself), or -1. Frames over 64 KiB are refused. There is no `bus_subscribe`: a `bus.read` grant IS the subscription. |
 | `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. The port must be one your manifest's `net.udp` grant names, so port 0 is refused: an ephemeral port is not a port the mariner consented to. |
 | `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** (the host resolves no name here), so `255.255.255.255` works and `gateway.local` does not. |
 | `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
@@ -136,6 +138,8 @@ manifest claims. See **File types** below.
 | `ais.publish` | `ais_upsert`: write AIS targets |
 | `ais.read` | `ais_subscribe`: receive `AIS_CHANGED` snapshots |
 | `view.read` | `view_subscribe`: receive `VIEW_CHANGED` boxes |
+| `bus.publish` | `bus_publish`: **to the topics the grant names, and no others** |
+| `bus.read` | receive `BUS_DATA` for the topics the grant names — the grant is the subscription, so revoking it stops the stream |
 | `overlay.draw` | `overlay`: retained objects on the chart |
 | `alerts.raise` | `alert` |
 | `net.tcp-client` | `tcp_connect`, `tcp_send`, `tcp_close` |
@@ -144,6 +148,16 @@ manifest claims. See **File types** below.
 | `net.ws` | `ws_connect`, `ws_send`, `ws_close`: **to the hosts the grant names, and no others** |
 | `storage` | `storage_get`, `storage_put`: a key-value store of your own |
 | `files` | `file_read`, `file_write`, `file_close`, on handles the host granted |
+
+**Bus topics are an open vocabulary.** The host validates a topic's shape — 1
+to 8 per grant, each 1–32 bytes of lowercase letters, digits, `.`, `_` and
+`-`, matched exactly — and never its meaning, so a manifest may name a topic
+nothing else speaks yet and two plugins may agree on a new one without a host
+change. What a topic's payloads mean is a contract between the plugins on it.
+The bus is fire-and-forget: no retained value, no replay, and a full queue
+drops the frame for that plugin alone, counted and logged. **State belongs in
+the vessel store, datasets in storage; the bus carries frames and events** —
+raw sentences, a man-overboard press, a "new dataset ready" ping.
 
 An unknown capability name refuses the whole plugin, so a typo in a grant is a
 load error rather than a permission that turns out to be missing at run time.

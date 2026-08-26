@@ -2,7 +2,7 @@
   "id": "org.beetlebug.nmea0183",
   "name": "NMEA 0183",
   "api": 1,
-  "capabilities": [{"net.tcp-client": ["local"]}, "vessel.publish", "ais.publish"],
+  "capabilities": [{"net.tcp-client": ["local"]}, "vessel.publish", "ais.publish", {"bus.publish": ["nmea0183"]}],
   "settings": {
     "groups": [
       {

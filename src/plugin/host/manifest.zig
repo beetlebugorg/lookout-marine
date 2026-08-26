@@ -172,6 +172,11 @@ pub const Manifest = struct {
     tcp_addrs: [][]u8 = &.{},
     /// The ports `net.udp` named, same rule.
     udp_ports: []u16 = &.{},
+    /// The topics `bus.publish` and `bus.read` named, same rule. An OPEN
+    /// vocabulary: the host checks the shape of a topic name and never its
+    /// meaning, so a manifest may name a topic nothing else knows yet.
+    pub_topics: [][]u8 = &.{},
+    sub_topics: [][]u8 = &.{},
     /// The file extensions this plugin claims, each lowercase and with the
     /// leading dot. Empty unless the manifest declares some, and never
     /// non-empty without the `files` capability.
@@ -193,6 +198,8 @@ pub const Manifest = struct {
         freeStrings(alloc, self.ws_hosts);
         freeStrings(alloc, self.tcp_addrs);
         if (self.udp_ports.len > 0) alloc.free(self.udp_ports);
+        freeStrings(alloc, self.pub_topics);
+        freeStrings(alloc, self.sub_topics);
         freeStrings(alloc, self.file_types);
         freeStrings(alloc, self.tables);
         freeFields(alloc, self.settings, self.settings.len);
@@ -364,12 +371,16 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
     var ws_hosts: [][]u8 = &.{};
     var tcp_addrs: [][]u8 = &.{};
     var udp_ports: []u16 = &.{};
+    var pub_topics: [][]u8 = &.{};
+    var sub_topics: [][]u8 = &.{};
     var file_types: [][]u8 = &.{};
     var table_keys: [][]u8 = &.{};
     errdefer freeStrings(alloc, http_hosts);
     errdefer freeStrings(alloc, ws_hosts);
     errdefer freeStrings(alloc, tcp_addrs);
     errdefer if (udp_ports.len > 0) alloc.free(udp_ports);
+    errdefer freeStrings(alloc, pub_topics);
+    errdefer freeStrings(alloc, sub_topics);
     errdefer freeStrings(alloc, file_types);
     errdefer freeStrings(alloc, table_keys);
     if (o.get("capabilities")) |c| {
@@ -408,6 +419,21 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
                             .net_tcp_client => {
                                 if (tcp_addrs.len > 0) return Error.BadManifest;
                                 tcp_addrs = hosts;
+                            },
+                            else => unreachable,
+                        }
+                    },
+                    .topics => {
+                        const topics = try parseTopics(alloc, kv.value_ptr.*);
+                        errdefer freeStrings(alloc, topics);
+                        switch (cap) {
+                            .bus_publish => {
+                                if (pub_topics.len > 0) return Error.BadManifest;
+                                pub_topics = topics;
+                            },
+                            .bus_read => {
+                                if (sub_topics.len > 0) return Error.BadManifest;
+                                sub_topics = topics;
                             },
                             else => unreachable,
                         }
@@ -524,6 +550,8 @@ pub fn parseManifest(alloc: std.mem.Allocator, json: []const u8) !Manifest {
         .ws_hosts = ws_hosts,
         .tcp_addrs = tcp_addrs,
         .udp_ports = udp_ports,
+        .pub_topics = pub_topics,
+        .sub_topics = sub_topics,
         .file_types = file_types,
         .tables = table_keys,
         .settings = fields,
@@ -704,7 +732,45 @@ fn parseHosts(alloc: std.mem.Allocator, v: std.json.Value) ![][]u8 {
     return out;
 }
 
-/// The owned string lists a manifest holds: hosts, and file types.
+/// Longest bus topic name, and how many one grant may carry.
+pub const max_topic_len = 32;
+pub const max_topics = 8;
+
+/// The topics a `{"bus.publish":[…]}` or `{"bus.read":[…]}` entry names. The
+/// vocabulary is OPEN — any name of the right shape is accepted, so a new
+/// topic never needs a host change — but the shape is fixed: lowercase
+/// letters, digits, `.`, `_` and `-`, compared exactly. An empty list refuses
+/// the manifest for the same reason an empty host list does.
+fn parseTopics(alloc: std.mem.Allocator, v: std.json.Value) ![][]u8 {
+    if (v != .array) return Error.BadManifest;
+    const items = v.array.items;
+    if (items.len == 0 or items.len > max_topics) return Error.BadManifest;
+    const out = try alloc.alloc([]u8, items.len);
+    var built: usize = 0;
+    errdefer {
+        for (out[0..built]) |s| alloc.free(s);
+        alloc.free(out);
+    }
+    for (items) |item| {
+        const text = switch (item) {
+            .string => |s| s,
+            else => return Error.BadManifest,
+        };
+        if (text.len == 0 or text.len > max_topic_len) return Error.BadManifest;
+        for (text) |c| switch (c) {
+            'a'...'z', '0'...'9', '.', '_', '-' => {},
+            else => return Error.BadManifest,
+        };
+        for (out[0..built]) |seen| {
+            if (std.mem.eql(u8, seen, text)) return Error.BadManifest;
+        }
+        out[built] = try alloc.dupe(u8, text);
+        built += 1;
+    }
+    return out;
+}
+
+/// The owned string lists a manifest holds: hosts, topics, and file types.
 fn freeStrings(alloc: std.mem.Allocator, list: [][]u8) void {
     for (list) |s| alloc.free(s);
     if (list.len > 0) alloc.free(list);
@@ -1047,6 +1113,41 @@ test "every outward grant carries its reach, and a bare one is refused" {
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.tcp-client\":[\"a.example\"]},{\"net.tcp-client\":[\"b.example\"]}]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.udp\":[10110]},{\"net.udp\":[4001]}]}",
         "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"net.http\":\"a.example\"}]}",
+    };
+    for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+}
+
+test "a bus grant names its topics, any topic of the right shape" {
+    const a = t.allocator;
+    // The vocabulary is open: `to-be-invented` is nothing any plugin speaks
+    // yet, and it parses like any other well-shaped name.
+    var m = try parseManifest(a,
+        \\{"id":"org.beetlebug.recorder","api":1,"capabilities":[
+        \\  {"bus.publish":["nmea0183"]},
+        \\  {"bus.read":["nmea0183","mob","to-be-invented"]}]}
+    );
+    defer m.deinit(a);
+    try t.expect(m.caps.contains(.bus_publish));
+    try t.expect(m.caps.contains(.bus_read));
+    try t.expectEqual(@as(usize, 1), m.pub_topics.len);
+    try t.expectEqualStrings("nmea0183", m.pub_topics[0]);
+    try t.expectEqual(@as(usize, 3), m.sub_topics.len);
+    try t.expectEqualStrings("mob", m.sub_topics[1]);
+
+    const bad = [_][]const u8{
+        // Bare and empty are the same over-broad grant the net caps refuse.
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"bus.publish\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[\"bus.read\"]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[]}]}",
+        // The shape is fixed even though the vocabulary is open: lowercase,
+        // 32 bytes, no spaces, no duplicates, strings only.
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[\"NMEA\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[\"a topic\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[\"a\",\"a\"]}]}",
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[7]}]}",
+        // One list per capability, like the net grants.
+        "{\"id\":\"x\",\"api\":1,\"capabilities\":[{\"bus.read\":[\"a\"]},{\"bus.read\":[\"b\"]}]}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
 }

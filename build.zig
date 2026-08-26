@@ -503,6 +503,9 @@ pub fn build(b: *std.Build) void {
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
         "plugins/nmea0183/config.zig",
+        // The raw-line TAG framing for the bus rides in the plugin's root,
+        // and it is pure byte math, so the file tests natively.
+        "plugins/nmea0183/main.zig",
         "plugins/signalk/delta.zig",
         "plugins/signalk/transport.zig",
         "plugins/signalk/config.zig",

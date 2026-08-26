@@ -364,6 +364,30 @@ fn hostAisSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
     return 0;
 }
 
+/// Largest bus frame. Big enough for a read's worth of NMEA sentences or a
+/// JSON event; a dataset goes in storage with a ping here.
+pub const bus_frame_max = 64 * 1024;
+
+fn hostBusPublish(env: wasm.c.wasm_exec_env_t, topic_ptr: [*c]const u8, topic_len: u32, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .bus_publish, "bus_publish")) return -1;
+    const topic = bytes(topic_ptr, topic_len);
+    if (!topicListed(p.pub_topics, topic)) {
+        p.denied += 1;
+        p.broker.denied += 1;
+        p.broker.say(level_err, p.id, "denied bus_publish: {s} is not in the manifest's bus.publish topic list", .{topic});
+        return -1;
+    }
+    const data = bytes(ptr, len);
+    if (data.len > bus_frame_max) {
+        p.broker.say(level_warn, p.id, "bus_publish {s}: frame over {d} bytes dropped", .{ topic, bus_frame_max });
+        return -1;
+    }
+    return p.broker.busPublish(p, topic, data);
+}
+
+const topicListed = caps_mod.topicListed;
+
 fn hostViewSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
     const p = caller(env) orelse return -1;
     if (!allow(p, .view_read, "view_subscribe")) return -1;
@@ -754,6 +778,7 @@ var natives = wasm.nativeSymbols(&.{
     .{ .name = "subscribe", .func = @ptrCast(&hostSubscribe), .signature = "(*~)i" },
     .{ .name = "ais_subscribe", .func = @ptrCast(&hostAisSubscribe), .signature = "()i" },
     .{ .name = "view_subscribe", .func = @ptrCast(&hostViewSubscribe), .signature = "()i" },
+    .{ .name = "bus_publish", .func = @ptrCast(&hostBusPublish), .signature = "(*~*~)i" },
     .{ .name = "udp_open", .func = @ptrCast(&hostUdpOpen), .signature = "(i)I" },
     .{ .name = "udp_send", .func = @ptrCast(&hostUdpSend), .signature = "(I*~*~i)i" },
     .{ .name = "udp_close", .func = @ptrCast(&hostUdpClose), .signature = "(I)" },

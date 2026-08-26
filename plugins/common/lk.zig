@@ -75,6 +75,7 @@ const host = if (builtin.is_test) TestHost else struct {
     extern "lookout" fn subscribe(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn ais_subscribe() i32;
     extern "lookout" fn view_subscribe() i32;
+    extern "lookout" fn bus_publish(topic_ptr: [*]const u8, topic_len: u32, ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn udp_open(port: u32) i64;
     extern "lookout" fn udp_send(id: i64, ptr: [*]const u8, len: u32, host_ptr: [*]const u8, host_len: u32, port: u32) i32;
     extern "lookout" fn udp_close(id: i64) void;
@@ -217,6 +218,15 @@ pub fn aisSubscribe() i32 {
 /// on the first tick after subscribing. Needs the `view.read` capability.
 pub fn viewSubscribe() i32 {
     return host.view_subscribe();
+}
+
+/// Put one frame on the bus. The topic must be in the manifest's
+/// `bus.publish` list; frames over 64 KiB are refused. Fire-and-forget:
+/// the return is how many plugins the frame reached (never this one), and
+/// zero readers is not an error. State belongs in the store and datasets in
+/// storage; the bus carries frames and events.
+pub fn busPublish(topic: []const u8, data: []const u8) i32 {
+    return host.bus_publish(topic.ptr, @intCast(topic.len), data.ptr, @intCast(data.len));
 }
 
 // ---------------------------------------------------------------------------
@@ -644,6 +654,10 @@ pub const Event = union(enum) {
     /// `{"min_lat":..,"min_lon":..,"max_lat":..,"max_lon":..}`, the chart
     /// camera's footprint. `viewBox` parses it.
     view_changed: []const u8,
+    /// One bus frame another plugin published on a topic the manifest's
+    /// `bus.read` grant lists. The payload meaning is the topic's contract,
+    /// not the host's.
+    bus_data: BusData,
     ws_open: WsOpen,
     ws_data: WsData,
     ws_closed: WsClosed,
@@ -704,22 +718,53 @@ const kind_ws_closed: u32 = 14;
 const kind_table_open: u32 = 15;
 const kind_table_closed: u32 = 16;
 const kind_grants_changed: u32 = 17;
+const kind_bus_data: u32 = 18;
 const kind_shutdown: u32 = 99;
 
 /// Split an HTTP_RESPONSE payload: `u32 json_len | head JSON | raw body`. One
 /// event carries both because a plugin needs both and the API carries one
 /// payload per event.
-fn parseHttpResponse(request: i64, payload: []const u8) HttpResponse {
-    if (payload.len < 4) return .{ .request = request, .status = 0, .head = "", .body = "" };
+/// `u32 json_len | head | body`, the framing HTTP_RESPONSE and BUS_DATA
+/// share. Null when the length prefix lies about the payload.
+fn splitEnvelope(payload: []const u8) ?struct { head: []const u8, body: []const u8 } {
+    if (payload.len < 4) return null;
     const json_len = std.mem.readInt(u32, payload[0..4], .little);
-    if (4 + @as(usize, json_len) > payload.len)
+    if (4 + @as(usize, json_len) > payload.len) return null;
+    return .{ .head = payload[4 .. 4 + json_len], .body = payload[4 + json_len ..] };
+}
+
+fn parseHttpResponse(request: i64, payload: []const u8) HttpResponse {
+    const parts = splitEnvelope(payload) orelse
         return .{ .request = request, .status = 0, .head = "", .body = "" };
-    const head = payload[4 .. 4 + json_len];
     return .{
         .request = request,
-        .status = statusOf(head),
-        .head = head,
-        .body = payload[4 + json_len ..],
+        .status = statusOf(parts.head),
+        .head = parts.head,
+        .body = parts.body,
+    };
+}
+
+pub const BusData = struct {
+    topic: []const u8,
+    /// The publishing plugin's manifest id.
+    from: []const u8,
+    bytes: []const u8,
+};
+
+/// `u32 json_len | {"topic":…,"from":…} | raw bytes`, the same envelope
+/// HTTP_RESPONSE uses. A malformed one reads as an empty frame on an empty
+/// topic, which no handler matches.
+fn parseBusData(payload: []const u8) BusData {
+    const none = BusData{ .topic = "", .from = "", .bytes = "" };
+    const parts = splitEnvelope(payload) orelse return none;
+    const head = envelope(parts.head) orelse return none;
+    if (head != .object) return none;
+    return .{
+        .topic = jstr(head.object.get("topic") orelse return none) orelse return none,
+        // An envelope this SDK cannot read whole is not delivered half-read:
+        // `from` is how a handler decides whether to trust the payload.
+        .from = jstr(head.object.get("from") orelse return none) orelse return none,
+        .bytes = parts.body,
     };
 }
 
@@ -840,6 +885,7 @@ pub fn registerPlugin(comptime P: type) void {
                         .{ .table_closed = table_key };
                 },
                 kind_grants_changed => .{ .grants_changed = payload },
+                kind_bus_data => .{ .bus_data = parseBusData(payload) },
                 kind_shutdown => .shutdown,
                 // The API says an unknown kind is ignored and answered 0. A
                 // future host must be able to add events without breaking a
@@ -1552,6 +1598,7 @@ const TestHost = struct {
         subscribe,
         ais_subscribe,
         view_subscribe,
+        bus_publish,
         udp_open,
         udp_send,
         udp_close,
@@ -1724,6 +1771,19 @@ const TestHost = struct {
 
     fn view_subscribe() i32 {
         record(.view_subscribe, .{});
+        return 0;
+    }
+
+    fn bus_publish(topic_ptr: [*]const u8, topic_len: u32, ptr: [*]const u8, len: u32) i32 {
+        // Topic and payload in one record, newline-joined, so a test can
+        // assert on both.
+        var joined: [max_payload]u8 = undefined;
+        const t_len: usize = @min(@as(usize, topic_len), 64);
+        @memcpy(joined[0..t_len], topic_ptr[0..t_len]);
+        joined[t_len] = '\n';
+        const d_len: usize = @min(@as(usize, len), max_payload - t_len - 1);
+        @memcpy(joined[t_len + 1 ..][0..d_len], ptr[0..d_len]);
+        record(.bus_publish, .{ .payload = joined[0 .. t_len + 1 + d_len] });
         return 0;
     }
 

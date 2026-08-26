@@ -123,6 +123,13 @@ pub const api_version = raw_lk.api_version;
 /// `pub fn onView(v: lk.ViewBox)`. Needs the `view.read` capability.
 pub const ViewBox = raw_lk.ViewBox;
 
+/// Put one frame on the bus (see `lk.raw.busPublish`). Frames arrive at a
+/// plugin that declares
+/// `pub fn onBus(topic: []const u8, from: []const u8, bytes: []const u8)`,
+/// for the topics its `bus.read` grant lists. The payload's meaning is the
+/// topic's contract.
+pub const busPublish = raw_lk.busPublish;
+
 // ---------------------------------------------------------------------------
 // The numbers the library fixes
 // ---------------------------------------------------------------------------
@@ -2311,6 +2318,10 @@ fn Wiring(comptime P: type) type {
                 },
                 .view_changed => |payload| if (comptime @hasDecl(P, "onView")) {
                     if (raw_lk.viewBox(payload)) |v| P.onView(v);
+                    return;
+                },
+                .bus_data => |frame| if (comptime @hasDecl(P, "onBus")) {
+                    if (frame.topic.len > 0) P.onBus(frame.topic, frame.from, frame.bytes);
                     return;
                 },
                 .config_changed => |payload| {
