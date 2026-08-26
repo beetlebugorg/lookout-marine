@@ -108,7 +108,25 @@ pub const List = struct {
     /// draws on the row's line rather than inside it. Empty means the first
     /// toggle column, which is what a list with one toggle wants.
     switch_key: []u8 = &.{},
+    /// What a shell browses the boat's network for on this list's behalf.
+    discover: []Discover = &.{},
 };
+
+/// One DNS-SD service a shell offers as a row ready to add. The host browses
+/// nothing itself: a mariner's network is reached through the platform's own
+/// Bonjour API, which is the shell's to call.
+pub const Discover = struct {
+    /// The service type, for example "_signalk-ws._tcp".
+    service: []u8,
+    /// The columns a discovered row takes beyond its name, address and port,
+    /// as a JSON object. Empty when the address is all a row needs. Every key
+    /// names a column of this list, and every value is that column's kind.
+    set: []u8 = &.{},
+};
+
+/// Most services one list may browse for. A list that wants five service types
+/// is a list that has not decided what it connects to.
+pub const max_discover = 4;
 
 /// Most rows one list may hold, and the longest row id kept. Eight NMEA
 /// gateways is already more than any boat this prototype targets.
@@ -760,7 +778,99 @@ fn parseList(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, tab
         if (items[at].kind != .toggle) return Error.BadManifest;
     }
     l.items = items;
+    l.discover = try parseDiscover(alloc, o.get("discover"), items);
     return l;
+}
+
+/// The services this list is browsed for. Absent is the ordinary case: a list
+/// of waypoints has nothing to find on a network.
+fn parseDiscover(
+    alloc: std.mem.Allocator,
+    v: ?std.json.Value,
+    items: []const Field,
+) ![]Discover {
+    const raw = switch (v orelse return &.{}) {
+        .array => |a| a.items,
+        else => return Error.BadManifest,
+    };
+    if (raw.len == 0 or raw.len > max_discover) return Error.BadManifest;
+
+    const out = try alloc.alloc(Discover, raw.len);
+    var built: usize = 0;
+    errdefer freeDiscover(alloc, out, built);
+    for (raw) |entry| {
+        if (entry != .object) return Error.BadManifest;
+        const eo = entry.object;
+        const service = switch (eo.get("service") orelse return Error.BadManifest) {
+            .string => |x| x,
+            else => return Error.BadManifest,
+        };
+        if (!isServiceType(service)) return Error.BadManifest;
+        var d = Discover{ .service = try alloc.dupe(u8, service) };
+        errdefer alloc.free(d.service);
+        d.set = try discoverSet(alloc, eo.get("set"), items);
+        out[built] = d;
+        built += 1;
+    }
+    return out;
+}
+
+/// A DNS-SD service type: `_signalk-ws._tcp`. Checked because the shell hands
+/// it to the platform's browser as it stands.
+fn isServiceType(s: []const u8) bool {
+    if (s.len == 0 or s.len > 64 or s[0] != '_') return false;
+    if (!std.mem.endsWith(u8, s, "._tcp") and !std.mem.endsWith(u8, s, "._udp")) return false;
+    for (s) |c| switch (c) {
+        'a'...'z', 'A'...'Z', '0'...'9', '_', '-', '.' => {},
+        else => return false,
+    };
+    return true;
+}
+
+/// The columns a discovered row takes beyond its address, checked against the
+/// list and written back as the JSON the shell applies. A key naming no column
+/// of this list, or a value that is not that column's kind, refuses the
+/// manifest: the alternative is a row the mariner adds that quietly never
+/// connects.
+fn discoverSet(alloc: std.mem.Allocator, v: ?std.json.Value, items: []const Field) ![]u8 {
+    const writeJsonString = @import("settings_json.zig").writeJsonString;
+    const o = switch (v orelse return &.{}) {
+        .object => |x| x,
+        else => return Error.BadManifest,
+    };
+    if (o.count() == 0) return Error.BadManifest;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    try out.append(alloc, '{');
+    var it = o.iterator();
+    while (it.next()) |e| {
+        const at = fieldIndex(items, e.key_ptr.*) orelse return Error.BadManifest;
+        const f = items[at];
+        if (out.items.len > 1) try out.append(alloc, ',');
+        try writeJsonString(&out, alloc, f.key);
+        try out.append(alloc, ':');
+        switch (f.kind) {
+            .toggle => switch (e.value_ptr.*) {
+                .bool => |b| try out.appendSlice(alloc, if (b) "true" else "false"),
+                else => return Error.BadManifest,
+            },
+            .number => {
+                const n = jsonNumber(e.value_ptr.*) orelse return Error.BadManifest;
+                if (n < f.min or n > f.max) return Error.BadManifest;
+                try out.print(alloc, "{d}", .{n});
+            },
+            .text => switch (e.value_ptr.*) {
+                .string => |x| {
+                    if (x.len > max_text_bytes) return Error.BadManifest;
+                    try writeJsonString(&out, alloc, x);
+                },
+                else => return Error.BadManifest,
+            },
+        }
+    }
+    try out.append(alloc, '}');
+    return out.toOwnedSlice(alloc);
 }
 
 fn fieldIndex(fields: []const Field, key: []const u8) ?usize {
@@ -802,6 +912,14 @@ fn freeFields(alloc: std.mem.Allocator, fields: []Field, built: usize) void {
     if (fields.len > 0) alloc.free(fields);
 }
 
+fn freeDiscover(alloc: std.mem.Allocator, ds: []Discover, built: usize) void {
+    for (ds[0..built]) |d| {
+        alloc.free(d.service);
+        alloc.free(d.set);
+    }
+    if (ds.len > 0) alloc.free(ds);
+}
+
 fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
     for (lists[0..built]) |l| {
         alloc.free(l.key);
@@ -810,6 +928,7 @@ fn freeLists(alloc: std.mem.Allocator, lists: []List, built: usize) void {
         alloc.free(l.empty);
         alloc.free(l.add_label);
         alloc.free(l.switch_key);
+        freeDiscover(alloc, l.discover, l.discover.len);
         freeFields(alloc, l.items, l.items.len);
     }
     if (lists.len > 0) alloc.free(lists);
@@ -1125,6 +1244,80 @@ test "a v2 schema carries labels, descriptions, groups and tabs" {
         "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"label\":\"G\"}]}}",
     };
     for (bad) |json| try t.expectError(Error.BadManifest, parseManifest(a, json));
+}
+
+test "a list says what to browse the network for, and refuses a set it cannot fill" {
+    const a = t.allocator;
+    var m = try parseManifest(a,
+        \\{"id":"x","api":1,"settings":{"groups":[{"label":"C","tab":"connections",
+        \\ "list":{"key":"c","discover":[{"service":"_signalk-ws._tcp","set":{"ws":true}},
+        \\                               {"service":"_nmea-0183._tcp"}],
+        \\  "item_fields":[{"key":"host","kind":"text","default":""},
+        \\                 {"key":"ws","kind":"toggle","default":false}]}}]}}
+    );
+    defer m.deinit(a);
+    const d = m.lists[0].discover;
+    try t.expectEqual(@as(usize, 2), d.len);
+    try t.expectEqualStrings("_signalk-ws._tcp", d[0].service);
+    // The set is written back as the shell applies it, over the column
+    // defaults, when the mariner adds what the browse found.
+    try t.expectEqualStrings("{\"ws\":true}", d[0].set);
+    // A service that needs nothing beyond the address carries no set.
+    try t.expectEqualStrings("", d[1].set);
+
+    // A list that declares none browses for nothing, which is every list that
+    // is not a connection.
+    var quiet = try parseManifest(a,
+        \\{"id":"x","api":1,"settings":{"groups":[{"label":"C","list":{"key":"c",
+        \\ "item_fields":[{"key":"host","kind":"text","default":""}]}}]}}
+    );
+    defer quiet.deinit(a);
+    try t.expectEqual(@as(usize, 0), quiet.lists[0].discover.len);
+
+    const head =
+        "{\"id\":\"x\",\"api\":1,\"settings\":{\"groups\":[{\"label\":\"C\",\"list\":{\"key\":\"c\",\"discover\":";
+    const tail =
+        ",\"item_fields\":[{\"key\":\"host\",\"kind\":\"text\",\"default\":\"\"}," ++
+        "{\"key\":\"port\",\"kind\":\"number\",\"min\":1,\"max\":65535,\"default\":80}," ++
+        "{\"key\":\"ws\",\"kind\":\"toggle\",\"default\":false}]}}]}}";
+    const bad = [_][]const u8{
+        // Not an array, and an array with nothing in it: both are the claim
+        // that this list is browsable written by someone who meant nothing.
+        "\"_signalk-ws._tcp\"",
+        "[]",
+        // A service type the platform's browser would refuse: no leading
+        // underscore, no transport, a space in it.
+        "[{\"service\":\"signalk-ws._tcp\"}]",
+        "[{\"service\":\"_signalk-ws\"}]",
+        "[{\"service\":\"_signal k._tcp\"}]",
+        "[{}]",
+        // A set that names no column of this list, or holds a value that is
+        // not that column's kind, or a port outside the column's range: each
+        // one adds a row that looks filled in and never connects.
+        "[{\"service\":\"_x._tcp\",\"set\":{\"secure\":true}}]",
+        "[{\"service\":\"_x._tcp\",\"set\":{\"ws\":\"yes\"}}]",
+        "[{\"service\":\"_x._tcp\",\"set\":{\"port\":99999}}]",
+        "[{\"service\":\"_x._tcp\",\"set\":{}}]",
+        "[{\"service\":\"_x._tcp\",\"set\":[\"ws\"]}]",
+    };
+    for (bad) |mid| {
+        const json = try std.mem.concat(a, u8, &.{ head, mid, tail });
+        defer a.free(json);
+        try t.expectError(Error.BadManifest, parseManifest(a, json));
+    }
+
+    // More service types than a list has any business browsing for.
+    var many: std.ArrayList(u8) = .empty;
+    defer many.deinit(a);
+    try many.appendSlice(a, "[");
+    for (0..max_discover + 1) |i| {
+        if (i > 0) try many.append(a, ',');
+        try many.print(a, "{{\"service\":\"_s{d}._tcp\"}}", .{i});
+    }
+    try many.appendSlice(a, "]");
+    const json = try std.mem.concat(a, u8, &.{ head, many.items, tail });
+    defer a.free(json);
+    try t.expectError(Error.BadManifest, parseManifest(a, json));
 }
 
 test "a list is refused when it fights another key, and text needs a row" {

@@ -201,6 +201,15 @@ struct PluginStatusItem {
     ]
 }
 
+/// One service type a list is browsed for.
+struct PluginDiscover {
+    let service: String
+    /// The columns a discovered row takes beyond its address, as the manifest
+    /// wrote them. A Signal K server announces its websocket, so a row added
+    /// from one arrives with that column on.
+    let set: [String: Any]
+}
+
 /// A repeating group the mariner adds rows to.
 struct PluginListSchema: Identifiable {
     let pluginID: String
@@ -219,6 +228,9 @@ struct PluginListSchema: Identifiable {
     /// Which toggle column is the row's own on/off switch. Empty means the
     /// first toggle column, which is what a list with one toggle wants.
     let switchKey: String
+    /// What to browse the boat's network for, and what a row takes from a
+    /// find beyond its name, address and port.
+    let discover: [PluginDiscover]
     /// How many rows the CORE will keep. Past this the host drops the row and
     /// logs, and the mariner is left with a connection that looks like every
     /// other one and never connects, so the window stops offering Add here
@@ -305,6 +317,10 @@ final class PluginSettings: ObservableObject {
     private weak var controller: ChartController?
     private var applyCancellable: AnyCancellable?
     private var pollCancellable: AnyCancellable?
+    /// What is answering on the boat's network right now. It browses only
+    /// while the window is open, and this republishes what it finds.
+    private let discovery = Discovery()
+    private var discoveryCancellable: AnyCancellable?
     /// Fires on an EDIT, never on a status poll: applying must be caused by
     /// the mariner, not by a plugin reporting its rate.
     private let edits = PassthroughSubject<Void, Never>()
@@ -372,11 +388,24 @@ final class PluginSettings: ObservableObject {
         pollCancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.refreshStatus() }
+        discoveryCancellable = discovery.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+        browseDeclared()
+    }
+
+    /// Browse for what the loaded lists declare, and for nothing else. Only
+    /// while the window is watching: `startPolling` and a plugin installed
+    /// under an open window are the two moments the set can change.
+    private func browseDeclared() {
+        discovery.browse(plugins.flatMap { $0.lists }.flatMap { $0.discover }.map(\.service))
     }
 
     func stopPolling() {
         pollCancellable?.cancel()
         pollCancellable = nil
+        discoveryCancellable?.cancel()
+        discoveryCancellable = nil
+        discovery.stop()
     }
 
     private func refreshStatus() {
@@ -395,6 +424,7 @@ final class PluginSettings: ObservableObject {
     func reload() {
         guard let fresh = readRegistry() else { return }
         plugins = fresh
+        if discoveryCancellable != nil { browseDeclared() }
     }
 
     /// The switch over one grant. Flipping it off revokes live — the plugin
@@ -481,6 +511,51 @@ final class PluginSettings: ObservableObject {
         guard let pi = plugins.firstIndex(where: { $0.id == list.pluginID }) else { return }
         var cells: [String: PluginValue] = [:]
         for f in list.itemFields { cells[f.key] = PluginValue(nil, f) }
+        let row = PluginRow(id: "row-" + UUID().uuidString.prefix(8).lowercased(), cells: cells)
+        plugins[pi].rows[list.key, default: []].append(row)
+        edited()
+    }
+
+    /// What this list could be filled in from: the services answering for one
+    /// of its types, less the ones it already holds.
+    ///
+    /// A host the list already points at is not offered again, whatever port
+    /// the row uses. One server announces the port it wants to be reached on
+    /// and is often reachable on another — a Signal K server announces its
+    /// websocket on 3000 and carries the same boat on 8375 — and offering a
+    /// second row to a machine already connected is offering to publish
+    /// everything on it twice.
+    func nearby(_ list: PluginListSchema) -> [DiscoveredService] {
+        if list.discover.isEmpty || isFull(list) { return [] }
+        let types = Set(list.discover.map(\.service))
+        let held = Set(rows(list).map { $0.text("host").lowercased() })
+        return discovery.found
+            .filter { types.contains($0.service) }
+            .filter { !held.contains($0.host.lowercased()) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Add what the browse found: the schema's defaults, the address it
+    /// answered on, and whatever else its service type says a row of this list
+    /// takes.
+    func addRow(_ list: PluginListSchema, from service: DiscoveredService) {
+        if isFull(list) { return }
+        guard let pi = plugins.firstIndex(where: { $0.id == list.pluginID }) else { return }
+        var cells: [String: PluginValue] = [:]
+        for f in list.itemFields { cells[f.key] = PluginValue(nil, f) }
+        let preset = list.discover.first { $0.service == service.service }?.set ?? [:]
+        for f in list.itemFields {
+            if let raw = preset[f.key] { cells[f.key] = PluginValue(raw, f) }
+        }
+        if let f = list.itemFields.first(where: { $0.key == "host" }) {
+            cells[f.key] = PluginValue(service.host, f)
+        }
+        if let f = list.itemFields.first(where: { $0.key == "port" }), preset["port"] == nil {
+            cells[f.key] = PluginValue(service.port, f)
+        }
+        if let f = list.itemFields.first(where: { $0.key == "name" }) {
+            cells[f.key] = PluginValue(service.name, f)
+        }
         let row = PluginRow(id: "row-" + UUID().uuidString.prefix(8).lowercased(), cells: cells)
         plugins[pi].rows[list.key, default: []].append(row)
         edited()
@@ -753,6 +828,10 @@ final class PluginSettings: ObservableObject {
             empty: o["empty"] as? String ?? "",
             addLabel: o["add_label"] as? String ?? "",
             switchKey: o["switch_key"] as? String ?? "",
+            discover: (o["discover"] as? [[String: Any]] ?? []).compactMap { d in
+                guard let service = d["service"] as? String else { return nil }
+                return PluginDiscover(service: service, set: d["set"] as? [String: Any] ?? [:])
+            },
             maxRows: (o["max_rows"] as? NSNumber)?.intValue ?? 0
         )
     }

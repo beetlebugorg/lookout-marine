@@ -42,6 +42,9 @@ type ConnOpts struct {
 	Footer   string
 	Empty    string
 	AddLabel string
+	// Discover is what a shell browses the boat's network for on this list's
+	// behalf, so a source already running is offered ready to add.
+	Discover []Discover
 	// Columns words the four standard columns and sets the port's range. A zero
 	// column keeps the library's wording.
 	Columns RowColumns
@@ -328,6 +331,7 @@ func (c *Conns) group() (specGroup, error) {
 		empty:     c.opts.Empty,
 		addLabel:  c.opts.AddLabel,
 		switchKey: "enabled",
+		discover:  c.opts.Discover,
 	}
 	// The standard columns come first because a shell draws them in order and
 	// the address is what a mariner fills in first. The switch goes last.

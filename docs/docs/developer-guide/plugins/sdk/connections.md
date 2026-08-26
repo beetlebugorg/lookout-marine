@@ -183,6 +183,7 @@ pub const Connections = lk.connections(.{
 | `group` | required | the section heading in the settings window |
 | `tab` | `.connections` | which settings tab the group lands on |
 | `footer`, `empty`, `add_label` | empty | the list's own wording in the settings window |
+| `discover` | empty | the DNS-SD services a shell browses the boat's network for |
 | `columns` | the SDK's wording | words the four standard fields and sets the port's range |
 | `Extra` | `struct {}` | fields beyond the four, declared like a settings group |
 | `State` | `struct {}` | per-connection state the plugin keeps: a framer, a parser, an identity |
@@ -203,6 +204,75 @@ delete closes a socket.
 The extra columns are declared like settings fields: `lk.Flag` is a switch,
 `lk.Num` a number with a range, `lk.Text` a text field. `lk.Text` carries
 `label`, `desc`, `default` and `optional`; optional means no default.
+
+## Being found without an address
+
+A source that announces itself over DNS-SD can be added without the mariner
+typing anything. Name the service types your list accepts, and a shell browses
+for them while the settings window is open, offering each answer above the Add
+button with the address it answered on.
+
+<Tabs groupId="plugin-language">
+<TabItem value="zig" label="Zig" default>
+
+```zig
+pub const Connections = lk.connections(.{
+    .key = "servers",
+    .group = "Signal K servers",
+    .discover = &.{.{ .service = "_signalk-ws._tcp", .set = "{\"websocket\":true}" }},
+    // …
+});
+```
+
+</TabItem>
+<TabItem value="go" label="Go">
+
+```go
+var servers = lk.Connections(lk.ConnOpts{
+	Key:      "servers",
+	Group:    "Signal K servers",
+	Discover: []lk.Discover{{Service: "_signalk-ws._tcp", Set: `{"websocket":true}`}},
+	// …
+})
+```
+
+</TabItem>
+<TabItem value="rust" label="Rust">
+
+```rust
+const OPTS: ConnOpts = ConnOpts {
+    key: "servers",
+    group: "Signal K servers",
+    discover: &[Discover {
+        service: "_signalk-ws._tcp",
+        set: r#"{"websocket":true}"#,
+    }],
+    ..ConnOpts::DEFAULT
+};
+```
+
+</TabItem>
+</Tabs>
+
+A row added from a find takes the service's name, host name and port. `set` is
+a JSON object of the other columns it takes, and it is what makes a find
+dialable when the address alone is not: a Signal K server announces its
+websocket on port 3000, and a row that took that port with `websocket` off
+would dial the web page. Every key must name a column of this list, and every
+value must be that column's kind, or the manifest is refused.
+
+THE HOST NAME IS WHAT IS KEPT, not the address behind it. A lease turns over
+and the address changes; the name still reaches the same machine.
+
+A list may name four service types at most. Every shell browses through its own
+platform: NetService on macOS and iOS, NsdManager on Android, Avahi on Linux and
+DnsServiceBrowse on Windows. The Apple shells also have to name the type in
+`NSBonjourServices`, so a service type the application does not ship is not
+browsable there.
+
+A find carries the host NAME on macOS, iOS, Linux and Windows. Android is the
+exception: NsdManager never exposes the SRV target, so a row added there holds
+the address the service answered on.
 
 ## The hooks
 

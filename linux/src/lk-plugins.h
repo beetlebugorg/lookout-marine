@@ -29,6 +29,7 @@
 #include <glib.h>
 
 #include "lk-chart-controller.h"
+#include "lk-json.h"
 
 G_BEGIN_DECLS
 
@@ -61,6 +62,17 @@ typedef struct {
   GPtrArray  *fields;  /* LkPluginField* */
 } LkPluginGroup;
 
+/* One DNS-SD service a connection list is browsed for.
+ *
+ * `set` is the columns a discovered row takes beyond its name, address and
+ * port, as the manifest wrote them: a Signal K server announces its websocket,
+ * so a row added from one arrives with that column on. It belongs to the
+ * registry the model last parsed, like every other string here. */
+typedef struct {
+  const char   *service; /* "_signalk-ws._tcp" */
+  const LkJson *set;     /* NULL when the address is all a row needs */
+} LkPluginDiscover;
+
 /* A repeating group the mariner adds rows to. */
 typedef struct {
   const char *plugin_id;
@@ -73,6 +85,7 @@ typedef struct {
   const char *switch_key;  /* which toggle column is the row's own on/off switch */
   int         max_rows;    /* how many rows the CORE keeps; 0 = it did not say */
   GPtrArray  *item_fields; /* LkPluginField*, the columns of one row */
+  GPtrArray  *discover;    /* LkPluginDiscover*, what to browse the network for */
 } LkPluginList;
 
 /* One capability the manifest asked for, in the consent sheet's own wording.
@@ -159,6 +172,16 @@ gboolean lk_plugins_list_is_full (LkPlugins *self, const LkPluginList *list);
  * again: it is what the plugin's status items point at. */
 void lk_plugins_add_row (LkPlugins *self, const LkPluginList *list);
 void lk_plugins_remove_row (LkPlugins *self, const LkPluginList *list, const char *row_id);
+
+/* Add a row filled in from what the network answered: the schema's defaults,
+ * the host name the service resolved to, its name and port, and whatever else
+ * the service type says a row of this list takes. */
+void lk_plugins_add_row_from (LkPlugins        *self,
+                              const LkPluginList *list,
+                              const char       *service,
+                              const char       *name,
+                              const char       *host,
+                              int               port);
 
 const char *lk_plugins_row_text (LkPlugins *self, const LkPluginList *list,
                                  const char *row_id, const char *key);

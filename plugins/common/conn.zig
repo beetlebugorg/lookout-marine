@@ -61,6 +61,9 @@ pub const Opts = struct {
     footer: []const u8 = "",
     empty: []const u8 = "",
     add_label: []const u8 = "",
+    /// The DNS-SD services a shell browses for, so a source already running on
+    /// the boat's network can be added without typing its address.
+    discover: []const schema.Discover = &.{},
     /// The wording of the four standard columns, and the port's range.
     columns: schema.RowColumns = .{},
     /// Columns beyond the four, as a struct shaped like a settings group.
@@ -175,6 +178,7 @@ pub fn Connections(comptime opts: Opts) type {
                 .footer = opts.footer,
                 .empty = opts.empty,
                 .add_label = opts.add_label,
+                .discover = opts.discover,
             },
             opts.columns,
             opts.Extra,

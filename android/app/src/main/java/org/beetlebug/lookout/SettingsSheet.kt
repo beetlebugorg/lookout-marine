@@ -80,6 +80,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -776,6 +777,16 @@ private fun PluginLists(
     // closes the last, so the pane never has two keyboards' worth of form on it.
     var editing by remember { mutableStateOf<String?>(null) }
 
+    // What is answering on the boat's network, for as long as this pane is on
+    // screen. A browse nobody is watching is a radio left on.
+    val context = LocalContext.current
+    val discovery = remember { Discovery(context) }
+    val services = registry.lists(tab).flatMap { it.discover }.map { it.service }
+    DisposableEffect(services) {
+        discovery.browse(services)
+        onDispose { discovery.stop() }
+    }
+
     for ((i, schema) in registry.lists(tab).withIndex()) {
         SectionHeader(schema.group.ifEmpty { "Connections" }, first = first && i == 0)
         val rows = registry.rows(schema)
@@ -811,6 +822,11 @@ private fun PluginLists(
                 )
             }
         }
+        for (service in discovery.nearby(schema, rows)) {
+            NearbyRow(service) {
+                controller.setPluginList(schema, rows + schema.rowFrom(service))
+            }
+        }
         AddRowButton(schema, rows.size) {
             val fresh = schema.newRow()
             controller.setPluginList(schema, rows + fresh)
@@ -819,6 +835,58 @@ private fun PluginLists(
             editing = fresh.id
         }
         if (schema.footer.isNotEmpty()) Footer(schema.footer)
+    }
+}
+
+/**
+ * What this list could be filled in from: the services answering for one of its
+ * types, less the ones it already holds.
+ *
+ * A host the list already points at is not offered again, whatever port the row
+ * uses. One machine announces the port it wants to be reached on and is often
+ * reachable on another, and a second row to a source already connected sends
+ * the same boat twice.
+ */
+private fun Discovery.nearby(
+    schema: PluginListSchema,
+    rows: List<PluginRow>,
+): List<DiscoveredService> {
+    if (schema.discover.isEmpty() || rows.size >= schema.maxRows) return emptyList()
+    val types = schema.discover.map { it.service }.toSet()
+    val address = schema.addressField ?: return emptyList()
+    val held = rows.map { it.text(address.key).lowercase() }.toSet()
+    return found
+        .filter { it.service in types && it.host.lowercase() !in held }
+        .sortedBy { it.name.lowercase() }
+}
+
+/**
+ * One source answering on the network, offered ready to add. Nothing found
+ * shows nothing: at a desk that is the ordinary case, and an empty heading is a
+ * question nobody asked.
+ */
+@Composable
+private fun NearbyRow(service: DiscoveredService, onAdd: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onAdd)
+            .padding(start = 20.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(service.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${service.host}:${service.port}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.Default.Add,
+            contentDescription = "Add ${service.name}",
+            tint = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

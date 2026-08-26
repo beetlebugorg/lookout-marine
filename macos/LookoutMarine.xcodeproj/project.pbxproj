@@ -34,6 +34,7 @@
 		6019BBBFC866BC7ADEBDCAAB /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */; };
 		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
+		72BB9A2C901DAD894A4C0736 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691669BA5266A092E22A3676 /* Discovery.swift */; };
 		741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
 		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
@@ -59,6 +60,7 @@
 		D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
 		DE7488B0D16B988AAA2DEAF3 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
+		E0715A2C0D9D8F46ACEB9D70 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691669BA5266A092E22A3676 /* Discovery.swift */; };
 		E64003666647657D54AE2A68 /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
 		E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		E88374AC97201A82AABB83C2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
@@ -102,6 +104,7 @@
 		64750619C04C6E8FC58ADF3C /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
 		684AE423C6C360B8C64E8187 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
+		691669BA5266A092E22A3676 /* Discovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Discovery.swift; sourceTree = "<group>"; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -184,6 +187,7 @@
 				67B9484301248E7DF8AD6EE2 /* ChartView.swift */,
 				A79681EADC27E70A6BB144FE /* Chrome.swift */,
 				0196916E70289224C21747BF /* Commands.swift */,
+				691669BA5266A092E22A3676 /* Discovery.swift */,
 				73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */,
 				5624860C29AF07752A4CE208 /* Info.plist */,
 				FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */,
@@ -453,6 +457,7 @@
 				E64003666647657D54AE2A68 /* ChartView.swift in Sources */,
 				7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */,
 				0FC697E6E69C983F38573E8D /* Commands.swift in Sources */,
+				72BB9A2C901DAD894A4C0736 /* Discovery.swift in Sources */,
 				FA0A1A3D4513B2121791CD8E /* HUDOverlay.swift in Sources */,
 				D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */,
 				ECECFDFE0FF0EF289D858D19 /* MarinerSettings.swift in Sources */,
@@ -484,6 +489,7 @@
 				09693BA46EA360C5604CC0DE /* ChartView.swift in Sources */,
 				0BC91B15C4652260E6898412 /* Chrome.swift in Sources */,
 				91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */,
+				E0715A2C0D9D8F46ACEB9D70 /* Discovery.swift in Sources */,
 				299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */,
 				58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */,
 				F84839EF2608C611368BF909 /* MarinerSettings.swift in Sources */,

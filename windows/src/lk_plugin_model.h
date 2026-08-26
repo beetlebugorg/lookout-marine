@@ -47,6 +47,16 @@ namespace lkw
         std::vector<PluginField> fields;
     };
 
+    // One DNS-SD service a connection list is browsed for. `set` is the columns
+    // a discovered row takes beyond its name, address and port, as text keyed by
+    // column: a Signal K server announces its websocket, so a row added from one
+    // arrives with that column on.
+    struct PluginDiscover
+    {
+        std::string service;
+        std::map<std::string, std::string> set;
+    };
+
     // A repeating group the mariner adds rows to.
     struct PluginList
     {
@@ -60,6 +70,8 @@ namespace lkw
         std::string switch_key; // which toggle column is the row's on/off switch
         int max_rows{ 0 };      // how many rows the CORE keeps; 0 = it did not say
         std::vector<PluginField> item_fields;
+        // What to browse the boat's network for on this list's behalf.
+        std::vector<PluginDiscover> discover;
     };
 
     // One value in a row. A row is not a settings field: it holds text as well

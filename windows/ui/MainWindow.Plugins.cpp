@@ -326,6 +326,50 @@ namespace winrt::LookoutMarine::implementation
                 list.switch_key = Str(lo, L"switch_key");
                 list.max_rows = (int)Num(lo, L"max_rows", 0);
 
+                // What to browse the boat's network for. The core carries the
+                // declaration; finding anything is this shell's own job.
+                for (auto const &de : Arr(lo, L"discover"))
+                {
+                    if (de.ValueType() != JsonValueType::Object)
+                        continue;
+                    JsonObject dobj = de.GetObject();
+                    lkw::PluginDiscover want;
+                    want.service = Str(dobj, L"service");
+                    if (want.service.empty())
+                        continue;
+                    if (dobj.HasKey(L"set") &&
+                        dobj.Lookup(L"set").ValueType() == JsonValueType::Object)
+                    {
+                        JsonObject set = dobj.GetNamedObject(L"set");
+                        for (auto const &cell : set)
+                        {
+                            // Kept as text and typed again when a row takes it,
+                            // which is what a cell of a row is here anyway.
+                            // A JsonObject iterates as IJsonValue, which reads
+                            // every kind here without asking for the concrete
+                            // JsonValue.
+                            IJsonValue value = cell.Value();
+                            std::string text;
+                            switch (value.ValueType())
+                            {
+                            case JsonValueType::Boolean:
+                                text = value.GetBoolean() ? "true" : "false";
+                                break;
+                            case JsonValueType::String:
+                                text = Utf8(value.GetString());
+                                break;
+                            case JsonValueType::Number:
+                                text = Trimmed(value.GetNumber());
+                                break;
+                            default:
+                                continue;
+                            }
+                            want.set[Utf8(cell.Key())] = text;
+                        }
+                    }
+                    list.discover.push_back(want);
+                }
+
                 for (auto const &ce : Arr(lo, L"item_fields"))
                 {
                     if (ce.ValueType() != JsonValueType::Object)
@@ -506,6 +550,7 @@ namespace winrt::LookoutMarine::implementation
     // field is left.
     void MainWindow::StartPluginStatusPoll()
     {
+        StartPluginDiscovery();
         if (plugin_poll_timer != nullptr)
             return;
         plugin_poll_timer = DispatcherTimer{};
@@ -516,12 +561,30 @@ namespace winrt::LookoutMarine::implementation
             // address keeps their field while the line beside it moves.
             if (RefreshPluginStatus())
                 UpdatePluginStatusUi();
+
+            uint64_t generation = discovery.Generation();
+            if (generation != discovery_drawn)
+            {
+                // A find is a row that is not on the page yet, so this one does
+                // need the page built again. Not under a mariner typing an
+                // address, though: the rebuild would take the field away from
+                // them, and the next tick can do it instead.
+                auto root = Content() != nullptr ? Content().XamlRoot() : nullptr;
+                auto focused =
+                    root != nullptr ? Input::FocusManager::GetFocusedElement(root) : nullptr;
+                if (focused == nullptr || focused.try_as<Controls::TextBox>() == nullptr)
+                {
+                    discovery_drawn = generation;
+                    BuildSettingsPage();
+                }
+            }
         });
         plugin_poll_timer.Start();
     }
 
     void MainWindow::StopPluginStatusPoll()
     {
+        StopPluginDiscovery();
         if (plugin_poll_timer == nullptr)
             return;
         plugin_poll_timer.Stop();
@@ -870,6 +933,44 @@ namespace winrt::LookoutMarine::implementation
                         ids.push_back(r.id);
                     for (auto const &id : ids)
                         BuildPluginRow(stack, p, list, id);
+                }
+
+                // WHAT IS ALREADY ANSWERING on the boat's network, offered
+                // ready to add. A Signal K server announces itself, so the
+                // mariner should not have to find its address to use it.
+                // Nothing found draws nothing: at a desk that is the ordinary
+                // case, and an empty heading is a question nobody asked.
+                for (auto const &found : NearbyFor(p, list))
+                {
+                    Controls::Grid line;
+                    Controls::ColumnDefinition wide, narrow;
+                    wide.Width({ 1, GridUnitType::Star });
+                    narrow.Width({ 0, GridUnitType::Auto });
+                    line.ColumnDefinitions().Append(wide);
+                    line.ColumnDefinitions().Append(narrow);
+                    line.Margin({ 0, 6, 0, 0 });
+
+                    Controls::StackPanel text;
+                    Controls::TextBlock name_tb;
+                    name_tb.Text(Wide(found.name));
+                    Controls::TextBlock where_tb;
+                    where_tb.Text(Wide(found.host + ":" + std::to_string(found.port)));
+                    where_tb.FontSize(11);
+                    where_tb.Opacity(0.7);
+                    text.Children().Append(name_tb);
+                    text.Children().Append(where_tb);
+                    line.Children().Append(text);
+
+                    Controls::Button add_found;
+                    add_found.Content(winrt::box_value(winrt::hstring{ L"Add" }));
+                    add_found.VerticalAlignment(VerticalAlignment::Center);
+                    lkw::Discovered entry = found;
+                    add_found.Click([this, plugin_id, list_key, entry](auto &&, auto &&) {
+                        AddPluginRowFrom(plugin_id, list_key, entry);
+                    });
+                    Controls::Grid::SetColumn(add_found, 1);
+                    line.Children().Append(add_found);
+                    stack.Children().Append(line);
                 }
 
                 // AT THE CAP THERE IS NOTHING TO ADD: the core keeps max_rows
@@ -1249,6 +1350,137 @@ namespace winrt::LookoutMarine::implementation
             return;
         cell->toggle = on;
         SchedulePluginApply();
+    }
+
+    // What this list could be filled in from: the services answering for one of
+    // its types, less the ones it already holds.
+    //
+    // A HOST the list points at is not offered again, whatever port the row
+    // uses. One machine announces the port it wants to be reached on and is
+    // often reachable on another — a Signal K server announces its websocket on
+    // 3000 and carries the same boat on 8375 — so a second row to it would send
+    // everything twice.
+    std::vector<lkw::Discovered> MainWindow::NearbyFor(lkw::PluginInfo const &p,
+                                                      lkw::PluginList const &list)
+    {
+        std::vector<lkw::Discovered> out;
+        if (list.discover.empty())
+            return out;
+
+        auto rows = p.rows.find(list.key);
+        size_t count = rows != p.rows.end() ? rows->second.size() : 0;
+        if (list.max_rows > 0 && (int)count >= list.max_rows)
+            return out;
+
+        for (auto const &found : discovery.Found())
+        {
+            bool wanted = std::any_of(list.discover.begin(), list.discover.end(),
+                                      [&](lkw::PluginDiscover const &d) {
+                                          return d.service == found.service;
+                                      });
+            if (!wanted)
+                continue;
+
+            bool held = false;
+            if (rows != p.rows.end())
+            {
+                for (auto const &row : rows->second)
+                {
+                    auto host = row.cells.find("host");
+                    if (host != row.cells.end() &&
+                        _stricmp(host->second.text.c_str(), found.host.c_str()) == 0)
+                    {
+                        held = true;
+                        break;
+                    }
+                }
+            }
+            if (!held)
+                out.push_back(found);
+        }
+        std::sort(out.begin(), out.end(), [](lkw::Discovered const &a, lkw::Discovered const &b) {
+            return _stricmp(a.name.c_str(), b.name.c_str()) < 0;
+        });
+        return out;
+    }
+
+    // Browse for what the loaded lists declare, and for nothing else, while the
+    // settings window is up. A browse nobody is watching is a radio left on.
+    void MainWindow::StartPluginDiscovery()
+    {
+        std::vector<std::string> services;
+        for (auto const &p : plugins)
+            for (auto const &list : p.lists)
+                for (auto const &want : list.discover)
+                    services.push_back(want.service);
+        if (services.empty())
+            return;
+
+        // Nothing is pushed at the UI from the browse's own threads: the poll
+        // below is already running while this window is up, and it notices a
+        // new find the same way it notices a new status line.
+        discovery.Browse(services);
+        discovery_drawn = discovery.Generation();
+    }
+
+    void MainWindow::StopPluginDiscovery() { discovery.Stop(); }
+
+    // Add a row filled in from what the network answered: the schema's
+    // defaults, the host name the service resolved to, its name and port, and
+    // whatever else the service type says a row of this list takes.
+    void MainWindow::AddPluginRowFrom(std::string const &plugin_id, std::string const &list_key,
+                                      lkw::Discovered const &found)
+    {
+        AddPluginRow(plugin_id, list_key);
+
+        lkw::PluginInfo *p = FindPlugin(plugin_id);
+        if (p == nullptr)
+            return;
+        auto rows = p->rows.find(list_key);
+        if (rows == p->rows.end() || rows->second.empty())
+            return;
+        auto list = std::find_if(p->lists.begin(), p->lists.end(),
+                                 [&](lkw::PluginList const &l) { return l.key == list_key; });
+        if (list == p->lists.end())
+            return;
+
+        lkw::PluginRow &row = rows->second.back();
+        auto set = std::find_if(list->discover.begin(), list->discover.end(),
+                                [&](lkw::PluginDiscover const &d) { return d.service == found.service; });
+        if (set != list->discover.end())
+        {
+            for (auto const &preset : set->set)
+            {
+                auto cell = row.cells.find(preset.first);
+                if (cell == row.cells.end())
+                    continue;
+                switch (cell->second.kind)
+                {
+                case lkw::PluginKind::Toggle:
+                    cell->second.toggle = preset.second == "true";
+                    break;
+                case lkw::PluginKind::Number:
+                    cell->second.number = atof(preset.second.c_str());
+                    break;
+                case lkw::PluginKind::Text:
+                    cell->second.text = preset.second;
+                    break;
+                }
+            }
+        }
+
+        auto name = row.cells.find("name");
+        if (name != row.cells.end())
+            name->second.text = found.name;
+        auto host = row.cells.find("host");
+        if (host != row.cells.end())
+            host->second.text = found.host;
+        auto port = row.cells.find("port");
+        if (port != row.cells.end())
+            port->second.number = found.port;
+
+        SchedulePluginApply();
+        BuildSettingsPage();
     }
 
     void MainWindow::AddPluginRow(std::string const &plugin_id, std::string const &list_key)

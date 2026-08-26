@@ -13,6 +13,7 @@
           "footer": "A Signal K server sends the whole boat as one stream of updates on port 8375. Give its address, and everything switched on here feeds the same chart.",
           "empty": "No servers yet.",
           "add_label": "Add Server",
+          "discover": [{"service": "_signalk-ws._tcp", "set": {"websocket": true}}],
           "switch_key": "enabled",
           "item_fields": [
             {"key": "name", "label": "Name", "desc": "What you call this server. Leave it empty to show the address.", "kind": "text", "optional": true},
