@@ -11,6 +11,7 @@ const std = @import("std");
 
 pub const Kind = struct {
     pub const config_changed: u32 = 1;
+    pub const view_changed: u32 = 2;
     pub const timer: u32 = 3;
     pub const tcp_connected: u32 = 4;
     pub const tcp_data: u32 = 5;
@@ -67,6 +68,7 @@ pub const Cap = enum {
     ais_publish,
     vessel_read,
     ais_read,
+    view_read,
     overlay_draw,
     alerts_raise,
     storage,
@@ -82,6 +84,7 @@ pub const Cap = enum {
             .ais_publish => "ais.publish",
             .vessel_read => "vessel.read",
             .ais_read => "ais.read",
+            .view_read => "view.read",
             .overlay_draw => "overlay.draw",
             .alerts_raise => "alerts.raise",
             .storage => "storage",

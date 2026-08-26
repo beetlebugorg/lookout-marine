@@ -40,6 +40,7 @@ what lets the host add an event without breaking a module built today.
 | # | Kind | `handle` | Payload |
 |---|---|---|---|
 | 1 | `CONFIG_CHANGED` | 0 | The plugin's whole settings object, `{"cpa_limit":926,"cpa_alarm":true}`. Every field the schema declares is present, so a handler never merges. |
+| 2 | `VIEW_CHANGED` | 0 | `{"min_lat":…,"min_lon":…,"max_lat":…,"max_lon":…}`, the chart camera's footprint in degrees, at most 2 Hz and only when the view moved. `min_lon`/`max_lon` are a continuous span, so a view across the antimeridian keeps `min_lon <= max_lon` with values outside ±180. |
 | 3 | `TIMER` | The timer id `timer_set` returned | empty |
 | 4 | `TCP_CONNECTED` | The connection id | empty |
 | 5 | `TCP_DATA` | The connection id | Raw bytes, one event per socket read, at most 8192 bytes. Reassembling lines is yours. |
@@ -57,7 +58,7 @@ what lets the host add an event without breaking a module built today.
 | 17 | `GRANTS_CHANGED` | 0 | `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities you hold right now. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
 
-Kind 2 is unassigned. `SHUTDOWN` ignores the queue cap, so a plugin whose queue
+`SHUTDOWN` ignores the queue cap, so a plugin whose queue
 is already full still receives it.
 
 **`GRANTS_CHANGED` is the only way to know what you hold.** The manifest is what
@@ -103,6 +104,7 @@ not trap.
 | `timer_cancel` | `(id: i64)` | none | Nothing. Cancelling another plugin's timer does nothing. |
 | `subscribe` | `(ptr, len) -> i32` | `vessel.read` | The number of paths, or -1. The payload is `["navigation.position",…]`. **One subscription per plugin**: calling again replaces the list. |
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
+| `view_subscribe` | `() -> i32` | `view.read` | 0, or -1. The current view arrives as `VIEW_CHANGED` on the next fanout tick rather than when the mariner next pans. |
 | `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. The port must be one your manifest's `net.udp` grant names, so port 0 is refused: an ephemeral port is not a port the mariner consented to. |
 | `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** (the host resolves no name here), so `255.255.255.255` works and `gateway.local` does not. |
 | `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
@@ -133,6 +135,7 @@ manifest claims. See **File types** below.
 | `vessel.read` | `subscribe`: receive `STORE_CHANGED` for named paths |
 | `ais.publish` | `ais_upsert`: write AIS targets |
 | `ais.read` | `ais_subscribe`: receive `AIS_CHANGED` snapshots |
+| `view.read` | `view_subscribe`: receive `VIEW_CHANGED` boxes |
 | `overlay.draw` | `overlay`: retained objects on the chart |
 | `alerts.raise` | `alert` |
 | `net.tcp-client` | `tcp_connect`, `tcp_send`, `tcp_close` |
