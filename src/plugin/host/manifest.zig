@@ -68,6 +68,9 @@ pub const Field = struct {
     /// A text field the mariner may leave empty. The shell says so; the plugin
     /// decides what an empty one means.
     optional: bool = false,
+    /// Ghost text a shell shows in an empty text control. Empty leaves the
+    /// shell's own wording.
+    placeholder: []u8 = &.{},
 
     /// `text` is only legal inside a LIST: a scalar value crosses the API as a
     /// number, and there is nowhere to keep a scalar string.
@@ -268,6 +271,11 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, ta
         else => "",
     };
 
+    const placeholder = switch (o.get("placeholder") orelse std.json.Value{ .string = "" }) {
+        .string => |s| if (s.len <= max_text_bytes) s else return Error.BadManifest,
+        else => "",
+    };
+
     var f = Field{
         .key = try alloc.dupe(u8, key),
         .label = undefined,
@@ -292,6 +300,8 @@ fn parseField(alloc: std.mem.Allocator, v: std.json.Value, group: []const u8, ta
     errdefer alloc.free(f.group);
     f.default_text = try alloc.dupe(u8, if (kind == .text) default_text else "");
     errdefer alloc.free(f.default_text);
+    f.placeholder = try alloc.dupe(u8, if (kind == .text) placeholder else "");
+    errdefer alloc.free(f.placeholder);
 
     switch (kind) {
         .number => {
@@ -908,6 +918,7 @@ fn freeFields(alloc: std.mem.Allocator, fields: []Field, built: usize) void {
         alloc.free(f.unit);
         alloc.free(f.group);
         alloc.free(f.default_text);
+        alloc.free(f.placeholder);
     }
     if (fields.len > 0) alloc.free(fields);
 }

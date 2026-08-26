@@ -50,6 +50,7 @@ typedef struct {
   double            fallback;      /* the manifest default; a toggle is 0 or 1 */
   const char       *fallback_text; /* a text field's default; only inside a row */
   gboolean          optional;      /* a text field that may be left empty */
+  const char       *placeholder;   /* ghost text for an empty text control; "" when none */
 } LkPluginField;
 
 /* One heading's worth of controls inside one settings section — the unit the

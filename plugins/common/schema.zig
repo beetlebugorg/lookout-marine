@@ -66,6 +66,8 @@ pub const Text = struct {
     default: []const u8 = "",
     /// The mariner may leave it empty. An optional column declares no default.
     optional: bool = false,
+    /// Ghost text shown in the empty control. Empty leaves the shell's own wording.
+    placeholder: []const u8 = "",
 };
 
 /// Longest text value the host keeps.
@@ -388,7 +390,8 @@ fn fieldJson(comptime key: []const u8, comptime f: anytype) []const u8 {
             // An optional column declares no default: the shell says the
             // mariner may leave it empty, and empty is what the plugin reads.
             Text => ",\"kind\":\"text\"" ++
-                (if (f.optional) ",\"optional\":true" else ",\"default\":" ++ str(f.default)) ++ "}",
+                (if (f.optional) ",\"optional\":true" else ",\"default\":" ++ str(f.default)) ++
+                (if (f.placeholder.len > 0) ",\"placeholder\":" ++ str(f.placeholder) else "") ++ "}",
             else => @compileError("a settings field must be lk.Num, lk.Flag or lk.Text"),
         };
     }

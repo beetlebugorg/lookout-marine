@@ -199,6 +199,7 @@ lk_plugin_field_read (const LkJson *node)
   field->min = lk_json_number (lk_json_member (node, "min"), 0);
   field->max = lk_json_number (lk_json_member (node, "max"), 1);
   field->optional = lk_json_member_bool (node, "optional", FALSE);
+  field->placeholder = lk_or_empty (lk_json_member_string (node, "placeholder"));
   field->fallback_text = lk_empty;
 
   switch (field->kind)

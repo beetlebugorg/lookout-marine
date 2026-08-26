@@ -157,6 +157,10 @@ pub fn writeFieldCore(out: *std.ArrayList(u8), alloc: std.mem.Allocator, f: Fiel
         try writeJsonString(out, alloc, f.unit);
     }
     if (f.optional) try out.appendSlice(alloc, ",\"optional\":true");
+    if (f.placeholder.len > 0) {
+        try out.appendSlice(alloc, ",\"placeholder\":");
+        try writeJsonString(out, alloc, f.placeholder);
+    }
     switch (f.kind) {
         .number => try out.print(alloc, ",\"min\":{d},\"max\":{d},\"default\":{d}", .{ f.min, f.max, f.default_value }),
         .toggle => try out.print(alloc, ",\"default\":{s}", .{boolText(f.default_value)}),
@@ -292,6 +296,17 @@ test "a list group parses, and its rows are policed like any other setting" {
     try t.expectEqualStrings(
         "{\"key\":\"host\",\"label\":\"Address\",\"desc\":\"The gateway on your network.\"," ++
             "\"kind\":\"text\",\"default\":\"127.0.0.1\",\"max_len\":128}",
+        json.items,
+    );
+
+    // A column's placeholder reaches the shell that renders the empty control.
+    json.clearRetainingCapacity();
+    try json.append(a, '{');
+    try writeFieldCore(&json, a, l.items[0]);
+    try json.append(a, '}');
+    try t.expectEqualStrings(
+        "{\"key\":\"name\",\"label\":\"Name\",\"kind\":\"text\",\"optional\":true," ++
+            "\"placeholder\":\"The gateway's own name\",\"default\":\"\",\"max_len\":128}",
         json.items,
     );
 }

@@ -321,7 +321,7 @@ struct PluginRowEditor: View {
                 case .text:
                     FieldRow(title: f.label, desc: f.desc) {
                         CommitTextField(
-                            placeholder: f.optional ? "Optional" : "",
+                            placeholder: !f.placeholder.isEmpty ? f.placeholder : (f.optional ? "Optional" : ""),
                             value: p.cellText(list, rowID, f.key)
                         )
                         .textFieldStyle(.roundedBorder)
@@ -450,7 +450,9 @@ struct CommitTextField: View {
     @FocusState private var editing: Bool
 
     var body: some View {
-        TextField(placeholder, text: $draft)
+        // The explicit prompt, not the title: with .labelsHidden() macOS
+        // drops the title entirely instead of ghosting it in the field.
+        TextField("", text: $draft, prompt: placeholder.isEmpty ? nil : Text(placeholder))
             .labelsHidden()
             .multilineTextAlignment(.trailing)
             .focused($editing)

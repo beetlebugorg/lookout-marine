@@ -51,6 +51,7 @@ struct PluginField: Identifiable {
     /// meaningful inside a list row.
     let defaultText: String
     let optional: Bool
+    let placeholder: String
     /// The value in force. A toggle is 0 or 1.
     var value: Double
 
@@ -884,6 +885,7 @@ final class PluginSettings: ObservableObject {
             defaultValue: fallback,
             defaultText: o["default"] as? String ?? "",
             optional: o["optional"] as? Bool ?? false,
+            placeholder: o["placeholder"] as? String ?? "",
             value: value
         )
     }
