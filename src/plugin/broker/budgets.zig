@@ -153,6 +153,10 @@ pub const Plugin = struct {
     /// Its vessel-store subscription, once it has called `subscribe`.
     sub: ?vstore.SubId = null,
     ais_sub: bool = false,
+    view_sub: bool = false,
+    /// True while this plugin is owed a VIEW_CHANGED whatever the dedupe says:
+    /// it just subscribed, or its last one was dropped on a full queue.
+    view_pending: bool = false,
     /// What the plugin last said about itself, through `chrome_status`.
     status_buf: [max_status]u8 = @splat(0),
     status_len: usize = 0,

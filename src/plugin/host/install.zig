@@ -34,6 +34,7 @@ pub const grants_file = "grants.json";
 pub const sentence_order = [_]broker.Cap{
     .vessel_read,
     .ais_read,
+    .view_read,
     .vessel_publish,
     .ais_publish,
     .overlay_draw,
@@ -53,6 +54,7 @@ pub fn writeSentence(out: *std.ArrayList(u8), alloc: std.mem.Allocator, cap: bro
     switch (cap) {
         .vessel_read => try out.appendSlice(alloc, "Read your instruments: position, heading, depth, wind."),
         .ais_read => try out.appendSlice(alloc, "Read AIS traffic."),
+        .view_read => try out.appendSlice(alloc, "See the area of chart you are viewing."),
         .vessel_publish => try out.appendSlice(alloc, "Provide instrument values to the chart."),
         .ais_publish => try out.appendSlice(alloc, "Provide AIS targets to the chart."),
         .overlay_draw => try out.appendSlice(alloc, "Draw on the chart."),
@@ -273,7 +275,7 @@ test "the consent sentences read exactly as install.md words them" {
     const a = t.allocator;
     var m = try parseManifest(a,
         \\{"id":"org.example.everything","api":1,"capabilities":[
-        \\ "vessel.read","ais.read","vessel.publish","ais.publish",
+        \\ "vessel.read","ais.read","view.read","vessel.publish","ais.publish",
         \\ "overlay.draw","alerts.raise",
         \\ {"net.tcp-client":["local"]},
         \\ {"net.udp":[10110,4001]},
@@ -287,6 +289,7 @@ test "the consent sentences read exactly as install.md words them" {
     const expect = [_][]const u8{
         "Read your instruments: position, heading, depth, wind.",
         "Read AIS traffic.",
+        "See the area of chart you are viewing.",
         "Provide instrument values to the chart.",
         "Provide AIS targets to the chart.",
         "Draw on the chart.",

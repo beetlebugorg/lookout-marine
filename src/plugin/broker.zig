@@ -123,6 +123,7 @@ pub const level_err = caps.level_err;
 pub const LogFn = caps.LogFn;
 pub const Cap = caps.Cap;
 pub const Caps = caps.Caps;
+pub const ViewBox = registry_json.ViewBox;
 
 pub const max_status = budgets.max_status;
 
@@ -158,6 +159,10 @@ pub const Event = queue.Event;
 
 pub const tick_ms = sockets.tick_ms;
 pub const ais_min_interval_ms = sockets.ais_min_interval_ms;
+
+/// VIEW_CHANGED's own cadence: wire.md promises at most 2 Hz, independent of
+/// whatever the AIS fanout is tuned to.
+pub const view_min_interval_ms: i64 = 500;
 pub const udp_max_datagram = sockets.udp_max_datagram;
 
 pub const http_max_inflight = http.http_max_inflight;
@@ -215,6 +220,7 @@ const jsonText = tables.jsonText;
 const jsonInt = registry_json.jsonInt;
 const jsonNum = registry_json.jsonNum;
 const writeAisChanged = registry_json.writeAisChanged;
+const writeViewChanged = registry_json.writeViewChanged;
 const writeJsonString = registry_json.writeJsonString;
 const writeJsonStringTo = registry_json.writeJsonStringTo;
 const writeStoreChanged = registry_json.writeStoreChanged;
@@ -335,6 +341,14 @@ pub const Broker = struct {
     next_tick: i64 = 0,
     last_ais_ms: i64 = 0,
     last_ais_seq: u64 = 0,
+    /// The chart camera's footprint as the shell last reported it, and the one
+    /// the VIEW_CHANGED fanout last sent. `cur_view` is written by the render
+    /// thread under its own tiny lock, so a frame never queues behind `mu`;
+    /// `sent_view` is touched only on the I/O thread and needs none.
+    view_mu: vstore.Lock = .{},
+    cur_view: ?ViewBox = null,
+    sent_view: ?ViewBox = null,
+    last_view_ms: i64 = 0,
     /// Grant refusals across all plugins.
     denied: u32 = 0,
 
@@ -454,18 +468,20 @@ pub const Broker = struct {
     pub fn push(self: *Broker, plugin: u32, kind: u32, handle: u64, payload: []const u8) void {
         self.mu.lock();
         defer self.mu.unlock();
-        self.pushLocked(plugin, kind, handle, payload);
+        _ = self.pushLocked(plugin, kind, handle, payload);
     }
 
-    fn pushLocked(self: *Broker, plugin: u32, kind: u32, handle: u64, payload: []const u8) void {
-        const q = self.queueForLocked(plugin) catch return;
+    /// False when the event was dropped rather than queued. Most callers have
+    /// nothing to do about that; the view fanout retries.
+    fn pushLocked(self: *Broker, plugin: u32, kind: u32, handle: u64, payload: []const u8) bool {
+        const q = self.queueForLocked(plugin) catch return false;
         if (q.depth() >= max_queued and kind != Kind.shutdown) {
             self.dropLocked(q, plugin, kind);
-            return;
+            return false;
         }
         const owned = self.alloc.dupe(u8, payload) catch {
             self.dropLocked(q, plugin, kind);
-            return;
+            return false;
         };
         q.items.append(self.alloc, .{
             .plugin = plugin,
@@ -475,13 +491,14 @@ pub const Broker = struct {
         }) catch {
             self.alloc.free(owned);
             self.dropLocked(q, plugin, kind);
-            return;
+            return false;
         };
         // The plugin's dispatch thread may be parked on its wake pipe.
         if (net.valid(q.wake[1])) {
             const one = [_]u8{0};
             _ = net.send(q.wake[1], &one);
         }
+        return true;
     }
 
     /// A dropped event, counted and — for the first one, and then rarely —
@@ -632,6 +649,8 @@ pub const Broker = struct {
                     p.sub = null;
                 }
                 p.ais_sub = false;
+                p.view_sub = false;
+                p.view_pending = false;
             }
 
             // Queued events for a plugin that will never run them again.
@@ -718,6 +737,20 @@ pub const Broker = struct {
                 id = p.id;
                 source = p.source;
                 span = p.source_span;
+                // A revoked READ grant must stop the stream already flowing,
+                // not just refuse the next subscribe call.
+                switch (cap) {
+                    .vessel_read => if (p.sub) |sid| {
+                        self.vessels.unsubscribe(sid);
+                        p.sub = null;
+                    },
+                    .ais_read => p.ais_sub = false,
+                    .view_read => {
+                        p.view_sub = false;
+                        p.view_pending = false;
+                    },
+                    else => {},
+                }
                 break;
             }
         }
@@ -2202,7 +2235,7 @@ pub const Broker = struct {
                     if (due <= now) due = now + p;
                     self.timers.items[i].due = due;
                 } else _ = self.timers.orderedRemove(i);
-                self.pushLocked(plugin, Kind.timer, @bitCast(id), "");
+                _ = self.pushLocked(plugin, Kind.timer, @bitCast(id), "");
             }
         }
     }
@@ -2430,6 +2463,57 @@ pub const Broker = struct {
 
         self.fanoutStore(now);
         self.fanoutAis(now, mono);
+        self.fanoutView(mono);
+    }
+
+    /// The chart camera's footprint, pushed by the render thread whenever a
+    /// frame was drawn. Takes only `view_mu`, so a frame never queues behind
+    /// the broker's own lock; the fanout tick decides whether anyone hears
+    /// about it. Quantized to ~1 cm so GPS noise under follow-ship does not
+    /// defeat the moved-view dedupe with last-ULP wiggle.
+    pub fn setView(self: *Broker, v: ViewBox) void {
+        const q = ViewBox{
+            .min_lat = quantizeDeg(v.min_lat),
+            .min_lon = quantizeDeg(v.min_lon),
+            .max_lat = quantizeDeg(v.max_lat),
+            .max_lon = quantizeDeg(v.max_lon),
+        };
+        self.view_mu.lock();
+        defer self.view_mu.unlock();
+        self.cur_view = q;
+    }
+
+    fn fanoutView(self: *Broker, mono: i64) void {
+        if (mono - self.last_view_ms < view_min_interval_ms) return;
+        // Advanced on every CHECK, not only on a send: gated by send alone an
+        // idle broker would rerun the whole body on each 100 ms tick forever.
+        // A push dropped on a full queue stays owed via view_pending and is
+        // retried on the next 500 ms check.
+        self.last_view_ms = mono;
+        const view = blk: {
+            self.view_mu.lock();
+            defer self.view_mu.unlock();
+            break :blk self.cur_view orelse return;
+        };
+        const moved = if (self.sent_view) |sent| !sent.eql(view) else true;
+
+        // Serialized before `mu`: four floats, and the render thread may be
+        // waiting on this lock.
+        var buf: [192]u8 = undefined;
+        var w = std.Io.Writer.fixed(&buf);
+        writeViewChanged(&w, view) catch return;
+        const json = w.buffered();
+
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.plugins.items) |p| {
+            if (!p.enabled or !p.view_sub) continue;
+            if (!moved and !p.view_pending) continue;
+            // A push dropped on a full queue stays owed: a static view never
+            // re-fires the moved check, so pending is the only retry.
+            p.view_pending = !self.pushLocked(p.index, Kind.view_changed, 0, json);
+        }
+        self.sent_view = view;
     }
 
     fn fanoutStore(self: *Broker, now: i64) void {
@@ -2482,10 +2566,17 @@ pub const Broker = struct {
         defer self.mu.unlock();
         for (self.plugins.items) |p| {
             if (!p.enabled or !p.ais_sub) continue;
-            self.pushLocked(p.index, Kind.ais_changed, 0, json.items);
+            _ = self.pushLocked(p.index, Kind.ais_changed, 0, json.items);
         }
     }
 };
+
+/// One centimetre of latitude, the resolution the view dedupe compares at.
+/// Public because the camera compares against it too: the two dedupes have to
+/// round the same way or the cheaper one never hits.
+pub fn quantizeDeg(v: f64) f64 {
+    return @round(v * 1e7) / 1e7;
+}
 
 // ---- the clock ---------------------------------------------------------------
 

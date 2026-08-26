@@ -61,6 +61,28 @@ pub fn writeAisChanged(out: *std.ArrayList(u8), alloc: std.mem.Allocator, target
     try out.appendSlice(alloc, "]}");
 }
 
+/// The chart camera's ground footprint, degrees WGS-84. `min_lon`/`max_lon`
+/// stay a continuous span, so a view across the antimeridian keeps
+/// `min_lon <= max_lon` with values outside ±180; the consumer normalizes.
+pub const ViewBox = struct {
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+
+    pub fn eql(a: ViewBox, b: ViewBox) bool {
+        return a.min_lat == b.min_lat and a.min_lon == b.min_lon and
+            a.max_lat == b.max_lat and a.max_lon == b.max_lon;
+    }
+};
+
+/// `{"min_lat":..,"min_lon":..,"max_lat":..,"max_lon":..}` — the VIEW_CHANGED
+/// payload. Into a fixed writer: the broker serializes this with the render
+/// thread possibly waiting on its lock, so no allocator.
+pub fn writeViewChanged(w: *std.Io.Writer, v: ViewBox) !void {
+    try w.print("{{\"min_lat\":{d},\"min_lon\":{d},\"max_lat\":{d},\"max_lon\":{d}}}", .{ v.min_lat, v.min_lon, v.max_lat, v.max_lon });
+}
+
 /// The same escaping, into a fixed writer. Overflow is dropped: every caller
 /// here is building a one-line envelope into a stack buffer.
 pub fn writeJsonStringTo(w: *std.Io.Writer, s: []const u8) void {
@@ -186,6 +208,13 @@ test "AIS_CHANGED omits fields never heard and always carries age" {
             "{\"mmsi\":7,\"ts\":500,\"age_ms\":1500}]}",
         out.items,
     );
+}
+
+test "VIEW_CHANGED is the four corners, nothing more" {
+    var buf: [192]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeViewChanged(&w, .{ .min_lat = 38.5, .min_lon = -76.9, .max_lat = 39.1, .max_lon = -76.1 });
+    try t.expectEqualStrings("{\"min_lat\":38.5,\"min_lon\":-76.9,\"max_lat\":39.1,\"max_lon\":-76.1}", w.buffered());
 }
 
 test "a JSON string is escaped, not pasted" {

@@ -364,6 +364,19 @@ fn hostAisSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
     return 0;
 }
 
+fn hostViewSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .view_read, "view_subscribe")) return -1;
+    const b = p.broker;
+    b.mu.lock();
+    defer b.mu.unlock();
+    p.view_sub = true;
+    // Deliver the current view to THIS plugin on the next tick rather than
+    // waiting for a pan; nobody else hears a duplicate.
+    p.view_pending = true;
+    return 0;
+}
+
 // -- UDP ----------------------------------------------------------------------
 
 fn hostUdpOpen(env: wasm.c.wasm_exec_env_t, port: u32) callconv(.c) i64 {
@@ -740,6 +753,7 @@ var natives = wasm.nativeSymbols(&.{
     .{ .name = "timer_cancel", .func = @ptrCast(&hostTimerCancel), .signature = "(I)" },
     .{ .name = "subscribe", .func = @ptrCast(&hostSubscribe), .signature = "(*~)i" },
     .{ .name = "ais_subscribe", .func = @ptrCast(&hostAisSubscribe), .signature = "()i" },
+    .{ .name = "view_subscribe", .func = @ptrCast(&hostViewSubscribe), .signature = "()i" },
     .{ .name = "udp_open", .func = @ptrCast(&hostUdpOpen), .signature = "(i)I" },
     .{ .name = "udp_send", .func = @ptrCast(&hostUdpSend), .signature = "(I*~*~i)i" },
     .{ .name = "udp_close", .func = @ptrCast(&hostUdpClose), .signature = "(I)" },

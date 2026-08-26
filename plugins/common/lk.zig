@@ -74,6 +74,7 @@ const host = if (builtin.is_test) TestHost else struct {
     extern "lookout" fn timer_cancel(id: i64) void;
     extern "lookout" fn subscribe(ptr: [*]const u8, len: u32) i32;
     extern "lookout" fn ais_subscribe() i32;
+    extern "lookout" fn view_subscribe() i32;
     extern "lookout" fn udp_open(port: u32) i64;
     extern "lookout" fn udp_send(id: i64, ptr: [*]const u8, len: u32, host_ptr: [*]const u8, host_len: u32, port: u32) i32;
     extern "lookout" fn udp_close(id: i64) void;
@@ -209,6 +210,13 @@ pub fn subscribePaths(paths: []const []const u8) i32 {
 /// at most twice a second and only when something moved.
 pub fn aisSubscribe() i32 {
     return host.ais_subscribe();
+}
+
+/// Ask for the chart camera's footprint. It arrives as `.view_changed`, at
+/// most twice a second and only when the view moved; the current view comes
+/// on the first tick after subscribing. Needs the `view.read` capability.
+pub fn viewSubscribe() i32 {
+    return host.view_subscribe();
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +641,9 @@ pub const Event = union(enum) {
     store_changed: []const u8,
     /// `{"targets":[...]}`, the full set. `targets` parses it.
     ais_changed: []const u8,
+    /// `{"min_lat":..,"min_lon":..,"max_lat":..,"max_lon":..}`, the chart
+    /// camera's footprint. `viewBox` parses it.
+    view_changed: []const u8,
     ws_open: WsOpen,
     ws_data: WsData,
     ws_closed: WsClosed,
@@ -677,6 +688,7 @@ pub const Start = struct {
 };
 
 const kind_config_changed: u32 = 1;
+const kind_view_changed: u32 = 2;
 const kind_timer: u32 = 3;
 const kind_tcp_connected: u32 = 4;
 const kind_tcp_data: u32 = 5;
@@ -802,6 +814,7 @@ pub fn registerPlugin(comptime P: type) void {
                 },
                 kind_store_changed => .{ .store_changed = payload },
                 kind_ais_changed => .{ .ais_changed = payload },
+                kind_view_changed => .{ .view_changed = payload },
                 kind_ws_open => blk: {
                     const root = envelope(payload) orelse return 0;
                     break :blk .{ .ws_open = .{
@@ -963,6 +976,29 @@ pub fn targets(payload: []const u8) []const Target {
         n += 1;
     }
     return out[0..n];
+}
+
+/// The chart camera's footprint, degrees WGS-84, from a `.view_changed`
+/// payload. `min_lon`/`max_lon` are a continuous span: a view across the
+/// antimeridian keeps `min_lon <= max_lon` with values outside ±180.
+pub const ViewBox = struct {
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+};
+
+/// Parse a `.view_changed` payload. Scratch-allocated, like `targets`.
+pub fn viewBox(payload: []const u8) ?ViewBox {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, scratch(), payload, .{}) catch return null;
+    if (root != .object) return null;
+    const o = root.object;
+    return .{
+        .min_lat = jnumOpt(o.get("min_lat")) orelse return null,
+        .min_lon = jnumOpt(o.get("min_lon")) orelse return null,
+        .max_lat = jnumOpt(o.get("max_lat")) orelse return null,
+        .max_lon = jnumOpt(o.get("max_lon")) orelse return null,
+    };
 }
 
 /// A string out of the start config, or `fallback`.
@@ -1515,6 +1551,7 @@ const TestHost = struct {
         timer_cancel,
         subscribe,
         ais_subscribe,
+        view_subscribe,
         udp_open,
         udp_send,
         udp_close,
@@ -1682,6 +1719,11 @@ const TestHost = struct {
 
     fn ais_subscribe() i32 {
         record(.ais_subscribe, .{});
+        return 0;
+    }
+
+    fn view_subscribe() i32 {
+        record(.view_subscribe, .{});
         return 0;
     }
 

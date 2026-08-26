@@ -611,9 +611,9 @@ pub const FrameProf = struct {
         var line: [320]u8 = undefined;
         for (self.rows[0..self.n]) |r| {
             const s = std.fmt.bufPrint(&line, "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
-                r.prepare_us,   r.style_us,     r.trim_us,       r.overlay_us,  r.ct_us,
+                r.prepare_us,   r.style_us,     r.trim_us,       r.overlay_us,   r.ct_us,
                 r.ct_update_us, r.ct_upload_us, r.ct_present_us, r.ct_finish_us, r.ct_cache_us,
-                r.ct_want_us,   r.ct_refill_us, r.ct_start_us,   r.ct_pump_us,  r.ct_serve_us,
+                r.ct_want_us,   r.ct_refill_us, r.ct_start_us,   r.ct_pump_us,   r.ct_serve_us,
                 r.ct_atlas_us,
             }) catch continue;
             buf.appendSlice(std.heap.c_allocator, s) catch return;
@@ -790,6 +790,9 @@ pub const Lookout = struct {
     /// Null unless asked for, and every probe is behind `if (prof)`.
     frame_prof: ?FrameProf = null,
     prof_checked: bool = false,
+    /// The view box last handed to the plugin broker, as min_lat, min_lon,
+    /// max_lat, max_lon — so an unmoved camera skips the handoff entirely.
+    last_view_box: ?[4]f64 = null,
     /// The SCAMIN latitude the current style was built at. See STYLE_LAT_DRIFT.
     style_lat: f64 = 0,
     /// ensureStyle's own microseconds, handed up from prepareFrame.
@@ -2672,6 +2675,7 @@ pub const Lookout = struct {
         self.serviceTrim();
         const t2 = if (prof) clock.ticksUs() else 0;
         self.updateOverlay();
+        self.pushViewBox();
         const t3 = if (prof) clock.ticksUs() else 0;
         // The frame in two halves, with the api lock DROPPED around the second.
         // The present blocks on the swapchain's drawable — 0.2 ms typical, and
@@ -2723,6 +2727,46 @@ pub const Lookout = struct {
             .ct_atlas_us = self.ct.prof_atlas_us,
         });
         return ok;
+    }
+
+    /// Hand the chart camera's ground footprint to the plugin broker, which
+    /// fans it out as VIEW_CHANGED to plugins holding `view.read`. Every camera
+    /// mutation converges on render(), so one call here covers pan, zoom,
+    /// fling, follow and resize. The broker throttles and deduplicates; an
+    /// unmoved camera does not even take its lock.
+    fn pushViewBox(self: *Lookout) void {
+        if (!plugins_on) return;
+        const ps = self.plugins orelse return;
+        // The rotated viewport's world AABB, analytically rather than from
+        // folded corners: wrapDx folds at half a world, so a view wider than
+        // 180° of longitude would report a box narrower than the screen.
+        // Longitude stays a CONTINUOUS span (possibly outside ±180 across the
+        // antimeridian; the subscriber splits), clamped at one full world.
+        const s = self.cam.worldToPx();
+        const c = @abs(std.math.cos(self.cam.rotation));
+        const sn = @abs(std.math.sin(self.cam.rotation));
+        const vw: f64 = self.cam.vw;
+        const vh: f64 = self.cam.vh;
+        const half_x = @min((vw * c + vh * sn) / (2.0 * s), 0.5);
+        const half_y = (vw * sn + vh * c) / (2.0 * s);
+        // World y clamps to [0,1] (the mercator poles); latitude comes out of
+        // the same projection the chart uses. Smaller y is farther north.
+        const max_lat = camera.worldToLonLat(.{ .x = 0, .y = std.math.clamp(self.cam.center.y - half_y, 0.0, 1.0) }).y;
+        const min_lat = camera.worldToLonLat(.{ .x = 0, .y = std.math.clamp(self.cam.center.y + half_y, 0.0, 1.0) }).y;
+        // Rounded the way the broker rounds, and for the same reason: under
+        // follow-ship the camera's arithmetic wobbles in the last bits every
+        // frame, which is not the view moving. Comparing the raw floats would
+        // miss on that wobble and hand the broker a new box each frame.
+        const q = phost.broker.quantizeDeg;
+        const box = [4]f64{
+            q(min_lat),
+            q((self.cam.center.x - half_x) * 360.0 - 180.0),
+            q(max_lat),
+            q((self.cam.center.x + half_x) * 360.0 - 180.0),
+        };
+        if (self.last_view_box) |last| if (std.meta.eql(last, box)) return;
+        self.last_view_box = box;
+        ps.br.setView(.{ .min_lat = box[0], .min_lon = box[1], .max_lat = box[2], .max_lon = box[3] });
     }
 
     /// How often own ship's own motion is allowed to raise a frame. 10 Hz is

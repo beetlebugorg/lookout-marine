@@ -407,3 +407,14 @@ null: never heard and heard as zero are different values.
 
 A target that stops being heard drops out of the set. Draw from the set each
 call and Lookout takes the symbol off the chart for you.
+
+## Reading the chart view
+
+Declaring `pub fn onView(v: lk.ViewBox) void` subscribes the plugin to the
+chart camera's footprint — the manifest must ask for `view.read`. The hook
+runs at most twice a second and only when the view moved, with the current
+view arriving right after start. `ViewBox` is four degrees-WGS-84 fields:
+`min_lat`, `min_lon`, `max_lat`, `max_lon`. The longitude pair is a
+continuous span, so a view across the antimeridian keeps `min_lon <= max_lon`
+with values outside ±180; split it yourself if what you feed wants seam-safe
+boxes.

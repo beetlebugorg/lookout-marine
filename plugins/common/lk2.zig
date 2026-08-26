@@ -119,6 +119,10 @@ pub const raw = raw_lk;
 
 pub const api_version = raw_lk.api_version;
 
+/// The chart camera's footprint, delivered to a plugin that declares
+/// `pub fn onView(v: lk.ViewBox)`. Needs the `view.read` capability.
+pub const ViewBox = raw_lk.ViewBox;
+
 // ---------------------------------------------------------------------------
 // The numbers the library fixes
 // ---------------------------------------------------------------------------
@@ -2267,6 +2271,13 @@ fn Wiring(comptime P: type) type {
             if (comptime D.has_ais) {
                 if (raw_lk.aisSubscribe() < 0) return error.AisSubscribeRefused;
             }
+            if (comptime @hasDecl(P, "onView")) {
+                // Refusal degrades rather than failing the start: the mariner
+                // revoked view.read, and a plugin that cannot see the view
+                // should still run and say so, not vanish.
+                if (raw_lk.viewSubscribe() < 0)
+                    log(.warn, "view_subscribe refused; onView will not fire", .{});
+            }
             if (comptime D.has_connections) {
                 P.Connections.lkStart(P, s.config);
             }
@@ -2298,6 +2309,10 @@ fn Wiring(comptime P: type) type {
                     runUpdate(mono);
                     return;
                 },
+                .view_changed => |payload| if (comptime @hasDecl(P, "onView")) {
+                    if (raw_lk.viewBox(payload)) |v| P.onView(v);
+                    return;
+                },
                 .config_changed => |payload| {
                     const cfg = std.json.parseFromSliceLeaky(std.json.Value, scratch(), payload, .{}) catch
                         return;
@@ -2310,6 +2325,18 @@ fn Wiring(comptime P: type) type {
                 },
                 .grants_changed => |payload| {
                     if (comptime D.has_draw) setMayDraw(raw_lk.granted(payload, "overlay.draw"));
+                    // A read grant toggled OFF tears the live stream down in
+                    // the host; toggled back ON, only this event says so —
+                    // resubscribe, or the stream stays dead until restart.
+                    if (comptime D.inputs.len > 0) {
+                        if (raw_lk.granted(payload, "vessel.read")) _ = raw_lk.subscribePaths(&D.paths);
+                    }
+                    if (comptime D.has_ais) {
+                        if (raw_lk.granted(payload, "ais.read")) _ = raw_lk.aisSubscribe();
+                    }
+                    if (comptime @hasDecl(P, "onView")) {
+                        if (raw_lk.granted(payload, "view.read")) _ = raw_lk.viewSubscribe();
+                    }
                 },
                 .timer => |id| {
                     if (comptime D.has_draw) {
