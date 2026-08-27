@@ -16,6 +16,7 @@
         {"key": "sog", "label": "SOG", "type": "speed"},
         {"key": "cpa", "label": "CPA", "type": "distance"},
         {"key": "tcpa", "label": "TCPA", "type": "duration"},
+        {"key": "via", "label": "Via", "type": "text"},
         {"key": "state", "label": "", "type": "flag"}
       ],
       "sort": {"key": "cpa", "ascending": true},

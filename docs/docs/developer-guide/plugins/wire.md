@@ -56,6 +56,7 @@ what lets the host add an event without breaking a module built today.
 | 15 | `TABLE_OPEN` | 0 | `{"key":"targets"}`. A shell has put one of your declared tables on screen. Build its rows from here on; before this nobody was looking. Send the first batch from inside this call, or the dialog sits empty. |
 | 16 | `TABLE_CLOSED` | 0 | `{"key":"targets"}`. The shell closed it and the host has already dropped the rows. |
 | 17 | `GRANTS_CHANGED` | 0 | `{"v":1,"granted":["ais.read","overlay.draw"]}`, the capabilities you hold right now. |
+| 18 | `BUS_DATA` | 0 | One bus frame another plugin published on a topic your `bus.read` grant lists: `u32 json_len`, then `{"topic":"nmea0183","from":"org.beetlebug.nmea0183"}`, then the raw bytes — the HTTP_RESPONSE envelope shape. The payload's meaning is the topic's contract, not the host's. |
 | 99 | `SHUTDOWN` | 0 | empty. The last thing you are ever handed, whatever you return. |
 
 `SHUTDOWN` ignores the queue cap, so a plugin whose queue
@@ -105,6 +106,8 @@ not trap.
 | `subscribe` | `(ptr, len) -> i32` | `vessel.read` | The number of paths, or -1. The payload is `["navigation.position",…]`. **One subscription per plugin**: calling again replaces the list. |
 | `ais_subscribe` | `() -> i32` | `ais.read` | 0, or -1. The current target set arrives on the next fanout tick rather than when a target next moves. |
 | `view_subscribe` | `() -> i32` | `view.read` | 0, or -1. The current view arrives as `VIEW_CHANGED` on the next fanout tick rather than when the mariner next pans. |
+| `bus_publish` | `(topic_ptr, topic_len, ptr, len) -> i32` | `bus.publish` + its topic list | Subscribers reached (never the publisher itself), or -1. Frames over 64 KiB are refused. There is no `bus_subscribe`: a `bus.read` grant IS the subscription. |
+| `rand_bytes` | `(ptr, cap) -> i32` | none | Fills the buffer with cryptographically secure random bytes and returns how many. The sandbox has no entropy of its own; a plugin minting an identity key needs some. |
 | `udp_open` | `(port: u32) -> i64` | `net.udp` | A socket id, or -1. The host binds the port on every interface and delivers each datagram as `UDP_DATA`. The port must be one your manifest's `net.udp` grant names, so port 0 is refused: an ephemeral port is not a port the mariner consented to. |
 | `udp_send` | `(id: i64, ptr, len, host_ptr, host_len, port: u32) -> i32` | `net.udp` | Bytes sent, or -1. The address is an **IP literal** (the host resolves no name here), so `255.255.255.255` works and `gateway.local` does not. |
 | `udp_close` | `(id: i64)` | `net.udp` | Nothing. It closes only your own socket. |
@@ -136,6 +139,8 @@ manifest claims. See **File types** below.
 | `ais.publish` | `ais_upsert`: write AIS targets |
 | `ais.read` | `ais_subscribe`: receive `AIS_CHANGED` snapshots |
 | `view.read` | `view_subscribe`: receive `VIEW_CHANGED` boxes |
+| `bus.publish` | `bus_publish`: **to the topics the grant names, and no others** |
+| `bus.read` | receive `BUS_DATA` for the topics the grant names — the grant is the subscription, so revoking it stops the stream |
 | `overlay.draw` | `overlay`: retained objects on the chart |
 | `alerts.raise` | `alert` |
 | `net.tcp-client` | `tcp_connect`, `tcp_send`, `tcp_close` |
@@ -144,6 +149,16 @@ manifest claims. See **File types** below.
 | `net.ws` | `ws_connect`, `ws_send`, `ws_close`: **to the hosts the grant names, and no others** |
 | `storage` | `storage_get`, `storage_put`: a key-value store of your own |
 | `files` | `file_read`, `file_write`, `file_close`, on handles the host granted |
+
+**Bus topics are an open vocabulary.** The host validates a topic's shape — 1
+to 8 per grant, each 1–32 bytes of lowercase letters, digits, `.`, `_` and
+`-`, matched exactly — and never its meaning, so a manifest may name a topic
+nothing else speaks yet and two plugins may agree on a new one without a host
+change. What a topic's payloads mean is a contract between the plugins on it.
+The bus is fire-and-forget: no retained value, no replay, and a full queue
+drops the frame for that plugin alone, counted and logged. **State belongs in
+the vessel store, datasets in storage; the bus carries frames and events** —
+raw sentences, a man-overboard press, a "new dataset ready" ping.
 
 An unknown capability name refuses the whole plugin, so a typo in a grant is a
 load error rather than a permission that turns out to be missing at run time.
@@ -312,19 +327,35 @@ the values land under your plugin.
 
 ```json
 {"targets":[{"mmsi":899000404,"lat":38.98,"lon":-76.47,"sog":5.1,"cog":210.0,
-             "heading":211.0,"name":"TANGERINE OTTER","ts":1754400000123}]}
+             "heading":211.0,"name":"TANGERINE OTTER","nav_status":0,"ship_type":71,
+             "class_b":false,"callsign":"3FOF8","destination":"NEW YORK","imo":9134270,
+             "draught":12.5,"length":294,"beam":32,"ts":1754400000123}]}
 ```
 
-Only `mmsi` is required; the upsert merges each field it carries into the target
-it names. `sog` is **metres per second**, not knots. The AIS wire format reports
-knots, and converting is the parsing plugin's job. An aid to navigation adds
-`"aton":true` and may add `"aton_type"` (0..31), `"virtual":true` and
-`"off_position"`. A target that has once reported as an aid stays one.
+Only `mmsi` is required; the upsert merges each field it carries into the target it names. `sog` is **metres per second**, not knots. The AIS wire format reports knots, and converting is the parsing plugin's job.
+
+The identity and voyage keys are what a static report carries: `nav_status` (0..14, the class A position report's own field), `ship_type` (0..99), `class_b`, `callsign`, `destination`, `imo` (the number alone), `draught` (metres), and `length` and `beam` (metres overall — sum the four dimensions the wire reports out from the antenna; the store takes the totals). A code outside its range loses that field and not the target: a garbled ship type is no reason to drop a vessel off the chart. Zero means "not assigned" for `imo` and "not available" for the dimensions, so send neither rather than a zero.
+
+`nav_status` and `class_b` ride with the position report that carried them, and the rest are static facts. That decides which of two reports seconds apart wins: kinematics follow the fresher stamp, and a name, a call sign or a hull dimension survives a position race either way.
+
+An aid to navigation adds `"aton":true` and may add `"aton_type"` (0..31), `"virtual":true` and `"off_position"`. A target that has once reported as an aid stays one.
 
 `"source"` works here too, and means the same thing: the place in the mariner's
 list of the connection that heard these targets. A target belongs to whichever
 source last updated it, so naming the receiver is what lets one of them be
 switched off without taking the other's targets with it.
+
+A batch-level `"net":true` marks every target in it as heard **over the
+internet** rather than by a receiver on the boat; a per-target `"net"` key
+overrides the batch, so a bridge re-publishing a mixed set keeps each
+target's provenance. It is display provenance — the target list shows it —
+and follows each target to its next update, like `source` does. It carries no
+precedence: the store arbitrates by `ts` alone, dropping an update MATERIALLY
+older (more than a few seconds) than the target it would overwrite, while
+near-ties still merge — a static report seconds behind a position race keeps
+its name. Stamp `ts` honestly — a receiver with its wall clock at receipt, an
+internet feed with the message's own time — or the freshest report cannot
+win. The host clamps `ts` into the eviction window ending at now.
 
 ### STORE_CHANGED
 
@@ -349,7 +380,8 @@ describe.
 
 ```json
 {"targets":[{"mmsi":899000101,"lat":38.966,"lon":-76.434,"sog":4.1,"cog":300.0,
-             "ts":1754400000123,"age_ms":540},
+             "nav_status":0,"ship_type":70,"class_b":false,"callsign":"EXAMP03",
+             "destination":"ANNAPOLIS","ts":1754400000123,"age_ms":540},
             {"mmsi":998990001,"lat":38.972,"lon":-76.466,"aton":true,
              "aton_type":25,"name":"EXAMPLE CHANNEL BUOY 2","ts":1754400000000,"age_ms":663}]}
 ```
@@ -358,7 +390,8 @@ The **whole** target set, at most twice a second and only when something moved.
 An unknown field is left out rather than sent as null, because "never heard" and
 "heard as zero" are different facts. Targets are evicted from the store after
 600 s, and an aid to navigation after 1800 s, because an aid transmits about
-every three minutes.
+every three minutes. A target whose last report came over the internet carries
+`"net":true`; the field is absent otherwise.
 
 ### overlay
 

@@ -34,6 +34,10 @@ const atonType = registry_json.atonType;
 const jsonBool = registry_json.jsonBool;
 const jsonInt = registry_json.jsonInt;
 const jsonNum = registry_json.jsonNum;
+const jsonCode = registry_json.jsonCode;
+const jsonMetres = registry_json.jsonMetres;
+const jsonImo = registry_json.jsonImo;
+const jsonStr = registry_json.jsonStr;
 const writeJsonValue = registry_json.writeJsonValue;
 const file_read_max = storage.file_read_max;
 
@@ -78,6 +82,17 @@ fn hostLog(env: wasm.c.wasm_exec_env_t, level: u32, ptr: [*c]const u8, len: u32)
 fn hostNowMs(env: wasm.c.wasm_exec_env_t) callconv(.c) i64 {
     _ = env;
     return wallMs();
+}
+
+/// Fill the caller's buffer with cryptographically secure random bytes.
+/// Capability-free like the clocks: the sandbox has no entropy of its own,
+/// and a plugin minting an identity key needs some.
+fn hostRandBytes(env: wasm.c.wasm_exec_env_t, ptr: [*c]u8, cap: u32) callconv(.c) i32 {
+    _ = caller(env) orelse return -1;
+    if (ptr == null or cap == 0) return 0;
+    // The same CSPRNG the TLS layer draws from (webio.zig).
+    std.Io.Threaded.global_single_threaded.io().random(ptr[0..cap]);
+    return @intCast(cap);
 }
 
 fn hostMonoMs(env: wasm.c.wasm_exec_env_t) callconv(.c) i64 {
@@ -164,11 +179,14 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
     const targets = parsed.value.object.get("targets") orelse return -1;
     if (targets != .array) return -1;
     const source = batchSource(p, parsed.value.object, "ais_upsert");
+    // Display provenance only; the store arbitrates by ts.
+    const net = jsonBool(parsed.value.object.get("net")) orelse false;
 
-    // Eviction measures `now - ts`, so a plugin-stamped future `ts` would
-    // make its target immortal. Clamped here because the store itself reads
-    // no wall clock.
+    // Clamped because the store reads no wall clock: a future `ts` would
+    // outrank every live report and never evict; an ancient one would evict
+    // on the next tick while churning the change counter.
     const now = wallMs();
+    const ts_floor = now - ais_store.default_evict_ms;
     var applied: i32 = 0;
     for (targets.array.items) |tv| {
         if (tv != .object) continue;
@@ -186,21 +204,32 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
             .sog = jsonNum(o.get("sog")),
             .cog = jsonNum(o.get("cog")),
             .heading = jsonNum(o.get("heading")),
-            .name = switch (o.get("name") orelse std.json.Value{ .null = {} }) {
-                .string => |s| s,
-                else => null,
-            },
+            .name = jsonStr(o.get("name")),
+            .nav_status = jsonCode(o.get("nav_status"), 14),
+            .ship_type = jsonCode(o.get("ship_type"), 99),
+            .class_b = jsonBool(o.get("class_b")),
+            .callsign = jsonStr(o.get("callsign")),
+            .destination = jsonStr(o.get("destination")),
+            .imo = jsonImo(o.get("imo")),
+            .draught_m = jsonNum(o.get("draught")),
+            .length_m = jsonMetres(o.get("length")),
+            .beam_m = jsonMetres(o.get("beam")),
             .aton = jsonBool(o.get("aton")),
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jsonBool(o.get("virtual")),
             .off_position = jsonBool(o.get("off_position")),
-            .ts_ms = @min(jsonInt(o.get("ts")) orelse now, now),
+            // A target's own key overrides the batch, so a bridge re-publishing
+            // a mixed set keeps each target's provenance.
+            .net = jsonBool(o.get("net")) orelse net,
+            .ts_ms = std.math.clamp(jsonInt(o.get("ts")) orelse now, ts_floor, now),
         };
-        p.broker.ais.upsert(upd, source) catch |e| {
+        const landed = p.broker.ais.upsert(upd, source) catch |e| {
             p.broker.say(level_warn, p.id, "ais_upsert {d}: {s}", .{ mmsi, @errorName(e) });
             continue;
         };
-        applied += 1;
+        // An outranked update is not an error, but it did not land, and the
+        // return is the number applied.
+        if (landed) applied += 1;
     }
     return applied;
 }
@@ -371,6 +400,30 @@ fn hostAisSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
     b.last_ais_seq = ~b.last_ais_seq;
     return 0;
 }
+
+/// Largest bus frame. Big enough for a read's worth of NMEA sentences or a
+/// JSON event; a dataset goes in storage with a ping here.
+pub const bus_frame_max = 64 * 1024;
+
+fn hostBusPublish(env: wasm.c.wasm_exec_env_t, topic_ptr: [*c]const u8, topic_len: u32, ptr: [*c]const u8, len: u32) callconv(.c) i32 {
+    const p = caller(env) orelse return -1;
+    if (!allow(p, .bus_publish, "bus_publish")) return -1;
+    const topic = bytes(topic_ptr, topic_len);
+    if (!topicListed(p.pub_topics, topic)) {
+        p.denied += 1;
+        p.broker.denied += 1;
+        p.broker.say(level_err, p.id, "denied bus_publish: {s} is not in the manifest's bus.publish topic list", .{topic});
+        return -1;
+    }
+    const data = bytes(ptr, len);
+    if (data.len > bus_frame_max) {
+        p.broker.say(level_warn, p.id, "bus_publish {s}: frame over {d} bytes dropped", .{ topic, bus_frame_max });
+        return -1;
+    }
+    return p.broker.busPublish(p, topic, data);
+}
+
+const topicListed = caps_mod.topicListed;
 
 fn hostViewSubscribe(env: wasm.c.wasm_exec_env_t) callconv(.c) i32 {
     const p = caller(env) orelse return -1;
@@ -746,6 +799,7 @@ fn hostFileClose(env: wasm.c.wasm_exec_env_t, handle: i64) callconv(.c) void {
 var natives = wasm.nativeSymbols(&.{
     .{ .name = "log", .func = @ptrCast(&hostLog), .signature = "(i*~)" },
     .{ .name = "now_ms", .func = @ptrCast(&hostNowMs), .signature = "()I" },
+    .{ .name = "rand_bytes", .func = @ptrCast(&hostRandBytes), .signature = "(*~)i" },
     .{ .name = "mono_ms", .func = @ptrCast(&hostMonoMs), .signature = "()I" },
     .{ .name = "publish", .func = @ptrCast(&hostPublish), .signature = "(*~)i" },
     .{ .name = "ais_upsert", .func = @ptrCast(&hostAisUpsert), .signature = "(*~)i" },
@@ -762,6 +816,7 @@ var natives = wasm.nativeSymbols(&.{
     .{ .name = "subscribe", .func = @ptrCast(&hostSubscribe), .signature = "(*~)i" },
     .{ .name = "ais_subscribe", .func = @ptrCast(&hostAisSubscribe), .signature = "()i" },
     .{ .name = "view_subscribe", .func = @ptrCast(&hostViewSubscribe), .signature = "()i" },
+    .{ .name = "bus_publish", .func = @ptrCast(&hostBusPublish), .signature = "(*~*~)i" },
     .{ .name = "udp_open", .func = @ptrCast(&hostUdpOpen), .signature = "(i)I" },
     .{ .name = "udp_send", .func = @ptrCast(&hostUdpSend), .signature = "(I*~*~i)i" },
     .{ .name = "udp_close", .func = @ptrCast(&hostUdpClose), .signature = "(I)" },
@@ -940,6 +995,59 @@ test "AIS targets carry the connection that heard them" {
     // One receiver switched off takes its own targets and leaves the other's.
     try t.expectEqual(@as(usize, 1), try fx.ais.clearSource(p.sourceAt(1)));
     try t.expectEqual(@as(usize, 1), fx.ais.count());
+}
+
+test "a target's identity and voyage land in the store, key for key" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    // THIS IS THE PLUGIN'S OWN OUTPUT, byte for byte: the same string
+    // `plugins/common/lk2.zig` asserts its writer produces. The two tests are
+    // the two ends of one wire, and a key renamed at either end fails here.
+    const json = "{\"source\":1,\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.5," ++
+        "\"cog\":210,\"heading\":211,\"name\":\"TANGERINE OTTER\",\"nav_status\":1," ++
+        "\"ship_type\":71,\"class_b\":false,\"callsign\":\"3FOF8\"," ++
+        "\"destination\":\"NEW YORK\",\"imo\":9134270,\"draught\":12.5," ++
+        "\"length\":294,\"beam\":32,\"ts\":0}]}";
+    try t.expectEqual(@as(i32, 1), applyAisUpsert(&p, json));
+
+    const tg = fx.ais.get(899000404).?;
+    try t.expectEqual(@as(u8, 1), tg.nav_status.?);
+    try t.expectEqual(@as(u8, 71), tg.ship_type.?);
+    try t.expectEqual(false, tg.class_b.?);
+    try t.expectEqualStrings("3FOF8", tg.callsign().?);
+    try t.expectEqualStrings("NEW YORK", tg.destination().?);
+    try t.expectEqual(@as(u32, 9134270), tg.imo.?);
+    try t.expectEqual(@as(f64, 12.5), tg.draught_m.?);
+    try t.expectEqual(@as(u16, 294), tg.length_m.?);
+    try t.expectEqual(@as(u16, 32), tg.beam_m.?);
+}
+
+test "a garbled code loses its field and not the target" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    // A vessel with a nonsense ship type is still a vessel on the chart. The
+    // alternative — refusing the whole target — takes a real contact off the
+    // screen over a field nobody steers by.
+    const json = "{\"source\":1,\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47," ++
+        "\"ship_type\":250,\"nav_status\":99,\"imo\":0,\"length\":0,\"ts\":0}]}";
+    try t.expectEqual(@as(i32, 1), applyAisUpsert(&p, json));
+
+    const tg = fx.ais.get(899000404).?;
+    try t.expect(tg.hasPosition());
+    try t.expect(tg.ship_type == null);
+    try t.expect(tg.nav_status == null);
+    // Zero is the wire's "not assigned", not a hull of no length or a vessel
+    // numbered nought.
+    try t.expect(tg.imo == null);
+    try t.expect(tg.length_m == null);
 }
 
 test "an alert's severity picks the log level it goes out at" {

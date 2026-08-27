@@ -266,6 +266,23 @@ pub struct Target {
     pub sog_mps: Option<f64>,
     pub cog_deg: Option<f64>,
     pub heading_deg: Option<f64>,
+    /// Navigation status, 0..=14, as a class A position report carries it.
+    /// Class B sends none.
+    pub nav_status: Option<u8>,
+    /// Ship and cargo type, 0..=99.
+    pub ship_type: Option<u8>,
+    /// True when the last position report came on class B, false on class A,
+    /// `None` until one has said which.
+    pub class_b: Option<bool>,
+    pub callsign: Option<String>,
+    pub destination: Option<String>,
+    /// The number alone, without the "IMO" a mariner reads in front of it.
+    pub imo: Option<u32>,
+    /// Maximum static draught, metres.
+    pub draught_m: Option<f64>,
+    /// Overall length and beam, metres.
+    pub length_m: Option<u16>,
+    pub beam_m: Option<u16>,
     /// True for an aid to navigation, which has its own aging and no CPA.
     pub aton: bool,
     pub aton_type: Option<u8>,
@@ -292,6 +309,15 @@ impl Target {
             sog_mps: t.sog,
             cog_deg: t.cog,
             heading_deg: t.heading,
+            nav_status: t.nav_status,
+            ship_type: t.ship_type,
+            class_b: t.class_b,
+            callsign: t.callsign,
+            destination: t.destination,
+            imo: t.imo,
+            draught_m: t.draught_m,
+            length_m: t.length_m,
+            beam_m: t.beam_m,
             aton: t.aton,
             aton_type: t.aton_type,
             virtual_aton: t.virtual_aton,
@@ -310,6 +336,15 @@ impl Target {
             cog: self.cog_deg,
             heading: self.heading_deg,
             name: self.name.clone(),
+            nav_status: self.nav_status,
+            ship_type: self.ship_type,
+            class_b: self.class_b,
+            callsign: self.callsign.clone(),
+            destination: self.destination.clone(),
+            imo: self.imo,
+            draught_m: self.draught_m,
+            length_m: self.length_m,
+            beam_m: self.beam_m,
             aton: self.aton,
             aton_type: self.aton_type,
             virtual_aton: self.virtual_aton,

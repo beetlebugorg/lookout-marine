@@ -39,6 +39,8 @@ pub const sentence_order = [_]broker.Cap{
     .ais_publish,
     .overlay_draw,
     .alerts_raise,
+    .bus_publish,
+    .bus_read,
     .net_tcp_client,
     .net_udp,
     .net_http,
@@ -59,6 +61,16 @@ pub fn writeSentence(out: *std.ArrayList(u8), alloc: std.mem.Allocator, cap: bro
         .ais_publish => try out.appendSlice(alloc, "Provide AIS targets to the chart."),
         .overlay_draw => try out.appendSlice(alloc, "Draw on the chart."),
         .alerts_raise => try out.appendSlice(alloc, "Raise alarms."),
+        .bus_publish => {
+            try out.appendSlice(alloc, "Share data with other plugins: ");
+            try writeTopicList(out, alloc, m.pub_topics);
+            try out.append(alloc, '.');
+        },
+        .bus_read => {
+            try out.appendSlice(alloc, "Read data other plugins share: ");
+            try writeTopicList(out, alloc, m.sub_topics);
+            try out.append(alloc, '.');
+        },
         .net_tcp_client => {
             try out.appendSlice(alloc, "Connect to instruments on: ");
             try writeHostList(out, alloc, m.tcp_addrs);
@@ -100,6 +112,17 @@ fn writeHostList(out: *std.ArrayList(u8), alloc: std.mem.Allocator, hosts: []con
     for (hosts, 0..) |h, i| {
         if (i > 0) try out.appendSlice(alloc, ", ");
         try out.appendSlice(alloc, if (std.mem.eql(u8, h, broker.local_token)) "your own network" else h);
+    }
+}
+
+/// A topic list, printed as the manifest spells it. Separate from the host
+/// list because `local` is a reserved word THERE and an ordinary topic name
+/// here: run through the host writer, a plugin publishing on a topic called
+/// `local` would tell the mariner it wanted their network.
+fn writeTopicList(out: *std.ArrayList(u8), alloc: std.mem.Allocator, topics: []const []u8) !void {
+    for (topics, 0..) |topic, i| {
+        if (i > 0) try out.appendSlice(alloc, ", ");
+        try out.appendSlice(alloc, topic);
     }
 }
 
@@ -277,6 +300,8 @@ test "the consent sentences read exactly as install.md words them" {
         \\{"id":"org.example.everything","api":1,"capabilities":[
         \\ "vessel.read","ais.read","view.read","vessel.publish","ais.publish",
         \\ "overlay.draw","alerts.raise",
+        \\ {"bus.publish":["nmea0183"]},
+        \\ {"bus.read":["nmea0183","mob","local"]},
         \\ {"net.tcp-client":["local"]},
         \\ {"net.udp":[10110,4001]},
         \\ {"net.http":["nomads.ncep.noaa.gov"]},
@@ -294,6 +319,10 @@ test "the consent sentences read exactly as install.md words them" {
         "Provide AIS targets to the chart.",
         "Draw on the chart.",
         "Raise alarms.",
+        "Share data with other plugins: nmea0183.",
+        // `local` is a topic here and a reserved word in the net grants below:
+        // the same word, two renderings, in one manifest.
+        "Read data other plugins share: nmea0183, mob, local.",
         "Connect to instruments on: your own network.",
         "Listen for broadcasts on ports 10110 and 4001.",
         "Fetch data from: nomads.ncep.noaa.gov.",

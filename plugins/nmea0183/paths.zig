@@ -181,6 +181,23 @@ pub const TargetFields = struct {
     heading: ?f64 = null,
     /// Points into the scratch buffer `parser.decode` was given.
     name: ?[]const u8 = null,
+    /// Navigation status, 0..14. Class A position reports only.
+    nav_status: ?u8 = null,
+    /// Ship and cargo type, 1..99. Code 0 is "not available" and reads as null.
+    ship_type: ?u8 = null,
+    /// Which class the position report came in on.
+    class_b: ?bool = null,
+    /// Both point into the same scratch buffer as `name`.
+    callsign: ?[]const u8 = null,
+    destination: ?[]const u8 = null,
+    /// The number alone; the "IMO" in front of it is the display's business.
+    imo: ?u32 = null,
+    /// Maximum static draught, metres.
+    draught_m: ?f64 = null,
+    /// Overall length and beam, metres, summed from the four dimensions the
+    /// wire reports out from the position-fixing antenna.
+    length_m: ?u16 = null,
+    beam_m: ?u16 = null,
     /// Set by a type 21 report: this station is an aid to navigation.
     aton: bool = false,
     aton_type: ?u8 = null,
@@ -189,12 +206,15 @@ pub const TargetFields = struct {
 };
 
 /// The target a decoded AIS message updates, or null when it carries nothing
-/// worth an upsert — a type 24 part B, which holds only a callsign and
-/// dimensions, or a message from MMSI 0.
+/// worth an upsert — a message from MMSI 0.
 ///
 /// A position report with every field on its "not available" sentinel still
 /// returns a target: the MMSI was heard, and refreshing its timestamp is what
 /// keeps a station that is transmitting from ageing out of the store.
+///
+/// A type 24 part B carries no name, and is a target all the same: the call
+/// sign, the ship type and the dimensions of every class B vessel arrive in
+/// that half and nowhere else.
 pub fn fromAis(msg: parser.AisMessage) ?TargetFields {
     switch (msg) {
         .position => |p| {
@@ -206,11 +226,23 @@ pub fn fromAis(msg: parser.AisMessage) ?TargetFields {
                 .sog_mps = if (p.sog_kn) |kn| kn * knot_mps else null,
                 .cog = p.cog_deg,
                 .heading = p.heading_deg,
+                .nav_status = p.nav_status,
+                .class_b = p.class_b,
             };
         },
         .static => |st| {
-            if (st.mmsi == 0 or st.name.len == 0) return null;
-            return .{ .mmsi = st.mmsi, .name = st.name };
+            if (st.mmsi == 0) return null;
+            return .{
+                .mmsi = st.mmsi,
+                .name = if (st.name.len == 0) null else st.name,
+                .callsign = if (st.callsign.len == 0) null else st.callsign,
+                .destination = if (st.destination.len == 0) null else st.destination,
+                .ship_type = shipType(st.ship_type),
+                .imo = if (st.imo) |v| (if (v == 0) null else v) else null,
+                .draught_m = st.draught_m,
+                .length_m = span(st.to_bow_m, st.to_stern_m),
+                .beam_m = span(st.to_port_m, st.to_starboard_m),
+            };
         },
         .aton => |a| {
             if (a.mmsi == 0) return null;
@@ -226,6 +258,22 @@ pub fn fromAis(msg: parser.AisMessage) ?TargetFields {
             };
         },
     }
+}
+
+/// A hull dimension: the wire reports each one as two halves measured out
+/// from the position-fixing antenna, and their sum is the overall figure. Zero
+/// is the wire's "not available", so it stays absent rather than becoming a
+/// vessel nought metres long.
+fn span(a: ?u16, b: ?u16) ?u16 {
+    const total = (a orelse return null) + (b orelse return null);
+    return if (total == 0) null else total;
+}
+
+/// A ship and cargo type. Code 0 is "not available", which is an absent field
+/// and not a category.
+fn shipType(code: ?u8) ?u8 {
+    const c = code orelse return null;
+    return if (c == 0) null else c;
 }
 
 // ---------------------------------------------------------------------------
@@ -443,10 +491,59 @@ test "a type 21 becomes an AtoN target with its flags" {
     try testing.expect(o.off_position.?);
 }
 
-test "type 24 part A is a name, part B nothing to upsert" {
+test "type 24 part A is a name, and part B the rest of the identity" {
     var text: [parser.text_scratch_bytes]u8 = undefined;
-    const t = fromAis(try decodeOne(fx.aivdm_type24a, &text)) orelse return error.NoTarget;
-    try testing.expectEqual(fx.aivdm_type24_expect.mmsi, t.mmsi);
-    try testing.expectEqualStrings(fx.aivdm_type24_expect.name, t.name.?);
-    try testing.expect(fromAis(try decodeOne(fx.aivdm_type24b, &text)) == null);
+    const a = fromAis(try decodeOne(fx.aivdm_type24a, &text)) orelse return error.NoTarget;
+    try testing.expectEqual(fx.aivdm_type24_expect.mmsi, a.mmsi);
+    try testing.expectEqualStrings(fx.aivdm_type24_expect.name, a.name.?);
+    try testing.expect(a.callsign == null);
+
+    // Part B is where a class B vessel's call sign, type and dimensions live
+    // and the only place they do. It carries no name.
+    const b = fromAis(try decodeOne(fx.aivdm_type24b, &text)) orelse return error.NoTarget;
+    try testing.expectEqual(fx.aivdm_type24_expect.mmsi, b.mmsi);
+    try testing.expect(b.name == null);
+    try testing.expectEqualStrings(fx.aivdm_type24_expect.callsign, b.callsign.?);
+    try testing.expectEqual(fx.aivdm_type24_expect.ship_type, b.ship_type.?);
+}
+
+test "a type 5 carries the whole identity and voyage through" {
+    var a = parser.Assembler{};
+    try testing.expect(a.push((try parser.parse(fx.aivdm_type5_a)).vdm) == null);
+    const done = a.push((try parser.parse(fx.aivdm_type5_b)).vdm) orelse return error.Incomplete;
+    var text: [parser.text_scratch_bytes]u8 = undefined;
+    const t = fromAis(try parser.decode(done.payload, done.fill, &text)) orelse return error.NoTarget;
+    try testing.expectEqual(fx.aivdm_type5_expect.mmsi, t.mmsi);
+    try testing.expectEqualStrings(fx.aivdm_type5_expect.name, t.name.?);
+    try testing.expectEqualStrings(fx.aivdm_type5_expect.callsign, t.callsign.?);
+    try testing.expectEqualStrings(fx.aivdm_type5_expect.destination, t.destination.?);
+    try testing.expectEqual(fx.aivdm_type5_expect.ship_type, t.ship_type.?);
+    try testing.expectEqual(fx.aivdm_type5_expect.imo, t.imo.?);
+}
+
+test "a class A position report carries its status and its class" {
+    var text: [parser.text_scratch_bytes]u8 = undefined;
+    const a = fromAis(try decodeOne(fx.aivdm_type1, &text)) orelse return error.NoTarget;
+    try testing.expect(a.class_b.? == false);
+    try testing.expect(a.nav_status != null);
+
+    // Class B sends no status at all, and says so by being class B.
+    const b = fromAis(try decodeOne(fx.aivdm_type18, &text)) orelse return error.NoTarget;
+    try testing.expect(b.class_b.? == true);
+    try testing.expect(b.nav_status == null);
+
+    // Status 15 is "undefined", which the decoder drops: not said and said
+    // nothing are different answers.
+    const s = fromAis(try decodeOne(fx.aivdm_sentinels, &text)) orelse return error.NoTarget;
+    try testing.expect(s.nav_status == null);
+}
+
+test "a dimension is the sum of its halves, and zero is not a hull" {
+    try testing.expectEqual(@as(u16, 42), span(20, 22).?);
+    try testing.expect(span(0, 0) == null);
+    try testing.expect(span(null, 22) == null);
+    try testing.expect(span(20, null) == null);
+    // Code 0 is "not available", not a category of vessel.
+    try testing.expect(shipType(0) == null);
+    try testing.expectEqual(@as(u8, 37), shipType(37).?);
 }

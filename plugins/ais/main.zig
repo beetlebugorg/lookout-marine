@@ -54,6 +54,7 @@ const cpa = @import("cpa.zig");
 const vec = @import("vector.zig");
 const cfg = @import("config.zig");
 const aton = @import("aton.zig");
+const vessel_names = @import("vessel.zig");
 const targets = @import("targets.zig");
 
 comptime {
@@ -444,23 +445,41 @@ fn objectId(buf: *[id_len]u8, mmsi: u32, which: Id) []const u8 {
 /// UNITS. These are display strings in knots, degrees, metres and minutes,
 /// formatted here. That breaks the rule that units convert in the core. See
 /// PROTOTYPE-CONCERNS.md.
+const max_rows = 15;
+
 const Pick = struct {
-    /// Room for every row `vessel` and `aid` can add: MMSI, SOG, COG, HDG,
-    /// CPA, TCPA, Age.
-    buf: [7][40]u8 = undefined,
-    store: [7][2][]const u8 = undefined,
+    /// Room for every row `vessel` and `aid` can add. A row a target has not
+    /// reported is not added at all, so most picks are far shorter than this:
+    /// a dash against a label the vessel never sent tells the mariner nothing.
+    buf: [max_rows][40]u8 = undefined,
+    store: [max_rows][2][]const u8 = undefined,
     n: usize = 0,
     name_buf: [max_name]u8 = undefined,
 
     fn add(self: *Pick, key: []const u8, comptime fmt: []const u8, args: anytype) void {
-        if (self.n == self.buf.len) return;
+        // A row past the end would go missing from the popup with nothing
+        // said, which reads exactly like a vessel that never reported it.
+        // Say so instead: `max_rows` needs raising.
+        if (self.n == self.buf.len) {
+            lk.log(.warn, "pick: more than {d} rows; \"{s}\" dropped", .{ max_rows, key });
+            return;
+        }
         const v = std.fmt.bufPrint(&self.buf[self.n], fmt, args) catch return;
         self.store[self.n] = .{ key, v };
         self.n += 1;
     }
 
+    /// What she is, then what she is doing, then where she is bound, then how
+    /// long ago she said so. Identity first because the mariner is matching
+    /// the symbol to something out of the window; the approach in the middle
+    /// because that is what the hover was for.
     fn vessel(self: *Pick, t: *const lk.Target, sol: ?cpa.Solution) void {
         self.add("MMSI", "{d}", .{t.mmsi});
+        if (t.callsign().len > 0) self.add("Call sign", "{s}", .{t.callsign()});
+        if (t.imo) |v| self.add("IMO", "{d}", .{v});
+        var type_buf: [32]u8 = undefined;
+        if (vessel_names.typeName(t.ship_type, &type_buf)) |name| self.add("Type", "{s}", .{name});
+        if (vessel_names.statusName(t.nav_status)) |name| self.add("Status", "{s}", .{name});
         if (t.sog_mps) |s| self.add("SOG", "{d:.1} kn", .{lk.knots(s)});
         if (t.cog_deg) |c| self.add("COG", "{d:.0}\u{00b0}", .{c});
         if (t.heading_deg) |h| self.add("HDG", "{d:.0}\u{00b0}", .{h});
@@ -474,6 +493,20 @@ const Pick = struct {
                 }
             }
         }
+        if (t.destination().len > 0) self.add("Bound for", "{s}", .{t.destination()});
+        // Length and beam are one fact about how much water she needs beside
+        // you, so they read as one row. Either alone is still worth saying.
+        if (t.length_m) |l| {
+            if (t.beam_m) |b| {
+                self.add("Size", "{d} \u{00d7} {d} m", .{ l, b });
+            } else {
+                self.add("Length", "{d} m", .{l});
+            }
+        } else if (t.beam_m) |b| {
+            self.add("Beam", "{d} m", .{b});
+        }
+        if (t.draught_m) |d| self.add("Draught", "{d:.1} m", .{d});
+        if (vessel_names.className(t.class_b)) |c| self.add("Class", "{s}", .{c});
         self.add("Age", "{d} s", .{@divTrunc(t.age_ms, 1000)});
     }
 

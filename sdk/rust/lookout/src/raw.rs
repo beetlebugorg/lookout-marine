@@ -833,6 +833,23 @@ pub struct Target {
     pub cog: Option<f64>,
     pub heading: Option<f64>,
     pub name: Option<String>,
+    /// Navigation status, 0..=14, as a class A position report carries it.
+    /// Class B sends none.
+    pub nav_status: Option<u8>,
+    /// Ship and cargo type, 0..=99.
+    pub ship_type: Option<u8>,
+    /// True when the last position report came on class B, false on class A,
+    /// `None` until one has said which.
+    pub class_b: Option<bool>,
+    pub callsign: Option<String>,
+    pub destination: Option<String>,
+    /// The number alone, without the "IMO" a mariner reads in front of it.
+    pub imo: Option<u32>,
+    /// Maximum static draught, metres.
+    pub draught_m: Option<f64>,
+    /// Overall length and beam, metres.
+    pub length_m: Option<u16>,
+    pub beam_m: Option<u16>,
     /// True when this is an aid to navigation, not a vessel: no CPA, no
     /// vector, and its own aging.
     pub aton: bool,
@@ -878,6 +895,32 @@ pub fn targets(payload: &str) -> Vec<Target> {
             cog: num("cog"),
             heading: num("heading"),
             name: item.get("name").and_then(Json::as_str).map(str::to_owned),
+            // A code outside the range the format defines loses the field and
+            // not the target: a garbled ship type is no reason to drop a
+            // vessel off the chart.
+            nav_status: num("nav_status")
+                .filter(|n| (0.0..=14.0).contains(n))
+                .map(|n| n as u8),
+            ship_type: num("ship_type")
+                .filter(|n| (0.0..=99.0).contains(n))
+                .map(|n| n as u8),
+            class_b: item.get("class_b").and_then(Json::as_bool),
+            callsign: item.get("callsign").and_then(Json::as_str).map(str::to_owned),
+            destination: item
+                .get("destination")
+                .and_then(Json::as_str)
+                .map(str::to_owned),
+            // Zero is the wire's "not assigned", not a vessel numbered nought.
+            imo: num("imo")
+                .filter(|n| *n > 0.0 && *n <= u32::MAX as f64)
+                .map(|n| n as u32),
+            draught_m: num("draught"),
+            length_m: num("length")
+                .filter(|n| *n > 0.0 && *n <= 1022.0)
+                .map(|n| n as u16),
+            beam_m: num("beam")
+                .filter(|n| *n > 0.0 && *n <= 1022.0)
+                .map(|n| n as u16),
             aton: item.bool_or("aton", false),
             // Anything outside 0..=31 loses the type, not the target.
             aton_type: num("aton_type")
@@ -1235,6 +1278,34 @@ impl AisUpsert {
             self.s.push_str(",\"name\":");
             json::push_str(&mut self.s, name);
         }
+        if let Some(v) = t.nav_status {
+            self.s.push_str(&format!(",\"nav_status\":{}", v));
+        }
+        if let Some(v) = t.ship_type {
+            self.s.push_str(&format!(",\"ship_type\":{}", v));
+        }
+        if let Some(b) = t.class_b {
+            self.s
+                .push_str(if b { ",\"class_b\":true" } else { ",\"class_b\":false" });
+        }
+        if let Some(cs) = &t.callsign {
+            self.s.push_str(",\"callsign\":");
+            json::push_str(&mut self.s, cs);
+        }
+        if let Some(d) = &t.destination {
+            self.s.push_str(",\"destination\":");
+            json::push_str(&mut self.s, d);
+        }
+        if let Some(v) = t.imo {
+            self.s.push_str(&format!(",\"imo\":{}", v));
+        }
+        self.field("draught", t.draught_m);
+        if let Some(v) = t.length_m {
+            self.s.push_str(&format!(",\"length\":{}", v));
+        }
+        if let Some(v) = t.beam_m {
+            self.s.push_str(&format!(",\"beam\":{}", v));
+        }
         if t.aton {
             self.s.push_str(",\"aton\":true");
             if let Some(k) = t.aton_type {
@@ -1337,6 +1408,81 @@ pub(crate) fn http_response(request: i64, payload: &[u8]) -> HttpResponse<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE OTHER END OF THE SAME WIRE. `plugins/common/lk2.zig` asserts its
+    /// writer produces this byte for byte, `sdk/go` asserts the same literal,
+    /// and `src/plugin/broker/natives.zig` reads it back on the host's side. A
+    /// plugin that spelled one key differently would drop that field in
+    /// silence, so all four are pinned to one string.
+    #[test]
+    fn a_targets_identity_and_voyage_go_out_as_the_host_reads_them() {
+        let mut u = AisUpsert::new();
+        u.target(&Target {
+            mmsi: 899000404,
+            lat: Some(38.98),
+            lon: Some(-76.47),
+            sog: Some(2.5),
+            cog: Some(210.0),
+            heading: Some(211.0),
+            name: Some("TANGERINE OTTER".to_string()),
+            nav_status: Some(1),
+            ship_type: Some(71),
+            class_b: Some(false),
+            callsign: Some("3FOF8".to_string()),
+            destination: Some("NEW YORK".to_string()),
+            imo: Some(9134270),
+            draught_m: Some(12.5),
+            length_m: Some(294),
+            beam_m: Some(32),
+            ts_ms: 1000,
+            ..Default::default()
+        });
+        u.s.push_str("]}");
+        assert_eq!(
+            u.s,
+            "{\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.5,\
+             \"cog\":210,\"heading\":211,\"name\":\"TANGERINE OTTER\",\"nav_status\":1,\
+             \"ship_type\":71,\"class_b\":false,\"callsign\":\"3FOF8\",\
+             \"destination\":\"NEW YORK\",\"imo\":9134270,\"draught\":12.5,\
+             \"length\":294,\"beam\":32,\"ts\":1000}]}"
+        );
+    }
+
+    /// A field the vessel never reported is absent, not a zero: "never heard"
+    /// and "heard as zero" are different things at sea.
+    #[test]
+    fn a_field_never_reported_is_left_out() {
+        let mut u = AisUpsert::new();
+        u.target(&Target {
+            mmsi: 7,
+            name: Some("SILENT".to_string()),
+            ts_ms: 500,
+            ..Default::default()
+        });
+        u.s.push_str("]}");
+        assert_eq!(u.s, "{\"targets\":[{\"mmsi\":7,\"name\":\"SILENT\",\"ts\":500}]}");
+    }
+
+    /// And what the host sends back parses into the same fields it was given.
+    #[test]
+    fn a_snapshot_parses_back_into_identity() {
+        let got = targets(
+            r#"{"targets":[{"mmsi":899000404,"lat":38.98,"lon":-76.47,"nav_status":1,
+            "ship_type":71,"class_b":false,"callsign":"3FOF8","destination":"NEW YORK",
+            "imo":9134270,"draught":12.5,"length":294,"beam":32,"ts":1000,"age_ms":540}]}"#,
+        );
+        assert_eq!(got.len(), 1);
+        let t = &got[0];
+        assert_eq!(t.nav_status, Some(1));
+        assert_eq!(t.ship_type, Some(71));
+        assert_eq!(t.class_b, Some(false));
+        assert_eq!(t.callsign.as_deref(), Some("3FOF8"));
+        assert_eq!(t.destination.as_deref(), Some("NEW YORK"));
+        assert_eq!(t.imo, Some(9134270));
+        assert_eq!(t.draught_m, Some(12.5));
+        assert_eq!(t.length_m, Some(294));
+        assert_eq!(t.beam_m, Some(32));
+    }
 
     #[test]
     fn granted_reads_the_capability_list() {

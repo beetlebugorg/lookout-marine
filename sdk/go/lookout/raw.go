@@ -536,6 +536,23 @@ type Target struct {
 	COG     *float64 `json:"cog"`
 	Heading *float64 `json:"heading"`
 	Name    string   `json:"name"`
+	// NavStatus is the navigation status, 0..14, as a class A position report
+	// carries it. Class B sends none.
+	NavStatus *uint8 `json:"nav_status"`
+	// ShipType is the ship and cargo type, 0..99.
+	ShipType *uint8 `json:"ship_type"`
+	// ClassB is true when the last position report came on class B, false on
+	// class A, and nil until one has said which.
+	ClassB      *bool  `json:"class_b"`
+	CallSign    string `json:"callsign"`
+	Destination string `json:"destination"`
+	// IMO is the number alone, without the "IMO" a mariner reads in front of it.
+	IMO *uint32 `json:"imo"`
+	// DraughtM is the maximum static draught, metres.
+	DraughtM *float64 `json:"draught"`
+	// LengthM and BeamM are the overall figures, metres.
+	LengthM *uint16 `json:"length"`
+	BeamM   *uint16 `json:"beam"`
 	// ATON is true for an aid to navigation, which has its own aging and no CPA.
 	ATON        bool   `json:"aton"`
 	ATONType    *uint8 `json:"aton_type"`
@@ -669,6 +686,27 @@ func (u *Upsert) Target(t Target) {
 		u.b = append(u.b, `,"name":`...)
 		u.b = appendString(u.b, t.Name)
 	}
+	u.code("nav_status", t.NavStatus)
+	u.code("ship_type", t.ShipType)
+	if t.ClassB != nil {
+		u.b = append(u.b, `,"class_b":`...)
+		u.b = strconv.AppendBool(u.b, *t.ClassB)
+	}
+	if t.CallSign != "" {
+		u.b = append(u.b, `,"callsign":`...)
+		u.b = appendString(u.b, t.CallSign)
+	}
+	if t.Destination != "" {
+		u.b = append(u.b, `,"destination":`...)
+		u.b = appendString(u.b, t.Destination)
+	}
+	if t.IMO != nil {
+		u.b = append(u.b, `,"imo":`...)
+		u.b = strconv.AppendUint(u.b, uint64(*t.IMO), 10)
+	}
+	u.field("draught", t.DraughtM)
+	u.metres("length", t.LengthM)
+	u.metres("beam", t.BeamM)
 	if t.ATON {
 		u.b = append(u.b, `,"aton":true`...)
 		if t.ATONType != nil {
@@ -686,6 +724,26 @@ func (u *Upsert) Target(t Target) {
 	u.b = append(u.b, `,"ts":`...)
 	u.b = strconv.AppendInt(u.b, u.ts, 10)
 	u.b = append(u.b, '}')
+}
+
+func (u *Upsert) code(name string, v *uint8) {
+	if v == nil {
+		return
+	}
+	u.b = append(u.b, ',', '"')
+	u.b = append(u.b, name...)
+	u.b = append(u.b, '"', ':')
+	u.b = strconv.AppendUint(u.b, uint64(*v), 10)
+}
+
+func (u *Upsert) metres(name string, v *uint16) {
+	if v == nil {
+		return
+	}
+	u.b = append(u.b, ',', '"')
+	u.b = append(u.b, name...)
+	u.b = append(u.b, '"', ':')
+	u.b = strconv.AppendUint(u.b, uint64(*v), 10)
 }
 
 func (u *Upsert) field(name string, v *float64) {

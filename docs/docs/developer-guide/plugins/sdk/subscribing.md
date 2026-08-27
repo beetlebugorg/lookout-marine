@@ -399,14 +399,40 @@ null: never heard and heard as zero are different values.
 | `at` | `?lk.Point` | |
 | `sog_mps` | `?f64` | metres per second |
 | `cog_deg`, `heading_deg` | `?f64` | degrees true |
+| `nav_status` | `?u8` | 0..14, as a class A position report carries it; class B sends none |
+| `ship_type` | `?u8` | 0..99 |
+| `class_b` | `?bool` | true when the last position report came on class B; null before one has |
+| `imo` | `?u32` | the number alone, without the "IMO" a mariner reads in front of it |
+| `draught_m` | `?f64` | maximum static draught, metres |
+| `length_m`, `beam_m` | `?u16` | overall, metres |
 | `aton`, `virtual_aton` | `bool` | an aid to navigation, and one that exists only as a broadcast |
 | `aton_type` | `?u8` | |
 | `off_position` | `?bool` | |
+| `net` | `bool` | the last report came over the internet, not from a receiver on the boat |
 | `age_ms` | `i64` | |
 | `name()` | `[]const u8` | cut at 32 bytes |
+| `callsign()` | `[]const u8` | cut at 8 bytes |
+| `destination()` | `[]const u8` | cut at 20 bytes |
 
 A target that stops being heard drops out of the set. Draw from the set each
 call and Lookout takes the symbol off the chart for you.
+
+## The bus
+
+Plugins exchange frames and events on named topics. Declaring
+`pub fn onBus(topic: []const u8, from: []const u8, bytes: []const u8) void`
+delivers every frame published on the topics the manifest's `bus.read` grant
+lists — the grant is the whole subscription. `lk.busPublish(topic, bytes)`
+publishes to a topic the `bus.publish` grant lists; the publisher never hears
+its own frame. `from` is the publishing plugin's manifest id.
+
+The bus is fire-and-forget with no retained value: a late subscriber hears
+nothing until the next frame. Keep state in the vessel store and datasets in
+plugin storage; the bus is for what HAPPENS — raw NMEA sentences (topic
+`nmea0183`, one frame per read, NMEA 4.10 TAG blocks naming the source), a
+man-overboard event, a "new dataset ready" ping. A topic's payload format is
+a contract between the plugins that speak it, documented where the topic is
+introduced.
 
 ## Reading the chart view
 

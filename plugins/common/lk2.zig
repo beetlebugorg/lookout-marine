@@ -123,6 +123,13 @@ pub const api_version = raw_lk.api_version;
 /// `pub fn onView(v: lk.ViewBox)`. Needs the `view.read` capability.
 pub const ViewBox = raw_lk.ViewBox;
 
+/// Put one frame on the bus (see `lk.raw.busPublish`). Frames arrive at a
+/// plugin that declares
+/// `pub fn onBus(topic: []const u8, from: []const u8, bytes: []const u8)`,
+/// for the topics its `bus.read` grant lists. The payload's meaning is the
+/// topic's contract.
+pub const busPublish = raw_lk.busPublish;
+
 // ---------------------------------------------------------------------------
 // The numbers the library fixes
 // ---------------------------------------------------------------------------
@@ -149,9 +156,17 @@ pub const max_objects = 512;
 pub const max_object_id = 48;
 
 /// The scene batch buffer, holding the objects that changed and the ids that
-/// went. A 600-point track is the largest thing any shipped plugin says, at
-/// about 45 bytes a point, so this has better than two to one in hand.
-pub const scene_bytes = 64 * 1024;
+/// went.
+///
+/// SIZED FOR THE BUSIEST CHART, NOT THE TYPICAL ONE. A scene that does not fit
+/// is dropped whole, which takes every target off the chart at once — so the
+/// budget is set from the worst case a shipped plugin can reach, not from what
+/// a quiet anchorage costs. That case is AIS: `max_objects` symbols and lines,
+/// each symbol carrying the hover rows that name the vessel, where she is
+/// bound and how close she comes. That measures 124 KB, which is what the
+/// test "a chart full of AIS traffic fits in the scene buffer" holds it to; a
+/// 600-point track, the next largest thing anything says, is 27 KB.
+pub const scene_bytes = 256 * 1024;
 
 /// Metres in a nautical mile.
 pub const nm_m: f64 = 1852.0;
@@ -235,6 +250,20 @@ pub const Point = struct {
             @abs(self.lat) <= 90.0 and @abs(self.lon) <= 180.0;
     }
 };
+
+/// Days between 1970-01-01 and a civil date; Howard Hinnant's
+/// days_from_civil (http://howardhinnant.github.io/date_algorithms.html).
+/// nmea0183's parser keeps a private copy: that file imports only std by
+/// design.
+pub fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
+    const y = if (month <= 2) year - 1 else year;
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const mp = if (month > 2) month - 3 else month + 9;
+    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    return era * 146097 + doe - 719468;
+}
 
 /// A bearing folded into 0..360.
 pub fn normalizeDeg(deg: f64) f64 {
@@ -490,17 +519,52 @@ pub const Target = struct {
     sog_mps: ?f64 = null,
     cog_deg: ?f64 = null,
     heading_deg: ?f64 = null,
+    /// Navigation status, 0..14, as a class A position report carries it.
+    /// Class B never sends one.
+    nav_status: ?u8 = null,
+    /// Ship and cargo type, 0..99.
+    ship_type: ?u8 = null,
+    /// True when the last position report came on class B, false on class A,
+    /// null until one has said which.
+    class_b: ?bool = null,
+    /// The IMO number alone: the "IMO" a mariner reads in front of it belongs
+    /// to the display, not the store.
+    imo: ?u32 = null,
+    /// Maximum static draught, METRES.
+    draught_m: ?f64 = null,
+    /// Overall length and beam, METRES.
+    length_m: ?u16 = null,
+    beam_m: ?u16 = null,
     /// True for an aid to navigation, which has its own aging and no CPA.
     aton: bool = false,
     aton_type: ?u8 = null,
     virtual_aton: bool = false,
     off_position: ?bool = null,
+    /// True when the target's last report came over the internet rather than
+    /// from a receiver on the boat.
+    net: bool = false,
     /// How old the report is, carried forward from delivery.
     age_ms: i64 = 0,
+    /// When publishing: the report's own time, epoch ms. Null takes the batch
+    /// stamp (now). An internet feed passes the message's time here so the
+    /// store's freshest-wins arbitration is honest.
+    ts_ms: ?i64 = null,
     name_str: Str(32) = .{},
+    /// Seven characters on the wire; eight leaves room for a relay that pads.
+    callsign_str: Str(8) = .{},
+    /// Twenty characters on the wire.
+    destination_str: Str(20) = .{},
 
     pub fn name(self: *const Target) []const u8 {
         return self.name_str.text();
+    }
+
+    pub fn callsign(self: *const Target) []const u8 {
+        return self.callsign_str.text();
+    }
+
+    pub fn destination(self: *const Target) []const u8 {
+        return self.destination_str.text();
     }
 };
 
@@ -558,13 +622,23 @@ pub fn subscribeAis(comptime opts: AisOpts) type {
                     .sog_mps = src.sog,
                     .cog_deg = src.cog,
                     .heading_deg = src.heading,
+                    .nav_status = src.nav_status,
+                    .ship_type = src.ship_type,
+                    .class_b = src.class_b,
+                    .imo = src.imo,
+                    .draught_m = src.draught_m,
+                    .length_m = src.length_m,
+                    .beam_m = src.beam_m,
                     .aton = src.aton,
                     .aton_type = src.aton_type,
                     .virtual_aton = src.virtual_aton,
                     .off_position = src.off_position,
+                    .net = src.net,
                     .age_ms = src.age_ms,
                 };
                 if (src.name) |n| dst.name_str.set(n);
+                if (src.callsign) |c| dst.callsign_str.set(c);
+                if (src.destination) |d| dst.destination_str.set(d);
             }
             at_mono_ms = mono;
         }
@@ -1441,7 +1515,14 @@ pub const Upsert = struct {
     /// updated it, so switching one receiver off leaves the other's targets on
     /// the chart.
     pub fn from(c: anytype) Upsert {
-        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place()), .ts = nowMs() };
+        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place(), false), .ts = nowMs() };
+    }
+
+    /// Targets one connection heard OVER THE INTERNET rather than by a
+    /// receiver on the boat. The batch is marked `net`, which follows each
+    /// target to the target list as display provenance.
+    pub fn fromNet(c: anytype) Upsert {
+        return .{ .b = raw_lk.AisUpsert.initFrom(&upsert_buf, c.place(), true), .ts = nowMs() };
     }
 
     pub fn target(self: *Upsert, t: Target) void {
@@ -1453,11 +1534,21 @@ pub const Upsert = struct {
             .cog = t.cog_deg,
             .heading = t.heading_deg,
             .name = if (t.name_str.len > 0) t.name() else null,
+            .nav_status = t.nav_status,
+            .ship_type = t.ship_type,
+            .class_b = t.class_b,
+            .callsign = if (t.callsign_str.len > 0) t.callsign() else null,
+            .destination = if (t.destination_str.len > 0) t.destination() else null,
+            .imo = t.imo,
+            .draught_m = t.draught_m,
+            .length_m = t.length_m,
+            .beam_m = t.beam_m,
             .aton = t.aton,
             .aton_type = t.aton_type,
             .virtual_aton = t.virtual_aton,
             .off_position = t.off_position,
-            .ts_ms = self.ts,
+            .net = t.net,
+            .ts_ms = t.ts_ms orelse self.ts,
         });
     }
 
@@ -2313,6 +2404,10 @@ fn Wiring(comptime P: type) type {
                     if (raw_lk.viewBox(payload)) |v| P.onView(v);
                     return;
                 },
+                .bus_data => |frame| if (comptime @hasDecl(P, "onBus")) {
+                    if (frame.topic.len > 0) P.onBus(frame.topic, frame.from, frame.bytes);
+                    return;
+                },
                 .config_changed => |payload| {
                     const cfg = std.json.parseFromSliceLeaky(std.json.Value, scratch(), payload, .{}) catch
                         return;
@@ -2655,6 +2750,86 @@ const expect = std.testing;
 
 const annapolis = Point{ .lat = 38.9763, .lon = -76.4767 };
 
+test "a target's identity and voyage survive the round trip to the host" {
+    // THE FAILURE THIS CATCHES IS A KEY NAME. Every field between the AIS
+    // decoder and the mariner's hover crosses four JSON hops, and a writer
+    // and a reader that disagree about one spelling drop that field in
+    // silence: the popup says nothing, and nothing says why. So the encoded
+    // text is asserted whole, and `src/plugin/broker/natives.zig` reads this
+    // very string back on the host's side of the same wire.
+    var t: Target = .{
+        .mmsi = 899000404,
+        .at = .{ .lat = 38.98, .lon = -76.47 },
+        .sog_mps = 2.5,
+        .cog_deg = 210,
+        .heading_deg = 211,
+        .nav_status = 1,
+        .ship_type = 71,
+        .class_b = false,
+        .imo = 9134270,
+        .draught_m = 12.5,
+        .length_m = 294,
+        .beam_m = 32,
+        .ts_ms = 1000,
+    };
+    t.name_str.set("TANGERINE OTTER");
+    t.callsign_str.set("3FOF8");
+    t.destination_str.set("NEW YORK");
+
+    var u = Upsert{ .b = raw_lk.AisUpsert.init(&upsert_buf), .ts = 1000 };
+    u.target(t);
+    u.b.b.raw("]}");
+    const json = u.b.b.bytes();
+    try expect.expectEqualStrings(
+        "{\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.5," ++
+            "\"cog\":210,\"heading\":211,\"name\":\"TANGERINE OTTER\",\"nav_status\":1," ++
+            "\"ship_type\":71,\"class_b\":false,\"callsign\":\"3FOF8\"," ++
+            "\"destination\":\"NEW YORK\",\"imo\":9134270,\"draught\":12.5," ++
+            "\"length\":294,\"beam\":32,\"ts\":1000}]}",
+        json,
+    );
+
+    // And the reader on this side agrees with the writer on this side: the
+    // snapshot the host sends back carries the same spellings.
+    const back = raw_lk.targets(json);
+    try expect.expectEqual(@as(usize, 1), back.len);
+    const b = back[0];
+    try expect.expectEqual(@as(u8, 1), b.nav_status.?);
+    try expect.expectEqual(@as(u8, 71), b.ship_type.?);
+    try expect.expectEqual(false, b.class_b.?);
+    try expect.expectEqualStrings("3FOF8", b.callsign.?);
+    try expect.expectEqualStrings("NEW YORK", b.destination.?);
+    try expect.expectEqual(@as(u32, 9134270), b.imo.?);
+    try expect.expectEqual(@as(f64, 12.5), b.draught_m.?);
+    try expect.expectEqual(@as(u16, 294), b.length_m.?);
+    try expect.expectEqual(@as(u16, 32), b.beam_m.?);
+}
+
+test "a field the target never reported is absent, not a zero" {
+    var t: Target = .{ .mmsi = 7, .ts_ms = 500 };
+    t.name_str.set("SILENT");
+    var u = Upsert{ .b = raw_lk.AisUpsert.init(&upsert_buf), .ts = 500 };
+    u.target(t);
+    u.b.b.raw("]}");
+    const json = u.b.b.bytes();
+    // "Never heard" and "heard as zero" are different things at sea, and an
+    // omitted key is how the wire says the first.
+    try expect.expectEqualStrings(
+        "{\"targets\":[{\"mmsi\":7,\"name\":\"SILENT\",\"ts\":500}]}",
+        json,
+    );
+    const back = raw_lk.targets(json);
+    try expect.expect(back[0].nav_status == null);
+    try expect.expect(back[0].ship_type == null);
+    try expect.expect(back[0].class_b == null);
+    try expect.expect(back[0].callsign == null);
+    try expect.expect(back[0].destination == null);
+    try expect.expect(back[0].imo == null);
+    try expect.expect(back[0].draught_m == null);
+    try expect.expect(back[0].length_m == null);
+    try expect.expect(back[0].beam_m == null);
+}
+
 test "an alert carries its key, and a plugin that names none sends the payload it always did" {
     raw_lk.test_hooks.reset();
 
@@ -2747,6 +2922,60 @@ test "labels join in the order they were declared" {
     try expect.expectEqualStrings("wind", comptime joinLabels(&.{"wind"}, ", "));
 }
 
+test "a chart full of AIS traffic fits in the scene buffer" {
+    // A SCENE THAT DOES NOT FIT IS DROPPED WHOLE, which takes every target
+    // off the chart at once — the one failure a mariner cannot see happening.
+    // So the worst case a shipped plugin can reach is measured here rather
+    // than discovered in a harbour: `max_objects` split between the symbols
+    // and the two lines each vessel draws, every symbol carrying the longest
+    // hover rows the AIS plugin can build.
+    scene.begin();
+    defer scene.forget();
+    var c = Chart{};
+
+    const rows = [_][2][]const u8{
+        .{ "MMSI", "899000404" },
+        .{ "Call sign", "3FOF8" },
+        .{ "IMO", "9134270" },
+        .{ "Type", "Tanker, hazardous A" },
+        .{ "Status", "Restricted manoeuvrability" },
+        .{ "SOG", "12.4 kn" },
+        .{ "COG", "210\u{00b0}" },
+        .{ "HDG", "211\u{00b0}" },
+        .{ "CPA", "463 m" },
+        .{ "TCPA", "7.2 min" },
+        .{ "Bound for", "PORT ELIZABETH NJ" },
+        .{ "Size", "294 \u{00d7} 32 m" },
+        .{ "Draught", "12.5 m" },
+        .{ "Class", "A" },
+        .{ "Age", "12 s" },
+    };
+    try expect.expectEqual(@as(usize, 15), rows.len);
+
+    var idb: [16]u8 = undefined;
+    var i: usize = 0;
+    while (i < max_objects / 3) : (i += 1) {
+        const mmsi: u32 = 899_000_000 + @as(u32, @intCast(i));
+        const at = Point{ .lat = 38.98, .lon = -76.47 };
+        c.symbol(
+            std.fmt.bufPrint(&idb, "t{d}", .{mmsi}) catch unreachable,
+            .target,
+            at,
+            .{
+                .color = .target,
+                .rot_deg = 211,
+                .pick = .{ .title = "TANGERINE OTTER", .rows = &rows },
+            },
+        );
+        const leg = [_]Point{ at, .{ .lat = 39.01, .lon = -76.44 } };
+        c.line(std.fmt.bufPrint(&idb, "t{d}/hdg", .{mmsi}) catch unreachable, &leg, .{ .color = .target });
+        c.line(std.fmt.bufPrint(&idb, "t{d}/vec", .{mmsi}) catch unreachable, &leg, .{ .color = .target, .dash = true });
+    }
+
+    std.debug.print("\nscene used {d} bytes of {d}\n", .{ scene.len, scene_bytes });
+    try expect.expect(!scene.overflowed);
+}
+
 test "canvas encoder: a valid object lands in the scene, the 2049th command is dropped" {
     scene.begin();
     defer scene.forget();
@@ -2773,7 +3002,7 @@ test "canvas encoder: a valid object lands in the scene, the 2049th command is d
     try expect.expectEqual(@as(usize, max_canvas_cmds - 2), lines);
 
     // What went out parses as the JSON the host's parser will see.
-    var buf: [2 * scene_bytes]u8 = undefined;
+    var buf: [scene_bytes + 8]u8 = undefined;
     const full = try std.fmt.bufPrint(&buf, "{s}]{c}", .{ body, '}' });
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
