@@ -733,7 +733,14 @@ fn listText(o: std.json.ObjectMap, key: []const u8) []const u8 {
         .string => |text| text,
         else => return "",
     };
-    return if (s.len > max_list_text) s[0..max_list_text] else s;
+    if (s.len <= max_list_text) return s;
+    // Back off to a codepoint boundary. The registry JSON writer passes bytes
+    // above 31 through untouched, so cutting a multi-byte sequence in half
+    // would put invalid UTF-8 in the document every shell parses — losing the
+    // whole plugin's settings over a caption.
+    var end: usize = max_list_text;
+    while (end > 0 and (s[end] & 0xc0) == 0x80) end -= 1;
+    return s[0..end];
 }
 
 /// One repeating group: the key its rows are stored under, and the fields one
@@ -1329,6 +1336,27 @@ test "a list says what to browse the network for, and refuses a set it cannot fi
     const json = try std.mem.concat(a, u8, &.{ head, many.items, tail });
     defer a.free(json);
     try t.expectError(Error.BadManifest, parseManifest(a, json));
+}
+
+test "an over-long caption is cut on a character, not in the middle of one" {
+    const a = t.allocator;
+    // 239 bytes of ASCII, then a three-byte ellipsis (U+2026) straddling the
+    // 240-byte cut. Slicing at the byte would leave a third of a character.
+    var footer: [242]u8 = undefined;
+    @memset(footer[0..239], 'x');
+    @memcpy(footer[239..242], "\u{2026}");
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try json.print(
+        a,
+        "{{\"id\":\"x\",\"api\":1,\"settings\":{{\"groups\":[{{\"list\":{{\"key\":\"c\"," ++
+            "\"footer\":\"{s}\",\"item_fields\":[{{\"key\":\"h\",\"kind\":\"text\",\"default\":\"\"}}]}}}}]}}}}",
+        .{footer},
+    );
+    var m = try parseManifest(a, json.items);
+    defer m.deinit(a);
+    try t.expectEqual(@as(usize, 239), m.lists[0].footer.len);
+    try t.expect(std.unicode.utf8ValidateSlice(m.lists[0].footer));
 }
 
 test "a list is refused when it fights another key, and text needs a row" {

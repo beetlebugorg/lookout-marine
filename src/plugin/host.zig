@@ -863,6 +863,7 @@ pub const Host = struct {
             .source = self.next_source,
             .source_span = sourceSpan(&manifest),
             .caps = grants,
+            .asked = manifest.caps,
             .http_hosts = manifest.http_hosts,
             .ws_hosts = manifest.ws_hosts,
             .tcp_addrs = manifest.tcp_addrs,

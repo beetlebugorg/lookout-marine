@@ -131,6 +131,10 @@ pub const Plugin = struct {
     /// instead of one slot they overwrite in turn.
     source_span: u32 = 1,
     caps: Caps,
+    /// What the MANIFEST asked for, which `caps` is the granted subset of.
+    /// Kept only so a refusal can say which of the two it is: a capability the
+    /// plugin never asked for, or one the mariner switched off.
+    asked: Caps = Caps.initEmpty(),
     /// The hostnames `http_fetch` may reach, from the manifest's `net.http`
     /// grant. Borrowed from the host's manifest, like `id`. Empty means the
     /// plugin may reach nothing, which is what an ungranted plugin has.
