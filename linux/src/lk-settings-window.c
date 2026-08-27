@@ -1,6 +1,7 @@
 #include "lk-discovery.h"
 #include "lk-settings-window.h"
 
+#include "lk-licenses.h"
 #include "lk-mariner.h"
 #include "lk-plugin-install.h"
 #include "lk-plugins.h"
@@ -1344,6 +1345,62 @@ lk_date_focus_left (GtkEventControllerFocus *focus, gpointer user_data)
 }
 
 static void
+lk_settings_licenses_clicked (GtkButton *button, gpointer user_data)
+{
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  GtkWindow *window = GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL;
+
+  /* The MAIN window is the parent, not this panel: the licenses stay open when
+   * the settings are closed. */
+  lk_licenses_window_present (window != NULL ? gtk_window_get_transient_for (window) : NULL,
+                              NULL);
+}
+
+/* What this build is: its version, the chart engine it is pinned to, and the
+ * way to the terms it and its components carry. It stands at the foot of the
+ * last page, as it does on the Mac (macos/LookoutMarine/SettingsView.swift). */
+static void
+lk_settings_about_section (GtkWidget *page)
+{
+  const GPtrArray *components = lk_licenses_components ();
+  const LkLicenseComponent *engine = lk_licenses_component ("tile57");
+  GtkWidget *about = lk_section (page, "About");
+  GtkWidget *version = gtk_label_new (lk_licenses_app_version ());
+
+  gtk_widget_add_css_class (version, "numeric");
+  gtk_widget_add_css_class (version, "dim-label");
+  gtk_label_set_selectable (GTK_LABEL (version), TRUE);
+  lk_row (about, "Version", version);
+
+  if (engine != NULL)
+    {
+      g_autofree char *pin = lk_licenses_pin (engine);
+      g_autofree char *text = g_strdup_printf ("%s · %s", engine->name, pin);
+      GtkWidget *label = gtk_label_new (text);
+
+      gtk_widget_add_css_class (label, "monospace");
+      gtk_widget_add_css_class (label, "dim-label");
+      gtk_label_set_selectable (GTK_LABEL (label), TRUE);
+      lk_row (about, "Chart engine", label);
+    }
+
+  /* The ellipsis promises a window, which is where a license has the width to
+   * be read whole. */
+  GtkWidget *button = gtk_button_new_with_label ("Licenses…");
+
+  gtk_widget_set_halign (button, GTK_ALIGN_START);
+  gtk_widget_set_margin_top (button, 6);
+  g_signal_connect (button, "clicked", G_CALLBACK (lk_settings_licenses_clicked), NULL);
+  gtk_box_append (GTK_BOX (about), button);
+
+  g_autofree char *footer =
+      g_strdup_printf ("This app's terms, and the %u components it is built from. "
+                       "Every license is carried whole and needs no connection.",
+                       components->len);
+  lk_footer (about, footer);
+}
+
+static void
 lk_build_advanced_page (LkSettings *settings)
 {
   GtkWidget *page = lk_page_new (settings, "advanced", "Advanced",
@@ -1379,6 +1436,10 @@ lk_build_advanced_page (LkSettings *settings)
   lk_footer (dates, "Leave the date empty to use today.");
 
   lk_plugin_fill_tab (page, settings, "advanced");
+
+  /* Last on the page, under whatever a plugin filed here: About says what this
+   * build is, and nothing is filed under it. */
+  lk_settings_about_section (page);
 }
 
 /* ---- the plugins' own controls ------------------------------------------- */

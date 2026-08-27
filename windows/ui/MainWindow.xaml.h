@@ -172,6 +172,40 @@ namespace winrt::LookoutMarine::implementation
         fire_and_forget HandleDrop(Microsoft::UI::Xaml::DragEventArgs e);
         fire_and_forget ConfirmUninstallPlugin(std::string id, std::string name);
 
+        // about and licenses (MainWindow.Licenses.cpp). Both have their own
+        // window: the license text runs at its own width, and About opens the
+        // same licenses window rather than a second copy of the list.
+        void ShowAbout();
+        // The licenses window, on `id`'s entry. An empty id opens on this
+        // app's own.
+        void ShowLicenses(std::string const &id);
+        void BuildLicensesList();
+        void BuildLicensesDetail();
+        // One label-and-value row of a detail pane. `literal` is a commit, a
+        // path or a version: monospaced, to be read character by character.
+        struct LicenseFact
+        {
+            std::wstring label;
+            std::string value;
+            bool literal;
+        };
+        Microsoft::UI::Xaml::Controls::Border LicenseCard(
+            Microsoft::UI::Xaml::UIElement const &child);
+        Microsoft::UI::Xaml::Controls::Border LicenseFacts(std::vector<LicenseFact> const &rows);
+        Microsoft::UI::Xaml::Controls::Border LicenseUpstream(std::string const &url);
+        Microsoft::UI::Xaml::Controls::StackPanel LicenseTextBlock(winrt::hstring const &heading,
+                                                                   std::string const &note,
+                                                                   std::string const &text);
+        Microsoft::UI::Xaml::Window about_window{ nullptr };
+        Microsoft::UI::Xaml::Window licenses_window{ nullptr };
+        // The two panels the licenses window fills, null while it is closed.
+        Microsoft::UI::Xaml::Controls::StackPanel licenses_list{ nullptr };
+        Microsoft::UI::Xaml::Controls::StackPanel licenses_detail{ nullptr };
+        // The entry on screen; empty is this app's own. Held here so About can
+        // open the window on a named one.
+        std::string licenses_selection;
+        std::string licenses_search;
+
         // plugin tables (MainWindow.Vessels.cpp)
         void RefreshPluginTables(); // re-read the declarations at open
         void OpenPluginTable(lkw::TableSpec const &spec);

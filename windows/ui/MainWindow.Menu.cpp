@@ -253,6 +253,13 @@ namespace winrt::LookoutMarine::implementation
                                      [this] { ToggleFullScreen(); }));
         menu.Items().Append(MenuItem(L"Settings…", L"Ctrl+,", [this] { ShowSettings(); }));
 
+        // Last, where Windows puts it. About carries the button to the
+        // licenses, and the licenses are also one press from here: a legal
+        // obligation should not sit behind another window.
+        menu.Items().Append(MenuFlyoutSeparator{});
+        menu.Items().Append(MenuItem(L"Licenses…", L"", [this] { ShowLicenses(""); }));
+        menu.Items().Append(MenuItem(L"About Lookout Marine", L"", [this] { ShowAbout(); }));
+
         menu.ShowAt(MenuBtn());
     }
 }

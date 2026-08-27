@@ -504,7 +504,9 @@ find_rc() {
 find_masm() {
     local d a
     for d in "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostarm64/arm64 \
-             "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64; do
+             "/c/Program Files (x86)/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostarm64/arm64 \
+             "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64 \
+             "/c/Program Files (x86)/Microsoft Visual Studio"/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64; do
         for a in ml64.exe armasm64.exe; do
             [ -x "$d/$a" ] && { echo "$d/$a"; return 0; }
         done
@@ -517,7 +519,8 @@ find_masm() {
 find_ninja() {
     command -v ninja >/dev/null 2>&1 && { echo ninja; return 0; }
     local n
-    for n in "/c/Program Files/Microsoft Visual Studio"/*/*/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe; do
+    for n in "/c/Program Files/Microsoft Visual Studio"/*/*/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe \
+             "/c/Program Files (x86)/Microsoft Visual Studio"/*/*/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe; do
         [ -x "$n" ] && { cygpath -m "$n"; return 0; }
     done
     return 1

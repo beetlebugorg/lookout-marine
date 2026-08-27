@@ -1906,3 +1906,15 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j
     defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
     return lookout_open_file(h.l, @ptrCast(cpath));
 }
+
+// ---- licenses ---------------------------------------------------------------
+
+extern fn lookout_licenses_json(out_len: ?*usize) [*:0]const u8;
+
+/// String nLicensesJson() -- this app's terms and every component it is built
+/// from, as the JSON the licenses screen decodes. Baked into the binary, so it
+/// needs no chart open and no handle.
+export fn Java_org_beetlebug_lookout_Lookout_nLicensesJson(env: [*c]j.JNIEnv, cls: j.jclass) j.jstring {
+    _ = cls;
+    return env_(env).NewStringUTF.?(env, lookout_licenses_json(null));
+}

@@ -44,6 +44,10 @@ endif
 c_args = []
 deps = [gtk_dep, vulkan_dep, png_dep, webp_dep, soup_dep, json_dep, m_dep]
 
+# The version the About and Licenses screens report. The project version above
+# is the one number this build states; build.zig.zon carries the same.
+c_args += '-DLK_VERSION="' + meson.project_version() + '"'
+
 # Where installed data lands. Named here rather than in the desktop-integration
 # section below because the plugin directory is BAKED INTO the binary, so the
 # compile line needs it.
@@ -117,6 +121,7 @@ core = custom_target('lookout-core',
 
 sources = files(
   'src/main.c',
+  'src/lk-about.c',
   'src/lk-alerts.c',
   'src/lk-app-model.c',
   'src/lk-chart-bake.c',
@@ -127,6 +132,7 @@ sources = files(
   'src/lk-discovery.c',
   'src/lk-hud.c',
   'src/lk-json.c',
+  'src/lk-licenses.c',
   'src/lk-mariner.c',
   'src/lk-native-surface.c',
   'src/lk-overlay-pick.c',
@@ -155,7 +161,10 @@ gnome = import('gnome')
 resources = gnome.compile_resources(
   'lk-resources',
   'data' / 'lookout-marine.gresource.xml',
-  source_dir: 'data' / 'icons' / 'scalable' / 'actions',
+  source_dir: [
+    'data' / 'icons' / 'scalable' / 'actions',
+    'data' / 'icons' / 'hicolor' / 'scalable' / 'apps',
+  ],
   c_name: 'lk',
 )
 

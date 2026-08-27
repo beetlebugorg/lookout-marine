@@ -487,6 +487,49 @@ const char *lookout_scan_charts(const char *path, size_t *out_len);
  * same reason. */
 const char *lookout_scan_zip(const char *path, size_t *out_len);
 
+/* ---- licenses ---------------------------------------------------------- */
+
+/* This app's terms and every component it is built from, as JSON, for the
+ * licenses screen. Baked in from vendor/licenses/licenses.json, so it is
+ * complete with no connection.
+ *
+ *   {"app":{"name":"Lookout Marine","summary":"...","license":"MIT",
+ *           "copyright":"...","url":"...","text":"<the full MIT text>"},
+ *    "components":[
+ *      {"id":"wamr","name":"WebAssembly Micro Runtime","group":"Plugins",
+ *       "summary":"...","license":"Apache 2.0 with the LLVM exception",
+ *       "license_short":"Apache-2.0",
+ *       "license_note":"...","version":"WAMR-2.4.5","commit":"25bd7eb...",
+ *       "pinned_in":"scripts/build-wamr.sh","copyright":"...","url":"...",
+ *       "shells":["macos","ios","android","linux","windows"],
+ *       "text":"<the full license text>","notice":""}]}
+ *
+ * `app` is this app's own terms. It is not a component and does not belong in
+ * the component count.
+ *
+ * `shells` is which builds carry that component: "macos", "ios", "android",
+ * "linux" or "windows". One manifest serves every build, so a shell draws the
+ * entries that name it and no others.
+ *
+ * `license_short` names the same terms in twenty characters or less, for the
+ * narrow column a list of components is read down. `license` is what a detail
+ * pane says.
+ *
+ * `text` is the license, whole and unmodified, hard-wrapped as upstream wrote
+ * it. Never truncate it or summarize it on screen.
+ *
+ * `notice` is the component's NOTICE file, which Apache 2.0 section 4(d) makes
+ * travel with the software. It is a separate obligation from the license and
+ * is empty for a component that ships none.
+ *
+ * An empty `license` means the terms could not be determined. The entry still
+ * ships, and `license_note` says why. Empty `version` or `commit` means
+ * upstream states none, and a component that publishes neither has both empty.
+ *
+ * Static storage: valid for the life of the process, needs no handle and is
+ * safe from any thread. *out_len (NULL to ignore) receives the length. */
+const char *lookout_licenses_json(size_t *out_len);
+
 /* ---- view -------------------------------------------------------------- */
 void lookout_fit_chart(lookout *h, lookout_view *out); /* fit the whole cell */
 void lookout_default_view(lookout *h, lookout_view *out); /* opening view, no saved pose */

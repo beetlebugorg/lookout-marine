@@ -3216,6 +3216,8 @@ test {
     _ = ctprovided;
     _ = cthost;
     _ = craster;
+    // The baked license manifest, whose tests check what the shells decode.
+    _ = @import("licenses.zig");
 }
 
 test "camera roundtrip" {

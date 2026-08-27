@@ -341,6 +341,12 @@ pub fn build(b: *std.Build) void {
             mod.addAnonymousImport("basemap_pmtiles", .{
                 .root_source_file = bb.path("vendor/gshhg/basemap.pmtiles"),
             });
+            // The component list src/licenses.zig embeds, out in vendor/ for
+            // the same reason as the basemap: @embedFile cannot reach outside
+            // the module's own directory.
+            mod.addAnonymousImport("licenses_json", .{
+                .root_source_file = bb.path("vendor/licenses/licenses.json"),
+            });
             if (self.android) {
                 // Neutralise bionic's nullability keywords for OUR parse: clang's
                 // translate-c (@cImport of stb_image.h -> stdlib.h) rejects
@@ -916,6 +922,7 @@ pub fn build(b: *std.Build) void {
         // The test module's root, and the core files it reaches. pick and the
         // renderer layer are reached only through root.zig's `test` block.
         "src/root.zig",
+        "src/licenses.zig",
         "src/pick.zig",
         "src/ct/host.zig",
         "src/ct/style.zig",

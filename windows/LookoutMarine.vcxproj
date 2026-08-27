@@ -91,6 +91,10 @@
       <!-- $(IntDir)(+ui): the WinUI markup passes write <Name>.xaml.g.h there,
            mirroring the source layout. The project root carries pch.h. -->
       <AdditionalIncludeDirectories>$(IntDir);$(IntDir)ui;$(MSBuildThisFileDirectory);$(MSBuildThisFileDirectory)ui;$(MSBuildThisFileDirectory)src;$(LookoutCoreIncDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- What About and the licenses screen report this build as. Kept in
+           step with build.zig.zon's version, the way linux/meson.build passes
+           its own project version through as LK_VERSION. -->
+      <PreprocessorDefinitions>LK_VERSION=0.1.0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level3</WarningLevel>
       <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
       <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
@@ -154,11 +158,13 @@
     <ClCompile Include="ui\MainWindow.Scale.cpp" />
     <ClCompile Include="ui\MainWindow.Settings.cpp" />
     <ClCompile Include="ui\MainWindow.Plugins.cpp" />
+    <ClCompile Include="ui\MainWindow.Licenses.cpp" />
     <ClCompile Include="src\lk_discovery.cpp" />
     <ClCompile Include="src\lk_paths.cpp" />
     <ClCompile Include="src\lk_bake.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
     <ClCompile Include="src\lk_pick.cpp" />
+    <ClCompile Include="src\lk_licenses.cpp" />
     <ClCompile Include="src\lk_backdrop.cpp" />
     <ClCompile Include="ui\winrt_glue.cpp" />
     <!-- The host-agnostic C layer (ports of the Linux shell's controller/store/

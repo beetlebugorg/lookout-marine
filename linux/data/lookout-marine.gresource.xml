@@ -9,8 +9,15 @@
 
   main.c adds this prefix to the icon theme's search path, which is what makes
   the names below reachable as ordinary icon names.
+
+  The app's own icon travels the same way. It is installed into hicolor as
+  well, for the desktop and the task bar, but a build tree has installed
+  nothing: without this the About window has no icon to draw.
 -->
 <gresources>
+  <gresource prefix="/org/beetlebug/LookoutMarine/icons/scalable/apps">
+    <file preprocess="xml-stripblanks">org.beetlebug.LookoutMarine.svg</file>
+  </gresource>
   <gresource prefix="/org/beetlebug/LookoutMarine/icons/scalable/actions">
     <file preprocess="xml-stripblanks">lk-display-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-depths-symbolic.svg</file>

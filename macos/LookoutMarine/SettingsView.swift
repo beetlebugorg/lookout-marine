@@ -773,6 +773,48 @@ private struct AdvancedSections: View {
         } header: {
             Text("Dates")
         } footer: { Text("Leave the date empty to use today.").captionFooter() }
+        AboutSection()
+    }
+}
+
+private struct AboutSection: View {
+    private var engine: LicenseComponent? {
+        LicenseManifest.current?.components.first { $0.id == "tile57" }
+    }
+
+    private var componentCount: Int { LicenseManifest.current?.components.count ?? 0 }
+
+    var body: some View {
+        Section {
+            LabeledContent("Version", value: LicensesView.appVersion)
+                .monospacedDigit()
+            if let engine, !engine.pinLabel.isEmpty {
+                LabeledContent("Chart engine") {
+                    Text("\(engine.name) · \(engine.pinLabel)")
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+            #if os(macOS)
+            // The ellipsis is the platform's promise that a window opens.
+            Button {
+                LicensesWindowController.shared.show()
+            } label: {
+                LabeledContent("Licenses…", value: componentCount > 0 ? "\(componentCount) components" : "")
+            }
+            .buttonStyle(.plain)
+            #else
+            // The phone pushes the screen, so no ellipsis.
+            NavigationLink {
+                LicensesRoot()
+            } label: {
+                LabeledContent("Licenses",
+                               value: componentCount > 0 ? "\(componentCount) components" : "")
+            }
+            #endif
+        } header: {
+            Text("About")
+        }
     }
 }
 

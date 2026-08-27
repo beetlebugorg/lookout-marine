@@ -18,6 +18,7 @@ android {
         // monotonic build number; a plain dev build keeps these defaults.
         versionCode (project.hasProperty('versionCode') ? project.versionCode.toInteger() : 1)
         versionName (project.hasProperty('versionName') ? project.versionName : '1.0')
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_PLATFORM=android-24", "-DANDROID_STL=c++_static"
@@ -81,6 +82,14 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended'
     implementation 'androidx.activity:activity-compose:1.9.3'
     implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+
+    // The licenses screen is checked on a device, because what it has to get
+    // right is what a mariner sees: which rows appear, what each one reads,
+    // and that a row opens its terms.
+    androidTestImplementation platform('androidx.compose:compose-bom:2024.10.01')
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
 }
 
 // Cross-compile the Zig core (liblookout_marine.a + libtile57.a via build-libs.sh)

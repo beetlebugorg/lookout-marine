@@ -11,6 +11,7 @@
 #include <map>
 
 #include "lk_format.h"
+#include "lk_licenses.h"
 #include "lk_paths.h"
 #include "lk_store.h"
 
@@ -1195,6 +1196,43 @@ namespace winrt::LookoutMarine::implementation
                         commit_date(s.template as<Controls::TextBox>());
                 });
                 stack.Children().Append(date);
+            }
+
+            // What this build is, and the way in to the licenses. The chart
+            // engine is the one component a mariner may be asked which copy of
+            // they are sailing on, so its pin is stated here too.
+            header(L"About");
+            {
+                auto const &licenses = lkw::Licenses();
+                auto fact = [&](wchar_t const *label, std::string const &value, bool literal) {
+                    Controls::TextBlock tb;
+                    tb.Text(label);
+                    tb.FontSize(12);
+                    stack.Children().Append(tb);
+                    Controls::TextBlock v;
+                    v.Text(winrt::to_hstring(value));
+                    v.FontSize(13);
+                    v.TextWrapping(TextWrapping::Wrap);
+                    v.IsTextSelectionEnabled(true);
+                    v.Margin({ 0, 0, 0, 4 });
+                    if (literal)
+                        v.FontFamily(Media::FontFamily{ L"Cascadia Mono, Consolas" });
+                    stack.Children().Append(v);
+                };
+                fact(L"Version", lkw::AppVersion(), true);
+                if (auto const *engine = lkw::LicenseById("tile57");
+                    engine != nullptr && !engine->PinLabel().empty())
+                    fact(L"Chart engine", engine->name + " · " + engine->PinLabel(), true);
+
+                // The ellipsis is the platform's promise that a window opens.
+                Controls::Button licenses_button;
+                licenses_button.Content(winrt::box_value(winrt::hstring{ L"Licenses…" }));
+                licenses_button.Margin({ 0, 4, 0, 0 });
+                licenses_button.Click([this](auto &&, auto &&) { ShowLicenses(""); });
+                stack.Children().Append(licenses_button);
+                if (!licenses.components.empty())
+                    footer(winrt::to_hstring(std::to_string(licenses.components.size()) +
+                                             " components"));
             }
         }
         else if (tab == "plugins")

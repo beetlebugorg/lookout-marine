@@ -83,6 +83,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -298,16 +300,40 @@ private fun SectionPane(
     onBack: (() -> Unit)?,
     onCloseSheet: () -> Unit,
 ) {
+    // The licenses push over the PANE, not over the sheet, so a tablet keeps
+    // its section list beside them. Two steps deep: the list, then one entry.
+    // Keyed on the section, so leaving Advanced puts the pane back where the
+    // mariner would expect to find it.
+    var licenses by remember(id) { mutableStateOf(false) }
+    var entry by remember(id) { mutableStateOf<LicenseSelection?>(null) }
+    val manifest = LicenseManifest.current
+
+    // The system back gesture unwinds the same one step at a time. Registered
+    // here rather than beside the sheet's, for the sheet's own reason: the
+    // dispatcher gives the most deeply composed enabled callback priority.
+    BackHandler(enabled = licenses) {
+        if (entry != null) entry = null else licenses = false
+    }
+
     Column(Modifier.fillMaxHeight()) {
-        val label = SettingsSection.all.firstOrNull { it.id == id }?.label ?: id
+        val label = when {
+            entry != null -> licenseTitle(manifest, entry)
+            licenses -> "Licenses"
+            else -> SettingsSection.all.firstOrNull { it.id == id }?.label ?: id
+        }
+        val back: (() -> Unit)? = when {
+            entry != null -> ({ entry = null })
+            licenses -> ({ licenses = false })
+            else -> onBack
+        }
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(start = 4.dp, end = 20.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (onBack != null) {
-                IconButton(onClick = onBack) {
+            if (back != null) {
+                IconButton(onClick = back) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
             } else {
@@ -316,6 +342,10 @@ private fun SectionPane(
             Text(label, style = MaterialTheme.typography.titleMedium)
         }
         HorizontalDivider()
+        if (licenses) {
+            LicensesScreen(manifest, entry) { entry = it }
+            return@Column
+        }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -333,7 +363,7 @@ private fun SectionPane(
                 "text" -> SymbolsSection(m)
                 "charts" -> ChartsSection(charts, controller, onRequestAccess)
                 "plugins" -> PluginsManageSection(registry, controller)
-                "advanced" -> AdvancedSection(m)
+                "advanced" -> AdvancedSection(m, onOpenLicenses = { licenses = true })
             }
             // The declared tables that belong to this section — the reference
             // shell's Vessels menu, as rows. Opening one closes the sheet: the
@@ -685,7 +715,7 @@ private fun SymbolsSection(m: MarinerState) {
 // ---- Advanced ---------------------------------------------------------------
 
 @Composable
-private fun AdvancedSection(m: MarinerState) {
+private fun AdvancedSection(m: MarinerState, onOpenLicenses: () -> Unit) {
     SectionHeader("Safety & quality", first = true)
     SwitchRow("Data quality overlay", m, MI.DATA_QUALITY)
     SwitchRow("Isolated dangers in shallow water", m, MI.SHOW_ISOLATED_DANGERS_SHALLOW)
@@ -702,6 +732,76 @@ private fun AdvancedSection(m: MarinerState) {
     SwitchRow("Date-dependent features", m, MI.DATE_DEPENDENT)
     SwitchRow("Highlight date-dependent", m, MI.HIGHLIGHT_DATE_DEPENDENT)
     Footer("Date-dependent features appear only when in season.")
+
+    AboutSection(onOpenLicenses)
+}
+
+/**
+ * What this build is, and the way to its terms. It sits at the foot of
+ * Advanced, where the other shells put it: the version and the engine's pin
+ * are what a bug report needs, and the licenses are a legal obligation that
+ * has to be reachable from somewhere a mariner can find.
+ */
+@Composable
+private fun AboutSection(onOpenLicenses: () -> Unit) {
+    val manifest = LicenseManifest.current
+    val engine = manifest?.components?.firstOrNull { it.id == "tile57" }
+    val count = manifest?.components?.size ?: 0
+
+    SectionHeader("About")
+    ValueRow("Version", appVersion())
+    if (engine != null && engine.pinLabel.isNotEmpty()) {
+        ValueRow("Chart engine", "${engine.name} · ${engine.pinLabel}", mono = true)
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenLicenses)
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .testTag("about-licenses"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Licenses", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        if (count > 0) {
+            Text(
+                "$count components",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null, // the row's own label says where it goes
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** A label with its value opposite, for a fact that is read and not changed. */
+@Composable
+private fun ValueRow(title: String, value: String, mono: Boolean = false) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** The title bar over one license entry: what the entry is called. */
+private fun licenseTitle(manifest: LicenseManifest?, sel: LicenseSelection?): String = when (sel) {
+    null -> "Licenses"
+    is LicenseSelection.App -> manifest?.app?.name ?: "Licenses"
+    is LicenseSelection.Component ->
+        manifest?.components?.firstOrNull { it.id == sel.id }?.name ?: "Licenses"
 }
 
 // ---- plugin-declared settings -----------------------------------------------

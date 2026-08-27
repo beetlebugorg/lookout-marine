@@ -1,8 +1,10 @@
 #include "lk-window.h"
 
+#include "lk-about.h"
 #include "lk-alerts.h"
 #include "lk-chart-view.h"
 #include "lk-hud.h"
+#include "lk-licenses.h"
 #include "lk-overlay-pick.h"
 #include "lk-plugin-install.h"
 #include "lk-pick-report.h"
@@ -523,6 +525,35 @@ lk_action_settings_at (GSimpleAction *action, GVariant *parameter, gpointer user
   lk_window_present_settings (user_data, g_variant_get_string (parameter, NULL));
 }
 
+/* What this build is, and the terms it carries. The licenses are a legal
+ * obligation, so they are reachable from the commands bubble and from the
+ * About window both, as they are on the Mac. */
+static void
+lk_action_about (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_about_window_present (GTK_WINDOW (self->window));
+}
+
+static void
+lk_action_licenses (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_licenses_window_present (GTK_WINDOW (self->window), NULL);
+}
+
+/* The licenses on one component's entry, by the id the manifest gives it. */
+static void
+lk_action_licenses_at (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  lk_licenses_window_present (GTK_WINDOW (self->window),
+                              g_variant_get_string (parameter, NULL));
+}
+
 /* ---- the commands bubble ------------------------------------------------ */
 
 /* One table a plugin declared, by "<plugin>/<key>". The declarations are read
@@ -628,9 +659,16 @@ lk_dev_hook_show (gpointer data)
   else if (g_str_has_prefix (spec, "table:"))
     g_action_group_activate_action (actions, "open-table",
                                     g_variant_new_string (spec + strlen ("table:")));
+  else if (g_str_equal (spec, "about"))
+    g_action_group_activate_action (actions, "about", NULL);
+  else if (g_str_equal (spec, "licenses"))
+    g_action_group_activate_action (actions, "licenses", NULL);
+  else if (g_str_has_prefix (spec, "licenses:"))
+    g_action_group_activate_action (actions, "licenses-at",
+                                    g_variant_new_string (spec + strlen ("licenses:")));
   else
-    g_warning ("ignoring LOOKOUT_SHOW '%s' "
-               "(want settings, settings:<tab> or table:<plugin>/<key>)", spec);
+    g_warning ("ignoring LOOKOUT_SHOW '%s' (want settings, settings:<tab>, "
+               "table:<plugin>/<key>, about, licenses or licenses:<id>)", spec);
   return G_SOURCE_REMOVE;
 }
 
@@ -713,6 +751,9 @@ static const GActionEntry lk_window_actions[] = {
   { "close-pick",       lk_action_close_pick },
   { "settings",         lk_action_settings },
   { "settings-at",      lk_action_settings_at, "s" },
+  { "about",            lk_action_about },
+  { "licenses",         lk_action_licenses },
+  { "licenses-at",      lk_action_licenses_at, "s" },
   { "set-scheme",       lk_action_set_scheme, "i", "0" },
   { "raster-cycle",     lk_action_raster_cycle },
   /* Stateful, so the pill's list marks the set that is drawn. The state is the
@@ -872,11 +913,19 @@ lk_window_fill_menu (GtkMenuButton *button, gpointer user_data)
   g_menu_append (app, "Settings…", "win.settings");
   g_menu_append_section (menu, NULL, G_MENU_MODEL (app));
 
+  /* What this build is, and its terms. The Mac's words, in the place a GNOME
+   * menu carries them: last, in their own section. */
+  GMenu *info = g_menu_new ();
+  g_menu_append (info, "About Lookout Marine", "win.about");
+  g_menu_append (info, "Licenses…", "win.licenses");
+  g_menu_append_section (menu, NULL, G_MENU_MODEL (info));
+
   gtk_menu_button_set_menu_model (button, G_MENU_MODEL (menu));
 
   g_object_unref (recents);
   g_object_unref (files);
   g_object_unref (app);
+  g_object_unref (info);
   g_object_unref (menu);
 }
 

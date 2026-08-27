@@ -365,6 +365,13 @@ struct ContentView: View {
                         // sort.
                         case "target":
                             model.revealTableRow(part.count > 1 ? part[1] : "")
+                        // The licenses window, and the About panel that opens
+                        // it. licenses:<id> selects one component's entry.
+                        case "licenses":
+                            LicensesWindowController.shared.show()
+                            if part.count > 1 { LicensesWindowController.shared.select(part[1]) }
+                        case "about":
+                            AboutWindowController.shared.show()
                         #endif
                         // scheme:1 dusk, scheme:2 night — the chrome must
                         // follow the chart's hours, and a screenshot proves it.
