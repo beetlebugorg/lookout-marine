@@ -42,11 +42,19 @@ pub const default_evict_ms: i64 = 600_000;
 /// minutes is ten missed reports.
 pub const default_aton_evict_ms: i64 = 1_800_000;
 
-/// How much older than the stored target an update may be and still apply.
-/// Within it reports merge — a static report must not lose its name to a
-/// position race, and stamps from different clocks jitter by seconds. Past it
-/// the update is outranked: a minutes-old relay must not walk a live contact
-/// backward.
+/// How much older than the stored target an update's KINEMATICS may be and
+/// still apply. Within it reports merge, because stamps from different clocks
+/// jitter by seconds. Past it the position, course and speed are outranked: a
+/// minutes-old relay must not walk a live contact backward.
+///
+/// IT DOES NOT GATE IDENTITY. What a vessel is called is as true six minutes
+/// late as it is now, and a class A ship broadcasts her name only every six
+/// minutes — so an internet relay replaying her last static report, with its
+/// own original time, is minutes behind her position stream every time.
+/// Measured against a live feed of a busy approach, gating identity on this
+/// threw away 88% of it and left a chart of anonymous triangles. Identity is
+/// weighed against `Target.static_ts_ms` instead: the most recent thing the
+/// vessel SAID ABOUT HERSELF wins.
 pub const stale_drop_ms: i64 = 10_000;
 
 /// One target. The name lives inline so a snapshot is a plain copy with no
@@ -78,6 +86,10 @@ pub const Target = struct {
     off_position: ?bool = null,
     /// When this target was last updated, as the caller stamped it.
     ts_ms: i64 = 0,
+    /// When the IDENTITY was last updated. Arbitrated on its own, because a
+    /// vessel's name does not go stale the way her position does — see
+    /// `stale_drop_ms`. Zero until one has been heard.
+    static_ts_ms: i64 = 0,
     /// The source that last updated it.
     source: SourceId = 0,
     /// True when the last update came over the internet rather than from a
@@ -133,6 +145,15 @@ pub const Error = error{
     TargetSetFull,
 };
 
+/// True when the update says something about WHAT the target is rather than
+/// where it is or where it is going. These are the facts a vessel broadcasts
+/// on her own slow schedule, and they are why an outranked report is still
+/// worth reading.
+fn carriesIdentity(u: Update) bool {
+    return u.name != null or u.aton != null or u.aton_type != null or
+        u.virtual_aton != null or u.off_position != null;
+}
+
 pub const AisStore = struct {
     alloc: std.mem.Allocator,
     mu: Lock = .{},
@@ -173,19 +194,28 @@ pub const AisStore = struct {
         if (self.targets.count() >= max_targets and !self.targets.contains(u.mmsi))
             return Error.TargetSetFull;
 
-        // The freshest report wins; only a near-tie merges. Checked before
-        // the entry exists, so an outranked update leaves no phantom target.
+        // Is this report materially older than the one stored? Its KINEMATICS
+        // are refused if so; its identity is weighed separately below.
+        var outranked = false;
         if (self.targets.get(u.mmsi)) |existing| {
-            if (existing.ts_ms - u.ts_ms > stale_drop_ms) return false;
+            outranked = existing.ts_ms - u.ts_ms > stale_drop_ms;
         }
+        // Nothing to say and outranked besides: leave no phantom target. Both
+        // checks happen before the entry exists, which is what makes that true.
+        if (outranked and !carriesIdentity(u)) return false;
+
         const gop = try self.targets.getOrPut(self.alloc, u.mmsi);
         if (!gop.found_existing) gop.value_ptr.* = .{ .mmsi = u.mmsi };
         const tgt = gop.value_ptr;
 
-        // A near-tie merges its STATIC facts only. Kinematics from the older
+        // Whether this update changed anything at all, which is what the
+        // return and the change counter both mean.
+        var applied = false;
+
+        // The freshest report wins the kinematics. Kinematics from the older
         // report would walk a live contact backward a few seconds every time
         // a relayed copy of it lands.
-        const newer = u.ts_ms >= tgt.ts_ms;
+        const newer = !outranked and u.ts_ms >= tgt.ts_ms;
         if (newer) {
             if (u.lat) |v| tgt.lat = v;
             if (u.lon) |v| tgt.lon = v;
@@ -196,25 +226,38 @@ pub const AisStore = struct {
             if (u.heading) |v| tgt.heading = wrap360(v);
             tgt.source = source_id;
             tgt.net = u.net;
+            applied = true;
         }
-        if (u.name) |n| {
-            const trimmed = std.mem.trim(u8, n, " ");
-            const len = @min(trimmed.len, max_name);
-            @memcpy(tgt.name_buf[0..len], trimmed[0..len]);
-            tgt.name_len = @intCast(len);
+
+        // IDENTITY IS WEIGHED AGAINST IDENTITY. Not against the position
+        // stream, which runs minutes ahead of every static report and would
+        // refuse nearly all of them; and not unconditionally either, or an
+        // ancient replay would overwrite a newer name. The most recent thing
+        // the vessel said about herself is what the mariner reads.
+        if (carriesIdentity(u) and u.ts_ms >= tgt.static_ts_ms) {
+            if (u.name) |n| {
+                const trimmed = std.mem.trim(u8, n, " ");
+                const len = @min(trimmed.len, max_name);
+                @memcpy(tgt.name_buf[0..len], trimmed[0..len]);
+                tgt.name_len = @intCast(len);
+            }
+            // An aid to navigation reports its nature every time; a position
+            // report from the same MMSI must not take it away again.
+            if (u.aton) |v| {
+                if (v) tgt.aton = true;
+            }
+            if (u.aton_type) |v| tgt.aton_type = v;
+            if (u.virtual_aton) |v| tgt.virtual_aton = v;
+            if (u.off_position) |v| tgt.off_position = v;
+            tgt.static_ts_ms = u.ts_ms;
+            applied = true;
         }
-        // An aid to navigation reports its nature every time; a position
-        // report from the same MMSI must not take it away again.
-        if (u.aton) |v| {
-            if (v) tgt.aton = true;
-        }
-        if (u.aton_type) |v| tgt.aton_type = v;
-        if (u.virtual_aton) |v| tgt.virtual_aton = v;
-        if (u.off_position) |v| tgt.off_position = v;
-        // A merging near-tie must not walk the age backward.
+
+        // Neither a merging near-tie nor an outranked report may walk the age
+        // backward: age measures when the target was last HEARD.
         tgt.ts_ms = @max(tgt.ts_ms, u.ts_ms);
-        self.seq_no +%= 1;
-        return true;
+        if (applied) self.seq_no +%= 1;
+        return applied;
     }
 
     /// A copy of one target, or null when the MMSI is unknown.
@@ -290,6 +333,9 @@ pub const AisStore = struct {
                     // or evicted. Repaired here, in the pass that already
                     // walks every target each tick.
                     if (e.value_ptr.ts_ms > now_ms) e.value_ptr.ts_ms = now_ms;
+                    // The identity stamp gates identity the same way, so a
+                    // future one would freeze the name just as surely.
+                    if (e.value_ptr.static_ts_ms > now_ms) e.value_ptr.static_ts_ms = now_ms;
                     break :blk e.value_ptr.ageMs(now_ms) >
                         if (e.value_ptr.aton) self.aton_evict_after_ms else self.evict_after_ms;
                 },
@@ -474,15 +520,23 @@ test "the freshest report wins, and only a near-tie merges" {
     defer s.deinit();
     const base: i64 = 100_000;
 
-    // A live receiver contact: a materially older relayed report is dropped
-    // whole, and says so.
+    // A live receiver contact: a materially older relayed report loses its
+    // KINEMATICS whole — the position, the provenance and the source all stay
+    // the live contact's. What it says about the vessel's identity is not
+    // stale in the same way and lands, which is what it landed for.
     _ = try s.upsert(.{ .mmsi = 1, .lat = 38.98, .lon = -76.47, .ts_ms = base }, 1);
-    try t.expect(!try s.upsert(.{ .mmsi = 1, .lat = 40.0, .lon = -70.0, .name = "GHOST", .net = true, .ts_ms = base - stale_drop_ms - 1 }, 2));
+    try t.expect(try s.upsert(.{ .mmsi = 1, .lat = 40.0, .lon = -70.0, .name = "GHOST", .net = true, .ts_ms = base - stale_drop_ms - 1 }, 2));
     const a = s.get(1).?;
     try t.expectApproxEqAbs(@as(f64, 38.98), a.lat.?, 1e-9);
-    try t.expect(a.name() == null);
+    try t.expectEqualStrings("GHOST", a.name().?);
     try t.expect(!a.net);
     try t.expectEqual(@as(SourceId, 1), a.source);
+    // And the age still measures the live contact, not the old replay.
+    try t.expectEqual(@as(i64, base), a.ts_ms);
+
+    // Carrying nothing but outranked kinematics, it lands nothing and says so.
+    try t.expect(!try s.upsert(.{ .mmsi = 1, .lat = 41.0, .lon = -71.0, .ts_ms = base - stale_drop_ms - 1 }, 2));
+    try t.expectApproxEqAbs(@as(f64, 38.98), s.get(1).?.lat.?, 1e-9);
 
     // A near-tie merges its STATIC facts: a static report seconds behind the
     // position race still lands its name — but the age never walks backward,
@@ -507,6 +561,48 @@ test "the freshest report wins, and only a near-tie merges" {
     try t.expect(!try s.upsert(.{ .mmsi = 2, .lat = 38.9, .lon = -76.4, .ts_ms = base - stale_drop_ms - 1 }, 1));
     try t.expect(s.get(2).?.net);
     try t.expectApproxEqAbs(@as(f64, 40.0), s.get(2).?.lat.?, 1e-9);
+}
+
+test "a relay's static report still names a vessel its position stream outran" {
+    var s = AisStore.init(t.allocator);
+    defer s.deinit();
+    // Epoch milliseconds, because the ages in play here are tens of minutes.
+    const now: i64 = 1_754_400_000_000;
+
+    // THE SHAPE THE INTERNET RELAY ACTUALLY SENDS, and the reason this rule
+    // is split. A class A ship broadcasts her identity every six minutes and
+    // her position every few seconds, so the relay's snapshot replays a type 5
+    // that is minutes behind the position stream — measured against a live
+    // feed of a busy approach, a median of twenty-odd minutes behind. Gated on
+    // the position, 88% of it was refused and the mariner read a chart of
+    // anonymous triangles.
+    _ = try s.upsert(.{ .mmsi = 1, .lat = 38.98, .lon = -76.47, .sog = 6.0, .ts_ms = now }, 1);
+    try t.expect(try s.upsert(.{
+        .mmsi = 1,
+        // The relay hangs the last known position on every event, including
+        // this one. It is the old one, and it must not win.
+        .lat = 20.0,
+        .lon = -30.0,
+        .name = "TANGERINE OTTER",
+        .ts_ms = now - 22 * 60 * 1000,
+    }, 1));
+
+    const a = s.get(1).?;
+    try t.expectEqualStrings("TANGERINE OTTER", a.name().?);
+    // The live contact keeps where she is, how fast, and how long ago.
+    try t.expectApproxEqAbs(@as(f64, 38.98), a.lat.?, 1e-9);
+    try t.expectApproxEqAbs(@as(f64, 6.0), a.sog.?, 1e-9);
+    try t.expectEqual(@as(i64, now), a.ts_ms);
+
+    // Identity is weighed against identity: an older static report than the
+    // one already applied cannot overwrite the name with a staler one...
+    try t.expect(!try s.upsert(.{ .mmsi = 1, .name = "WRONG", .ts_ms = now - 30 * 60 * 1000 }, 1));
+    try t.expectEqualStrings("TANGERINE OTTER", s.get(1).?.name().?);
+
+    // ...and a newer one renames her, which is what a vessel correcting her
+    // static report looks like.
+    try t.expect(try s.upsert(.{ .mmsi = 1, .name = "TIN WHISTLE", .ts_ms = now - 60_000 }, 1));
+    try t.expectEqualStrings("TIN WHISTLE", s.get(1).?.name().?);
 }
 
 test "an outranked update leaves no phantom target behind" {
