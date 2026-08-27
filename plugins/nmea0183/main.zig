@@ -157,12 +157,21 @@ fn upsertTarget(conn: *Connection, v: parser.Vdm) void {
         .sog_mps = f.sog_mps,
         .cog_deg = f.cog,
         .heading_deg = f.heading,
+        .nav_status = f.nav_status,
+        .ship_type = f.ship_type,
+        .class_b = f.class_b,
+        .imo = f.imo,
+        .draught_m = f.draught_m,
+        .length_m = f.length_m,
+        .beam_m = f.beam_m,
         .aton = f.aton,
         .aton_type = f.aton_type,
         .virtual_aton = f.virtual_aton,
         .off_position = f.off_position,
     };
     if (f.name) |n| target.name_str.set(n);
+    if (f.callsign) |c| target.callsign_str.set(c);
+    if (f.destination) |d| target.destination_str.set(d);
     u.target(target);
     _ = u.send();
 }

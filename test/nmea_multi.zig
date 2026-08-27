@@ -526,6 +526,9 @@ const ais_lines = [_][]const u8{
     "!AIVDM,2,1,4,,5=IFar000000EP4m33==0D<dhDB0dEA@hD0000163064440008hCSPD3k2Dh,0*52",
     "!AIVDM,2,2,5,,00000000000,2*60",
     "!AIVDM,1,1,,B,H=IFWsi=0D<dhDB1@D50u@000000,0*68",
+    // Part B of the same class B vessel's static report: her call sign, her
+    // type and her dimensions arrive in this half and in no other message.
+    "!AIVDM,1,1,,B,H=IFWslU<;?40CB5H1=@hj104220,0*49",
 };
 
 const class_a_mmsi: u32 = 899000808;
@@ -541,6 +544,24 @@ fn named(store: *aisstore.AisStore, mmsi: u32, want: []const u8) bool {
 
 fn bothNamed(store: *aisstore.AisStore) bool {
     return named(store, class_a_mmsi, class_a_name) and named(store, class_b_mmsi, class_b_name);
+}
+
+/// Everything the two static reports carry beyond the name, as the hover
+/// popup reads it back out of the store.
+fn fullyDescribed(store: *aisstore.AisStore) bool {
+    const a = store.get(class_a_mmsi) orelse return false;
+    const b = store.get(class_b_mmsi) orelse return false;
+    // Her type 5: a cargo ship under way, bound for Annapolis, 30 by 8 metres
+    // drawing 3.5. Her type 1 says class A and "under way using engine".
+    if (a.ship_type != 70 or a.nav_status != 0 or a.class_b != false) return false;
+    if (!std.mem.eql(u8, a.callsign() orelse return false, "EXAMP03")) return false;
+    if (!std.mem.eql(u8, a.destination() orelse return false, "ANNAPOLIS")) return false;
+    if (a.draught_m != 3.5 or a.length_m != 30 or a.beam_m != 8) return false;
+    // Her type 24 part B: a pleasure craft. Class B sends no status at all,
+    // and the type 18 is what says she is class B.
+    if (b.ship_type != 37 or b.class_b != true or b.nav_status != null) return false;
+    if (!std.mem.eql(u8, b.callsign() orelse return false, "EXAMP02")) return false;
+    return true;
 }
 
 test "an AIS name reaches the row the targets dialog draws, not the MMSI" {
@@ -589,6 +610,12 @@ test "an AIS name reaches the row the targets dialog draws, not the MMSI" {
     // static report carried. The class A name only gets here if the
     // mismatched message ids were tolerated.
     try waitFor(&ais, bothNamed);
+    // And the rest of what she said arrives with the name. THIS IS THE WHOLE
+    // CHAIN: the AIVDM off the socket, decoded in the plugin's wasm, over the
+    // upsert JSON, into the host's store — which is what the hover popup then
+    // reads back. Every one of these was decoded and thrown away before it
+    // reached here, so a field that stops arriving is a silent regression.
+    try waitFor(&ais, fullyDescribed);
 
     // The mariner opens the targets dialog. Rows exist only while it is open,
     // and what it holds is what the shell puts on screen.

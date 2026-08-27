@@ -437,6 +437,67 @@ test "acknowledging the alarm holds while the words move, and the next vessel st
     try must(!rig.log.has("trapped"), "nothing trapped");
 }
 
+test "the hover popup says everything the vessel reported" {
+    const alloc = std.testing.allocator;
+    var rig = try Rig.init(alloc);
+    defer rig.deinit();
+    try rig.start();
+
+    // A vessel that has sent both halves of what AIS carries: where she is
+    // and how she is moving, and then who she is and where she is bound.
+    _ = try rig.ais.upsert(.{
+        .mmsi = target_mmsi,
+        .lat = latAt(gap_m),
+        .lon = lonAt(offset_m),
+        .sog = closing_mps,
+        .cog = 180,
+        .heading = 181,
+        .name = "SPECKLED KETTLE",
+        .nav_status = 1,
+        .ship_type = 71,
+        .class_b = false,
+        .callsign = "EXAMP03",
+        .destination = "ANNAPOLIS",
+        .imo = 9134270,
+        .draught_m = 12.5,
+        .length_m = 294,
+        .beam_m = 32,
+        .ts_ms = broker.wallMs(),
+    }, test_source);
+    try publishOwnShip(rig.vessels, 0);
+
+    // THIS IS WHAT THE MARINER READS. The rows are built in the plugin and
+    // travel as the symbol's pick payload; every label below was decoded and
+    // thrown away before it reached the chart, so a label that stops
+    // appearing is a popup that quietly went back to saying almost nothing.
+    try waitFor(rig.ov, struct {
+        fn ready(ov: *overlay.Store) bool {
+            const o = ov.objs.get(ais_id ++ "/t899000101") orelse return false;
+            const p = o.pick;
+            const wants = [_][]const u8{
+                "\"SPECKLED KETTLE\"",
+                "[\"MMSI\",\"899000101\"]",
+                "[\"Call sign\",\"EXAMP03\"]",
+                "[\"IMO\",\"9134270\"]",
+                "[\"Type\",\"Cargo, hazardous A\"]",
+                "[\"Status\",\"At anchor\"]",
+                "[\"HDG\",\"181",
+                "[\"Bound for\",\"ANNAPOLIS\"]",
+                "[\"Draught\",\"12.5 m\"]",
+                "[\"Class\",\"A\"]",
+            };
+            for (wants) |w| {
+                if (std.mem.indexOf(u8, p, w) == null) return false;
+            }
+            // Length and beam read as one fact, not two rows.
+            return std.mem.indexOf(u8, p, "294") != null and
+                std.mem.indexOf(u8, p, "32 m") != null;
+        }
+    }.ready);
+    try must(!rig.log.has("more than"), "no row was dropped for want of room");
+    try must(!rig.log.has("trapped"), "nothing trapped");
+}
+
 test "one approach is one alarm, however many reports arrive" {
     const alloc = std.testing.allocator;
     var rig = try Rig.init(alloc);

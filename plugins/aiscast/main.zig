@@ -299,6 +299,14 @@ const position_types = [_][]const u8{
     "LongRangeAisBroadcastMessage",
 };
 
+/// The two position reports a class B transponder sends. Everything else in
+/// `position_types` is class A, and a message that is neither leaves the
+/// target's class as it found it.
+const class_b_types = [_][]const u8{
+    "StandardClassBPositionReport",
+    "ExtendedClassBPositionReport",
+};
+
 pub fn onData(conn: *Connection, data: []const u8) void {
     const root = std.json.parseFromSliceLeaky(std.json.Value, lk.scratch(), data, .{}) catch return;
     if (root != .object) return;
@@ -369,12 +377,29 @@ pub fn onData(conn: *Connection, data: []const u8) void {
             if (jnum(m.get("TrueHeading"))) |h| {
                 if (h >= 0 and h < 360.0) tgt.heading_deg = h;
             }
+            // 15 is "undefined", which is the wire declining to say. Class B
+            // never sends a status at all.
+            if (jint(m.get("NavigationalStatus"))) |st| {
+                if (st >= 0 and st < 15) tgt.nav_status = @intCast(st);
+            }
+            // The extended class B report and the long-range one carry a ship
+            // type, and the extended one its dimensions too, beside the
+            // position. The other two hold none of it and this reads nothing.
+            setStatic(&tgt, m);
         }
+        tgt.class_b = eqlAny(msg_type, &class_b_types);
     } else if (std.mem.eql(u8, msg_type, "ShipStaticData")) {
-        if (msg) |m| setName(&tgt, m.get("Name"));
+        if (msg) |m| {
+            setName(&tgt, m.get("Name"));
+            setStatic(&tgt, m);
+        }
     } else if (std.mem.eql(u8, msg_type, "StaticDataReport")) {
-        // Type 24 part A carries the name one level down.
-        if (msg) |m| if (m.get("ReportA")) |a| if (a == .object) setName(&tgt, a.object.get("Name"));
+        // Type 24 arrives in halves: part A is the name alone, and part B is
+        // where a class B vessel's call sign, type and dimensions live.
+        if (msg) |m| {
+            if (m.get("ReportA")) |a| if (a == .object) setName(&tgt, a.object.get("Name"));
+            if (m.get("ReportB")) |b| if (b == .object) setStatic(&tgt, b.object);
+        }
     } else if (std.mem.eql(u8, msg_type, "AidsToNavigationReport")) {
         tgt.aton = true;
         if (msg) |m| {
@@ -389,7 +414,7 @@ pub fn onData(conn: *Connection, data: []const u8) void {
     // Anything else — a base station, a binary broadcast — still refreshes
     // the target's position and age, and says nothing more.
 
-    if (tgt.at == null and tgt.name_str.len == 0 and !tgt.aton) return;
+    if (tgt.at == null and tgt.name_str.len == 0 and tgt.callsign_str.len == 0 and !tgt.aton) return;
     var u = lk.Upsert.fromNet(conn);
     u.target(tgt);
     _ = u.send();
@@ -531,6 +556,53 @@ fn storeIdentity() void {
     if (lk.raw.storagePut("identity", json) < 0) lk.log(.warn, "identity not stored; sharing lasts this session", .{});
 }
 
+/// The identity and voyage fields, wherever the relay hangs them: `ShipStaticData`
+/// holds all of them, a type 24 part B holds the call sign, the type and the
+/// dimensions, and the extended class B and long-range reports carry a type
+/// alongside a position. Each one is absent unless this message had it, so a
+/// half-filled report leaves the rest of the target alone.
+fn setStatic(tgt: *lk.Target, m: std.json.ObjectMap) void {
+    // go-ais spells it `Type` on a type 5 and `ShipType` on a type 24 part B
+    // and a type 27. 0 is "not available", not a category.
+    if (jint(m.get("Type") orelse m.get("ShipType"))) |ty| {
+        if (ty > 0 and ty <= 99) tgt.ship_type = @intCast(ty);
+    }
+    setText(&tgt.callsign_str, m.get("CallSign"));
+    setText(&tgt.destination_str, m.get("Destination"));
+    // 0 is the wire's "not assigned".
+    if (jint(m.get("ImoNumber"))) |imo| {
+        if (imo > 0 and imo <= 0xffff_ffff) tgt.imo = @intCast(imo);
+    }
+    if (jnum(m.get("MaximumStaticDraught"))) |d| {
+        if (d > 0 and d <= 25.5) tgt.draught_m = d;
+    }
+    // The four dimensions are measured out from the position-fixing antenna;
+    // their sums are the overall figures.
+    if (m.get("Dimension")) |dim| if (dim == .object) {
+        const d = dim.object;
+        tgt.length_m = span(d.get("A"), d.get("B"));
+        tgt.beam_m = span(d.get("C"), d.get("D"));
+    };
+}
+
+/// One half plus the other, or absent when either is missing or the total is
+/// the wire's zero.
+fn span(a: ?std.json.Value, b: ?std.json.Value) ?u16 {
+    const x = jint(a) orelse return null;
+    const y = jint(b) orelse return null;
+    if (x < 0 or y < 0) return null;
+    const total = x + y;
+    return if (total > 0 and total <= 1022) @intCast(total) else null;
+}
+
+/// A padded wire string into its fixed field. Absent, empty or all padding
+/// leaves what was already there.
+fn setText(dst: anytype, v: ?std.json.Value) void {
+    const raw = jstr(v) orelse return;
+    const trimmed = std.mem.trim(u8, raw, " @");
+    if (trimmed.len > 0) dst.set(trimmed);
+}
+
 fn setName(tgt: *lk.Target, v: ?std.json.Value) void {
     const n = jstr(v) orelse return;
     // The wire pads names with spaces or '@'.
@@ -589,6 +661,59 @@ test "ISO time round-trips against known instants, UTC only" {
     try t.expect(isoMs("2025-08-20 15:25:54.794168 +0000 UTC") == null);
     try t.expect(isoMs("not a time") == null);
     try t.expect(isoMs(null) == null);
+}
+
+test "the relay's identity fields land, whichever half of the wire holds them" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const Case = struct {
+        fn parse(alloc: std.mem.Allocator, json: []const u8) std.json.ObjectMap {
+            const v = std.json.parseFromSliceLeaky(std.json.Value, alloc, json, .{}) catch unreachable;
+            return v.object;
+        }
+    };
+
+    // A type 5 spells it `Type` and carries everything at once.
+    var five = lk.Target{ .mmsi = 899000404 };
+    setStatic(&five, Case.parse(a,
+        \\{"Type":71,"CallSign":"3FOF8@@","Destination":"NEW YORK@@@@","ImoNumber":9134270,
+        \\ "MaximumStaticDraught":12.5,"Dimension":{"A":225,"B":69,"C":16,"D":16}}
+    ));
+    try t.expectEqual(@as(u8, 71), five.ship_type.?);
+    // The wire pads with '@'; the mariner should not read the padding.
+    try t.expectEqualStrings("3FOF8", five.callsign());
+    try t.expectEqualStrings("NEW YORK", five.destination());
+    try t.expectEqual(@as(u32, 9134270), five.imo.?);
+    try t.expectEqual(@as(f64, 12.5), five.draught_m.?);
+    try t.expectEqual(@as(u16, 294), five.length_m.?);
+    try t.expectEqual(@as(u16, 32), five.beam_m.?);
+
+    // A type 24 part B spells the same field `ShipType` and holds no voyage.
+    var partb = lk.Target{ .mmsi = 899000303 };
+    setStatic(&partb, Case.parse(a,
+        \\{"ShipType":37,"CallSign":"EXAMP02","Dimension":{"A":6,"B":6,"C":2,"D":2}}
+    ));
+    try t.expectEqual(@as(u8, 37), partb.ship_type.?);
+    try t.expectEqualStrings("EXAMP02", partb.callsign());
+    try t.expectEqual(@as(u16, 12), partb.length_m.?);
+    try t.expect(partb.destination().len == 0);
+    try t.expect(partb.imo == null);
+
+    // The wire's "not available" is zero, and it stays absent rather than
+    // becoming a vessel of no length numbered nought.
+    var empty = lk.Target{ .mmsi = 7 };
+    setStatic(&empty, Case.parse(a,
+        \\{"Type":0,"CallSign":"@@@@@@@","ImoNumber":0,"MaximumStaticDraught":0,
+        \\ "Dimension":{"A":0,"B":0,"C":0,"D":0}}
+    ));
+    try t.expect(empty.ship_type == null);
+    try t.expect(empty.callsign().len == 0);
+    try t.expect(empty.imo == null);
+    try t.expect(empty.draught_m == null);
+    try t.expect(empty.length_m == null);
+    try t.expect(empty.beam_m == null);
 }
 
 test "the subscribe frame pads the view and splits the antimeridian" {

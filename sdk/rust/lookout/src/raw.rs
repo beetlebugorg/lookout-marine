@@ -833,6 +833,23 @@ pub struct Target {
     pub cog: Option<f64>,
     pub heading: Option<f64>,
     pub name: Option<String>,
+    /// Navigation status, 0..=14, as a class A position report carries it.
+    /// Class B sends none.
+    pub nav_status: Option<u8>,
+    /// Ship and cargo type, 0..=99.
+    pub ship_type: Option<u8>,
+    /// True when the last position report came on class B, false on class A,
+    /// `None` until one has said which.
+    pub class_b: Option<bool>,
+    pub callsign: Option<String>,
+    pub destination: Option<String>,
+    /// The number alone, without the "IMO" a mariner reads in front of it.
+    pub imo: Option<u32>,
+    /// Maximum static draught, metres.
+    pub draught_m: Option<f64>,
+    /// Overall length and beam, metres.
+    pub length_m: Option<u16>,
+    pub beam_m: Option<u16>,
     /// True when this is an aid to navigation, not a vessel: no CPA, no
     /// vector, and its own aging.
     pub aton: bool,
@@ -878,6 +895,32 @@ pub fn targets(payload: &str) -> Vec<Target> {
             cog: num("cog"),
             heading: num("heading"),
             name: item.get("name").and_then(Json::as_str).map(str::to_owned),
+            // A code outside the range the format defines loses the field and
+            // not the target: a garbled ship type is no reason to drop a
+            // vessel off the chart.
+            nav_status: num("nav_status")
+                .filter(|n| (0.0..=14.0).contains(n))
+                .map(|n| n as u8),
+            ship_type: num("ship_type")
+                .filter(|n| (0.0..=99.0).contains(n))
+                .map(|n| n as u8),
+            class_b: item.get("class_b").and_then(Json::as_bool),
+            callsign: item.get("callsign").and_then(Json::as_str).map(str::to_owned),
+            destination: item
+                .get("destination")
+                .and_then(Json::as_str)
+                .map(str::to_owned),
+            // Zero is the wire's "not assigned", not a vessel numbered nought.
+            imo: num("imo")
+                .filter(|n| *n > 0.0 && *n <= u32::MAX as f64)
+                .map(|n| n as u32),
+            draught_m: num("draught"),
+            length_m: num("length")
+                .filter(|n| *n > 0.0 && *n <= 1022.0)
+                .map(|n| n as u16),
+            beam_m: num("beam")
+                .filter(|n| *n > 0.0 && *n <= 1022.0)
+                .map(|n| n as u16),
             aton: item.bool_or("aton", false),
             // Anything outside 0..=31 loses the type, not the target.
             aton_type: num("aton_type")
@@ -1234,6 +1277,34 @@ impl AisUpsert {
         if let Some(name) = &t.name {
             self.s.push_str(",\"name\":");
             json::push_str(&mut self.s, name);
+        }
+        if let Some(v) = t.nav_status {
+            self.s.push_str(&format!(",\"nav_status\":{}", v));
+        }
+        if let Some(v) = t.ship_type {
+            self.s.push_str(&format!(",\"ship_type\":{}", v));
+        }
+        if let Some(b) = t.class_b {
+            self.s
+                .push_str(if b { ",\"class_b\":true" } else { ",\"class_b\":false" });
+        }
+        if let Some(cs) = &t.callsign {
+            self.s.push_str(",\"callsign\":");
+            json::push_str(&mut self.s, cs);
+        }
+        if let Some(d) = &t.destination {
+            self.s.push_str(",\"destination\":");
+            json::push_str(&mut self.s, d);
+        }
+        if let Some(v) = t.imo {
+            self.s.push_str(&format!(",\"imo\":{}", v));
+        }
+        self.field("draught", t.draught_m);
+        if let Some(v) = t.length_m {
+            self.s.push_str(&format!(",\"length\":{}", v));
+        }
+        if let Some(v) = t.beam_m {
+            self.s.push_str(&format!(",\"beam\":{}", v));
         }
         if t.aton {
             self.s.push_str(",\"aton\":true");

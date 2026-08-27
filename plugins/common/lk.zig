@@ -980,6 +980,26 @@ pub const Target = struct {
     cog: ?f64 = null,
     heading: ?f64 = null,
     name: ?[]const u8 = null,
+    /// Navigation status, 0..14, as types 1-3 carry it. 15 ("undefined") is
+    /// dropped where the message is decoded, so it never arrives here.
+    nav_status: ?u8 = null,
+    /// Ship and cargo type, 0..99, from a type 5 or a type 24 part B.
+    ship_type: ?u8 = null,
+    /// True when the last position report came on class B, false on class A.
+    /// Null until one has said which: a target known only from a static
+    /// report has not.
+    class_b: ?bool = null,
+    callsign: ?[]const u8 = null,
+    destination: ?[]const u8 = null,
+    /// The IMO number alone, without the "IMO" the mariner reads in front of
+    /// it. Zero on the wire means "none", and arrives here as null.
+    imo: ?u32 = null,
+    /// Maximum static draught, METRES.
+    draught_m: ?f64 = null,
+    /// Overall length and beam, METRES, summed from the four dimensions the
+    /// wire reports from the position-fixing antenna.
+    length_m: ?u16 = null,
+    beam_m: ?u16 = null,
     /// True when this is an aid to navigation, not a vessel: no CPA, no
     /// vector, and its own aging.
     aton: bool = false,
@@ -1023,6 +1043,15 @@ pub fn targets(payload: []const u8) []const Target {
             .cog = jnumOpt(o.get("cog")),
             .heading = jnumOpt(o.get("heading")),
             .name = if (o.get("name")) |v| jstr(v) else null,
+            .nav_status = code(o.get("nav_status"), 14),
+            .ship_type = code(o.get("ship_type"), 99),
+            .class_b = jboolOpt(o.get("class_b")),
+            .callsign = jstrOpt(o.get("callsign")),
+            .destination = jstrOpt(o.get("destination")),
+            .imo = imoNumber(o.get("imo")),
+            .draught_m = jnumOpt(o.get("draught")),
+            .length_m = metres(o.get("length")),
+            .beam_m = metres(o.get("beam")),
             .aton = jboolOpt(o.get("aton")) orelse false,
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jboolOpt(o.get("virtual")) orelse false,
@@ -1119,8 +1148,27 @@ pub fn jstrOpt(v: ?std.json.Value) ?[]const u8 {
 
 /// A navaid type code. Anything outside 0..31 loses the type, not the target.
 fn atonType(v: ?std.json.Value) ?u8 {
+    return code(v, 31);
+}
+
+/// A small code from the wire, 0..`max`. Out of range loses the field and not
+/// the target: a garbled ship type is no reason to drop a vessel off the chart.
+fn code(v: ?std.json.Value, comptime max: u8) ?u8 {
     const n = jintOpt(v) orelse return null;
-    return if (n >= 0 and n <= 31) @intCast(n) else null;
+    return if (n >= 0 and n <= max) @intCast(n) else null;
+}
+
+/// A dimension in metres. The wire's fields cannot exceed 511 + 511 metres.
+fn metres(v: ?std.json.Value) ?u16 {
+    const n = jintOpt(v) orelse return null;
+    return if (n > 0 and n <= 1022) @intCast(n) else null;
+}
+
+/// An IMO number. Zero is the wire's "not assigned", which is an absent field
+/// rather than a vessel whose number is nought.
+fn imoNumber(v: ?std.json.Value) ?u32 {
+    const n = jintOpt(v) orelse return null;
+    return if (n > 0 and n <= 0xffff_ffff) @intCast(n) else null;
 }
 
 pub fn jintOpt(v: ?std.json.Value) ?i64 {
@@ -1312,6 +1360,24 @@ pub const AisUpsert = struct {
             self.b.raw(",\"name\":");
             self.b.str(n);
         }
+        if (t.nav_status) |v| self.b.print(",\"nav_status\":{d}", .{v});
+        if (t.ship_type) |v| self.b.print(",\"ship_type\":{d}", .{v});
+        if (t.class_b) |v| self.b.print(",\"class_b\":{s}", .{if (v) "true" else "false"});
+        if (t.callsign) |v| {
+            self.b.raw(",\"callsign\":");
+            self.b.str(v);
+        }
+        if (t.destination) |v| {
+            self.b.raw(",\"destination\":");
+            self.b.str(v);
+        }
+        if (t.imo) |v| self.b.print(",\"imo\":{d}", .{v});
+        if (t.draught_m) |v| {
+            self.b.raw(",\"draught\":");
+            self.b.num(v);
+        }
+        if (t.length_m) |v| self.b.print(",\"length\":{d}", .{v});
+        if (t.beam_m) |v| self.b.print(",\"beam\":{d}", .{v});
         if (t.aton) {
             self.b.raw(",\"aton\":true");
             if (t.aton_type) |v| self.b.print(",\"aton_type\":{d}", .{v});

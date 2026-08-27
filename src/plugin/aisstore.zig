@@ -27,6 +27,12 @@ const Lock = store.Lock;
 /// characters, and an aid to navigation may add a 14-character extension.
 pub const max_name = 34;
 
+/// A call sign is seven characters on the wire.
+pub const max_callsign = 8;
+
+/// A destination is twenty characters on the wire.
+pub const max_destination = 20;
+
 /// Distinct MMSIs held at once. The busiest harbours run a few thousand live
 /// targets; without a cap a publisher inventing MMSIs grows the set forever,
 /// and the memory budgets never see host-side growth.
@@ -47,14 +53,14 @@ pub const default_aton_evict_ms: i64 = 1_800_000;
 /// jitter by seconds. Past it the position, course and speed are outranked: a
 /// minutes-old relay must not walk a live contact backward.
 ///
-/// IT DOES NOT GATE IDENTITY. What a vessel is called is as true six minutes
-/// late as it is now, and a class A ship broadcasts her name only every six
-/// minutes — so an internet relay replaying her last static report, with its
-/// own original time, is minutes behind her position stream every time.
-/// Measured against a live feed of a busy approach, gating identity on this
-/// threw away 88% of it and left a chart of anonymous triangles. Identity is
-/// weighed against `Target.static_ts_ms` instead: the most recent thing the
-/// vessel SAID ABOUT HERSELF wins.
+/// IT DOES NOT GATE IDENTITY. What a vessel is called, her call sign, her IMO
+/// number and her dimensions are as true six minutes late as they are now, and
+/// a class A ship broadcasts them only every six minutes — so an internet
+/// relay replaying her last static report, with its own original time, is
+/// minutes behind her position stream every time. Gating identity on this
+/// would throw nearly all of it away and leave the mariner a chart of
+/// anonymous triangles. Identity is arbitrated against `Target.static_ts_ms`
+/// instead: the most recent thing the vessel SAID ABOUT HERSELF wins.
 pub const stale_drop_ms: i64 = 10_000;
 
 /// One target. The name lives inline so a snapshot is a plain copy with no
@@ -72,8 +78,29 @@ pub const Target = struct {
     cog: ?f64 = null,
     /// True heading, degrees in [0,360).
     heading: ?f64 = null,
+    /// Navigation status, 0..14, as a class A position report carries it.
+    nav_status: ?u8 = null,
+    /// Ship and cargo type, 0..99.
+    ship_type: ?u8 = null,
+    /// True when the last position report came on class B, false on class A.
+    /// Null until one has said which: a target heard only as a static report
+    /// has not.
+    class_b: ?bool = null,
+    /// The IMO number alone. The "IMO" a mariner reads in front of it is the
+    /// display's, like every other unit and prefix this store leaves out.
+    imo: ?u32 = null,
+    /// Maximum static draught, METRES.
+    draught_m: ?f64 = null,
+    /// Overall length and beam, METRES, summed by the parsing plugin from the
+    /// four dimensions the wire reports.
+    length_m: ?u16 = null,
+    beam_m: ?u16 = null,
     name_buf: [max_name]u8 = [_]u8{0} ** max_name,
     name_len: u8 = 0,
+    callsign_buf: [max_callsign]u8 = [_]u8{0} ** max_callsign,
+    callsign_len: u8 = 0,
+    destination_buf: [max_destination]u8 = [_]u8{0} ** max_destination,
+    destination_len: u8 = 0,
     /// True once the target has reported as an aid to navigation. An AtoN ages
     /// on its own clock and gets no CPA: it is not going anywhere.
     aton: bool = false,
@@ -87,8 +114,8 @@ pub const Target = struct {
     /// When this target was last updated, as the caller stamped it.
     ts_ms: i64 = 0,
     /// When the IDENTITY was last updated. Arbitrated on its own, because a
-    /// vessel's name does not go stale the way her position does — see
-    /// `stale_drop_ms`. Zero until one has been heard.
+    /// name, a call sign or a hull dimension does not go stale the way a
+    /// position does — see `stale_drop_ms`. Zero until one has been heard.
     static_ts_ms: i64 = 0,
     /// The source that last updated it.
     source: SourceId = 0,
@@ -98,6 +125,14 @@ pub const Target = struct {
 
     pub fn name(self: *const Target) ?[]const u8 {
         return if (self.name_len == 0) null else self.name_buf[0..self.name_len];
+    }
+
+    pub fn callsign(self: *const Target) ?[]const u8 {
+        return if (self.callsign_len == 0) null else self.callsign_buf[0..self.callsign_len];
+    }
+
+    pub fn destination(self: *const Target) ?[]const u8 {
+        return if (self.destination_len == 0) null else self.destination_buf[0..self.destination_len];
     }
 
     pub fn ageMs(self: Target, now_ms: i64) i64 {
@@ -121,6 +156,15 @@ pub const Update = struct {
     cog: ?f64 = null,
     heading: ?f64 = null,
     name: ?[]const u8 = null,
+    nav_status: ?u8 = null,
+    ship_type: ?u8 = null,
+    class_b: ?bool = null,
+    callsign: ?[]const u8 = null,
+    destination: ?[]const u8 = null,
+    imo: ?u32 = null,
+    draught_m: ?f64 = null,
+    length_m: ?u16 = null,
+    beam_m: ?u16 = null,
     /// Set true by a type 21 report. Never set back to false: a target that
     /// has once identified as an aid to navigation stays one.
     aton: ?bool = null,
@@ -150,8 +194,21 @@ pub const Error = error{
 /// on her own slow schedule, and they are why an outranked report is still
 /// worth reading.
 fn carriesIdentity(u: Update) bool {
-    return u.name != null or u.aton != null or u.aton_type != null or
-        u.virtual_aton != null or u.off_position != null;
+    return u.name != null or u.callsign != null or u.destination != null or
+        u.ship_type != null or u.imo != null or u.draught_m != null or
+        u.length_m != null or u.beam_m != null or u.aton != null or
+        u.aton_type != null or u.virtual_aton != null or u.off_position != null;
+}
+
+/// Store one wire string in its fixed buffer, trimmed and truncated to fit.
+/// What does not fit is dropped rather than growing the buffer: a target is a
+/// plain copy with no pointers back into the store, and that is what lets the
+/// render thread read a snapshot.
+fn setStr(buf: []u8, len: *u8, s: []const u8) void {
+    const trimmed = std.mem.trim(u8, s, " ");
+    const n = @min(trimmed.len, buf.len);
+    @memcpy(buf[0..n], trimmed[0..n]);
+    len.* = @intCast(n);
 }
 
 pub const AisStore = struct {
@@ -212,9 +269,9 @@ pub const AisStore = struct {
         // return and the change counter both mean.
         var applied = false;
 
-        // The freshest report wins the kinematics. Kinematics from the older
-        // report would walk a live contact backward a few seconds every time
-        // a relayed copy of it lands.
+        // The freshest report wins the kinematics; only a near-tie merges.
+        // Kinematics from the older report would walk a live contact backward
+        // a few seconds every time a relayed copy of it lands.
         const newer = !outranked and u.ts_ms >= tgt.ts_ms;
         if (newer) {
             if (u.lat) |v| tgt.lat = v;
@@ -224,6 +281,11 @@ pub const AisStore = struct {
             // symbol by a negative or a wrapped bearing.
             if (u.cog) |v| tgt.cog = wrap360(v);
             if (u.heading) |v| tgt.heading = wrap360(v);
+            // A status and a class ride with the position report that carried
+            // them, so they follow the kinematics and not the static facts:
+            // "at anchor" from a minute ago must not outrank "under way" now.
+            if (u.nav_status) |v| tgt.nav_status = v;
+            if (u.class_b) |v| tgt.class_b = v;
             tgt.source = source_id;
             tgt.net = u.net;
             applied = true;
@@ -235,12 +297,14 @@ pub const AisStore = struct {
         // ancient replay would overwrite a newer name. The most recent thing
         // the vessel said about herself is what the mariner reads.
         if (carriesIdentity(u) and u.ts_ms >= tgt.static_ts_ms) {
-            if (u.name) |n| {
-                const trimmed = std.mem.trim(u8, n, " ");
-                const len = @min(trimmed.len, max_name);
-                @memcpy(tgt.name_buf[0..len], trimmed[0..len]);
-                tgt.name_len = @intCast(len);
-            }
+            if (u.name) |n| setStr(&tgt.name_buf, &tgt.name_len, n);
+            if (u.callsign) |n| setStr(&tgt.callsign_buf, &tgt.callsign_len, n);
+            if (u.destination) |n| setStr(&tgt.destination_buf, &tgt.destination_len, n);
+            if (u.ship_type) |v| tgt.ship_type = v;
+            if (u.imo) |v| tgt.imo = v;
+            if (u.draught_m) |v| tgt.draught_m = v;
+            if (u.length_m) |v| tgt.length_m = v;
+            if (u.beam_m) |v| tgt.beam_m = v;
             // An aid to navigation reports its nature every time; a position
             // report from the same MMSI must not take it away again.
             if (u.aton) |v| {
@@ -573,9 +637,9 @@ test "a relay's static report still names a vessel its position stream outran" {
     // is split. A class A ship broadcasts her identity every six minutes and
     // her position every few seconds, so the relay's snapshot replays a type 5
     // that is minutes behind the position stream — measured against a live
-    // feed of a busy approach, a median of twenty-odd minutes behind. Gated on
-    // the position, 88% of it was refused and the mariner read a chart of
-    // anonymous triangles.
+    // feed, a median of twenty-odd minutes behind. Gated on the position, all
+    // of it would be refused and the mariner would read a chart of anonymous
+    // triangles.
     _ = try s.upsert(.{ .mmsi = 1, .lat = 38.98, .lon = -76.47, .sog = 6.0, .ts_ms = now }, 1);
     try t.expect(try s.upsert(.{
         .mmsi = 1,
@@ -584,25 +648,34 @@ test "a relay's static report still names a vessel its position stream outran" {
         .lat = 20.0,
         .lon = -30.0,
         .name = "TANGERINE OTTER",
+        .callsign = "3FOF8",
+        .destination = "NEW YORK",
+        .ship_type = 71,
+        .imo = 9134270,
         .ts_ms = now - 22 * 60 * 1000,
     }, 1));
 
     const a = s.get(1).?;
     try t.expectEqualStrings("TANGERINE OTTER", a.name().?);
+    try t.expectEqualStrings("3FOF8", a.callsign().?);
+    try t.expectEqualStrings("NEW YORK", a.destination().?);
+    try t.expectEqual(@as(u8, 71), a.ship_type.?);
+    try t.expectEqual(@as(u32, 9134270), a.imo.?);
     // The live contact keeps where she is, how fast, and how long ago.
     try t.expectApproxEqAbs(@as(f64, 38.98), a.lat.?, 1e-9);
     try t.expectApproxEqAbs(@as(f64, 6.0), a.sog.?, 1e-9);
     try t.expectEqual(@as(i64, now), a.ts_ms);
 
     // Identity is weighed against identity: an older static report than the
-    // one already applied cannot overwrite the name with a staler one...
+    // one already applied cannot overwrite the name with a stale one...
     try t.expect(!try s.upsert(.{ .mmsi = 1, .name = "WRONG", .ts_ms = now - 30 * 60 * 1000 }, 1));
     try t.expectEqualStrings("TANGERINE OTTER", s.get(1).?.name().?);
 
-    // ...and a newer one renames her, which is what a vessel correcting her
-    // static report looks like.
-    try t.expect(try s.upsert(.{ .mmsi = 1, .name = "TIN WHISTLE", .ts_ms = now - 60_000 }, 1));
-    try t.expectEqualStrings("TIN WHISTLE", s.get(1).?.name().?);
+    // ...and a newer one renames her, which is how a vessel changes her
+    // destination mid-voyage.
+    try t.expect(try s.upsert(.{ .mmsi = 1, .destination = "BALTIMORE", .ts_ms = now - 60_000 }, 1));
+    try t.expectEqualStrings("BALTIMORE", s.get(1).?.destination().?);
+    try t.expectEqualStrings("TANGERINE OTTER", s.get(1).?.name().?);
 }
 
 test "an outranked update leaves no phantom target behind" {

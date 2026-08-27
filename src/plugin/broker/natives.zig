@@ -34,6 +34,10 @@ const atonType = registry_json.atonType;
 const jsonBool = registry_json.jsonBool;
 const jsonInt = registry_json.jsonInt;
 const jsonNum = registry_json.jsonNum;
+const jsonCode = registry_json.jsonCode;
+const jsonMetres = registry_json.jsonMetres;
+const jsonImo = registry_json.jsonImo;
+const jsonStr = registry_json.jsonStr;
 const writeJsonValue = registry_json.writeJsonValue;
 const file_read_max = storage.file_read_max;
 
@@ -192,10 +196,16 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
             .sog = jsonNum(o.get("sog")),
             .cog = jsonNum(o.get("cog")),
             .heading = jsonNum(o.get("heading")),
-            .name = switch (o.get("name") orelse std.json.Value{ .null = {} }) {
-                .string => |s| s,
-                else => null,
-            },
+            .name = jsonStr(o.get("name")),
+            .nav_status = jsonCode(o.get("nav_status"), 14),
+            .ship_type = jsonCode(o.get("ship_type"), 99),
+            .class_b = jsonBool(o.get("class_b")),
+            .callsign = jsonStr(o.get("callsign")),
+            .destination = jsonStr(o.get("destination")),
+            .imo = jsonImo(o.get("imo")),
+            .draught_m = jsonNum(o.get("draught")),
+            .length_m = jsonMetres(o.get("length")),
+            .beam_m = jsonMetres(o.get("beam")),
             .aton = jsonBool(o.get("aton")),
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jsonBool(o.get("virtual")),
@@ -977,6 +987,59 @@ test "AIS targets carry the connection that heard them" {
     // One receiver switched off takes its own targets and leaves the other's.
     try t.expectEqual(@as(usize, 1), try fx.ais.clearSource(p.sourceAt(1)));
     try t.expectEqual(@as(usize, 1), fx.ais.count());
+}
+
+test "a target's identity and voyage land in the store, key for key" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    // THIS IS THE PLUGIN'S OWN OUTPUT, byte for byte: the same string
+    // `plugins/common/lk2.zig` asserts its writer produces. The two tests are
+    // the two ends of one wire, and a key renamed at either end fails here.
+    const json = "{\"source\":1,\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.5," ++
+        "\"cog\":210,\"heading\":211,\"name\":\"TANGERINE OTTER\",\"nav_status\":1," ++
+        "\"ship_type\":71,\"class_b\":false,\"callsign\":\"3FOF8\"," ++
+        "\"destination\":\"NEW YORK\",\"imo\":9134270,\"draught\":12.5," ++
+        "\"length\":294,\"beam\":32,\"ts\":0}]}";
+    try t.expectEqual(@as(i32, 1), applyAisUpsert(&p, json));
+
+    const tg = fx.ais.get(899000404).?;
+    try t.expectEqual(@as(u8, 1), tg.nav_status.?);
+    try t.expectEqual(@as(u8, 71), tg.ship_type.?);
+    try t.expectEqual(false, tg.class_b.?);
+    try t.expectEqualStrings("3FOF8", tg.callsign().?);
+    try t.expectEqualStrings("NEW YORK", tg.destination().?);
+    try t.expectEqual(@as(u32, 9134270), tg.imo.?);
+    try t.expectEqual(@as(f64, 12.5), tg.draught_m.?);
+    try t.expectEqual(@as(u16, 294), tg.length_m.?);
+    try t.expectEqual(@as(u16, 32), tg.beam_m.?);
+}
+
+test "a garbled code loses its field and not the target" {
+    const a = t.allocator;
+    const fx = try Fixture.init(a);
+    defer fx.deinit(a);
+    var p = try withConnections(fx, "org.beetlebug.nmea0183", 1);
+    try fx.br.registerPlugin(&p);
+
+    // A vessel with a nonsense ship type is still a vessel on the chart. The
+    // alternative — refusing the whole target — takes a real contact off the
+    // screen over a field nobody steers by.
+    const json = "{\"source\":1,\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47," ++
+        "\"ship_type\":250,\"nav_status\":99,\"imo\":0,\"length\":0,\"ts\":0}]}";
+    try t.expectEqual(@as(i32, 1), applyAisUpsert(&p, json));
+
+    const tg = fx.ais.get(899000404).?;
+    try t.expect(tg.hasPosition());
+    try t.expect(tg.ship_type == null);
+    try t.expect(tg.nav_status == null);
+    // Zero is the wire's "not assigned", not a hull of no length or a vessel
+    // numbered nought.
+    try t.expect(tg.imo == null);
+    try t.expect(tg.length_m == null);
 }
 
 test "an alert's severity picks the log level it goes out at" {

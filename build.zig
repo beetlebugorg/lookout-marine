@@ -515,6 +515,7 @@ pub fn build(b: *std.Build) void {
         "plugins/ais/vector.zig",
         "plugins/ais/config.zig",
         "plugins/ais/aton.zig",
+        "plugins/ais/vessel.zig",
         "plugins/laylines/geo.zig",
         "plugins/laylines/config.zig",
         "plugins/aiscast/config.zig",

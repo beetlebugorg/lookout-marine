@@ -50,6 +50,21 @@ pub fn writeAisChanged(out: *std.ArrayList(u8), alloc: std.mem.Allocator, target
             try out.appendSlice(alloc, ",\"name\":");
             try writeJsonString(out, alloc, n);
         }
+        if (tg.nav_status) |v| try out.print(alloc, ",\"nav_status\":{d}", .{v});
+        if (tg.ship_type) |v| try out.print(alloc, ",\"ship_type\":{d}", .{v});
+        if (tg.class_b) |v| try out.print(alloc, ",\"class_b\":{s}", .{if (v) "true" else "false"});
+        if (tg.callsign()) |n| {
+            try out.appendSlice(alloc, ",\"callsign\":");
+            try writeJsonString(out, alloc, n);
+        }
+        if (tg.destination()) |n| {
+            try out.appendSlice(alloc, ",\"destination\":");
+            try writeJsonString(out, alloc, n);
+        }
+        if (tg.imo) |v| try out.print(alloc, ",\"imo\":{d}", .{v});
+        if (tg.draught_m) |v| try out.print(alloc, ",\"draught\":{d}", .{v});
+        if (tg.length_m) |v| try out.print(alloc, ",\"length\":{d}", .{v});
+        if (tg.beam_m) |v| try out.print(alloc, ",\"beam\":{d}", .{v});
         if (tg.aton) {
             try out.appendSlice(alloc, ",\"aton\":true");
             if (tg.aton_type) |v| try out.print(alloc, ",\"aton_type\":{d}", .{v});
@@ -135,8 +150,37 @@ pub fn jsonBool(v: ?std.json.Value) ?bool {
 /// A navaid type code. Out of the 0..31 the wire format defines it reads as
 /// unknown, so a bad value loses the type rather than the whole target.
 pub fn atonType(v: ?std.json.Value) ?u8 {
+    return jsonCode(v, 31);
+}
+
+/// A small code from the wire, 0..`max`. Out of range loses the field and not
+/// the target, the same bargain `atonType` makes: a garbled ship type is no
+/// reason to drop a vessel off the chart.
+pub fn jsonCode(v: ?std.json.Value, comptime max: u8) ?u8 {
     const n = jsonInt(v) orelse return null;
-    return if (n >= 0 and n <= 31) @intCast(n) else null;
+    return if (n >= 0 and n <= max) @intCast(n) else null;
+}
+
+/// A hull dimension in metres. The wire's two halves cap at 511 each, and a
+/// zero total is the "not available" the parsing plugin passes through.
+pub fn jsonMetres(v: ?std.json.Value) ?u16 {
+    const n = jsonInt(v) orelse return null;
+    return if (n > 0 and n <= 1022) @intCast(n) else null;
+}
+
+/// An IMO number. Zero is the wire's "not assigned", not a vessel numbered
+/// nought.
+pub fn jsonImo(v: ?std.json.Value) ?u32 {
+    const n = jsonInt(v) orelse return null;
+    return if (n > 0 and n <= std.math.maxInt(u32)) @intCast(n) else null;
+}
+
+pub fn jsonStr(v: ?std.json.Value) ?[]const u8 {
+    const val = v orelse return null;
+    return switch (val) {
+        .string => |s| s,
+        else => null,
+    };
 }
 
 pub fn jsonInt(v: ?std.json.Value) ?i64 {
@@ -207,6 +251,47 @@ test "AIS_CHANGED omits fields never heard and always carries age" {
         "{\"targets\":[" ++
             "{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.6,\"name\":\"TANGERINE OTTER\",\"ts\":1000,\"age_ms\":1000}," ++
             "{\"mmsi\":7,\"net\":true,\"ts\":500,\"age_ms\":1500}]}",
+        out.items,
+    );
+}
+
+test "AIS_CHANGED carries the whole identity back to the plugin" {
+    const a = t.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    var tg = ais_store.Target{
+        .mmsi = 899000404,
+        .lat = 38.98,
+        .lon = -76.47,
+        .sog = 2.5,
+        .cog = 210,
+        .heading = 211,
+        .nav_status = 1,
+        .ship_type = 71,
+        .class_b = false,
+        .imo = 9134270,
+        .draught_m = 12.5,
+        .length_m = 294,
+        .beam_m = 32,
+        .ts_ms = 1_000,
+    };
+    @memcpy(tg.name_buf[0..15], "TANGERINE OTTER");
+    tg.name_len = 15;
+    @memcpy(tg.callsign_buf[0..5], "3FOF8");
+    tg.callsign_len = 5;
+    @memcpy(tg.destination_buf[0..8], "NEW YORK");
+    tg.destination_len = 8;
+
+    const targets = [_]ais_store.Target{tg};
+    try writeAisChanged(&out, a, &targets, 2_000);
+    // `plugins/common/lk.zig`'s `targets()` reads these spellings. A rename
+    // here that is not made there drops the field with nothing said.
+    try t.expectEqualStrings(
+        "{\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.5," ++
+            "\"cog\":210,\"heading\":211,\"name\":\"TANGERINE OTTER\",\"nav_status\":1," ++
+            "\"ship_type\":71,\"class_b\":false,\"callsign\":\"3FOF8\"," ++
+            "\"destination\":\"NEW YORK\",\"imo\":9134270,\"draught\":12.5," ++
+            "\"length\":294,\"beam\":32,\"ts\":1000,\"age_ms\":1000}]}",
         out.items,
     );
 }

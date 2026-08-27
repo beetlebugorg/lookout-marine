@@ -327,14 +327,18 @@ the values land under your plugin.
 
 ```json
 {"targets":[{"mmsi":899000404,"lat":38.98,"lon":-76.47,"sog":5.1,"cog":210.0,
-             "heading":211.0,"name":"TANGERINE OTTER","ts":1754400000123}]}
+             "heading":211.0,"name":"TANGERINE OTTER","nav_status":0,"ship_type":71,
+             "class_b":false,"callsign":"3FOF8","destination":"NEW YORK","imo":9134270,
+             "draught":12.5,"length":294,"beam":32,"ts":1754400000123}]}
 ```
 
-Only `mmsi` is required; the upsert merges each field it carries into the target
-it names. `sog` is **metres per second**, not knots. The AIS wire format reports
-knots, and converting is the parsing plugin's job. An aid to navigation adds
-`"aton":true` and may add `"aton_type"` (0..31), `"virtual":true` and
-`"off_position"`. A target that has once reported as an aid stays one.
+Only `mmsi` is required; the upsert merges each field it carries into the target it names. `sog` is **metres per second**, not knots. The AIS wire format reports knots, and converting is the parsing plugin's job.
+
+The identity and voyage keys are what a static report carries: `nav_status` (0..14, the class A position report's own field), `ship_type` (0..99), `class_b`, `callsign`, `destination`, `imo` (the number alone), `draught` (metres), and `length` and `beam` (metres overall — sum the four dimensions the wire reports out from the antenna; the store takes the totals). A code outside its range loses that field and not the target: a garbled ship type is no reason to drop a vessel off the chart. Zero means "not assigned" for `imo` and "not available" for the dimensions, so send neither rather than a zero.
+
+`nav_status` and `class_b` ride with the position report that carried them, and the rest are static facts. That decides which of two reports seconds apart wins: kinematics follow the fresher stamp, and a name, a call sign or a hull dimension survives a position race either way.
+
+An aid to navigation adds `"aton":true` and may add `"aton_type"` (0..31), `"virtual":true` and `"off_position"`. A target that has once reported as an aid stays one.
 
 `"source"` works here too, and means the same thing: the place in the mariner's
 list of the connection that heard these targets. A target belongs to whichever
@@ -376,7 +380,8 @@ describe.
 
 ```json
 {"targets":[{"mmsi":899000101,"lat":38.966,"lon":-76.434,"sog":4.1,"cog":300.0,
-             "ts":1754400000123,"age_ms":540},
+             "nav_status":0,"ship_type":70,"class_b":false,"callsign":"EXAMP03",
+             "destination":"ANNAPOLIS","ts":1754400000123,"age_ms":540},
             {"mmsi":998990001,"lat":38.972,"lon":-76.466,"aton":true,
              "aton_type":25,"name":"EXAMPLE CHANNEL BUOY 2","ts":1754400000000,"age_ms":663}]}
 ```
