@@ -1409,6 +1409,81 @@ pub(crate) fn http_response(request: i64, payload: &[u8]) -> HttpResponse<'_> {
 mod tests {
     use super::*;
 
+    /// THE OTHER END OF THE SAME WIRE. `plugins/common/lk2.zig` asserts its
+    /// writer produces this byte for byte, `sdk/go` asserts the same literal,
+    /// and `src/plugin/broker/natives.zig` reads it back on the host's side. A
+    /// plugin that spelled one key differently would drop that field in
+    /// silence, so all four are pinned to one string.
+    #[test]
+    fn a_targets_identity_and_voyage_go_out_as_the_host_reads_them() {
+        let mut u = AisUpsert::new();
+        u.target(&Target {
+            mmsi: 899000404,
+            lat: Some(38.98),
+            lon: Some(-76.47),
+            sog: Some(2.5),
+            cog: Some(210.0),
+            heading: Some(211.0),
+            name: Some("TANGERINE OTTER".to_string()),
+            nav_status: Some(1),
+            ship_type: Some(71),
+            class_b: Some(false),
+            callsign: Some("3FOF8".to_string()),
+            destination: Some("NEW YORK".to_string()),
+            imo: Some(9134270),
+            draught_m: Some(12.5),
+            length_m: Some(294),
+            beam_m: Some(32),
+            ts_ms: 1000,
+            ..Default::default()
+        });
+        u.s.push_str("]}");
+        assert_eq!(
+            u.s,
+            "{\"targets\":[{\"mmsi\":899000404,\"lat\":38.98,\"lon\":-76.47,\"sog\":2.5,\
+             \"cog\":210,\"heading\":211,\"name\":\"TANGERINE OTTER\",\"nav_status\":1,\
+             \"ship_type\":71,\"class_b\":false,\"callsign\":\"3FOF8\",\
+             \"destination\":\"NEW YORK\",\"imo\":9134270,\"draught\":12.5,\
+             \"length\":294,\"beam\":32,\"ts\":1000}]}"
+        );
+    }
+
+    /// A field the vessel never reported is absent, not a zero: "never heard"
+    /// and "heard as zero" are different things at sea.
+    #[test]
+    fn a_field_never_reported_is_left_out() {
+        let mut u = AisUpsert::new();
+        u.target(&Target {
+            mmsi: 7,
+            name: Some("SILENT".to_string()),
+            ts_ms: 500,
+            ..Default::default()
+        });
+        u.s.push_str("]}");
+        assert_eq!(u.s, "{\"targets\":[{\"mmsi\":7,\"name\":\"SILENT\",\"ts\":500}]}");
+    }
+
+    /// And what the host sends back parses into the same fields it was given.
+    #[test]
+    fn a_snapshot_parses_back_into_identity() {
+        let got = targets(
+            r#"{"targets":[{"mmsi":899000404,"lat":38.98,"lon":-76.47,"nav_status":1,
+            "ship_type":71,"class_b":false,"callsign":"3FOF8","destination":"NEW YORK",
+            "imo":9134270,"draught":12.5,"length":294,"beam":32,"ts":1000,"age_ms":540}]}"#,
+        );
+        assert_eq!(got.len(), 1);
+        let t = &got[0];
+        assert_eq!(t.nav_status, Some(1));
+        assert_eq!(t.ship_type, Some(71));
+        assert_eq!(t.class_b, Some(false));
+        assert_eq!(t.callsign.as_deref(), Some("3FOF8"));
+        assert_eq!(t.destination.as_deref(), Some("NEW YORK"));
+        assert_eq!(t.imo, Some(9134270));
+        assert_eq!(t.draught_m, Some(12.5));
+        assert_eq!(t.length_m, Some(294));
+        assert_eq!(t.beam_m, Some(32));
+    }
+
     #[test]
     fn granted_reads_the_capability_list() {
         let payload = r#"{"v":1,"granted":["ais.read","overlay.draw"]}"#;
