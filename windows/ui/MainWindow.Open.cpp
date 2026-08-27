@@ -224,8 +224,9 @@ namespace winrt::LookoutMarine::implementation
 
             // The cross-host screenshot protocol's LOOKOUT_SHOW: "pick" or
             // "pick:0.5x0.85" (a view fraction; 'x' because commas split the
-            // list elsewhere), "scale", or
-            // "table[:key[:sort[:asc|desc[:activate]]]]". Applied after the
+            // list elsewhere), "scale",
+            // "table[:key[:sort[:asc|desc[:activate]]]]", "licenses[:id]" (an
+            // id opens on one component's entry) or "about". Applied after the
             // first scenes settle, like the macOS shell's 3 s delay.
             char show[64];
             DWORD show_n = GetEnvironmentVariableA("LOOKOUT_SHOW", show, sizeof show);
@@ -234,20 +235,30 @@ namespace winrt::LookoutMarine::implementation
                 bool pick = strncmp(show, "pick", 4) == 0;
                 bool scale = strcmp(show, "scale") == 0;
                 bool table = strncmp(show, "table", 5) == 0;
+                bool licenses = strncmp(show, "licenses", 8) == 0;
+                bool about = strcmp(show, "about") == 0;
                 double fx = 0.5, fy = 0.5;
                 if (pick && show[4] == ':')
                     sscanf_s(show + 5, "%lfx%lf", &fx, &fy);
-                if (pick || scale || table)
+                std::string license_id;
+                if (licenses && show[8] == ':')
+                    license_id = show + 9;
+                if (pick || scale || table || licenses || about)
                 {
                     std::string spec = show;
                     Microsoft::UI::Xaml::DispatcherTimer timer;
                     timer.Interval(std::chrono::milliseconds(3000));
-                    timer.Tick([this, pick, table, fx, fy, spec, timer](auto &&, auto &&) {
+                    timer.Tick([this, pick, table, licenses, about, fx, fy, spec, license_id,
+                                timer](auto &&, auto &&) {
                         timer.Stop();
                         if (pick)
                             ShowPick(Root().ActualWidth() * fx, Root().ActualHeight() * fy);
                         else if (table)
                             ShowTableHook(spec);
+                        else if (licenses)
+                            ShowLicenses(license_id);
+                        else if (about)
+                            ShowAbout();
                         else
                             ToggleScalePanel();
                     });
