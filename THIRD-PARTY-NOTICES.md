@@ -208,3 +208,29 @@ Writes the JSON a chart link's tile server answers with. The shell's own reader 
 - Pinned in: `linux/meson.build`
 - Upstream: <https://gitlab.gnome.org/GNOME/json-glib>
 - Ships on: Linux
+
+### Windows App SDK
+
+WinUI 3 and the Windows App Runtime: the windows, the controls and the input the Windows shell is built with. The build copies the runtime beside the executable, so the app is self-contained.
+
+- License: Microsoft Software License Terms
+- Version: 2.3.1
+- Copyright: © Microsoft Corporation
+- Pinned in: `windows/LookoutMarine.vcxproj`
+- Upstream: <https://github.com/microsoft/WindowsAppSDK>
+- Ships on: Windows
+
+Microsoft states its own upstreams' notices for the runtime at
+<https://3rdpartysource.microsoft.com>. These terms do not make that file travel
+with an application, so it is not reproduced here.
+
+### C++/WinRT
+
+The C++ language projection the Windows shell calls WinRT through. It generates headers at build time; nothing of it ships beyond the code it generated.
+
+- License: MIT
+- Version: 3.0.260715.1
+- Copyright: © Microsoft Corporation
+- Pinned in: `windows/LookoutMarine.vcxproj`
+- Upstream: <https://github.com/microsoft/cppwinrt>
+- Ships on: Windows
