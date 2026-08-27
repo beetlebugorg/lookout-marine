@@ -868,6 +868,8 @@ pub const Host = struct {
             .ws_hosts = manifest.ws_hosts,
             .tcp_addrs = manifest.tcp_addrs,
             .udp_ports = manifest.udp_ports,
+            .pub_topics = manifest.pub_topics,
+            .sub_topics = manifest.sub_topics,
             .table_keys = manifest.tables,
         };
         inst.setUserData(state);
@@ -1198,6 +1200,8 @@ pub const Host = struct {
                     .net_http => e.manifest.http_hosts,
                     .net_ws => e.manifest.ws_hosts,
                     .net_tcp_client => e.manifest.tcp_addrs,
+                    .bus_publish => e.manifest.pub_topics,
+                    .bus_read => e.manifest.sub_topics,
                     else => &.{},
                 };
                 if (hosts.len > 0) {

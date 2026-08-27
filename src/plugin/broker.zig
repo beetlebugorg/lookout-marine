@@ -474,15 +474,24 @@ pub const Broker = struct {
     /// False when the event was dropped rather than queued. Most callers have
     /// nothing to do about that; the view fanout retries.
     fn pushLocked(self: *Broker, plugin: u32, kind: u32, handle: u64, payload: []const u8) bool {
+        return self.pushLockedJoined(plugin, kind, handle, payload, "");
+    }
+
+    /// `pushLocked` for a payload in two pieces: an envelope and its bytes.
+    /// Joining them where the queue makes its own copy means the caller never
+    /// builds one, and a publish with no listeners allocates nothing.
+    fn pushLockedJoined(self: *Broker, plugin: u32, kind: u32, handle: u64, head: []const u8, body: []const u8) bool {
         const q = self.queueForLocked(plugin) catch return false;
         if (q.depth() >= max_queued and kind != Kind.shutdown) {
             self.dropLocked(q, plugin, kind);
             return false;
         }
-        const owned = self.alloc.dupe(u8, payload) catch {
+        const owned = self.alloc.alloc(u8, head.len + body.len) catch {
             self.dropLocked(q, plugin, kind);
             return false;
         };
+        @memcpy(owned[0..head.len], head);
+        @memcpy(owned[head.len..], body);
         q.items.append(self.alloc, .{
             .plugin = plugin,
             .kind = kind,
@@ -2466,6 +2475,40 @@ pub const Broker = struct {
         self.fanoutView(mono);
     }
 
+    /// Deliver one frame from `publisher` to every enabled plugin whose
+    /// `bus.read` grant lists the topic. The grant is the subscription, so a
+    /// revoked grant stops delivery by itself; the publisher never receives
+    /// its own frame. Returns the number of subscribers reached. A full queue
+    /// drops the frame for that plugin only, counted and logged like any
+    /// drop.
+    ///
+    /// The payload uses the HTTP_RESPONSE envelope:
+    /// `u32 json_len | {"topic":…,"from":…} | raw bytes`.
+    pub fn busPublish(self: *Broker, publisher: *const budgets.Plugin, topic: []const u8, data: []const u8) i32 {
+        // Room for a 128-byte manifest id escaped to \uXXXX at every byte.
+        var head_buf: [1024]u8 = undefined;
+        var w = std.Io.Writer.fixed(head_buf[4..]);
+        w.writeAll("{\"topic\":") catch return -1;
+        writeJsonStringTo(&w, topic);
+        w.writeAll(",\"from\":") catch return -1;
+        writeJsonStringTo(&w, publisher.id);
+        w.writeAll("}") catch return -1;
+        const json_len = w.buffered().len;
+        std.mem.writeInt(u32, head_buf[0..4], @intCast(json_len), .little);
+        const head = head_buf[0 .. 4 + json_len];
+
+        self.mu.lock();
+        defer self.mu.unlock();
+        var reached: i32 = 0;
+        for (self.plugins.items) |p| {
+            if (!p.enabled or p == publisher) continue;
+            if (!p.caps.contains(.bus_read)) continue;
+            if (!caps.topicListed(p.sub_topics, topic)) continue;
+            if (self.pushLockedJoined(p.index, Kind.bus_data, 0, head, data)) reached += 1;
+        }
+        return reached;
+    }
+
     /// The chart camera's footprint, pushed by the render thread whenever a
     /// frame was drawn. Takes only `view_mu`, so a frame never queues behind
     /// the broker's own lock; the fanout tick decides whether anyone hears
@@ -2682,6 +2725,82 @@ test "dropping a plugin takes its queued events and its store contributions" {
     try t.expectEqual(@as(u64, 3), c.handle);
     try t.expect(vessels.readElected("navigation.position", 100) == null);
     try t.expectEqual(@as(usize, 0), ais.count());
+}
+
+test "a bus frame reaches exactly the plugins whose grant lists the topic" {
+    var vessels = try vstore.Store.init(t.allocator);
+    defer vessels.deinit();
+    var ais = ais_store.AisStore.init(t.allocator);
+    defer ais.deinit();
+    var b = Broker.init(t.allocator, &vessels, &ais, .{});
+    defer b.deinit();
+
+    var pub_caps = Caps.initEmpty();
+    pub_caps.insert(.bus_publish);
+    // The publisher also reads the topic, to prove it never hears itself.
+    pub_caps.insert(.bus_read);
+    var read_caps = Caps.initEmpty();
+    read_caps.insert(.bus_read);
+
+    const topic_list = [_][]const u8{"nmea0183"};
+    const other_list = [_][]const u8{"mob"};
+    var publisher = Plugin{
+        .broker = &b,
+        .index = 0,
+        .id = "org.beetlebug.nmea0183",
+        .source = 1,
+        .caps = pub_caps,
+        .pub_topics = &topic_list,
+        .sub_topics = &topic_list,
+    };
+    var reader = Plugin{
+        .broker = &b,
+        .index = 1,
+        .id = "org.beetlebug.aiscast",
+        .source = 2,
+        .caps = read_caps,
+        .sub_topics = &topic_list,
+    };
+    // Lists the topic but holds no grant: no delivery.
+    var revoked = Plugin{
+        .broker = &b,
+        .index = 2,
+        .id = "org.example.revoked",
+        .source = 3,
+        .caps = Caps.initEmpty(),
+        .sub_topics = &topic_list,
+    };
+    // Holds bus.read for a different topic: no delivery.
+    var elsewhere = Plugin{
+        .broker = &b,
+        .index = 3,
+        .id = "org.example.elsewhere",
+        .source = 4,
+        .caps = read_caps,
+        .sub_topics = &other_list,
+    };
+    try b.registerPlugin(&publisher);
+    try b.registerPlugin(&reader);
+    try b.registerPlugin(&revoked);
+    try b.registerPlugin(&elsewhere);
+
+    const line = "\\s:lk1*4F\\!AIVDM,1,1,,A,13HOI:0P0000VOHLCnHQKwvL05Ip,0*23";
+    try t.expectEqual(@as(i32, 1), b.busPublish(&publisher, "nmea0183", line));
+    try t.expectEqual(@as(usize, 0), b.queuedFor(0));
+    try t.expectEqual(@as(usize, 1), b.queuedFor(1));
+    try t.expectEqual(@as(usize, 0), b.queuedFor(2));
+    try t.expectEqual(@as(usize, 0), b.queuedFor(3));
+
+    // The delivered frame carries the envelope and the bytes untouched.
+    const e = b.popFor(1).?;
+    defer b.freeEvent(e);
+    try t.expectEqual(Kind.bus_data, e.kind);
+    const json_len = std.mem.readInt(u32, e.payload[0..4], .little);
+    try t.expectEqualStrings(
+        "{\"topic\":\"nmea0183\",\"from\":\"org.beetlebug.nmea0183\"}",
+        e.payload[4 .. 4 + json_len],
+    );
+    try t.expectEqualStrings(line, e.payload[4 + json_len ..]);
 }
 
 test "withdrawing a grant takes back every source the plugin owns" {

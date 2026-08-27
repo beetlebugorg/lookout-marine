@@ -28,6 +28,7 @@
 //! host clock, and a replayed log (or a receiver whose date is wrong) would
 //! otherwise arrive already stale.
 
+const std = @import("std");
 const lk = @import("lk2");
 const parser = @import("parser.zig");
 const paths = @import("paths.zig");
@@ -40,22 +41,41 @@ comptime {
 pub const Connections = cfg.Connections;
 const Connection = Connections.Connection;
 
+/// One read's worth of raw lines for the bus, TAG blocks included. A TCP
+/// read is at most 8 KiB and the tag adds ~10 bytes per ~40-byte line, so
+/// this rarely fills; a line that does not fit is dropped whole.
+var bus_buf: [16 * 1024]u8 = undefined;
+
+/// True after the host refuses a publish (the grant is off), so the refusal
+/// is logged once instead of once per read. GRANTS_CHANGED and reconnects
+/// reset it.
+var bus_denied = false;
+
 /// A partial sentence and a half-assembled AIS message from the last connection
 /// have nothing to do with this one, so the stream starts over here.
 pub fn onOpen(conn: *Connection) void {
     const s = &conn.state;
     s.feeder = parser.Feeder.init(&s.line);
     s.assembler = .{};
+    // Retry the bus once per reconnect: the flag cannot tell a revoked grant
+    // from a transient refusal, and a retry costs at most one log line.
+    bus_denied = false;
 }
 
 pub fn onData(conn: *Connection, bytes: []const u8) void {
     const s = &conn.state;
     if (s.feeder.buf.len == 0) s.feeder = parser.Feeder.init(&s.line);
+    // The TAG block depends only on the row, so build it once per read, and
+    // not at all while the grant is off.
+    var tag_buf: [24]u8 = undefined;
+    const tag = if (bus_denied) "" else rowTag(&tag_buf, conn.place());
+    var bus_len: usize = 0;
     var it = s.feeder.feed(bytes);
     while (it.next()) |line| {
         // The feeder returns complete, checksum-verified lines only, so this
         // is the connection's message rate.
         conn.count(1);
+        if (tag.len > 0) appendRaw(&bus_len, tag, line);
         // A sentence type this parser does not decode — GSV, GSA, a
         // proprietary line — or one whose fields are unreadable.
         const sentence = parser.parse(line) catch continue;
@@ -64,6 +84,43 @@ pub fn onData(conn: *Connection, bytes: []const u8) void {
             else => publish(conn, sentence),
         }
     }
+    // Publish the whole read as one frame: far fewer events than per-line
+    // frames, and a multipart AIS group's fragments stay adjacent.
+    if (bus_len > 0) {
+        if (lk.busPublish("nmea0183", bus_buf[0..bus_len]) < 0) bus_denied = true;
+    }
+}
+
+/// Only GRANTS_CHANGED matters here: it says whether raw lines may go on the
+/// bus, arriving once after start and again on every change.
+pub fn onEvent(e: lk.raw.Event) !void {
+    switch (e) {
+        .grants_changed => |payload| bus_denied = !lk.raw.granted(payload, "bus.publish"),
+        else => {},
+    }
+}
+
+/// The row's NMEA 4.10 TAG block (`\s:lk2*hh\`). It lets a consumer merging
+/// several gateways tell the streams apart: multipart AIS messages
+/// reassemble only within one stream.
+fn rowTag(buf: []u8, place: u32) []const u8 {
+    var body_buf: [16]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "s:lk{d}", .{place}) catch return "";
+    var sum: u8 = 0;
+    for (body) |c| sum ^= c;
+    return std.fmt.bufPrint(buf, "\\{s}*{X:0>2}\\", .{ body, sum }) catch "";
+}
+
+/// Append one tagged line to the pending bus frame. A line that does not fit
+/// is dropped whole, never split.
+fn appendRaw(len: *usize, tag: []const u8, line: []const u8) void {
+    const needed = tag.len + line.len + 2;
+    if (len.* + needed > bus_buf.len) return;
+    @memcpy(bus_buf[len.*..][0..tag.len], tag);
+    @memcpy(bus_buf[len.* + tag.len ..][0..line.len], line);
+    bus_buf[len.* + needed - 2] = '\r';
+    bus_buf[len.* + needed - 1] = '\n';
+    len.* += needed;
 }
 
 fn publish(conn: *Connection, sentence: parser.Sentence) void {
@@ -107,4 +164,27 @@ fn upsertTarget(conn: *Connection, v: parser.Vdm) void {
     if (f.name) |n| target.name_str.set(n);
     u.target(target);
     _ = u.send();
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const t = @import("std").testing;
+
+test "a raw line is tagged with its source row and appended whole or not at all" {
+    var len: usize = 0;
+    var t1: [24]u8 = undefined;
+    var t2: [24]u8 = undefined;
+    appendRaw(&len, rowTag(&t1, 1), "!AIVDM,1,1,,A,13HOI:0P0000VOHLCnHQKwvL05Ip,0*23");
+    appendRaw(&len, rowTag(&t2, 2), "$GPRMC,092750.000,A,5321.6802,N,00630.3372,W,0.02,31.66,280511,,,A*43");
+    // The XOR checksum of "s:lk1" is 0x7F.
+    try t.expect(std.mem.startsWith(u8, bus_buf[0..len], "\\s:lk1*7F\\!AIVDM,"));
+    try t.expect(std.mem.indexOf(u8, bus_buf[0..len], "\r\n\\s:lk2*7C\\$GPRMC,") != null);
+    try t.expect(std.mem.endsWith(u8, bus_buf[0..len], "*43\r\n"));
+
+    // A line past the end of the buffer is dropped whole.
+    var full: usize = bus_buf.len - 4;
+    appendRaw(&full, rowTag(&t1, 1), "$GPRMC,092750.000,A*68");
+    try t.expectEqual(bus_buf.len - 4, full);
 }
