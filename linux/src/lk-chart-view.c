@@ -368,31 +368,25 @@ lk_chart_view_sample_velocity (LkChartView *self, double dx, double dy)
   self->last_sample_us = now;
 }
 
-/* The pick, and the point it belongs to. The window puts the mark there and
- * stands the report beside it.
+/* A plain click or tap on the chart. It pins an overlay symbol's bubble and
+ * does nothing else.
  *
- * A PLUGIN'S SYMBOL ANSWERS FIRST. A click that lands on a vessel pins its
- * bubble and never opens the chart pick report underneath it: the mariner
- * clicked the target, not the water it is over. */
+ * IT DOES NOT PICK. A stray click while panning used to throw a pick report
+ * the mariner never asked for, and the plain click belongs to the chart. What
+ * is at a point is asked for by name, from the menu a secondary click or a
+ * held finger raises there. The reference shell follows the same rule
+ * (ChartView.swift, tapChart).
+ *
+ * A PLUGIN'S SYMBOL STILL ANSWERS. A click that lands on a vessel pins its
+ * bubble: the mariner clicked the target, not the water it is over. A click
+ * elsewhere closes the bubble. */
 static void
-lk_chart_view_identify_at (LkChartView *self, double x, double y)
+lk_chart_view_tap (LkChartView *self, double x, double y)
 {
   g_autoptr (LkOverlayObject) object =
       lk_chart_controller_overlay_hit (self->controller, x, y);
 
-  if (object != NULL)
-    {
-      lk_app_model_pin_overlay (self->model, object->id);
-      return;
-    }
-
-  double lon, lat;
-  if (!lk_chart_controller_geo_at (self->controller, x, y, &lon, &lat))
-    return;
-
-  lk_app_model_pin_overlay (self->model, NULL);
-  lk_app_model_set_pick (self->model, lk_chart_controller_pick (self->controller, lon, lat),
-                         x, y, lon, lat);
+  lk_app_model_pin_overlay (self->model, object != NULL ? object->id : NULL);
 }
 
 /* ---- the chart menu ------------------------------------------------------ */
@@ -611,7 +605,7 @@ lk_chart_view_released (GtkGestureClick *gesture,
 
   double moved = hypot (x - self->down_x, y - self->down_y);
   if (moved <= LK_TAP_SLOP)
-    lk_chart_view_identify_at (self, x, y);
+    lk_chart_view_tap (self, x, y);
   else
     lk_chart_controller_fling_start (self->controller, self->vx, self->vy);
 }
@@ -639,7 +633,7 @@ lk_chart_view_touch_settle (gpointer user_data)
   if (self->touch_taken)
     self->touch_taken = FALSE;
   else if (self->touch_moved <= LK_TOUCH_SLOP)
-    lk_chart_view_identify_at (self, self->touch_down_x, self->touch_down_y);
+    lk_chart_view_tap (self, self->touch_down_x, self->touch_down_y);
   else if (hypot (self->vx, self->vy) > LK_TOUCH_FLING_MIN)
     lk_chart_controller_fling_start (self->controller, self->vx, self->vy);
 

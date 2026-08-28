@@ -79,7 +79,10 @@ never remembers it from a click.
 
 ## How the pick report is composed
 
-A click on the chart marks the object and opens the report beside the mark.
+The chart menu raises the report: a secondary click, or a held finger, then
+**Pick Report**. A plain click never picks — a stray click while panning used
+to throw a report nobody asked for. The report opens beside a mark at the
+menu's point.
 
 The **engine** composes the report. The core emits `{"report":…,"s57":…}` for each
 picked feature, which is the decoded page beside the raw payload. Every shell only
