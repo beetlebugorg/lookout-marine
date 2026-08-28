@@ -81,6 +81,9 @@ test_coordinate_rejects (void)
   assert_no_coordinate ("38.9763, 76.4x");
   assert_no_coordinate ("38\302\26058'N");   /* latitude alone */
   assert_no_coordinate ("76\302\26028'W");   /* longitude alone */
+  /* The hemisphere path holds the same fences as the decimal one. */
+  assert_no_coordinate ("91\302\26030'N 76\302\26028'W");
+  assert_no_coordinate ("38\302\26058'N 200\302\26000'E");
 }
 
 static void

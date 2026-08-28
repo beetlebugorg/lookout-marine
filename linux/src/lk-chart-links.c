@@ -119,7 +119,12 @@ lk_links_read_done (GObject *source_object, GAsyncResult *result, gpointer user_
 
   if (!g_file_load_contents_finish (G_FILE (source_object), result, &text, &length, NULL, &error))
     {
-      lk_links_answer (fetch->self, fetch->id, NULL, 0);
+      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        /* As in lk_links_fetch_done: a reopen cancelled this, and the id
+         * would land on the NEW handle's request of the same number. */
+        g_hash_table_remove (fetch->self->in_flight, &fetch->id);
+      else
+        lk_links_answer (fetch->self, fetch->id, NULL, 0);
     }
   else
     {

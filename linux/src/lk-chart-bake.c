@@ -194,6 +194,11 @@ lk_chart_bake_output_dir (const char *source)
 static gboolean
 lk_remove_tree (const char *path)
 {
+  /* A symlink is removed, never followed: the walk must stay inside the
+   * prepared tree whatever a lifted archive managed to put in it. */
+  if (g_file_test (path, G_FILE_TEST_IS_SYMLINK))
+    return g_remove (path) == 0;
+
   GDir *dir = g_dir_open (path, 0, NULL);
 
   if (dir != NULL)

@@ -1,5 +1,7 @@
 #include "lk-store.h"
 
+#include <errno.h>
+#include <stdio.h>
 #include <string.h>
 
 #define LK_GROUP_VIEW    "view"
@@ -18,14 +20,30 @@ lk_store_path (void)
   return g_build_filename (g_get_user_config_dir (), "lookout-marine", "settings.ini", NULL);
 }
 
-/* The whole file, or an empty keyfile when there isn't one yet. Never NULL. */
+/* The whole file, or an empty keyfile when there isn't one yet. Never NULL.
+ *
+ * A file that EXISTS and will not parse is set aside as settings.ini.broken
+ * before the empty keyfile takes its place. The next flush overwrites the
+ * live file either way; the copy is what keeps a mariner's library and
+ * settings recoverable after the damage, and the warning says where it is. */
 static GKeyFile *
 lk_store_load (void)
 {
   GKeyFile *keyfile = g_key_file_new ();
   g_autofree char *path = lk_store_path ();
+  g_autoptr (GError) error = NULL;
 
-  g_key_file_load_from_file (keyfile, path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+  if (!g_key_file_load_from_file (keyfile, path, G_KEY_FILE_KEEP_COMMENTS, &error) &&
+      !g_error_matches (error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
+    {
+      g_autofree char *broken = g_strconcat (path, ".broken", NULL);
+      if (rename (path, broken) == 0)
+        g_warning ("settings.ini would not parse (%s); set aside as %s",
+                   error->message, broken);
+      else
+        g_warning ("settings.ini would not parse (%s) and could not be set aside: %s",
+                   error->message, g_strerror (errno));
+    }
   return keyfile;
 }
 
@@ -351,11 +369,13 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
 
   /* Apply each field only when the key is present, so older settings files
    * leave newer fields at engine defaults instead of zeroing them. */
-#define GET_INT(key, field)                                                        \
+  /* Every integer key is an enum, and the engine indexes tables by it: a
+   * value outside the enum's range is damage and keeps the default. */
+#define GET_ENUM(key, field, hi)                                                   \
   G_STMT_START {                                                                    \
     g_autoptr (GError) e = NULL;                                                    \
     int v = g_key_file_get_integer (keyfile, LK_GROUP_MARINER, key, &e);             \
-    if (e == NULL)                                                                  \
+    if (e == NULL && v >= 0 && v <= (hi))                                           \
       field = v;                                                                    \
   } G_STMT_END
 
@@ -384,8 +404,8 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
       field = v;                                                                    \
   } G_STMT_END
 
-  GET_INT ("scheme", m->scheme);
-  GET_INT ("depth_unit", m->depth_unit);
+  GET_ENUM ("scheme", m->scheme, TILE57_SCHEME_NIGHT);
+  GET_ENUM ("depth_unit", m->depth_unit, TILE57_DEPTH_FEET);
   GET_DBL ("shallow_contour", m->shallow_contour);
   GET_DBL ("safety_contour", m->safety_contour);
   GET_DBL ("deep_contour", m->deep_contour);
@@ -394,12 +414,12 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
   GET_BOOL ("display_base", m->display_base);
   GET_BOOL ("display_standard", m->display_standard);
   GET_BOOL ("display_other", m->display_other);
-  GET_INT ("soundings", m->soundings);
+  GET_ENUM ("soundings", m->soundings, 2);
   GET_BOOL ("text_names", m->text_names);
   GET_BOOL ("show_light_descriptions", m->show_light_descriptions);
   GET_BOOL ("text_other", m->text_other);
   GET_BOOL ("simplified_points", m->simplified_points);
-  GET_INT ("boundary_style", m->boundary_style);
+  GET_ENUM ("boundary_style", m->boundary_style, TILE57_BOUNDARY_PLAIN);
   GET_BOOL ("show_full_sector_lines", m->show_full_sector_lines);
   GET_BOOL ("data_quality", m->data_quality);
   GET_BOOL ("show_isolated_dangers_shallow", m->show_isolated_dangers_shallow);
@@ -412,7 +432,7 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
   GET_BOOL ("date_dependent", m->date_dependent);
   GET_BOOL ("highlight_date_dependent", m->highlight_date_dependent);
 
-#undef GET_INT
+#undef GET_ENUM
 #undef GET_BOOL
 #undef GET_DBL
 #undef GET_SCALE

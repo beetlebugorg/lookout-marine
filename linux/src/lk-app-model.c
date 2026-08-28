@@ -154,17 +154,6 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
 }
 
 static void
-lk_app_model_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
-{
-  LkAppModel *self = LK_APP_MODEL (object);
-
-  switch (prop_id)
-    {
-    default: G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-    }
-}
-
-static void
 lk_app_model_dispose (GObject *object)
 {
   LkAppModel *self = LK_APP_MODEL (object);
@@ -179,8 +168,8 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->pending_open_source, g_free);
-  g_free (self->bake_progress.name);
-  g_free (self->bake_progress.cell);
+  g_clear_pointer (&self->bake_progress.name, g_free);
+  g_clear_pointer (&self->bake_progress.cell, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -199,12 +188,11 @@ lk_app_model_class_init (LkAppModelClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
+  /* Every property is read-only, so there is no set_property. */
   object_class->get_property = lk_app_model_get_property;
-  object_class->set_property = lk_app_model_set_property;
   object_class->dispose = lk_app_model_dispose;
 
 #define RO  (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)
-#define RW  (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
 
   properties[PROP_HAS_CHART] = g_param_spec_boolean ("has-chart", NULL, NULL, FALSE, RO);
   properties[PROP_CHART_PATH] = g_param_spec_string ("chart-path", NULL, NULL, NULL, RO);
@@ -548,7 +536,13 @@ lk_app_model_recompose_library (LkAppModel *self)
   if (all != NULL && all[0] != NULL)
     lk_chart_controller_reopen (self->controller, (const char *const *) all);
   else
-    lk_chart_controller_close (self->controller);
+    {
+      lk_chart_controller_close (self->controller);
+      /* The readouts stop with the render loop, so the raster snapshot has
+       * to be read back here — without this the pill keeps naming a set of
+       * the chart that just closed. */
+      lk_app_model_refresh_raster_state (self);
+    }
 }
 
 /* Put a source on the list, switched on. Opening a source is also
@@ -669,8 +663,16 @@ lk_meta_done_idle (gpointer data)
   LkMetaJob *job = data;
   LkAppModel *self = job->model;
 
-  g_hash_table_replace (self->chart_set_meta, g_strdup (job->path),
-                        lk_set_meta_build (job->path, job->source, job->derived));
+  /* The set can leave the library while its scan is in flight. Keeping the
+   * result would pin stale metadata: a later re-add reads the cache and
+   * never rescans. */
+  gboolean still_aboard = FALSE;
+  for (guint i = 0; self->chart_sets != NULL && self->chart_sets[i] != NULL; i++)
+    still_aboard = still_aboard || g_strcmp0 (self->chart_sets[i], job->path) == 0;
+
+  if (still_aboard)
+    g_hash_table_replace (self->chart_set_meta, g_strdup (job->path),
+                          lk_set_meta_build (job->path, job->source, job->derived));
   self->meta_scanning = FALSE;
   lk_app_model_emit_chart_sets_changed (self);
   lk_app_model_kick_meta_scan (self);
@@ -973,6 +975,9 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
 
   if (out_dir == NULL && baked == 0)
     {
+      /* A failed bake opens nothing; a stale source here would confuse the
+       * next bake's open. */
+      g_clear_pointer (&self->pending_open_source, g_free);
       lk_app_model_set_open_error (self, "Those charts could not be prepared.");
       return;
     }
@@ -1013,8 +1018,22 @@ lk_scan_done_idle (gpointer data)
       if (lk_scanned_cell_needs_prepare (g_ptr_array_index (set->cells, i)))
         to_prepare++;
 
-  if (set != NULL && to_prepare > 0 && !self->baking)
+  if (set != NULL && to_prepare > 0)
     {
+      /* One bake at a time — the engine's import is not reentrant. A set
+       * that needs preparing while another is importing is refused with the
+       * reason, never quietly added as an empty set nothing will fill. */
+      if (self->baking)
+        {
+          g_autofree char *name = g_path_get_basename (dir);
+          g_autofree char *message =
+              g_strdup_printf ("Still working on %s. Wait for it to finish.",
+                               self->bake_progress.name != NULL
+                                   ? self->bake_progress.name : name);
+          lk_app_model_set_open_error (self, message);
+          goto out;
+        }
+
       g_free (self->pending_open_source);
       self->pending_open_source = g_strdup (dir);
 
@@ -1062,6 +1081,18 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
     {
       lk_app_model_set_open_error (self,
           "Still looking through the last pick. Try again in a moment.");
+      return;
+    }
+  /* One import at a time, and the refusal says so — as the reference does.
+   * A quiet fall-through here left the folder in the library as an empty
+   * set that nothing would ever prepare. */
+  if (self->baking)
+    {
+      g_autofree char *message =
+          g_strdup_printf ("Still working on %s. Wait for it to finish.",
+                           self->bake_progress.name != NULL
+                               ? self->bake_progress.name : "the last import");
+      lk_app_model_set_open_error (self, message);
       return;
     }
 
@@ -1125,11 +1156,16 @@ lk_app_model_zoom_to_scale (LkAppModel *self, double denominator)
                                      log2 (self->scale_denominator / denominator));
 }
 
-/* A menu scheme change must persist just like one from the settings form. */
+/* A menu scheme change must persist just like one from the settings form.
+ * Both guard on an open chart, as the reference does: with no handle there is
+ * nothing to cycle, and nothing read back may be saved. */
 void
 lk_app_model_cycle_scheme (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (!lk_chart_controller_is_open (self->controller))
+    return;
 
   lk_chart_controller_cycle_scheme (self->controller);
   tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
@@ -1140,6 +1176,9 @@ void
 lk_app_model_set_scheme (LkAppModel *self, int scheme)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (!lk_chart_controller_is_open (self->controller))
+    return;
 
   tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
   mariner.scheme = (tile57_scheme) scheme;
@@ -1477,10 +1516,15 @@ lk_app_model_toggle_chart (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
+  /* Nothing to hide without a chart — and a chartless toggle must not clear
+   * the saved choice, which the next open replays. */
+  if (!lk_chart_controller_is_open (self->controller))
+    return;
+
   lk_chart_controller_toggle_chart (self->controller);
   lk_app_model_refresh_raster_state (self);
-  /* From the engine, not from what was asked for: with no chart open the toggle
-   * does nothing, and the saved flag has to agree with the picture. */
+  /* From the engine, not from what was asked for: the saved flag has to agree
+   * with the picture. */
   lk_store_save_chart_hidden (lk_chart_controller_chart_hidden (self->controller));
 }
 
@@ -1575,7 +1619,10 @@ lk_parse_hemispheres (const char *text, double *out_lat, double *out_lon)
       g_match_info_next (match, NULL);
     }
 
-  return have_lat && have_lon;
+  /* The same fences as the decimal path: 91°N is a typo, not a place. */
+  if (!have_lat || !have_lon)
+    return FALSE;
+  return *out_lat >= -90 && *out_lat <= 90 && *out_lon >= -180 && *out_lon <= 180;
 }
 
 gboolean

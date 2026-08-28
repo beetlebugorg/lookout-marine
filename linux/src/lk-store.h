@@ -77,6 +77,4 @@ char **lk_store_load_plugin_ids (void);
 char  *lk_store_load_plugin_config (const char *plugin_id);
 void   lk_store_save_plugin_config (const char *plugin_id, const char *json);
 
-/* HUD coordinate format. */
-
 G_END_DECLS

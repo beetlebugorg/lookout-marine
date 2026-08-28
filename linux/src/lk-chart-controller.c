@@ -872,15 +872,24 @@ lk_chart_controller_open (LkChartController *self,
   const char *spec = g_getenv ("LOOKOUT_VIEW");
   if (spec != NULL)
     {
+      /* Every field must parse whole. A non-numeric field read as 0 would
+       * open on null island — and the 3 s pose save would then keep it. */
       g_auto (GStrv) parts = g_strsplit (spec, ",", -1);
-      if (g_strv_length (parts) >= 3)
+      guint count = g_strv_length (parts);
+      double fields[4] = { 0, 0, 0, 0 };
+      gboolean ok = count >= 3 && count <= 4;
+
+      for (guint i = 0; ok && i < count; i++)
         {
-          lookout_view v = {
-            .lon = g_ascii_strtod (parts[0], NULL),
-            .lat = g_ascii_strtod (parts[1], NULL),
-            .zoom = g_ascii_strtod (parts[2], NULL),
-            .rotation_deg = g_strv_length (parts) > 3 ? g_ascii_strtod (parts[3], NULL) : 0.0,
-          };
+          char *end = NULL;
+          fields[i] = g_ascii_strtod (parts[i], &end);
+          ok = end != parts[i] && *end == '\0';
+        }
+
+      if (ok)
+        {
+          lookout_view v = { .lon = fields[0], .lat = fields[1],
+                             .zoom = fields[2], .rotation_deg = fields[3] };
           lookout_set_view (handle, &v);
         }
       else
@@ -1234,7 +1243,14 @@ lk_chart_controller_get_mariner (LkChartController *self)
   if (LK_IS_CHART_CONTROLLER (self) && self->handle != NULL)
     lookout_get_mariner (self->handle, &mariner);
   else
-    lookout_mariner_defaults (&mariner);
+    {
+      /* No handle: the defaults with the mariner's saved choices on top. A
+       * chartless read must never answer values the mariner did not set —
+       * callers save what they read back, and bare defaults here would wipe
+       * the saved settings. */
+      lookout_mariner_defaults (&mariner);
+      lk_store_apply_saved_mariner (&mariner);
+    }
 
   return mariner;
 }
