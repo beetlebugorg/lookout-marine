@@ -120,7 +120,6 @@ core = custom_target('lookout-core',
 )
 
 sources = files(
-  'src/main.c',
   'src/lk-about.c',
   'src/lk-alerts.c',
   'src/lk-app-model.c',
@@ -168,14 +167,34 @@ resources = gnome.compile_resources(
   c_name: 'lk',
 )
 
+# The shell as a static library, so the executable and the test binaries link
+# the same objects. main.c stays out: a test binary carries its own main.
+#
+# The headers among the core outputs order this target after the core build;
+# the archives are link inputs the consumers name for themselves.
+core_headers = [core[2], core[3]]
+core_archives = [core[0], core[1]]
+if plugins
+  core_archives += core[4]
+endif
+
+shell_c_args = c_args + ['-I' + meson.current_build_dir()]
+
+lkshell = static_library('lookout-shell',
+  sources, resources, core_headers,
+  c_args: shell_c_args,
+  dependencies: deps,
+)
+
 executable('lookout-marine',
-  sources, resources,
-  core,
-  # lookout.h and tile57.h land in the build dir alongside the archives.
-  c_args: c_args + ['-I' + meson.current_build_dir()],
+  'src/main.c', core_headers,
+  link_with: [lkshell] + core_archives,
+  c_args: shell_c_args,
   dependencies: deps,
   install: true,
 )
+
+subdir('tests')
 
 # ---- desktop integration -----------------------------------------------------
 #
