@@ -349,13 +349,15 @@ lk_hud_update_coord (LkHudCapsule *capsule)
   gtk_image_set_from_icon_name (GTK_IMAGE (capsule->fix_icon), pill[state].icon);
   gtk_label_set_text (GTK_LABEL (capsule->fix_label), pill[state].text);
   gtk_widget_set_tooltip_text (capsule->fix_pill, pill[state].tooltip);
-  /* Only the third state is a control: Configure GPS opens the settings at
-   * Connections. GPS and NO GPS are readouts, as on the reference shell. */
+  /* Only Configure GPS is a control: it opens the settings at Connections.
+   * GPS and NO GPS are readouts, as on the reference shell — can_target off,
+   * not insensitive, so the state tints never grey out. */
   if (state == LK_FIX_NONE)
     gtk_actionable_set_detailed_action_name (GTK_ACTIONABLE (capsule->fix_pill),
                                              "win.settings-at::connections");
   else
     gtk_actionable_set_action_name (GTK_ACTIONABLE (capsule->fix_pill), NULL);
+  gtk_widget_set_can_target (capsule->fix_pill, state == LK_FIX_NONE);
 
   for (gsize i = 0; i < G_N_ELEMENTS (pill); i++)
     gtk_widget_remove_css_class (capsule->fix_pill, pill[i].css);
@@ -769,8 +771,13 @@ lk_raster_pill_new (LkAppModel *model)
   gtk_box_append (GTK_BOX (pill->root), lk_hud_rule ());
   gtk_box_append (GTK_BOX (pill->root), pill->button);
 
-  g_signal_connect_data (model, "raster-changed", G_CALLBACK (lk_raster_pill_changed),
-                         pill, lk_raster_pill_free, 0);
+  /* Tethered like every other builder here: the model outlives the window,
+   * and an untethered handler would fire into freed widgets after teardown. */
+  lk_tether (model,
+             g_signal_connect_data (model, "raster-changed",
+                                    G_CALLBACK (lk_raster_pill_changed),
+                                    pill, lk_raster_pill_free, 0),
+             pill->root);
   lk_raster_pill_update (pill);
   return pill->root;
 }
