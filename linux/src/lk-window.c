@@ -943,6 +943,17 @@ lk_window_update_overlays (LkWindow *self)
   gboolean has_chart = lk_app_model_get_has_chart (self->model);
   gboolean baking = lk_app_model_get_baking (self->model);
 
+  /* Without a chart the camera commands have nothing to act on, so their
+   * bubbles and menu items grey out — as the reference's do. */
+  static const char *camera_actions[] = { "zoom-in", "zoom-out", "zoom-fit", "north-up" };
+  for (gsize i = 0; i < G_N_ELEMENTS (camera_actions); i++)
+    {
+      GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window),
+                                                    camera_actions[i]);
+      if (action != NULL)
+        g_simple_action_set_enabled (G_SIMPLE_ACTION (action), has_chart);
+    }
+
   gtk_widget_set_visible (self->loader, loading && !baking);
   /* Nothing is open DURING a bake either, but "No chart open" beside a card
      offering to open one is the wrong thing to say while the app is already
@@ -1129,8 +1140,15 @@ lk_window_raster_changed (LkAppModel *model, gpointer user_data)
   action = g_action_map_lookup_action (G_ACTION_MAP (self->window), "raster-select");
 
   if (action != NULL)
-    g_simple_action_set_state (G_SIMPLE_ACTION (action),
-                               g_variant_new_int32 (lk_app_model_get_raster_active (model)));
+    {
+      g_simple_action_set_state (G_SIMPLE_ACTION (action),
+                                 g_variant_new_int32 (lk_app_model_get_raster_active (model)));
+      /* The picker offers nothing until a raster chart is installed. The
+       * cycle stays enabled: with nothing installed it opens the Add picker
+       * instead, which lk_action_raster_cycle explains. */
+      g_simple_action_set_enabled (G_SIMPLE_ACTION (action),
+                                   lk_app_model_get_raster_count (model) > 0);
+    }
 }
 
 static void
@@ -1650,6 +1668,7 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
                 "gtk-application-prefer-dark-theme", &self->desktop_prefers_dark, NULL);
 
   lk_window_update_overlays (self);
+  lk_window_raster_changed (model, self);
   lk_window_apply_scheme (self);
   lk_window_apply_dev_hooks (self);
 

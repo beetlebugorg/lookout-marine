@@ -338,9 +338,9 @@ lk_hud_update_coord (LkHudCapsule *capsule)
     { "preferences-system-symbolic", "Configure GPS", "lk-fix-none",
       "No source of position. Add a gateway or a Signal K server." },
     { "network-offline-symbolic", "NO GPS", "lk-fix-lost",
-      "The position source stopped answering. Opens the settings." },
+      "The position source stopped answering." },
     { "find-location-symbolic", "GPS", "lk-fix-live",
-      "Own ship's reported position. Opens the settings." },
+      "Own ship's reported position." },
   };
 
   int state = lk_app_model_get_fix_state (capsule->model);
@@ -349,6 +349,13 @@ lk_hud_update_coord (LkHudCapsule *capsule)
   gtk_image_set_from_icon_name (GTK_IMAGE (capsule->fix_icon), pill[state].icon);
   gtk_label_set_text (GTK_LABEL (capsule->fix_label), pill[state].text);
   gtk_widget_set_tooltip_text (capsule->fix_pill, pill[state].tooltip);
+  /* Only the third state is a control: Configure GPS opens the settings at
+   * Connections. GPS and NO GPS are readouts, as on the reference shell. */
+  if (state == LK_FIX_NONE)
+    gtk_actionable_set_detailed_action_name (GTK_ACTIONABLE (capsule->fix_pill),
+                                             "win.settings-at::connections");
+  else
+    gtk_actionable_set_action_name (GTK_ACTIONABLE (capsule->fix_pill), NULL);
 
   for (gsize i = 0; i < G_N_ELEMENTS (pill); i++)
     gtk_widget_remove_css_class (capsule->fix_pill, pill[i].css);
@@ -1072,7 +1079,8 @@ lk_zoom_controls_new (LkAppModel *model)
 
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, LK_CHROME_GAP);
 
-  gtk_box_append (GTK_BOX (box), lk_bubble_new ("zoom-fit-best-symbolic", "Fit chart", "win.zoom-fit"));
+  /* Two bubbles, as on the reference and the WinUI shell. Fit stays on Ctrl+0
+   * and in the commands menu. */
   gtk_box_append (GTK_BOX (box), lk_bubble_new ("zoom-in-symbolic", "Zoom in", "win.zoom-in"));
   gtk_box_append (GTK_BOX (box), lk_bubble_new ("zoom-out-symbolic", "Zoom out", "win.zoom-out"));
 

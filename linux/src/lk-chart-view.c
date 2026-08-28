@@ -976,6 +976,11 @@ lk_chart_view_query_tooltip (GtkWidget *widget, int x, int y, gboolean keyboard,
   if (keyboard)
     return FALSE;
 
+  /* A pinned bubble already states the object; a tip floating over it would
+   * say the same thing twice. The reference suppresses the hover too. */
+  if (lk_app_model_get_overlay_pin (self->model) != NULL)
+    return FALSE;
+
   g_autofree char *payload = lk_chart_controller_overlay_at (self->controller, x, y);
   if (payload == NULL)
     return FALSE;

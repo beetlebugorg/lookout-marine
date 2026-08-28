@@ -56,7 +56,7 @@ GtkWidget *lk_building_pill_new (LkAppModel *model);
  * that is enough. */
 GtkWidget *lk_bake_pill_new (LkAppModel *model);
 
-/* Fit, zoom in and zoom out, as a column of bubbles. */
+/* Zoom in and zoom out, as a column of bubbles. */
 GtkWidget *lk_zoom_controls_new (LkAppModel *model);
 
 /* The compass bubble, which is also the FOLLOW LOCK, as on every other shell.

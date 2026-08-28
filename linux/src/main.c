@@ -350,6 +350,8 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
     { "win.raster-cycle",     { "<Control>i", NULL } },
     { "win.raster-add",       { "<Control><Shift>i", NULL } },
     { "win.toggle-chart",     { "<Control><Shift>h", NULL } },
+    /* The desktop convention; macOS keeps the system's own fullscreen key. */
+    { "win.full-screen",      { "F11", NULL } },
   };
 
   for (gsize i = 0; i < G_N_ELEMENTS (accels); i++)
