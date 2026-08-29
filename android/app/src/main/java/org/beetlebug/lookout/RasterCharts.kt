@@ -181,10 +181,6 @@ data class RasterSet(
  * `inView` changes as the mariner sails.
  */
 data class RasterState(
-    /** The set drawn over this view, or "" when this water has no picture. */
-    val name: String = "",
-    /** A set in view, drawn or not — what the pill offers to turn on. */
-    val available: String = "",
     /** Which set is drawn here, or -1. */
     val active: Int = -1,
     val sets: List<RasterSet> = emptyList(),

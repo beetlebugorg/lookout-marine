@@ -14,6 +14,13 @@ import android.view.Surface;
  * thread) and the frame loop (the render thread) may call concurrently.
  * close(), attachSurface() and detachSurface() are the exceptions: run them on
  * the render thread with the frame loop stopped.
+ *
+ * COMPLETENESS IS DELIBERATE. This class mirrors include/lookout.h whole, and
+ * some of what it binds no Kotlin here calls: altStyleActive, pluginConfigGet,
+ * rasterEnabled, rasterOverChart, isOpen, and the three portrayal quick
+ * toggles, which the Mac reaches from its menu bar and this shell has no route
+ * to. Those are gaps in the SHELL, not in the binding, so they stay bound. A
+ * method removed here would have to be found again by reading the header.
  */
 public final class Lookout implements AutoCloseable {
     static {

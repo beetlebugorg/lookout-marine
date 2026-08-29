@@ -271,6 +271,7 @@ class ChartController(private val appContext: Context) {
 
     /** Result of the last tap-to-identify; empty hides the report. */
     var identify by mutableStateOf<List<PickFeature>>(emptyList())
+        private set
 
     /**
      * The pinned overlay bubble, and where on screen it is anchored (logical
@@ -312,9 +313,16 @@ class ChartController(private val appContext: Context) {
 
     /** Which object of the pick the report shows. */
     var identifyIndex by mutableStateOf(0)
+        private set
+
+    /** The report's object list, choosing which object is on show. */
+    fun selectIdentify(index: Int) {
+        identifyIndex = index
+    }
 
     /** Where the pick happened, in logical points, or null when none is open. */
     var identifyPoint by mutableStateOf<Offset?>(null)
+        private set
 
     /**
      * The camera pose the open report belongs to, or null when none is open.
@@ -802,7 +810,7 @@ class ChartController(private val appContext: Context) {
      *
      * RENDER THREAD: the native call takes the api lock.
      */
-    fun connections(l: Lookout): Connections {
+    private fun connections(l: Lookout): Connections {
         var live = false
         var trying = false
         for (p in PluginRegistry.parse(l.pluginsJson()).plugins) {
@@ -1015,6 +1023,7 @@ class ChartController(private val appContext: Context) {
     var chartLinkBusy by mutableStateOf(false)
         private set
     var chartLinkError by mutableStateOf<String?>(null)
+        private set
 
     /** The active chart link's source credits, shown by the scale bar while
      *  the link draws (tile usage policies make the credit a condition of
@@ -1191,9 +1200,11 @@ class ChartController(private val appContext: Context) {
         // engine owns the election.
         rasterCharts.noteShown(sets.map { it.name to it.shown })
         rasterCharts.setChartHidden(l.chartHidden())
+        // Only what the pill actually reads. The engine also offers the
+        // active and available set NAMES; the pill derives its label from
+        // `visible` and `active` instead, so asking for them was two JNI
+        // string crossings per push for nothing.
         val s = RasterState(
-            name = l.rasterActiveName(),
-            available = l.rasterAvailableName(),
             active = l.rasterActiveIndex(),
             sets = sets,
             chartHidden = l.chartHidden(),

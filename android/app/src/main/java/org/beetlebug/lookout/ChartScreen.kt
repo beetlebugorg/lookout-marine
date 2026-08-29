@@ -222,7 +222,7 @@ fun ChartScreen(
             PickReportCard(
                 results = controller.identify,
                 selected = controller.identifyIndex,
-                onSelect = { controller.identifyIndex = it },
+                onSelect = { controller.selectIdentify(it) },
                 onDismiss = { controller.dismissIdentify() },
                 width = width,
                 maxHeight = place.room,
@@ -358,28 +358,6 @@ fun ChartScreen(
             },
             initialSection = settingsSection,
         )
-    }
-}
-
-@Composable
-private fun RoundButton(icon: ImageVector, description: String, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onClick),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
-        tonalElevation = 2.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                icon,
-                contentDescription = description,
-                modifier = Modifier.size(21.dp),
-                tint = MaterialTheme.colorScheme.onSurface,
-            )
-        }
     }
 }
 

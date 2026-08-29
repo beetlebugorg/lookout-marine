@@ -21,9 +21,8 @@ class StatusCaptionTest {
         statusCaption(
             PluginInfo(
                 id = "org.example.x", name = "X", version = "1", origin = "installed",
-                live = true, status = status, capabilities = emptyList(),
+                status = status, capabilities = emptyList(),
                 fields = emptyList(), lists = emptyList(), rows = emptyMap(),
-                fileTypes = emptyList(),
             )
         )
 

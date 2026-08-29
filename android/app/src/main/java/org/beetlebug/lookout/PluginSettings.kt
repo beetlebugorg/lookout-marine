@@ -174,6 +174,14 @@ data class PluginCapability(
     val cap: String,
     /** The core's own plain sentence for it, ready to show beside a switch. */
     val sentence: String,
+    /**
+   * The addresses a grant reaches, or the topics it publishes on. The core
+   * writes them so a shell can show the reach beside the sentence; no shell
+   * does, this one included. Kept because the gap is a decision nobody has
+   * made rather than a field nobody wants, and deleting it would hide that.
+   * The same is true of a capability's `ports`, and of a settings field's
+   * `placeholder` and `max_len`, none of which are read here.
+   */
     val hosts: List<String>,
     val granted: Boolean,
 )
@@ -191,13 +199,11 @@ data class PluginInfo(
     val name: String,
     val version: String,
     val origin: String,
-    val live: Boolean,
     val status: String,
     val capabilities: List<PluginCapability>,
     val fields: List<PluginField>,
     val lists: List<PluginListSchema>,
     val rows: Map<String, List<PluginRow>>,
-    val fileTypes: List<String>,
     /**
      * What the plugin says about each row of its lists, by row id. Decoded from
      * [status], which is a JSON line the plugin wrote:
@@ -206,7 +212,6 @@ data class PluginInfo(
     val statusItems: Map<String, PluginStatusItem> = emptyMap(),
 ) {
     val bundled: Boolean get() = origin == "bundled"
-    val installed: Boolean get() = origin == "installed"
 }
 
 /** A plugin's fields that share a heading within one section, kept together. */
@@ -320,13 +325,11 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
                 name = o.optString("name").ifEmpty { id },
                 version = o.optString("version"),
                 origin = o.optString("origin").ifEmpty { "bundled" },
-                live = o.optBoolean("live", false),
                 status = status,
                 capabilities = o.optJSONArray("capabilities").objects().mapNotNull { capability(it) },
                 fields = o.optJSONArray("settings").objects().mapNotNull { field(it) },
                 lists = lists,
                 rows = rows(o.optJSONArray("lists")),
-                fileTypes = o.optJSONArray("file_types").strings(),
                 statusItems = statusItems(status),
             )
         }

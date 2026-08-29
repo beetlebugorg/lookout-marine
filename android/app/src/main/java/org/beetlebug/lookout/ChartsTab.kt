@@ -298,7 +298,7 @@ private fun RasterChartsSection(controller: ChartController) {
  */
 @Composable
 private fun RasterBrowser(controller: ChartController) {
-    val roots = controller.rasterCharts.let { _ -> storageRootsRemembered() }
+    val roots = storageRootsRemembered()
     var cur by remember { mutableStateOf(roots.firstOrNull()) }
     var kids by remember { mutableStateOf<List<File>>(emptyList()) }
     var found by remember { mutableStateOf<List<String>>(emptyList()) }
