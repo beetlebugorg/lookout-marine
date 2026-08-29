@@ -16,11 +16,13 @@ import org.beetlebug.lookout.settings.SettingsSheet
 import android.content.Context
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -185,6 +187,49 @@ class SettingsSheetTest {
         assertEquals("switching the unit must not move the contour", before, mariner.safetyContour, 1e-9)
     }
 
+    /**
+     * A contour is TYPED, not stepped to. It follows the boat's draught rather
+     * than the last value, so the usual change is a large one and twenty taps
+     * on a stepper is the wrong way to make it.
+     */
+    @Test fun aContourCanBeTypedStraightIn() {
+        openSection("Depths", "depths")
+        compose.onNodeWithTag("settings-pane").performScrollToNode(hasText("Safety contour"))
+        safetyField().performTextReplacement("30")
+        // Done is the commit. Writing through per keystroke would send "3"
+        // to the engine on the way to "30" and shade the chart for it.
+        safetyField().performImeAction()
+        compose.waitForIdle()
+        assertEquals(30.0, mariner.safetyContour, 1e-6)
+    }
+
+    /** Out of range clamps rather than being refused: 900 m is not a contour,
+     *  and the deepest charted one is the honest answer. */
+    @Test fun aTypedContourIsClampedToWhatACanCarry() {
+        openSection("Depths", "depths")
+        compose.onNodeWithTag("settings-pane").performScrollToNode(hasText("Safety contour"))
+        safetyField().performTextReplacement("900")
+        safetyField().performImeAction()
+        compose.waitForIdle()
+        assertEquals(660.0, mariner.safetyContour, 1e-6)
+    }
+
+    /**
+     * Nonsense goes back to what is in force. A half-typed contour must never
+     * land as a zero, which would shade the chart as if the water were safe
+     * everywhere.
+     */
+    @Test fun anUnreadableContourFallsBackRatherThanZeroing() {
+        openSection("Depths", "depths")
+        compose.onNodeWithTag("settings-pane").performScrollToNode(hasText("Safety contour"))
+        val before = mariner.safetyContour
+        safetyField().performTextReplacement("")
+        safetyField().performImeAction()
+        compose.waitForIdle()
+        assertEquals(before, mariner.safetyContour, 1e-9)
+    }
+
+    /** The steppers stay, for a nudge of a metre. */
     @Test fun aContourStepsInWholeUnits() {
         openSection("Depths", "depths")
         val before = mariner.safetyContour
@@ -192,6 +237,10 @@ class SettingsSheetTest {
         compose.waitForIdle()
         assertEquals(before + 1.0, mariner.safetyContour, 1e-9)
     }
+
+    /** The field for the safety contour, which is the row every branch of the
+     *  Depths section shows. */
+    private fun safetyField() = compose.onNodeWithTag("depth-Safety contour")
 
     // ---- Text ---------------------------------------------------------------
 

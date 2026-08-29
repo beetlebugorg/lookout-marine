@@ -12,6 +12,19 @@ import org.beetlebug.lookout.ui.SegmentedRow
 // changes labels, so feet mode edits through a conversion here. Sending "ft"
 // numbers straight through as metres was a real bug once.
 
+import androidx.compose.ui.platform.testTag
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -163,10 +176,32 @@ private fun DepthRow(
     onChange: (Double) -> Unit,
 ) {
     val shown = if (feet) (metres * FEET_PER_METRE).roundToInt().toDouble() else metres
+    fun text(v: Double) = if (feet) "${v.roundToInt()}" else String.format(Locale.US, "%.1f", v)
     fun commit(v: Double) {
-        val clamped = v.coerceIn(0.0, 660.0)
+        val clamped = v.coerceIn(0.0, MAX_DEPTH)
         onChange(if (feet) clamped.roundToInt() / FEET_PER_METRE else clamped)
     }
+
+    // The field is the way a contour is SET and the steppers are the way it is
+    // nudged. Going from ten metres to thirty is one edit here and twenty taps
+    // on the buttons, and a mariner changing a safety contour is usually
+    // changing it by a lot: it follows the boat's draught, not the last value.
+    //
+    // The draft is re-seeded whenever the value moves under it, which is the
+    // stepper, a unit switch, or a load from the engine. Nothing moves it while
+    // the field has focus, because the commit is on Done and on losing focus
+    // rather than per keystroke.
+    var draft by remember(shown, feet) { mutableStateOf(text(shown)) }
+    var focused by remember { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+    fun commitDraft() {
+        // Nonsense goes back to what is in force rather than to zero: a
+        // half-typed contour must not shade the chart as if the water were
+        // safe everywhere.
+        val typed = draft.trim().replace(',', '.').toDoubleOrNull()
+        if (typed == null) draft = text(shown) else commit(typed)
+    }
+
     Row(
         Modifier
             .fillMaxWidth()
@@ -175,10 +210,33 @@ private fun DepthRow(
     ) {
         Text(title, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.weight(1f))
-        Text(
-            text = if (feet) "${shown.roundToInt()}" else String.format(Locale.US, "%.1f", shown),
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { typed ->
+                // Digits and one separator. A minus sign is not a depth, and
+                // letters would only be refused on commit.
+                val kept = typed.filter { it.isDigit() || it == '.' || it == ',' }
+                if (kept.count { it == '.' || it == ',' } <= 1) draft = kept
+            },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(textAlign = TextAlign.End),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (feet) KeyboardType.Number else KeyboardType.Decimal,
+                imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(onDone = {
+                commitDraft()
+                focus.clearFocus()
+            }),
+            modifier = Modifier
+                .width(DEPTH_FIELD_WIDTH)
+                .testTag("depth-$title")
+                .onFocusChanged { state ->
+                    // Leaving the field is a commit: a mariner who types a
+                    // depth and taps the chart meant the depth.
+                    if (focused && !state.isFocused) commitDraft()
+                    focused = state.isFocused
+                },
         )
         Text(
             " $unit",
@@ -193,5 +251,12 @@ private fun DepthRow(
         }
     }
 }
+
+/** Wide enough for "660.0" and no wider: the row still has to hold its label
+ *  and both steppers on a phone. */
+private val DEPTH_FIELD_WIDTH = 96.dp
+
+/** No charted contour is deeper than this, in either unit. */
+private const val MAX_DEPTH = 660.0
 
 // ---- Text & Symbols ---------------------------------------------------------
