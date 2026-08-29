@@ -1,6 +1,5 @@
 package org.beetlebug.lookout.plugins
 
-import org.beetlebug.lookout.settings.SettingsSheet
 
 import org.json.JSONArray
 import org.json.JSONObject

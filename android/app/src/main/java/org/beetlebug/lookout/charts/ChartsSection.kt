@@ -1,8 +1,10 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.ui.SwitchRow
+
 import org.beetlebug.lookout.chart.ChartController
-import org.beetlebug.lookout.settings.Footer
-import org.beetlebug.lookout.settings.SectionHeader
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.SectionHeader
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement

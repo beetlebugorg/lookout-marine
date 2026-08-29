@@ -1,11 +1,14 @@
-package org.beetlebug.lookout.settings
+package org.beetlebug.lookout.ui
 
-// The rows every settings pane is built from.
+import org.beetlebug.lookout.settings.MarinerState
+
+// The rows every pane in the shell is built from.
 //
-// Shared, and not only by the settings: the charts pane and the licences screen
-// draw their headings and footers with these too, which is why they are
-// `internal` and why they live in a file of their own rather than at the foot
-// of the sheet that happened to need them first.
+// They are not the settings sheet's, though that is where they grew: the charts
+// pane, the licences screen and every plugin-declared control draw their
+// headings, footers and switch rows with these. Leaving them in `settings` made
+// `plugins`, `charts` and `licenses` all import from it while it imported back
+// from them, which said those packages were one thing when they are not.
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column

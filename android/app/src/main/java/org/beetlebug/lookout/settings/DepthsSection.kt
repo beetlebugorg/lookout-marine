@@ -1,5 +1,10 @@
 package org.beetlebug.lookout.settings
 
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.LabeledRow
+import org.beetlebug.lookout.ui.SectionHeader
+import org.beetlebug.lookout.ui.SegmentedRow
+
 // The Depths section: the unit, the water shading, and the four contours that
 // decide what counts as safe water.
 //

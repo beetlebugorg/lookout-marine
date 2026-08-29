@@ -1,5 +1,10 @@
 package org.beetlebug.lookout.settings
 
+import org.beetlebug.lookout.ui.LabeledRow
+import org.beetlebug.lookout.ui.SectionHeader
+import org.beetlebug.lookout.ui.SegmentedRow
+import org.beetlebug.lookout.ui.SwitchRow
+
 // The Text section: what is written on the chart, and how the symbols are drawn.
 
 import androidx.compose.material3.Text

@@ -32,10 +32,8 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import org.beetlebug.lookout.plugins.PluginField
-import org.beetlebug.lookout.plugins.PluginGroup
-import org.beetlebug.lookout.settings.Footer
-import org.beetlebug.lookout.settings.SectionHeader
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.SectionHeader
 
 /**
  * Every plugin group that belongs on this section, under its own heading.

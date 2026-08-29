@@ -1,5 +1,9 @@
 package org.beetlebug.lookout.settings
 
+import org.beetlebug.lookout.ui.ChoiceRow
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.SectionHeader
+
 // The Display section: the colour scheme, the display category and the
 // soundings, with the scheme drawn as pieces of chart rather than colour chips.
 

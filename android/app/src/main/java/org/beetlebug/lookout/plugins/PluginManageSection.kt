@@ -27,10 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.beetlebug.lookout.Lookout
-import org.beetlebug.lookout.plugins.PluginInfo
-import org.beetlebug.lookout.plugins.PluginRegistry
-import org.beetlebug.lookout.settings.Footer
-import org.beetlebug.lookout.settings.SectionHeader
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.SectionHeader
 
 /**
  * The section that talks ABOUT plugins. It lists what the mariner installed and

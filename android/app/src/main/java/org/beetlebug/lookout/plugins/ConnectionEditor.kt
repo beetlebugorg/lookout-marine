@@ -64,17 +64,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import org.beetlebug.lookout.plugins.DiscoveredService
-import org.beetlebug.lookout.plugins.Discovery
-import org.beetlebug.lookout.plugins.PluginField
-import org.beetlebug.lookout.plugins.PluginListSchema
-import org.beetlebug.lookout.plugins.PluginRegistry
-import org.beetlebug.lookout.plugins.PluginRow
-import org.beetlebug.lookout.plugins.PluginStatusItem
-import org.beetlebug.lookout.plugins.newRow
-import org.beetlebug.lookout.plugins.rowFrom
-import org.beetlebug.lookout.settings.Footer
-import org.beetlebug.lookout.settings.SectionHeader
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.SectionHeader
 
 /**
  * Every repeating list on this section, as rows that can be added to, edited

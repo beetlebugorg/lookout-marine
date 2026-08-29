@@ -1,5 +1,11 @@
 package org.beetlebug.lookout.settings
 
+import org.beetlebug.lookout.ui.Footer
+import org.beetlebug.lookout.ui.SectionHeader
+import org.beetlebug.lookout.ui.SizeRow
+import org.beetlebug.lookout.ui.SwitchRow
+import org.beetlebug.lookout.ui.ValueRow
+
 // The Advanced section: safety and quality, sizing, dates, and About.
 //
 // About sits at its foot, where the other shells put it: the version and the
