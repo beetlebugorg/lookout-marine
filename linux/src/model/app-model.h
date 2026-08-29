@@ -4,6 +4,7 @@
 #pragma once
 
 #include "library/bake.h"
+#include "library/sets.h"
 
 #include <gtk/gtk.h>
 
@@ -28,9 +29,6 @@ char **lk_app_model_initial_chart_paths (LkAppModel *self);
 /* The path the app would open on its own, drawable or not. Free with g_free. */
 char *lk_app_model_initial_source (LkAppModel *self);
 
-/* Every baked cell under a directory, sorted. */
-char **lk_app_model_chart_paths_in_dir (const char *dir);
-
 /* Open a single .pmtiles file or a folder of cells (dispatches on what's on disk). */
 void lk_app_model_open_chart (LkAppModel *self, const char *path);
 void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
@@ -41,16 +39,6 @@ void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
  * publishes them. The list answers what is aboard and what is being sailed
  * on: switching a set off keeps it aboard and takes it out of the chart, and
  * the chart is composed as the UNION of the sets switched on. */
-typedef struct {
-  char    *path;
-  char    *title;  /* the agency when the charts agree on one, else the folder name */
-  char    *detail; /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB";
-                    * "" until the background scan lands */
-  guint    charts; /* prepared cells, 0 until the scan lands */
-  gboolean on;
-} LkChartSetRow;
-
-void lk_chart_set_row_free (LkChartSetRow *row);
 
 /* Every set aboard, in the order added. Transfer full: a GPtrArray of
  * LkChartSetRow. Titles and details fill in as the background scans land;

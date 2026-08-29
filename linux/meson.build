@@ -126,6 +126,7 @@ sources = files(
   'src/library/links.c',
   'src/library/raster.c',
   'src/library/scan.c',
+  'src/library/sets.c',
   'src/model/app-model.c',
   'src/model/coord.c',
   'src/model/mariner.c',

@@ -564,7 +564,6 @@ lk_chart_bake_start (const char        *source,
   bake->on_progress = on_progress;
   bake->on_done = on_done;
   bake->user_data = user_data;
-  bake->job_total = (int) ordered->len;
   bake->started_us = g_get_monotonic_time ();
 
   for (guint i = 0; i < ordered->len; i++)

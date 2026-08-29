@@ -1,5 +1,7 @@
 #include "library/raster.h"
 
+#include "library/scan.h"
+
 #include "model/store.h"
 
 #include <string.h>
@@ -353,42 +355,8 @@ lk_raster_charts_groups (LkRasterCharts *self)
 
 /* ---- finding them on disk ------------------------------------------------ */
 
-static void
-lk_raster_collect (const char *dir, GPtrArray *out)
-{
-  g_autoptr (GDir) handle = g_dir_open (dir, 0, NULL);
-
-  if (handle == NULL)
-    return;
-
-  const char *name;
-  while ((name = g_dir_read_name (handle)) != NULL)
-    {
-      g_autofree char *path = g_build_filename (dir, name, NULL);
-      g_autofree char *lower = g_ascii_strdown (name, -1);
-
-      if (g_file_test (path, G_FILE_TEST_IS_DIR))
-        lk_raster_collect (path, out);
-      else if (g_str_has_suffix (lower, ".mbtiles"))
-        g_ptr_array_add (out, g_steal_pointer (&path));
-    }
-}
-
-static int
-lk_raster_sort (gconstpointer a, gconstpointer b)
-{
-  return g_strcmp0 (*(const char *const *) a, *(const char *const *) b);
-}
-
 char **
 lk_raster_charts_in_dir (const char *dir)
 {
-  g_autoptr (GPtrArray) paths = g_ptr_array_new_with_free_func (g_free);
-
-  g_return_val_if_fail (dir != NULL, g_new0 (char *, 1));
-
-  lk_raster_collect (dir, paths);
-  g_ptr_array_sort (paths, lk_raster_sort);
-  g_ptr_array_add (paths, NULL);
-  return (char **) g_ptr_array_free (g_steal_pointer (&paths), FALSE);
+  return lk_files_under (dir, ".mbtiles");
 }

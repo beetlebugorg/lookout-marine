@@ -50,4 +50,9 @@ gboolean lk_scanned_cell_needs_prepare (const LkScannedCell *cell);
 /* True when the cell is a picture rather than the survey. */
 gboolean lk_scanned_cell_is_raster (const LkScannedCell *cell);
 
+/* Every file under `dir` whose name ends in `suffix`, however it is cased,
+ * depth first and sorted by path. Transfer full strv, never NULL. This is the
+ * plain disk walk, not a scan: it reads names, not charts. */
+char **lk_files_under (const char *dir, const char *suffix);
+
 #endif /* LK_CHART_SCAN_H */
