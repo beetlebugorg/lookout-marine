@@ -1,0 +1,73 @@
+{"plugins":[
+{"id":"org.beetlebug.nmea0183","name":"NMEA 0183","version":"1.0.0","origin":"bundled","live":true,
+ "status":"{\"state\":\"running\",\"detail\":\"1 of 1 connected\",\"items\":[{\"id\":\"row-a1b2c3d4\",\"state\":\"connected\",\"detail\":\"44 msg/s\"},{\"id\":\"row-deadbeef\",\"state\":\"unreachable\",\"detail\":\"no route to host\"}]}",
+ "capabilities":[
+  {"cap":"net.tcp-client","sentence":"Connect to devices on your boat's own network.","hosts":["local"],"granted":true},
+  {"cap":"vessel.publish","sentence":"Report your boat's position, course and speed.","granted":true},
+  {"cap":"ais.publish","sentence":"Report other vessels it hears.","granted":true},
+  {"cap":"bus.publish","sentence":"Hand raw sentences to other plugins.","hosts":["nmea0183"],"granted":false}],
+ "settings":[],
+ "lists":[
+  {"key":"connections","group":"Connections",
+   "footer":"Give the address of your instrument network's gateway.",
+   "empty":"No connections yet.","add_label":"Add Connection","switch_key":"enabled",
+   "discover":[{"service":"_nmea-0183._tcp"}],
+   "tab":"connections","max_rows":8,
+   "item_fields":[
+    {"key":"name","label":"Name","desc":"What you call this source. Leave it empty to show the address.","kind":"text","optional":true,"default":"","max_len":120},
+    {"key":"host","label":"Address","desc":"The name or IP address of the instrument network's gateway.","kind":"text","default":"","max_len":120},
+    {"key":"port","label":"Port","desc":"Most WiFi gateways serve NMEA 0183 on port 10110.","kind":"number","min":1,"max":65535,"default":10110},
+    {"key":"enabled","label":"On","desc":"Off closes the connection and stops reconnecting.","kind":"toggle","default":true}],
+   "rows":[
+    {"id":"row-a1b2c3d4","name":"Masthead","host":"192.168.1.50","port":10110,"enabled":true},
+    {"id":"row-deadbeef","name":"","host":"nav.local","port":10111,"enabled":false}]}]},
+
+{"id":"org.beetlebug.signalk","name":"Signal K","version":"1.0.0","origin":"bundled","live":true,
+ "status":"{\"state\":\"running\",\"detail\":\"\",\"items\":[{\"id\":\"row-5f5f5f5f\",\"state\":\"reconnecting\",\"detail\":\"retry in 4 s\"}]}",
+ "capabilities":[
+  {"cap":"net.tcp-client","sentence":"Connect to devices on your boat's own network.","hosts":["local"],"granted":true},
+  {"cap":"net.ws","sentence":"Open a WebSocket to your boat's own network.","hosts":["local"],"granted":true}],
+ "settings":[],
+ "lists":[
+  {"key":"servers","group":"Signal K servers",
+   "footer":"A Signal K server sends the whole boat as one stream of updates on port 8375.",
+   "empty":"No servers yet.","add_label":"Add Server","switch_key":"enabled",
+   "discover":[{"service":"_signalk-ws._tcp","set":{"websocket":true}}],
+   "tab":"connections","max_rows":8,
+   "item_fields":[
+    {"key":"name","label":"Name","desc":"What you call this server. Leave it empty to show the address.","kind":"text","optional":true,"default":"","max_len":120},
+    {"key":"host","label":"Address","desc":"The name or IP address of the Signal K server.","kind":"text","default":"","max_len":120},
+    {"key":"port","label":"Port","desc":"Most Signal K servers stream on port 8375.","kind":"number","min":1,"max":65535,"default":8375},
+    {"key":"websocket","label":"WebSocket","desc":"Read the WebSocket stream instead of the plain one.","kind":"toggle","default":false},
+    {"key":"enabled","label":"On","desc":"Off closes the stream and stops reconnecting.","kind":"toggle","default":true}],
+   "rows":[
+    {"id":"row-5f5f5f5f","name":"","host":"signalk.local","port":3000,"websocket":true,"enabled":true}]}]},
+
+{"id":"org.beetlebug.ais","name":"AIS targets","version":"1.0.0","origin":"bundled","live":true,
+ "status":"Tracking 14 targets",
+ "capabilities":[
+  {"cap":"ais.read","sentence":"Read the vessels other plugins report.","granted":true},
+  {"cap":"overlay.draw","sentence":"Draw on the chart.","granted":true},
+  {"cap":"alerts.raise","sentence":"Raise alarms and warnings.","granted":true}],
+ "settings":[
+  {"key":"cpa_limit","label":"Closest approach (CPA)","desc":"Alarm when a vessel will pass closer than this.","kind":"number","unit":"m","min":93,"max":9260,"default":926,"group":"Collision alarm","tab":"alarms","value":926},
+  {"key":"tcpa_limit","label":"Time to closest approach (TCPA)","desc":"Alarm only when that pass is this soon or sooner.","kind":"number","unit":"min","min":1,"max":60,"default":10,"group":"Collision alarm","tab":"alarms","value":10},
+  {"key":"cpa_alarm","label":"Collision alarm","desc":"Sound the alarm and colour the vessel red.","kind":"toggle","default":true,"group":"Collision alarm","tab":"alarms","value":true},
+  {"key":"vector_min","label":"Course vectors","desc":"How far ahead of each vessel its course line is drawn.","kind":"number","unit":"min","min":1,"max":24,"default":6,"group":"AIS targets","tab":"vessels","value":6},
+  {"key":"min_sog","label":"Hide targets under","desc":"Leave out vessels slower than this.","kind":"number","unit":"kn","min":0,"max":5,"default":0,"group":"AIS targets","tab":"vessels","value":0.5}]},
+
+{"id":"org.example.grib","name":"GRIB weather","version":"0.4.1","origin":"installed","live":true,
+ "status":"{\"state\":\"degraded\",\"detail\":\"no file loaded\"}",
+ "capabilities":[
+  {"cap":"net.http","sentence":"Fetch forecasts from the internet.","hosts":["nomads.ncep.noaa.gov"],"granted":false},
+  {"cap":"overlay.draw","sentence":"Draw on the chart.","granted":true}],
+ "file_types":["grib2","grb"],
+ "settings":[
+  {"key":"opacity","label":"Overlay opacity","kind":"number","unit":"%","min":10,"max":100,"default":60,"tab":"advanced","value":60}]},
+
+{"id":"org.example.routes","name":"Routes","version":"2.0.0","origin":"developer","live":false,
+ "status":"{\"state\":\"stopped\",\"detail\":\"module trapped\"}",
+ "capabilities":[],
+ "settings":[
+  {"key":"show_legs","label":"Show leg distances","kind":"toggle","default":true,"tab":"advanced","value":false}]}
+]}

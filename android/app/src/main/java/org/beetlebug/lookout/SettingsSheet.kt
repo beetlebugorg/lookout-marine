@@ -1334,7 +1334,7 @@ private fun PluginNumberRow(field: PluginField, onCommit: (Double) -> Unit) {
  * in: word + " · " + detail (the reference's word map). Null when the plugin
  * says nothing.
  */
-private fun statusCaption(p: PluginInfo): String? {
+internal fun statusCaption(p: PluginInfo): String? {
     val raw = p.status.trim()
     if (raw.isEmpty()) return null
     if (!raw.startsWith("{")) return raw
