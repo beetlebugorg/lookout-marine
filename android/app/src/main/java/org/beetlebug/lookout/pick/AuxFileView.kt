@@ -2,7 +2,6 @@
 // photograph — shown whole. The Android twin of the reference's AuxFileView.
 package org.beetlebug.lookout.pick
 
-import org.beetlebug.lookout.chart.ChartController
 
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
@@ -20,7 +19,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun AuxFileDialog(file: ChartController.AuxFile, onDismiss: () -> Unit) {
+fun AuxFileDialog(file: AuxFile, onDismiss: () -> Unit) {
     // Decoded by CONTENT, not by the mime string: the engine's mime is a
     // hint, and a picture that will not decode falls through to text, which
     // falls through to the honest sentence.

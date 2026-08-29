@@ -1,6 +1,6 @@
 package org.beetlebug.lookout
 
-import org.beetlebug.lookout.chart.PickFeature
+import org.beetlebug.lookout.pick.PickFeature
 import org.beetlebug.lookout.pick.PickDecoded
 import org.beetlebug.lookout.pick.S57
 

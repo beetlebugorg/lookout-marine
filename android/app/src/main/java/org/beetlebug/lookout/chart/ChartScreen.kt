@@ -342,7 +342,7 @@ fun ChartScreen(
         }
         // A plugin's declared table (AIS targets), over the chart so a row's
         // reveal lands on a visible chart.
-        PluginTableDialog(controller)
+        PluginTableDialog(controller.tables)
         // Consent for a .lkplug that arrived from another app; also serves
         // the settings sheet's install flow.
         PluginInstallDialogs(controller)

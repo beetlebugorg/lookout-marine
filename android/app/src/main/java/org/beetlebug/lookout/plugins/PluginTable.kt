@@ -18,7 +18,6 @@
 // and the table says which one it has.
 package org.beetlebug.lookout.plugins
 
-import org.beetlebug.lookout.chart.ChartController
 import org.beetlebug.lookout.hud.Chrome
 
 import androidx.compose.foundation.background
@@ -168,7 +167,7 @@ private fun columnWidth(type: String) = if (type == "text") 150.dp else 84.dp
  * the rows poll rides this composable's lifetime.
  */
 @Composable
-fun PluginTableDialog(controller: ChartController) {
+fun PluginTableDialog(controller: TableController) {
     val spec = controller.openTable ?: return
     LaunchedEffect(spec.id) {
         while (true) {
@@ -236,7 +235,7 @@ fun PluginTableDialog(controller: ChartController) {
 private fun TableRowLine(
     spec: TableSpec,
     row: TableRow,
-    controller: ChartController,
+    controller: TableController,
 ) {
     // The colour of a row, from its flag column. Alarm takes the palette's
     // strongest warning colour, the way the alert banner does; a warning is
