@@ -103,7 +103,7 @@ movement of the camera retires the report, so it never floats above water that i
 does not describe. **Escape** closes it.
 
 GLib has no JSON reader, and json-glib is not a dependency of GTK. Therefore
-`src/lk-json.c` reads the payload. It is small, and it adds no prerequisite for a
+`src/util/json.c` reads the payload. It is small, and it adds no prerequisite for a
 packager.
 
 ## Handling what the plugins put on the chart
@@ -209,7 +209,7 @@ raster chart, not the ENC: the accent colour while the picture draws, amber whil
 one covers the view and is off. Hiding the ENC above it keeps the accent colour,
 because the picture is still drawn; the "ENC OFF" text carries that.
 
-`src/lk-raster.c` holds the installed list and the on/off state. **The list must
+`src/library/raster.c` holds the installed list and the on/off state. **The list must
 live in the shell.** The engine holds what is open now, and a raster chart belongs
 to one `lookout*` handle. A chart set has to outlive both a change of ENC and a
 restart, so the list is persisted in `settings.ini` and
@@ -350,22 +350,15 @@ the saved chart library. Then it looks for
 
 ## Where the code lives
 
-| File | Function |
+| Directory | Function |
 |------|----------|
 | `src/main.c` | The `GtkApplication` entry point, the CSS, and the accelerators |
-| `src/lk-window.c` | The window: the titlebar, the chart, the floating chrome, the actions, and the open dialog |
-| `src/lk-chart-view.c` | The chart widget. It owns the surface, the transparent hole, and all input. |
-| `src/lk-chart-controller.c` | The one `lookout*` handle, every `lookout_*` call, and the render loop |
-| `src/lk-native-surface.c` | The X11 child window or the Wayland subsurface that the chart draws into |
-| `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate and scale parsers |
-| `src/lk-hud.c` | The readouts capsule, the distance bar, the north control, the scale entry, and the formats |
-| `src/lk-pick-report.c` | The pick report: the decode, the card, and the placement of the callout |
-| `src/lk-raster.c` | The installed raster charts, their on and off, and the set names |
-| `src/lk-json.c` | The JSON reader for the payload of a pick |
-| `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
-| `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The mariner panel (Display, Depths, Text, Charts, Advanced) |
-| `src/lk-store.c` | The camera position, the recents, and the settings in one XDG keyfile |
+| `src/engine/` | The one `lookout*` handle, every `lookout_*` call, the render loop, and the native surface that the chart draws into |
+| `src/model/` | The shared state, the coordinate and scale parsers, the settings store, and the live `tile57_mariner` |
+| `src/library/` | The chart library: the bake, the cell scan, the charts by link, and the installed raster charts |
+| `src/plugins/` | The wasm plugin registry, the `.lkplug` install, and the source discovery |
+| `src/ui/` | The window, and the chart, hud, settings and chrome widgets below it |
+| `src/util/` | The JSON reader, and the signal tether |
 | `build-core.sh` | It builds the Zig core where meson expects the outputs. |
 | `screenshots.sh` | It makes the documentation screenshots. Refer to [the protocol](screenshots.md). |
 

@@ -116,27 +116,15 @@ the first frame, because the engine draws a set as it opens it.
 
 ## What's in here
 
-| File | Role |
+| Directory | Role |
 |------|------|
 | `src/main.c` | `GtkApplication` entry, CSS, accelerators |
-| `src/lk-window.c` | The window: titlebar, chart, the floating chrome, actions, the commands menu, open dialog, file drops |
-| `src/lk-alerts.c` | The plugin alert strip, and the siren behind an alarm |
-| `src/lk-table-window.c` | A plugin's declared table, as a window |
-| `src/lk-plugin-install.c` | The `.lkplug` consent sheet, and the install |
-| `src/lk-overlay-pick.c` | The bubble pinned to a symbol a plugin drew |
-| `src/lk-chart-view.c` | The chart widget: owns the surface, the transparent hole, all input |
-| `src/lk-chart-controller.c` | The one `lookout*` handle; every `lookout_*` call; the render loop |
-| `src/lk-native-surface.c` | The X11 child window / Wayland subsurface the chart presents into |
-| `src/lk-app-model.c` | Shared state, the chart library, open paths, coordinate and scale parsers |
-| `src/lk-hud.c` | The readouts capsule, scale bar, north bubble, scale entry, formatting |
-| `src/lk-pick-report.c` | The cursor pick report: the decode, the card, the callout placement |
-| `src/lk-raster.c` | The installed raster charts, their on/off, and the set names |
-| `src/lk-json.c` | A small JSON reader for the engine's pick payload |
-| `src/lk-plugins.c` | The wasm plugin registry: schemas, values, list rows, apply and save |
-| `src/lk-search.c` | Coordinate go-to (feature search stubbed) |
-| `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The mariner panel (Display / Depths / Text / Charts / Advanced), and the plugin-declared sections |
-| `src/lk-store.c` | Camera pose, recents and settings in one XDG keyfile |
+| `src/engine/` | The one `lookout*` handle, every `lookout_*` call, the render loop, and the native surface the chart presents into |
+| `src/model/` | Shared state, the coordinate and scale parsers, the settings store, and the live `tile57_mariner` |
+| `src/library/` | The chart library: the bake, the cell scan, charts by link, and the installed raster charts |
+| `src/plugins/` | The wasm plugin registry, the `.lkplug` install, and the source discovery |
+| `src/ui/` | The window, and the chart, hud, settings and chrome widgets below it |
+| `src/util/` | The JSON reader, and the signal tether |
 | `build-core.sh` | Builds the Zig core where meson expects its outputs |
 | `screenshots.sh` | The documentation screenshots, headless |
 | `data/` | The desktop entry and the hicolor icons `meson install` ships |
