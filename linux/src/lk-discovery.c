@@ -20,16 +20,21 @@ struct _LkDiscovery {
   guint              item_remove;
   LkDiscoveryChanged changed;
   gpointer           user_data;
+  grefcount          refs;     /* the owner, plus one per call in flight */
 };
 
 /* One call in flight, so its answer knows which browse asked for it. The
- * discovery cancels every call it started before it frees itself, and a
- * cancelled call answers an error, so a callback reads `self` only once it has
- * a reply in hand. */
+ * discovery cancels every call it started when the owner frees it, but a reply
+ * that already arrived is delivered with a result, not a cancellation, so the
+ * callback could read a freed `self`. Each pending therefore holds a reference,
+ * and the struct is finalised only when the last call is answered. */
 typedef struct {
   LkDiscovery *self;
   char        *service;
 } LkPending;
+
+static LkDiscovery *lk_discovery_ref (LkDiscovery *self);
+static void         lk_discovery_unref (LkDiscovery *self);
 
 static void
 lk_discovered_free (gpointer data)
@@ -66,6 +71,7 @@ lk_discovery_moved (LkDiscovery *self)
 static void
 lk_pending_free (LkPending *pending)
 {
+  lk_discovery_unref (pending->self);
   g_free (pending->service);
   g_free (pending);
 }
@@ -163,7 +169,7 @@ lk_discovery_item_new (GDBusConnection *bus,
 
   LkPending *resolve = g_new0 (LkPending, 1);
 
-  resolve->self = self;
+  resolve->self = lk_discovery_ref (self);
   resolve->service = g_steal_pointer (&service);
 
   /* Resolved on the interface and protocol it was seen on. A resolve that asks
@@ -257,6 +263,7 @@ lk_discovery_new (LkDiscoveryChanged changed, gpointer user_data)
   LkDiscovery *self = g_new0 (LkDiscovery, 1);
   g_autoptr (GError) error = NULL;
 
+  g_ref_count_init (&self->refs);
   self->changed = changed;
   self->user_data = user_data;
   self->browsers = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
@@ -331,7 +338,7 @@ lk_discovery_browse (LkDiscovery *self, GPtrArray *services)
 
       LkPending *pending = g_new0 (LkPending, 1);
 
-      pending->self = self;
+      pending->self = lk_discovery_ref (self);
       pending->service = g_strdup (service);
       g_dbus_connection_call (self->bus, LK_AVAHI_BUS, "/", LK_AVAHI_SERVER, "ServiceBrowserNew",
                               g_variant_new ("(iissu)", LK_AVAHI_IF_UNSPEC, LK_AVAHI_PROTO_UNSPEC,
@@ -347,12 +354,43 @@ lk_discovery_found (LkDiscovery *self)
   return self->found;
 }
 
+static LkDiscovery *
+lk_discovery_ref (LkDiscovery *self)
+{
+  g_ref_count_inc (&self->refs);
+  return self;
+}
+
+static void
+lk_discovery_finalize (LkDiscovery *self)
+{
+  if (self->bus != NULL)
+    g_object_unref (self->bus);
+  g_object_unref (self->cancel);
+  g_hash_table_unref (self->browsers);
+  g_ptr_array_unref (self->found);
+  g_free (self);
+}
+
+static void
+lk_discovery_unref (LkDiscovery *self)
+{
+  if (g_ref_count_dec (&self->refs))
+    lk_discovery_finalize (self);
+}
+
 void
 lk_discovery_free (LkDiscovery *self)
 {
   if (self == NULL)
     return;
 
+  /* The owner is done. Cut the notify and stop new work, so a call still in
+     flight cannot report into the freed owner. The struct itself lives until
+     the last call is answered: a reply that already arrived is delivered with a
+     result, not a cancellation, so a callback must still find `self` valid. */
+  self->changed = NULL;
+  self->user_data = NULL;
   g_cancellable_cancel (self->cancel);
 
   if (self->bus != NULL)
@@ -365,13 +403,16 @@ lk_discovery_free (LkDiscovery *self)
         lk_discovery_free_browser (self, value);
 
       if (self->item_new != 0)
-        g_dbus_connection_signal_unsubscribe (self->bus, self->item_new);
+        {
+          g_dbus_connection_signal_unsubscribe (self->bus, self->item_new);
+          self->item_new = 0;
+        }
       if (self->item_remove != 0)
-        g_dbus_connection_signal_unsubscribe (self->bus, self->item_remove);
-      g_object_unref (self->bus);
+        {
+          g_dbus_connection_signal_unsubscribe (self->bus, self->item_remove);
+          self->item_remove = 0;
+        }
     }
-  g_object_unref (self->cancel);
-  g_hash_table_unref (self->browsers);
-  g_ptr_array_unref (self->found);
-  g_free (self);
+
+  lk_discovery_unref (self);
 }
