@@ -26,18 +26,23 @@ $here = $PSScriptRoot
 $out = Join-Path $here 'test\out'
 $target = if ($Platform -eq 'arm64') { 'aarch64-windows-gnu' } else { 'x86_64-windows-gnu' }
 
+# Every source directory is on the include path, the way the vcxproj puts it
+# there ($(LkSourceDirs)), so a header is included by name here too.
+$sourceDirs = @('app', 'chart', 'hud', 'library', 'plugins', 'settings', 'about',
+    'engine', 'util') | ForEach-Object { "-I$PSScriptRoot\src\$_" }
+
 # The shell's own sources under test. A new module goes in one of the first two
 # lists, its suite in the third, and main.cpp names the suite function.
 $cSources = @(
-    'src\lk_coord.c'
+    'src\util\lk_coord.c'
 )
 $cppSources = @(
-    'src\lk_json.cpp',
-    'src\lk_utf8.cpp',
-    'src\lk_pick.cpp',
-    'src\lk_licenses.cpp',
-    'src\lk_plugin_registry.cpp',
-    'src\lk_alerts.cpp'
+    'src\util\lk_json.cpp',
+    'src\util\lk_utf8.cpp',
+    'src\chart\lk_pick.cpp',
+    'src\about\lk_licenses.cpp',
+    'src\plugins\lk_plugin_registry.cpp',
+    'src\plugins\lk_alerts.cpp'
 )
 $suites = @(
     'test\main.cpp',
@@ -55,8 +60,8 @@ $objects = New-Object System.Collections.Generic.List[string]
 
 function Compile([string]$Sub, [string]$Source, [string[]]$Extra) {
     $obj = Join-Path $out ((Split-Path $Source -Leaf) + '.o')
-    $arguments = @($Sub, '-target', $target, '-c', (Join-Path $here $Source), '-o', $obj,
-        "-I$here\src", "-I$here\test", '-Wall', '-Wextra', '-Wno-unused-parameter', '-g') + $Extra
+    $arguments = @($Sub, '-target', $target, '-c', (Join-Path $here $Source), '-o', $obj) +
+        $sourceDirs + @("-I$here\test", '-Wall', '-Wextra', '-Wno-unused-parameter', '-g') + $Extra
     & zig @arguments
     if ($LASTEXITCODE -ne 0) { throw "zig $Sub failed on $Source ($LASTEXITCODE)" }
     $objects.Add($obj)

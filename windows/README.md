@@ -99,34 +99,51 @@ live in Settings ▸ Plugins. One copy runs per machine (`LOOKOUT_MULTI=1`
 lifts it); `LOOKOUT_CLEAN=1` keeps every plugin on its manifest defaults for
 captures.
 
-## What's in here
+## The source tree
 
-| File | Role |
-|------|------|
-| `ui/MainWindow.xaml.cpp` | Window construction, chrome wiring, the render thread |
-| `ui/MainWindow.Open.cpp` | Open flow, pickers, the chart panel |
-| `ui/MainWindow.Input.cpp` | Gestures, commands, coordinate search |
-| `ui/MainWindow.Hud.cpp` | Readout capsule and the scale bar |
-| `ui/MainWindow.Loader.cpp` | The startup loader phases (atlas / mapping / tessellating) |
-| `ui/MainWindow.Pick.cpp` | The pick report card: ranked pick, object list, decoded rows, raw fold |
-| `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
-| `ui/MainWindow.Raster.cpp` | The raster pill and its menu, the add flow, the re-install at every open |
-| `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
-| `ui/MainWindow.Settings.cpp` | The mariner settings window: the section list, the pages, debounced apply |
-| `ui/MainWindow.Plugins.cpp` | The plugin-declared settings sections, the connection list, capability grants, apply and save |
-| `ui/MainWindow.Alerts.cpp` | The alert strip and the siren: an alarm sounds and repeats until acknowledged |
-| `ui/MainWindow.Vessels.cpp` | Plugin table windows (AIS Targets): shell-side units, seq-gated reload, reveal on chart |
-| `ui/MainWindow.PluginInstall.cpp` | The .lkplug consent sheet, install, and the dropped-file router |
-| `ui/MainWindow.Overlay.cpp` | The bubble pinned to an overlay object, the hover tip, the GPS pill, the follow lock |
-| `src/lk_plugin_model.h` | The shape the plugin registry takes on this side |
-| `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
-| `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |
-| `src/lk_store.*` | Camera pose, recents, mariner settings and the raster chart list in `%APPDATA%\lookout-marine\settings.ini` |
-| `src/lk_coord.*` | Coordinate go-to parser and DMS formatting |
-| `src/lk_paths.*`, `src/lk_format.*`, `src/lk_backdrop.*` | Chart discovery, HUD formatting, the transparent backdrop |
-| `build-core.ps1` | Builds the Zig core where the vcxproj expects its outputs |
-| `LookoutMarine.rc`, `resource.h` | The app icon as a Win32 ICON resource |
-| `LookoutMarine.ico` | The icon itself: 16/32/48/64/128/256 in one container |
+`src/` has a directory per area of the app, and each one holds **both** the
+WinUI that draws that area and the model that drives it: the pick report card
+sits with the pick decoder, the raster pill with the raster paths, the
+connection list with the registry reader. A change to one feature is a change
+in one directory.
+
+The model files carry no WinRT — that is what lets `build-tests.ps1` link them
+into a test binary with no XAML host (see **Tests** below). The vcxproj marks
+each of them `NotUsing` for the precompiled header to keep it honest.
+
+| Directory | What it is |
+|---|---|
+| `src/app/` | The two XAML types (`App`, `MainWindow`), the window shell and the render thread, the menu bubble, and the glue that compiles the XAML-generated TUs a command-line build does not auto-register |
+| `src/chart/` | The chart surface: the open flow and the panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at, and `lk_pick` — the report envelope decoder |
+| `src/hud/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` — the readout formatting and the chrome palette |
+| `src/library/` | The charts aboard: the sets and their switches, charts by link, the raster underlay and its pill, the import and bake, and `lk_paths` / `lk_bake` behind them |
+| `src/plugins/` | Everything the wasm plugins reach: their settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and siren, DNS-SD discovery, and the `lk_plugin_registry` / `lk_alerts` models |
+| `src/settings/` | The mariner settings window: the section list, the pages, the debounced apply |
+| `src/about/` | About and the licences screen, over the `lk_licenses` manifest model |
+| `src/engine/` | The seams: `lk_controller` (the one `lookout*` handle and every `lookout_*` call), `lk_store` (`%APPDATA%\lookout-marine`), `lk_backdrop` (the transparent backdrop) |
+| `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8`, `lk_coord` |
+| `test/` | The model layer's tests and the check harness they are written against |
+
+At the root: `build-core.ps1` builds the Zig core where the vcxproj expects its
+outputs, `build-tests.ps1` builds and runs the tests, `pch.h` is the WinRT
+precompiled header, and `LookoutMarine.rc` / `resource.h` / `LookoutMarine.ico`
+are the app icon as a Win32 ICON resource.
+
+## Tests
+
+```powershell
+pwsh windows/build-tests.ps1
+```
+
+The suite covers the shell's **model**: the coordinate and scale parsers, the
+JSON reader every seam with the core goes through, the pick report decoder, the
+licence manifest, the plugin registry and the config object that goes back, and
+the alert rules. Not the WinUI layer, which needs a XAML host.
+
+It builds with `zig`, not MSVC, on purpose: `zig` is already a prerequisite of
+this shell, so the tests run for anyone who can build the app — including on a
+machine with no Visual Studio. Nothing in the suite links the core or WinRT,
+which is what keeps that true.
 
 ## The app icon
 

@@ -1,6 +1,6 @@
 // The pick report card: ranked cursor pick → marker, callout placement, the
 // object list, the decoded rows and the raw S-57 fold. The aux-file views and
-// the picture viewer live in MainWindow.PickAux.cpp. Mirrors PickReport.swift
+// the picture viewer live in chart/PickAux.cpp. Mirrors PickReport.swift
 // (macOS/iOS) and PickReport.kt (Android).
 #include "pch.h"
 #include "MainWindow.xaml.h"

@@ -1,6 +1,8 @@
-// The window shell: construction, chrome wiring, and the render thread. The
-// other concerns are split per file: MainWindow.Open.cpp, .Input.cpp,
-// .Hud.cpp, .Settings.cpp.
+// The window shell: construction, chrome wiring, and the render thread.
+//
+// Everything else this window does lives in the directory for the area it
+// belongs to — chart/, hud/, library/, plugins/, settings/, about/ — each
+// beside the model that drives it. See README.md for the map.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 #if __has_include("MainWindow.g.cpp")

@@ -14,7 +14,7 @@
             <!-- The chrome wears the CHART's scheme, not the system's: a white
                  pick card at night would undo the night palette's whole point.
                  Day chrome is light; dusk and night flip Root's RequestedTheme
-                 to Dark (MainWindow.Hud.cpp) and these dictionaries carry the
+                 to Dark (hud/Hud.cpp) and these dictionaries carry the
                  rest — menus and dialogs follow the element theme on their
                  own. -->
             <ResourceDictionary>
@@ -64,7 +64,7 @@
              The commands live in a bubble rather than a menu bar, because the
              chart is the app: a bar would take a strip of water on every
              screen, and this is the one shape the Mac, the iPad and the phone
-             can all wear. The list is built in code (MainWindow.Menu.cpp),
+             can all wear. The list is built in code (app/Menu.cpp),
              since most of it names things that come and go: the charts opened
              lately, the raster sets covering this view, the tables the plugins
              declare. -->
@@ -80,7 +80,7 @@
             </StackPanel>
             <!-- The results row under the field: a parsed coordinate previews
                  as a go-to; anything else says honestly that name search is
-                 not here yet. Built in code (MainWindow.Input.cpp); never
+                 not here yet. Built in code (chart/Input.cpp); never
                  faked results. -->
             <Border x:Name="SearchResults" Width="320" CornerRadius="12"
                     HorizontalAlignment="Left" Margin="58,0,0,0"
@@ -136,7 +136,7 @@
             <!-- source credits while a chart link draws: tile usage policies
                  (openstreetmap.org's among them) make the visible credit a
                  condition of service, so it rides the one HUD element that
-                 is always on screen (MainWindow.ChartLinks.cpp fills it). -->
+                 is always on screen (library/ChartLinks.cpp fills it). -->
             <TextBlock x:Name="ScaleBarCredit" FontSize="10.5" Text=""
                        Foreground="{ThemeResource LkMutedBrush}"
                        Visibility="Collapsed" MaxWidth="360" TextWrapping="Wrap" />
@@ -144,7 +144,7 @@
 
         <!-- top-center: the plugin alert strip above the build pill, so an
              alarm is never under it. Alert rows are built in code
-             (MainWindow.Alerts.cpp); only unacknowledged alerts show, two at
+             (plugins/Alerts.cpp); only unacknowledged alerts show, two at
              most, the rest as one "n more" line. -->
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Top"
                     Margin="0,10,0,0" Spacing="8">
@@ -173,7 +173,7 @@
 
         <!-- pick report card: a callout placed beside the mark in code. The
              list column shows only when the pick found more than one object;
-             every dynamic row is built in MainWindow.Pick.cpp. -->
+             every dynamic row is built in chart/Pick.cpp. -->
         <Border x:Name="PickCard" CornerRadius="12" Background="{ThemeResource LkCardBrush}"
                 BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1" Visibility="Collapsed"
                 HorizontalAlignment="Left" VerticalAlignment="Top">
@@ -305,7 +305,7 @@
              sections down the left, the section itself on the right, and the
              one promise the whole thing makes standing under the list rather
              than repeated in every section.
-             This lives in ITS OWN WINDOW (MainWindow.Settings.cpp moves it
+             This lives in ITS OWN WINDOW (settings/Settings.cpp moves it
              there at construction). A pane over the chart had to dodge the
              HUD and the corner bubbles, which left it too narrow for a
              two-column form and put it under the chrome it was covering. -->
@@ -340,7 +340,7 @@
         </Border>
 
         <!-- bottom-center: the zoom-to-scale panel, above the readout capsule.
-             Presets are built in code (MainWindow.Scale.cpp). -->
+             Presets are built in code (hud/Scale.cpp). -->
         <Border x:Name="ScalePanel" Width="340" CornerRadius="12" Background="{ThemeResource LkCardBrush}"
                 BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1" Padding="14"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
@@ -420,7 +420,7 @@
                 <!-- the raster pill: shown while a raster chart set covers the
                      view — amber when it is switched off, blue while it is
                      drawn. The chevron is a promise: a press opens a list
-                     (MainWindow.Raster.cpp). -->
+                     (library/Raster.cpp). -->
                 <Rectangle x:Name="RasterPillSep" Width="1" Height="20" Fill="#DDDDDD"
                            Visibility="Collapsed" />
                 <Button x:Name="RasterPill" Padding="7,2" BorderThickness="0"
@@ -438,7 +438,7 @@
         <!-- startup loader: the S-52 NODATA day blue under a 22% scrim, so
              launch, loader and first frame read as one continuous surface.
              Three phases (baking atlas / mapping cells / tessellating) set in
-             MainWindow.Loader.cpp. -->
+             hud/Loader.cpp. -->
         <Grid x:Name="StartupLoader" Background="#FF93AEBB" Visibility="Collapsed">
             <Grid Background="#38000000" />
             <Border CornerRadius="12" Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}"
@@ -472,7 +472,7 @@
         <!-- chart import: raw S-57 cells being baked into charts the app can
              draw. Same surface as the startup loader, but the count is known,
              so the bar is determinate and the mariner can stop. Driven on a
-             timer from the job's snapshot in MainWindow.Bake.cpp. -->
+             timer from the job's snapshot in library/Bake.cpp. -->
         <Grid x:Name="BakePanel" Background="#FF93AEBB" Visibility="Collapsed">
             <Grid Background="#38000000" />
             <Border CornerRadius="12" Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}"
@@ -493,7 +493,7 @@
         </Grid>
 
         <!-- a bubble pinned to an overlay object (an AIS target): placed and
-             refreshed per tick in MainWindow.Overlay.cpp, closed when the
+             refreshed per tick in hud/Overlay.cpp, closed when the
              object goes. The hover tip is its one-shot cousin under the
              pointer. -->
         <Border x:Name="OverlayBubble" CornerRadius="10" Background="{ThemeResource LkCardBrush}"

@@ -9,7 +9,7 @@
  *   - an unacknowledged alarm is audible, and looking at it is not
  *     acknowledging it.
  *
- * The strip and the siren are MainWindow.Alerts.cpp's.
+ * The strip and the siren are plugins/Alerts.cpp's.
  */
 #pragma once
 

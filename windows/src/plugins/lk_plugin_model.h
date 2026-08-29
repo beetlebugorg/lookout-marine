@@ -1,7 +1,7 @@
 // lk_plugin_model — the shape the wasm plugin registry takes on this side.
 //
 // A plugin declares a settings schema in its manifest and the core hands the
-// whole registry over as JSON (lookout_plugins_json); MainWindow.Plugins.cpp
+// whole registry over as JSON (lookout_plugins_json); plugins/PluginSettings.cpp
 // parses it into these and draws a control per field. Mirrors PluginSettings.swift
 // (macOS/iOS) and linux/src/lk-plugins.h.
 //
@@ -128,7 +128,7 @@ namespace lkw
     // One declared plugin table (the AIS Targets list). A column TYPE is the
     // unit contract: distance metres, speed m/s, bearing degrees true,
     // duration seconds, plus number/text/flag — the plugin sends SI and the
-    // shell formats for the mariner (MainWindow.Vessels.cpp).
+    // shell formats for the mariner (plugins/Tables.cpp).
     struct TableColumn
     {
         std::string key;

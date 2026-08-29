@@ -7,7 +7,7 @@
  * in, what a list row carries, what the plugin's status line says. That
  * contract lives here, so it can be checked without a settings window.
  *
- * The pane that draws it is MainWindow.Plugins.cpp, and it is the only thing
+ * The pane that draws it is plugins/PluginSettings.cpp, and it is the only thing
  * that should know about WinUI. Model types are in lk_plugin_model.h.
  */
 #pragma once
