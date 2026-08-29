@@ -943,13 +943,18 @@ lk_window_update_overlays (LkWindow *self)
   gboolean has_chart = lk_app_model_get_has_chart (self->model);
   gboolean baking = lk_app_model_get_baking (self->model);
 
-  /* Without a chart the camera commands have nothing to act on, so their
-   * bubbles and menu items grey out — as the reference's do. */
-  static const char *camera_actions[] = { "zoom-in", "zoom-out", "zoom-fit", "north-up" };
-  for (gsize i = 0; i < G_N_ELEMENTS (camera_actions); i++)
+  /* Without a chart these commands have nothing to act on, so their bubbles
+   * and menu items grey out — as the reference's do. Search stays: the go-to
+   * works from an empty view. */
+  static const char *chart_actions[] = {
+    "zoom-in", "zoom-out", "zoom-fit", "north-up", "follow",
+    "cycle-scheme", "set-scheme", "toggle-text", "toggle-soundings",
+    "toggle-other", "toggle-chart",
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (chart_actions); i++)
     {
       GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window),
-                                                    camera_actions[i]);
+                                                    chart_actions[i]);
       if (action != NULL)
         g_simple_action_set_enabled (G_SIMPLE_ACTION (action), has_chart);
     }
