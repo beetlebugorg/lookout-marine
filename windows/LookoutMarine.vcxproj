@@ -180,6 +180,9 @@
     <ClCompile Include="src\chart\lk_pick.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\chart\lk_pick_layout.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
 
   <!-- hud: the readouts, the scale, the loader, the overlay bubbles. -->

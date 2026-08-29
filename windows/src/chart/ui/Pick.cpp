@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "lk_format.h"
+#include "lk_pick_layout.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -22,16 +23,9 @@ namespace
     // already known-good UTF-8, so this never throws.
     winrt::hstring H(std::string const &s) { return winrt::to_hstring(s); }
 
-    // Callout geometry — the same numbers as OverlayLayer.calloutLayout
-    // (macOS) and calloutPlacement (Android).
-    constexpr double kPickMargin = 12.0;
-    constexpr double kMarkerSize = 34.0;
-    constexpr double kMarkClear = kMarkerSize / 2 + 6; // card edge stops clear of the mark
-    constexpr double kHudBand = 44 + 16 * 2;           // the readouts capsule owns the rest
-    constexpr double kDetailWidth = 430.0;
-    constexpr double kListWidth = 200.0;
-    constexpr double kMinWidth = 280.0;
-    constexpr double kPreferAbove = 200.0;             // enough room above wins outright
+    // The callout's geometry is lk_pick_layout.h — arithmetic, with a test.
+    using lkw::kDetailWidth;
+    using lkw::kMarkerSize;
 }
 
 namespace winrt::LookoutMarine::implementation
@@ -432,34 +426,24 @@ namespace winrt::LookoutMarine::implementation
 
     // Callout placement: above the mark when there is room, below otherwise;
     // the floor is the HUD band, and `room` is a hard cap the card scrolls in.
+    // The arithmetic is lk_pick_layout.h's; this is the four setters it feeds.
     void MainWindow::PlacePickCard()
     {
-        double view_w = Root().ActualWidth(), view_h = Root().ActualHeight();
-        double want = kDetailWidth + (pick_count > 1 ? kListWidth : 0.0);
-        double width = std::min(want, std::max(kMinWidth, view_w - 2 * kPickMargin));
-        double x = pick_x - width / 2;
-        x = std::clamp(x, kPickMargin, std::max(kPickMargin, view_w - kPickMargin - width));
+        auto at = lkw::PlacePick(Root().ActualWidth(), Root().ActualHeight(), pick_x, pick_y,
+                                 pick_count, pick_height_floor);
 
-        double floor_y = std::max(kPickMargin, view_h - kHudBand);
-        double over = (pick_y - kMarkClear) - kPickMargin;
-        double under = floor_y - (pick_y + kMarkClear);
-        bool above = over >= kPreferAbove || over >= under;
-        double room = std::max(48.0, above ? over : under);
-
-        PickCard().Width(width);
-        PickCard().MaxHeight(room);
-        // Re-cap the height floor: a resize must not carry a taller floor
-        // than the new room forward.
-        PickCard().MinHeight(std::min(pick_height_floor, room));
-        if (above)
+        PickCard().Width(at.width);
+        PickCard().MaxHeight(at.room);
+        PickCard().MinHeight(at.min_height);
+        if (at.above)
         {
             PickCard().VerticalAlignment(VerticalAlignment::Bottom);
-            PickCard().Margin({ x, 0, 0, view_h - (pick_y - kMarkClear) });
+            PickCard().Margin({ at.x, 0, 0, at.edge_gap });
         }
         else
         {
             PickCard().VerticalAlignment(VerticalAlignment::Top);
-            PickCard().Margin({ x, pick_y + kMarkClear, 0, 0 });
+            PickCard().Margin({ at.x, at.edge_gap, 0, 0 });
         }
     }
 

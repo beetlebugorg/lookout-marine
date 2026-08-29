@@ -17,6 +17,7 @@ void TestCoord();
 void TestJson();
 void TestUtf8();
 void TestPick();
+void TestPickLayout();
 void TestLicenses();
 void TestPluginRegistry();
 void TestAlerts();
@@ -33,6 +34,7 @@ int main()
     TestJson();
     TestUtf8();
     TestPick();
+    TestPickLayout();
     TestLicenses();
     TestPluginRegistry();
     TestAlerts();
