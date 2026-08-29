@@ -250,3 +250,39 @@ lk_section_hinted (GtkWidget *page, const char *title, const char *hint)
   gtk_box_append (GTK_BOX (page), box);
   return box;
 }
+
+/* ---- a list that rebuilds off an idle ------------------------------------ */
+
+static gboolean
+lk_deferred_list_refill (gpointer user_data)
+{
+  LkDeferredList *list = user_data;
+
+  list->idle_id = 0;
+  list->fill (list->settings);
+  return G_SOURCE_REMOVE;
+}
+
+void
+lk_deferred_list_bind (LkDeferredList *list, LkSettings *settings, GtkWidget *box,
+                       void (*fill) (LkSettings *settings))
+{
+  list->settings = settings;
+  list->box = box;
+  list->fill = fill;
+}
+
+void
+lk_deferred_list_schedule (LkDeferredList *list)
+{
+  if (list->box == NULL || list->idle_id != 0)
+    return;
+
+  list->idle_id = g_idle_add (lk_deferred_list_refill, list);
+}
+
+void
+lk_deferred_list_clear (LkDeferredList *list)
+{
+  g_clear_handle_id (&list->idle_id, g_source_remove);
+}

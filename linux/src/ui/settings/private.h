@@ -20,7 +20,22 @@ G_BEGIN_DECLS
 
 #define LK_FEET_PER_METRE 3.28084
 
+typedef struct _LkSettings LkSettings;
+
+/* One list on the Charts page that rebuilds itself off an idle.
+ *
+ * Every one of them is driven by a signal it raises itself: a control in the
+ * list changes the model, which signals straight back. Rebuilding inside that
+ * would free the control that is still emitting, so the rebuild waits for the
+ * next idle — which also folds a burst of changes into one pass. */
 typedef struct {
+  GtkWidget  *box;      /* the list, NULL until the page builds it */
+  guint       idle_id;
+  LkSettings *settings;
+  void      (*fill) (LkSettings *settings);
+} LkDeferredList;
+
+struct _LkSettings {
   LkAppModel *model;
   LkMariner  *mariner;
 
@@ -30,20 +45,12 @@ typedef struct {
   GtkWidget *sidebar;
   GtkWidget *stack;
 
-  /* The raster chart list, rebuilt whenever the installed set changes. The
-   * rebuild runs off an idle: a switch here changes the model, and rebuilding
-   * inside that would destroy the very switch that is still emitting. */
-  GtkWidget *raster_list;
-  guint      raster_refresh_id;
-
-  /* The chart-link list, rebuilt off an idle for the same reason: picking a
-   * radio here changes the links object, which signals straight back. */
-  GtkWidget *links_list;
-  guint      links_refresh_id;
-
-  /* The chart library, same discipline. */
-  GtkWidget *sets_list;
-  guint      sets_refresh_id;
+  /* The three lists on the Charts page: the installed raster charts, the
+   * charts by link, and the library of sets aboard. All three answer a signal
+   * their own controls raise, so all three defer their rebuild. */
+  LkDeferredList raster;
+  LkDeferredList links;
+  LkDeferredList sets;
 
   /* The Display tab's three scheme swatches, so the ring can move to the pick. */
   GtkWidget *scheme_swatches[3];
@@ -74,7 +81,7 @@ typedef struct {
   GHashTable *list_boxes;
   GPtrArray  *pending_lists; /* const LkPluginList*, waiting for the idle below */
   guint       list_refill_id;
-} LkSettings;
+};
 
 /* Appends whatever a plugin filed under one settings section. Every page ends
  * with a call to it, so a plugin can put a control in any section the app has

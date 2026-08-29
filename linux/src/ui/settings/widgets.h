@@ -45,6 +45,17 @@ GtkWidget *lk_choice_row (GtkWidget          *section,
                           int                *field,
                           void              (*apply) (LkSettings *, int));
 
+/* Bind a list on the Charts page to the function that fills it. */
+void lk_deferred_list_bind (LkDeferredList *list, LkSettings *settings, GtkWidget *box,
+                            void (*fill) (LkSettings *settings));
+
+/* Rebuild the list on the next idle. Does nothing while the page is not built,
+ * or while a rebuild is already waiting. */
+void lk_deferred_list_schedule (LkDeferredList *list);
+
+/* Drop a waiting rebuild. The window calls it as it goes. */
+void lk_deferred_list_clear (LkDeferredList *list);
+
 /* Frees a per-widget binding when its closure dies. Exposed because the pages
  * build bindings of their own. */
 void lk_binding_free (gpointer data, GClosure *closure);
