@@ -1,5 +1,6 @@
 #include "library/raster.h"
 
+#include "engine/controller.h"
 #include "library/scan.h"
 
 #include "model/store.h"
@@ -88,8 +89,17 @@ lk_raster_set_name_for (const char *path)
 
 /* ---- the installed list ------------------------------------------------- */
 
-/* The keys of a set table as a strv the store can write. Borrowed: the strings
- * belong to the table. */
+/* Close a borrowed pointer array so the store can read it as a strv. Every
+ * list written from here is gathered first and terminated last, so this is the
+ * one place that terminator is added. */
+static const char *const *
+lk_raster_strv (GPtrArray *borrowed)
+{
+  g_ptr_array_add (borrowed, NULL);
+  return (const char *const *) borrowed->pdata;
+}
+
+/* The keys of a set table. Borrowed: the strings belong to the table. */
 static GPtrArray *
 lk_raster_keys (GHashTable *table)
 {
@@ -100,7 +110,6 @@ lk_raster_keys (GHashTable *table)
   g_hash_table_iter_init (&iter, table);
   while (g_hash_table_iter_next (&iter, &key, NULL))
     g_ptr_array_add (keys, key);
-  g_ptr_array_add (keys, NULL);
 
   return keys;
 }
@@ -112,8 +121,8 @@ lk_raster_charts_save (LkRasterCharts *self)
   g_autoptr (GPtrArray) hidden = lk_raster_keys (self->hidden);
 
   lk_store_save_raster_all (lk_raster_charts_paths (self),
-                            (const char *const *) off->pdata,
-                            (const char *const *) hidden->pdata);
+                            lk_raster_strv (off),
+                            lk_raster_strv (hidden));
 }
 
 /* Forget every installed raster chart: the list, the off set, and the hidden
@@ -226,26 +235,33 @@ lk_raster_charts_remove (LkRasterCharts *self, const char *path)
   g_return_if_fail (self != NULL && path != NULL);
 
   g_autofree char *name = lk_raster_set_name_for (path);
+  gboolean had = FALSE;
 
   for (guint i = 0; i + 1 < self->paths->len; i++)
     {
       if (g_strcmp0 (g_ptr_array_index (self->paths, i), path) == 0)
         {
           g_ptr_array_remove_index (self->paths, i);
+          had = TRUE;
           break;
         }
     }
-
   /* Forgotten means forgotten. The two lists are keyed by path and by set name,
    * so leaving an entry behind means the same file installed again months later
    * comes back switched off, or its set not drawn, with nothing on screen to
    * say why. The name goes with the LAST file of its set: while the mariner
    * still carries the others, it is still the set they switched off. */
-  g_hash_table_remove (self->off, path);
-  if (!lk_raster_charts_holds_set (self, name))
-    g_hash_table_remove (self->hidden, name);
+  gboolean changed = had;
+  if (g_hash_table_remove (self->off, path))
+    changed = TRUE;
+  if (!lk_raster_charts_holds_set (self, name) &&
+      g_hash_table_remove (self->hidden, name))
+    changed = TRUE;
 
-  lk_raster_charts_save (self);
+  /* Removing a path that was never installed moves nothing, and settings.ini
+   * is not rewritten for it. */
+  if (changed)
+    lk_raster_charts_save (self);
 }
 
 void
@@ -253,12 +269,12 @@ lk_raster_charts_set_enabled (LkRasterCharts *self, const char *path, gboolean o
 {
   g_return_if_fail (self != NULL && path != NULL);
 
-  if (on)
-    g_hash_table_remove (self->off, path);
-  else
-    g_hash_table_add (self->off, g_strdup (path));
-
-  lk_raster_charts_save (self);
+  /* Only a real move is written. Setting a chart to the state it is already in
+   * is what the settings form does on every rebuild of its list. */
+  gboolean changed = on ? g_hash_table_remove (self->off, path)
+                        : g_hash_table_add (self->off, g_strdup (path));
+  if (changed)
+    lk_raster_charts_save (self);
 }
 
 gboolean
@@ -359,4 +375,186 @@ char **
 lk_raster_charts_in_dir (const char *dir)
 {
   return lk_files_under (dir, ".mbtiles");
+}
+
+/* ---- the engine's election ----------------------------------------------- */
+/*
+ * Which set is drawn, which one covers this view, and whether the ENC is
+ * hidden under it: all of that is the engine's account, read back after every
+ * change. The engine owns the election — showing one set turns off the sets
+ * covering the same water — so what it says after a change is the only account
+ * that can be right.
+ */
+
+struct _LkRasterState {
+  GPtrArray *sets;      /* LkRasterSet*, as the engine last reported them */
+  int        active;
+  char      *available; /* the set covering this view, "" when none does */
+  gboolean   over_chart;
+  gboolean   chart_hidden;
+};
+
+LkRasterState *
+lk_raster_state_new (void)
+{
+  LkRasterState *self = g_new0 (LkRasterState, 1);
+
+  self->sets = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_raster_set_free);
+  self->active = -1;
+  self->available = g_strdup ("");
+  return self;
+}
+
+void
+lk_raster_state_free (LkRasterState *self)
+{
+  if (self == NULL)
+    return;
+  g_clear_pointer (&self->sets, g_ptr_array_unref);
+  g_clear_pointer (&self->available, g_free);
+  g_free (self);
+}
+
+static gboolean
+lk_raster_sets_equal (GPtrArray *a, GPtrArray *b)
+{
+  if (a->len != b->len)
+    return FALSE;
+
+  for (guint i = 0; i < a->len; i++)
+    {
+      const LkRasterSet *one = g_ptr_array_index (a, i);
+      const LkRasterSet *other = g_ptr_array_index (b, i);
+
+      if (one->id != other->id || one->in_view != other->in_view ||
+          one->shown != other->shown || g_strcmp0 (one->name, other->name) != 0)
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+/* Write down which sets are drawn. Everything that can move the selection comes
+ * through the sync below, so this is the one place it is saved: the pill's
+ * menu, the Chart menu, the cycle key, and switching a chart off in the
+ * settings, which can move the selection on its own.
+ *
+ * Read back from the engine rather than tracked here. The engine owns the
+ * election — showing one set turns off the sets covering the same water — so
+ * what it says after the change is the only account that can be right. */
+static void
+lk_raster_state_note_shown (LkRasterState *self, LkRasterCharts *charts)
+{
+  if (self->sets->len == 0)
+    return; /* no chart open, or no raster charts in it: nothing to say */
+
+  g_autoptr (GPtrArray) shown = g_ptr_array_new ();
+  g_autoptr (GPtrArray) hidden = g_ptr_array_new ();
+
+  for (guint i = 0; i < self->sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (self->sets, i);
+      g_ptr_array_add (set->shown ? shown : hidden, set->name);
+    }
+
+  lk_raster_charts_note_shown (charts, lk_raster_strv (shown), lk_raster_strv (hidden));
+}
+
+/* Read the engine's raster state into the model. TRUE when something moved —
+ * the caller decides whether that alone warrants rebuilding the chrome. */
+gboolean
+lk_raster_state_sync (LkRasterState *self, LkChartController *controller,
+                      LkRasterCharts *charts)
+{
+  int active = lk_chart_controller_raster_active_index (controller);
+  gboolean over = lk_chart_controller_raster_over_chart (controller);
+  gboolean hidden = lk_chart_controller_chart_hidden (controller);
+  g_autofree char *available = lk_chart_controller_raster_available_name (controller);
+  g_autoptr (GPtrArray) sets = lk_chart_controller_raster_sets (controller);
+
+  gboolean changed = active != self->active ||
+                     over != self->over_chart ||
+                     hidden != self->chart_hidden ||
+                     g_strcmp0 (available, self->available) != 0 ||
+                     !lk_raster_sets_equal (sets, self->sets);
+
+  if (!changed)
+    return FALSE;
+
+  self->active = active;
+  self->over_chart = over;
+  self->chart_hidden = hidden;
+  g_free (self->available);
+  self->available = g_steal_pointer (&available);
+  g_clear_pointer (&self->sets, g_ptr_array_unref);
+  self->sets = g_ptr_array_ref (sets);
+  lk_raster_state_note_shown (self, charts);
+  return TRUE;
+}
+
+/* Put back which sets the mariner had drawn. Adding a source draws its set,
+ * which is right for a chart just picked and wrong for one being re-installed
+ * at launch, so every open has to correct it — after every source is in,
+ * because switching one chart off can move which set is drawn, and before the
+ * first frame, or a set the mariner switched off flashes on screen.
+ *
+ * Two passes. Hiding first and showing second is what keeps the election: where
+ * two providers cover one coast, the sources were added in an order that drew
+ * the first of them, so showing the mariner's pick before hiding its rival
+ * would leave the rival to turn the pick straight back off. */
+void
+lk_raster_state_restore (LkRasterCharts *charts, LkChartController *controller)
+{
+  g_autoptr (GPtrArray) sets = lk_chart_controller_raster_sets (controller);
+
+  for (guint i = 0; i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (!lk_raster_charts_shown (charts, set->name))
+        lk_chart_controller_raster_set_shown (controller, set->id, FALSE);
+    }
+
+  for (guint i = 0; i < sets->len; i++)
+    {
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
+
+      if (lk_raster_charts_shown (charts, set->name))
+        lk_chart_controller_raster_set_shown (controller, set->id, TRUE);
+    }
+}
+
+GPtrArray *
+lk_raster_state_sets (LkRasterState *self)
+{
+  g_return_val_if_fail (self != NULL, NULL);
+  return self->sets;
+}
+
+int
+lk_raster_state_active (LkRasterState *self)
+{
+  g_return_val_if_fail (self != NULL, -1);
+  return self->active;
+}
+
+const char *
+lk_raster_state_available (LkRasterState *self)
+{
+  g_return_val_if_fail (self != NULL, "");
+  return self->available;
+}
+
+gboolean
+lk_raster_state_over_chart (LkRasterState *self)
+{
+  g_return_val_if_fail (self != NULL, FALSE);
+  return self->over_chart;
+}
+
+gboolean
+lk_raster_state_chart_hidden (LkRasterState *self)
+{
+  g_return_val_if_fail (self != NULL, FALSE);
+  return self->chart_hidden;
 }

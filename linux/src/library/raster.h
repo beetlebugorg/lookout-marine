@@ -16,6 +16,8 @@
 
 #include <glib.h>
 
+#include "engine/controller.h"
+
 G_BEGIN_DECLS
 
 typedef struct _LkRasterCharts LkRasterCharts;
@@ -72,5 +74,36 @@ char *lk_raster_set_name_for (const char *path);
 /* Every raster chart under a directory, sorted. `.mbtiles` today: the extension
  * is a hint only, and the engine decides by what the file IS. */
 char **lk_raster_charts_in_dir (const char *dir);
+
+/* ---- the engine's election ----------------------------------------------- */
+/*
+ * Which set is drawn, which one covers this view, and whether the ENC is
+ * hidden under it. The engine owns this: showing one set turns off the sets
+ * covering the same water, so what it says after a change is the only account
+ * that can be right. This holds the last account read back, so the chrome has
+ * something to draw between frames.
+ */
+
+typedef struct _LkRasterState LkRasterState;
+
+LkRasterState *lk_raster_state_new (void);
+void           lk_raster_state_free (LkRasterState *self);
+
+/* Read the engine's account. TRUE when something moved — the caller decides
+ * whether that alone warrants rebuilding the chrome. A real move is also
+ * written down through `charts`. */
+gboolean lk_raster_state_sync (LkRasterState *self, LkChartController *controller,
+                               LkRasterCharts *charts);
+
+/* Put back which sets the mariner had drawn, into the chart the engine has
+ * open now. Call it after every source is in and before the first frame. */
+void lk_raster_state_restore (LkRasterCharts *charts, LkChartController *controller);
+
+/* The last account read back. `sets` is borrowed and holds LkRasterSet*. */
+GPtrArray  *lk_raster_state_sets (LkRasterState *self);
+int         lk_raster_state_active (LkRasterState *self);
+const char *lk_raster_state_available (LkRasterState *self);
+gboolean    lk_raster_state_over_chart (LkRasterState *self);
+gboolean    lk_raster_state_chart_hidden (LkRasterState *self);
 
 G_END_DECLS

@@ -57,11 +57,7 @@ struct _LkAppModel {
   /* The raster charts the mariner installed, and the state the engine reports
    * for them over the water in view. */
   LkRasterCharts *raster_charts;
-  GPtrArray      *raster_sets; /* LkRasterSet* */
-  int             raster_active;
-  char           *raster_available;
-  gboolean        raster_over_chart;
-  gboolean        chart_hidden;
+  LkRasterState  *raster_state; /* the engine's election, as last read back */
 
   /* The overlay object the mariner pinned, by id. NULL while none is. */
   char *overlay_pin;
@@ -177,8 +173,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
   g_clear_pointer (&self->chart_sets, lk_chart_sets_free);
-  g_clear_pointer (&self->raster_sets, g_ptr_array_unref);
-  g_clear_pointer (&self->raster_available, g_free);
+  g_clear_pointer (&self->raster_state, lk_raster_state_free);
   g_clear_pointer (&self->raster_charts, lk_raster_charts_free);
 
   G_OBJECT_CLASS (lk_app_model_parent_class)->dispose (object);
@@ -308,9 +303,7 @@ lk_app_model_init (LkAppModel *self)
   self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
 
   self->raster_charts = lk_raster_charts_new ();
-  self->raster_sets = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_raster_set_free);
-  self->raster_active = -1;
-  self->raster_available = g_strdup ("");
+  self->raster_state = lk_raster_state_new ();
 }
 
 LkAppModel *
@@ -759,92 +752,12 @@ lk_app_model_toggle_other_category (LkAppModel *self)
 
 /* ---- raster charts ------------------------------------------------------ */
 
-static gboolean
-lk_raster_sets_equal (GPtrArray *a, GPtrArray *b)
-{
-  if (a->len != b->len)
-    return FALSE;
-
-  for (guint i = 0; i < a->len; i++)
-    {
-      const LkRasterSet *one = g_ptr_array_index (a, i);
-      const LkRasterSet *other = g_ptr_array_index (b, i);
-
-      if (one->id != other->id || one->in_view != other->in_view ||
-          one->shown != other->shown || g_strcmp0 (one->name, other->name) != 0)
-        return FALSE;
-    }
-
-  return TRUE;
-}
-
-/* Write down which sets are drawn. Everything that can move the selection comes
- * through the sync below, so this is the one place it is saved: the pill's
- * menu, the Chart menu, the cycle key, and switching a chart off in the
- * settings, which can move the selection on its own.
- *
- * Read back from the engine rather than tracked here. The engine owns the
- * election — showing one set turns off the sets covering the same water — so
- * what it says after the change is the only account that can be right. */
-static void
-lk_app_model_save_raster_shown (LkAppModel *self)
-{
-  if (self->raster_sets->len == 0)
-    return; /* no chart open, or no raster charts in it: nothing to say */
-
-  g_autoptr (GPtrArray) shown = g_ptr_array_new ();
-  g_autoptr (GPtrArray) hidden = g_ptr_array_new ();
-
-  for (guint i = 0; i < self->raster_sets->len; i++)
-    {
-      const LkRasterSet *set = g_ptr_array_index (self->raster_sets, i);
-      g_ptr_array_add (set->shown ? shown : hidden, set->name);
-    }
-
-  g_ptr_array_add (shown, NULL);
-  g_ptr_array_add (hidden, NULL);
-  lk_raster_charts_note_shown (self->raster_charts,
-                               (const char *const *) shown->pdata,
-                               (const char *const *) hidden->pdata);
-}
-
-/* Read the engine's raster state into the model. TRUE when something moved —
- * the caller decides whether that alone warrants rebuilding the chrome. */
-static gboolean
-lk_app_model_sync_raster (LkAppModel *self)
-{
-  int active = lk_chart_controller_raster_active_index (self->controller);
-  gboolean over = lk_chart_controller_raster_over_chart (self->controller);
-  gboolean hidden = lk_chart_controller_chart_hidden (self->controller);
-  g_autofree char *available = lk_chart_controller_raster_available_name (self->controller);
-  g_autoptr (GPtrArray) sets = lk_chart_controller_raster_sets (self->controller);
-
-  gboolean changed = active != self->raster_active ||
-                     over != self->raster_over_chart ||
-                     hidden != self->chart_hidden ||
-                     g_strcmp0 (available, self->raster_available) != 0 ||
-                     !lk_raster_sets_equal (sets, self->raster_sets);
-
-  if (!changed)
-    return FALSE;
-
-  self->raster_active = active;
-  self->raster_over_chart = over;
-  self->chart_hidden = hidden;
-  g_free (self->raster_available);
-  self->raster_available = g_steal_pointer (&available);
-  g_clear_pointer (&self->raster_sets, g_ptr_array_unref);
-  self->raster_sets = g_ptr_array_ref (sets);
-  lk_app_model_save_raster_shown (self);
-  return TRUE;
-}
-
 void
 lk_app_model_refresh_raster_state (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
-  if (lk_app_model_sync_raster (self))
+  if (lk_raster_state_sync (self->raster_state, self->controller, self->raster_charts))
     g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
 }
 
@@ -868,38 +781,6 @@ lk_app_model_retire_chrome (LkAppModel *self)
   g_signal_emit (self, signals[SIGNAL_CHROME_RETIRED], 0);
 }
 
-/* Put back which sets the mariner had drawn. Adding a source draws its set,
- * which is right for a chart just picked and wrong for one being re-installed
- * at launch, so every open has to correct it — after every source is in,
- * because switching one chart off can move which set is drawn, and before the
- * first frame, or a set the mariner switched off flashes on screen.
- *
- * Two passes. Hiding first and showing second is what keeps the election: where
- * two providers cover one coast, the sources were added in an order that drew
- * the first of them, so showing the mariner's pick before hiding its rival
- * would leave the rival to turn the pick straight back off. */
-static void
-lk_app_model_restore_raster_shown (LkAppModel *self)
-{
-  g_autoptr (GPtrArray) sets = lk_chart_controller_raster_sets (self->controller);
-
-  for (guint i = 0; i < sets->len; i++)
-    {
-      const LkRasterSet *set = g_ptr_array_index (sets, i);
-
-      if (!lk_raster_charts_shown (self->raster_charts, set->name))
-        lk_chart_controller_raster_set_shown (self->controller, set->id, FALSE);
-    }
-
-  for (guint i = 0; i < sets->len; i++)
-    {
-      const LkRasterSet *set = g_ptr_array_index (sets, i);
-
-      if (lk_raster_charts_shown (self->raster_charts, set->name))
-        lk_chart_controller_raster_set_shown (self->controller, set->id, TRUE);
-    }
-}
-
 void
 lk_app_model_reinstall_raster_charts (LkAppModel *self)
 {
@@ -920,7 +801,7 @@ lk_app_model_reinstall_raster_charts (LkAppModel *self)
 
   if (lk_raster_charts_count (self->raster_charts) > 0)
     {
-      lk_app_model_restore_raster_shown (self);
+      lk_raster_state_restore (self->raster_charts, self->controller);
       g_message ("raster: %u/%u chart(s) re-installed", installed,
                  lk_raster_charts_count (self->raster_charts));
     }
@@ -939,15 +820,16 @@ static void
 lk_app_model_draw_added_raster (LkAppModel *self, const char *path)
 {
   g_autofree char *name = lk_raster_set_name_for (path);
+  GPtrArray *sets = lk_raster_state_sets (self->raster_state);
 
-  for (guint i = 0; i < self->raster_sets->len; i++)
+  for (guint i = 0; i < sets->len; i++)
     {
-      const LkRasterSet *set = g_ptr_array_index (self->raster_sets, i);
+      const LkRasterSet *set = g_ptr_array_index (sets, i);
 
       if (set->in_view && g_strcmp0 (set->name, name) == 0)
         {
           lk_chart_controller_raster_select (self->controller, set->id);
-          lk_app_model_sync_raster (self);
+          lk_raster_state_sync (self->raster_state, self->controller, self->raster_charts);
           return;
         }
     }
@@ -982,7 +864,7 @@ lk_app_model_add_raster_charts (LkAppModel *self, const char *const *paths)
   /* Read the whole state back rather than waiting for a frame: the chart sits
    * idle behind the picker, so without this a chart added over the water in
    * view appears to do nothing at all. */
-  lk_app_model_sync_raster (self);
+  lk_raster_state_sync (self->raster_state, self->controller, self->raster_charts);
   if (last_added != NULL)
     lk_app_model_draw_added_raster (self, last_added);
   g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
@@ -1010,7 +892,7 @@ lk_app_model_forget_raster_charts (LkAppModel *self)
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
   lk_raster_charts_clear (self->raster_charts);
-  lk_app_model_sync_raster (self);
+  lk_raster_state_sync (self->raster_state, self->controller, self->raster_charts);
   g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
 }
 
@@ -1028,7 +910,7 @@ lk_app_model_remove_raster_chart (LkAppModel *self, const char *path)
    * until the next open. Switch it off, so what the mariner sees agrees with
    * the list they just edited. */
   lk_chart_controller_raster_set_enabled (self->controller, path, FALSE);
-  lk_app_model_sync_raster (self);
+  lk_raster_state_sync (self->raster_state, self->controller, self->raster_charts);
   g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
 }
 
@@ -1041,7 +923,7 @@ lk_app_model_set_raster_enabled (LkAppModel *self, const char *path, gboolean on
   lk_chart_controller_raster_set_enabled (self->controller, path, on);
   /* Switching off the last chart of the drawn set moves the selection, and the
    * pill must not keep naming a chart that is off. */
-  lk_app_model_sync_raster (self);
+  lk_raster_state_sync (self->raster_state, self->controller, self->raster_charts);
   g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
 }
 
@@ -1105,35 +987,35 @@ GPtrArray *
 lk_app_model_get_raster_sets (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
-  return self->raster_sets;
+  return lk_raster_state_sets (self->raster_state);
 }
 
 int
 lk_app_model_get_raster_active (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), -1);
-  return self->raster_active;
+  return lk_raster_state_active (self->raster_state);
 }
 
 const char *
 lk_app_model_get_raster_available (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), "");
-  return self->raster_available;
+  return lk_raster_state_available (self->raster_state);
 }
 
 gboolean
 lk_app_model_get_raster_over_chart (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
-  return self->raster_over_chart;
+  return lk_raster_state_over_chart (self->raster_state);
 }
 
 gboolean
 lk_app_model_get_chart_hidden (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
-  return self->chart_hidden;
+  return lk_raster_state_chart_hidden (self->raster_state);
 }
 
 /* ---- search: coordinate go-to ------------------------------------------- */
