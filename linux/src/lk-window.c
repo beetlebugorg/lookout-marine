@@ -9,7 +9,7 @@
 #include "lk-plugin-install.h"
 #include "lk-pick-report.h"
 #include "lk-plugins.h"
-#include "lk-tether.h"
+#include "util/tether.h"
 #include "lk-search.h"
 #include "lk-settings-window.h"
 #include "lk-table-window.h"

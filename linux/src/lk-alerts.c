@@ -1,7 +1,7 @@
 #include "lk-alerts.h"
 
 #include "lk-hud.h"
-#include "lk-json.h"
+#include "util/json.h"
 
 #include <math.h>
 #include <string.h>

@@ -1,6 +1,6 @@
 #include "lk-overlay-pick.h"
 
-#include "lk-json.h"
+#include "util/json.h"
 #include "lk-pick-report.h"
 
 /* How often the pinned object is re-read. It matches the plugin poll, because

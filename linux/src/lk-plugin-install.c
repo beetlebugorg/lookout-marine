@@ -1,6 +1,6 @@
 #include "lk-plugin-install.h"
 
-#include "lk-json.h"
+#include "util/json.h"
 
 /* What the core said about one package: everything the consent sheet shows, or
  * the one sentence the package was refused with. Every string borrows from

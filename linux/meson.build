@@ -25,7 +25,7 @@ png_dep = dependency('libpng16')
 webp_dep = dependency('libwebp')
 # Chart links: the shell fetches a publisher's MapLibre style and serves its
 # tiles (lookout does no networking), which takes an HTTP client and a JSON
-# writer — lk-json.c only reads.
+# writer — util/json.c only reads.
 soup_dep = dependency('libsoup-3.0')
 json_dep = dependency('json-glib-1.0')
 m_dep = cc.find_library('m', required: false)
@@ -131,7 +131,6 @@ sources = files(
   'src/lk-coord.c',
   'src/lk-discovery.c',
   'src/lk-hud.c',
-  'src/lk-json.c',
   'src/lk-licenses.c',
   'src/lk-mariner.c',
   'src/lk-native-surface.c',
@@ -145,6 +144,7 @@ sources = files(
   'src/lk-store.c',
   'src/lk-table-window.c',
   'src/lk-window.c',
+  'src/util/json.c',
 )
 
 # ---- the app's own icons -----------------------------------------------------

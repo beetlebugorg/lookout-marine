@@ -1,6 +1,6 @@
 #include "lk-plugins.h"
 
-#include "lk-json.h"
+#include "util/json.h"
 #include "lk-store.h"
 
 #include <math.h>

@@ -1,6 +1,6 @@
 #include "lk-hud.h"
 #include "lk-coord.h"
-#include "lk-tether.h"
+#include "util/tether.h"
 
 #include <math.h>
 #include <string.h>

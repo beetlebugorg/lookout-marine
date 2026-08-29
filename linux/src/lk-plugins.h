@@ -29,7 +29,7 @@
 #include <glib.h>
 
 #include "lk-chart-controller.h"
-#include "lk-json.h"
+#include "util/json.h"
 
 G_BEGIN_DECLS
 

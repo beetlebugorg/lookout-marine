@@ -1,4 +1,4 @@
-/* lk-json.h — a small JSON reader for the pick payload.
+/* util/json.h — a small JSON reader for the pick payload.
  *
  * The engine hands each picked feature a JSON string: {"report":…,"s57":…},
  * the decoded page beside the raw payload. The other shells parse it with the

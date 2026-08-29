@@ -2,7 +2,7 @@
 
 #include "lk-app-model.h"
 #include "lk-hud.h"
-#include "lk-json.h"
+#include "util/json.h"
 
 /* S-52 NODATA, day scheme — what lookout's first frame clears to. */
 static const GdkRGBA LK_NODATA_COLOR = { 0.576f, 0.682f, 0.733f, 1.0f };

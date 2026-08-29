@@ -1,6 +1,6 @@
 #include "lk-licenses.h"
 
-#include "lk-json.h"
+#include "util/json.h"
 
 #include <lookout.h>
 #include <string.h>
