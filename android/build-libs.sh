@@ -43,6 +43,25 @@ ABIS="${ABIS:-arm64-v8a}"
 # so gradle passes ReleaseFast for both APKs; OPT= overrides from the CLI.
 OPT="${OPT:-ReleaseFast}"
 
+# The wasm plugin host. Own ship, AIS targets, laylines and the two source
+# plugins are wasm modules, so an APK without the host is a chartplotter with
+# no boat and no traffic: it loads nothing and says so in the log.
+#
+# WAMR is a vendored C tree with no build output in git, so the archive is
+# built here on the first run rather than left as a step to remember. It takes
+# about a minute once; after that the file is there and this is a test.
+# WAMR=0 skips it, for a build that deliberately ships no plugins.
+WAMR="${WAMR:-1}"
+wamr_lib="$core/vendor/wamr-dist-android-arm64/lib/libvmlib.a"
+case " $ABIS " in
+    *" arm64-v8a "*)
+        if [ "$WAMR" = 1 ] && [ ! -f "$wamr_lib" ]; then
+            echo ">> building the wasm plugin host (once)"
+            "$core/scripts/build-wamr.sh" android-arm64
+        fi
+        ;;
+esac
+
 abi_triple() {
     case "$1" in
         arm64-v8a) echo "aarch64-linux-android" ;;
@@ -64,7 +83,7 @@ for abi in $ABIS; do
     # carries the third archive. Only arm64 has a WAMR archive
     # (vendor/wamr-dist-android-arm64), so another ABI must build without it.
     plugins=false
-    [ "$abi" = "arm64-v8a" ] && [ -f "$core/vendor/wamr-dist-android-arm64/lib/libvmlib.a" ] && plugins=true
+    [ "$abi" = "arm64-v8a" ] && [ -f "$wamr_lib" ] && plugins=true
     # Its OWN install prefix, per ABI, the way the iOS build phases use
     # zig-out-$PLATFORM_NAME. The default zig-out is where a NATIVE `zig build`
     # also installs, so a desktop build running at the same time (an editor, a
@@ -84,6 +103,15 @@ for abi in $ABIS; do
     # from an earlier plugins=true build would otherwise linger and link.
     rm -f "$dest/libvmlib.a"
     [ "$plugins" = true ] && cp "$prefix/lib/libvmlib.a" "$dest/"
+    # CMake decides whether to link the runtime with if(EXISTS ...), and that is
+    # a CONFIGURE-TIME test: a cache written when the archive was absent goes on
+    # linking without it, and the core's wasm_* symbols come out undefined at
+    # the link. So when the answer changes, drop the cache and configure again.
+    marker="$dest/.plugins"
+    if [ "$(cat "$marker" 2>/dev/null || echo)" != "$plugins" ]; then
+        rm -rf "$here/app/.cxx"
+        echo "$plugins" > "$marker"
+    fi
     # sanity: must be an AArch64/x86-64 ELF archive, never a native Mach-O one.
     # llvm-objdump reports the first member's format, and it ships with the NDK
     # this script already requires.
