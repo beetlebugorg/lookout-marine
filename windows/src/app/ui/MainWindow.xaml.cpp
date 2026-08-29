@@ -132,13 +132,26 @@ namespace winrt::LookoutMarine::implementation
 
         WireChrome();
 
+        // The readout poll. NOT STARTED HERE: a boat runs off a battery, and
+        // ten wakeups a second with no chart open is a clock ticking for
+        // nothing. It starts when a chart opens (chart/ui/Open.cpp) and stops
+        // when the window closes; before that the only thing it did was retry
+        // the open, which the first layout below does instead — an event,
+        // not a poll.
         readout_timer = DispatcherTimer{};
         readout_timer.Interval(std::chrono::milliseconds(100));
         readout_timer.Tick([this](auto &&, auto &&) { OnRendering(nullptr, nullptr); });
-        readout_timer.Start();
+
         // The ROOT ELEMENT's SizeChanged, not the window's: the element fires
-        // after layout, when ActualWidth/Height already hold the new size.
-        Root().SizeChanged([this](auto &&, auto &&) { SyncChartBounds(); });
+        // after layout, when ActualWidth/Height already hold the new size —
+        // which is also the moment the first open becomes possible, because
+        // an open needs a size to give the engine.
+        Root().SizeChanged([this](auto &&, auto &&) {
+            if (controller != nullptr && !lk_controller_is_open(controller))
+                TryOpen();
+            else
+                SyncChartBounds();
+        });
         this->Closed([this](auto &&, auto &&) {
             if (readout_timer != nullptr)
                 readout_timer.Stop();
@@ -336,7 +349,10 @@ namespace winrt::LookoutMarine::implementation
                 return;
             if (!lk_controller_is_open(controller))
             {
-                TryOpen();
+                // Between a close and the open that follows it there is
+                // nothing to read out. The open itself is driven by layout,
+                // not by this clock, so the poll stands down until one lands.
+                readout_timer.Stop();
                 return;
             }
             UpdateReadouts(false);

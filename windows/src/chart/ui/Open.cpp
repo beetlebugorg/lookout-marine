@@ -144,6 +144,9 @@ namespace winrt::LookoutMarine::implementation
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);
             StartRenderThread();
+            // The readout poll runs while there is a chart to read out and
+            // not before: idle means idle (app/ui/MainWindow.xaml.cpp).
+            readout_timer.Start();
             UpdateReadouts(true);
             // $LOOKOUT_WINDOW="1400x900": the client size in logical points,
             // so a screenshot frame is the same on any machine (the
@@ -270,6 +273,8 @@ namespace winrt::LookoutMarine::implementation
         {
             HideStartupLoader();
             EmptyState().Visibility(Visibility::Visible);
+            // Nothing to read out, so nothing to poll for.
+            readout_timer.Stop();
         }
     }
 
