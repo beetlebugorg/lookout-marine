@@ -14,6 +14,10 @@ GtkWidget *lk_window_build_loader (void);
 /* The first-run page: where charts come from, and how to bring one aboard. */
 GtkWidget *lk_window_build_empty_state (void);
 
+/* One step row, appended to `box`. The opening page and the import panel both
+ * show their work as steps, and they show it the same way. */
+GtkWidget *lk_loader_step_new (GtkWidget *box);
+
 /* One step of the opening page: what it says, and whether it is waiting (0),
  * running (1) or done (2). The window drives it from the model. */
 void lk_loader_step_set (GtkWidget *row, int state,
