@@ -9,6 +9,7 @@
 
 #include "model/app-model.h"
 #include "ui/hud/hud.h"
+#include "ui/hud/scale-bar.h"
 
 static LkAppModel *model;
 static GtkWidget *window;

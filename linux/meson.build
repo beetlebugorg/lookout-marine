@@ -143,6 +143,7 @@ sources = files(
   'src/ui/chrome/table-window.c',
   'src/ui/hud/hud.c',
   'src/ui/hud/pills.c',
+  'src/ui/hud/scale-bar.c',
   'src/ui/hud/scale-entry.c',
   'src/ui/settings/window.c',
   'src/ui/window.c',

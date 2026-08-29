@@ -5,6 +5,7 @@
 #include "ui/chart/view.h"
 #include "ui/hud/hud.h"
 #include "ui/hud/pills.h"
+#include "ui/hud/scale-bar.h"
 #include "ui/chrome/licenses.h"
 #include "ui/chart/overlay.h"
 #include "plugins/install.h"

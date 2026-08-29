@@ -44,9 +44,6 @@ GtkWidget *lk_hud_capsule_new (LkAppModel *model);
  * covers it. */
 GtkWidget *lk_raster_pill_new (LkAppModel *model);
 
-/* The distance bar: four alternating segments under a round distance. */
-GtkWidget *lk_scale_bar_new (LkAppModel *model);
-
 /* Zoom in and zoom out, as a column of bubbles. */
 GtkWidget *lk_zoom_controls_new (LkAppModel *model);
 
@@ -81,10 +78,5 @@ char *lk_format_scale (double denominator);
 
 /* The S-52 navigational purpose band for a display scale. */
 const char *lk_format_band (double denominator);
-
-/* The nice round distance the scale bar draws, in metres, with its bar width
-   in points through out_width_points. The width never passes the bar's target
-   cap. Exposed for tests. */
-double lk_scale_bar_nice_metres (double denominator, double *out_width_points);
 
 G_END_DECLS

@@ -6,6 +6,7 @@
  */
 
 #include "ui/hud/hud.h"
+#include "ui/hud/scale-bar.h"
 #include "ui/chart/view.h"
 
 static void
