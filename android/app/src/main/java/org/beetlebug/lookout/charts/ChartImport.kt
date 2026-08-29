@@ -4,7 +4,9 @@
 // coarse-band-first sort — a cancel leaves passage-scale coverage, not one
 // river's berths — and the same skip of outputs that already exist, so
 // re-importing one chart never re-bakes the rest.
-package org.beetlebug.lookout
+package org.beetlebug.lookout.charts
+
+import org.beetlebug.lookout.Lookout
 
 import android.content.Context
 import android.os.Handler

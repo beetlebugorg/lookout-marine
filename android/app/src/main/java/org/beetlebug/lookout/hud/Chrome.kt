@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.hud
+
+import org.beetlebug.lookout.Lookout
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border

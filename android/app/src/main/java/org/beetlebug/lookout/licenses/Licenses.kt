@@ -1,4 +1,7 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.licenses
+
+import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.settings.SectionHeader
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

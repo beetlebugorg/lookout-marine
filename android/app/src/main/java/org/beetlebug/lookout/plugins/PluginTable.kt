@@ -16,7 +16,10 @@
 //
 // A null cell is a dash. Never heard and heard as zero are different values,
 // and the table says which one it has.
-package org.beetlebug.lookout
+package org.beetlebug.lookout.plugins
+
+import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.hud.Chrome
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

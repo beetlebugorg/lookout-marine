@@ -1,5 +1,8 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.chart.ScaleParser
+import org.beetlebug.lookout.chart.zoomDeltaForScale
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

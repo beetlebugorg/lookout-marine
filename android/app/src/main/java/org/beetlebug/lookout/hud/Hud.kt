@@ -1,4 +1,9 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.hud
+
+import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.chart.Readouts
+import org.beetlebug.lookout.charts.RasterState
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

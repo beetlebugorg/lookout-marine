@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.store
+
+import org.beetlebug.lookout.settings.MarinerState
 
 import android.content.Context
 

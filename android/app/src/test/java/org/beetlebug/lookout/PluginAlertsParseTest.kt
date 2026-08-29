@@ -1,5 +1,8 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.plugins.PluginAlertSet
+import org.beetlebug.lookout.plugins.PluginAlertSeverity
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 

@@ -1,4 +1,4 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.charts
 
 import android.content.Context
 import android.util.Log

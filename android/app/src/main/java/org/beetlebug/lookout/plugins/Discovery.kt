@@ -1,4 +1,4 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.plugins
 
 import android.content.Context
 import android.net.nsd.NsdManager

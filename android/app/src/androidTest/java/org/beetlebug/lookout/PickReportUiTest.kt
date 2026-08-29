@@ -1,5 +1,11 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.chart.OverlayInfo
+import org.beetlebug.lookout.chart.PickFeature
+import org.beetlebug.lookout.hud.LookoutTheme
+import org.beetlebug.lookout.pick.OverlayBubble
+import org.beetlebug.lookout.pick.PickReportCard
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed

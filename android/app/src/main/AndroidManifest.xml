@@ -107,7 +107,7 @@
              an alarm: the thing that detects a collision is the thing that
              would otherwise not be running. See ChartService. -->
         <service
-            android:name="org.beetlebug.lookout.ChartService"
+            android:name="org.beetlebug.lookout.engine.ChartService"
             android:foregroundServiceType="connectedDevice"
             android:exported="false" />
     </application>

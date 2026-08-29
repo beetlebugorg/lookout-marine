@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.settings
+
+import org.beetlebug.lookout.Lookout
 
 import android.content.Context
 import android.content.SharedPreferences

@@ -1,5 +1,9 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.plugins.PluginTableFormat
+import org.beetlebug.lookout.plugins.parseTableRows
+import org.beetlebug.lookout.plugins.parseTableSpecs
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.charts
+
+import org.beetlebug.lookout.engine.LookoutView
 
 import android.content.Context
 import android.os.Build

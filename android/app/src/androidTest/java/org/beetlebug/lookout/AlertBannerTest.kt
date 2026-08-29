@@ -1,5 +1,10 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.hud.LookoutTheme
+import org.beetlebug.lookout.plugins.AlertBanner
+import org.beetlebug.lookout.plugins.PluginAlert
+import org.beetlebug.lookout.plugins.PluginAlertSeverity
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed

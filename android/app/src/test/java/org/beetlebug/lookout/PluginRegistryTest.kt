@@ -1,5 +1,9 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.plugins.PluginField
+import org.beetlebug.lookout.plugins.PluginRegistry
+import org.beetlebug.lookout.plugins.PluginStatusItem
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

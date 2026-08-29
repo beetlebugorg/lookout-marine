@@ -1,4 +1,4 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.hud
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme

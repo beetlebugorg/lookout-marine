@@ -1,4 +1,8 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.charts
+
+import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.settings.Footer
+import org.beetlebug.lookout.settings.SectionHeader
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement

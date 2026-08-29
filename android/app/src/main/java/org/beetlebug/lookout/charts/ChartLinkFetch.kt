@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.charts
+
+import org.beetlebug.lookout.Lookout
 
 import android.util.Log
 import java.io.File

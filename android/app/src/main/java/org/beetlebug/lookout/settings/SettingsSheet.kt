@@ -1,4 +1,27 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.settings
+
+import org.beetlebug.lookout.plugins.newRow
+import org.beetlebug.lookout.plugins.rowFrom
+
+import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.charts.ChartsModel
+import org.beetlebug.lookout.charts.ChartsSection
+import org.beetlebug.lookout.hud.Chrome
+import org.beetlebug.lookout.licenses.LicenseManifest
+import org.beetlebug.lookout.licenses.LicenseSelection
+import org.beetlebug.lookout.licenses.LicensesScreen
+import org.beetlebug.lookout.licenses.appVersion
+import org.beetlebug.lookout.plugins.DiscoveredService
+import org.beetlebug.lookout.plugins.Discovery
+import org.beetlebug.lookout.plugins.PluginField
+import org.beetlebug.lookout.plugins.PluginGroup
+import org.beetlebug.lookout.plugins.PluginInfo
+import org.beetlebug.lookout.plugins.PluginListSchema
+import org.beetlebug.lookout.plugins.PluginRegistry
+import org.beetlebug.lookout.plugins.PluginRow
+import org.beetlebug.lookout.plugins.PluginStatusItem
+import org.beetlebug.lookout.plugins.SettingsSection
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas

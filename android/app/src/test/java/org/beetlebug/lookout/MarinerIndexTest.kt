@@ -1,5 +1,7 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.settings.MI
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

@@ -1,5 +1,12 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.charts.ChartsModel
+import org.beetlebug.lookout.hud.LookoutTheme
+import org.beetlebug.lookout.licenses.LicenseManifest
+import org.beetlebug.lookout.settings.MarinerState
+import org.beetlebug.lookout.settings.SettingsSheet
+
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule

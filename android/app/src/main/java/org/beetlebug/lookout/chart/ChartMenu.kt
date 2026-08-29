@@ -2,7 +2,9 @@
 // marker verbs — the touch shell's stand-in for the reference's right-click
 // panel, drawn as app chrome for the same reason the Mac draws its own (a
 // system menu would put a bright panel on a night passage).
-package org.beetlebug.lookout
+package org.beetlebug.lookout.chart
+
+import org.beetlebug.lookout.hud.coordString
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column

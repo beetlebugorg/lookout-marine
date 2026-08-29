@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.pick
+
+import org.beetlebug.lookout.chart.PickFeature
 
 import org.json.JSONArray
 import org.json.JSONObject

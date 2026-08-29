@@ -1,4 +1,6 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.plugins
+
+import org.beetlebug.lookout.hud.Chrome
 
 import android.content.Context
 import android.media.AudioAttributes

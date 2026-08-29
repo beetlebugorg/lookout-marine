@@ -1,4 +1,4 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.chart
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column

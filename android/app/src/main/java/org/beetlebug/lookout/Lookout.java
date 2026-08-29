@@ -1,5 +1,8 @@
 package org.beetlebug.lookout;
 
+import org.beetlebug.lookout.settings.MI;
+import org.beetlebug.lookout.settings.MarinerState;
+
 import android.view.Surface;
 
 /**

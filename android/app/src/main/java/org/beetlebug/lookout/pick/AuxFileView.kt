@@ -1,6 +1,8 @@
 // A file the chart itself carries — a TXTDSC chart note, a PICREP bridge
 // photograph — shown whole. The Android twin of the reference's AuxFileView.
-package org.beetlebug.lookout
+package org.beetlebug.lookout.pick
+
+import org.beetlebug.lookout.chart.ChartController
 
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image

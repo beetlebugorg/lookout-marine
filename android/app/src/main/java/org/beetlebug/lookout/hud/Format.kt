@@ -1,4 +1,4 @@
-package org.beetlebug.lookout
+package org.beetlebug.lookout.hud
 
 import java.util.Locale
 import kotlin.math.abs

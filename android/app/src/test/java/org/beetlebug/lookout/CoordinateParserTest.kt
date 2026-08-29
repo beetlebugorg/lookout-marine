@@ -1,5 +1,7 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.chart.CoordinateParser
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

@@ -1,5 +1,14 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.charts.RasterCharts
+import org.beetlebug.lookout.plugins.PluginPrefs
+import org.beetlebug.lookout.plugins.PluginRegistry
+import org.beetlebug.lookout.settings.DisplayCategory
+import org.beetlebug.lookout.settings.MI
+import org.beetlebug.lookout.settings.MarinerState
+import org.beetlebug.lookout.settings.Scheme
+import org.beetlebug.lookout.store.ViewState
+
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals

@@ -1,5 +1,7 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.settings.MI
+
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Test

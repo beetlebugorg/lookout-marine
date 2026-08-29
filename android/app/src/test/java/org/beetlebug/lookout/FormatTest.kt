@@ -1,5 +1,11 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.chart.CoordinateParser
+import org.beetlebug.lookout.hud.bandString
+import org.beetlebug.lookout.hud.coordString
+import org.beetlebug.lookout.hud.dm
+import org.beetlebug.lookout.hud.scaleString
+
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

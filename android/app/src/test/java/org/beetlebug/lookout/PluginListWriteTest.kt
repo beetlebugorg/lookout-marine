@@ -1,5 +1,15 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.plugins.newRow
+import org.beetlebug.lookout.plugins.rowFrom
+import org.beetlebug.lookout.plugins.rowsJson
+
+import org.beetlebug.lookout.plugins.DiscoveredService
+import org.beetlebug.lookout.plugins.PluginListSchema
+import org.beetlebug.lookout.plugins.PluginRegistry
+import org.beetlebug.lookout.plugins.PluginRow
+import org.beetlebug.lookout.plugins.trimmed
+
 import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
