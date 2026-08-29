@@ -1,6 +1,6 @@
 package org.beetlebug.lookout
 
-import org.beetlebug.lookout.chart.Readouts
+import org.beetlebug.lookout.hud.Readouts
 import org.beetlebug.lookout.charts.RasterSet
 import org.beetlebug.lookout.charts.RasterState
 import org.beetlebug.lookout.hud.LookoutTheme

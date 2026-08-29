@@ -1,8 +1,6 @@
 package org.beetlebug.lookout.hud
 
 import org.beetlebug.lookout.Lookout
-import org.beetlebug.lookout.chart.ChartController
-import org.beetlebug.lookout.chart.Readouts
 import org.beetlebug.lookout.charts.RasterState
 
 import androidx.compose.foundation.background
@@ -403,13 +401,13 @@ private fun OverscaleBadge(overscale: Double) {
 @Composable
 fun StartupLoader(
     cells: Int,
-    phase: ChartController.LoadPhase,
+    phase: LoadPhase,
     modifier: Modifier = Modifier,
 ) {
     val step = when (phase) {
-        ChartController.LoadPhase.SYMBOLS -> 0
-        ChartController.LoadPhase.MAPPING -> 1
-        ChartController.LoadPhase.TESSELLATING -> 2
+        LoadPhase.SYMBOLS -> 0
+        LoadPhase.MAPPING -> 1
+        LoadPhase.TESSELLATING -> 2
     }
     val mapping = if (cells > 1) {
         String.format(Locale.US, "Mapping %,d cells", cells)

@@ -1,5 +1,7 @@
 package org.beetlebug.lookout.engine
 
+import org.beetlebug.lookout.hud.LoadPhase
+
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.chart.ChartController
 
@@ -143,8 +145,8 @@ class ChartEngine private constructor() {
                 // only when the cache is cold, and the first-scene step takes
                 // over once the (synchronous) open returns.
                 controller.noteOpenPhase(
-                    if (Lookout.atlasCacheReady()) ChartController.LoadPhase.MAPPING
-                    else ChartController.LoadPhase.SYMBOLS
+                    if (Lookout.atlasCacheReady()) LoadPhase.MAPPING
+                    else LoadPhase.SYMBOLS
                 )
                 // An active chart link needs no cell library to paint. Open
                 // the engine EMPTY — about a second instead of the ten that
@@ -162,7 +164,7 @@ class ChartEngine private constructor() {
                 // The TARGET library, whatever was opened so far: a re-attach
                 // must not close a still-loading engine over the difference.
                 paths = chartPaths
-                controller.noteOpenPhase(ChartController.LoadPhase.TESSELLATING)
+                controller.noteOpenPhase(LoadPhase.TESSELLATING)
                 if (linkFirst) {
                     val engine = l
                     libraryAdd = Thread({
