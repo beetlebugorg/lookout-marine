@@ -147,6 +147,7 @@ sources = files(
   'src/ui/hud/scale-bar.c',
   'src/ui/hud/scale-entry.c',
   'src/ui/settings/depths.c',
+  'src/ui/settings/display.c',
   'src/ui/settings/widgets.c',
   'src/ui/settings/window.c',
   'src/ui/dev-hooks.c',
