@@ -72,6 +72,37 @@ test_raster_roundtrip (void)
 }
 
 static void
+test_raster_all_roundtrip (void)
+{
+  /* The batched write puts all three lists in one file pass. Each list reads
+     back as itself, and an empty list clears its key. */
+  const char *paths[] = { "/rasters/a.mbtiles", "/rasters/b.mbtiles", "/rasters/c.mbtiles", NULL };
+  const char *off[] = { "/rasters/b.mbtiles", NULL };
+  const char *hidden[] = { "harbor", "approach", NULL };
+
+  lk_store_save_raster_all (paths, off, hidden);
+
+  g_auto (GStrv) loaded = lk_store_load_raster_paths ();
+  g_auto (GStrv) loaded_off = lk_store_load_raster_off ();
+  g_auto (GStrv) loaded_hidden = lk_store_load_raster_hidden ();
+  g_assert_cmpuint (g_strv_length (loaded), ==, 3);
+  g_assert_cmpstr (loaded[2], ==, "/rasters/c.mbtiles");
+  g_assert_cmpuint (g_strv_length (loaded_off), ==, 1);
+  g_assert_cmpstr (loaded_off[0], ==, "/rasters/b.mbtiles");
+  g_assert_cmpuint (g_strv_length (loaded_hidden), ==, 2);
+
+  /* Empty lists clear their keys in the same one pass. */
+  const char *none[] = { NULL };
+  lk_store_save_raster_all (none, none, none);
+  g_auto (GStrv) empty_paths = lk_store_load_raster_paths ();
+  g_auto (GStrv) empty_off = lk_store_load_raster_off ();
+  g_auto (GStrv) empty_hidden = lk_store_load_raster_hidden ();
+  g_assert_cmpuint (g_strv_length (empty_paths), ==, 0);
+  g_assert_cmpuint (g_strv_length (empty_off), ==, 0);
+  g_assert_cmpuint (g_strv_length (empty_hidden), ==, 0);
+}
+
+static void
 test_chart_sets_empty_vs_absent (void)
 {
   /* Never saved answers NULL, so the caller seeds from the recents once. An
@@ -137,6 +168,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/store/view-roundtrip", test_view_roundtrip);
   g_test_add_func ("/store/recents", test_recents_order_and_cap);
   g_test_add_func ("/store/raster", test_raster_roundtrip);
+  g_test_add_func ("/store/raster-all", test_raster_all_roundtrip);
   g_test_add_func ("/store/chart-sets", test_chart_sets_empty_vs_absent);
   g_test_add_func ("/store/plugin-config", test_plugin_config_roundtrip);
   g_test_add_func ("/store/chart-links", test_chart_links_roundtrip);

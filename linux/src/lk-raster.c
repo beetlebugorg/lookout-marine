@@ -109,9 +109,9 @@ lk_raster_charts_save (LkRasterCharts *self)
   g_autoptr (GPtrArray) off = lk_raster_keys (self->off);
   g_autoptr (GPtrArray) hidden = lk_raster_keys (self->hidden);
 
-  lk_store_save_raster_paths (lk_raster_charts_paths (self));
-  lk_store_save_raster_off ((const char *const *) off->pdata);
-  lk_store_save_raster_hidden ((const char *const *) hidden->pdata);
+  lk_store_save_raster_all (lk_raster_charts_paths (self),
+                            (const char *const *) off->pdata,
+                            (const char *const *) hidden->pdata);
 }
 
 LkRasterCharts *

@@ -15,12 +15,23 @@ struct _LkMariner {
 
 G_DEFINE_FINAL_TYPE (LkMariner, lk_mariner, G_TYPE_OBJECT)
 
+static gboolean lk_mariner_apply (gpointer user_data);
+
 static void
 lk_mariner_dispose (GObject *object)
 {
   LkMariner *self = LK_MARINER (object);
 
-  g_clear_handle_id (&self->apply_id, g_source_remove);
+  /* A pending edit is the mariner's last word. Apply it now rather than drop
+     it, so "kept for next launch" holds even when the pane closes inside the
+     debounce window. The controller is still alive here; unref it after. */
+  if (self->apply_id != 0)
+    {
+      g_clear_handle_id (&self->apply_id, g_source_remove);
+      lk_mariner_apply (self);
+    }
+
+  g_clear_object (&self->controller);
 
   G_OBJECT_CLASS (lk_mariner_parent_class)->dispose (object);
 }
@@ -42,7 +53,9 @@ lk_mariner_new (LkChartController *controller)
 {
   LkMariner *self = g_object_new (LK_TYPE_MARINER, NULL);
 
-  self->controller = controller;
+  /* Hold a reference. The apply timer can outlive the caller and fires into the
+     controller, so the mariner must keep it alive for that long. */
+  self->controller = controller != NULL ? g_object_ref (controller) : NULL;
   lk_mariner_reload (self);
   return self;
 }

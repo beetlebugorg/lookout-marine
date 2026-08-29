@@ -36,6 +36,13 @@ void   lk_store_save_raster_off (const char *const *paths);
  * covers this water, and a set that is not drawn is still offered. */
 char   **lk_store_load_raster_hidden (void);
 void     lk_store_save_raster_hidden (const char *const *names);
+
+/* Write the installed list, the off list, and the hidden list in one pass, so
+ * a single raster change rewrites and fsyncs the file once, not three times. */
+void     lk_store_save_raster_all (const char *const *paths,
+                                   const char *const *off,
+                                   const char *const *hidden);
+
 gboolean lk_store_load_chart_hidden (void);
 void     lk_store_save_chart_hidden (gboolean hidden);
 

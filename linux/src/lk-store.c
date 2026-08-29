@@ -138,17 +138,26 @@ lk_store_load_group_list (const char *group, const char *key)
   return list != NULL ? list : g_new0 (char *, 1);
 }
 
+/* Set or clear one list key on an already-loaded keyfile. The caller flushes,
+   so several keys can be written in one pass. An empty list clears the key. */
 static void
-lk_store_save_group_list (const char *group, const char *key, const char *const *paths)
+lk_store_set_group_list (GKeyFile *keyfile, const char *group, const char *key,
+                         const char *const *paths)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
   gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
 
   if (n == 0)
     g_key_file_remove_key (keyfile, group, key, NULL);
   else
     g_key_file_set_string_list (keyfile, group, key, paths, n);
+}
 
+static void
+lk_store_save_group_list (const char *group, const char *key, const char *const *paths)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  lk_store_set_group_list (keyfile, group, key, paths);
   lk_store_flush (keyfile);
 }
 
@@ -198,6 +207,22 @@ void
 lk_store_save_raster_hidden (const char *const *names)
 {
   lk_store_save_list ("hidden", names);
+}
+
+/* The whole raster state in one pass. One raster change touches all three
+   lists, so a per-key save rewrote and fsync'd the file three times; adding a
+   folder of twenty multiplied that. This writes and flushes once. */
+void
+lk_store_save_raster_all (const char *const *paths,
+                          const char *const *off,
+                          const char *const *hidden)
+{
+  g_autoptr (GKeyFile) keyfile = lk_store_load ();
+
+  lk_store_set_group_list (keyfile, LK_GROUP_RASTER, "paths", paths);
+  lk_store_set_group_list (keyfile, LK_GROUP_RASTER, "off", off);
+  lk_store_set_group_list (keyfile, LK_GROUP_RASTER, "hidden", hidden);
+  lk_store_flush (keyfile);
 }
 
 gboolean
