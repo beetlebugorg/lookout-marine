@@ -12,7 +12,7 @@ core, same C ABI, same behaviour.
 
 ## Prerequisites
 
-- **GTK 4.10+**, **Vulkan** headers and a loader, X11 and/or Wayland client libs.
+- **GTK 4.22+**, **Vulkan** headers and a loader, X11 and/or Wayland client libs.
 - **Zig 0.16** on `PATH`; **meson** + **ninja**.
 
 ```sh

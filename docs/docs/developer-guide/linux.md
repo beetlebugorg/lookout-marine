@@ -312,7 +312,7 @@ because the engine permits only one thread and GTK requires the main thread.
 
 ## Before you build
 
-- **GTK 4.10** or later, the **Vulkan** headers, a Vulkan loader, and the X11 or
+- **GTK 4.22** or later, the **Vulkan** headers, a Vulkan loader, and the X11 or
   Wayland client libraries.
 - **Zig 0.16** on `PATH`. **meson** and **ninja**.
 
