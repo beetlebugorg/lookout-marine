@@ -11,7 +11,7 @@
 #include "plugins/registry.h"
 #include "util/tether.h"
 #include "ui/chrome/search.h"
-#include "lk-settings-window.h"
+#include "ui/settings/window.h"
 #include "ui/chrome/table-window.h"
 
 typedef struct {

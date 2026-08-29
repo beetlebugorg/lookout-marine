@@ -1,4 +1,4 @@
-/* lk-settings-window.h — the S-52 mariner settings.
+/* ui/settings/window.h — the S-52 mariner settings.
  *
  * The fixed tabs are Display, Depths, Text, Charts, Advanced, and Plugins. A
  * plugin can add its own tab (Connections, for one). The Depths tab's band

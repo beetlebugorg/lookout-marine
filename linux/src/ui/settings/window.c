@@ -1,5 +1,5 @@
 #include "plugins/discovery.h"
-#include "lk-settings-window.h"
+#include "ui/settings/window.h"
 
 #include "ui/chrome/licenses.h"
 #include "model/mariner.h"

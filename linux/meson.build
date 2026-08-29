@@ -126,7 +126,6 @@ sources = files(
   'src/library/links.c',
   'src/library/raster.c',
   'src/library/scan.c',
-  'src/lk-settings-window.c',
   'src/lk-window.c',
   'src/model/app-model.c',
   'src/model/coord.c',
@@ -144,6 +143,7 @@ sources = files(
   'src/ui/chrome/search.c',
   'src/ui/chrome/table-window.c',
   'src/ui/hud/hud.c',
+  'src/ui/settings/window.c',
   'src/util/json.c',
 )
 
