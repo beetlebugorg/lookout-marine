@@ -1,6 +1,7 @@
 #pragma once
 #include "MainWindow.g.h"
 
+#include "lk_alerts.h"
 #include "lk_bake.h"
 #include "lk_controller.h"
 #include "lk_pick.h"
@@ -375,16 +376,9 @@ namespace winrt::LookoutMarine::implementation
         int fix_state_shown{ -2 };    // -2 = never drawn
         int follow_state_shown{ -1 };
 
-        // plugin alert state. severity: 2 alarm, 1 warning, 0 notice — an
-        // unknown word reads as alarm, because silence is never the fallback.
-        struct AlertItem
-        {
-            unsigned long long id;
-            int severity;
-            std::wstring title, body;
-            bool acknowledged;
-        };
-        std::vector<AlertItem> alerts;
+        // plugin alert state. The list and the rules over it are model code
+        // (src/lk_alerts.h); the strip and the siren are this shell's.
+        std::vector<lkw::Alert> alerts;
         long long alert_seq{ -1 };  // -1 forces the next read to rebuild
         Microsoft::UI::Xaml::DispatcherTimer alert_timer{ nullptr };
         Microsoft::UI::Xaml::DispatcherTimer siren_timer{ nullptr };

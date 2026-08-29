@@ -184,6 +184,9 @@
     <ClCompile Include="src\lk_plugin_registry.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\lk_alerts.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <!-- The host-agnostic C layer (ports of the Linux shell's controller/store/
          coord) — plain C, no PCH. -->
     <ClCompile Include="src\lk_controller.c">

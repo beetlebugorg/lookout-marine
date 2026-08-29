@@ -36,7 +36,8 @@ $cppSources = @(
     'src\lk_utf8.cpp',
     'src\lk_pick.cpp',
     'src\lk_licenses.cpp',
-    'src\lk_plugin_registry.cpp'
+    'src\lk_plugin_registry.cpp',
+    'src\lk_alerts.cpp'
 )
 $suites = @(
     'test\main.cpp',
@@ -45,7 +46,8 @@ $suites = @(
     'test\test_utf8.cpp',
     'test\test_pick.cpp',
     'test\test_licenses.cpp',
-    'test\test_plugin_registry.cpp'
+    'test\test_plugin_registry.cpp',
+    'test\test_alerts.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

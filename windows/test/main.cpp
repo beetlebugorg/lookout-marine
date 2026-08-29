@@ -19,6 +19,7 @@ void TestUtf8();
 void TestPick();
 void TestLicenses();
 void TestPluginRegistry();
+void TestAlerts();
 
 int main()
 {
@@ -30,6 +31,7 @@ int main()
     TestPick();
     TestLicenses();
     TestPluginRegistry();
+    TestAlerts();
 
     return lktest::Report();
 }

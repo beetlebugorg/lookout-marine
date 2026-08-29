@@ -15,9 +15,10 @@
 
 #include <mmsystem.h>
 
+#include "lk_alerts.h"
+
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
-using namespace winrt::Windows::Data::Json;
 
 namespace
 {
@@ -52,25 +53,18 @@ namespace
 
     winrt::Windows::UI::Color SeverityColor(int severity)
     {
-        return severity >= 2 ? kAlarm : severity == 1 ? kWarning : kNotice;
+        return severity >= lkw::kSeverityAlarm     ? kAlarm
+               : severity == lkw::kSeverityWarning ? kWarning
+                                                   : kNotice;
     }
 
     wchar_t const *SeverityGlyph(int severity)
     {
         // Warning triangle for an alarm, exclamation circle for a warning,
         // info circle for a notice.
-        return severity >= 2 ? L"\uE7BA" : severity == 1 ? L"\uE783" : L"\uE946";
-    }
-
-    int ParseSeverity(winrt::hstring const &word)
-    {
-        if (word == L"notice")
-            return 0;
-        if (word == L"warning")
-            return 1;
-        // "alarm", and every word this shell does not know: silence is never
-        // the fallback.
-        return 2;
+        return severity >= lkw::kSeverityAlarm     ? L"\uE7BA"
+               : severity == lkw::kSeverityWarning ? L"\uE783"
+                                                   : L"\uE946";
     }
 }
 
@@ -116,33 +110,13 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
 
+        // A malformed read changes nothing; the next second answers again.
         bool changed = false;
-        try
+        if (auto set = lkw::ReadAlerts(json); set && set->seq != alert_seq)
         {
-            auto root = JsonObject::Parse(winrt::to_hstring(json));
-            long long seq = (long long)root.GetNamedNumber(L"seq", 0);
-            if (seq != alert_seq)
-            {
-                alert_seq = seq;
-                changed = true;
-                alerts.clear();
-                auto arr = root.GetNamedArray(L"alerts", JsonArray{});
-                for (auto const &v : arr)
-                {
-                    auto o = v.GetObject();
-                    AlertItem a;
-                    a.id = (unsigned long long)o.GetNamedNumber(L"id", 0);
-                    a.severity = ParseSeverity(o.GetNamedString(L"severity", L""));
-                    a.title = o.GetNamedString(L"title", L"").c_str();
-                    a.body = o.GetNamedString(L"body", L"").c_str();
-                    a.acknowledged = o.GetNamedBoolean(L"acknowledged", false);
-                    alerts.push_back(std::move(a));
-                }
-            }
-        }
-        catch (winrt::hresult_error const &)
-        {
-            // A malformed read changes nothing; the next second answers again.
+            alert_seq = set->seq;
+            alerts = std::move(set->alerts);
+            changed = true;
         }
         free(json);
 
@@ -151,10 +125,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The siren follows the state every poll, changed or not: an alarm is
         // audible until acknowledged, and warnings are never counted.
-        bool audible = false;
-        for (auto const &a : alerts)
-            audible = audible || (a.severity >= 2 && !a.acknowledged);
-        SirenSetSounding(audible);
+        SirenSetSounding(lkw::AnyAudible(alerts));
     }
 
     void MainWindow::AcknowledgeAlert(unsigned long long id)
@@ -223,7 +194,7 @@ namespace winrt::LookoutMarine::implementation
             line.Children().Append(glyph);
 
             Controls::TextBlock title;
-            title.Text(a.title);
+            title.Text(winrt::to_hstring(a.title));
             title.FontSize(13);
             title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
             title.Foreground(Media::SolidColorBrush{ ThemeInk(AlertStrip()) });
@@ -234,7 +205,7 @@ namespace winrt::LookoutMarine::implementation
             // One line always: the body truncates rather than wrapping,
             // because the water under it is what the mariner is reading.
             Controls::TextBlock body;
-            body.Text(a.body);
+            body.Text(winrt::to_hstring(a.body));
             body.FontSize(12);
             body.Foreground(Media::SolidColorBrush{ ThemeMuted(AlertStrip()) });
             body.VerticalAlignment(VerticalAlignment::Center);
