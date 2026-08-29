@@ -1,11 +1,11 @@
-/* test-format.c — the readout formatters in lk-hud.c.
+/* test-format.c — the readout formatters in ui/hud/hud.c.
  *
  * Each format agrees with CoordFormat (macOS and iOS), lkw::FormatCoord
  * (Windows) and Hud.kt (Android). The expected strings here are the strings
  * the macOS shell prints, so a drift on either side fails this suite.
  */
 
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 #include "ui/chart/view.h"
 
 static void

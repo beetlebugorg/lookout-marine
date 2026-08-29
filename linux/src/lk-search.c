@@ -1,7 +1,7 @@
 #include "lk-search.h"
 
 #include "model/coord.h"
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 
 typedef struct {
   LkAppModel *model;

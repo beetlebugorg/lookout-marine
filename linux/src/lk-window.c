@@ -3,7 +3,7 @@
 #include "lk-about.h"
 #include "lk-alerts.h"
 #include "ui/chart/view.h"
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 #include "lk-licenses.h"
 #include "ui/chart/overlay.h"
 #include "plugins/install.h"

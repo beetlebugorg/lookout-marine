@@ -1,4 +1,4 @@
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 #include "model/coord.h"
 #include "util/tether.h"
 

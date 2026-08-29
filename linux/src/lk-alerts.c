@@ -1,6 +1,6 @@
 #include "lk-alerts.h"
 
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 #include "util/json.h"
 
 #include <math.h>

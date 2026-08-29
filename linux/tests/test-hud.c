@@ -8,7 +8,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 
 static LkAppModel *model;
 static GtkWidget *window;

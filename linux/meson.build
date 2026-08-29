@@ -128,7 +128,6 @@ sources = files(
   'src/library/scan.c',
   'src/lk-about.c',
   'src/lk-alerts.c',
-  'src/lk-hud.c',
   'src/lk-licenses.c',
   'src/lk-search.c',
   'src/lk-settings-window.c',
@@ -144,6 +143,7 @@ sources = files(
   'src/ui/chart/overlay.c',
   'src/ui/chart/pick-report.c',
   'src/ui/chart/view.c',
+  'src/ui/hud/hud.c',
   'src/util/json.c',
 )
 

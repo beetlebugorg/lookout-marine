@@ -1,4 +1,4 @@
-/* lk-hud.h — the chrome that floats over the chart.
+/* ui/hud/hud.h — the chrome that floats over the chart.
  *
  * The layout is the layout every shell uses (windows/ui/MainWindow.xaml,
  * ChartView.swift, ChartScreen.kt): north at the top right, zoom at the bottom

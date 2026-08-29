@@ -1,7 +1,7 @@
 #include "ui/chart/view.h"
 
 #include "model/app-model.h"
-#include "lk-hud.h"
+#include "ui/hud/hud.h"
 #include "util/json.h"
 
 /* S-52 NODATA, day scheme — what lookout's first frame clears to. */
