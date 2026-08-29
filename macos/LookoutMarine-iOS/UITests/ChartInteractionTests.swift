@@ -17,8 +17,7 @@ final class ChartInteractionTests: XCTestCase {
     /// view uses a callout and does not move.
     func testChartLiftsToRevealAPickUnderTheSheet() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launch()
 
@@ -46,8 +45,7 @@ final class ChartInteractionTests: XCTestCase {
         // A fixed chart and view, so the pinch starts with room to zoom out.
         // Documents can open on the z4 floor, where a pinch out is correctly
         // a no-op and the assertion below fails for the wrong reason.
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launch()
 
@@ -180,8 +178,7 @@ final class ChartInteractionTests: XCTestCase {
     /// detail pane follows.
     func testHardwareKeyboardWalksThePickList() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launchEnvironment["LOOKOUT_SHOW"] = "pick"
         app.launch()
@@ -223,8 +220,7 @@ final class ChartInteractionTests: XCTestCase {
     /// this.
     func testChromeButtonsWorkWithPickReportOpen() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launchEnvironment["LOOKOUT_SHOW"] = "pick"
         // Log which path answers each hit test; the map must be the one.
@@ -272,8 +268,7 @@ final class ChartInteractionTests: XCTestCase {
             throw XCTSkip("set LOOKOUT_SCHEMEHOLD=1 to run the scheme hold")
         }
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launchEnvironment["LOOKOUT_SHOW"] = "settings"
         app.launch()
@@ -295,8 +290,7 @@ final class ChartInteractionTests: XCTestCase {
             throw XCTSkip("set LOOKOUT_PICKHOLD=1 to run the pick screenshot hold")
         }
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
         app.launchEnvironment["LOOKOUT_SHOW"] = "pick"
         app.launch()

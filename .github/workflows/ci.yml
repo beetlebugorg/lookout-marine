@@ -129,6 +129,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:LookoutMarine-iOSTests
 
+      # The UI tests open the baked cell this repository carries, so a runner
+      # has a chart. They answer what only a real touch delivery can: that a
+      # pinch reaches the chart across the two-window stack, and that a chrome
+      # button is not swallowed by it.
+      - name: UI test iOS
+        run: |
+          xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+            -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath macos/build-mac \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:LookoutMarine-iOS-UITests
+
       # Tar first: an artifact zip drops the executable bit, which leaves an
       # .app that will not launch.
       - name: Package

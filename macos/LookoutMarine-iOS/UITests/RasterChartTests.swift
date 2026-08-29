@@ -20,19 +20,18 @@ final class RasterChartTests: XCTestCase {
     private func rasterChart() throws -> String {
         let fm = FileManager.default
         let candidates = [
+            ProcessInfo.processInfo.environment["LOOKOUT_TEST_RASTER"],
             NSHomeDirectory() + "/Charts/MBTILES/USA-Atlantic-CMap-Z8-16.mbtiles",
-            "/Users/claude/Charts/MBTILES/USA-Atlantic-CMap-Z8-16.mbtiles",
-        ]
+        ].compactMap { $0 }
         guard let found = candidates.first(where: { fm.fileExists(atPath: $0) }) else {
             throw XCTSkip("no raster chart covering the Chesapeake to test with")
         }
         return found
     }
 
-    private func launch(_ raster: String) -> XCUIApplication {
+    private func launch(_ raster: String) throws -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,13"
         // -AppleLanguages style argument domain: read before the app's own
         // defaults, so the chart is installed before the first frame.
@@ -43,7 +42,7 @@ final class RasterChartTests: XCTestCase {
 
     /// The pill names the set and appears only where the chart covers.
     func testPillAppearsOverCoverage() throws {
-        let app = launch(try rasterChart())
+        let app = try launch(rasterChart())
         let pill = app.buttons["raster-pill"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 60),
                       "no raster pill over a raster chart's own coverage")
@@ -55,7 +54,7 @@ final class RasterChartTests: XCTestCase {
     /// transparent-chrome-window hole: the pill draws correctly and does
     /// nothing when pressed.
     func testTapOpensTheList() throws {
-        let app = launch(try rasterChart())
+        let app = try launch(rasterChart())
         let pill = app.buttons["raster-pill"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 60), "no raster pill")
         pill.tap()
@@ -68,7 +67,7 @@ final class RasterChartTests: XCTestCase {
     /// "None" stops drawing, and the pill says so. Choosing the set again
     /// brings it back — the comparison the whole feature exists for.
     func testNoneTurnsItOffAndTheSetBringsItBack() throws {
-        let app = launch(try rasterChart())
+        let app = try launch(rasterChart())
         let pill = app.buttons["raster-pill"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 60), "no raster pill")
 
@@ -101,7 +100,7 @@ final class RasterChartTests: XCTestCase {
     /// Hiding the ENC over the raster chart leaves the raster chart drawn, so
     /// the pill keeps naming it and reports which layer is off.
     func testHideEncKeepsTheRasterChart() throws {
-        let app = launch(try rasterChart())
+        let app = try launch(rasterChart())
         let pill = app.buttons["raster-pill"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 60), "no raster pill")
 

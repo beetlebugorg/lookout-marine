@@ -14,10 +14,9 @@ import XCTest
 final class CompactHudTests: XCTestCase {
     private let bands = ["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"]
 
-    private func launch() -> XCUIApplication {
+    private func launch() throws -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] =
-            "/Users/claude/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles"
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
         app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,14"
         app.launch()
         return app
@@ -44,7 +43,7 @@ final class CompactHudTests: XCTestCase {
     /// dropping it — it is the one readout a mariner may have to write down or
     /// pass over the radio, and it becomes the vessel's own once there is a GPS.
     func testPositionIsAlwaysVisible() throws {
-        let app = launch()
+        let app = try launch()
         let band = bandText(app)
         XCTAssertTrue(band.waitForExistence(timeout: 60), "no readouts")
         try skipUnlessCompact(app)
@@ -56,7 +55,7 @@ final class CompactHudTests: XCTestCase {
     /// Degrees and DECIMAL MINUTES, which is what a mariner works in. Seconds
     /// would read as a position and be the wrong convention.
     func testPositionIsDegreesAndDecimalMinutes() throws {
-        let app = launch()
+        let app = try launch()
         let pos = position(app)
         XCTAssertTrue(pos.waitForExistence(timeout: 60), "no position")
         XCTAssertFalse(pos.label.contains("\""),
@@ -69,7 +68,7 @@ final class CompactHudTests: XCTestCase {
     /// scale entry; it shares the row with the gesture that reveals the
     /// position, and the inner control has to win on its own area.
     func testScaleStillOpensItsEntry() throws {
-        let app = launch()
+        let app = try launch()
         let band = bandText(app)
         XCTAssertTrue(band.waitForExistence(timeout: 60), "no readouts")
         try skipUnlessCompact(app)
@@ -86,7 +85,7 @@ final class CompactHudTests: XCTestCase {
     /// not cover its label, which silently clipped the scale to "1:26,9…" and
     /// the pill's name to "GO…" — both of which still LOOK like a readout.
     func testNothingIsTruncated() throws {
-        let app = launch()
+        let app = try launch()
         let band = bandText(app)
         XCTAssertTrue(band.waitForExistence(timeout: 60), "no readouts")
         try skipUnlessCompact(app)

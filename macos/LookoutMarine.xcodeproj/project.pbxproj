@@ -101,6 +101,7 @@
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
 		D995E6DD546F85947B4BCCDE /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = F465829CA2C82E927BD23352 /* CoordFormat.swift */; };
 		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
+		DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B414D76B8FFB4298A58494 /* ChartFixture.swift */; };
 		DE7488B0D16B988AAA2DEAF3 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
 		DEB74CABE7860B8AEF08E5F1 /* table-rows.json in Resources */ = {isa = PBXBuildFile; fileRef = 6B57985A66EA3200DE8C06C7 /* table-rows.json */; };
 		DF11E4F4E08BD1C05646534F /* plugins.json in Resources */ = {isa = PBXBuildFile; fileRef = BFEED0FFE8BC85A0C20BF804 /* plugins.json */; };
@@ -211,6 +212,7 @@
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		9FAE0C61602607D05CF24596 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
 		A79681EADC27E70A6BB144FE /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
+		A9B414D76B8FFB4298A58494 /* ChartFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartFixture.swift; sourceTree = "<group>"; };
 		AD2C1E199441E57327C292F6 /* Fixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixture.swift; sourceTree = "<group>"; };
 		BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateParserTests.swift; sourceTree = "<group>"; };
 		BFEED0FFE8BC85A0C20BF804 /* plugins.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = plugins.json; sourceTree = "<group>"; };
@@ -259,6 +261,7 @@
 		03D60F73A6EF0CE678D0A090 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
+				A9B414D76B8FFB4298A58494 /* ChartFixture.swift */,
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
 				9FAE0C61602607D05CF24596 /* LicensesTests.swift */,
@@ -769,6 +772,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */,
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
 				1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */,
