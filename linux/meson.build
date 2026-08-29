@@ -142,6 +142,7 @@ sources = files(
   'src/ui/chrome/search.c',
   'src/ui/chrome/table-window.c',
   'src/ui/hud/hud.c',
+  'src/ui/hud/pills.c',
   'src/ui/settings/window.c',
   'src/ui/window.c',
   'src/util/json.c',
