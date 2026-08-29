@@ -15,6 +15,16 @@ extern "C" {
 
 typedef struct lk_controller lk_controller;
 
+/* How much room a raster set's name needs, everywhere it is asked for.
+ *
+ * ONE size, because the name is a KEY: the pill shows it, the post-add
+ * auto-select compares it, and the hidden-set list is saved under it. Two
+ * sizes meant a name between them was truncated where it was compared and
+ * whole where it was written down, so the set a mariner had just added was
+ * never selected and the entry saying they had hidden it could never be
+ * matched back. */
+#define LK_RASTER_SET_NAME_MAX 192
+
 /* Live HUD values, polled by the host each tick (see lk_controller_readout). */
 typedef struct {
     double lon, lat;       /* view centre */
@@ -28,8 +38,8 @@ typedef struct {
      * DRAWN over this view (or ""), the set COVERING this view while switched
      * off (or ""), whether the chart is drawing reduced over a picture, and
      * whether the ENC is hidden where pictures cover. */
-    char   raster_active[96];
-    char   raster_available[96];
+    char   raster_active[LK_RASTER_SET_NAME_MAX];
+    char   raster_available[LK_RASTER_SET_NAME_MAX];
     int    raster_over;
     int    chart_hidden;
 } lk_readout;

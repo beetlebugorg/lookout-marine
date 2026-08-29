@@ -100,7 +100,7 @@ namespace winrt::LookoutMarine::implementation
                 if (!lk_controller_raster_set_in_view(controller, (unsigned)i))
                     continue;
                 any_in_view = true;
-                char name[96];
+                char name[LK_RASTER_SET_NAME_MAX];
                 lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
                 ToggleMenuFlyoutItem it;
                 it.Text(winrt::to_hstring(name));

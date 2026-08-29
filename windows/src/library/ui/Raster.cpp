@@ -64,7 +64,7 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
 
-        char name[96];
+        char name[LK_RASTER_SET_NAME_MAX];
         lk_controller_raster_set_name(controller, (unsigned)pill, name, sizeof name);
         std::wstring text = winrt::to_hstring(name).c_str();
         for (auto &c : text)
@@ -102,7 +102,7 @@ namespace winrt::LookoutMarine::implementation
         {
             if (!lk_controller_raster_set_in_view(controller, (unsigned)i))
                 continue;
-            char name[96];
+            char name[LK_RASTER_SET_NAME_MAX];
             lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
             Controls::ToggleMenuFlyoutItem it;
             it.Text(winrt::to_hstring(name));
@@ -215,7 +215,7 @@ namespace winrt::LookoutMarine::implementation
             int count = lk_controller_raster_set_count(controller);
             for (int i = 0; i < count; ++i)
             {
-                char name[96];
+                char name[LK_RASTER_SET_NAME_MAX];
                 lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
                 if (want == name && lk_controller_raster_set_in_view(controller, (unsigned)i))
                 {
@@ -330,10 +330,14 @@ namespace winrt::LookoutMarine::implementation
             if (!std::filesystem::exists(paths[i], ec))
                 continue; // stale entry: unplugged drive, deleted download
             ++total;
-            raster_paths.push_back(paths[i]);
+            // Only what actually went in. raster_paths is what the add flow
+            // checks before offering to add a file again, so a chart the
+            // engine refused at launch has to be absent from it or the
+            // mariner can never retry it in this session.
             if (lk_controller_raster_add(controller, paths[i]))
             {
                 ++ok;
+                raster_paths.push_back(paths[i]);
                 if (!enabled[i])
                     lk_controller_raster_set_enabled(controller, paths[i], 0);
             }
@@ -367,7 +371,7 @@ namespace winrt::LookoutMarine::implementation
         int count = lk_controller_raster_set_count(controller);
         if (count > 0)
         {
-            char name[192];
+            char name[LK_RASTER_SET_NAME_MAX];
             for (int i = 0; i < count; ++i)
             {
                 lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
@@ -420,7 +424,7 @@ namespace winrt::LookoutMarine::implementation
         if (count <= 0)
             return;
         auto hidden = raster_hidden;
-        char name[192];
+        char name[LK_RASTER_SET_NAME_MAX];
         for (int i = 0; i < count; ++i)
         {
             lk_controller_raster_set_name(controller, (unsigned)i, name, sizeof name);
