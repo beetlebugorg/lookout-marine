@@ -146,6 +146,7 @@ sources = files(
   'src/ui/hud/pills.c',
   'src/ui/hud/scale-bar.c',
   'src/ui/hud/scale-entry.c',
+  'src/ui/settings/widgets.c',
   'src/ui/settings/window.c',
   'src/ui/dev-hooks.c',
   'src/ui/open-dialogs.c',
