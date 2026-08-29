@@ -1,4 +1,4 @@
-/* lk-window.h — the main window: headerbar, chart, status bar. Chrome that
+/* ui/window.h — the main window: headerbar, chart, status bar. Chrome that
  * floats over the chart on macOS is edge-attached here (headerbar + status bar)
  * on the native-surface path. */
 #pragma once

@@ -8,7 +8,7 @@
 
 #include "model/app-model.h"
 #include "library/bake.h"
-#include "lk-window.h"
+#include "ui/window.h"
 
 #define LK_APP_ID "org.beetlebug.LookoutMarine"
 
@@ -304,7 +304,7 @@ static const char *LK_CSS =
     ".lk-raster-pill > button:hover { background: alpha(@accent_color, 0.30); }"
     ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
     ".lk-raster-bar { opacity: 0.5; }"
-    /* Night. The dark-theme flip (lk-window.c, lk_window_apply_scheme) does
+    /* Night. The dark-theme flip (ui/window.c, lk_window_apply_scheme) does
      * most of the work — every chrome fill above rides @theme_bg_color — and
      * this class quiets the surfaces further, so the brightest thing on deck
      * is the chart, never the readouts floating over it. The fix pill keeps

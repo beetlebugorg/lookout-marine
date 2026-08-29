@@ -5,7 +5,7 @@
 #include "model/mariner.h"
 #include "plugins/install.h"
 #include "plugins/registry.h"
-#include "lk-window.h"
+#include "ui/window.h"
 
 #include <gdk/gdkkeysyms.h>
 #include <math.h>

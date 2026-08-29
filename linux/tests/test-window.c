@@ -10,7 +10,7 @@
 
 #include "model/app-model.h"
 #include "ui/chart/pick-report.h"
-#include "lk-window.h"
+#include "ui/window.h"
 
 static LkAppModel *model;
 static GtkWidget  *window; /* the application window, which is the action map */
