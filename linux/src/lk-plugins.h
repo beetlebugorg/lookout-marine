@@ -113,16 +113,6 @@ void       lk_plugins_free (LkPlugins *self);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (LkPlugins, lk_plugins_free)
 
-/* Re-read the registry whole, after an install or anything else that changes
- * WHICH plugins are loaded. FALSE when the core did not answer, which leaves
- * the last good registry in place.
- *
- * AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. lookout_plugins_json answers NULL
- * with no chart open and in a build with no plugin host; a core holding no
- * plugins answers {"plugins":[]} instead. Reading the two the same way would
- * empty the whole settings window the moment one read came back short. */
-gboolean lk_plugins_reload (LkPlugins *self);
-
 /* Take only the STATUS lines from a fresh read. TRUE when any of them moved, so
  * the window redraws its rows and nothing else: the values and rows on screen
  * are the mariner's, and overwriting those mid-edit would fight the keyboard. */

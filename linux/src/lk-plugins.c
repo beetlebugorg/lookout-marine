@@ -196,8 +196,11 @@ lk_plugin_field_read (const LkJson *node)
     field->label = key;
   field->desc = lk_or_empty (lk_json_member_string (node, "desc"));
   field->unit = lk_or_empty (lk_json_member_string (node, "unit"));
+  /* An absent bound is wide, not tight. A max defaulting to 1 clamped every
+     larger plugin value down to 1; the field is unbounded unless the schema
+     says otherwise. */
   field->min = lk_json_number (lk_json_member (node, "min"), 0);
-  field->max = lk_json_number (lk_json_member (node, "max"), 1);
+  field->max = lk_json_number (lk_json_member (node, "max"), 1e9);
   field->optional = lk_json_member_bool (node, "optional", FALSE);
   field->placeholder = lk_or_empty (lk_json_member_string (node, "placeholder"));
   field->fallback_text = lk_empty;
@@ -369,8 +372,8 @@ lk_plugin_state_read_lists (LkPluginState *state, const LkJson *node)
       guint services_n = lk_json_length (services);
       for (guint d = 0; d < services_n; d++)
         {
-          const LkJson *node = lk_json_at (services, d);
-          const char *service = lk_json_member_string (node, "service");
+          const LkJson *service_node = lk_json_at (services, d);
+          const char *service = lk_json_member_string (service_node, "service");
 
           if (service == NULL)
             continue;
@@ -378,7 +381,7 @@ lk_plugin_state_read_lists (LkPluginState *state, const LkJson *node)
           LkPluginDiscover *want = g_new0 (LkPluginDiscover, 1);
 
           want->service = service;
-          want->set = lk_json_member (node, "set");
+          want->set = lk_json_member (service_node, "set");
           g_ptr_array_add (list->discover, want);
         }
 
@@ -532,7 +535,15 @@ lk_plugin_state_read (const LkJson *node)
   return state;
 }
 
-gboolean
+/* Re-read the registry whole, after an install or anything else that changes
+ * WHICH plugins are loaded. FALSE when the core did not answer, which leaves
+ * the last good registry in place.
+ *
+ * AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. lookout_plugins_json answers NULL
+ * with no chart open and in a build with no plugin host; a core holding no
+ * plugins answers {"plugins":[]} instead. Reading the two the same way would
+ * empty the whole settings window the moment one read came back short. */
+static gboolean
 lk_plugins_reload (LkPlugins *self)
 {
   g_return_val_if_fail (self != NULL, FALSE);
@@ -630,18 +641,21 @@ lk_plugins_new (LkChartController *controller)
   return self;
 }
 
+static gboolean lk_plugins_apply (gpointer user_data);
+
 void
 lk_plugins_free (LkPlugins *self)
 {
   if (self == NULL)
     return;
 
-  /* A pending apply holds a pointer to this. Firing it after the free is the
-   * one way this model can outlive itself. */
+  /* A pending apply is the mariner's last edit. Flush it before the free, so
+   * the change survives the pane closing inside the debounce window; firing it
+   * after the free would be the one way this model outlives itself. */
   if (self->apply_id != 0)
     {
-      g_source_remove (self->apply_id);
-      self->apply_id = 0;
+      g_clear_handle_id (&self->apply_id, g_source_remove);
+      lk_plugins_apply (self);
     }
   g_ptr_array_unref (self->plugins);
   g_hash_table_unref (self->by_id);
