@@ -233,8 +233,18 @@ lk_scale_entry_popover_new (LkAppModel *model)
   entry->now = gtk_label_new ("");
   gtk_widget_add_css_class (entry->now, "dim-label");
   gtk_widget_add_css_class (entry->now, "caption");
+
+  /* A close button in the header, as the reference's card has: a popover
+     dismisses on a click outside, but the xmark is the plain way out. */
+  GtkWidget *close = gtk_button_new_from_icon_name ("window-close-symbolic");
+  gtk_widget_add_css_class (close, "flat");
+  gtk_widget_add_css_class (close, "circular");
+  gtk_widget_set_valign (close, GTK_ALIGN_CENTER);
+  gtk_actionable_set_action_name (GTK_ACTIONABLE (close), "popover.popdown");
+
   gtk_box_append (GTK_BOX (header), title);
   gtk_box_append (GTK_BOX (header), entry->now);
+  gtk_box_append (GTK_BOX (header), close);
   gtk_box_append (GTK_BOX (box), header);
 
   /* The entry, prefixed with the 1: a scale is always written with. */
@@ -264,9 +274,12 @@ lk_scale_entry_popover_new (LkAppModel *model)
 
   gtk_box_append (GTK_BOX (box), gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
 
-  /* The bands, so a mariner picks a purpose instead of a number. */
-  GtkWidget *presets = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-  gtk_box_set_homogeneous (GTK_BOX (presets), TRUE);
+  /* The bands, so a mariner picks a purpose instead of a number. Three across,
+     as the reference lays them, so the fifth does not squeeze the row thin. */
+  GtkWidget *presets = gtk_grid_new ();
+  gtk_grid_set_column_homogeneous (GTK_GRID (presets), TRUE);
+  gtk_grid_set_row_spacing (GTK_GRID (presets), 6);
+  gtk_grid_set_column_spacing (GTK_GRID (presets), 6);
   for (gsize i = 0; i < G_N_ELEMENTS (LK_SCALE_PRESETS); i++)
     {
       GtkWidget *stack = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
@@ -288,7 +301,7 @@ lk_scale_entry_popover_new (LkAppModel *model)
       *denominator = LK_SCALE_PRESETS[i].denominator;
       g_object_set_data_full (G_OBJECT (button), "lk-denominator", denominator, g_free);
       g_signal_connect (button, "clicked", G_CALLBACK (lk_scale_preset_clicked), entry);
-      gtk_box_append (GTK_BOX (presets), button);
+      gtk_grid_attach (GTK_GRID (presets), button, (int) (i % 3), (int) (i / 3), 1, 1);
       entry->presets[i] = button;
     }
   gtk_box_append (GTK_BOX (box), presets);
