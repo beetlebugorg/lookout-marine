@@ -20,7 +20,7 @@ import org.beetlebug.lookout.pick.calloutPlacement
 import org.beetlebug.lookout.pick.pickReportWidth
 import org.beetlebug.lookout.plugins.AlertBanner
 import org.beetlebug.lookout.plugins.PluginTableDialog
-import org.beetlebug.lookout.settings.PluginInstallDialogs
+import org.beetlebug.lookout.plugins.PluginInstallDialogs
 import org.beetlebug.lookout.settings.SettingsSheet
 
 import androidx.compose.foundation.layout.Arrangement
@@ -345,7 +345,7 @@ fun ChartScreen(
         PluginTableDialog(controller.tables)
         // Consent for a .lkplug that arrived from another app; also serves
         // the settings sheet's install flow.
-        PluginInstallDialogs(controller)
+        PluginInstallDialogs(controller.plugins)
     }
 
     if (showSearch) {

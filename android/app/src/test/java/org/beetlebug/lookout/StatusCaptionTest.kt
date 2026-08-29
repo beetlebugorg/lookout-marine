@@ -1,7 +1,7 @@
 package org.beetlebug.lookout
 
 import org.beetlebug.lookout.plugins.PluginInfo
-import org.beetlebug.lookout.settings.statusCaption
+import org.beetlebug.lookout.plugins.statusCaption
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
