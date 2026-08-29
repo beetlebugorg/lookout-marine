@@ -149,6 +149,13 @@ jobs:
       - name: Build core
         run: pwsh windows/build-core.ps1 -Configuration Debug -Platform x64
 
+      # The shell's model layer: the parsers, the formatters, the geometry and
+      # the store. Built with zig, not MSVC, and it links neither the core nor
+      # WinRT — but it needs the core's HEADERS for the types the store and the
+      # chart paths speak in, so it runs after the core.
+      - name: Test the shell
+        run: pwsh windows/build-tests.ps1
+
       - name: Build
         run: |
           msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Debug /p:Platform=x64
