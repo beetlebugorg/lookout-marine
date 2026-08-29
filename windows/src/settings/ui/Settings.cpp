@@ -435,17 +435,27 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    void MainWindow::LoadSettings()
+    // The pane wears the chart's scheme: dusk and night take the dark palette
+    // whatever the OS says — a bright panel has no place on a night passage.
+    //
+    // EXPLICIT Light, never Default. The pane is declared inside Root but
+    // detached from it at construction and handed to a window of its own, so
+    // Default does not mean "the chart's day scheme", it means "whatever the
+    // OS is set to" — and under a dark system theme that gave a dark pane
+    // with the day scheme's dark ink written on it.
+    void MainWindow::ThemeSettingsPane(ElementTheme want)
     {
-        lk_controller_get_mariner(controller, &pending);
-        // The pane wears the chart's scheme: dusk and night take the dark
-        // palette whatever the OS says — a bright panel has no place on a
-        // night passage. Day follows the app default.
-        bool dark = pending.scheme != 0;
-        SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
+        bool dark = want == ElementTheme::Dark;
+        SettingsPane().RequestedTheme(want);
         SettingsPane().Background(Media::SolidColorBrush{
             dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x24, 0x28 }
                  : winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
+    }
+
+    void MainWindow::LoadSettings()
+    {
+        lk_controller_get_mariner(controller, &pending);
+        ThemeSettingsPane(pending.scheme != 0 ? ElementTheme::Dark : ElementTheme::Light);
         // The plugin schemas are read here, not at construction: there is no
         // plugin layer until a chart opens. What a plugin DECLARES does not
         // change while the pane is up, so this is the only whole read.
@@ -618,11 +628,8 @@ namespace winrt::LookoutMarine::implementation
                             return;
                         pending.scheme = (tile57_scheme)i;
                         ScheduleApply();
-                        bool dark = pending.scheme != 0;
-                        SettingsPane().RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Default);
-                        SettingsPane().Background(Media::SolidColorBrush{
-                            dark ? winrt::Windows::UI::Color{ 0xFF, 0x20, 0x24, 0x28 }
-                                 : winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
+                        ThemeSettingsPane(pending.scheme != 0 ? ElementTheme::Dark
+                                                              : ElementTheme::Light);
                         BuildSettingsPage();
                     });
                     row.Children().Append(cell);

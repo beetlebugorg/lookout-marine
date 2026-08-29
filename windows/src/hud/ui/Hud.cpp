@@ -12,6 +12,41 @@ using namespace Microsoft::UI::Xaml;
 
 namespace winrt::LookoutMarine::implementation
 {
+    // The scheme the whole app is wearing. Every window built after a change
+    // asks for this, so one opened at night opens dark rather than waiting
+    // for the next change to catch it.
+    ElementTheme MainWindow::ChromeTheme()
+    {
+        return Root().RequestedTheme();
+    }
+
+    // The chart's scheme belongs to EVERY window this app opens, not only the
+    // chart. The settings pane is the reason: it is declared inside Root but
+    // detached from it at construction and handed to a window of its own
+    // (settings/ui/Settings.cpp), so it never sees Root's RequestedTheme and
+    // resolved its ThemeDictionary brushes against the SYSTEM theme instead —
+    // while the rows built inside it in code asked DarkChrome(), which is the
+    // chart's. A night chart under a light system theme gave a light pane
+    // with night ink on it: white on white.
+    void MainWindow::ApplyChromeTheme(ElementTheme want)
+    {
+        Root().RequestedTheme(want);
+        ThemeSettingsPane(want); // settings/ui/Settings.cpp
+        for (auto const &w : { settings_window, licenses_window, about_window })
+            if (w != nullptr)
+                if (auto content = w.Content().try_as<FrameworkElement>())
+                    content.RequestedTheme(want);
+        ApplyTableTheme(want); // the plugin tables, in plugins/ui/Tables.cpp
+
+        // The change-detected chrome re-resolves its colours on its next
+        // build; force one, or the pills and the bar keep the old theme's ink.
+        fix_state_shown = -2;
+        follow_state_shown = -2;
+        raster_pill_shown.clear();
+        scalebar_pt = 0;
+        scalebar_m = 0;
+    }
+
     void MainWindow::UpdateReadouts(bool /*force*/)
     {
         if (controller == nullptr)
@@ -24,14 +59,7 @@ namespace winrt::LookoutMarine::implementation
         // dialogs follow the element theme on their own.
         ElementTheme want = r.scheme != 0 ? ElementTheme::Dark : ElementTheme::Light;
         if (Root().RequestedTheme() != want)
-        {
-            Root().RequestedTheme(want);
-            // The change-detected chrome re-resolves its colours on its next
-            // build; force one, or the pills keep the old theme's ink.
-            fix_state_shown = -2;
-            follow_state_shown = -2;
-            raster_pill_shown.clear();
-        }
+            ApplyChromeTheme(want);
 
         // A pick report describes the objects under one point of one view:
         // any camera move the MARINER makes — pan, fling, zoom, rotate —
@@ -129,6 +157,15 @@ namespace winrt::LookoutMarine::implementation
             swprintf_s(label, L"%g m", best);
         ScaleBarLabel().Text(label);
 
+        // The bar is a chequer of ink and ground, so it takes both from the
+        // palette rather than from black and white: at night the ink lightens
+        // and the light half goes to the panel behind it, or the bar reads as
+        // a white block on a dark chart. ApplyChromeTheme clears the
+        // change-detect above so this runs again when the scheme moves.
+        bool dark = DarkChrome();
+        auto ink = lkw::Brush(lkw::chrome::Ink(dark));
+        auto ground = lkw::Brush(dark ? 0xFF1B2126u : 0xFFFFFFFFu);
+
         auto segs = ScaleBarSegs();
         segs.Children().Clear();
         for (int i = 0; i < 4; ++i)
@@ -136,9 +173,8 @@ namespace winrt::LookoutMarine::implementation
             Controls::Border seg;
             seg.Width(width_pt / 4.0);
             seg.Height(6);
-            seg.Background(Media::SolidColorBrush{ i % 2 == 0 ? winrt::Windows::UI::Color{ 0xFF, 0x1A, 0x1A, 0x1A }
-                                                              : winrt::Windows::UI::Color{ 0xFF, 0xFF, 0xFF, 0xFF } });
-            seg.BorderBrush(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x1A, 0x1A, 0x1A } });
+            seg.Background(i % 2 == 0 ? ink : ground);
+            seg.BorderBrush(ink);
             seg.BorderThickness({ 1, 1, i == 3 ? 1.0 : 0.0, 1 });
             segs.Children().Append(seg);
         }

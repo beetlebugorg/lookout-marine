@@ -20,22 +20,43 @@
 
 #include "lk_store.h"
 #include "lk_table.h"
+#include "lk_format.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 
 namespace lkw
 {
-    static constexpr winrt::Windows::UI::Color kInk{ 0xFF, 0x1A, 0x1A, 0x1A };
-    static constexpr winrt::Windows::UI::Color kMuted{ 0xFF, 0x6B, 0x6B, 0x6B };
-    static constexpr winrt::Windows::UI::Color kFaint{ 0xFF, 0x9A, 0x9A, 0x9A };
-    static constexpr winrt::Windows::UI::Color kRule{ 0xFF, 0xDD, 0xDD, 0xDD };
-    static constexpr winrt::Windows::UI::Color kAlarmText{ 0xFF, 0xD1, 0x40, 0x38 };
-    static constexpr winrt::Windows::UI::Color kWarnText{ 0xFF, 0xE0, 0x9B, 0x2A };
-    static constexpr winrt::Windows::UI::Color kAlarmRow{ 0x38, 0xD1, 0x40, 0x38 };
-    static constexpr winrt::Windows::UI::Color kWarnRow{ 0x33, 0xE0, 0x9B, 0x2A };
+    using winrt::Microsoft::UI::Xaml::ElementTheme;
+    using winrt::Windows::UI::Color;
+
+    /* Alarm and warning keep their colours at night: they are the one thing
+     * on this window that has to mean the same in any light. */
+    static constexpr Color kAlarmText{ 0xFF, 0xD1, 0x40, 0x38 };
+    static constexpr Color kWarnText{ 0xFF, 0xE0, 0x9B, 0x2A };
+    static constexpr Color kAlarmRow{ 0x38, 0xD1, 0x40, 0x38 };
+    static constexpr Color kWarnRow{ 0x33, 0xE0, 0x9B, 0x2A };
     /* 18 % of the shell accent: the selected row, over any flag tint. */
-    static constexpr winrt::Windows::UI::Color kSelectRow{ 0x2E, 0x1B, 0x49, 0xC4 };
+    static constexpr Color kSelectRow{ 0x2E, 0x1B, 0x49, 0xC4 };
+
+    /* Everything else follows the chart's scheme, out of the one palette
+     * (lk_format.h) the rest of the shell draws from. */
+    static Color FromArgb(uint32_t argb)
+    {
+        return { (uint8_t)(argb >> 24), (uint8_t)(argb >> 16), (uint8_t)(argb >> 8),
+                 (uint8_t)argb };
+    }
+
+    static Color TableInk(bool dark) { return FromArgb(chrome::Ink(dark)); }
+    static Color TableMuted(bool dark) { return FromArgb(chrome::Muted(dark)); }
+    static Color TableRule(bool dark) { return FromArgb(chrome::Rule(dark)); }
+    /* A cell nobody has heard is fainter than muted, either way round. */
+    static Color TableFaint(bool dark) { return FromArgb(dark ? 0xFF6E7C88u : 0xFF9A9A9Au); }
+
+    Color TableGround(ElementTheme theme)
+    {
+        return FromArgb(theme == ElementTheme::Dark ? 0xFF1B2126u : 0xFFF8F8F8u);
+    }
 
     // The columns, the units and the row model are lk_table.h's; what is left
     // in this file is the window they are laid out in.
@@ -67,6 +88,13 @@ namespace lkw
         std::vector<uint8_t> row_has_at;
         std::vector<std::string> row_flags;
     };
+
+    /* The scheme this window is wearing, which is the chart's. */
+    static bool DarkOf(VesselTableWin const *t)
+    {
+        return t->rows != nullptr &&
+               t->rows.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark;
+    }
 
     static winrt::Windows::UI::Color RowTint(VesselTableWin const *t, int idx)
     {
@@ -134,7 +162,7 @@ namespace lkw
             label.Text(text);
             label.FontSize(12);
             label.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            label.Foreground(Media::SolidColorBrush{ kMuted });
+            label.Foreground(Media::SolidColorBrush{ TableMuted(DarkOf(t)) });
             hb.Content(label);
 
             std::string key = col.key;
@@ -183,6 +211,7 @@ namespace lkw
         t->row_at.clear();
         t->row_has_at.clear();
         t->row_flags.clear();
+        bool const dark = DarkOf(t); // one read for the whole batch
         for (auto const &row : batch->rows)
         {
             t->row_flags.push_back(row.flag);
@@ -215,10 +244,10 @@ namespace lkw
                 cell.TextTrimming(TextTrimming::CharacterEllipsis);
                 cell.TextAlignment(NumericColumn(col.type) ? TextAlignment::Right
                                                            : TextAlignment::Left);
-                auto color = value.missing ? kFaint
+                auto color = value.missing ? TableFaint(dark)
                     : col.type == "flag" && row.flag == "alarm" ? kAlarmText
                     : col.type == "flag" && row.flag == "warning" ? kWarnText
-                    : kInk;
+                    : TableInk(dark);
                 cell.Foreground(Media::SolidColorBrush{ color });
                 cellrow.Children().Append(cell);
             }
@@ -241,7 +270,7 @@ namespace lkw
 
             Controls::Border rule;
             rule.Height(1);
-            rule.Background(Media::SolidColorBrush{ kRule });
+            rule.Background(Media::SolidColorBrush{ TableRule(dark) });
             t->rows.Children().Append(rule);
         }
         // The selection survives a rebuild by index; a shrunk table clamps it
@@ -298,7 +327,11 @@ namespace winrt::LookoutMarine::implementation
         t->ascending = spec.sort_ascending;
 
         Controls::Grid root;
-        root.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0xF8, 0xF8, 0xF8 } });
+        // The chart's scheme, not the system's: this window sits beside the
+        // chart and has to be readable in the same light. ApplyTableTheme
+        // below moves it when the scheme does.
+        root.RequestedTheme(ChromeTheme());
+        root.Background(Media::SolidColorBrush{ lkw::TableGround(ChromeTheme()) });
         Controls::RowDefinition r0, r1;
         r0.Height({ 0, GridUnitType::Auto });
         r1.Height({ 1, GridUnitType::Star });
@@ -319,7 +352,8 @@ namespace winrt::LookoutMarine::implementation
         t->empty = Controls::TextBlock{};
         t->empty.Text(L"Nothing to show yet.");
         t->empty.FontSize(13);
-        t->empty.Foreground(Media::SolidColorBrush{ lkw::kMuted });
+        t->empty.Foreground(
+            Media::SolidColorBrush{ lkw::TableMuted(ChromeTheme() == ElementTheme::Dark) });
         t->empty.HorizontalAlignment(HorizontalAlignment::Center);
         t->empty.VerticalAlignment(VerticalAlignment::Center);
         Controls::Grid::SetRow(t->empty, 1);
@@ -496,6 +530,28 @@ namespace winrt::LookoutMarine::implementation
             }
         });
         timer.Start();
+    }
+
+    // The chart's scheme moved, so these move with it: the window's own
+    // ground, and then a forced reload, because every row's ink was resolved
+    // when the row was built (hud/ui/Hud.cpp's ApplyChromeTheme).
+    void MainWindow::ApplyTableTheme(ElementTheme want)
+    {
+        for (auto &[key, t] : lkw::g_tables)
+        {
+            if (t == nullptr || t->window == nullptr)
+                continue;
+            if (auto root = t->window.Content().try_as<Controls::Grid>())
+            {
+                root.RequestedTheme(want);
+                root.Background(Media::SolidColorBrush{ lkw::TableGround(want) });
+            }
+            if (t->empty != nullptr)
+                t->empty.Foreground(
+                    Media::SolidColorBrush{ lkw::TableMuted(want == ElementTheme::Dark) });
+            lkw::BuildTableHeader(t.get());
+            lkw::ReloadTable(t.get(), true);
+        }
     }
 
     // The tables belong to the chart handle: a close or re-open retires them.

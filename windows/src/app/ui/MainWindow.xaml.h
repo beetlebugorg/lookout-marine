@@ -244,6 +244,14 @@ namespace winrt::LookoutMarine::implementation
             return Root().ActualTheme() == Microsoft::UI::Xaml::ElementTheme::Dark;
         }
 
+        // The chart's scheme is worn by EVERY window this app opens, not only
+        // the chart (hud/ui/Hud.cpp). A window built later asks ChromeTheme()
+        // for it, so one opened at night opens dark.
+        Microsoft::UI::Xaml::ElementTheme ChromeTheme();
+        void ApplyChromeTheme(Microsoft::UI::Xaml::ElementTheme want);
+        void ApplyTableTheme(Microsoft::UI::Xaml::ElementTheme want);   // plugins/ui/Tables.cpp
+        void ThemeSettingsPane(Microsoft::UI::Xaml::ElementTheme want); // settings/ui/Settings.cpp
+
         // ---- chart sets (the folders of charts aboard) ----------------------
         // A set is a folder — the baked library, a folder of .pmtiles, a
         // folder of pictures — with an on/off switch. What opens is the UNION

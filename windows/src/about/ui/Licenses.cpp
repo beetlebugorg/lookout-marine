@@ -561,6 +561,7 @@ namespace winrt::LookoutMarine::implementation
         auto const &m = lkw::Licenses();
 
         Controls::Grid root;
+        root.RequestedTheme(ChromeTheme());
         root.Background(Brush(DarkChrome() ? 0xFF1B2126u : 0xFFF7F7F7u));
 
         // An entry point that does nothing would hide a build whose list will
@@ -775,6 +776,7 @@ namespace winrt::LookoutMarine::implementation
         }
 
         Controls::Grid root;
+        root.RequestedTheme(ChromeTheme());
         root.Background(Brush(DarkChrome() ? 0xFF1B2126u : 0xFFF7F7F7u));
         root.Children().Append(box);
 
