@@ -1,5 +1,5 @@
-/* lk-chart-links.c — charts by link. See lk-chart-links.h. */
-#include "lk-chart-links.h"
+/* library/links.c — charts by link. See library/links.h. */
+#include "library/links.h"
 
 #include "model/store.h"
 

@@ -3,13 +3,13 @@
  * through it. Readouts are GObject properties the HUD tracks via notify::. */
 #pragma once
 
-#include "lk-chart-bake.h"
+#include "library/bake.h"
 
 #include <gtk/gtk.h>
 
 #include "engine/controller.h"
-#include "lk-chart-links.h"
-#include "lk-raster.h"
+#include "library/links.h"
+#include "library/raster.h"
 
 G_BEGIN_DECLS
 

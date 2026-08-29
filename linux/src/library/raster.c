@@ -1,4 +1,4 @@
-#include "lk-raster.h"
+#include "library/raster.h"
 
 #include "model/store.h"
 

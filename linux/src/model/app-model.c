@@ -1,6 +1,6 @@
 #include "model/app-model.h"
 
-#include "lk-chart-scan.h"
+#include "library/scan.h"
 #include "model/coord.h"
 #include "model/store.h"
 

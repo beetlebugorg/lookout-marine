@@ -1,4 +1,4 @@
-/* lk-raster.h — the raster charts the mariner installed, and which of them are
+/* library/raster.h — the raster charts the mariner installed, and which of them are
  * switched on. The Linux twin of RasterCharts.kt and AppModel's raster list.
  *
  * A raster chart is a chart made of pictures the mariner supplies: MBTiles of

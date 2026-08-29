@@ -7,7 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "model/app-model.h"
-#include "lk-chart-bake.h"
+#include "library/bake.h"
 #include "lk-window.h"
 
 #define LK_APP_ID "org.beetlebug.LookoutMarine"

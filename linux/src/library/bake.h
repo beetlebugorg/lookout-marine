@@ -18,7 +18,7 @@
 #ifndef LK_CHART_BAKE_H
 #define LK_CHART_BAKE_H
 
-#include "lk-chart-scan.h"
+#include "library/scan.h"
 
 #include <glib.h>
 

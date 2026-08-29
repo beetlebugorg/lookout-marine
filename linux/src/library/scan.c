@@ -1,4 +1,4 @@
-#include "lk-chart-scan.h"
+#include "library/scan.h"
 
 #include "util/json.h"
 
