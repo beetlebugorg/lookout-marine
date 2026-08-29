@@ -8,6 +8,7 @@
 #include "MainWindow.xaml.h"
 
 #include "lk_format.h"
+#include "lk_text.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -75,7 +76,7 @@ namespace winrt::LookoutMarine::implementation
         copy.Text(L"Copy Position");
         copy.Click([lat, lon](auto &&, auto &&) {
             Windows::ApplicationModel::DataTransfer::DataPackage pkg;
-            pkg.SetText(lkw::FormatCoord(lat, lon));
+            pkg.SetText(winrt::to_hstring(lkw::FormatCoord(lat, lon)));
             Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(pkg);
         });
         menu.Items().Append(copy);

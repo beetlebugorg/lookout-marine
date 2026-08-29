@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "lk_format.h"
+#include "lk_text.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -60,11 +61,11 @@ namespace winrt::LookoutMarine::implementation
         {
             double slon = 0, slat = 0;
             bool live = lk_controller_own_ship(controller, &slon, &slat) == 2;
-            HudCoord().Text(live ? lkw::FormatCoord(slat, slon) : winrt::hstring{});
+            HudCoord().Text(live ? winrt::to_hstring(lkw::FormatCoord(slat, slon)) : winrt::hstring{});
             HudCoord().Visibility(live ? Visibility::Visible : Visibility::Collapsed);
         }
-        HudScale().Text(lkw::FormatScale(r.scale_denom));
-        HudBand().Text(lkw::BandForDenom(r.scale_denom));
+        HudScale().Text(winrt::to_hstring(lkw::FormatScale(r.scale_denom)));
+        HudBand().Text(winrt::to_hstring(lkw::BandForDenom(r.scale_denom)));
         wchar_t z[16];
         swprintf_s(z, L"z%.1f", r.zoom);
         HudZoom().Text(z);

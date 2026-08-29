@@ -183,6 +183,9 @@
     <ClCompile Include="src\hud\Overlay.cpp" />
     <ClCompile Include="src\hud\Scale.cpp" />
     <ClCompile Include="src\hud\lk_format.cpp" />
+    <ClCompile Include="src\hud\lk_text.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
 
   <!-- library: the charts aboard — sets, raster, the bake, charts by link. -->

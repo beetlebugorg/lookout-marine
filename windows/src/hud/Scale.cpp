@@ -6,9 +6,11 @@
 #include "MainWindow.xaml.h"
 
 #include <cmath>
+#include <cstring>
 
 #include "lk_coord.h"
 #include "lk_format.h"
+#include "lk_text.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -65,7 +67,7 @@ namespace winrt::LookoutMarine::implementation
             name.HorizontalAlignment(HorizontalAlignment::Center);
             text.Children().Append(name);
             Controls::TextBlock value;
-            value.Text(lkw::FormatScale(kPresets[i].denom));
+            value.Text(to_hstring(lkw::FormatScale(kPresets[i].denom)));
             value.FontSize(11);
             value.Foreground(Brush(Muted(DarkChrome())));
             value.HorizontalAlignment(HorizontalAlignment::Center);
@@ -106,15 +108,15 @@ namespace winrt::LookoutMarine::implementation
     // Refreshed from the readout tick while the panel is up.
     void MainWindow::UpdateScalePanel(lk_readout const &r)
     {
-        ScaleNow().Text(hstring{ L"now " } + lkw::FormatScale(r.scale_denom));
-        wchar_t const *band = lkw::BandForDenom(r.scale_denom);
+        ScaleNow().Text(hstring{ L"now " } + to_hstring(lkw::FormatScale(r.scale_denom)));
+        char const *band = lkw::BandForDenom(r.scale_denom);
         for (uint32_t i = 0, n = 0; i < ScalePresetRows().Children().Size(); ++i)
         {
             auto row = ScalePresetRows().Children().GetAt(i).as<Controls::StackPanel>();
             for (uint32_t j = 0; j < row.Children().Size(); ++j, ++n)
             {
                 auto b = row.Children().GetAt(j).as<Controls::Button>();
-                bool sel = wcscmp(band, lkw::BandForDenom(kPresets[n].denom)) == 0;
+                bool sel = std::strcmp(band, lkw::BandForDenom(kPresets[n].denom)) == 0;
                 b.Background(Brush(sel ? 0x241B49C4 : kClear)); // 14 % accent
                 b.BorderBrush(Brush(sel ? 0x801B49C4 : kClear)); // 50 % accent
             }
@@ -131,7 +133,7 @@ namespace winrt::LookoutMarine::implementation
         ScaleBox().BorderBrush(Brush(empty ? 0x33000000 : ok ? kAccent55 : kOverscaleRed55));
         if (ok)
         {
-            ScaleHint().Text(hstring{ lkw::BandForDenom(denom) } +
+            ScaleHint().Text(to_hstring(lkw::BandForDenom(denom)) +
                              L" band. The chart holds the nearest scale it has.");
         }
         else

@@ -8,6 +8,7 @@
 
 #include "lk_coord.h"
 #include "lk_format.h"
+#include "lk_text.h"
 #include "lk_store.h"
 
 using namespace winrt;
@@ -217,7 +218,7 @@ namespace winrt::LookoutMarine::implementation
             pin.FontSize(14);
             row.Children().Append(pin);
             Controls::TextBlock label;
-            label.Text(hstring{ L"Go to " } + lkw::FormatCoord(lat, lon));
+            label.Text(hstring{ L"Go to " } + to_hstring(lkw::FormatCoord(lat, lon)));
             label.FontSize(13);
             row.Children().Append(label);
             go.Content(row);
