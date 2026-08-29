@@ -85,24 +85,15 @@ lk_bake_progress_title (const LkBakeProgress *p)
 
   const char *name = p->name != NULL ? p->name : "";
 
-  switch (p->kind)
-    {
-    case LK_BAKE_REMOVING:
-      return g_strdup_printf ("Removing %s", name);
-    case LK_BAKE_FINDING:
-      return g_strdup_printf ("Finding charts in %s", name);
-    case LK_BAKE_IMPORTING:
-    default:
-      /* A count means the charts have been found and are being converted. */
-      return p->total > 0 ? g_strdup_printf ("Importing %s", name)
-                          : g_strdup_printf ("Finding charts in %s", name);
-    }
+  /* A count means the charts have been found and are being converted. */
+  return p->total > 0 ? g_strdup_printf ("Importing %s", name)
+                      : g_strdup_printf ("Finding charts in %s", name);
 }
 
 char *
 lk_bake_progress_remaining (const LkBakeProgress *p)
 {
-  if (p == NULL || p->kind == LK_BAKE_REMOVING)
+  if (p == NULL)
     return NULL;
   if (p->done < 3 || p->total <= p->done || p->elapsed <= 1)
     return NULL;
@@ -405,7 +396,6 @@ lk_bake_progress_cb (void *ctx, uint32_t done, uint32_t total)
     {
       msg = g_new0 (LkBakePost, 1);
       msg->bake = bake;
-      msg->progress.kind = LK_BAKE_IMPORTING;
       msg->progress.done = bake->done;
       msg->progress.total = bake->job_total;
       msg->progress.name = g_strdup (bake->name);

@@ -223,7 +223,6 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_OVERLAY_PIN] = g_param_spec_string ("overlay-pin", NULL, NULL, NULL, RO);
 
 #undef RO
-#undef RW
 
   g_object_class_install_properties (object_class, N_PROPS, properties);
 
@@ -1491,13 +1490,6 @@ lk_app_model_raster_enabled (LkAppModel *self, const char *path)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), TRUE);
   return lk_raster_charts_enabled (self->raster_charts, path);
-}
-
-const char *const *
-lk_app_model_get_raster_paths (LkAppModel *self)
-{
-  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
-  return lk_raster_charts_paths (self->raster_charts);
 }
 
 guint

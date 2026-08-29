@@ -22,14 +22,7 @@
 
 #include <glib.h>
 
-typedef enum {
-  LK_BAKE_FINDING,   /* looking through a folder or an archive */
-  LK_BAKE_IMPORTING, /* converting cells and sheets */
-  LK_BAKE_REMOVING,  /* throwing away what a removed set left */
-} LkBakeKind;
-
 typedef struct {
-  LkBakeKind kind;
   int        done;
   int        total;
   char      *name;    /* the set being worked on */

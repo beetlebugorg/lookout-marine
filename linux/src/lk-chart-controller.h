@@ -131,8 +131,6 @@ gboolean lk_chart_controller_raster_set_enabled (LkChartController *self,
 GPtrArray *lk_chart_controller_raster_sets (LkChartController *self);
 
 int      lk_chart_controller_raster_active_index (LkChartController *self);
-/* The set drawn over this view, or "". Transfer full. */
-char    *lk_chart_controller_raster_active_name (LkChartController *self);
 /* A set covering this view, DRAWN OR NOT, or "". It is what tells a mariner
  * sailing into coverage that a picture is here while it is switched off.
  * Transfer full. */
@@ -147,9 +145,6 @@ void     lk_chart_controller_set_chart_hidden (LkChartController *self, gboolean
 gboolean lk_chart_controller_chart_hidden (LkChartController *self);
 
 /* ---- charts by link ------------------------------------------------------ */
-
-/* TRUE while a publisher's style is the chart being drawn. */
-gboolean lk_chart_controller_alt_style_active (LkChartController *self);
 
 /* The url fetcher lookout drives for the style, TileJSON, sprite packs and
  * every tile. The callback fires with lookout's lock held: start the fetch and

@@ -127,8 +127,6 @@ void lk_app_model_remove_raster_chart (LkAppModel *self, const char *path);
 void     lk_app_model_set_raster_enabled (LkAppModel *self, const char *path, gboolean on);
 gboolean lk_app_model_raster_enabled (LkAppModel *self, const char *path);
 
-/* The installed files, and them grouped by set. The groups are transfer full. */
-const char *const *lk_app_model_get_raster_paths (LkAppModel *self);
 guint              lk_app_model_get_raster_count (LkAppModel *self);
 GPtrArray         *lk_app_model_get_raster_groups (LkAppModel *self);
 

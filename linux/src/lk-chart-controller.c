@@ -969,14 +969,6 @@ lk_chart_controller_close (LkChartController *self)
 
 /* ---- charts by link ------------------------------------------------------ */
 
-gboolean
-lk_chart_controller_alt_style_active (LkChartController *self)
-{
-  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
-    return FALSE;
-  return lookout_alt_chart_style_active (self->handle) != 0;
-}
-
 void
 lk_chart_controller_set_http_provider (LkChartController *self,
                                        lookout_http_get get,
@@ -1416,19 +1408,6 @@ lk_chart_controller_raster_active_index (LkChartController *self)
   if (self->handle == NULL)
     return -1;
   return (int) lookout_raster_active_index (self->handle);
-}
-
-char *
-lk_chart_controller_raster_active_name (LkChartController *self)
-{
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), g_strdup (""));
-
-  if (self->handle == NULL)
-    return g_strdup ("");
-
-  size_t length = 0;
-  const char *name = lookout_raster_active_name (self->handle, &length);
-  return lk_raster_dup (name, length);
 }
 
 char *
