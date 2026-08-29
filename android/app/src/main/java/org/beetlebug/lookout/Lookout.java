@@ -193,6 +193,15 @@ public final class Lookout implements AutoCloseable {
      */
     public static final int MARINER_LEN = 27;
 
+    /**
+     * The mariner field names, in index order, as the engine declares them.
+     *
+     * The crossing is a flat double[] with no names in it, so {@link MarinerState}
+     * and the MI block in src/jni_android.zig have to agree field for field.
+     * MARINER_LEN checks the length; this checks the order.
+     */
+    public static String[] marinerKeys()          { return nMarinerKeys(); }
+
     /** Fill {@code out} (length >= {@link #MARINER_LEN}) from the engine. */
     public void getMariner(double[] out)          { if (h != 0) nGetMariner(h, out); }
 
@@ -249,6 +258,7 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
     private static native String nLicensesJson();
+    private static native String[] nMarinerKeys();
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
