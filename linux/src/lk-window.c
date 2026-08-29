@@ -930,6 +930,79 @@ static char *lk_group_number (guint value);
 static void  lk_loader_step_set (GtkWidget *row, int state,
                                  const char *text, const char *detail_text);
 
+/* Turning a set back on composes the chart, which closes this page. */
+static void
+lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  const char *path = g_object_get_data (G_OBJECT (sw), "lk-path");
+
+  if (gtk_widget_in_destruction (self->window))
+    return;
+  if (gtk_switch_get_active (sw) && path != NULL)
+    lk_app_model_set_chart_set_on (self->model, path, TRUE);
+}
+
+/* The "Switched off" list on the empty page: the sets aboard when every one is
+ * off, each with a switch to bring it back. When any set is on the chart draws
+ * and this page is not showing, so the list stays hidden. */
+static void
+lk_window_refresh_switched_off (LkWindow *self)
+{
+  GtkWidget *box = g_object_get_data (G_OBJECT (self->empty_state), "lk-switched-off");
+  GtkWidget *child;
+
+  while ((child = gtk_widget_get_first_child (box)) != NULL)
+    gtk_box_remove (GTK_BOX (box), child);
+
+  g_autoptr (GPtrArray) rows = lk_app_model_get_chart_sets (self->model);
+  gboolean any_on = FALSE;
+  for (guint i = 0; i < rows->len; i++)
+    any_on |= ((const LkChartSetRow *) g_ptr_array_index (rows, i))->on;
+
+  if (rows->len == 0 || any_on)
+    {
+      gtk_widget_set_visible (box, FALSE);
+      return;
+    }
+
+  GtkWidget *header = gtk_label_new ("Switched off");
+  gtk_widget_add_css_class (header, "heading");
+  gtk_label_set_xalign (GTK_LABEL (header), 0.0);
+  gtk_box_append (GTK_BOX (box), header);
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *set = g_ptr_array_index (rows, i);
+      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      GtkWidget *sw = gtk_switch_new ();
+      GtkWidget *name = gtk_label_new (set->title);
+
+      gtk_switch_set_active (GTK_SWITCH (sw), FALSE);
+      gtk_widget_set_valign (sw, GTK_ALIGN_CENTER);
+      g_object_set_data_full (G_OBJECT (sw), "lk-path", g_strdup (set->path), g_free);
+      g_signal_connect (sw, "notify::active", G_CALLBACK (lk_switched_off_toggled), self);
+
+      gtk_label_set_xalign (GTK_LABEL (name), 0.0);
+      gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
+      gtk_widget_set_hexpand (name, TRUE);
+      gtk_box_append (GTK_BOX (row), sw);
+      gtk_box_append (GTK_BOX (row), name);
+      gtk_box_append (GTK_BOX (box), row);
+    }
+  gtk_widget_set_visible (box, TRUE);
+}
+
+static void
+lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  if (gtk_widget_in_destruction (self->window))
+    return;
+  lk_window_refresh_switched_off (self);
+}
+
 static void
 lk_window_update_overlays (LkWindow *self)
 {
@@ -1501,11 +1574,20 @@ lk_window_build_empty_state (void)
   gtk_widget_set_halign (buttons, GTK_ALIGN_START);
   gtk_widget_set_margin_bottom (buttons, 14);
 
+  /* The sets that are aboard but switched off. When every set is off the chart
+     is empty, so this page shows instead — with a switch to bring each back,
+     rather than sending the mariner to settings to find them. Filled from the
+     model on chart-sets-changed. */
+  GtkWidget *switched_off = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  gtk_widget_set_visible (switched_off, FALSE);
+  gtk_widget_set_margin_bottom (switched_off, 14);
+
   gtk_box_append (GTK_BOX (box), icon);
   gtk_box_append (GTK_BOX (box), title);
   gtk_box_append (GTK_BOX (box), body);
   gtk_box_append (GTK_BOX (box), error);
   gtk_box_append (GTK_BOX (box), buttons);
+  gtk_box_append (GTK_BOX (box), switched_off);
 
   /* What actually works, in the words of what the mariner has in hand. Where
    * the charts come from goes first: a mariner with none needs that before a
@@ -1572,6 +1654,7 @@ lk_window_build_empty_state (void)
   gtk_widget_set_visible (scroller, FALSE);
 
   g_object_set_data (G_OBJECT (scroller), "lk-error", error);
+  g_object_set_data (G_OBJECT (scroller), "lk-switched-off", switched_off);
   return scroller;
 }
 
@@ -1719,11 +1802,14 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
                                       G_CALLBACK (lk_window_raster_changed), self), self->window);
   lk_tether (model, g_signal_connect (model, "pick-moved",
                                       G_CALLBACK (lk_window_pick_moved), self), self->window);
+  lk_tether (model, g_signal_connect (model, "chart-sets-changed",
+                                      G_CALLBACK (lk_window_chart_sets_changed), self), self->window);
 
   g_object_get (gtk_widget_get_settings (self->window),
                 "gtk-application-prefer-dark-theme", &self->desktop_prefers_dark, NULL);
 
   lk_window_update_overlays (self);
+  lk_window_refresh_switched_off (self);
   lk_window_raster_changed (model, self);
   lk_window_apply_scheme (self);
   lk_window_apply_dev_hooks (self);
