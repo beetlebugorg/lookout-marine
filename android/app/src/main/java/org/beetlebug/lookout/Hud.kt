@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -500,54 +499,6 @@ fun IdentifyPanel(
             }
         }
     }
-}
-
-// ---- formatting -------------------------------------------------------------
-
-fun coordString(lat: Double, lon: Double): String =
-    "${dm(lat, true)} ${dm(lon, false)}"
-
-/**
- * Degrees and DECIMAL MINUTES with a hemisphere. The longitude has three degree
- * digits, so a pair keeps its column width. It agrees with CoordFormat.dm
- * (macOS and iOS), lkw::FormatCoord (Windows) and lk_coord_format_dm (Linux).
- * Each host prints the same string.
- *
- * WHY NOT DEGREES, MINUTES AND SECONDS. Decimal minutes is what a mariner works
- * in: it is what a GPS and a chartplotter show, what goes in the deck log, and
- * what is passed over the radio. One minute of latitude is one nautical mile,
- * so a decimal minute reads as distance directly. Seconds belong to surveying.
- */
-private fun dm(value: Double, isLat: Boolean): String {
-    val hemi = if (isLat) (if (value >= 0) "N" else "S") else (if (value >= 0) "E" else "W")
-    val a = abs(value)
-    var deg = a.toInt()
-    var minutes = (a - deg) * 60
-    // Carry the rounding. 59.9996' prints as 60.000', which is the next degree.
-    if (Math.round(minutes * 1000) >= 60000) {
-        minutes = 0.0
-        deg++
-    }
-    val fmt = if (isLat) "%02d\u00B0%06.3f'%s" else "%03d\u00B0%06.3f'%s"
-    return String.format(Locale.US, fmt, deg, minutes, hemi)
-}
-
-/** The full 1:N with group separators: `1:13,267`, as every shell prints it. */
-private fun scaleString(n: Double): String =
-    if (n <= 0) "1:\u2014" else String.format(Locale.US, "1:%,d", Math.round(n))
-
-/**
- * The S-52 navigational purpose band for a display scale. It agrees with
- * CoordFormat.band (macOS and iOS) and lkw::BandForDenom (Windows).
- */
-private fun bandString(n: Double): String = when {
-    n < 0.001 -> "\u2014"
-    n < 5_000 -> "Berthing"
-    n < 25_000 -> "Harbor"
-    n < 75_000 -> "Approach"
-    n < 300_000 -> "Coastal"
-    n < 1_500_000 -> "General"
-    else -> "Overview"
 }
 
 /**
