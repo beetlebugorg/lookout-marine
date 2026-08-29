@@ -128,6 +128,14 @@ class ChartController(private val appContext: Context) {
      */
     @Volatile private var pinnedId: String? = null
 
+    /**
+     * The pinned object's payload as the core last stated it, and what it
+     * parsed to. RENDER THREAD, and only ever read against the id it belongs
+     * to: both are cleared when the pin changes or goes.
+     */
+    private var pinnedPayload: String? = null
+    private var pinnedInfo: OverlayInfo? = null
+
     /** What the render thread last told Compose, so it can skip saying it again. */
     private var postedPin: OverlayPin? = null
     private var postedPoint: Offset? = null
@@ -732,6 +740,8 @@ class ChartController(private val appContext: Context) {
                 val next = if (again) null else OverlayPin(id, info, pinLonLat[0], pinLonLat[1])
                 val at = if (again) null else screenPointFor(l, pinLonLat[0], pinLonLat[1])
                 pinnedId = if (again) null else id
+                pinnedPayload = null
+                pinnedInfo = null
                 postedPin = next
                 postedPoint = at
                 access.onMain {
@@ -745,6 +755,8 @@ class ChartController(private val appContext: Context) {
         // A tap on open water closes the bubble and picks the chart, as it did
         // before there were overlay objects to tap.
         pinnedId = null
+        pinnedPayload = null
+        pinnedInfo = null
         postedPin = null
         postedPoint = null
         l.screenToGeo(xPts, yPts, geoBuf)
@@ -774,6 +786,8 @@ class ChartController(private val appContext: Context) {
     /** Close the pinned bubble (its own close button, and the back gesture). */
     fun dismissPin() {
         pinnedId = null
+        pinnedPayload = null
+        pinnedInfo = null
         pinned = null
         pinnedPoint = null
         postedPin = null
@@ -792,10 +806,25 @@ class ChartController(private val appContext: Context) {
         val cur = l.overlayInfo(id, pinLonLat)
         if (cur == null || cur.size < 2) {
             pinnedId = null
+            pinnedPayload = null
+            pinnedInfo = null
             access.onMain { if (pinned?.id == id) dismissPin() }
             return
         }
-        val info = OverlayInfo.parse(cur[1]) ?: return
+        // The payload is JSON the plugin wrote, and it is the same JSON on
+        // almost every frame: a target's name and MMSI never change, and its
+        // speed and closest approach change at the store's own 2 Hz. Parsing
+        // it per frame built a JSONObject, a JSONArray and a list of pairs at
+        // display rate to produce an object equal to the last one. The
+        // re-projection below is what must run every frame; this need not.
+        val info = if (cur[1] == pinnedPayload) {
+            pinnedInfo
+        } else {
+            OverlayInfo.parse(cur[1])?.also {
+                pinnedPayload = cur[1]
+                pinnedInfo = it
+            }
+        } ?: return
         val next = OverlayPin(id, info, pinLonLat[0], pinLonLat[1])
         val at = screenPointFor(l, pinLonLat[0], pinLonLat[1])
         // Every frame, but posted only when something actually moved: the

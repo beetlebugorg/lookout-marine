@@ -108,10 +108,19 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
      */
     val chartPaths: Array<String>
         get() {
-            selected?.let { if (it.cells.isNotEmpty()) return it.cells.toTypedArray() }
-            pushed?.let { return it.toTypedArray() }
-            return bundled?.let { arrayOf(it) } ?: emptyArray()
+            val want = selected?.cells?.takeIf { it.isNotEmpty() }
+                ?: pushed
+                ?: return bundled?.let { arrayOf(it) } ?: emptyArray()
+            // Held, not rebuilt. This is read from composition, and a real
+            // library is seven thousand cells: returning a fresh Array on
+            // every read copied all of them each time the loader recomposed.
+            pathsCache?.let { if (it.first === want) return it.second }
+            val array = want.toTypedArray()
+            pathsCache = want to array
+            return array
         }
+
+    private var pathsCache: Pair<List<String>, Array<String>>? = null
 
     /** A label for the HUD/settings: what's actually open right now. */
     val activeLabel: String
