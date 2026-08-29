@@ -15,7 +15,7 @@ add_project_arguments(cc.get_supported_arguments(
   '-Wno-missing-field-initializers',
 ), language: 'c')
 
-gtk_dep = dependency('gtk4', version: '>= 4.22')
+gtk_dep = dependency('gtk4', version: '>= 4.14')
 # The core is a static library that deliberately leaves the loader to its host,
 # so the executable is what resolves libvulkan.
 vulkan_dep = dependency('vulkan')
