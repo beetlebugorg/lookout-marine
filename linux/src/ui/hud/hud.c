@@ -255,7 +255,7 @@ lk_hud_credit_changed (LkChartLinks *links, gpointer user_data)
 
   /* The tether cuts the handler when the column FINALIZES, which is after
    * its children were disposed: a push resolving mid-teardown must not touch
-   * a dying label (lk-tether.h's contract). */
+   * a dying label (util/tether.h's contract). */
   if (gtk_widget_in_destruction (label))
     return;
 
