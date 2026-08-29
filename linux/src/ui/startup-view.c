@@ -121,7 +121,7 @@ lk_compass_mark_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
 
 /* One step of the opening page: what it says, and whether it is waiting,
  * running or done. */
-static GtkWidget *
+GtkWidget *
 lk_loader_step_new (GtkWidget *box)
 {
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
@@ -209,7 +209,10 @@ lk_window_build_loader (void)
   g_object_set_data (G_OBJECT (box), "lk-step1", lk_loader_step_new (box));
   g_object_set_data (G_OBJECT (box), "lk-step2", lk_loader_step_new (box));
 
-  gtk_widget_add_css_class (box, "lk-card");
+  /* No surface. This stands on the page fill, not over the chart, so a card
+     here would be a panel drawn on a panel. The reference's StartupLoader is
+     bare content on the same fill. */
+  gtk_widget_set_size_request (box, 320, -1);
   gtk_widget_set_halign (box, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
   gtk_widget_set_visible (box, FALSE);
@@ -360,18 +363,35 @@ lk_window_build_empty_state (void)
   gtk_widget_set_margin_top (warn, 10);
   gtk_box_append (GTK_BOX (box), warn);
 
-  gtk_widget_add_css_class (box, "lk-card");
+  /* No surface, for the reason lk_window_build_loader gives. 430 is the
+     reference's content width (EmptyChartState, maxWidth 430). */
   gtk_widget_set_size_request (box, 430, -1);
+  /* The card centres INSIDE the scroller, which is what leaves it in the middle
+     of a tall window. The margins are its clearance from the window edges once
+     it is taller than the window and the scroller has filled. */
+  gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
+  gtk_widget_set_margin_top (box, 16);
+  gtk_widget_set_margin_bottom (box, 16);
 
-  /* A page this tall must still fit a short window, so it scrolls. */
+  /* A page this tall must still fit a short window, so it scrolls.
+     valign FILL, not CENTER: an overlay child that is not FILL is allocated its
+     NATURAL height, and a card taller than the window is then centred and
+     clipped at both ends with no way to scroll to what it cut, because the
+     scroller believes it fits. Filling hands it the window's height, and
+     anything over that scrolls. */
   GtkWidget *scroller = gtk_scrolled_window_new ();
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), box);
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_propagate_natural_width (GTK_SCROLLED_WINDOW (scroller), TRUE);
-  gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
+  /* Do NOT propagate the natural width. A wrapping label reports its UNWRAPPED
+     text as its natural width, so propagating ran the card the whole width of
+     the window instead of the reference's 430 (EmptyChartState, maxWidth 430).
+     Refusing it leaves the scroller asking for the card's minimum, which is the
+     430 above, and the labels wrap to that. max-content-width cannot do this
+     job: the horizontal policy is NEVER, and that path ignores it. */
+  gtk_scrolled_window_set_propagate_natural_width (GTK_SCROLLED_WINDOW (scroller), FALSE);
   gtk_widget_set_halign (scroller, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (scroller, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (scroller, GTK_ALIGN_FILL);
   gtk_widget_set_visible (scroller, FALSE);
 
   g_object_set_data (G_OBJECT (scroller), "lk-error", error);
