@@ -46,6 +46,7 @@ typedef struct {
   char    *title;  /* the agency when the charts agree on one, else the folder name */
   char    *detail; /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB";
                     * "" until the background scan lands */
+  guint    charts; /* prepared cells, 0 until the scan lands */
   gboolean on;
 } LkChartSetRow;
 

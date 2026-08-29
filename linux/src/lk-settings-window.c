@@ -1082,13 +1082,90 @@ lk_chart_set_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
   lk_app_model_set_chart_set_on (settings->model, path, gtk_switch_get_active (widget));
 }
 
+/* The removal question outlives the button that raised it, so it carries the
+   window (held by a reference) and the set's path. The settings struct hangs
+   off the window, so a settings window closed while the question stands is not
+   freed under the answer. */
+typedef struct {
+  GtkWindow *window; /* reffed */
+  char      *path;
+} LkSetRemoveAsk;
+
+static void
+lk_set_remove_ask_free (LkSetRemoveAsk *ask)
+{
+  g_clear_object (&ask->window);
+  g_free (ask->path);
+  g_free (ask);
+}
+
+/* The reference's estimate: about 0.2 s to rebuild each prepared chart. */
+static char *
+lk_rebuild_estimate (guint charts)
+{
+  double seconds = charts * 0.2;
+
+  if (seconds < 60)
+    return g_strdup ("under a minute");
+  if (seconds < 3600)
+    return g_strdup_printf ("about %d minutes", (int) ((seconds / 60) + 0.5));
+  return g_strdup_printf ("about %.1f hours", seconds / 3600);
+}
+
+static void
+lk_chart_set_remove_answered (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  LkSetRemoveAsk *ask = user_data;
+  g_autoptr (GError) error = NULL;
+  int chosen = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, &error);
+
+  /* Cancel is 0, Remove is 1. Act only while the window still stands. */
+  if (chosen == 1 && ask->window != NULL &&
+      !gtk_widget_in_destruction (GTK_WIDGET (ask->window)))
+    {
+      LkSettings *settings = g_object_get_data (G_OBJECT (ask->window), "lk-settings");
+      if (settings != NULL)
+        lk_app_model_remove_chart_set (settings->model, ask->path);
+    }
+
+  lk_set_remove_ask_free (ask);
+}
+
+/* Removing a set deletes the charts Lookout prepared from it, and re-adding it
+ * rebuilds them, so the removal is asked about first — as the reference does. */
 static void
 lk_chart_set_remove_clicked (GtkButton *button, gpointer user_data)
 {
-  LkSettings *settings = user_data;
   const char *path = g_object_get_data (G_OBJECT (button), "lk-path");
+  const char *name = g_object_get_data (G_OBJECT (button), "lk-set-title");
+  guint charts = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (button), "lk-set-charts"));
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  g_autofree char *question = g_strdup_printf ("Remove %s?", name != NULL ? name : "this set");
+  static const char *answers[] = { "Cancel", "Remove and delete prepared charts", NULL };
 
-  lk_app_model_remove_chart_set (settings->model, path);
+  g_autofree char *detail = NULL;
+  if (charts > 0)
+    {
+      g_autofree char *estimate = lk_rebuild_estimate (charts);
+      detail = g_strdup_printf ("This deletes the %u charts Lookout prepared from it. Your "
+                                "folder is not touched. Re-adding it rebuilds them, %s.",
+                                charts, estimate);
+    }
+  else
+    detail = g_strdup ("This deletes the charts Lookout prepared from it. Your folder "
+                       "is not touched.");
+
+  GtkAlertDialog *dialog = gtk_alert_dialog_new ("%s", question);
+  gtk_alert_dialog_set_detail (dialog, detail);
+  gtk_alert_dialog_set_buttons (dialog, answers);
+  gtk_alert_dialog_set_cancel_button (dialog, 0);
+  gtk_alert_dialog_set_default_button (dialog, 0);
+
+  LkSetRemoveAsk *ask = g_new0 (LkSetRemoveAsk, 1);
+  ask->window = GTK_IS_WINDOW (root) ? g_object_ref (GTK_WINDOW (root)) : NULL;
+  ask->path = g_strdup (path);
+  gtk_alert_dialog_choose (dialog, ask->window, NULL, lk_chart_set_remove_answered, ask);
+  g_object_unref (dialog);
 }
 
 /* What is aboard, and what is being sailed on: a switch and a title per set,
@@ -1158,6 +1235,8 @@ lk_settings_fill_sets_list (LkSettings *settings)
 
       g_object_set_data_full (G_OBJECT (toggle), "lk-path", g_strdup (set->path), g_free);
       g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (set->path), g_free);
+      g_object_set_data_full (G_OBJECT (remove), "lk-set-title", g_strdup (set->title), g_free);
+      g_object_set_data (G_OBJECT (remove), "lk-set-charts", GUINT_TO_POINTER (set->charts));
       g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_chart_set_toggled), settings);
       g_signal_connect (remove, "clicked", G_CALLBACK (lk_chart_set_remove_clicked), settings);
 

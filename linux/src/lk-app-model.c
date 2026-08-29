@@ -265,6 +265,7 @@ lk_app_model_class_init (LkAppModelClass *klass)
 typedef struct {
   char *title;
   char *detail;
+  guint charts; /* prepared cells, for the removal dialog's rebuild estimate */
 } LkSetMeta;
 
 static void
@@ -668,6 +669,7 @@ lk_set_meta_build (const char *path, const LkChartSet *source, const LkChartSet 
   if (detail->len == 0)
     g_string_append (detail, "No charts found");
   meta->detail = g_string_free (detail, FALSE);
+  meta->charts = charts;
   return meta;
 }
 
@@ -772,6 +774,7 @@ lk_app_model_get_chart_sets (LkAppModel *self)
       row->path = g_strdup (path);
       row->title = meta != NULL ? g_strdup (meta->title) : g_path_get_basename (path);
       row->detail = g_strdup (meta != NULL ? meta->detail : "");
+      row->charts = meta != NULL ? meta->charts : 0;
       row->on = lk_app_model_chart_set_on (self, path);
       g_ptr_array_add (rows, row);
     }
