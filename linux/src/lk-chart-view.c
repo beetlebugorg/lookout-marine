@@ -278,6 +278,11 @@ lk_chart_view_unrealize (GtkWidget *widget)
   /* Close before the surface goes: lookout is presenting into it. */
   lk_chart_controller_close (self->controller);
   g_clear_pointer (&self->surface, lk_native_surface_free);
+  /* A re-realize must open the chart and present a frame again. Reset the two
+     flags that gate those steps, so the fresh surface repeats them instead of
+     staying blank. */
+  self->did_auto_open = FALSE;
+  self->presented = FALSE;
 
   GTK_WIDGET_CLASS (lk_chart_view_parent_class)->unrealize (widget);
 }
@@ -725,6 +730,17 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
             self->touch_press_id =
                 g_timeout_add (LK_TOUCH_PRESS_MS, lk_chart_view_touch_press, self);
           }
+        else
+          {
+            /* The same finger came back to carry on the stroke. It rests on the
+               glass now, so stop the coast and start velocity sampling fresh.
+               Without this the old fling stays armed and the stitched contact
+               relaunches it on release. */
+            self->vx = 0;
+            self->vy = 0;
+            self->last_sample_us = 0;
+            lk_chart_controller_fling_start (self->controller, 0, 0);
+          }
 
         self->touch_x = x;
         self->touch_y = y;
@@ -935,6 +951,8 @@ lk_chart_view_dispose (GObject *object)
   LkChartView *self = LK_CHART_VIEW (object);
 
   g_clear_handle_id (&self->auto_open_id, g_source_remove);
+  g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+  g_clear_handle_id (&self->touch_press_id, g_source_remove);
   g_clear_pointer (&self->surface, lk_native_surface_free);
   g_clear_pointer (&self->menu_marker, lk_marker_free);
   /* A popover parented to a widget has to be unparented before the widget
