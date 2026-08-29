@@ -1,4 +1,4 @@
-/* lk-search.h — the search capsule.
+/* ui/chrome/search.h — the search capsule.
  *
  * A field that floats beside the top-left bubble, opened from it or with
  * Ctrl+F. Coordinate go-to works (decimal or DMS → recentre); feature/place

@@ -1,4 +1,4 @@
-#include "lk-table-window.h"
+#include "ui/chrome/table-window.h"
 
 #include "util/json.h"
 

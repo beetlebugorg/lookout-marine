@@ -1,4 +1,4 @@
-#include "lk-alerts.h"
+#include "ui/chrome/alerts.h"
 
 #include "ui/hud/hud.h"
 #include "util/json.h"

@@ -1,6 +1,6 @@
-#include "lk-about.h"
+#include "ui/chrome/about.h"
 
-#include "lk-licenses.h"
+#include "ui/chrome/licenses.h"
 
 /* The chart engine is the one component a mariner may be asked which copy of
  * they are sailing on, so the About window states its pin. */

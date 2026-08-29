@@ -1,4 +1,4 @@
-/* lk-table-window.h — a plugin's declared table, as a window.
+/* ui/chrome/table-window.h — a plugin's declared table, as a window.
  *
  * A plugin declares a table in its manifest: a key, a title, the menu it opens
  * from, and TYPED columns. The core hands the declaration over through

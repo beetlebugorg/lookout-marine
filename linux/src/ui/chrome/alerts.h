@@ -1,4 +1,4 @@
-/* lk-alerts.h — the alerts the plugins raise, on screen and out loud.
+/* ui/chrome/alerts.h — the alerts the plugins raise, on screen and out loud.
  *
  * A plugin raises an alert with a severity, a title and a body. The core keeps
  * it and hands it over through lookout_plugin_alerts_json, already ordered:

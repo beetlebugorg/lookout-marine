@@ -1,18 +1,18 @@
 #include "lk-window.h"
 
-#include "lk-about.h"
-#include "lk-alerts.h"
+#include "ui/chrome/about.h"
+#include "ui/chrome/alerts.h"
 #include "ui/chart/view.h"
 #include "ui/hud/hud.h"
-#include "lk-licenses.h"
+#include "ui/chrome/licenses.h"
 #include "ui/chart/overlay.h"
 #include "plugins/install.h"
 #include "ui/chart/pick-report.h"
 #include "plugins/registry.h"
 #include "util/tether.h"
-#include "lk-search.h"
+#include "ui/chrome/search.h"
 #include "lk-settings-window.h"
-#include "lk-table-window.h"
+#include "ui/chrome/table-window.h"
 
 typedef struct {
   LkAppModel *model;

@@ -1,4 +1,4 @@
-#include "lk-licenses.h"
+#include "ui/chrome/licenses.h"
 
 #include "util/json.h"
 

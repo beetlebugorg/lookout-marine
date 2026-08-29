@@ -1,7 +1,7 @@
 #include "plugins/discovery.h"
 #include "lk-settings-window.h"
 
-#include "lk-licenses.h"
+#include "ui/chrome/licenses.h"
 #include "model/mariner.h"
 #include "plugins/install.h"
 #include "plugins/registry.h"

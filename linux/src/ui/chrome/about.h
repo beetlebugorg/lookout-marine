@@ -1,4 +1,4 @@
-/* lk-about.h — the About window.
+/* ui/chrome/about.h — the About window.
  *
  * What this build is: its name, its version, the chart engine it is pinned to,
  * and the way to its licenses. It says NOT FOR NAVIGATION, because a

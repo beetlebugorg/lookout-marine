@@ -1,4 +1,4 @@
-/* lk-licenses.h — the licenses screen.
+/* ui/chrome/licenses.h — the licenses screen.
  *
  * The core bakes vendor/licenses/licenses.json into the binary and hands it
  * over whole (lookout_licenses_json), so this needs no connection and no file.

@@ -1,4 +1,4 @@
-#include "lk-search.h"
+#include "ui/chrome/search.h"
 
 #include "model/coord.h"
 #include "ui/hud/hud.h"
