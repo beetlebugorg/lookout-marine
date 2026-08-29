@@ -7,7 +7,7 @@
 
 #include <gtk/gtk.h>
 
-#include "lk-chart-controller.h"
+#include "engine/controller.h"
 #include "lk-chart-links.h"
 #include "lk-raster.h"
 

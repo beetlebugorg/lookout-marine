@@ -8,7 +8,7 @@
 
 #include <gtk/gtk.h>
 
-#include "lk-native-surface.h"
+#include "engine/surface.h"
 
 G_BEGIN_DECLS
 

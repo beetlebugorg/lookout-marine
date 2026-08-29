@@ -120,11 +120,12 @@ core = custom_target('lookout-core',
 )
 
 sources = files(
+  'src/engine/controller.c',
+  'src/engine/surface.c',
   'src/lk-about.c',
   'src/lk-alerts.c',
   'src/lk-app-model.c',
   'src/lk-chart-bake.c',
-  'src/lk-chart-controller.c',
   'src/lk-chart-links.c',
   'src/lk-chart-scan.c',
   'src/lk-chart-view.c',
@@ -133,7 +134,6 @@ sources = files(
   'src/lk-hud.c',
   'src/lk-licenses.c',
   'src/lk-mariner.c',
-  'src/lk-native-surface.c',
   'src/lk-overlay-pick.c',
   'src/lk-pick-report.c',
   'src/lk-plugin-install.c',

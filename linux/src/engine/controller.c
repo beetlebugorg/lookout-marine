@@ -1,4 +1,4 @@
-#include "lk-chart-controller.h"
+#include "engine/controller.h"
 
 #include "lk-app-model.h"
 #include "lk-chart-view.h"

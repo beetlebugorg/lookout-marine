@@ -1,4 +1,4 @@
-/* lk-chart-controller.h — the single owner of the `lookout*` handle.
+/* engine/controller.h — the single owner of the `lookout*` handle.
  *
  * Every lookout_* call funnels through here, on the main thread only (the
  * engine wants one thread, GTK wants the main one). Drives the on-demand render

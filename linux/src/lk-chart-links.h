@@ -12,7 +12,7 @@
  */
 #pragma once
 
-#include "lk-chart-controller.h"
+#include "engine/controller.h"
 
 G_BEGIN_DECLS
 

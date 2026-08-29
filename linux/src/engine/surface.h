@@ -1,4 +1,4 @@
-/* lk-native-surface.h — the chart's own presentation surface, under GTK.
+/* engine/surface.h — the chart's own presentation surface, under GTK.
  *
  * lookout renders Vulkan and needs a real window-system surface, which GTK4
  * won't hand out per-widget. So the chart gets its own child surface under the

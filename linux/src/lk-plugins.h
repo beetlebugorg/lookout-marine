@@ -28,7 +28,7 @@
 
 #include <glib.h>
 
-#include "lk-chart-controller.h"
+#include "engine/controller.h"
 #include "util/json.h"
 
 G_BEGIN_DECLS
