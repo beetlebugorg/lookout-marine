@@ -5,6 +5,7 @@ import org.beetlebug.lookout.plugins.rowFrom
 
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.plugins.PluginSettingsController
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.ChartsSection
 import org.beetlebug.lookout.hud.Chrome
@@ -1512,7 +1513,7 @@ fun PluginInstallDialogs(controller: ChartController) {
  */
 @Composable
 private fun PluginConsentDialog(
-    pkg: ChartController.PluginPackage,
+    pkg: PluginSettingsController.PluginPackage,
     onInstall: () -> Unit,
     onCancel: () -> Unit,
 ) {
