@@ -342,6 +342,9 @@ lk_chart_controller_load_plugins (LkChartController *self)
 
   if (lookout_plugins_active (self->handle) == 0)
     g_message ("no plugin layer: this chart has no own ship, no AIS and no instrument input");
+
+  if (self->model != NULL)
+    lk_app_model_notify_plugins_changed (self->model);
 }
 
 gboolean
@@ -499,6 +502,8 @@ lk_chart_controller_plugin_install (LkChartController *self, const char *path)
   /* It loaded hot, so it may already be drawing. */
   lk_chart_controller_start_plugin_poll (self);
   lk_chart_controller_kick (self);
+  if (self->model != NULL)
+    lk_app_model_notify_plugins_changed (self->model);
   return NULL;
 }
 
@@ -514,6 +519,8 @@ lk_chart_controller_plugin_uninstall (LkChartController *self, const char *id)
 
   /* Its overlay objects went with it, so the chart is a frame out of date. */
   lk_chart_controller_kick (self);
+  if (self->model != NULL)
+    lk_app_model_notify_plugins_changed (self->model);
   return TRUE;
 }
 

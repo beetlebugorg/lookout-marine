@@ -110,6 +110,7 @@ enum {
   SIGNAL_PICK_MOVED,
   SIGNAL_RASTER_CHANGED,
   SIGNAL_CHART_SETS_CHANGED,
+  SIGNAL_PLUGINS_CHANGED,
   N_SIGNALS
 };
 
@@ -244,6 +245,12 @@ lk_app_model_class_init (LkAppModelClass *klass)
    * filled a title in. One signal; the list is rebuilt as a whole. */
   signals[SIGNAL_CHART_SETS_CHANGED] =
       g_signal_new ("chart-sets-changed", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
+                    0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+
+  /* The plugin layer changed: a load after an open, a hot install, or an
+     uninstall. The alert watch follows this to arm and disarm its poll. */
+  signals[SIGNAL_PLUGINS_CHANGED] =
+      g_signal_new ("plugins-changed", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
                     0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
 
@@ -1296,6 +1303,16 @@ lk_app_model_refresh_raster_state (LkAppModel *self)
 
   if (lk_app_model_sync_raster (self))
     g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
+}
+
+/* The controller calls this after the plugin layer changes: a load on open, a
+   hot install, or an uninstall. The alert watch arms or disarms on it. */
+void
+lk_app_model_notify_plugins_changed (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  g_signal_emit (self, signals[SIGNAL_PLUGINS_CHANGED], 0);
 }
 
 /* Put back which sets the mariner had drawn. Adding a source draws its set,

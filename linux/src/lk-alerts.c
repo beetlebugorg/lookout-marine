@@ -57,6 +57,8 @@ typedef struct {
   GtkMediaStream *stream;
 } LkAlerts;
 
+static gboolean lk_alerts_poll (gpointer user_data);
+
 static void
 lk_alert_free (LkAlert *alert)
 {
@@ -240,8 +242,11 @@ lk_alerts_acknowledge (GtkButton *button, gpointer user_data)
 
   lk_chart_controller_alert_ack (lk_app_model_get_controller (self->model), id);
 
-  /* The control answers now, not on the next second. */
+  /* Answer now, not on the next poll. Without this the row stays and the siren
+     keeps sounding for up to a second after the mariner silences the alarm.
+     seq = -1 forces the read to rebuild the strip. */
   self->seq = -1;
+  lk_alerts_poll (self);
 }
 
 /* One alert: the severity bar, the words, and the control that silences it. */
@@ -457,13 +462,27 @@ lk_alerts_sync_watch (LkAlerts *self)
   lk_siren_set_sounding (self, FALSE);
 }
 
-/* The panel carries the state, so the handler dies with the panel rather than
- * outliving it on a model that lives for the whole session. */
+/* The panel carries the state, so the handlers die with the panel rather than
+ * outliving it on a model that lives for the whole session. A notify can still
+ * arrive while the panel tears down, so both handlers stop at that. */
 static void
 lk_alerts_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
+  if (gtk_widget_in_destruction (GTK_WIDGET (user_data)))
+    return;
   if (g_str_equal (g_param_spec_get_name (pspec), "has-chart"))
     lk_alerts_sync_watch (g_object_get_data (G_OBJECT (user_data), "lk-alerts"));
+}
+
+/* The plugin layer changed: a chart open loaded one, or the mariner installed
+ * or removed one. A hot install must start the poll, and removing the last
+ * plugin must stop it, neither of which changes has-chart. */
+static void
+lk_alerts_plugins_changed (LkAppModel *model, gpointer user_data)
+{
+  if (gtk_widget_in_destruction (GTK_WIDGET (user_data)))
+    return;
+  lk_alerts_sync_watch (g_object_get_data (G_OBJECT (user_data), "lk-alerts"));
 }
 
 static void
@@ -499,6 +518,8 @@ lk_alerts_new (LkAppModel *model)
 
   g_object_set_data_full (G_OBJECT (self->panel), "lk-alerts", self, lk_alerts_free);
   g_signal_connect_object (model, "notify", G_CALLBACK (lk_alerts_notify),
+                           self->panel, 0);
+  g_signal_connect_object (model, "plugins-changed", G_CALLBACK (lk_alerts_plugins_changed),
                            self->panel, 0);
   lk_alerts_sync_watch (self);
 
