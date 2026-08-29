@@ -78,7 +78,7 @@ GtkWidget *lk_bubble_menu_new (const char *icon_name, const char *tooltip, GMenu
 
 /* ---- readout formatting ------------------------------------------------- */
 
-/* One half of a position, in degrees, minutes and seconds: 38°58'34.8"N. */
+/* One half of a position, in degrees and decimal minutes: 38°58.580'N. */
 char *lk_coord_format_dm (double value, gboolean is_lat);
 
 /* The full scale with group separators, as every shell prints it: 1:13,267. */
@@ -86,5 +86,10 @@ char *lk_format_scale (double denominator);
 
 /* The S-52 navigational purpose band for a display scale. */
 const char *lk_format_band (double denominator);
+
+/* The nice round distance the scale bar draws, in metres, with its bar width
+   in points through out_width_points. The width never passes the bar's target
+   cap. Exposed for tests. */
+double lk_scale_bar_nice_metres (double denominator, double *out_width_points);
 
 G_END_DECLS

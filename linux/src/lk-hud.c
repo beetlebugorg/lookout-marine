@@ -10,7 +10,7 @@
 
 /* ---- readout formatting ------------------------------------------------- */
 
-/* Degrees, minutes and seconds with a hemisphere. The longitude has three
+/* Degrees and decimal minutes with a hemisphere. The longitude has three
  * degree digits, so a pair keeps its column width. It agrees with
  * CoordFormat.dm (macOS and iOS), lkw::FormatCoord (Windows) and Hud.kt
  * (Android). Each host prints the same string. */
@@ -793,7 +793,7 @@ lk_raster_pill_new (LkAppModel *model)
 #define LK_SCALE_BAR_TARGET 140.0
 
 static const double LK_NICE_DISTANCES[] = {
-  10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
+  1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
   10000, 20000, 50000, 100000, 200000, 500000,
 };
 
@@ -842,6 +842,28 @@ lk_scale_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpo
   cairo_stroke (cr);
 }
 
+/* The nice round distance the bar draws at this scale, in metres, and the bar
+   width it maps to in points. The largest nice distance that fits the target
+   width keeps the bar at or under LK_SCALE_BAR_TARGET — the reason the nice
+   table reaches down to 1 m. Exposed so a test can hold that cap. */
+double
+lk_scale_bar_nice_metres (double denominator, double *out_width_points)
+{
+  double metres_per_point = denominator * LK_METRES_PER_POINT_AT_1_TO_1;
+  double target = LK_SCALE_BAR_TARGET * metres_per_point;
+  double metres = LK_NICE_DISTANCES[0];
+
+  for (gsize i = 0; i < G_N_ELEMENTS (LK_NICE_DISTANCES); i++)
+    {
+      if (LK_NICE_DISTANCES[i] <= target)
+        metres = LK_NICE_DISTANCES[i];
+    }
+
+  if (out_width_points != NULL)
+    *out_width_points = metres / metres_per_point;
+  return metres;
+}
+
 static void
 lk_scale_bar_update (LkScaleBar *bar)
 {
@@ -853,15 +875,8 @@ lk_scale_bar_update (LkScaleBar *bar)
       return;
     }
 
-  double metres_per_point = denominator * LK_METRES_PER_POINT_AT_1_TO_1;
-  double target = LK_SCALE_BAR_TARGET * metres_per_point;
-  double metres = LK_NICE_DISTANCES[0];
-
-  for (gsize i = 0; i < G_N_ELEMENTS (LK_NICE_DISTANCES); i++)
-    {
-      if (LK_NICE_DISTANCES[i] <= target)
-        metres = LK_NICE_DISTANCES[i];
-    }
+  double width_points = 0;
+  double metres = lk_scale_bar_nice_metres (denominator, &width_points);
 
   /* Every nice number of 1000 or more is a whole number of kilometres. */
   g_autofree char *label = metres >= 1000
@@ -869,7 +884,7 @@ lk_scale_bar_update (LkScaleBar *bar)
                                : g_strdup_printf ("%d m", (int) metres);
 
   gtk_label_set_text (GTK_LABEL (bar->label), label);
-  gtk_widget_set_size_request (bar->bar, (int) round (metres / metres_per_point), 6);
+  gtk_widget_set_size_request (bar->bar, (int) round (width_points), 6);
   gtk_widget_set_visible (bar->root, TRUE);
 }
 
@@ -1149,7 +1164,9 @@ lk_north_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
   pango_layout_get_pixel_size (layout, &text_width, &text_height);
 
   gdk_cairo_set_source_rgba (cr, &ink);
-  cairo_move_to (cr, -text_width / 2.0, -1);
+  /* Centre the glyph on its own measured box. A magic offset clips the letter
+     once the display scales the text up. */
+  cairo_move_to (cr, -text_width / 2.0, -text_height / 2.0);
   pango_cairo_show_layout (cr, layout);
   cairo_restore (cr);
 }

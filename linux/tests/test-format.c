@@ -95,11 +95,32 @@ test_band_thresholds (void)
   g_assert_cmpstr (lk_format_band (50000000), ==, "Overview");
 }
 
+static void
+test_scale_bar_cap (void)
+{
+  /* The bar picks the largest nice distance that fits its target width, so the
+     drawn width never passes the target cap. The nice table now reaches down to
+     1 m, so it fits every real chart scale — including the small scales near
+     1:360 that once had no nice distance small enough. */
+  static const double denominators[] = {
+    100, 200, 360, 500, 1000, 5000, 13267, 50000, 250000, 1500000,
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (denominators); i++)
+    {
+      double width = 0;
+      double metres = lk_scale_bar_nice_metres (denominators[i], &width);
+      g_assert_cmpfloat (metres, >, 0);
+      g_assert_cmpfloat (width, >, 0);
+      g_assert_cmpfloat (width, <=, 140.0 + 1e-6);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func ("/format/scale-bar/cap", test_scale_bar_cap);
   g_test_add_func ("/format/coord/basic", test_coord_dm_basic);
   g_test_add_func ("/format/coord/zero", test_coord_dm_zero);
   g_test_add_func ("/format/coord/carry", test_coord_dm_carry);

@@ -46,6 +46,12 @@ lk_window_free (gpointer data)
   LkWindow *self = data;
 
   g_clear_handle_id (&self->place_id, g_source_remove);
+  /* The settings window keeps this pointer NULL as it closes. If it outlives
+     the main window, drop the weak reference first — else the settings
+     teardown writes back into this freed slot. */
+  if (self->settings_window != NULL)
+    g_object_remove_weak_pointer (G_OBJECT (self->settings_window),
+                                  (gpointer *) &self->settings_window);
   g_free (self);
 }
 
@@ -1202,6 +1208,15 @@ lk_window_apply_scheme (LkWindow *self)
     gtk_widget_add_css_class (self->window, "lk-night");
   else
     gtk_widget_remove_css_class (self->window, "lk-night");
+
+  /* The menu radio tracks the chart's scheme. A cycle (Ctrl+L) or a load
+     changes the scheme without touching the action, so push the state back
+     here — the same way raster-select follows the active set. */
+  GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window),
+                                                "set-scheme");
+  if (action != NULL)
+    g_simple_action_set_state (G_SIMPLE_ACTION (action),
+                               g_variant_new_int32 (scheme));
 }
 
 static void
