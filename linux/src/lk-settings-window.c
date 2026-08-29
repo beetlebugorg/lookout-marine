@@ -2726,8 +2726,12 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 
   lk_settings_select_section (settings, tab);
 
-  /* While the window is up, the connection lines move on their own. */
-  settings->status_poll_id = g_timeout_add_seconds (1, lk_plugin_status_poll, settings);
+  /* While the window is up, the connection lines move on their own — but only
+     when a plugin shows a status line. With nothing to watch the poll would
+     read the whole registry once a second to change nothing. A hot install
+     rebuilds this window, so a plugin added later starts the poll then. */
+  if (settings->status_labels->len > 0)
+    settings->status_poll_id = g_timeout_add_seconds (1, lk_plugin_status_poll, settings);
 
   lk_settings_start_discovery (settings);
 

@@ -44,9 +44,12 @@ typedef struct {
 
   char     *sort_key;
   gboolean  ascending;
-  gint64    seq; /* the batch on screen; -1 forces the next read to rebuild */
+  gint64    seq; /* the batch on screen; -1 forces the next read to rebuild,
+                    LK_TABLE_SEQ_DEAD marks the emptied "plugin gone" state */
   guint     poll_id;
 } LkTableWindow;
+
+#define LK_TABLE_SEQ_DEAD (-2)
 
 /* Every table window on screen, by "<plugin>/<key>". A second Open finds the
  * window it already has instead of stacking another one on it. */
@@ -271,8 +274,12 @@ lk_table_reload (LkTableWindow *self, gboolean force)
   if (root == NULL)
     {
       /* The plugin has gone, and the table with it. An empty window beats a
-       * picture nobody is keeping up to date. */
-      self->seq = -1;
+       * picture nobody is keeping up to date. Clear it once, then hold: redoing
+       * it every second is work with nothing to show. Keep polling, so the
+       * table refills if the plugin restarts. */
+      if (self->seq == LK_TABLE_SEQ_DEAD)
+        return;
+      self->seq = LK_TABLE_SEQ_DEAD;
       gtk_list_box_remove_all (GTK_LIST_BOX (self->rows));
       gtk_widget_set_visible (self->empty, TRUE);
       return;
