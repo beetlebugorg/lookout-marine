@@ -357,6 +357,16 @@ public final class Lookout implements AutoCloseable {
      */
     public boolean pluginsActive()               { return h != 0 && nPluginsActive(h); }
 
+    /**
+     * What the source plugins' connection rows say between them, as two bits:
+     * 1 a session is open to a gateway, 2 one is open or being dialled.
+     *
+     * Answered by walking the registry natively. The shell asks once a second,
+     * and building the whole registry here to read a handful of strings was the
+     * only work a backgrounded plotter did.
+     */
+    public int pluginsConnectionState()          { return h == 0 ? 0 : nPluginsConnectionState(h); }
+
     /** Every loaded plugin with its settings schema, as JSON. Null when none. */
     public String pluginsJson()                  { return h == 0 ? null : nPluginsJson(h); }
 
@@ -423,6 +433,7 @@ public final class Lookout implements AutoCloseable {
 
     private static native boolean nPluginsLoad(long h, String dir);
     private static native boolean nPluginsActive(long h);
+    private static native int nPluginsConnectionState(long h);
     private static native String nPluginsJson(long h);
     private static native String nPluginConfigGet(long h, String id);
     private static native boolean nPluginConfigSet(long h, String id, String json);

@@ -931,6 +931,87 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginsActive(env: [*c]j.JNIEnv, c
 }
 
 /// String nPluginsJson(long h) -- every loaded plugin with its settings schema
+/// int nPluginsConnectionState(long h) -- what the source plugins' connection
+/// rows say between them, as two bits: 1 = a session is open to a gateway,
+/// 2 = one is open or being dialled.
+///
+/// The shell asks this once a second, in the foreground off the frame loop and
+/// in the background as the only work the process does. Answering it from the
+/// registry JVM-side meant building every plugin, every settings field, every
+/// list schema and every row once a second to read a handful of strings. This
+/// walks the same document here instead: one arena, freed before it returns,
+/// and nothing for the JVM to collect.
+///
+/// A token walk rather than a substring search. A plugin's `detail` is free
+/// text it writes itself and may contain anything, including the word it would
+/// be searched for.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsConnectionState(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    var len: usize = 0;
+    const ptr = lookout_plugins_json(h.l, &len) orelse return 0;
+    if (len == 0) return 0;
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const doc = std.json.parseFromSliceLeaky(std.json.Value, a, ptr[0..len], .{}) catch return 0;
+    const plugins = switch (doc) {
+        .object => |o| o.get("plugins") orelse return 0,
+        else => return 0,
+    };
+    const entries = switch (plugins) {
+        .array => |x| x,
+        else => return 0,
+    };
+
+    var live = false;
+    var trying = false;
+    for (entries.items) |entry| {
+        const obj = switch (entry) {
+            .object => |o| o,
+            else => continue,
+        };
+        // The status is a JSON document a plugin wrote, carried as a string.
+        // A plugin that writes a plain sentence instead simply has no rows.
+        const status = switch (obj.get("status") orelse continue) {
+            .string => |t| t,
+            else => continue,
+        };
+        if (status.len == 0 or status[0] != '{') continue;
+        const inner = std.json.parseFromSliceLeaky(std.json.Value, a, status, .{}) catch continue;
+        const items = switch (inner) {
+            .object => |o| o.get("items") orelse continue,
+            else => continue,
+        };
+        const rows = switch (items) {
+            .array => |x| x,
+            else => continue,
+        };
+        for (rows.items) |row| {
+            const ro = switch (row) {
+                .object => |o| o,
+                else => continue,
+            };
+            const state = switch (ro.get("state") orelse continue) {
+                .string => |t| t,
+                else => continue,
+            };
+            if (std.mem.eql(u8, state, "connected")) {
+                live = true;
+                trying = true;
+            } else if (std.mem.eql(u8, state, "reconnecting") or
+                std.mem.eql(u8, state, "unreachable"))
+            {
+                trying = true;
+            }
+        }
+    }
+    return (if (live) @as(j.jint, 1) else 0) | (if (trying) @as(j.jint, 2) else 0);
+}
+
 /// and the values in force. null when no layer is up.
 export fn Java_org_beetlebug_lookout_Lookout_nPluginsJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
     _ = cls;

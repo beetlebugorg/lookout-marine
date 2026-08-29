@@ -46,7 +46,7 @@ class PluginSettingsController(
      * is applied, since the core answers with the values as clamped.
      */
     var pluginRegistry by mutableStateOf(PluginRegistry())
-    private set
+        private set
 
     /** Re-read the registry from the core. Safe to call on any thread. */
     fun refreshPlugins() = access.onEngine { l -> republish(l) }
@@ -57,8 +57,8 @@ class PluginSettingsController(
      * declare — so what the mariner asked for is not always what is in force.
      */
     fun setPluginConfig(id: String, json: String) = access.onEngine { l ->
-    if (!l.pluginConfigSet(id, json)) Log.w(TAG, "plugin config refused: $id $json")
-    republish(l)
+        if (!l.pluginConfigSet(id, json)) Log.w(TAG, "plugin config refused: $id $json")
+        republish(l)
     }
 
     /**
@@ -67,11 +67,11 @@ class PluginSettingsController(
      * [setPluginList]; this is their twin for toggles and numbers.
      */
     fun setPluginScalar(pluginId: String, field: PluginField, value: Double) {
-    PluginPrefs.saveScalar(appContext, pluginId, field.key, value)
-    val body = org.json.JSONObject()
-        .put(field.key, if (field.kind == PluginField.Kind.TOGGLE) value != 0.0 else value)
-        .toString()
-    setPluginConfig(pluginId, body)
+        PluginPrefs.saveScalar(appContext, pluginId, field.key, value)
+        val body = org.json.JSONObject()
+            .put(field.key, if (field.kind == PluginField.Kind.TOGGLE) value != 0.0 else value)
+            .toString()
+        setPluginConfig(pluginId, body)
     }
 
     /**
@@ -83,9 +83,9 @@ class PluginSettingsController(
      * the next launch.
      */
     fun setPluginList(list: PluginListSchema, rows: List<PluginRow>) {
-    val json = list.rowsJson(rows)
-    PluginPrefs.saveRows(appContext, list, json)
-    setPluginConfig(list.pluginId, org.json.JSONObject().put(list.key, org.json.JSONArray(json)).toString())
+        val json = list.rowsJson(rows)
+        PluginPrefs.saveRows(appContext, list, json)
+        setPluginConfig(list.pluginId, org.json.JSONObject().put(list.key, org.json.JSONArray(json)).toString())
     }
 
     /**
@@ -96,9 +96,6 @@ class PluginSettingsController(
      *
      * RENDER THREAD only: [lastPluginsJson] is its own.
      */
-    private var lastPluginsJson: String? = null
-    private var pluginsJsonWasNull = false
-
     /**
      * Republish into a registry nobody has seen. A new Activity over a process
      * that kept running has already-loaded plugins and no registry of its own.
@@ -108,31 +105,34 @@ class PluginSettingsController(
         lastPluginsJson = null
     }
 
+    private var lastPluginsJson: String? = null
+    private var pluginsJsonWasNull = false
+
     fun republish(l: Lookout) {
-    val json = l.pluginsJson()
-    if (json == null) {
-        // A null read is the plugin layer mid-restart, not an empty
-        // registry. Publishing it would empty Vessels, Alarms and
-        // Connections until the next good read; keep the last one and
-        // say so once each way.
-        if (!pluginsJsonWasNull) Log.w(TAG, "plugins registry unreadable; keeping the last one")
-        pluginsJsonWasNull = true
-        return
-    }
-    if (pluginsJsonWasNull) {
-        Log.w(TAG, "plugins registry is back")
-        pluginsJsonWasNull = false
-    }
-    if (json == lastPluginsJson) return
-    lastPluginsJson = json
-    val reg = PluginRegistry.parse(json)
-    // The declared tables ride the same refresh: they follow the loaded
-    // set, so a plugin that unloads takes its table with it.
-    val specs = parseTableSpecs(l.pluginTables())
-    access.onMain {
-        pluginRegistry = reg
-        onTables(specs)
-    }
+        val json = l.pluginsJson()
+        if (json == null) {
+            // A null read is the plugin layer mid-restart, not an empty
+            // registry. Publishing it would empty Vessels, Alarms and
+            // Connections until the next good read; keep the last one and
+            // say so once each way.
+            if (!pluginsJsonWasNull) Log.w(TAG, "plugins registry unreadable; keeping the last one")
+            pluginsJsonWasNull = true
+            return
+        }
+        if (pluginsJsonWasNull) {
+            Log.w(TAG, "plugins registry is back")
+            pluginsJsonWasNull = false
+        }
+        if (json == lastPluginsJson) return
+        lastPluginsJson = json
+        val reg = PluginRegistry.parse(json)
+        // The declared tables ride the same refresh: they follow the loaded
+        // set, so a plugin that unloads takes its table with it.
+        val specs = parseTableSpecs(l.pluginTables())
+        access.onMain {
+            pluginRegistry = reg
+            onTables(specs)
+        }
     }
 
     // ---- live plugin status -------------------------------------------------
@@ -145,22 +145,22 @@ class PluginSettingsController(
     @Volatile private var polling = false
 
     private val pollTick = object : Runnable {
-    override fun run() {
-        if (!polling) return
-        refreshPlugins()
-        access.postMainDelayed(PLUGIN_POLL_MS, this)
-    }
+        override fun run() {
+            if (!polling) return
+            refreshPlugins()
+            access.postMainDelayed(PLUGIN_POLL_MS, this)
+        }
     }
 
     fun startPluginPolling() {
-    if (polling) return
-    polling = true
-    access.postMain(pollTick)
+        if (polling) return
+        polling = true
+        access.postMain(pollTick)
     }
 
     fun stopPluginPolling() {
-    polling = false
-    access.cancelMain(pollTick)
+        polling = false
+        access.cancelMain(pollTick)
     }
 
     /**
@@ -173,44 +173,44 @@ class PluginSettingsController(
      * so the host files them as `bundled` and the ids belong to the application.
      */
     fun loadPlugins(l: Lookout) {
-    val dir = pluginDir ?: return
-    // Android's files dir has no path in the environment, so the core
-    // cannot resolve an install root itself. Before the layer comes up.
-    l.pluginsInstallRoot(File(appContext.filesDir, "plugins").absolutePath)
-    if (!l.pluginsLoad(dir)) {
-        Log.w(TAG, "plugins: none loaded from $dir (no host in this build?)")
-        return
-    }
-    // Then the set the mariner installed: bundled first, installed after,
-    // so on an id collision the application's copy wins (the documented
-    // precedence every shell follows).
-    l.pluginsLoadInstalled()
-    // What actually came up, by id — the answer to "did the module load"
-    // that a screenshot cannot give.
-    val json = l.pluginsJson()
-    Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
-    val loadedReg = PluginRegistry.parse(json)
-    val restored = restoreLists(l, loadedReg)
-    restoreScalars(l, loadedReg)
-    // The developer override, and only where the mariner has said nothing:
-    // a list they have edited is the truth, empty or not.
-    nmeaAddress?.let { addr ->
-        if (restored.contains("org.beetlebug.nmea0183/connections")) {
-            Log.i(TAG, "plugins: -e nmea ignored; the saved connection list wins")
-        } else {
-            configureNmea(l, addr)
+        val dir = pluginDir ?: return
+        // Android's files dir has no path in the environment, so the core
+        // cannot resolve an install root itself. Before the layer comes up.
+        l.pluginsInstallRoot(File(appContext.filesDir, "plugins").absolutePath)
+        if (!l.pluginsLoad(dir)) {
+            Log.w(TAG, "plugins: none loaded from $dir (no host in this build?)")
+            return
         }
-    }
-    // After the restore, so the registry the settings screen first sees
-    // already holds the mariner's own connections.
-    val reg = PluginRegistry.parse(l.pluginsJson())
-    Log.i(
-        TAG,
-        "plugins: sections ${reg.sections.joinToString(", ") { it.id }}" +
-            " | managed ${reg.managed.size} of ${reg.plugins.size}",
-    )
-    lastPluginsJson = l.pluginsJson()
-    access.onMain { pluginRegistry = reg }
+        // Then the set the mariner installed: bundled first, installed after,
+        // so on an id collision the application's copy wins (the documented
+        // precedence every shell follows).
+        l.pluginsLoadInstalled()
+        // What actually came up, by id — the answer to "did the module load"
+        // that a screenshot cannot give.
+        val json = l.pluginsJson()
+        Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
+        val loadedReg = PluginRegistry.parse(json)
+        val restored = restoreLists(l, loadedReg)
+        restoreScalars(l, loadedReg)
+        // The developer override, and only where the mariner has said nothing:
+        // a list they have edited is the truth, empty or not.
+        nmeaAddress?.let { addr ->
+            if (restored.contains("org.beetlebug.nmea0183/connections")) {
+                Log.i(TAG, "plugins: -e nmea ignored; the saved connection list wins")
+            } else {
+                configureNmea(l, addr)
+            }
+        }
+        // After the restore, so the registry the settings screen first sees
+        // already holds the mariner's own connections.
+        val reg = PluginRegistry.parse(l.pluginsJson())
+        Log.i(
+            TAG,
+            "plugins: sections ${reg.sections.joinToString(", ") { it.id }}" +
+                " | managed ${reg.managed.size} of ${reg.plugins.size}",
+        )
+        lastPluginsJson = l.pluginsJson()
+        access.onMain { pluginRegistry = reg }
     }
 
     /**
@@ -223,19 +223,19 @@ class PluginSettingsController(
      * editor authoritative over the launch intent.
      */
     private fun restoreLists(l: Lookout, reg: PluginRegistry): Set<String> {
-    val done = mutableSetOf<String>()
-    for (p in reg.plugins) {
-        for (list in p.lists) {
-            val saved = PluginPrefs.savedRows(appContext, list) ?: continue
-            val body = org.json.JSONObject()
-                .put(list.key, org.json.JSONArray(saved))
-                .toString()
-            val ok = l.pluginConfigSet(p.id, body)
-            Log.i(TAG, "plugins: ${p.id}/${list.key} restored ${if (ok) "ok" else "REFUSED"}")
-            if (ok) done.add("${p.id}/${list.key}")
+        val done = mutableSetOf<String>()
+        for (p in reg.plugins) {
+            for (list in p.lists) {
+                val saved = PluginPrefs.savedRows(appContext, list) ?: continue
+                val body = org.json.JSONObject()
+                    .put(list.key, org.json.JSONArray(saved))
+                    .toString()
+                val ok = l.pluginConfigSet(p.id, body)
+                Log.i(TAG, "plugins: ${p.id}/${list.key} restored ${if (ok) "ok" else "REFUSED"}")
+                if (ok) done.add("${p.id}/${list.key}")
+            }
         }
-    }
-    return done
+        return done
     }
 
     /**
@@ -247,22 +247,22 @@ class PluginSettingsController(
      * is dropped by the core on the way in.
      */
     private fun restoreScalars(l: Lookout, reg: PluginRegistry) {
-    val saved = PluginPrefs.savedScalars(appContext)
-    if (saved.isEmpty()) return
-    for (p in reg.plugins) {
-        val body = org.json.JSONObject()
-        for (f in p.fields) {
-            val v = saved["${p.id}/${f.key}"] ?: continue
-            when (f.kind) {
-                PluginField.Kind.TOGGLE -> body.put(f.key, v != 0.0)
-                PluginField.Kind.NUMBER -> body.put(f.key, v)
-                else -> {}
+        val saved = PluginPrefs.savedScalars(appContext)
+        if (saved.isEmpty()) return
+        for (p in reg.plugins) {
+            val body = org.json.JSONObject()
+            for (f in p.fields) {
+                val v = saved["${p.id}/${f.key}"] ?: continue
+                when (f.kind) {
+                    PluginField.Kind.TOGGLE -> body.put(f.key, v != 0.0)
+                    PluginField.Kind.NUMBER -> body.put(f.key, v)
+                    else -> {}
+                }
             }
+            if (body.length() == 0) continue
+            val ok = l.pluginConfigSet(p.id, body.toString())
+            Log.i(TAG, "plugins: ${p.id} scalars restored ${if (ok) "ok" else "REFUSED"}")
         }
-        if (body.length() == 0) continue
-        val ok = l.pluginConfigSet(p.id, body.toString())
-        Log.i(TAG, "plugins: ${p.id} scalars restored ${if (ok) "ok" else "REFUSED"}")
-    }
     }
 
     /**
@@ -277,11 +277,11 @@ class PluginSettingsController(
      * saved list — see the caller.
      */
     private fun configureNmea(l: Lookout, addr: String) {
-    val host = addr.substringBeforeLast(':', addr)
-    val port = addr.substringAfterLast(':', "").toIntOrNull() ?: 10110
-    val row = """{"connections":[{"id":"adb","name":"","host":"$host","port":$port,"enabled":true}]}"""
-    val ok = l.pluginConfigSet("org.beetlebug.nmea0183", row)
-    Log.i(TAG, "plugins: -e nmea (developer) -> $host:$port ${if (ok) "set" else "REFUSED"}")
+        val host = addr.substringBeforeLast(':', addr)
+        val port = addr.substringAfterLast(':', "").toIntOrNull() ?: 10110
+        val row = """{"connections":[{"id":"adb","name":"","host":"$host","port":$port,"enabled":true}]}"""
+        val ok = l.pluginConfigSet("org.beetlebug.nmea0183", row)
+        Log.i(TAG, "plugins: -e nmea (developer) -> $host:$port ${if (ok) "set" else "REFUSED"}")
     }
 
     /**
@@ -291,62 +291,56 @@ class PluginSettingsController(
      * though it were a sixth plugin.
      */
     private fun summarize(json: String?): String {
-    if (json.isNullOrEmpty()) return "(no plugin json)"
-    val ids = try {
-        val arr = org.json.JSONObject(json).getJSONArray("plugins")
-        (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("id").ifEmpty { null } }
-    } catch (e: Exception) {
-        return "(unreadable plugin json: $e)"
-    }
-    return if (ids.isEmpty()) "(none loaded)" else "loaded: ${ids.joinToString(", ")}"
+        if (json.isNullOrEmpty()) return "(no plugin json)"
+        val ids = try {
+            val arr = org.json.JSONObject(json).getJSONArray("plugins")
+            (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("id").ifEmpty { null } }
+        } catch (e: Exception) {
+            return "(unreadable plugin json: $e)"
+        }
+        return if (ids.isEmpty()) "(none loaded)" else "loaded: ${ids.joinToString(", ")}"
     }
 
     /** What the source plugins' connection rows say between them. */
     data class Connections(val live: Boolean, val trying: Boolean)
 
     /**
-     * Read the connection rows out of the plugin registry. `live` is a session
-     * actually open to a gateway; `trying` also covers the ones being dialled,
+     * `live` is a session actually open to a gateway; `trying` also covers the
+     * ones being dialled,
      * which is the difference between a boat under way and one whose gateway is
      * switched off. A paused, address-less or refused row is neither.
+     *
+     * The core walks its own registry for this. Building it here to read a
+     * handful of strings was, on the background path, the only work the
+     * process did, once a second, for as long as the app was away.
      *
      * RENDER THREAD: the native call takes the api lock.
      */
     fun connections(l: Lookout): Connections {
-    var live = false
-    var trying = false
-    for (p in PluginRegistry.parse(l.pluginsJson()).plugins) {
-        for (s in p.statusItems.values) {
-            when (s.state) {
-                "connected" -> { live = true; trying = true }
-                "reconnecting", "unreachable" -> trying = true
-            }
-        }
-    }
-    return Connections(live, trying)
+        val bits = l.pluginsConnectionState()
+        return Connections(live = bits and 1 != 0, trying = bits and 2 != 0)
     }
 
-    // ---- plugin install ------------------------------------------------------
     //
     // NOTHING IS INSTALLED BEFORE ITS PERMISSIONS ARE SHOWN. The sentences
     // come from the core, so every shell shows the same words.
 
     /** What the consent sheet shows for a .lkplug the mariner picked. */
     data class PluginPackage(
-    val path: String,
-    val id: String,
-    val name: String,
-    val version: String,
-    val sentences: List<String>,
-    val installedVersion: String?,
-    val installedOrigin: String?,
-    val adds: List<String>,
-    val drops: List<String>,
-    val downgrade: Boolean,
+        val path: String,
+        val id: String,
+        val name: String,
+        val version: String,
+        val sentences: List<String>,
+        val installedVersion: String?,
+        val installedOrigin: String?,
+        val adds: List<String>,
+        val drops: List<String>,
+        val downgrade: Boolean,
     )
 
     var pluginConsent by mutableStateOf<PluginPackage?>(null)
-    private set
+        private set
 
     /** One sentence from the core, ready to show. */
     var installError by mutableStateOf<String?>(null)
@@ -361,97 +355,97 @@ class PluginSettingsController(
      * moment the open finishes.
      */
     fun openFile(path: String) {
-    if (!access.isOpen) {
-        synchronized(pendingOpenFiles) { pendingOpenFiles.add(path) }
-        return
-    }
-    if (path.endsWith(".lkplug", ignoreCase = true)) {
-        beginPluginInstall(path)
-        return
-    }
-    access.onEngine { l ->
-        when (l.openFile(path)) {
-            1 -> Log.i(TAG, "opened file taken by a plugin: $path")
-            -1 -> Log.w(TAG, "opened file claimed but not taken: $path")
-            else -> Log.i(TAG, "opened file claimed by nothing: $path")
+        if (!access.isOpen) {
+            synchronized(pendingOpenFiles) { pendingOpenFiles.add(path) }
+            return
         }
-    }
+        if (path.endsWith(".lkplug", ignoreCase = true)) {
+            beginPluginInstall(path)
+            return
+        }
+        access.onEngine { l ->
+            when (l.openFile(path)) {
+                1 -> Log.i(TAG, "opened file taken by a plugin: $path")
+                -1 -> Log.w(TAG, "opened file claimed but not taken: $path")
+                else -> Log.i(TAG, "opened file claimed by nothing: $path")
+            }
+        }
     }
 
     private val pendingOpenFiles = mutableListOf<String>()
 
     /** Route what arrived while there was no engine. Main thread, post-attach. */
     fun drainOpenFiles() {
-    val parked = synchronized(pendingOpenFiles) {
-        val copy = pendingOpenFiles.toList()
-        pendingOpenFiles.clear()
-        copy
-    }
-    for (p in parked) openFile(p)
+        val parked = synchronized(pendingOpenFiles) {
+            val copy = pendingOpenFiles.toList()
+            pendingOpenFiles.clear()
+            copy
+        }
+        for (p in parked) openFile(p)
     }
 
     fun beginPluginInstall(path: String) = access.onEngine { l ->
-    val json = l.pluginInspect(path)
-    if (json == null) {
-        access.onMain { installError = "The plugin layer could not start." }
-        return@onEngine
-    }
-    try {
-        val o = org.json.JSONObject(json)
-        val err = o.optString("error")
-        if (err.isNotEmpty()) {
-            access.onMain { installError = err }
+        val json = l.pluginInspect(path)
+        if (json == null) {
+            access.onMain { installError = "The plugin layer could not start." }
             return@onEngine
         }
-        fun arr(a: org.json.JSONArray?): List<String> =
-            if (a == null) emptyList() else List(a.length()) { a.optString(it) }
-        val inst = o.optJSONObject("installed")
-        val pkg = PluginPackage(
-            path = path,
-            id = o.optString("id"),
-            name = o.optString("name"),
-            version = o.optString("version"),
-            sentences = arr(o.optJSONArray("sentences")),
-            installedVersion = inst?.optString("version"),
-            installedOrigin = inst?.optString("origin"),
-            adds = arr(inst?.optJSONArray("adds")),
-            drops = arr(inst?.optJSONArray("drops")),
-            downgrade = inst?.optBoolean("downgrade") ?: false,
-        )
-        access.onMain { pluginConsent = pkg }
-    } catch (e: Exception) {
-        access.onMain { installError = "That file is not a plugin package." }
-    }
+        try {
+            val o = org.json.JSONObject(json)
+            val err = o.optString("error")
+            if (err.isNotEmpty()) {
+                access.onMain { installError = err }
+                return@onEngine
+            }
+            fun arr(a: org.json.JSONArray?): List<String> =
+                if (a == null) emptyList() else List(a.length()) { a.optString(it) }
+            val inst = o.optJSONObject("installed")
+            val pkg = PluginPackage(
+                path = path,
+                id = o.optString("id"),
+                name = o.optString("name"),
+                version = o.optString("version"),
+                sentences = arr(o.optJSONArray("sentences")),
+                installedVersion = inst?.optString("version"),
+                installedOrigin = inst?.optString("origin"),
+                adds = arr(inst?.optJSONArray("adds")),
+                drops = arr(inst?.optJSONArray("drops")),
+                downgrade = inst?.optBoolean("downgrade") ?: false,
+            )
+            access.onMain { pluginConsent = pkg }
+        } catch (e: Exception) {
+            access.onMain { installError = "That file is not a plugin package." }
+        }
     }
 
     /** The Install button; nothing touched disk before this. */
     fun confirmPluginInstall() {
-    val pkg = pluginConsent ?: return
-    pluginConsent = null
-    access.onEngine { l ->
-        val msg = l.pluginInstall(pkg.path)
-        if (msg != null) access.onMain { installError = msg }
-        republish(l)
-    }
+        val pkg = pluginConsent ?: return
+        pluginConsent = null
+        access.onEngine { l ->
+            val msg = l.pluginInstall(pkg.path)
+            if (msg != null) access.onMain { installError = msg }
+            republish(l)
+        }
     }
 
     fun cancelPluginInstall() {
-    pluginConsent = null
+        pluginConsent = null
     }
 
     fun dismissInstallError() {
-    installError = null
+        installError = null
     }
 
     fun uninstallPlugin(id: String) = access.onEngine { l ->
-    if (!l.pluginUninstall(id)) Log.w(TAG, "uninstall refused: $id")
-    republish(l)
+        if (!l.pluginUninstall(id)) Log.w(TAG, "uninstall refused: $id")
+        republish(l)
     }
 
     /** A live grant flip; the registry re-read carries the new truth. */
     fun setPluginGrant(id: String, cap: String, on: Boolean) = access.onEngine { l ->
-    if (!l.pluginGrantSet(id, cap, on)) Log.w(TAG, "grant flip refused: $id/$cap")
-    republish(l)
+        if (!l.pluginGrantSet(id, cap, on)) Log.w(TAG, "grant flip refused: $id/$cap")
+        republish(l)
     }
 
     private companion object {
@@ -459,7 +453,7 @@ class PluginSettingsController(
 
         /**
          * How often the settings screen re-reads the plugin status. The plugins
-         * rebuild theirs every two seconds, so this is twice their cadence —
+         * rebuild theirs every two seconds, so this is twice their cadence:
          * fast enough that a rate never looks stuck, and the republish is
          * skipped whenever nothing changed.
          */
