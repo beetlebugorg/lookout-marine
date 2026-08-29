@@ -33,6 +33,11 @@ lk_test_isolate (void)
   g_setenv ("LOOKOUT_CLEAN", "1", TRUE);
   /* The chrome, not the chart, is under test: no GPU. */
   g_setenv ("GSK_RENDERER", "cairo", TRUE);
+  /* No accessibility either. A build runner has no a11y bus, GTK says so with
+     a warning at init, and g_test_init has already made a warning fatal — so
+     every widget suite trapped there before it ran a single test. GTK names
+     this setting in that warning. It must be set before gtk_init reads it. */
+  g_setenv ("GTK_A11Y", "none", TRUE);
 }
 
 static inline void
