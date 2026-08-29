@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "ABAEBDCFCC218F9164521159"
-               BuildableName = "LookoutMarine-iOS.app"
-               BlueprintName = "LookoutMarine-iOS"
+               BlueprintIdentifier = "98D5486F698D955D344F0F65"
+               BuildableName = "LookoutMarine.app"
+               BlueprintName = "LookoutMarine"
                ReferencedContainer = "container:LookoutMarine.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,9 +32,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "ABAEBDCFCC218F9164521159"
-            BuildableName = "LookoutMarine-iOS.app"
-            BlueprintName = "LookoutMarine-iOS"
+            BlueprintIdentifier = "98D5486F698D955D344F0F65"
+            BuildableName = "LookoutMarine.app"
+            BlueprintName = "LookoutMarine"
             ReferencedContainer = "container:LookoutMarine.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -44,20 +44,9 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "2B49F6B4FF2B729BEF73FD4F"
-               BuildableName = "LookoutMarine-iOSTests.xctest"
-               BlueprintName = "LookoutMarine-iOSTests"
-               ReferencedContainer = "container:LookoutMarine.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7DC91D64E44F15978302A618"
-               BuildableName = "LookoutMarine-iOS-UITests.xctest"
-               BlueprintName = "LookoutMarine-iOS-UITests"
+               BlueprintIdentifier = "6E20237B91A25CEA8D706844"
+               BuildableName = "LookoutMarineTests.xctest"
+               BlueprintName = "LookoutMarineTests"
                ReferencedContainer = "container:LookoutMarine.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -79,9 +68,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "ABAEBDCFCC218F9164521159"
-            BuildableName = "LookoutMarine-iOS.app"
-            BlueprintName = "LookoutMarine-iOS"
+            BlueprintIdentifier = "98D5486F698D955D344F0F65"
+            BuildableName = "LookoutMarine.app"
+            BlueprintName = "LookoutMarine"
             ReferencedContainer = "container:LookoutMarine.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -96,9 +85,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "ABAEBDCFCC218F9164521159"
-            BuildableName = "LookoutMarine-iOS.app"
-            BlueprintName = "LookoutMarine-iOS"
+            BlueprintIdentifier = "98D5486F698D955D344F0F65"
+            BuildableName = "LookoutMarine.app"
+            BlueprintName = "LookoutMarine"
             ReferencedContainer = "container:LookoutMarine.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

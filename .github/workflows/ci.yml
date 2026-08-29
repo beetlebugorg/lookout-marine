@@ -109,6 +109,26 @@ jobs:
             -derivedDataPath macos/build-mac \
             CODE_SIGNING_ALLOWED=NO build
 
+      # The unit tests. Both bundles are hosted by the app target above, so
+      # they reach the shell through `@testable import` and the C ABI through
+      # the host. The UI tests need a chart the runner does not carry and stay
+      # out of this job.
+      - name: Test macOS
+        run: |
+          xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath macos/build-mac \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            -only-testing:LookoutMarineTests
+
+      - name: Test iOS
+        run: |
+          xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+            -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath macos/build-mac \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:LookoutMarine-iOSTests
+
       # Tar first: an artifact zip drops the executable bit, which leaves an
       # .app that will not launch.
       - name: Package

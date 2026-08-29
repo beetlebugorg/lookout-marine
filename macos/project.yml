@@ -321,6 +321,55 @@ targets:
           mkdir -p "$DEST"
           rsync -a --delete zig-out/plugins-bundled/ "$DEST/"
 
+  # ---- Unit tests ------------------------------------------------------------
+  # One source directory, two targets. The two app targets both produce a module
+  # named LookoutMarine, so `@testable import LookoutMarine` reaches the shell on
+  # either platform and one test is written once. The host app links the Zig
+  # core, so the test bundle reaches the C ABI without linking it again.
+  LookoutMarineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: LookoutMarine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ARCHS: arm64
+        CODE_SIGN_STYLE: Automatic
+        # `@testable import LookoutMarine` re-imports the app module's bridging
+        # header, so the test bundle has to be able to find lookout.h too.
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out/include"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/LookoutMarine.app/Contents/MacOS/LookoutMarine"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  LookoutMarine-iOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: LookoutMarine-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.beetlebug.lookout-marine-ios-tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        ARCHS: arm64
+        CODE_SIGN_STYLE: Automatic
+        # See the macOS test target.
+        SWIFT_OBJC_BRIDGING_HEADER: LookoutMarine/Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/LookoutMarine.app/LookoutMarine"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
   # Touch-delivery smoke test (XCUITest): pinch must move the zoom readout.
   # Run: xcodebuild test -scheme LookoutMarine-iOS -destination 'platform=iOS Simulator,...'
   LookoutMarine-iOS-UITests:
@@ -338,11 +387,22 @@ targets:
         CODE_SIGN_STYLE: Automatic
         TEST_TARGET_NAME: LookoutMarine-iOS
 
+# Both schemes are declared here so they are SHARED. A scheme xcodebuild
+# creates for itself is user data: it carries no test action, so `xcodebuild
+# test` on a fresh checkout would find nothing to run.
 schemes:
+  LookoutMarine:
+    build:
+      targets:
+        LookoutMarine: all
+    test:
+      targets:
+        - LookoutMarineTests
   LookoutMarine-iOS:
     build:
       targets:
         LookoutMarine-iOS: all
     test:
       targets:
+        - LookoutMarine-iOSTests
         - LookoutMarine-iOS-UITests

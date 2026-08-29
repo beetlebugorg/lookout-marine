@@ -15,7 +15,9 @@
 		0B449CF57106605B212E94E1 /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
 		0BC91B15C4652260E6898412 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
 		0FC697E6E69C983F38573E8D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
+		1001392DF7ECEB52C30F7AD5 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A3DC2D37A94F800391B26 /* SmokeTests.swift */; };
 		15BC02BD89536FECE4FD9DA8 /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */; };
+		1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FAE0C61602607D05CF24596 /* LicensesTests.swift */; };
 		22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
 		23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
 		299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
@@ -55,7 +57,6 @@
 		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
-		7E1C9A41B2D34F5A81C0AA12 /* LicensesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1C9A40B2D34F5A81C0AA11 /* LicensesTests.swift */; };
 		C8844DCDBFFB759DC10B3DBB /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7093D68AB566DD20CAA67D /* About.swift */; };
 		CADC1E15181EEA0D5D9CE684 /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */; };
 		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
@@ -72,6 +73,7 @@
 		ECECFDFE0FF0EF289D858D19 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
 		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		F84839EF2608C611368BF909 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
+		F8F3C1C2C1A1F48435FAA789 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A3DC2D37A94F800391B26 /* SmokeTests.swift */; };
 		FA0A1A3D4513B2121791CD8E /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
 		FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
 		FD9CA492CC32E134017339D9 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
@@ -79,6 +81,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		2CD16BD4AF4390EFD65929C3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2A01BBEEFB9BB3FB14C0C549 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ABAEBDCFCC218F9164521159;
+			remoteInfo = "LookoutMarine-iOS";
+		};
+		67B051EDB993B5C84C0E9483 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2A01BBEEFB9BB3FB14C0C549 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 98D5486F698D955D344F0F65;
+			remoteInfo = LookoutMarine;
+		};
 		CDFFA14B2286295D84D56D42 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2A01BBEEFB9BB3FB14C0C549 /* Project object */;
@@ -99,8 +115,10 @@
 		1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlerts.swift; sourceTree = "<group>"; };
 		231885FFFF86BB739D2D973D /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
+		24BF84F8C0A7FF756F21F8FD /* LookoutMarine-iOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
+		429A3DC2D37A94F800391B26 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
 		44DE7634B8D1E8049164F21C /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
 		51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -111,6 +129,7 @@
 		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
 		684AE423C6C360B8C64E8187 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
 		691669BA5266A092E22A3676 /* Discovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Discovery.swift; sourceTree = "<group>"; };
+		6BF0A8EA8646D981F5F411D0 /* LookoutMarineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LookoutMarineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -121,6 +140,7 @@
 		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		9FAE0C61602607D05CF24596 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
 		A79681EADC27E70A6BB144FE /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
 		C30C216F6C0285110D3B2A87 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
 		D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
@@ -129,7 +149,6 @@
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterChartTests.swift; sourceTree = "<group>"; };
-		7E1C9A40B2D34F5A81C0AA11 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
 		F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartInteractionTests.swift; sourceTree = "<group>"; };
 		FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LookoutMarine.entitlements; sourceTree = "<group>"; };
 		FF4CDAEE17FBF230AF39737A /* Licenses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Licenses.swift; sourceTree = "<group>"; };
@@ -167,7 +186,7 @@
 			children = (
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
-				7E1C9A40B2D34F5A81C0AA11 /* LicensesTests.swift */,
+				9FAE0C61602607D05CF24596 /* LicensesTests.swift */,
 				F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */,
 			);
 			path = UITests;
@@ -178,6 +197,7 @@
 			children = (
 				07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */,
 				ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */,
+				7A2F9C85C221FF891E418216 /* Tests */,
 				87EF150269B4560D22106C89 /* Frameworks */,
 				CCC54782152F8720212B3D54 /* Products */,
 			);
@@ -221,6 +241,14 @@
 			path = LookoutMarine;
 			sourceTree = "<group>";
 		};
+		7A2F9C85C221FF891E418216 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				429A3DC2D37A94F800391B26 /* SmokeTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		87EF150269B4560D22106C89 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -238,7 +266,9 @@
 			children = (
 				83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */,
 				10B668C8717144E00D603812 /* LookoutMarine-iOS.app */,
+				24BF84F8C0A7FF756F21F8FD /* LookoutMarine-iOSTests.xctest */,
 				F025332072E90FBEB0445CEB /* LookoutMarine.app */,
+				6BF0A8EA8646D981F5F411D0 /* LookoutMarineTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -255,6 +285,42 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		2B49F6B4FF2B729BEF73FD4F /* LookoutMarine-iOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7242FF87F127A09736710E6D /* Build configuration list for PBXNativeTarget "LookoutMarine-iOSTests" */;
+			buildPhases = (
+				F44A8967AD97DB92087DDF65 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E70CDFEF5F73DC991CF4B2BA /* PBXTargetDependency */,
+			);
+			name = "LookoutMarine-iOSTests";
+			packageProductDependencies = (
+			);
+			productName = "LookoutMarine-iOSTests";
+			productReference = 24BF84F8C0A7FF756F21F8FD /* LookoutMarine-iOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		6E20237B91A25CEA8D706844 /* LookoutMarineTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C9429BFA679CE141219623FB /* Build configuration list for PBXNativeTarget "LookoutMarineTests" */;
+			buildPhases = (
+				86026EC80D8AD2CB621886A7 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0E815FAAB397282EC6CBC4E4 /* PBXTargetDependency */,
+			);
+			name = LookoutMarineTests;
+			packageProductDependencies = (
+			);
+			productName = LookoutMarineTests;
+			productReference = 6BF0A8EA8646D981F5F411D0 /* LookoutMarineTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		7DC91D64E44F15978302A618 /* LookoutMarine-iOS-UITests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = EE5EA841DC1F5B39198C5A19 /* Build configuration list for PBXNativeTarget "LookoutMarine-iOS-UITests" */;
@@ -324,6 +390,12 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					2B49F6B4FF2B729BEF73FD4F = {
+						ProvisioningStyle = Automatic;
+					};
+					6E20237B91A25CEA8D706844 = {
+						ProvisioningStyle = Automatic;
+					};
 					7DC91D64E44F15978302A618 = {
 						ProvisioningStyle = Automatic;
 						TestTargetID = ABAEBDCFCC218F9164521159;
@@ -352,6 +424,8 @@
 			targets = (
 				98D5486F698D955D344F0F65 /* LookoutMarine */,
 				ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */,
+				6E20237B91A25CEA8D706844 /* LookoutMarineTests */,
+				2B49F6B4FF2B729BEF73FD4F /* LookoutMarine-iOSTests */,
 				7DC91D64E44F15978302A618 /* LookoutMarine-iOS-UITests */,
 			);
 		};
@@ -490,6 +564,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		86026EC80D8AD2CB621886A7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1001392DF7ECEB52C30F7AD5 /* SmokeTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		95BC3126A20103FF3F84572E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -530,22 +612,64 @@
 			files = (
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
-				7E1C9A41B2D34F5A81C0AA12 /* LicensesTests.swift in Sources */,
+				1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */,
 				50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F44A8967AD97DB92087DDF65 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F8F3C1C2C1A1F48435FAA789 /* SmokeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		0E815FAAB397282EC6CBC4E4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 98D5486F698D955D344F0F65 /* LookoutMarine */;
+			targetProxy = 67B051EDB993B5C84C0E9483 /* PBXContainerItemProxy */;
+		};
 		6FA04E319DB568F0458B79CF /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */;
 			targetProxy = CDFFA14B2286295D84D56D42 /* PBXContainerItemProxy */;
 		};
+		E70CDFEF5F73DC991CF4B2BA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = ABAEBDCFCC218F9164521159 /* LookoutMarine-iOS */;
+			targetProxy = 2CD16BD4AF4390EFD65929C3 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		32140F04E36CC61E49FC5FFE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios-tests";
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LookoutMarine.app/LookoutMarine";
+			};
+			name = Debug;
+		};
 		346A6E641061E902C34B07D5 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -682,6 +806,55 @@
 			};
 			name = Debug;
 		};
+		80E3051A77BCC4E2B2BEA5FD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out/include",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-tests";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LookoutMarine.app/Contents/MacOS/LookoutMarine";
+			};
+			name = Release;
+		};
+		8794C03A5328BD0ED6042618 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out-$(PLATFORM_NAME)/include",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-ios-tests";
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LookoutMarine.app/LookoutMarine";
+			};
+			name = Release;
+		};
 		B929C85E1916BDBF6EDC3F56 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -774,6 +947,31 @@
 			};
 			name = Release;
 		};
+		EF10D15B2525777219C7EDCE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../zig-out/include",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "org.beetlebug.lookout-marine-tests";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "LookoutMarine/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LookoutMarine.app/Contents/MacOS/LookoutMarine";
+			};
+			name = Debug;
+		};
 		F75E78BD1116101F48BF6436 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -857,11 +1055,29 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		7242FF87F127A09736710E6D /* Build configuration list for PBXNativeTarget "LookoutMarine-iOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				32140F04E36CC61E49FC5FFE /* Debug */,
+				8794C03A5328BD0ED6042618 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		9C3ECF9BD93BBA14B99E5413 /* Build configuration list for PBXNativeTarget "LookoutMarine" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				F8E2B75C8A35030B2F8C1929 /* Debug */,
 				D4028988297387E7CCBFE1AB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C9429BFA679CE141219623FB /* Build configuration list for PBXNativeTarget "LookoutMarineTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF10D15B2525777219C7EDCE /* Debug */,
+				80E3051A77BCC4E2B2BEA5FD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
