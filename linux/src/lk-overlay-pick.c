@@ -132,14 +132,19 @@ lk_overlay_bubble_track (gpointer user_data)
     return G_SOURCE_CONTINUE;
 
   /* The bubble is clamped inside the view, so an object near an edge does not
-   * push its own description off the screen. */
+   * push its own description off the screen. Clamp against the bubble's own
+   * measured size, so a wider readout still stops at the edge. */
   int view_width = lk_app_model_get_view_width (self->model);
   int view_height = lk_app_model_get_view_height (self->model);
   int left = (int) (x + LK_OVERLAY_OFFSET);
   int top = (int) (y - LK_OVERLAY_OFFSET);
+  int panel_w = 0, panel_h = 0;
 
-  gtk_widget_set_margin_start (self->panel, CLAMP (left, 0, MAX (0, view_width - 120)));
-  gtk_widget_set_margin_top (self->panel, CLAMP (top, 0, MAX (0, view_height - 40)));
+  gtk_widget_measure (self->panel, GTK_ORIENTATION_HORIZONTAL, -1, NULL, &panel_w, NULL, NULL);
+  gtk_widget_measure (self->panel, GTK_ORIENTATION_VERTICAL, -1, NULL, &panel_h, NULL, NULL);
+
+  gtk_widget_set_margin_start (self->panel, CLAMP (left, 0, MAX (0, view_width - panel_w)));
+  gtk_widget_set_margin_top (self->panel, CLAMP (top, 0, MAX (0, view_height - panel_h)));
   gtk_widget_set_visible (self->panel, TRUE);
   return G_SOURCE_CONTINUE;
 }

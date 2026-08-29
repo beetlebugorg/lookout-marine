@@ -984,6 +984,9 @@ lk_window_update_overlays (LkWindow *self)
   /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
    * with nothing to report. */
   gtk_widget_set_visible (self->capsule, has_chart);
+  /* The scale bar also hides itself when the denominator is not positive (see
+     lk_scale_bar_update), so this is the coarse gate and that is the fine one.
+     They agree: no chart means no denominator. */
   gtk_widget_set_visible (self->scale_bar, has_chart);
 
   /* A hidden empty state drops its inline error with it: the sentence
