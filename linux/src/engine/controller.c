@@ -304,6 +304,18 @@ lk_bundled_plugin_dir (void)
       if (g_file_test (relative, G_FILE_TEST_IS_DIR))
         return relative;
       g_free (relative);
+
+      /* The build tree, where there is no bundle and nothing is installed:
+         build-core.sh stages the shipped set beside the executable, which is
+         also where install-plugins.sh reads it from at `meson install`. Without
+         this a developer running ./build/lookout-marine gets no own ship, no
+         traffic and no instrument input until they install or set
+         $LOOKOUT_PLUGINS. An installed binary has no such directory. */
+      char *in_build = g_build_filename (bindir, "plugins", NULL);
+
+      if (g_file_test (in_build, G_FILE_TEST_IS_DIR))
+        return in_build;
+      g_free (in_build);
     }
 
 #ifdef LK_PLUGIN_DIR
