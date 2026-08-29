@@ -56,6 +56,19 @@ android {
     lint {
         abortOnError = false
     }
+    // The shell's logic is mostly parsing what the core hands over and reading
+    // it back out of SharedPreferences, so the JVM suite runs under Robolectric
+    // rather than against the mockable android.jar: that stub throws on
+    // org.json, which is half of what there is to test, and has no working
+    // preferences behind it either.
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all {
+                testLogging { events 'passed', 'skipped', 'failed' }
+            }
+        }
+    }
     buildFeatures {
         compose = true
     }
@@ -82,6 +95,13 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended'
     implementation 'androidx.activity:activity-compose:1.9.3'
     implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+
+    // The JVM suite: everything that does not need a GPU, a Surface or the
+    // native library. It runs on `./gradlew test`, with no device.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core-ktx:1.6.1'
+    testImplementation 'androidx.test.ext:junit:1.2.1'
 
     // The licenses screen is checked on a device, because what it has to get
     // right is what a mariner sees: which rows appear, what each one reads,
