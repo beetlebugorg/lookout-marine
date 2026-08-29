@@ -411,6 +411,17 @@ lk_chart_view_close_menu (LkChartView *self)
     gtk_popover_popdown (GTK_POPOVER (self->menu));
 }
 
+/* The model retired the chrome after a camera move. Close the menu with it. */
+static void
+lk_chart_view_chrome_retired (LkAppModel *model, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  if (gtk_widget_in_destruction (GTK_WIDGET (self)))
+    return;
+  lk_chart_view_close_menu (self);
+}
+
 /* The report for the point the menu was raised at. The report itself is
  * unchanged; only the way it is raised is new. */
 static void
@@ -512,6 +523,30 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
 
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 
+  /* A header naming the place the menu acts on: the mark's name when the press
+     was on one, and the coordinate under it. A label, not a button, as the
+     reference's menu header is. */
+  if (self->menu_marker != NULL && self->menu_marker->name != NULL &&
+      self->menu_marker->name[0] != '\0')
+    {
+      GtkWidget *title = gtk_label_new (self->menu_marker->name);
+      gtk_widget_add_css_class (title, "lk-menu-title");
+      gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+      gtk_box_append (GTK_BOX (box), title);
+    }
+  g_autofree char *hlat = lk_coord_format_dm (lat, TRUE);
+  g_autofree char *hlon = lk_coord_format_dm (lon, FALSE);
+  g_autofree char *coord = g_strdup_printf ("%s  %s", hlat, hlon);
+  GtkWidget *header = gtk_label_new (coord);
+  gtk_widget_add_css_class (header, "dim-label");
+  gtk_widget_add_css_class (header, "lk-menu-coord");
+  gtk_label_set_xalign (GTK_LABEL (header), 0.0);
+  gtk_box_append (GTK_BOX (box), header);
+
+  /* The reference's order: Pick report, then Drop or (rename + Remove), then
+     Copy position. The strings match it verbatim. */
+  lk_chart_menu_item (box, "Pick report", G_CALLBACK (lk_chart_menu_pick), self);
+
   if (self->menu_marker != NULL)
     {
       /* The field opens with the mark's current name in it. */
@@ -524,15 +559,14 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
       g_signal_connect (entry, "activate", G_CALLBACK (lk_chart_menu_rename_committed), self);
       gtk_box_append (GTK_BOX (box), entry);
 
-      lk_chart_menu_item (box, "Remove Mark", G_CALLBACK (lk_chart_menu_remove_marker), self);
+      lk_chart_menu_item (box, "Remove marker", G_CALLBACK (lk_chart_menu_remove_marker), self);
     }
   else
     {
-      lk_chart_menu_item (box, "Drop Mark", G_CALLBACK (lk_chart_menu_drop_marker), self);
+      lk_chart_menu_item (box, "Drop marker", G_CALLBACK (lk_chart_menu_drop_marker), self);
     }
 
-  lk_chart_menu_item (box, "Pick Report", G_CALLBACK (lk_chart_menu_pick), self);
-  lk_chart_menu_item (box, "Copy Position", G_CALLBACK (lk_chart_menu_copy_position), self);
+  lk_chart_menu_item (box, "Copy position", G_CALLBACK (lk_chart_menu_copy_position), self);
 
   if (self->menu == NULL)
     {
@@ -1177,6 +1211,11 @@ lk_chart_view_new (LkAppModel *model)
   LkChartView *self = g_object_new (LK_TYPE_CHART_VIEW, NULL);
   self->model = model;
   self->controller = lk_app_model_get_controller (model);
+  /* A camera move retires the chrome. The pick report clears through the model,
+     and the chart menu closes here — a keyboard zoom or a follow move must not
+     leave it standing over water it no longer points at. */
+  g_signal_connect_object (model, "chrome-retired",
+                           G_CALLBACK (lk_chart_view_chrome_retired), self, 0);
   return GTK_WIDGET (self);
 }
 

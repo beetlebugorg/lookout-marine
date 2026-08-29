@@ -1082,7 +1082,12 @@ static void
 lk_chart_controller_retire_pick (LkChartController *self)
 {
   if (self->model != NULL)
-    lk_app_model_clear_pick (self->model);
+    {
+      lk_app_model_clear_pick (self->model);
+      /* The report goes with the pick; the chart menu belongs to the same view,
+         so it retires here too. */
+      lk_app_model_retire_chrome (self->model);
+    }
 }
 
 void

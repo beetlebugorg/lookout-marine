@@ -808,7 +808,9 @@ lk_window_build_chart_menu (LkWindow *self)
   g_menu_append (scheme, "Dusk", "win.set-scheme(1)");
   g_menu_append (scheme, "Night", "win.set-scheme(2)");
   g_menu_append (scheme, "Cycle", "win.cycle-scheme");
-  g_menu_append_submenu (chart, "Colour Scheme", G_MENU_MODEL (scheme));
+  /* "Color Scheme" in the menu, the reference's American spelling, while the
+     settings header keeps "Colour scheme" — each mirrors macOS as it is. */
+  g_menu_append_submenu (chart, "Color Scheme", G_MENU_MODEL (scheme));
 
   /* The raster sets covering THIS view, the drawn one marked, then the way back
    * to no picture at all. It is the same list the pill opens. */

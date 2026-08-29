@@ -600,7 +600,9 @@ lk_build_display_page (LkSettings *settings)
   tile57_mariner *m = lk_mariner_raw (settings->mariner);
 
   GtkWidget *scheme_section = lk_section (page, NULL);
-  lk_choice_row (scheme_section, settings, "Color scheme", schemes,
+  /* "Colour scheme" here, the reference's settings header spelling, while the
+     commands menu says "Color Scheme". Each mirrors macOS as it is. */
+  lk_choice_row (scheme_section, settings, "Colour scheme", schemes,
                  (int) m->scheme, NULL, lk_apply_scheme);
   lk_footer (scheme_section, "Day, dusk and night palettes switch instantly.");
 

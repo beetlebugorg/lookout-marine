@@ -146,6 +146,10 @@ void lk_app_model_refresh_raster_state (LkAppModel *self);
  * ::plugins-changed, which the alert watch follows to arm and disarm. */
 void lk_app_model_notify_plugins_changed (LkAppModel *self);
 
+/* The controller calls this when a camera move retires the chrome. Emits
+ * ::chrome-retired, which the chart view follows to close its menu. */
+void lk_app_model_retire_chrome (LkAppModel *self);
+
 /* ---- charts by link ------------------------------------------------------ */
 
 /* The mariner's linked charts (an online map AS the chart). Owned here so the

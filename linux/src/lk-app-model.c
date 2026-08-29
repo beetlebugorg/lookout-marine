@@ -111,6 +111,7 @@ enum {
   SIGNAL_RASTER_CHANGED,
   SIGNAL_CHART_SETS_CHANGED,
   SIGNAL_PLUGINS_CHANGED,
+  SIGNAL_CHROME_RETIRED,
   N_SIGNALS
 };
 
@@ -254,6 +255,12 @@ lk_app_model_class_init (LkAppModelClass *klass)
      uninstall. The alert watch follows this to arm and disarm its poll. */
   signals[SIGNAL_PLUGINS_CHANGED] =
       g_signal_new ("plugins-changed", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
+                    0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+
+  /* A camera move retired the chrome. The report follows the pick, which
+     clears with it; the chart view follows this to close its menu as well. */
+  signals[SIGNAL_CHROME_RETIRED] =
+      g_signal_new ("chrome-retired", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
                     0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
 
@@ -1316,6 +1323,16 @@ lk_app_model_notify_plugins_changed (LkAppModel *self)
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
   g_signal_emit (self, signals[SIGNAL_PLUGINS_CHANGED], 0);
+}
+
+/* The controller calls this when a camera move retires the chrome. The chart
+   view closes its menu on it, the way the report clears with the pick. */
+void
+lk_app_model_retire_chrome (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  g_signal_emit (self, signals[SIGNAL_CHROME_RETIRED], 0);
 }
 
 /* Put back which sets the mariner had drawn. Adding a source draws its set,

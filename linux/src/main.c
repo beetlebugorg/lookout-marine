@@ -206,6 +206,9 @@ static const char *LK_CSS =
     "  border-radius: 6px;"
     "  font-size: 90%;"
     "}"
+    /* The chart menu header: a mark's name, and the coordinate under it. */
+    ".lk-menu-title { font-weight: bold; padding: 4px 10px 0 10px; }"
+    ".lk-menu-coord { padding: 2px 10px 6px 10px; font-size: 90%; }"
     /* 48px is LK_CHROME_BUBBLE, the bubble diameter Chrome.swift and Chrome.kt
        use. The layout reserves the same, so the two agree. */
     ".lk-bubble {"
