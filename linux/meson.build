@@ -179,6 +179,13 @@ resources = gnome.compile_resources(
     'data' / 'icons' / 'hicolor' / 'scalable' / 'apps',
   ],
   c_name: 'lk',
+  # No constructor. The resource object lives in the shell's static library,
+  # and a static library only gives up an object that resolves an undefined
+  # symbol: with nothing calling into it the object was dropped, its
+  # constructor never ran, and every lk-*-symbolic icon resolved to the broken
+  # image. main.c calls lk_register_resource, which both registers the icons
+  # and is the reference that pulls the object in.
+  extra_args: ['--manual-register'],
 )
 
 # The shell as a static library, so the executable and the test binaries link

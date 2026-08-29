@@ -10,6 +10,8 @@
 #include "library/bake.h"
 #include "ui/window.h"
 
+#include "lk-resources.h"
+
 #define LK_APP_ID "org.beetlebug.LookoutMarine"
 
 /* The chrome the stock stylesheet has no class for. The sizes and the colours
@@ -350,6 +352,7 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
    * water, a chart, a boat and a bell, and the stock theme carries none of
    * them. This runs at STARTUP rather than in main: there is no display to ask
    * for a theme until GTK is up. */
+  lk_register_resource ();
   gtk_icon_theme_add_resource_path (gtk_icon_theme_get_for_display (gdk_display_get_default ()),
                                     "/org/beetlebug/LookoutMarine/icons");
 
