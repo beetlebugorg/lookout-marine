@@ -673,8 +673,8 @@ final class PluginSettings: ObservableObject {
             for l in p.lists { lists[l.key] = Self.rowsJSON(l, p.rows[l.key] ?? []) }
             if !lists.isEmpty { savedRows[p.id] = lists }
         }
-        UserDefaults.standard.set(saved, forKey: Self.defaultsKey)
-        UserDefaults.standard.set(savedRows, forKey: Self.listsKey)
+        Store.shared.set(saved, Self.defaultsKey)
+        Store.shared.set(savedRows, Self.listsKey)
     }
 
     /// Push the saved settings into the plugins that just came up. Called once
@@ -687,8 +687,8 @@ final class PluginSettings: ObservableObject {
         // the developer's own instruments, and a frame taken through one
         // publishes other people's vessel names, MMSIs and positions.
         if ProcessInfo.processInfo.environment["LOOKOUT_CLEAN"] != nil { return }
-        let saved = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
-        let savedRows = UserDefaults.standard.dictionary(forKey: listsKey) ?? [:]
+        let saved = Store.shared.dictionary(defaultsKey) ?? [:]
+        let savedRows = Store.shared.dictionary(listsKey) ?? [:]
         if saved.isEmpty && savedRows.isEmpty { return }
         for p in parse(controller.pluginsJSON()) where !p.fields.isEmpty || !p.lists.isEmpty {
             var fields = p.fields

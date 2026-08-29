@@ -133,7 +133,7 @@ final class MarinerSettings: ObservableObject {
             }
     }
 
-    // MARK: - Persistence (UserDefaults)
+    // MARK: - Persistence
     //
     // Saved field-by-field, NOT as raw struct bytes: the engine struct's layout
     // is an ABI detail that changes (it did twice this week); a versioned
@@ -171,13 +171,13 @@ final class MarinerSettings: ObservableObject {
         d["date_dependent"] = m.date_dependent
         d["highlight_date_dependent"] = m.highlight_date_dependent
         d["date_view"] = m.dateViewString
-        UserDefaults.standard.set(d, forKey: defaultsKey)
+        Store.shared.set(d, defaultsKey)
     }
 
     /// Overlay the saved settings onto `m` (typically the engine defaults +
     /// device_scale). Missing keys leave the field untouched.
     static func applySavedOverlay(_ m: inout tile57_mariner) {
-        guard let d = UserDefaults.standard.dictionary(forKey: defaultsKey) else { return }
+        guard let d = Store.shared.dictionary(defaultsKey) else { return }
         func f(_ k: String) -> Double? { d[k] as? Double }
         func b(_ k: String) -> Bool? { d[k] as? Bool }
         func i(_ k: String) -> Int? { d[k] as? Int }

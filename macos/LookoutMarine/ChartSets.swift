@@ -310,7 +310,7 @@ struct ChartSetStore {
     /// One list means one list: a picture the mariner added by hand is a set
     /// like any other, not a second kind of thing in a second section.
     private static func legacyRasterFolders() -> [String] {
-        let files = UserDefaults.standard.stringArray(forKey: "lookout.rastercharts") ?? []
+        let files = Store.shared.strings("lookout.rastercharts") ?? []
         var seen = Set<String>()
         var out: [String] = []
         for f in files where FileManager.default.fileExists(atPath: f) {
@@ -327,15 +327,15 @@ struct ChartSetStore {
     }
 
     static func savedPaths() -> [String] {
-        if let saved = UserDefaults.standard.stringArray(forKey: pathsKey) {
+        if let saved = Store.shared.strings(pathsKey) {
             // A mariner who had raster charts before this list existed gets
             // them as sets, once.
             let missing = legacyRasterFolders().filter { !saved.contains($0) }
-            guard !missing.isEmpty, !UserDefaults.standard.bool(forKey: "lookout.chartsets.rastermigrated")
+            guard !missing.isEmpty, !Store.shared.bool("lookout.chartsets.rastermigrated")
             else { return saved }
-            UserDefaults.standard.set(true, forKey: "lookout.chartsets.rastermigrated")
+            Store.shared.set(true, "lookout.chartsets.rastermigrated")
             let merged = saved + missing
-            UserDefaults.standard.set(merged, forKey: pathsKey)
+            Store.shared.set(merged, pathsKey)
             return merged
         }
         // No list yet means this build has never run here. Carry the last
@@ -346,33 +346,33 @@ struct ChartSetStore {
         // The paths are not filtered here. A scan decides what is a chart, so
         // an entry that was never a chart library, or has since been deleted,
         // drops out on its own the first time the list is built.
-        let legacy = (UserDefaults.standard.stringArray(forKey: legacyKey) ?? [])
+        let legacy = (Store.shared.strings(legacyKey) ?? [])
             + legacyRasterFolders()
-        UserDefaults.standard.set(true, forKey: "lookout.chartsets.rastermigrated")
-        if !legacy.isEmpty { UserDefaults.standard.set(legacy, forKey: pathsKey) }
+        Store.shared.set(true, "lookout.chartsets.rastermigrated")
+        if !legacy.isEmpty { Store.shared.set(legacy, pathsKey) }
         return legacy
     }
 
     static func savedOff() -> Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: offKey) ?? [])
+        Set(Store.shared.strings(offKey) ?? [])
     }
 
     /// Put a folder on the list. Adding one already there changes nothing.
     static func add(_ path: String) {
         var paths = savedPaths()
         if !paths.contains(path) { paths.append(path) }
-        UserDefaults.standard.set(paths, forKey: pathsKey)
+        Store.shared.set(paths, pathsKey)
     }
 
     /// Take a folder off the list. This is the ONLY thing that shortens it.
     static func remove(_ path: String) {
-        UserDefaults.standard.set(savedPaths().filter { $0 != path }, forKey: pathsKey)
-        UserDefaults.standard.set(Array(savedOff().subtracting([path])), forKey: offKey)
+        Store.shared.set(savedPaths().filter { $0 != path }, pathsKey)
+        Store.shared.set(Array(savedOff().subtracting([path])), offKey)
     }
 
     static func setOff(_ path: String, _ off: Bool) {
         var list = savedOff()
         if off { list.insert(path) } else { list.remove(path) }
-        UserDefaults.standard.set(Array(list), forKey: offKey)
+        Store.shared.set(Array(list), offKey)
     }
 }

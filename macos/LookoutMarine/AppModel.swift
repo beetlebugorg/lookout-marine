@@ -294,11 +294,11 @@ final class AppModel: ObservableObject {
         // Drop anything that has since been deleted or unplugged, so a stale
         // entry never becomes an error the mariner has to dismiss at every
         // launch.
-        rasterPaths = (UserDefaults.standard.stringArray(forKey: rasterKey) ?? [])
+        rasterPaths = (Store.shared.strings(rasterKey) ?? [])
             .filter { FileManager.default.fileExists(atPath: $0) }
-        rasterOff = Set(UserDefaults.standard.stringArray(forKey: rasterOffKey) ?? [])
-        rasterHidden = Set(UserDefaults.standard.stringArray(forKey: rasterHiddenKey) ?? [])
-        chartHiddenSaved = UserDefaults.standard.bool(forKey: chartHiddenKey)
+        rasterOff = Set(Store.shared.strings(rasterOffKey) ?? [])
+        rasterHidden = Set(Store.shared.strings(rasterHiddenKey) ?? [])
+        chartHiddenSaved = Store.shared.bool(chartHiddenKey)
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
         // The panel's list. The open itself does not wait on this: it takes
@@ -357,7 +357,7 @@ final class AppModel: ObservableObject {
         // a raster archive from a vector one without opening it, so it takes
         // the answer the last scan already worked out: anything installed as a
         // raster stays out. Opening one as a vector chart composes nonsense.
-        var seen = Set(UserDefaults.standard.stringArray(forKey: rasterKey) ?? [])
+        var seen = Set(Store.shared.strings(rasterKey) ?? [])
         for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
             for p in cellPaths(for: dir) where !seen.contains(p) {
                 seen.insert(p)
@@ -588,7 +588,7 @@ final class AppModel: ObservableObject {
         }
         guard wanted != rasterPaths else { return }
         rasterPaths = wanted
-        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+        Store.shared.set(rasterPaths, rasterKey)
     }
 
     // MARK: - Baking raw cells
@@ -770,7 +770,7 @@ final class AppModel: ObservableObject {
             let kept = rasterPaths.filter { !carried.contains($0) }
             if kept != rasterPaths {
                 rasterPaths = kept
-                UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+                Store.shared.set(rasterPaths, rasterKey)
             }
         }
         syncRasterFromSets()
@@ -856,17 +856,16 @@ final class AppModel: ObservableObject {
     /// the window between handing it over and deleting the defaults replays
     /// harmlessly if the app dies in it.
     func migrateChartLinks() {
-        let defaults = UserDefaults.standard
-        guard let data = defaults.data(forKey: Self.chartLinksKey) else { return }
+        guard let data = Store.shared.data(Self.chartLinksKey) else { return }
         var doc: [String: Any] = [:]
         if let old = try? JSONSerialization.jsonObject(with: data) { doc["links"] = old }
-        doc["active"] = defaults.string(forKey: Self.chartLinkActiveKey) ?? NSNull()
+        doc["active"] = Store.shared.string(Self.chartLinkActiveKey) ?? NSNull()
         guard let out = try? JSONSerialization.data(withJSONObject: doc),
               let json = String(data: out, encoding: .utf8) else { return }
         lkLog("chart links: handing \(data.count) B of the old store to the core")
         controller?.importChartLinks(json)
-        defaults.removeObject(forKey: Self.chartLinksKey)
-        defaults.removeObject(forKey: Self.chartLinkActiveKey)
+        Store.shared.remove(Self.chartLinksKey)
+        Store.shared.remove(Self.chartLinkActiveKey)
     }
 
     /// Take the core's snapshot, if it changed. Called once per readout tick:
@@ -1238,7 +1237,7 @@ final class AppModel: ObservableObject {
         c.toggleChart()
         chartHidden = c.chartHidden()
         chartHiddenSaved = chartHidden
-        UserDefaults.standard.set(chartHidden, forKey: chartHiddenKey)
+        Store.shared.set(chartHidden, chartHiddenKey)
     }
 
     /// Install the raster charts the mariner chose. Files that will not open are reported
@@ -1254,7 +1253,7 @@ final class AppModel: ObservableObject {
                 failed.append((p as NSString).lastPathComponent)
             }
         }
-        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
+        Store.shared.set(rasterPaths, rasterKey)
 
         // Read the whole state back, not just the name. The pill is built from
         // rasterSets and rasterAvailable, and those reach it through the frame
@@ -1312,7 +1311,7 @@ final class AppModel: ObservableObject {
         }
         guard hidden != rasterHidden else { return }
         rasterHidden = hidden
-        UserDefaults.standard.set(Array(hidden), forKey: rasterHiddenKey)
+        Store.shared.set(Array(hidden), rasterHiddenKey)
     }
 
     /// Draw one set, or none for -1.
@@ -1349,7 +1348,7 @@ final class AppModel: ObservableObject {
     /// Turn one raster chart on or off. It stays installed either way.
     func setRasterEnabled(_ path: String, _ on: Bool) {
         if on { rasterOff.remove(path) } else { rasterOff.insert(path) }
-        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
+        Store.shared.set(Array(rasterOff), rasterOffKey)
         controller?.setRasterEnabled(path, on)
         // Read the selection back: switching off the last file of the drawn set
         // moves the selection, and the pill must not keep naming a chart that
@@ -1363,8 +1362,8 @@ final class AppModel: ObservableObject {
     func removeRasterChart(_ path: String) {
         rasterPaths.removeAll { $0 == path }
         rasterOff.remove(path)
-        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
-        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
+        Store.shared.set(rasterPaths, rasterKey)
+        Store.shared.set(Array(rasterOff), rasterOffKey)
     }
 
     /// What to call the set a file belongs to — mirrors the engine's rule.
@@ -1401,9 +1400,9 @@ final class AppModel: ObservableObject {
         rasterPaths.removeAll()
         rasterOff.removeAll()
         rasterHidden.removeAll()
-        UserDefaults.standard.set(rasterPaths, forKey: rasterKey)
-        UserDefaults.standard.set(Array(rasterOff), forKey: rasterOffKey)
-        UserDefaults.standard.set(Array(rasterHidden), forKey: rasterHiddenKey)
+        Store.shared.set(rasterPaths, rasterKey)
+        Store.shared.set(Array(rasterOff), rasterOffKey)
+        Store.shared.set(Array(rasterHidden), rasterHiddenKey)
     }
 
     /// Step to the next raster chart set, with "no picture" as one position — so the
