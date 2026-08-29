@@ -22,7 +22,7 @@ foreach name : unit_tests
   test(name, exe, suite: 'unit', timeout: 60)
 endforeach
 
-widget_tests = ['hud']
+widget_tests = ['hud', 'window']
 headless = find_program ('run-headless.sh')
 
 foreach name : widget_tests
@@ -34,5 +34,7 @@ foreach name : widget_tests
     c_args: shell_c_args,
     dependencies: deps,
   )
-  test(name, headless, args: [exe], suite: 'widget', timeout: 120)
+  # Serial: each widget test spawns its own Xvfb through `xvfb-run -a`, and two
+  # of those racing for a display number is what makes one die.
+  test(name, headless, args: [exe], suite: 'widget', timeout: 120, is_parallel: false)
 endforeach
