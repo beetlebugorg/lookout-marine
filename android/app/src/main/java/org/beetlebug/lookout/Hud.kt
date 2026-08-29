@@ -238,13 +238,21 @@ fun ReadoutsCapsule(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(top = 2.dp),
             ) {
-                Text(
-                    text = coordString(readouts.lat, readouts.lon),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                )
-                Separator()
+                // THE SHIP-OR-NOTHING RULE, the same one the wide row keeps.
+                // This line used to print the MAP CENTRE, unconditionally, a
+                // few points under the fix pill: with the chart panned away
+                // from the boat it read as a position, beside a "GPS" badge,
+                // and a mariner could write it in a log or pass it over the
+                // radio. Own ship's reported fix or no numbers at all.
+                if (readouts.fixState == Lookout.FIX_LIVE) {
+                    Text(
+                        text = coordString(readouts.shipLat, readouts.shipLon),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                    )
+                    Separator()
+                }
                 Text(
                     text = String.format(Locale.US, "z%.1f", readouts.zoom),
                     style = MaterialTheme.typography.bodyMedium,
