@@ -50,9 +50,6 @@ typedef struct {
  * made static in a file that cannot hold every caller.
  */
 
-/* Apply the LOOKOUT_* development hooks. ui/dev-hooks.c. */
-void lk_window_apply_dev_hooks (LkWindow *self);
-
 /* The startup loader and the empty state, both built once. ui/startup-view.c. */
 GtkWidget *lk_window_build_loader (void);
 GtkWidget *lk_window_build_empty_state (void);
