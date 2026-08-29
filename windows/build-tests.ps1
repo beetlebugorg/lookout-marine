@@ -31,10 +31,13 @@ $target = if ($Platform -eq 'arm64') { 'aarch64-windows-gnu' } else { 'x86_64-wi
 $cSources = @(
     'src\lk_coord.c'
 )
-$cppSources = @()
+$cppSources = @(
+    'src\lk_json.cpp'
+)
 $suites = @(
     'test\main.cpp',
-    'test\test_coord.cpp'
+    'test\test_coord.cpp',
+    'test\test_json.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

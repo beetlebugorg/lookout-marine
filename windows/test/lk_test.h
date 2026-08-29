@@ -53,7 +53,6 @@ namespace lktest
     inline std::string Show(unsigned v) { return std::to_string(v); }
     inline std::string Show(unsigned long v) { return std::to_string(v); }
     inline std::string Show(unsigned long long v) { return std::to_string(v); }
-    inline std::string Show(size_t const *v) { return v ? std::to_string(*v) : "null"; }
 
     inline std::string Show(double v)
     {

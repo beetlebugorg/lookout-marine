@@ -14,12 +14,14 @@
 #include "lk_test.h"
 
 void TestCoord();
+void TestJson();
 
 int main()
 {
     std::printf("lookout-marine: the Windows shell\n\n");
 
     TestCoord();
+    TestJson();
 
     return lktest::Report();
 }
