@@ -839,6 +839,10 @@ lk_build_depths_page (LkSettings *settings)
   gtk_widget_set_size_request (settings->band_preview, -1, 34);
   gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (settings->band_preview),
                                   lk_band_preview_draw, settings, NULL);
+  /* The preview is drawn, so it has no text a screen reader can read. Name it. */
+  gtk_accessible_update_property (GTK_ACCESSIBLE (settings->band_preview),
+                                  GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                  "Depth shading preview", -1);
   gtk_box_append (GTK_BOX (preview_section), settings->band_preview);
   lk_footer (preview_section,
              "Shading follows the depth areas in the chart: the effective safety "
@@ -1065,6 +1069,8 @@ lk_settings_fill_raster_list (LkSettings *settings)
           /* The engine cannot drop a chart from a live handle, so a removal
            * switches the picture off now and the chart goes at the next open. */
           gtk_widget_set_tooltip_text (remove, "Remove. The picture goes at once.");
+          gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
+                                          GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove raster chart", -1);
 
           g_object_set_data_full (G_OBJECT (file_toggle), "lk-path", g_strdup (path), g_free);
           g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (path), g_free);
@@ -1213,6 +1219,8 @@ lk_settings_fill_links_list (LkSettings *settings)
       gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
       gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
       gtk_widget_set_tooltip_text (remove, "Forget this link");
+      gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
+                                      GTK_ACCESSIBLE_PROPERTY_LABEL, "Forget this link", -1);
       g_object_set_data_full (G_OBJECT (remove), "lk-url", g_strdup (link->url), g_free);
       g_signal_connect (remove, "clicked", G_CALLBACK (lk_link_remove_clicked), settings);
 
@@ -1432,6 +1440,8 @@ lk_settings_fill_sets_list (LkSettings *settings)
       gtk_widget_set_tooltip_text (remove,
                                    "Remove from the library. Charts Lookout prepared "
                                    "from it are deleted; your folder is not touched.");
+      gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
+                                      GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove chart set", -1);
 
       g_object_set_data_full (G_OBJECT (toggle), "lk-path", g_strdup (set->path), g_free);
       g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (set->path), g_free);

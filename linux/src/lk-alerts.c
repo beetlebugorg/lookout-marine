@@ -515,6 +515,11 @@ lk_alerts_new (LkAppModel *model)
   gtk_widget_set_visible (self->panel, FALSE);
   /* The strip takes the pointer, because the mariner has to reach Acknowledge. */
   gtk_widget_set_can_target (self->panel, TRUE);
+  /* Name the strip for a screen reader. GTK maps the alert live-region to the
+     ALERT role, which is class-level; a plain box cannot take it, so each row's
+     text stands as the announcement and this label names the region. */
+  gtk_accessible_update_property (GTK_ACCESSIBLE (self->panel),
+                                  GTK_ACCESSIBLE_PROPERTY_LABEL, "Alerts", -1);
 
   g_object_set_data_full (G_OBJECT (self->panel), "lk-alerts", self, lk_alerts_free);
   g_signal_connect_object (model, "notify", G_CALLBACK (lk_alerts_notify),

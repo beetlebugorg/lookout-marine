@@ -576,6 +576,10 @@ lk_pick_flat_button (const char *icon_name, const char *tooltip)
   gtk_widget_add_css_class (button, "flat");
   gtk_widget_set_valign (button, GTK_ALIGN_START);
   gtk_widget_set_tooltip_text (button, tooltip);
+  /* An icon-only button has no accessible name of its own, so the tooltip words
+     name it for a screen reader too. */
+  gtk_accessible_update_property (GTK_ACCESSIBLE (button),
+                                  GTK_ACCESSIBLE_PROPERTY_LABEL, tooltip, -1);
   return button;
 }
 
@@ -1045,6 +1049,10 @@ lk_pick_report_new (LkAppModel *model, int width, int room)
   gtk_widget_set_size_request (root, width, -1);
   gtk_widget_add_css_class (root, "lk-panel");
   gtk_widget_add_css_class (root, "lk-pick-report");
+  /* Name the card, so a screen reader reads it as one thing rather than a loose
+     run of labels. */
+  gtk_accessible_update_property (GTK_ACCESSIBLE (root),
+                                  GTK_ACCESSIBLE_PROPERTY_LABEL, "Pick report", -1);
 
   if (results->len > 1)
     {
