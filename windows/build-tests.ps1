@@ -1,0 +1,63 @@
+# build-tests.ps1 — build and run the Windows shell's tests.
+#
+# The suite covers the shell's MODEL: the parsers, the formatters, the geometry
+# and the store. Not the WinUI layer — that needs a XAML host — and not the
+# core, which has its own `zig build test`.
+#
+# It builds with zig rather than MSVC on purpose. zig is already a prerequisite
+# of this shell (build-core.ps1 needs it), so the tests run for anyone who can
+# build the app, including on a machine with no Visual Studio: the mingw-ABI
+# target links the same Win32 API the shell calls without needing the SDK.
+# Nothing here links the core or WinRT, which is what keeps that true.
+#
+# The C layer is compiled with `zig cc` and the C++ with `zig c++`: clang++
+# compiles a .c file as C++, and that code is C.
+#
+# Usage:  pwsh windows/build-tests.ps1 [-Platform x64|arm64] [-Build]
+#         -Build   compile only, do not run
+param(
+    [ValidateSet('x64', 'arm64')]
+    [string]$Platform = 'x64',
+    [switch]$Build
+)
+$ErrorActionPreference = 'Stop'
+
+$here = $PSScriptRoot
+$out = Join-Path $here 'test\out'
+$target = if ($Platform -eq 'arm64') { 'aarch64-windows-gnu' } else { 'x86_64-windows-gnu' }
+
+# The shell's own sources under test. A new module goes in one of the first two
+# lists, its suite in the third, and main.cpp names the suite function.
+$cSources = @(
+    'src\lk_coord.c'
+)
+$cppSources = @()
+$suites = @(
+    'test\main.cpp',
+    'test\test_coord.cpp'
+)
+
+New-Item -ItemType Directory -Force $out | Out-Null
+$objects = New-Object System.Collections.Generic.List[string]
+
+function Compile([string]$Sub, [string]$Source, [string[]]$Extra) {
+    $obj = Join-Path $out ((Split-Path $Source -Leaf) + '.o')
+    $arguments = @($Sub, '-target', $target, '-c', (Join-Path $here $Source), '-o', $obj,
+        "-I$here\src", "-I$here\test", '-Wall', '-Wextra', '-Wno-unused-parameter', '-g') + $Extra
+    & zig @arguments
+    if ($LASTEXITCODE -ne 0) { throw "zig $Sub failed on $Source ($LASTEXITCODE)" }
+    $objects.Add($obj)
+}
+
+foreach ($s in $cSources) { Compile 'cc' $s @('-std=c11') }
+foreach ($s in ($cppSources + $suites)) { Compile 'c++' $s @('-std=c++20') }
+
+$exe = Join-Path $out 'lk-tests.exe'
+& zig c++ -target $target @($objects.ToArray()) -o $exe
+if ($LASTEXITCODE -ne 0) { throw "link failed ($LASTEXITCODE)" }
+
+Write-Host "tests built: $exe`n"
+if ($Build) { return }
+
+& $exe
+if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
