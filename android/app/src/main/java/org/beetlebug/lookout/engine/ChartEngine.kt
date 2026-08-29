@@ -72,6 +72,13 @@ class ChartEngine private constructor() {
     private var ticking = false
 
     /**
+     * Set the moment the platform takes the surface back, cleared when it
+     * hands one over. Read by the open, which finishes long after `detach`
+     * has returned and must not start drawing on a window that has gone.
+     */
+    @Volatile private var surfaceGone = false
+
+    /**
      * Give the engine a surface, opening the library on the first one and
      * starting the frame loop on every one. Returns at once; the work is the
      * render thread's.
@@ -99,6 +106,7 @@ class ChartEngine private constructor() {
             queue = Handler(thread!!.looper)
         }
         val h = queue ?: return
+        surfaceGone = false
         frameHook = hook
         // Before any path returns: every controller mutation must be able to
         // wake an idled frame loop, whichever branch below runs.
@@ -173,6 +181,19 @@ class ChartEngine private constructor() {
                     }, "lookout-library-add").also { it.start() }
                 }
             }
+            // The surface went while this open was running. `detach` could
+            // not barrier against it — the handle is published last, so it
+            // had nothing to wait on and returned at once — and the window
+            // the platform handed us has since been freed. Starting the frame
+            // loop here would draw at display rate into a dead surface for
+            // as long as the app lived: measured at 13% of a core, backgrounded,
+            // indefinitely, and it never stopped when the app came back.
+            if (surfaceGone) {
+                Log.i(TAG, "surface went during the open; standing down instead of drawing")
+                l.detachSurface()
+                startBackgroundTick()
+                return@post
+            }
             stopBackgroundTick()
             lastFrameNs = 0 // a new surface is not a continuation of the old
             idleFrames = 0
@@ -194,6 +215,13 @@ class ChartEngine private constructor() {
      */
     fun detach() {
         val h = queue ?: return
+        // Before the early return below: an open that is still running has to
+        // learn the surface is gone, because it is what starts the frame loop
+        // when it finishes.
+        surfaceGone = true
+        // Nothing to barrier against yet. `openOn` publishes the handle LAST,
+        // so a null one means the open has not finished, and the frame loop
+        // has not started either — there is no drawing in flight to wait for.
         val l = lookout ?: return
         val done = CountDownLatch(1)
         h.post {
