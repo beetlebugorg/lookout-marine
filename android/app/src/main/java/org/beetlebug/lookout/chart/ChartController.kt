@@ -9,6 +9,7 @@ import org.beetlebug.lookout.charts.RasterCharts
 import org.beetlebug.lookout.charts.RasterSet
 import org.beetlebug.lookout.charts.RasterState
 import org.beetlebug.lookout.engine.ChartService
+import org.beetlebug.lookout.engine.EngineAccess
 import org.beetlebug.lookout.engine.LookoutView
 import org.beetlebug.lookout.plugins.AlarmSiren
 import org.beetlebug.lookout.plugins.PluginAlert
@@ -27,7 +28,6 @@ import org.beetlebug.lookout.store.ViewState
 
 import android.content.Context
 import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.geometry.Offset
@@ -110,8 +110,6 @@ data class Readouts(
  * engine that is already open binds to a fresh controller through [rebind].
  */
 class ChartController(private val appContext: Context) {
-
-    @Volatile private var lk: Lookout? = null
 
     /**
      * Where the wasm plugin set was extracted to (filesDir/plugins), or null in
@@ -204,7 +202,7 @@ class ChartController(private val appContext: Context) {
         // The declared tables ride the same refresh: they follow the loaded
         // set, so a plugin that unloads takes its table with it.
         val specs = parseTableSpecs(l.pluginTables())
-        main.post {
+        access.onMain {
             pluginRegistry = reg
             tableSpecs = specs
             if (openTable?.let { o -> specs.none { it.id == o.id } } == true) {
@@ -227,39 +225,34 @@ class ChartController(private val appContext: Context) {
         override fun run() {
             if (!polling) return
             refreshPlugins()
-            main.postDelayed(this, PLUGIN_POLL_MS)
+            access.postMainDelayed(PLUGIN_POLL_MS, this)
         }
     }
 
     fun startPluginPolling() {
         if (polling) return
         polling = true
-        main.post(pollTick)
+        access.postMain(pollTick)
     }
 
     fun stopPluginPolling() {
         polling = false
-        main.removeCallbacks(pollTick)
+        access.cancelMain(pollTick)
     }
 
-    private val main = Handler(Looper.getMainLooper())
+    /**
+     * The handle, the render thread and the way back to the main thread, in
+     * one object. Held rather than reimplemented here so the parts this class
+     * is being broken into can each take it and keep the same threading rule.
+     */
+    val access = EngineAccess()
 
-    /** The render thread's queue; null while detached. */
-    @Volatile private var engine: Handler? = null
+    /** Set by the engine: wakes its idled frame loop after a mutation lands. */
+    var onMutated: (() -> Unit)?
+        get() = access.onMutated
+        set(v) { access.onMutated = v }
 
-    /** Run [block] on the render thread, or drop it if there is no engine. */
-    /** Set by the engine: wakes its idled frame loop after a mutation lands.
-     * A spurious wake — a read posted through here — costs one needsRedraw
-     * check. */
-    var onMutated: (() -> Unit)? = null
-
-    private fun onEngine(block: (Lookout) -> Unit) {
-        val h = engine ?: return
-        h.post {
-            lk?.let(block)
-            onMutated?.invoke()
-        }
-    }
+    private fun onEngine(block: (Lookout) -> Unit) = access.onEngine(block)
     private val readoutBuf = DoubleArray(Lookout.READOUTS_LEN)
     private val geoBuf = DoubleArray(2)
     private val shipBuf = DoubleArray(2)
@@ -291,7 +284,7 @@ class ChartController(private val appContext: Context) {
 
     /** Called around the open on the render thread; the loader recomposes. */
     fun noteOpenPhase(p: LoadPhase) {
-        main.post { loadPhase = p }
+        access.onMain { loadPhase = p }
     }
 
     /** Result of the last tap-to-identify; empty hides the report. */
@@ -369,7 +362,7 @@ class ChartController(private val appContext: Context) {
     var raster by mutableStateOf(RasterState())
         private set
 
-    val isOpen: Boolean get() = lk != null
+    val isOpen: Boolean get() = access.isOpen
 
     // ---- lifecycle (called by LookoutView) ---------------------------------
 
@@ -383,8 +376,7 @@ class ChartController(private val appContext: Context) {
      * to hop to main, Compose state being main-thread-only.
      */
     fun attach(l: Lookout, queue: Handler) {
-        lk = l
-        engine = queue
+        access.bind(l, queue)
         val v = DoubleArray(Lookout.MARINER_LEN)
         l.getMariner(v)                       // the engine's own defaults
         var date = l.getMarinerDate()
@@ -409,9 +401,9 @@ class ChartController(private val appContext: Context) {
         // one as soon as this installs the fetcher, so nothing is replayed
         // here — only the mariner's old SharedPreferences list, once.
         migrateChartLinks(l)
-        linkFetch.start(l) { onMutated?.invoke() }
+        linkFetch.start(l) { access.wake() }
         val loaded = date
-        main.post {
+        access.onMain {
             mariner.loadFrom(v, loaded)
             drainOpenFiles()
         }
@@ -464,7 +456,7 @@ class ChartController(private val appContext: Context) {
                 " | managed ${reg.managed.size} of ${reg.plugins.size}",
         )
         lastPluginsJson = l.pluginsJson()
-        main.post { pluginRegistry = reg }
+        access.onMain { pluginRegistry = reg }
     }
 
     /**
@@ -578,8 +570,7 @@ class ChartController(private val appContext: Context) {
      * MAIN THREAD; the value is posted to [queue].
      */
     fun rebind(l: Lookout, queue: Handler) {
-        lk = l
-        engine = queue
+        access.bind(l, queue)
         queue.post {
             lastPluginsJson = null // republish into a registry nobody has seen
             alertSeq = ALERTS_UNREAD
@@ -595,8 +586,8 @@ class ChartController(private val appContext: Context) {
             // This controller's own fetcher, and its own snapshot poll: the
             // old controller's was stopped in onReplaced, and the credit the
             // recreation dropped comes back with the next snapshot.
-            linkFetch.start(l) { onMutated?.invoke() }
-            main.post { mariner.loadFrom(v, date) }
+            linkFetch.start(l) { access.wake() }
+            access.onMain { mariner.loadFrom(v, date) }
         }
     }
 
@@ -630,19 +621,18 @@ class ChartController(private val appContext: Context) {
      * dead settings) until the next surface change.
      */
     fun detach(l: Lookout?) {
-        if (l != null && lk !== l) return
+        if (!access.isLive(l)) return
         saveView() // last known pose; the handle is about to close
         // Before the handle closes: a fetch landing later must find the
         // provider gone, not a dying engine.
         linkFetch.stop()
-        engine = null
-        lk = null
+        access.unbind()
         // Everything below is the MAIN thread's: Compose state, the siren
         // (whose strike runnable lives on the main handler and whose flag is
         // not volatile), and the service. Called here from the render thread
         // inside closeOn, so it hops — the race let one more strike sound
         // after the engine and its alarm were gone.
-        main.post {
+        access.onMain {
             rendering = false
             identify = emptyList()
             // The chart is going away with the plugins that raised the
@@ -677,7 +667,7 @@ class ChartController(private val appContext: Context) {
      * recompose the HUD 120 times a second to redraw identical text.
      */
     fun onFrameRendered(frameTimeNanos: Long) {
-        val l = lk ?: return
+        val l = access.live ?: return
         // Before the HUD throttle: the bubble follows its target at frame rate,
         // the readouts at 10 Hz.
         followPin(l)
@@ -710,7 +700,7 @@ class ChartController(private val appContext: Context) {
                 r.zoom != pose.zoom || r.rotationDeg != pose.rotationDeg
             ) {
                 pickPose = null
-                main.post {
+                access.onMain {
                     dismissIdentify()
                     // A camera move retires the chart menu with the report:
                     // both describe a point the chart has slid out from under.
@@ -728,7 +718,7 @@ class ChartController(private val appContext: Context) {
         pollChartLinks(l)
         if (r == lastPushed) return
         lastPushed = r
-        main.post {
+        access.onMain {
             readouts = r
             rendering = true
         }
@@ -881,12 +871,12 @@ class ChartController(private val appContext: Context) {
             // once had nothing to say.
             if (alertSeq == ALERTS_UNREAD) return
             alertSeq = ALERTS_UNREAD
-            main.post { applyAlerts(emptyList()) }
+            access.onMain { applyAlerts(emptyList()) }
             return
         }
         if (got.seq == alertSeq) return
         alertSeq = got.seq
-        main.post { applyAlerts(got.alerts) }
+        access.onMain { applyAlerts(got.alerts) }
     }
 
     /** MAIN THREAD. The list and the siren move together. */
@@ -1006,13 +996,13 @@ class ChartController(private val appContext: Context) {
             // The plugin has gone, and the table with it. Better an empty
             // dialog than a picture nobody is keeping up to date.
             tableSeq = -1
-            main.post { if (openTable?.id == spec.id) tableBatch = TableBatch(0, emptyList()) }
+            access.onMain { if (openTable?.id == spec.id) tableBatch = TableBatch(0, emptyList()) }
             return
         }
         val batch = parseTableRows(json, spec.columns.size) ?: return
         if (!force && batch.seq == tableSeq) return
         tableSeq = batch.seq
-        main.post { if (openTable?.id == spec.id) tableBatch = batch }
+        access.onMain { if (openTable?.id == spec.id) tableBatch = batch }
     }
 
     /** Centre the chart on a table row and shut the dialog over it. Follow is
@@ -1123,7 +1113,7 @@ class ChartController(private val appContext: Context) {
             return
         }
         val hint = active != null
-        main.post {
+        access.onMain {
             chartLinks = links
             activeChartLink = active
             chartLinkAttribution = credit
@@ -1236,7 +1226,7 @@ class ChartController(private val appContext: Context) {
         )
         if (s == lastRaster) return
         lastRaster = s
-        main.post { raster = s }
+        access.onMain { raster = s }
     }
 
     /**
@@ -1329,7 +1319,7 @@ class ChartController(private val appContext: Context) {
         l.getMariner(v)
         val date = l.getMarinerDate()
         MarinerState.save(appContext, v, date)
-        main.post { mariner.loadFrom(v, date) }
+        access.onMain { mariner.loadFrom(v, date) }
     }
 
     // ---- actions -----------------------------------------------------------
@@ -1387,7 +1377,7 @@ class ChartController(private val appContext: Context) {
         val id = l.markerAt(xPts, yPts)
         val name = if (id != 0L) l.markerName(id).orEmpty() else ""
         val menu = ChartMenu(Offset(xPts, yPts), geoBuf[0], geoBuf[1], id, name)
-        main.post { chartMenu = menu }
+        access.onMain { chartMenu = menu }
     }
 
     fun dismissChartMenu() {
@@ -1408,7 +1398,7 @@ class ChartController(private val appContext: Context) {
             return@onEngine
         }
         val out = AuxFile(name, bytes, mime[0] ?: "")
-        main.post { auxFile = out }
+        access.onMain { auxFile = out }
     }
 
     fun dismissAuxFile() {
@@ -1450,7 +1440,7 @@ class ChartController(private val appContext: Context) {
      * moment the open finishes.
      */
     fun openFile(path: String) {
-        if (engine == null) {
+        if (!access.isOpen) {
             synchronized(pendingOpenFiles) { pendingOpenFiles.add(path) }
             return
         }
@@ -1482,14 +1472,14 @@ class ChartController(private val appContext: Context) {
     fun beginPluginInstall(path: String) = onEngine { l ->
         val json = l.pluginInspect(path)
         if (json == null) {
-            main.post { installError = "The plugin layer could not start." }
+            access.onMain { installError = "The plugin layer could not start." }
             return@onEngine
         }
         try {
             val o = org.json.JSONObject(json)
             val err = o.optString("error")
             if (err.isNotEmpty()) {
-                main.post { installError = err }
+                access.onMain { installError = err }
                 return@onEngine
             }
             fun arr(a: org.json.JSONArray?): List<String> =
@@ -1507,9 +1497,9 @@ class ChartController(private val appContext: Context) {
                 drops = arr(inst?.optJSONArray("drops")),
                 downgrade = inst?.optBoolean("downgrade") ?: false,
             )
-            main.post { pluginConsent = pkg }
+            access.onMain { pluginConsent = pkg }
         } catch (e: Exception) {
-            main.post { installError = "That file is not a plugin package." }
+            access.onMain { installError = "That file is not a plugin package." }
         }
     }
 
@@ -1519,7 +1509,7 @@ class ChartController(private val appContext: Context) {
         pluginConsent = null
         onEngine { l ->
             val msg = l.pluginInstall(pkg.path)
-            if (msg != null) main.post { installError = msg }
+            if (msg != null) access.onMain { installError = msg }
             republish(l)
         }
     }
@@ -1620,7 +1610,7 @@ class ChartController(private val appContext: Context) {
                 pinnedId = if (again) null else id
                 postedPin = next
                 postedPoint = at
-                main.post {
+                access.onMain {
                     pinned = next
                     pinnedPoint = at
                     if (next != null) dismissIdentify()
@@ -1647,7 +1637,7 @@ class ChartController(private val appContext: Context) {
             }
         }
         val pose = lastPushed
-        main.post {
+        access.onMain {
             pinned = null
             pinnedPoint = null
             identify = found
@@ -1678,7 +1668,7 @@ class ChartController(private val appContext: Context) {
         val cur = l.overlayInfo(id, pinLonLat)
         if (cur == null || cur.size < 2) {
             pinnedId = null
-            main.post { if (pinned?.id == id) dismissPin() }
+            access.onMain { if (pinned?.id == id) dismissPin() }
             return
         }
         val info = OverlayInfo.parse(cur[1]) ?: return
@@ -1693,8 +1683,8 @@ class ChartController(private val appContext: Context) {
         if (next == postedPin && at == postedPoint) return
         postedPin = next
         postedPoint = at
-        main.post {
-            if (pinnedId != id) return@post          // retired while this hopped threads
+        access.onMain {
+            if (pinnedId != id) return@onMain          // retired while this hopped threads
             pinned = next
             pinnedPoint = at
         }
