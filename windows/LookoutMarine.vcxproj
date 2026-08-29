@@ -240,7 +240,9 @@
   <!-- about: About and the licences. -->
   <ItemGroup>
     <ClCompile Include="src\about\ui\Licenses.cpp" />
-    <ClCompile Include="src\about\lk_licenses_baked.cpp" />
+    <ClCompile Include="src\about\lk_licenses_baked.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\about\lk_licenses.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

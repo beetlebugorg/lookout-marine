@@ -76,20 +76,22 @@ store_file(const char *name, char *path, size_t path_len)
     if (path[0] != '\0')
         return path;
 
+    /* The directory the store lives in, then the file inside it. */
+    char dir[MAX_PATH];
     char base[MAX_PATH];
-    if (store_dir[0] != '\0') {
-        snprintf(path, path_len, "%s", store_dir);
-        CreateDirectoryA(path, NULL);
-        strncat(path, "\\", path_len - strlen(path) - 1);
-        strncat(path, name, path_len - strlen(path) - 1);
-    } else if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, base))) {
-        snprintf(path, path_len, "%s\\lookout-marine", base);
-        CreateDirectoryA(path, NULL);
-        strncat(path, "\\", path_len - strlen(path) - 1);
-        strncat(path, name, path_len - strlen(path) - 1);
-    } else {
+    if (store_dir[0] != '\0')
+        snprintf(dir, sizeof dir, "%s", store_dir);
+    else if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, base)))
+        snprintf(dir, sizeof dir, "%s\\lookout-marine", base);
+    else {
+        /* Nowhere of our own to write: beside the exe, under a name that
+         * cannot be mistaken for anything else there. */
         snprintf(path, path_len, ".\\lookout-%s", name);
+        return path;
     }
+
+    CreateDirectoryA(dir, NULL);
+    snprintf(path, path_len, "%s\\%s", dir, name);
     return path;
 }
 
