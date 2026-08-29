@@ -1,6 +1,11 @@
 #include "lk-json.h"
 
+#include <math.h>
 #include <string.h>
+
+/* A cap on nesting, so a document of nothing but opening brackets cannot run
+   the parser off the stack. Deeper than any message this shell reads. */
+#define LK_JSON_MAX_DEPTH 64
 
 struct _LkJson {
   LkJsonKind kind;
@@ -18,6 +23,7 @@ struct _LkJson {
 
 typedef struct {
   const char *p;
+  int         depth; /* open containers above this point */
 } LkJsonReader;
 
 static LkJson *lk_json_read_value (LkJsonReader *r);
@@ -85,9 +91,10 @@ lk_json_read_escape_unicode (LkJsonReader *r, GString *out)
         }
     }
 
-  /* A lone surrogate is not a character. Keep the string readable rather than
-   * writing invalid UTF-8 into a label GTK would then reject. */
-  if (code >= 0xD800 && code <= 0xDFFF)
+  /* A lone surrogate is not a character, and a NUL would truncate the C string
+   * the label is built from. Keep the string readable and whole rather than
+   * writing invalid UTF-8 or a cut a reader downstream would never see past. */
+  if ((code >= 0xD800 && code <= 0xDFFF) || code == 0)
     code = 0xFFFD;
 
   g_string_append_unichar (out, code);
@@ -145,10 +152,23 @@ lk_json_read_number (LkJsonReader *r)
 {
   const char *start = r->p;
   char *end = NULL;
-  double value = g_ascii_strtod (start, &end);
 
-  if (end == start)
+  /* A JSON number starts with a digit or a minus. g_ascii_strtod also takes
+     forms JSON forbids — a leading plus or dot, hexadecimal floats, inf, nan —
+     so both the first character and the whole consumed span are checked. */
+  if (*start != '-' && !g_ascii_isdigit (*start))
     return NULL;
+
+  double value = g_ascii_strtod (start, &end);
+  if (end == start || !isfinite (value))
+    return NULL;
+
+  for (const char *c = start; c < end; c++)
+    {
+      if (!g_ascii_isdigit (*c) && *c != '.' && *c != '-' && *c != '+' &&
+          *c != 'e' && *c != 'E')
+        return NULL; /* a hex digit or an 'x' — a form strtod took, JSON forbids */
+    }
 
   LkJson *node = lk_json_new (LK_JSON_NUMBER);
   node->number = value;
@@ -271,10 +291,22 @@ lk_json_read_value (LkJsonReader *r)
   switch (*r->p)
     {
     case '{':
-      return lk_json_read_object (r);
+      {
+        if (++r->depth > LK_JSON_MAX_DEPTH)
+          return NULL;
+        LkJson *node = lk_json_read_object (r);
+        r->depth--;
+        return node;
+      }
 
     case '[':
-      return lk_json_read_array (r);
+      {
+        if (++r->depth > LK_JSON_MAX_DEPTH)
+          return NULL;
+        LkJson *node = lk_json_read_array (r);
+        r->depth--;
+        return node;
+      }
 
     case '"':
       {
@@ -355,10 +387,12 @@ lk_json_member (const LkJson *node, const char *name)
   if (node == NULL || node->kind != LK_JSON_OBJECT || name == NULL)
     return NULL;
 
-  for (guint i = 0; i < node->keys->len; i++)
+  /* A duplicate key answers with the LAST value, as the other shells' parsers
+     do, so search from the end and take the first hit. */
+  for (guint i = node->keys->len; i > 0; i--)
     {
-      if (g_str_equal (g_ptr_array_index (node->keys, i), name))
-        return g_ptr_array_index (node->items, i);
+      if (g_str_equal (g_ptr_array_index (node->keys, i - 1), name))
+        return g_ptr_array_index (node->items, i - 1);
     }
   return NULL;
 }
