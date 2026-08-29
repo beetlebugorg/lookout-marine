@@ -9,6 +9,7 @@ package org.beetlebug.lookout.ui
 // `plugins`, `charts` and `licenses` all import from it while it imported back
 // from them, which said those packages were one thing when they are not.
 
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -133,11 +134,16 @@ internal fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolea
     Row(
         Modifier
             .fillMaxWidth()
+            // The whole row is the target, so the switch is not a 50 dp mark to
+            // hit at a slant in the wet. A plugin's own toggles already work
+            // this way; these are in the same sheet and must not differ.
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
             .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        // null: the row owns the click, so the switch must not take it too.
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
