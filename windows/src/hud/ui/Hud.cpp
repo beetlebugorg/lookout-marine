@@ -47,7 +47,7 @@ namespace winrt::LookoutMarine::implementation
         scalebar_m = 0;
     }
 
-    void MainWindow::UpdateReadouts(bool /*force*/)
+    void MainWindow::UpdateReadouts()
     {
         if (controller == nullptr)
             return;

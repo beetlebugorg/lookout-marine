@@ -187,6 +187,6 @@ namespace winrt::LookoutMarine::implementation
         lk_controller_zoom_centered(controller, dz,
                                     (unsigned)std::max(1.0, Root().ActualWidth()),
                                     (unsigned)std::max(1.0, Root().ActualHeight()));
-        UpdateReadouts(true);
+        UpdateReadouts();
     }
 }

@@ -235,7 +235,7 @@ namespace winrt::LookoutMarine::implementation
         int taken = lk_controller_open_file(controller, path.c_str());
         if (taken == 1)
         {
-            UpdateReadouts(true);
+            UpdateReadouts();
             return;
         }
         if (taken == -1)

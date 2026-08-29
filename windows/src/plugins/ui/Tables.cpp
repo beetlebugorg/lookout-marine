@@ -285,7 +285,7 @@ namespace winrt::LookoutMarine::implementation
     {
         lk_controller_follow_set(controller, 0);
         lk_controller_set_center(controller, lon, lat);
-        UpdateReadouts(true);
+        UpdateReadouts();
         if (!TryPinOverlayAt(Root().ActualWidth() / 2, Root().ActualHeight() / 2))
             CloseOverlayBubble();
     }

@@ -122,7 +122,7 @@ namespace winrt::LookoutMarine::implementation
         void StartRenderThread();
         void StopRenderThread();
         void RenderLoop();
-        void UpdateReadouts(bool force);
+        void UpdateReadouts();
         void UpdateScaleBar(double denom);
         // `label` is what Settings ▸ Charts calls the set ("NOAA"); the recent
         // stays a path. Empty falls back to the recent, then the first cell.

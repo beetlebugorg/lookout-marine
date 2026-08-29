@@ -110,7 +110,7 @@ namespace winrt::LookoutMarine::implementation
             it.Click([this, i](auto &&, auto &&) {
                 lk_controller_raster_select(controller, i);
                 SaveRasterShown();
-                UpdateReadouts(true);
+                UpdateReadouts();
             });
             menu.Items().Append(it);
         }
@@ -121,7 +121,7 @@ namespace winrt::LookoutMarine::implementation
         none.Click([this](auto &&, auto &&) {
             lk_controller_raster_select(controller, -1);
             SaveRasterShown();
-            UpdateReadouts(true);
+            UpdateReadouts();
         });
         menu.Items().Append(none);
 
@@ -133,7 +133,7 @@ namespace winrt::LookoutMarine::implementation
         enc.Click([this](auto &&, auto &&) {
             lk_controller_toggle_chart(controller);
             lk_store_set_chart_hidden(lk_controller_chart_hidden(controller));
-            UpdateReadouts(true);
+            UpdateReadouts();
         });
         menu.Items().Append(enc);
 
@@ -226,7 +226,7 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
-        UpdateReadouts(true);
+        UpdateReadouts();
         if (SettingsOpen())
             BuildSettingsPage();
 

@@ -172,7 +172,7 @@ namespace winrt::LookoutMarine::implementation
         default:
             break;
         }
-        UpdateReadouts(true);
+        UpdateReadouts();
     }
 
     void MainWindow::SubmitSearch()

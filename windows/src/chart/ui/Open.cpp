@@ -170,7 +170,7 @@ namespace winrt::LookoutMarine::implementation
             // The readout poll runs while there is a chart to read out and
             // not before: idle means idle (app/ui/MainWindow.xaml.cpp).
             readout_timer.Start();
-            UpdateReadouts(true);
+            UpdateReadouts();
             // The development and screenshot hooks (app/ui/DevHooks.cpp):
             // LOOKOUT_WINDOW, LOOKOUT_OPEN_SETTINGS, LOOKOUT_ADD,
             // LOOKOUT_REMOVE and LOOKOUT_SHOW. Read once, now that there

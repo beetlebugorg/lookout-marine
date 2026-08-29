@@ -107,27 +107,6 @@ lk_coord_parse(const char *text, double *out_lat, double *out_lon)
     return 1;
 }
 
-void
-lk_coord_format_dms(double value, int is_lat, char *dst, int dst_len)
-{
-    if (dst == NULL || dst_len <= 0)
-        return;
-
-    char hemi;
-    if (is_lat)
-        hemi = (value < 0) ? 'S' : 'N';
-    else
-        hemi = (value < 0) ? 'W' : 'E';
-
-    double a = fabs(value);
-    int deg = (int)a;
-    double minutes = (a - deg) * 60.0;
-
-    /* Match linux/src/lk-hud.c: "%d°%05.2f'%s" — minutes zero-padded to 2 int
-     * digits + 2 decimals (e.g. 38°58.80'N). */
-    snprintf(dst, (size_t)dst_len, "%d\xc2\xb0%05.2f'%c", deg, minutes, hemi);
-}
-
 int
 lk_scale_parse(const char *text, double *out_denom)
 {

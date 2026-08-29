@@ -49,7 +49,7 @@ namespace winrt::LookoutMarine::implementation
             remove.Text(winrt::hstring{ L"Remove " } + winrt::to_hstring(mark.name));
             remove.Click([this, id](auto &&, auto &&) {
                 lk_controller_marker_remove(controller, id);
-                UpdateReadouts(true);
+                UpdateReadouts();
             });
             menu.Items().Append(remove);
         }
@@ -63,7 +63,7 @@ namespace winrt::LookoutMarine::implementation
             drop.Click([this, lon, lat](auto &&, auto &&) {
                 if (lk_controller_marker_add(controller, lon, lat) == 0)
                     fprintf(stderr, "shell: marker could not be stored\n");
-                UpdateReadouts(true);
+                UpdateReadouts();
             });
             menu.Items().Append(drop);
         }
@@ -111,6 +111,6 @@ namespace winrt::LookoutMarine::implementation
             co_return;
         auto name = winrt::to_string(box.Text());
         lk_controller_marker_rename(controller, id, name.c_str());
-        UpdateReadouts(true);
+        UpdateReadouts();
     }
 }

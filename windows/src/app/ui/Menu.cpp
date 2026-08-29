@@ -78,7 +78,7 @@ namespace winrt::LookoutMarine::implementation
                 it.IsEnabled(open);
                 it.Click([this, i](auto &&, auto &&) {
                     lk_controller_set_scheme(controller, i);
-                    UpdateReadouts(true);
+                    UpdateReadouts();
                 });
                 scheme.Items().Append(it);
             }
@@ -107,7 +107,7 @@ namespace winrt::LookoutMarine::implementation
                 it.IsChecked(i == active);
                 it.Click([this, i](auto &&, auto &&) {
                     lk_controller_raster_select(controller, i);
-                    UpdateReadouts(true);
+                    UpdateReadouts();
                 });
                 raster.Items().Append(it);
             }
@@ -118,7 +118,7 @@ namespace winrt::LookoutMarine::implementation
             none.IsChecked(active < 0);
             none.Click([this](auto &&, auto &&) {
                 lk_controller_raster_select(controller, -1);
-                UpdateReadouts(true);
+                UpdateReadouts();
             });
             raster.Items().Append(none);
             raster.IsEnabled(open && !raster_paths.empty());

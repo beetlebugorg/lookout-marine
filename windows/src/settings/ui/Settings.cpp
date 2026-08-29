@@ -357,7 +357,7 @@ namespace winrt::LookoutMarine::implementation
                 apply_timer.Stop();
                 lk_controller_set_mariner(controller, &pending);
                 lk_store_save_mariner(&pending);
-                UpdateReadouts(true);
+                UpdateReadouts();
             });
         }
         apply_timer.Stop();
@@ -888,7 +888,7 @@ namespace winrt::LookoutMarine::implementation
                         if (settings_loading)
                             return;
                         set(s.template as<Controls::ToggleSwitch>().IsOn());
-                        UpdateReadouts(true);
+                        UpdateReadouts();
                         BuildSettingsPage();
                     });
                     return ts;
@@ -944,7 +944,7 @@ namespace winrt::LookoutMarine::implementation
                         L"Remove the whole set. Takes full effect the next time a chart opens.");
                     grm.Click([this, remove_group, files](auto &&, auto &&) {
                         remove_group(files);
-                        UpdateReadouts(true);
+                        UpdateReadouts();
                         BuildSettingsPage();
                     });
                     Controls::Grid::SetColumn(grm, 3);
@@ -1002,7 +1002,7 @@ namespace winrt::LookoutMarine::implementation
                             // The engine has no remove: quiet it on the live
                             // handle, and the next open drops it for good.
                             lk_controller_raster_set_enabled(controller, p.c_str(), 0);
-                            UpdateReadouts(true);
+                            UpdateReadouts();
                             BuildSettingsPage();
                         });
                         Controls::Grid::SetColumn(rm, 2);

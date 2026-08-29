@@ -299,6 +299,9 @@ namespace winrt::LookoutMarine::implementation
         struct Accel { Windows::System::VirtualKey key; bool shift; char cmd; };
         static constexpr Accel accels[] = {
             { Windows::System::VirtualKey::O, false, 'o' },
+            // The menu has always said Ctrl+Shift+O opens a chart FILE, and
+            // it did nothing: the command was written and never bound.
+            { Windows::System::VirtualKey::O, true, 'O' },
             { (Windows::System::VirtualKey)0xBB, false, '+' }, // VK_OEM_PLUS
             { (Windows::System::VirtualKey)0xBD, false, '-' }, // VK_OEM_MINUS
             { Windows::System::VirtualKey::Number0, false, '0' },
@@ -355,7 +358,7 @@ namespace winrt::LookoutMarine::implementation
                 readout_timer.Stop();
                 return;
             }
-            UpdateReadouts(false);
+            UpdateReadouts();
             // The chart-link list, the credit and the error, from the core. A
             // landing answer raises needs-redraw, so a resolve keeps the render
             // loop ticking until it is done.

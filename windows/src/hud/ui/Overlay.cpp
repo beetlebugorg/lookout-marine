@@ -243,7 +243,7 @@ namespace winrt::LookoutMarine::implementation
             lk_controller_course_up_set(controller, 0);
             lk_controller_reset_rotation(controller);
         }
-        UpdateReadouts(true);
+        UpdateReadouts();
     }
 
     void MainWindow::UpdateFollowLock()
