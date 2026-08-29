@@ -156,9 +156,9 @@ keeps running.
 ## Opening a file a plugin reads
 
 A manifest claims file types, and a weather file the mariner opens belongs to the
-plugin that reads them. Every way in routes the same way: **Ctrl+Shift+O**, a drop
-on the window, and the recent list all offer the file to the plugins before the
-shell treats it as a chart. The core answers which, so the app never matches an
+plugin that reads them. Every way in routes the same way: **Ctrl+Shift+O** and a
+drop on the window both offer the file to the plugins before the shell treats it
+as a chart. The core answers which, so the app never matches an
 extension itself. A chart always answers 0, and so does a build with no plugin
 layer, which is why one code path serves both.
 
@@ -344,7 +344,7 @@ frames.
 
 You need a baked `.pmtiles` chart. Use **Open** in the headerbar to select a folder
 of cells. At the first start, the app looks for `$LOOKOUT_OPEN`. Then it looks for
-the most recent chart. Then it looks for
+the saved chart library. Then it looks for
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`. Set
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` to select the first camera position.
 

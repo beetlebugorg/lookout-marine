@@ -83,7 +83,6 @@ enum {
   PROP_HAS_CHART,
   PROP_CHART_PATH,
   PROP_OPEN_ERROR,
-  PROP_RECENTS,
   PROP_SHOW_STARTUP_LOADER,
   PROP_CENTER_LON,
   PROP_CENTER_LAT,
@@ -132,7 +131,6 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_HAS_CHART:           g_value_set_boolean (value, self->has_chart); break;
     case PROP_CHART_PATH:          g_value_set_string (value, self->chart_path); break;
     case PROP_OPEN_ERROR:          g_value_set_string (value, self->open_error); break;
-    case PROP_RECENTS:             g_value_set_boxed (value, self->recents); break;
     case PROP_SHOW_STARTUP_LOADER: g_value_set_boolean (value, lk_app_model_get_show_startup_loader (self)); break;
     case PROP_CENTER_LON:          g_value_set_double (value, self->center_lon); break;
     case PROP_CENTER_LAT:          g_value_set_double (value, self->center_lat); break;
@@ -203,7 +201,6 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_HAS_CHART] = g_param_spec_boolean ("has-chart", NULL, NULL, FALSE, RO);
   properties[PROP_CHART_PATH] = g_param_spec_string ("chart-path", NULL, NULL, NULL, RO);
   properties[PROP_OPEN_ERROR] = g_param_spec_string ("open-error", NULL, NULL, NULL, RO);
-  properties[PROP_RECENTS] = g_param_spec_boxed ("recents", NULL, NULL, G_TYPE_STRV, RO);
   properties[PROP_SHOW_STARTUP_LOADER] = g_param_spec_boolean ("show-startup-loader", NULL, NULL, FALSE, RO);
   properties[PROP_CENTER_LON] = g_param_spec_double ("center-lon", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
   properties[PROP_CENTER_LAT] = g_param_spec_double ("center-lat", NULL, NULL, -G_MAXDOUBLE, G_MAXDOUBLE, 0, RO);
@@ -845,8 +842,6 @@ lk_app_model_initial_source (LkAppModel *self)
   const char *env = g_getenv ("LOOKOUT_OPEN");
   if (env != NULL)
     return g_strdup (env);
-  if (self->recents != NULL && self->recents[0] != NULL)
-    return g_strdup (self->recents[0]);
   return NULL;
 }
 
@@ -873,14 +868,6 @@ lk_app_model_initial_chart_paths (LkAppModel *self)
       g_strfreev (cells);
     }
 
-  if (self->recents != NULL && self->recents[0] != NULL)
-    {
-      char **cells = lk_cell_paths_for (self->recents[0]);
-      if (g_strv_length (cells) > 0)
-        return cells;
-      g_strfreev (cells);
-    }
-
   /* The Zig demo's built-in default, if present. */
   g_autofree char *demo = g_build_filename (g_get_home_dir (), ".cache", "chartplotter",
                                             "NOAA", "tiles", "d5", "US5MD1MC.pmtiles", NULL);
@@ -894,18 +881,11 @@ lk_app_model_initial_chart_paths (LkAppModel *self)
   return g_new0 (char *, 1);
 }
 
-/* `recent` is what the USER opened (folder or single cell), not the expanded
- * cells — else the next launch would reopen one cell, not the whole library. */
 static void
-lk_app_model_request_open (LkAppModel *self, char **paths, const char *recent)
+lk_app_model_request_open (LkAppModel *self, char **paths)
 {
   if (paths == NULL || g_strv_length (paths) == 0)
     return;
-
-  lk_store_note_recent (recent);
-  g_clear_pointer (&self->recents, g_strfreev);
-  self->recents = lk_store_load_recents ();
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_RECENTS]);
 
   lk_chart_controller_reopen (self->controller, (const char *const *) paths);
 }
@@ -962,7 +942,7 @@ lk_app_model_open_prepared (LkAppModel *self, const char *source)
       return;
     }
 
-  lk_app_model_request_open (self, all, source);
+  lk_app_model_request_open (self, all);
 }
 
 static void
@@ -1118,13 +1098,6 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
   job->model = g_object_ref (self);
   job->dir = g_strdup (dir);
   g_thread_unref (g_thread_new ("lk-scan", lk_scan_worker, job));
-}
-
-const char *const *
-lk_app_model_get_recents (LkAppModel *self)
-{
-  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
-  return (const char *const *) self->recents;
 }
 
 /* ---- commands ----------------------------------------------------------- */

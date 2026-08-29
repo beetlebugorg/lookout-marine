@@ -403,14 +403,6 @@ lk_action_open_archive (GSimpleAction *action, GVariant *parameter, gpointer use
 }
 
 static void
-lk_action_open_recent (GSimpleAction *action, GVariant *parameter, gpointer user_data)
-{
-  LkWindow *self = user_data;
-
-  lk_app_model_open_chart (self->model, g_variant_get_string (parameter, NULL));
-}
-
-static void
 lk_action_zoom_in (GSimpleAction *a, GVariant *p, gpointer d)  { lk_app_model_zoom_in (((LkWindow *) d)->model); }
 static void
 lk_action_zoom_out (GSimpleAction *a, GVariant *p, gpointer d) { lk_app_model_zoom_out (((LkWindow *) d)->model); }
@@ -753,7 +745,6 @@ static const GActionEntry lk_window_actions[] = {
   { "open",             lk_action_open },
   { "open-archive",     lk_action_open_archive },
   { "open-file",        lk_action_open_file },
-  { "open-recent",      lk_action_open_recent, "s" },
   { "zoom-in",          lk_action_zoom_in },
   { "zoom-out",         lk_action_zoom_out },
   { "zoom-fit",         lk_action_zoom_fit },
@@ -906,20 +897,6 @@ lk_window_fill_menu (GtkMenuButton *button, gpointer user_data)
   g_menu_append (files, "Open Chart Folder…", "win.open");
   g_menu_append (files, "Open Chart Archive…", "win.open-archive");
   g_menu_append (files, "Open a File…", "win.open-file");
-
-  GMenu *recents = g_menu_new ();
-  const char *const *paths = lk_app_model_get_recents (self->model);
-  for (gsize i = 0; paths != NULL && paths[i] != NULL; i++)
-    {
-      g_autofree char *name = g_path_get_basename (paths[i]);
-      g_autoptr (GVariant) target = g_variant_new_string (paths[i]);
-      g_autoptr (GMenuItem) item = g_menu_item_new (name, NULL);
-
-      g_menu_item_set_action_and_target_value (item, "win.open-recent",
-                                               g_steal_pointer (&target));
-      g_menu_append_item (recents, item);
-    }
-  g_menu_append_submenu (files, "Open Recent", G_MENU_MODEL (recents));
   g_menu_append (files, "Install Plugin…", "win.install-plugin");
   g_menu_append_section (menu, NULL, G_MENU_MODEL (files));
 
@@ -940,7 +917,6 @@ lk_window_fill_menu (GtkMenuButton *button, gpointer user_data)
 
   gtk_menu_button_set_menu_model (button, G_MENU_MODEL (menu));
 
-  g_object_unref (recents);
   g_object_unref (files);
   g_object_unref (app);
   g_object_unref (info);

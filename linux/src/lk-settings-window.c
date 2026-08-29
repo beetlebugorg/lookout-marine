@@ -705,16 +705,6 @@ lk_charts_open_clicked (GtkButton *button, gpointer user_data)
                                 settings->model);
 }
 
-static void
-lk_charts_recent_clicked (GtkButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *path = g_object_get_data (G_OBJECT (button), "lk-path");
-
-  if (path != NULL)
-    lk_app_model_open_chart (settings->model, path);
-}
-
 /* ---- the raster chart list ---------------------------------------------- */
 
 static void
@@ -1264,24 +1254,6 @@ lk_build_charts_page (LkSettings *settings)
              "Each folder or archive added is a set. The chart is every set "
              "switched on, drawn as one seamless library; a set switched off "
              "stays aboard and out of the chart.");
-
-  const char *const *recents = lk_app_model_get_recents (settings->model);
-  if (recents != NULL && recents[0] != NULL)
-    {
-      GtkWidget *recent_section = lk_section (page, "Recent");
-      for (guint i = 0; recents[i] != NULL; i++)
-        {
-          g_autofree char *name = g_path_get_basename (recents[i]);
-          GtkWidget *button = gtk_button_new_with_label (name);
-
-          gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
-          gtk_widget_set_halign (button, GTK_ALIGN_FILL);
-          g_object_set_data_full (G_OBJECT (button), "lk-path",
-                                  g_strdup (recents[i]), g_free);
-          g_signal_connect (button, "clicked", G_CALLBACK (lk_charts_recent_clicked), settings);
-          gtk_box_append (GTK_BOX (recent_section), button);
-        }
-    }
 
   GtkWidget *add = lk_section (page, NULL);
   GtkWidget *add_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);

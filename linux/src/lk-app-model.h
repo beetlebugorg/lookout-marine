@@ -35,8 +35,6 @@ char **lk_app_model_chart_paths_in_dir (const char *dir);
 void lk_app_model_open_chart (LkAppModel *self, const char *path);
 void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
-const char *const *lk_app_model_get_recents (LkAppModel *self);
-
 /* ---- the chart library: sets aboard -------------------------------------- */
 
 /* A SET is a folder the mariner added, or one .zip — how a chart agency

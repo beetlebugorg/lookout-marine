@@ -89,7 +89,7 @@ chart pick report does not open for that click.
 
 You need a baked `.pmtiles` chart to see anything. **Ctrl+O**, or **Charts** in the
 mariner settings, picks a folder of cells; on first launch the app probes
-`$LOOKOUT_OPEN`, then the last recent, then
+`$LOOKOUT_OPEN`, then the saved chart library, then
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` pins the opening camera.
 
@@ -127,7 +127,7 @@ the first frame, because the engine draws a set as it opens it.
 | `src/lk-chart-view.c` | The chart widget: owns the surface, the transparent hole, all input |
 | `src/lk-chart-controller.c` | The one `lookout*` handle; every `lookout_*` call; the render loop |
 | `src/lk-native-surface.c` | The X11 child window / Wayland subsurface the chart presents into |
-| `src/lk-app-model.c` | Shared state, recents, open paths, coordinate and scale parsers |
+| `src/lk-app-model.c` | Shared state, the chart library, open paths, coordinate and scale parsers |
 | `src/lk-hud.c` | The readouts capsule, scale bar, north bubble, scale entry, formatting |
 | `src/lk-pick-report.c` | The cursor pick report: the decode, the card, the callout placement |
 | `src/lk-raster.c` | The installed raster charts, their on/off, and the set names |
