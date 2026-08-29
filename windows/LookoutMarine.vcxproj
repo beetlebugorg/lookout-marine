@@ -165,6 +165,7 @@
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
     <ClCompile Include="src\app\ui\Menu.cpp" />
+    <ClCompile Include="src\app\ui\DevHooks.cpp" />
     <ClCompile Include="src\app\ui\winrt_glue.cpp" />
     <ClCompile Include="src\app\ui\lk_backdrop.cpp" />
   </ItemGroup>

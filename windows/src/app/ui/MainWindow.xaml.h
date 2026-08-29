@@ -113,6 +113,9 @@ namespace winrt::LookoutMarine::implementation
         void RemovePluginRow(std::string const &plugin_id, std::string const &list_key,
                              std::string const &row_id);
         void TryOpen();
+        // The LOOKOUT_* development and screenshot hooks (app/ui/DevHooks.cpp),
+        // read once after the first chart is up.
+        void ApplyDevHooks();
         bool OpenChart(std::vector<std::string> const &paths);
         void SyncChartBounds();
         void ApplyPanelScale();
