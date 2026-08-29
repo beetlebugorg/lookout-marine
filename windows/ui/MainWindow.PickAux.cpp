@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "lk_format.h"
+#include "lk_utf8.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -15,37 +16,26 @@ using namespace lkw::chrome;
 
 namespace
 {
-    // UTF-8 → hstring with a Latin-1 fallback (an aux text file is not
-    // always well-formed UTF-8).
+    // An aux text file is whatever the office wrote, so it is made showable
+    // before it reaches a TextBlock (see lk_utf8.h).
     hstring TextFromBytes(unsigned char const *bytes, size_t len)
     {
-        std::string_view view{ (char const *)bytes, len };
-        try
-        {
-            return to_hstring(view);
-        }
-        catch (hresult_error const &)
-        {
-            std::wstring wide;
-            wide.reserve(len);
-            for (unsigned char c : view)
-                wide.push_back((wchar_t)c);
-            return hstring{ wide };
-        }
+        return to_hstring(lkw::Utf8OrLatin1({ (char const *)bytes, len }));
     }
 }
 
 namespace winrt::LookoutMarine::implementation
 {
     void MainWindow::AddAuxFileView(Controls::StackPanel const &into,
-                                    std::string const &cell, hstring const &name)
+                                    std::string const &cell, std::string const &name)
     {
         unsigned char const *bytes = nullptr;
         size_t len = 0;
         char const *mime = nullptr;
-        std::string name_utf8 = to_string(name);
-        int found = lk_controller_aux_file(controller, cell.c_str(), name_utf8.c_str(),
+        int found = lk_controller_aux_file(controller, cell.c_str(), name.c_str(),
                                            &bytes, &len, &mime);
+        // The row's own text, and what the picture viewer titles itself with.
+        hstring shown = to_hstring(name);
 
         Controls::StackPanel box;
         box.Margin({ 16, 2, 16, 6 });
@@ -61,7 +51,7 @@ namespace winrt::LookoutMarine::implementation
         icon.Foreground(Brush(Muted(DarkChrome())));
         head.Children().Append(icon);
         Controls::TextBlock file_name;
-        file_name.Text(name);
+        file_name.Text(shown);
         file_name.FontSize(11);
         file_name.Foreground(Brush(Muted(DarkChrome())));
         file_name.IsTextSelectionEnabled(true);
@@ -85,10 +75,10 @@ namespace winrt::LookoutMarine::implementation
             img.Stretch(Media::Stretch::Uniform);
             img.HorizontalAlignment(HorizontalAlignment::Left);
             std::vector<uint8_t> copy(bytes, bytes + len);
-            LoadAuxImage(img, std::move(copy), name);
-            img.Tapped([this, img, name](auto &&, auto &&) {
+            LoadAuxImage(img, std::move(copy), shown);
+            img.Tapped([this, img, shown](auto &&, auto &&) {
                 if (img.Source() != nullptr)
-                    ShowPicture(img.Source(), name);
+                    ShowPicture(img.Source(), shown);
             });
             box.Children().Append(img);
         }

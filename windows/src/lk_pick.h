@@ -2,20 +2,22 @@
 // report card lays out. The ENGINE composes the report ({"report":{...},
 // "s57":<raw>}); this only parses and flattens, mirroring PickDecoded.kt
 // (Android) and PickReport.swift's PickDecoded + S57 (macOS/iOS).
+//
+// Model code: UTF-8 std::string and no WinRT, so it links into the test
+// target. Every string here is valid UTF-8 whatever the cell held (see
+// lk_utf8.h), so the card converts with winrt::to_hstring without guarding.
 #pragma once
 
 #include <string>
 #include <vector>
-
-#include <winrt/base.h>
 
 namespace lkw
 {
     // One decoded detail row from report.rows.
     struct PickRow
     {
-        winrt::hstring label;
-        winrt::hstring value;
+        std::string label;
+        std::string value;
         int depth{ 0 };
         bool file{ false };    // value names an aux file (TXTDSC/NTXTDS/PICREP)
         bool picture{ false }; // that file is a picture
@@ -25,8 +27,8 @@ namespace lkw
     // array element; value is empty for an object/array heading).
     struct RawRow
     {
-        winrt::hstring name;
-        winrt::hstring value;
+        std::string name;
+        std::string value;
         int depth{ 0 };
     };
 
@@ -40,11 +42,11 @@ namespace lkw
 
     struct PickDecoded
     {
-        winrt::hstring title;    // the operative fact; falls back to cls
-        winrt::hstring subtitle; // what the object is; may be empty
-        winrt::hstring chip;     // short list-column name; falls back to cls
-        winrt::hstring footnote; // provenance; falls back to the chart name
-        std::vector<winrt::hstring> notes; // promoted INFORM cautions
+        std::string title;    // the operative fact; falls back to cls
+        std::string subtitle; // what the object is; may be empty
+        std::string chip;     // short list-column name; falls back to cls
+        std::string footnote; // provenance; falls back to the chart name
+        std::vector<std::string> notes; // promoted INFORM cautions
         std::vector<PickRow> rows;
         PickEmpty empty{ PickEmpty::No };
         std::vector<RawRow> raw; // the raw payload, flattened
@@ -56,5 +58,5 @@ namespace lkw
 
     // The clipboard form: "<cls>  <chart>" then the raw rows, two spaces per
     // depth — a chart problem gets reported in the cell's own words.
-    winrt::hstring PickPlainText(char const *cls, char const *json, char const *chart);
+    std::string PickPlainText(char const *cls, char const *json, char const *chart);
 }

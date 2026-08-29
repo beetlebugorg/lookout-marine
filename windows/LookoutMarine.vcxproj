@@ -163,10 +163,21 @@
     <ClCompile Include="src\lk_paths.cpp" />
     <ClCompile Include="src\lk_bake.cpp" />
     <ClCompile Include="src\lk_format.cpp" />
-    <ClCompile Include="src\lk_pick.cpp" />
     <ClCompile Include="src\lk_licenses.cpp" />
     <ClCompile Include="src\lk_backdrop.cpp" />
     <ClCompile Include="ui\winrt_glue.cpp" />
+    <!-- The model layer: no WinRT and no PCH, which is what lets
+         windows\build-tests.ps1 link it into a test binary with no XAML host.
+         Keep it that way — a winrt include here takes the tests with it. -->
+    <ClCompile Include="src\lk_json.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\lk_utf8.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\lk_pick.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <!-- The host-agnostic C layer (ports of the Linux shell's controller/store/
          coord) — plain C, no PCH. -->
     <ClCompile Include="src\lk_controller.c">

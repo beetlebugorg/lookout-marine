@@ -1,87 +1,59 @@
 // lk_pick — pick-report envelope decode. See lk_pick.h.
-#include "pch.h"
 #include "lk_pick.h"
 
-#include <algorithm>
+#include <cinttypes>
+#include <cmath>
 #include <cstdio>
-#include <cwchar>
 
-#include <winrt/Windows.Data.Json.h>
-
-using namespace winrt;
-using namespace winrt::Windows::Data::Json;
+#include "lk_json.h"
+#include "lk_utf8.h"
 
 namespace
 {
-    // UTF-8 → hstring, falling back to Latin-1 when the bytes aren't UTF-8 (a
-    // cell's attribute text is not always well-formed).
-    hstring FromUtf8(char const *s)
+    using lkw::json::Kind;
+    using lkw::json::Value;
+
+    std::string Text(char const *s)
     {
-        if (s == nullptr || *s == '\0')
-            return {};
-        std::string_view view{ s };
-        try
-        {
-            return to_hstring(view);
-        }
-        catch (hresult_error const &)
-        {
-            std::wstring wide;
-            wide.reserve(view.size());
-            for (unsigned char c : view)
-                wide.push_back((wchar_t)c);
-            return hstring{ wide };
-        }
+        return s == nullptr ? std::string{} : lkw::Utf8OrLatin1(s);
     }
 
     // A scalar JSON value as display text: whole numbers without the ".0",
     // null as empty — matching S57.text() in PickDecoded.kt.
-    hstring ScalarText(IJsonValue const &v)
+    std::string ScalarText(Value const &v)
     {
-        switch (v.ValueType())
+        switch (v.kind())
         {
-        case JsonValueType::String:
-            return v.GetString();
-        case JsonValueType::Number:
+        case Kind::String:
+            return v.String();
+        case Kind::Number:
         {
-            double d = v.GetNumber();
-            wchar_t buf[64];
+            double d = v.Number(0);
+            char buf[64];
             if (d == (double)(long long)d)
-                swprintf_s(buf, L"%lld", (long long)d);
+                std::snprintf(buf, sizeof buf, "%lld", (long long)d);
             else
-                swprintf_s(buf, L"%.10g", d);
-            return hstring{ buf };
+                std::snprintf(buf, sizeof buf, "%.10g", d);
+            return buf;
         }
-        case JsonValueType::Boolean:
-            return v.GetBoolean() ? hstring{ L"true" } : hstring{ L"false" };
-        case JsonValueType::Null:
+        case Kind::Bool:
+            return v.Bool(false) ? "true" : "false";
         default:
             return {};
         }
     }
 
-    // JSON null and "" are both "absent" (optStringOrNull in PickDecoded.kt).
-    hstring OptString(JsonObject const &o, hstring const &key)
-    {
-        if (o == nullptr || !o.HasKey(key))
-            return {};
-        auto v = o.GetNamedValue(key);
-        if (v.ValueType() != JsonValueType::String)
-            return {};
-        return v.GetString();
-    }
-
     // Flatten any JSON into (name, value, depth) rows: an object emits a
     // heading then its keys SORTED one level in (top-level keys stay at depth
     // 0), an array emits a heading then its items in, a scalar emits one row.
-    void Flatten(hstring const &name, IJsonValue const &v, int depth,
+    void Flatten(std::string const &name, Value const &v, int depth,
                  std::vector<lkw::RawRow> &out)
     {
-        if (v == nullptr)
+        if (v.IsAbsent())
             return;
-        switch (v.ValueType())
+        switch (v.kind())
         {
-        case JsonValueType::Object:
+        case Kind::Object:
         {
             int child_depth = depth;
             if (!name.empty())
@@ -89,22 +61,14 @@ namespace
                 out.push_back({ name, {}, depth });
                 child_depth = depth + 1;
             }
-            auto obj = v.GetObject();
-            std::vector<hstring> keys;
-            for (auto const &kv : obj)
-                keys.push_back(kv.Key());
-            std::sort(keys.begin(), keys.end(),
-                      [](hstring const &a, hstring const &b) {
-                          return std::wcscmp(a.c_str(), b.c_str()) < 0;
-                      });
-            for (auto const &k : keys)
-                Flatten(k, obj.GetNamedValue(k), child_depth, out);
+            for (auto const &k : v.MemberNames())
+                Flatten(k, v[k], child_depth, out);
             break;
         }
-        case JsonValueType::Array:
+        case Kind::Array:
         {
             out.push_back({ name, {}, depth });
-            for (auto const &item : v.GetArray())
+            for (auto const &item : v.Items())
                 Flatten({}, item, depth + 1, out);
             break;
         }
@@ -113,33 +77,6 @@ namespace
             break;
         }
     }
-
-    // Split the envelope: *report gets the composed report object (or null),
-    // the return value is the raw payload half (or null when nothing parses).
-    IJsonValue SplitEnvelope(char const *json, JsonObject *report)
-    {
-        *report = nullptr;
-        if (json == nullptr || *json == '\0')
-            return nullptr;
-        JsonValue root{ nullptr };
-        if (!JsonValue::TryParse(FromUtf8(json), root))
-            return nullptr;
-        if (root.ValueType() == JsonValueType::Object)
-        {
-            auto obj = root.GetObject();
-            if (obj.HasKey(L"report") &&
-                obj.GetNamedValue(L"report").ValueType() == JsonValueType::Object)
-            {
-                *report = obj.GetNamedObject(L"report");
-                // The raw half; absent means the whole doc was the report's.
-                if (obj.HasKey(L"s57"))
-                    return obj.GetNamedValue(L"s57");
-                return nullptr;
-            }
-        }
-        // No envelope: the core's fallback emits the raw payload bare.
-        return root;
-    }
 }
 
 namespace lkw
@@ -147,96 +84,97 @@ namespace lkw
     PickDecoded DecodePick(char const *cls, char const *json, char const *chart)
     {
         PickDecoded d;
-        hstring cls_h = FromUtf8(cls);
-        hstring chart_h = FromUtf8(chart);
+        std::string cls_text = Text(cls);
+        std::string chart_text = Text(chart);
 
-        JsonObject report{ nullptr };
-        IJsonValue raw{ nullptr };
-        try
+        // An unparseable payload keeps the fallbacks; the fold shows nothing.
+        auto doc = json != nullptr && *json != '\0'
+                       ? json::Parse(Utf8OrLatin1(json))
+                       : std::nullopt;
+        if (doc)
         {
-            raw = SplitEnvelope(json, &report);
+            // Split the envelope: the composed report, and the raw payload
+            // half. No envelope means the core's fallback emitted the raw
+            // payload bare; an envelope with no "s57" means the whole document
+            // was the report's.
+            Value const &root = *doc;
+            bool enveloped = root.kind() == Kind::Object &&
+                             root["report"].kind() == Kind::Object;
+            Value const &report = enveloped ? root["report"] : Value::Nothing();
+            Value const &raw = enveloped ? root["s57"] : root;
 
-            if (report != nullptr)
+            if (enveloped)
             {
-                d.title = OptString(report, L"title");
-                d.subtitle = OptString(report, L"subtitle");
-                d.chip = OptString(report, L"chip");
-                d.footnote = OptString(report, L"footnote");
-                hstring empty = OptString(report, L"empty");
-                if (empty == L"none")
+                d.title = report.MemberString("title");
+                d.subtitle = report.MemberString("subtitle");
+                d.chip = report.MemberString("chip");
+                d.footnote = report.MemberString("footnote");
+                std::string empty = report.MemberString("empty");
+                if (empty == "none")
                     d.empty = PickEmpty::NoAttributes;
-                else if (empty == L"source")
+                else if (empty == "source")
                     d.empty = PickEmpty::SourceOnly;
-                if (report.HasKey(L"notes") &&
-                    report.GetNamedValue(L"notes").ValueType() == JsonValueType::Array)
+
+                for (auto const &n : report["notes"].Items())
                 {
-                    for (auto const &n : report.GetNamedArray(L"notes"))
-                    {
-                        hstring text = n.ValueType() == JsonValueType::String ? n.GetString() : hstring{};
-                        if (!text.empty())
-                            d.notes.push_back(text);
-                    }
+                    std::string text = n.String();
+                    if (!text.empty())
+                        d.notes.push_back(std::move(text));
                 }
-                if (report.HasKey(L"rows") &&
-                    report.GetNamedValue(L"rows").ValueType() == JsonValueType::Array)
+
+                for (auto const &rv : report["rows"].Items())
                 {
-                    for (auto const &rv : report.GetNamedArray(L"rows"))
-                    {
-                        if (rv.ValueType() != JsonValueType::Object)
-                            continue;
-                        auto ro = rv.GetObject();
-                        PickRow row;
-                        row.label = OptString(ro, L"label");
-                        row.value = OptString(ro, L"value");
-                        row.depth = (int)ro.GetNamedNumber(L"depth", 0);
-                        row.file = ro.GetNamedBoolean(L"file", false);
-                        row.picture = ro.GetNamedBoolean(L"picture", false);
-                        d.rows.push_back(std::move(row));
-                    }
+                    if (rv.kind() != Kind::Object)
+                        continue;
+                    PickRow row;
+                    row.label = rv.MemberString("label");
+                    row.value = rv.MemberString("value");
+                    row.depth = (int)rv.MemberNumber("depth", 0);
+                    row.file = rv.MemberBool("file", false);
+                    row.picture = rv.MemberBool("picture", false);
+                    d.rows.push_back(std::move(row));
                 }
             }
-            if (raw != nullptr)
-                Flatten({}, raw, 0, d.raw);
-        }
-        catch (hresult_error const &)
-        {
-            // An unparseable payload keeps the fallbacks; the fold shows nothing.
+
+            Flatten({}, raw, 0, d.raw);
         }
 
         if (d.title.empty())
-            d.title = cls_h;
+            d.title = cls_text;
         if (d.chip.empty())
-            d.chip = cls_h;
+            d.chip = cls_text;
         if (d.footnote.empty())
-            d.footnote = chart_h;
+            d.footnote = chart_text;
         return d;
     }
 
-    hstring PickPlainText(char const *cls, char const *json, char const *chart)
+    std::string PickPlainText(char const *cls, char const *json, char const *chart)
     {
         PickDecoded d = DecodePick(cls, json, chart);
-        std::wstring text;
-        text += FromUtf8(cls);
-        text += L"  ";
-        text += FromUtf8(chart);
-        text += L"\n";
+        std::string text;
+        text += Text(cls);
+        text += "  ";
+        text += Text(chart);
+        text += "\n";
         for (auto const &r : d.raw)
         {
-            text.append((size_t)r.depth * 2, L' ');
+            text.append((size_t)r.depth * 2, ' ');
             if (r.name.empty())
+            {
                 text += r.value;
+            }
             else
             {
                 text += r.name;
-                text += L":";
+                text += ":";
                 if (!r.value.empty())
                 {
-                    text += L" ";
+                    text += " ";
                     text += r.value;
                 }
             }
-            text += L"\n";
+            text += "\n";
         }
-        return hstring{ text };
+        return text;
     }
 }

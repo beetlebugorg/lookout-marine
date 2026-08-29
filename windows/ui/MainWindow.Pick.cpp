@@ -17,6 +17,11 @@ using namespace lkw::chrome;
 
 namespace
 {
+    // The decoder is model code and speaks UTF-8 (lk_pick.h); the card is the
+    // only place that needs an hstring, and every string it is handed is
+    // already known-good UTF-8, so this never throws.
+    winrt::hstring H(std::string const &s) { return winrt::to_hstring(s); }
+
     // Callout geometry — the same numbers as OverlayLayer.calloutLayout
     // (macOS) and calloutPlacement (Android).
     constexpr double kPickMargin = 12.0;
@@ -160,7 +165,7 @@ namespace winrt::LookoutMarine::implementation
                     book.Foreground(Brush(Muted(DarkChrome())));
                     line.Children().Append(book);
                     Controls::TextBlock chip;
-                    chip.Text(!d.chip.empty() ? d.chip : d.title);
+                    chip.Text(H(!d.chip.empty() ? d.chip : d.title));
                     chip.FontSize(12);
                     chip.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                     chip.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -172,17 +177,17 @@ namespace winrt::LookoutMarine::implementation
                 {
                     Controls::StackPanel text;
                     Controls::TextBlock title;
-                    title.Text(d.title);
+                    title.Text(H(d.title));
                     title.FontSize(13);
                     title.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                     title.TextTrimming(TextTrimming::CharacterEllipsis);
                     title.MaxLines(1);
                     text.Children().Append(title);
-                    hstring sub = !d.subtitle.empty() ? d.subtitle : d.chip;
+                    std::string sub = !d.subtitle.empty() ? d.subtitle : d.chip;
                     if (!sub.empty() && sub != d.title)
                     {
                         Controls::TextBlock subtitle;
-                        subtitle.Text(sub);
+                        subtitle.Text(H(sub));
                         subtitle.FontSize(11);
                         subtitle.Foreground(Brush(Muted(DarkChrome())));
                         subtitle.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -293,11 +298,11 @@ namespace winrt::LookoutMarine::implementation
         highlight(PickNotesShelf(), false);
 
         auto const &d = pick_decoded[(size_t)index];
-        PickTitle().Text(d.title);
+        PickTitle().Text(H(d.title));
         // The subtitle line is reserved even when empty so the header keeps
         // one height for every object and the rows never shift.
-        PickSubtitle().Text(d.subtitle.empty() ? L" " : d.subtitle);
-        PickFootnote().Text(d.footnote);
+        PickSubtitle().Text(d.subtitle.empty() ? hstring{ L" " } : H(d.subtitle));
+        PickFootnote().Text(H(d.footnote));
         wchar_t fold[64];
         swprintf_s(fold, L"S-57 source attributes (%zu)", d.raw.size());
         PickFoldLabel().Text(fold);
@@ -333,7 +338,7 @@ namespace winrt::LookoutMarine::implementation
             warn.VerticalAlignment(VerticalAlignment::Top);
             line.Children().Append(warn);
             Controls::TextBlock text;
-            text.Text(note);
+            text.Text(H(note));
             text.FontSize(13);
             text.Foreground(Brush(Ink(DarkChrome())));
             text.TextWrapping(TextWrapping::Wrap);
@@ -370,13 +375,13 @@ namespace winrt::LookoutMarine::implementation
             grid.Margin({ 16.0 + row.depth * 12.0, 3, 16, 3 });
             grid.ColumnSpacing(12);
             Controls::TextBlock label;
-            label.Text(row.label);
+            label.Text(H(row.label));
             label.FontSize(13);
             label.Foreground(Brush(Muted(DarkChrome())));
             label.TextWrapping(TextWrapping::Wrap);
             grid.Children().Append(label);
             Controls::TextBlock value;
-            value.Text(row.value);
+            value.Text(H(row.value));
             value.FontSize(13);
             value.Foreground(Brush(Ink(DarkChrome())));
             value.TextWrapping(TextWrapping::Wrap);
@@ -406,13 +411,13 @@ namespace winrt::LookoutMarine::implementation
                 Controls::TextBlock name;
                 name.Text(raw.name.empty()
                               ? hstring{}
-                              : (raw.value.empty() ? raw.name : hstring{ raw.name + L":" }));
+                              : H(raw.value.empty() ? raw.name : raw.name + ":"));
                 name.FontSize(11);
                 name.FontFamily(Media::FontFamily{ L"Consolas" });
                 name.Foreground(Brush(Muted(DarkChrome())));
                 grid.Children().Append(name);
                 Controls::TextBlock value;
-                value.Text(raw.value);
+                value.Text(H(raw.value));
                 value.FontSize(11);
                 value.FontFamily(Media::FontFamily{ L"Consolas" });
                 value.Foreground(Brush(Ink(DarkChrome())));
@@ -466,7 +471,7 @@ namespace winrt::LookoutMarine::implementation
             return;
         auto const &f = pick_feats[pick_index];
         Windows::ApplicationModel::DataTransfer::DataPackage dp;
-        dp.SetText(lkw::PickPlainText(f.cls, f.json, f.chart));
+        dp.SetText(H(lkw::PickPlainText(f.cls, f.json, f.chart)));
         Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(dp);
     }
 }

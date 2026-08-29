@@ -15,6 +15,8 @@
 
 void TestCoord();
 void TestJson();
+void TestUtf8();
+void TestPick();
 
 int main()
 {
@@ -22,6 +24,8 @@ int main()
 
     TestCoord();
     TestJson();
+    TestUtf8();
+    TestPick();
 
     return lktest::Report();
 }

@@ -317,7 +317,7 @@ namespace winrt::LookoutMarine::implementation
         void BuildPickBody();
         void CopyPickReport();
         void AddAuxFileView(Microsoft::UI::Xaml::Controls::StackPanel const &into,
-                            std::string const &cell, winrt::hstring const &name);
+                            std::string const &cell, std::string const &name);
         fire_and_forget LoadAuxImage(Microsoft::UI::Xaml::Controls::Image image,
                                      std::vector<uint8_t> bytes, winrt::hstring name);
         void ShowPicture(Microsoft::UI::Xaml::Media::ImageSource const &src,
