@@ -41,21 +41,15 @@ namespace lkw
 
     /* Everything else follows the chart's scheme, out of the one palette
      * (lk_format.h) the rest of the shell draws from. */
-    static Color FromArgb(uint32_t argb)
-    {
-        return { (uint8_t)(argb >> 24), (uint8_t)(argb >> 16), (uint8_t)(argb >> 8),
-                 (uint8_t)argb };
-    }
-
-    static Color TableInk(bool dark) { return FromArgb(chrome::Ink(dark)); }
-    static Color TableMuted(bool dark) { return FromArgb(chrome::Muted(dark)); }
-    static Color TableRule(bool dark) { return FromArgb(chrome::Rule(dark)); }
+    static Color TableInk(bool dark) { return Rgb(chrome::Ink(dark)); }
+    static Color TableMuted(bool dark) { return Rgb(chrome::Muted(dark)); }
+    static Color TableRule(bool dark) { return Rgb(chrome::Rule(dark)); }
     /* A cell nobody has heard is fainter than muted, either way round. */
-    static Color TableFaint(bool dark) { return FromArgb(dark ? 0xFF6E7C88u : 0xFF9A9A9Au); }
+    static Color TableFaint(bool dark) { return Rgb(dark ? 0xFF6E7C88u : 0xFF9A9A9Au); }
 
     Color TableGround(ElementTheme theme)
     {
-        return FromArgb(theme == ElementTheme::Dark ? 0xFF1B2126u : 0xFFF8F8F8u);
+        return Rgb(theme == ElementTheme::Dark ? 0xFF1B2126u : 0xFFF8F8F8u);
     }
 
     // The columns, the units and the row model are lk_table.h's; what is left

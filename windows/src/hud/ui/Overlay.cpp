@@ -5,26 +5,24 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include "lk_format.h"
+
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace winrt::Windows::Data::Json;
+using lkw::WithAlpha;
 
 namespace
 {
-    constexpr winrt::Windows::UI::Color kInk{ 0xFF, 0x1A, 0x1A, 0x1A };
-    constexpr winrt::Windows::UI::Color kMuted{ 0xFF, 0x6B, 0x6B, 0x6B };
-    constexpr winrt::Windows::UI::Color kAccent{ 0xFF, 0x1B, 0x49, 0xC4 };
-    constexpr winrt::Windows::UI::Color kOverscale{ 0xFF, 0xD8, 0x3B, 0x01 };
+    // A fix that has been LOST is the one colour here that does not follow
+    // the scheme: it is the overscale red-orange and it means the same thing
+    // at night as it does at noon.
+    constexpr winrt::Windows::UI::Color kNoFix{ 0xFF, 0xD8, 0x3B, 0x01 };
 
-    winrt::Windows::UI::Color WithAlpha(winrt::Windows::UI::Color c, double a)
-    {
-        c.A = (uint8_t)(a * 255.0 + 0.5);
-        return c;
-    }
-
-    // Ink and muted follow the ELEMENT's theme: the chrome re-themes with the
-    // chart's scheme (see the XAML ThemeDictionaries), and these cards are
-    // rebuilt when their content changes, which is when they re-resolve.
+    // Everything else comes out of the one palette (lk_format.h), resolved
+    // against the ELEMENT's theme: the chrome re-themes with the chart's
+    // scheme, and these cards are rebuilt when their content changes, which
+    // is when they re-resolve.
     bool DarkOn(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
         return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark;
@@ -32,17 +30,17 @@ namespace
 
     winrt::Windows::UI::Color Ink(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
-        return DarkOn(el) ? winrt::Windows::UI::Color{ 0xFF, 0xDD, 0xE4, 0xEA } : kInk;
+        return lkw::Rgb(lkw::chrome::Ink(DarkOn(el)));
     }
 
     winrt::Windows::UI::Color Muted(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
-        return DarkOn(el) ? winrt::Windows::UI::Color{ 0xFF, 0x9F, 0xB0, 0xBD } : kMuted;
+        return lkw::Rgb(lkw::chrome::Muted(DarkOn(el)));
     }
 
     winrt::Windows::UI::Color Accent(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
-        return DarkOn(el) ? winrt::Windows::UI::Color{ 0xFF, 0x7E, 0xA1, 0xF5 } : kAccent;
+        return lkw::Rgb(lkw::chrome::Accent(DarkOn(el)));
     }
 
     // {"title":"...","rows":[["key","value"],...]} into a small stack.
@@ -198,17 +196,17 @@ namespace winrt::LookoutMarine::implementation
         {
             GpsIcon().Glyph(L"\uE707");
             GpsText().Text(L"GPS");
-            GpsIcon().Foreground(Media::SolidColorBrush{ kAccent });
-            GpsText().Foreground(Media::SolidColorBrush{ kAccent });
-            GpsPill().Background(Media::SolidColorBrush{ WithAlpha(kAccent, 0.18) });
+            GpsIcon().Foreground(Media::SolidColorBrush{ Accent(GpsText()) });
+            GpsText().Foreground(Media::SolidColorBrush{ Accent(GpsText()) });
+            GpsPill().Background(Media::SolidColorBrush{ WithAlpha(Accent(GpsText()), 0.18) });
         }
         else if (state == 1)
         {
             GpsIcon().Glyph(L"\uE707");
             GpsText().Text(L"NO GPS");
-            GpsIcon().Foreground(Media::SolidColorBrush{ kOverscale });
-            GpsText().Foreground(Media::SolidColorBrush{ kOverscale });
-            GpsPill().Background(Media::SolidColorBrush{ WithAlpha(kOverscale, 0.22) });
+            GpsIcon().Foreground(Media::SolidColorBrush{ kNoFix });
+            GpsText().Foreground(Media::SolidColorBrush{ kNoFix });
+            GpsPill().Background(Media::SolidColorBrush{ WithAlpha(kNoFix, 0.22) });
         }
         else
         {

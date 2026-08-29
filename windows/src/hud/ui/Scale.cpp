@@ -30,7 +30,15 @@ namespace
         { L"Coastal", 150000 }, { L"General", 700000 },
     };
     constexpr uint32_t kOverscaleRed55 = 0x8CD83B01; // an unparseable entry
-    constexpr uint32_t kAccent55 = 0x8C1B49C4;       // a parseable entry
+
+    // The accent at the strengths this panel wants it, whichever scheme is on.
+    // The presets are BUILT ONCE, at construction, so their sublabel is
+    // re-inked by UpdateScalePanel rather than by the build — the panel would
+    // otherwise wear the theme the app launched in for the rest of the run.
+    constexpr uint32_t Alpha(uint32_t argb, uint32_t a)
+    {
+        return (a << 24) | (argb & 0x00FFFFFFu);
+    }
 }
 
 namespace winrt::LookoutMarine::implementation
@@ -110,15 +118,23 @@ namespace winrt::LookoutMarine::implementation
     {
         ScaleNow().Text(hstring{ L"now " } + to_hstring(lkw::FormatScale(r.scale_denom)));
         char const *band = lkw::BandForDenom(r.scale_denom);
+        bool dark = DarkChrome();
+        uint32_t accent = Accent(dark);
         for (uint32_t i = 0, n = 0; i < ScalePresetRows().Children().Size(); ++i)
         {
             auto row = ScalePresetRows().Children().GetAt(i).as<Controls::StackPanel>();
-            for (uint32_t j = 0; j < row.Children().Size(); ++j, ++n)
+            for (uint32_t j = 0; j < row.Children().Size() && n < std::size(kPresets); ++j, ++n)
             {
                 auto b = row.Children().GetAt(j).as<Controls::Button>();
                 bool sel = std::strcmp(band, lkw::BandForDenom(kPresets[n].denom)) == 0;
-                b.Background(Brush(sel ? 0x241B49C4 : kClear)); // 14 % accent
-                b.BorderBrush(Brush(sel ? 0x801B49C4 : kClear)); // 50 % accent
+                b.Background(Brush(sel ? Alpha(accent, 0x24) : kClear)); // 14 % accent
+                b.BorderBrush(Brush(sel ? Alpha(accent, 0x80) : kClear)); // 50 % accent
+                // The sublabel was inked when the panel was built; re-ink it
+                // here so it follows the scheme like everything else.
+                if (auto text = b.Content().try_as<Controls::StackPanel>())
+                    if (text.Children().Size() > 1)
+                        if (auto value = text.Children().GetAt(1).try_as<Controls::TextBlock>())
+                            value.Foreground(Brush(Muted(dark)));
             }
         }
     }
@@ -130,7 +146,12 @@ namespace winrt::LookoutMarine::implementation
         bool ok = lk_scale_parse(text.c_str(), &denom);
         ScaleGo().IsEnabled(ok);
         bool empty = text.empty();
-        ScaleBox().BorderBrush(Brush(empty ? 0x33000000 : ok ? kAccent55 : kOverscaleRed55));
+        // Nothing typed yet is a quiet rule, not a black one: at night a
+        // black edge on a dark field is no edge at all.
+        uint32_t edge = empty ? Alpha(Rule(DarkChrome()), 0x66)
+                        : ok  ? Alpha(Accent(DarkChrome()), 0x8C)
+                              : kOverscaleRed55;
+        ScaleBox().BorderBrush(Brush(edge));
         if (ok)
         {
             ScaleHint().Text(to_hstring(lkw::BandForDenom(denom)) +

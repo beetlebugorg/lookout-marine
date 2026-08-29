@@ -13,6 +13,14 @@ namespace lkw
     /* A solid brush from 0xAARRGGBB, for chrome built in code. */
     winrt::Microsoft::UI::Xaml::Media::SolidColorBrush Brush(uint32_t argb);
 
+    /* The colour itself, for the few places that tint one before drawing it
+     * (a pill's fill is its ink at 18 %). */
+    winrt::Windows::UI::Color Rgb(uint32_t argb);
+
+    /* `c` at `alpha` of its opacity — how every pill in this shell gets its
+     * fill from its own ink. */
+    winrt::Windows::UI::Color WithAlpha(winrt::Windows::UI::Color c, double alpha);
+
     /* The light-theme chrome literals the markup uses, for code-built chrome
      * (the shared palette every shell carries — see Chrome.swift). */
     namespace chrome

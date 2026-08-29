@@ -603,7 +603,7 @@ namespace winrt::LookoutMarine::implementation
                     frame.CornerRadius({ 8, 8, 8, 8 });
                     frame.BorderThickness(sel ? Thickness{ 3, 3, 3, 3 } : Thickness{ 1, 1, 1, 1 });
                     frame.BorderBrush(Media::SolidColorBrush{
-                        sel ? winrt::Windows::UI::Color{ 0xFF, 0x1B, 0x49, 0xC4 }
+                        sel ? lkw::Rgb(lkw::chrome::Accent(DarkChrome()))
                             : winrt::Windows::UI::Color{ 0x40, 0x80, 0x80, 0x80 } });
                     frame.Child(SchemeSwatch(PaletteOf(i)));
                     cell.Children().Append(frame);

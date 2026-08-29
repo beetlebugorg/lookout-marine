@@ -18,6 +18,7 @@
 #include <filesystem>
 
 #include "lk_bake.h"
+#include "lk_format.h"
 #include "lk_paths.h"
 
 using namespace winrt;
@@ -51,8 +52,6 @@ namespace
         return tb;
     }
 
-    constexpr winrt::Windows::UI::Color kInk{ 0xFF, 0x1A, 0x1A, 0x1A };
-    constexpr winrt::Windows::UI::Color kMuted{ 0xFF, 0x6B, 0x6B, 0x6B };
     constexpr winrt::Windows::UI::Color kAdd{ 0xFF, 0xE0, 0x9B, 0x2A };
 }
 
@@ -136,8 +135,8 @@ namespace winrt::LookoutMarine::implementation
 
         // The dialog wears the chart's scheme (its XamlRoot is Root's), so
         // the consent ink resolves against it: dark cards need light text.
-        auto ink = DarkChrome() ? winrt::Windows::UI::Color{ 0xFF, 0xDD, 0xE4, 0xEA } : kInk;
-        auto muted = DarkChrome() ? winrt::Windows::UI::Color{ 0xFF, 0x9F, 0xB0, 0xBD } : kMuted;
+        auto ink = lkw::Rgb(lkw::chrome::Ink(DarkChrome()));
+        auto muted = lkw::Rgb(lkw::chrome::Muted(DarkChrome()));
 
         Controls::StackPanel body;
         body.Spacing(8);

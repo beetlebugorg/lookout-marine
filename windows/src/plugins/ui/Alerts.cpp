@@ -16,6 +16,7 @@
 #include <mmsystem.h>
 
 #include "lk_alerts.h"
+#include "lk_format.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -27,27 +28,27 @@ namespace
     constexpr winrt::Windows::UI::Color kAlarm{ 0xFF, 0xD8, 0x3B, 0x01 };
     constexpr winrt::Windows::UI::Color kWarning{ 0xFF, 0xF5, 0x9E, 0x0B };
     constexpr winrt::Windows::UI::Color kNotice{ 0xFF, 0x1B, 0x49, 0xC4 };
-    constexpr winrt::Windows::UI::Color kInk{ 0xFF, 0x1A, 0x1A, 0x1A };
-    constexpr winrt::Windows::UI::Color kMuted{ 0xFF, 0x6B, 0x6B, 0x6B };
-    constexpr winrt::Windows::UI::Color kRule{ 0xFF, 0xDD, 0xDD, 0xDD };
-    // Theme-resolved ink for the strip's rows: the chrome wears the chart's
-    // scheme, and the rows rebuild when the alert set changes.
+    // Theme-resolved ink for the strip's rows, out of the one palette
+    // (lk_format.h): the chrome wears the chart's scheme, and the rows
+    // rebuild when the alert set changes, which is when they re-resolve.
+    bool DarkOn(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
+    {
+        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark;
+    }
+
     winrt::Windows::UI::Color ThemeInk(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
-        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark
-                   ? winrt::Windows::UI::Color{ 0xFF, 0xDD, 0xE4, 0xEA } : kInk;
+        return lkw::Rgb(lkw::chrome::Ink(DarkOn(el)));
     }
 
     winrt::Windows::UI::Color ThemeMuted(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
-        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark
-                   ? winrt::Windows::UI::Color{ 0xFF, 0x9F, 0xB0, 0xBD } : kMuted;
+        return lkw::Rgb(lkw::chrome::Muted(DarkOn(el)));
     }
 
     winrt::Windows::UI::Color ThemeRule(winrt::Microsoft::UI::Xaml::FrameworkElement const &el)
     {
-        return el.ActualTheme() == winrt::Microsoft::UI::Xaml::ElementTheme::Dark
-                   ? winrt::Windows::UI::Color{ 0xFF, 0x33, 0x41, 0x4D } : kRule;
+        return lkw::Rgb(lkw::chrome::Rule(DarkOn(el)));
     }
 
 
@@ -220,7 +221,9 @@ namespace winrt::LookoutMarine::implementation
             ack.Padding({ 10, 4, 10, 4 });
             ack.CornerRadius({ 6, 6, 6, 6 });
             ack.BorderThickness({ 0, 0, 0, 0 });
-            ack.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0x14, 0x00, 0x00, 0x00 } });
+            // The strip's own ink at 8 %: a black wash is invisible on a dark strip.
+            ack.Background(Media::SolidColorBrush{
+                lkw::WithAlpha(ThemeInk(AlertStrip()), 0.08) });
             ack.VerticalAlignment(VerticalAlignment::Center);
             Controls::ToolTipService::SetToolTip(ack,
                 winrt::box_value(L"Silence this alert and take it off the chart"));

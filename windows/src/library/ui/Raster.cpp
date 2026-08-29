@@ -10,26 +10,18 @@
 #include <cwctype>
 #include <filesystem>
 
+#include "lk_format.h"
 #include "lk_paths.h"
 #include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
+using lkw::WithAlpha;
 
-namespace
-{
-    // The pill reports the raster chart, never the ENC: amber only while the
-    // set is switched off; hiding the ENC keeps it blue (the picture is still
-    // drawn). Matches the macOS Chrome.amber / Chrome.accent.
-    constexpr winrt::Windows::UI::Color kAmber{ 0xFF, 0xF5, 0x9E, 0x0B };
-    constexpr winrt::Windows::UI::Color kAccent{ 0xFF, 0x1B, 0x49, 0xC4 };
-
-    winrt::Windows::UI::Color WithAlpha(winrt::Windows::UI::Color c, double a)
-    {
-        c.A = (uint8_t)(a * 255.0 + 0.5);
-        return c;
-    }
-}
+// The pill reports the raster chart, never the ENC: amber only while the set
+// is switched off; hiding the ENC keeps it blue (the picture is still drawn).
+// Both come out of the one palette (lk_format.h) — amber stays amber at night
+// because it means something, and the accent lightens to read on dark.
 
 namespace winrt::LookoutMarine::implementation
 {
@@ -86,7 +78,8 @@ namespace winrt::LookoutMarine::implementation
             return;
         raster_pill_shown = text;
 
-        auto tint = drawn ? kAccent : kAmber;
+        auto tint = drawn ? lkw::Rgb(lkw::chrome::Accent(DarkChrome()))
+                          : lkw::Rgb(lkw::chrome::kAmber);
         RasterPillText().Text(text);
         RasterPillText().Foreground(Media::SolidColorBrush{ tint });
         RasterPillChevron().Foreground(Media::SolidColorBrush{ tint });

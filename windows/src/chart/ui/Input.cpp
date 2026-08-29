@@ -234,7 +234,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::FontIcon q;
             q.Glyph(L""); // question ring
             q.FontSize(14);
-            q.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x6B, 0x6B, 0x6B } });
+            q.Foreground(lkw::Brush(lkw::chrome::Muted(DarkChrome())));
             row.Children().Append(q);
             Controls::StackPanel lines;
             Controls::TextBlock title;
@@ -244,7 +244,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock note;
             note.Text(L"Coming soon. Needs a chart name index.");
             note.FontSize(11);
-            note.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0xFF, 0x6B, 0x6B, 0x6B } });
+            note.Foreground(lkw::Brush(lkw::chrome::Muted(DarkChrome())));
             lines.Children().Append(note);
             row.Children().Append(lines);
             SearchResultRows().Children().Append(row);
