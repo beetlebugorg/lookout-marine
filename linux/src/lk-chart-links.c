@@ -83,7 +83,10 @@ lk_links_answer (LkChartLinks *self, guint64 id, GBytes *bytes, guint status)
   const void *data = bytes != NULL ? g_bytes_get_data (bytes, &length) : NULL;
 
   g_hash_table_remove (self->in_flight, &id);
-  lk_chart_controller_http_respond (self->controller, id, data, length, (int) status);
+  /* Shutdown drops the controller while a fetch may still be alive. A late
+     answer then has nowhere to go, and lookout already released the slot. */
+  if (self->controller != NULL)
+    lk_chart_controller_http_respond (self->controller, id, data, length, (int) status);
 }
 
 static void
@@ -456,19 +459,37 @@ lk_chart_links_reapply (LkChartLinks *self)
 
 /* ---- GObject ------------------------------------------------------------- */
 
+/* Break the fetch → links → controller reference chain. An in-flight fetch
+   holds a strong reference to this object, and this object holds one to the
+   controller. At quit there is no main loop left to drain the fetch, so the
+   controller would never finalise and lookout_close and the final pose save
+   would not run. Cancel the fetches, detach the provider, and drop the
+   controller reference now, so the model's own reference is the last one. Safe
+   to call more than once; dispose calls it too. */
+void
+lk_chart_links_shutdown (LkChartLinks *self)
+{
+  g_return_if_fail (LK_IS_CHART_LINKS (self));
+
+  self->live = FALSE;
+  if (self->in_flight != NULL)
+    lk_links_cancel_all (self);
+  if (self->session != NULL)
+    soup_session_abort (self->session);
+  g_clear_object (&self->session);
+  if (self->controller != NULL)
+    {
+      lk_chart_controller_set_http_provider (self->controller, NULL, NULL, NULL);
+      g_clear_object (&self->controller);
+    }
+}
+
 static void
 lk_chart_links_dispose (GObject *object)
 {
   LkChartLinks *self = LK_CHART_LINKS (object);
 
-  self->live = FALSE;
-  lk_links_cancel_all (self);
-  if (self->session != NULL)
-    soup_session_abort (self->session);
-  g_clear_object (&self->session);
-  if (self->controller != NULL)
-    lk_chart_controller_set_http_provider (self->controller, NULL, NULL, NULL);
-  g_clear_object (&self->controller);
+  lk_chart_links_shutdown (self);
   g_clear_pointer (&self->in_flight, g_hash_table_unref);
   g_clear_pointer (&self->links, g_ptr_array_unref);
   g_clear_pointer (&self->active, g_free);

@@ -162,8 +162,12 @@ lk_app_model_dispose (GObject *object)
   /* A bake still running holds this model as its callback data; its idles
      must not fire into a freed object. Blocks up to about one chart. */
   g_clear_pointer (&self->bake, lk_chart_bake_destroy);
-  /* Before the controller: the links object detaches its tile provider from
-   * the handle on the way out. */
+  /* Break the links → controller chain first. An in-flight fetch holds the
+   * links object, which holds the controller; without this the controller
+   * would outlive its dispose and skip lookout_close and the final pose save.
+   * This also detaches the tile provider from the handle. */
+  if (self->chart_links != NULL)
+    lk_chart_links_shutdown (self->chart_links);
   g_clear_object (&self->chart_links);
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);

@@ -71,4 +71,9 @@ void lk_chart_links_reapply (LkChartLinks *self);
  * Called once per render tick: the changed flag has ONE consumer. */
 void lk_chart_links_poll (LkChartLinks *self);
 
+/* Cancel every in-flight fetch and drop the controller reference now. The
+ * model calls this at dispose, ahead of releasing the controller, so an
+ * in-flight fetch cannot keep the controller alive past the final pose save. */
+void lk_chart_links_shutdown (LkChartLinks *self);
+
 G_END_DECLS
