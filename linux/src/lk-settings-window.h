@@ -1,6 +1,7 @@
 /* lk-settings-window.h — the S-52 mariner settings.
  *
- * Five tabs: Display / Depths / Text / Charts / Advanced. The Depths tab's band
+ * The fixed tabs are Display, Depths, Text, Charts, Advanced, and Plugins. A
+ * plugin can add its own tab (Connections, for one). The Depths tab's band
  * preview makes the S-52 shading model visible (white water starts at the DEEP
  * contour under four-shade), which is otherwise mistaken for a bug.
  */

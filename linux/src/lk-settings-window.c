@@ -397,7 +397,11 @@ lk_depth_row (GtkWidget   *section,
               GtkWidget  **out_spin)
 {
   gboolean feet = lk_settings_feet (settings);
-  GtkWidget *spin = gtk_spin_button_new_with_range (0, 660, 1);
+  /* The range follows the unit. 660 m is the deepest contour the core takes;
+     in feet that is about 2165, so a fixed metre range would clamp a deep
+     contour and write the clamped value back on the next touch. */
+  GtkWidget *spin =
+      gtk_spin_button_new_with_range (0, feet ? round (660 * LK_FEET_PER_METRE) : 660, 1);
   LkDepthBinding *binding = g_new0 (LkDepthBinding, 1);
 
   binding->settings = settings;
@@ -434,6 +438,10 @@ lk_settings_refresh_depths (LkSettings *settings)
     {
       if (rows[i].spin == NULL)
         continue;
+      /* Widen the range to the unit before setting the value, or the old range
+         clamps a deep contour on the way in. */
+      gtk_spin_button_set_range (GTK_SPIN_BUTTON (rows[i].spin), 0,
+                                 feet ? round (660 * LK_FEET_PER_METRE) : 660);
       gtk_spin_button_set_digits (GTK_SPIN_BUTTON (rows[i].spin), feet ? 0 : 1);
       gtk_spin_button_set_value (GTK_SPIN_BUTTON (rows[i].spin),
                                  feet ? round (rows[i].metres * LK_FEET_PER_METRE)

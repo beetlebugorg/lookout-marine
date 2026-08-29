@@ -279,8 +279,7 @@ typedef struct {
   GtkWidget  *notes;       /* the chart's M_* notes, NULL when the cell has none */
   GtkWidget  *body;        /* the detail scroller, rebuilt with the selection */
   int         width;       /* the card's width, one value for the whole pick */
-  int         room;        /* the height the card may use */
-  int         ceiling;     /* …and the most of it the card may take */
+  int         ceiling;     /* the most of the given room the card may take */
   int         floor;       /* the tallest the card has stood for this pick */
   gboolean    fold_open;   /* per pick, not per object */
   gboolean    setting_row; /* guards the list's own selection callback */
@@ -1023,7 +1022,6 @@ lk_pick_report_new (LkAppModel *model, int width, int room)
 
   LkPickCard *card = g_new0 (LkPickCard, 1);
   card->model = model;
-  card->room = room;
   card->width = width;
   /* Half the free area is the card's share. A pick report is something the
    * mariner reads beside the chart, not instead of it, so a content-rich
