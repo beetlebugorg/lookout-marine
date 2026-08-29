@@ -1,6 +1,8 @@
-#include "pch.h"
+// Model code: no WinRT, so the discovery rules are reachable from a test.
 #include "lk_paths.h"
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <shlobj.h> // SHGetKnownFolderPath / FOLDERID_LocalAppData
 
 #include <algorithm>
@@ -44,7 +46,7 @@ namespace lkw
         std::error_code ec;
         for (auto const &e : std::filesystem::recursive_directory_iterator(dir, ec))
         {
-            if (e.is_regular_file(ec) && e.path().extension() == ".pmtiles")
+            if (e.is_regular_file(ec) && LowerExtOf(e.path()) == ".pmtiles")
                 out.push_back(e.path().string());
         }
         std::sort(out.begin(), out.end());
@@ -123,10 +125,11 @@ namespace lkw
          * is not reported as "OSM" (mirrors raster.zig providerIn). */
         char const *ProviderIn(std::string const &name)
         {
+            /* The match is case-insensitive, so one spelling of each. */
             static char const *known[] = {
                 "OpenSeaMap", "Navionics", "Sentinel", "ArcGIS", "Google",
-                "C-Map",      "Yandex",    "Imagery",  "Bing",   "ESRI",
-                "Esri",       "CMap",      "NAIP",     "SASP",   "OSM",
+                "C-Map",      "Yandex",    "Imagery",  "Bing",   "Esri",
+                "CMap",       "NAIP",      "SASP",     "OSM",
             };
             for (auto k : known)
                 if (ContainsIgnoreCase(name, k))
@@ -147,7 +150,7 @@ namespace lkw
         /* The bake's layout — <root>/<stem>/<stem>.pmtiles: the sheet belongs
          * to the bake, and the bake's own name names the producer when it
          * carries one. */
-        if (p.extension() == ".pmtiles")
+        if (LowerExtOf(p) == ".pmtiles")
         {
             auto dir = p.parent_path();
             if (dir.filename().string() == stem)
@@ -245,10 +248,18 @@ namespace lkw
                 }
             }
         }
+        // The repo's own test cell, for a developer running out of the build
+        // tree. Every step is checked: this is documented as answering empty
+        // for a chart it cannot find, and resize(npos) would throw instead.
         char exe[MAX_PATH];
-        GetModuleFileNameA(nullptr, exe, MAX_PATH);
-        std::string dir(exe);
-        dir.resize(dir.find_last_of('\\'));
+        DWORD exe_n = GetModuleFileNameA(nullptr, exe, MAX_PATH);
+        if (exe_n == 0 || exe_n >= MAX_PATH)
+            return {};
+        std::string dir(exe, exe_n);
+        size_t slash = dir.find_last_of('\\');
+        if (slash == std::string::npos)
+            return {};
+        dir.resize(slash);
         char full[MAX_PATH];
         std::string demo = dir + "\\..\\..\\..\\android\\app\\src\\main\\assets\\charts\\US5MD1MC.pmtiles";
         if (GetFullPathNameA(demo.c_str(), MAX_PATH, full, nullptr) != 0 &&

@@ -419,6 +419,15 @@ lk_controller_overlay_free(lk_overlay_obj *obj)
 
 /* ---- lifecycle ---------------------------------------------------------- */
 
+/* The store hands over the config object each plugin was last given; pushing
+ * it into a handle is this file's business, because what a lookout handle is
+ * is this file's business. */
+static void
+push_saved_plugin_config(void *user, const char *id, const char *json)
+{
+    lookout_plugin_config_set((lookout *)user, id, json);
+}
+
 int
 lk_controller_open(lk_controller *self, const char *const *paths, int n,
                    unsigned width_pt, unsigned height_pt, float density)
@@ -466,7 +475,7 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
      * per open, and the settings an earlier session saved are replayed into
      * them. A saved key the schema no longer declares is ignored by the core. */
     load_plugins(h);
-    lk_store_apply_saved_plugins(h);
+    lk_store_each_plugin_config(push_saved_plugin_config, h);
 
     self->last_view_saved_ms = GetTickCount64();
     return 1;

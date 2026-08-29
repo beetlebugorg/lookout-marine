@@ -22,6 +22,8 @@ void TestPluginRegistry();
 void TestAlerts();
 void TestTable();
 void TestText();
+void TestPaths();
+void TestStore();
 
 int main()
 {
@@ -36,6 +38,8 @@ int main()
     TestAlerts();
     TestTable();
     TestText();
+    TestPaths();
+    TestStore();
 
     return lktest::Report();
 }

@@ -34,10 +34,18 @@ $sourceDirs = @('app\ui', 'chart', 'chart\ui', 'hud', 'hud\ui', 'library', 'libr
     'plugins', 'plugins\ui', 'settings\ui', 'about', 'about\ui', 'engine', 'util') |
     ForEach-Object { "-I$PSScriptRoot\src\$_" }
 
+# The core's headers, for the TYPES the store and the paths speak in
+# (lookout_view, tile57_mariner). Headers only: nothing here links the core,
+# and a test that needed a lookout_* symbol would be testing the core.
+$coreInclude = Join-Path (Split-Path $PSScriptRoot -Parent) 'zig-out\include'
+if (Test-Path $coreInclude) { $sourceDirs += "-I$coreInclude" }
+else { Write-Warning "no core headers at $coreInclude; run windows\build-core.ps1 first" }
+
 # The shell's own sources under test. A new module goes in one of the first two
 # lists, its suite in the third, and main.cpp names the suite function.
 $cSources = @(
-    'src\util\lk_coord.c'
+    'src\util\lk_coord.c',
+    'src\engine\lk_store.c'
 )
 $cppSources = @(
     'src\util\lk_json.cpp',
@@ -47,7 +55,8 @@ $cppSources = @(
     'src\plugins\lk_plugin_registry.cpp',
     'src\plugins\lk_alerts.cpp',
     'src\plugins\lk_table.cpp',
-    'src\hud\lk_text.cpp'
+    'src\hud\lk_text.cpp',
+    'src\library\lk_paths.cpp'
 )
 $suites = @(
     'test\main.cpp',
@@ -59,7 +68,9 @@ $suites = @(
     'test\test_plugin_registry.cpp',
     'test\test_alerts.cpp',
     'test\test_table.cpp',
-    'test\test_text.cpp'
+    'test\test_text.cpp',
+    'test\test_paths.cpp',
+    'test\test_store.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null
@@ -78,7 +89,8 @@ foreach ($s in $cSources) { Compile 'cc' $s @('-std=c11') }
 foreach ($s in ($cppSources + $suites)) { Compile 'c++' $s @('-std=c++20') }
 
 $exe = Join-Path $out 'lk-tests.exe'
-& zig c++ -target $target @($objects.ToArray()) -o $exe
+# shell32/ole32: the known-folder calls the store and the chart paths make.
+& zig c++ -target $target @($objects.ToArray()) -o $exe -lshell32 -lole32
 if ($LASTEXITCODE -ne 0) { throw "link failed ($LASTEXITCODE)" }
 
 Write-Host "tests built: $exe`n"

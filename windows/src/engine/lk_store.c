@@ -38,6 +38,36 @@ store_unlock(void)
     ReleaseSRWLockExclusive(&store_mu);
 }
 
+/* Where the store lives. Empty means %APPDATA%\lookout-marine, which is the
+ * only thing the app ever uses; lk_store_set_dir points it somewhere a test
+ * may write.
+ *
+ * Every file's path is worked out once and kept, so the five buffers live
+ * here rather than inside their accessors: moving the directory has to
+ * invalidate them all, and a cache one function deep could not be reached. */
+static char store_dir[MAX_PATH];
+static char path_settings[MAX_PATH];
+static char path_rasters[MAX_PATH];
+static char path_chartsets[MAX_PATH];
+static char path_hidden[MAX_PATH];
+static char path_chartlinks[MAX_PATH];
+
+void
+lk_store_set_dir(const char *dir)
+{
+    store_lock();
+    if (dir == NULL || dir[0] == '\0')
+        store_dir[0] = '\0';
+    else
+        snprintf(store_dir, sizeof store_dir, "%s", dir);
+    path_settings[0] = '\0';
+    path_rasters[0] = '\0';
+    path_chartsets[0] = '\0';
+    path_hidden[0] = '\0';
+    path_chartlinks[0] = '\0';
+    store_unlock();
+}
+
 /* A file beside settings.ini, created on first write. Caller holds the lock
  * (the static buffer is initialized under it). */
 static const char *
@@ -47,7 +77,12 @@ store_file(const char *name, char *path, size_t path_len)
         return path;
 
     char base[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, base))) {
+    if (store_dir[0] != '\0') {
+        snprintf(path, path_len, "%s", store_dir);
+        CreateDirectoryA(path, NULL);
+        strncat(path, "\\", path_len - strlen(path) - 1);
+        strncat(path, name, path_len - strlen(path) - 1);
+    } else if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, base))) {
         snprintf(path, path_len, "%s\\lookout-marine", base);
         CreateDirectoryA(path, NULL);
         strncat(path, "\\", path_len - strlen(path) - 1);
@@ -62,8 +97,7 @@ store_file(const char *name, char *path, size_t path_len)
 static const char *
 store_path(void)
 {
-    static char path[MAX_PATH];
-    return store_file("settings.ini", path, sizeof path);
+    return store_file("settings.ini", path_settings, sizeof path_settings);
 }
 
 /* %APPDATA%\lookout-marine\rasters.list — the raster library, out of the INI:
@@ -73,8 +107,7 @@ store_path(void)
 static const char *
 rasters_path(void)
 {
-    static char path[MAX_PATH];
-    return store_file("rasters.list", path, sizeof path);
+    return store_file("rasters.list", path_rasters, sizeof path_rasters);
 }
 
 static int load_view_locked(lookout_view *out);
@@ -616,8 +649,7 @@ lk_store_free_rasters(char **paths, int *enabled)
 static const char *
 chartsets_path(void)
 {
-    static char path[MAX_PATH];
-    return store_file("chartsets.list", path, sizeof path);
+    return store_file("chartsets.list", path_chartsets, sizeof path_chartsets);
 }
 
 static char **
@@ -757,8 +789,7 @@ lk_store_set_chartset_on(const char *path, int on)
 static const char *
 hidden_sets_path(void)
 {
-    static char path[MAX_PATH];
-    return store_file("rasters.hidden", path, sizeof path);
+    return store_file("rasters.hidden", path_hidden, sizeof path_hidden);
 }
 
 char **
@@ -846,8 +877,7 @@ lk_store_set_chart_hidden(int hidden)
 static const char *
 chartlinks_path(void)
 {
-    static char path[MAX_PATH];
-    return store_file("chartlinks.json", path, sizeof path);
+    return store_file("chartlinks.json", path_chartlinks, sizeof path_chartlinks);
 }
 
 char *
@@ -1026,8 +1056,10 @@ lk_store_apply_saved_mariner(tile57_mariner *m)
     APPLY_BOOL("date_dependent", m->date_dependent);
     APPLY_BOOL("highlight_date_dependent", m->highlight_date_dependent);
 
-    char date[16];
-    if (get_str(LK_GROUP_MARINER, "date_view", date, sizeof date)) {
+    /* Sized from the field it fills, not from a guess: a shorter buffer here
+     * silently clipped a date the engine had room for. */
+    char date[sizeof m->date_view];
+    if (get_str(LK_GROUP_MARINER, "date_view", date, (int)sizeof date)) {
         memset(m->date_view, 0, sizeof m->date_view);
         strncpy(m->date_view, date, sizeof m->date_view - 1);
     }
@@ -1054,9 +1086,10 @@ lk_store_save_plugin_config(const char *plugin_id, const char *json)
 }
 
 void
-lk_store_apply_saved_plugins(lookout *h)
+lk_store_each_plugin_config(void (*fn)(void *user, const char *id, const char *json),
+                            void *user)
 {
-    if (h == NULL)
+    if (fn == NULL)
         return;
 
     /* The screenshot protocol's clean slate: every plugin stays on its
@@ -1093,7 +1126,7 @@ lk_store_apply_saved_plugins(lookout *h)
             fprintf(stderr, "store: %s: saved plugin settings truncated; not applied\n", id);
             continue;
         }
-        lookout_plugin_config_set(h, id, value);
+        fn(user, id, value);
     }
     free(value);
 }

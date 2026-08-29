@@ -199,7 +199,9 @@
     <ClCompile Include="src\library\ui\ChartLinks.cpp" />
     <ClCompile Include="src\library\ui\Raster.cpp" />
     <ClCompile Include="src\library\ui\Bake.cpp" />
-    <ClCompile Include="src\library\lk_paths.cpp" />
+    <ClCompile Include="src\library\lk_paths.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\library\lk_bake.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

@@ -19,6 +19,13 @@
 extern "C" {
 #endif
 
+/* Where the store lives. The app never calls this: it defaults to
+ * %APPDATA%\lookout-marine, which is the only place a mariner's settings
+ * belong. It exists so a test can point the store at a directory it may
+ * write, and it must be called before the first read or write — the paths
+ * are worked out once and kept. */
+void lk_store_set_dir(const char *dir);
+
 /* Camera pose. load returns 1 if a saved pose exists. */
 int  lk_store_load_view(lookout_view *out);
 void lk_store_save_view(const lookout_view *view);
@@ -109,10 +116,13 @@ void  lk_store_save_chartlink_active(const char *url);
  * plugin last accepted needs no schema on this side, and the core ignores a key
  * the manifest no longer declares.
  *
- * apply_saved pushes every stored object into the plugins of a freshly opened
- * chart, which is where a mariner's connections come back from. */
+ * each_saved hands every stored object over, which is where a mariner's
+ * connections come back from at every open. The store does not push them
+ * itself: what a lookout handle is, is the controller's business, and a store
+ * that knew would be a store no test could link (lk_controller.c). */
 void lk_store_save_plugin_config(const char *plugin_id, const char *json);
-void lk_store_apply_saved_plugins(lookout *h);
+void lk_store_each_plugin_config(void (*fn)(void *user, const char *id, const char *json),
+                                 void *user);
 
 #ifdef __cplusplus
 }
