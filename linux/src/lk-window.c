@@ -14,8 +14,6 @@
 #include "lk-settings-window.h"
 #include "lk-table-window.h"
 
-#include <math.h>
-
 typedef struct {
   LkAppModel *model;
   GtkWidget  *window;
@@ -1308,21 +1306,14 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
 /* ---- overlays ----------------------------------------------------------- */
 
-/* 7217 → "7,217". The separator is a comma on every shell, as it is in the
- * scale readout. */
+/* 7217 → "7,217", the same grouping the scale readout uses. */
 static char *
 lk_group_number (guint value)
 {
   g_autofree char *plain = g_strdup_printf ("%u", value);
-  gsize length = strlen (plain);
   GString *grouped = g_string_new (NULL);
 
-  for (gsize i = 0; i < length; i++)
-    {
-      if (i > 0 && (length - i) % 3 == 0)
-        g_string_append_c (grouped, ',');
-      g_string_append_c (grouped, plain[i]);
-    }
+  lk_append_grouped (grouped, plain);
   return g_string_free (grouped, FALSE);
 }
 
@@ -1610,7 +1601,7 @@ lk_window_build_empty_state (void)
  * the SwiftUI, WinUI and Compose shells put it — so no control stands in two
  * places, and the chart gets the whole window. */
 static GtkWidget *
-lk_window_build_header (LkWindow *self)
+lk_window_build_header (void)
 {
   GtkWidget *header = gtk_header_bar_new ();
 
@@ -1644,7 +1635,7 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   g_action_map_add_action_entries (G_ACTION_MAP (self->window), lk_window_actions,
                                    G_N_ELEMENTS (lk_window_actions), self);
 
-  gtk_window_set_titlebar (GTK_WINDOW (self->window), lk_window_build_header (self));
+  gtk_window_set_titlebar (GTK_WINDOW (self->window), lk_window_build_header ());
 
   /* Search above, chart in the middle, readouts below. */
   GtkWidget *root = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);

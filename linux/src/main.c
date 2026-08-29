@@ -206,9 +206,11 @@ static const char *LK_CSS =
     "  border-radius: 6px;"
     "  font-size: 90%;"
     "}"
+    /* 48px is LK_CHROME_BUBBLE, the bubble diameter Chrome.swift and Chrome.kt
+       use. The layout reserves the same, so the two agree. */
     ".lk-bubble {"
-    "  min-width: 40px;"
-    "  min-height: 40px;"
+    "  min-width: 48px;"
+    "  min-height: 48px;"
     "  padding: 0;"
     "  border-radius: 999px;"
     "  background: alpha(@theme_bg_color, 0.92);"
@@ -219,8 +221,8 @@ static const char *LK_CSS =
      * second frame inside the bubble. The bubble is the only frame there is, so
      * the inner one is taken off and the round shape carries through to it. */
     "menubutton.lk-bubble > button {"
-    "  min-width: 40px;"
-    "  min-height: 40px;"
+    "  min-width: 48px;"
+    "  min-height: 48px;"
     "  padding: 0;"
     "  border-radius: 999px;"
     "  background: none;"

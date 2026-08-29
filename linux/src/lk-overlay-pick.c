@@ -147,11 +147,16 @@ lk_overlay_bubble_track (gpointer user_data)
 static void
 lk_overlay_bubble_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
-  LkOverlayBubble *self = g_object_get_data (G_OBJECT (user_data), "lk-overlay-bubble");
   const char *name = g_param_spec_get_name (pspec);
 
+  /* A notify can arrive while the host widget tears down, when its data is
+     half-cleared. The tether's contract is to stop at that. */
+  if (gtk_widget_in_destruction (GTK_WIDGET (user_data)))
+    return;
   if (!g_str_equal (name, "overlay-pin"))
     return;
+
+  LkOverlayBubble *self = g_object_get_data (G_OBJECT (user_data), "lk-overlay-bubble");
 
   const char *id = lk_app_model_get_overlay_pin (self->model);
 

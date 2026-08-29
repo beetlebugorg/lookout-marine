@@ -81,6 +81,10 @@ GtkWidget *lk_bubble_menu_new (const char *icon_name, const char *tooltip, GMenu
 /* One half of a position, in degrees and decimal minutes: 38°58.580'N. */
 char *lk_coord_format_dm (double value, gboolean is_lat);
 
+/* Append the digits of `plain` to `out` with a comma every three from the
+ * right: "13267" becomes "13,267". */
+void lk_append_grouped (GString *out, const char *plain);
+
 /* The full scale with group separators, as every shell prints it: 1:13,267. */
 char *lk_format_scale (double denominator);
 

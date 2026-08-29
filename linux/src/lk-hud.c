@@ -33,9 +33,24 @@ lk_coord_format_dm (double value, gboolean is_lat)
                           degrees, minutes, hemi);
 }
 
-/* The full 1:N with group separators: 1:13,267. The separator is a comma on
- * every shell — the readout is a chart scale, and a mariner reads it the same
- * way whatever the locale sorts numbers by. */
+/* Append the digits of `plain` to `out` with a comma every three from the
+ * right: "13267" becomes "13,267". The separator is a comma on every shell — a
+ * chart scale and a chart count both read the same way whatever the locale
+ * sorts numbers by. */
+void
+lk_append_grouped (GString *out, const char *plain)
+{
+  gsize length = strlen (plain);
+
+  for (gsize i = 0; i < length; i++)
+    {
+      if (i > 0 && (length - i) % 3 == 0)
+        g_string_append_c (out, ',');
+      g_string_append_c (out, plain[i]);
+    }
+}
+
+/* The full 1:N with group separators: 1:13,267. */
 char *
 lk_format_scale (double denominator)
 {
@@ -43,16 +58,9 @@ lk_format_scale (double denominator)
     return g_strdup ("1:—");
 
   g_autofree char *plain = g_strdup_printf ("%" G_GINT64_FORMAT, (gint64) llround (denominator));
-  gsize length = strlen (plain);
   g_autoptr (GString) grouped = g_string_new ("1:");
 
-  for (gsize i = 0; i < length; i++)
-    {
-      if (i > 0 && (length - i) % 3 == 0)
-        g_string_append_c (grouped, ',');
-      g_string_append_c (grouped, plain[i]);
-    }
-
+  lk_append_grouped (grouped, plain);
   return g_string_free (g_steal_pointer (&grouped), FALSE);
 }
 
@@ -937,6 +945,8 @@ lk_scale_bar_new (LkAppModel *model)
 static void
 lk_building_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
+  if (gtk_widget_in_destruction (GTK_WIDGET (user_data)))
+    return;
   if (g_str_equal (g_param_spec_get_name (pspec), "building"))
     gtk_widget_set_visible (user_data, lk_app_model_get_building (LK_APP_MODEL (object)));
 }
@@ -1201,6 +1211,8 @@ lk_north_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   GtkWidget *button = user_data;
   const char *name = g_param_spec_get_name (pspec);
 
+  if (gtk_widget_in_destruction (button))
+    return;
   if (g_str_equal (name, "rotation"))
     {
       gtk_widget_queue_draw (gtk_button_get_child (GTK_BUTTON (button)));
