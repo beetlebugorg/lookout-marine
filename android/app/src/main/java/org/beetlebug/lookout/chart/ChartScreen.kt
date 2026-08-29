@@ -176,7 +176,7 @@ fun ChartScreen(
                 .align(Alignment.BottomStart)
                 .navigationBarsPadding()
                 .padding(start = Chrome.margin, bottom = Chrome.gap + capsuleH + Chrome.gap),
-            attribution = controller.chartLinkAttribution,
+            attribution = controller.chartLinkController.chartLinkAttribution,
         )
 
         // ---- a tapped overlay object, in a bubble pinned to it ---------------
@@ -308,9 +308,9 @@ fun ChartScreen(
                 .navigationBarsPadding()
                 .padding(bottom = Chrome.gap)
                 .onSizeChanged { capsuleH = (it.height / density).dp },
-            raster = controller.raster,
-            onRasterSelect = { controller.selectRasterSet(it) },
-            onToggleChart = { controller.toggleChart() },
+            raster = controller.rasterController.raster,
+            onRasterSelect = { controller.rasterController.selectRasterSet(it) },
+            onToggleChart = { controller.rasterController.toggleChart() },
             // The Charts tab is where charts are added; the pill's item goes
             // there rather than growing a second file browser.
             onAddRasterCharts = { showSettings = true },

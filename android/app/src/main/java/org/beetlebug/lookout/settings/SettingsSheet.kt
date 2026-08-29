@@ -328,7 +328,7 @@ private fun SectionPane(
                 "display" -> DisplaySection(m)
                 "depths" -> DepthsSection(m)
                 "text" -> SymbolsSection(m)
-                "charts" -> ChartsSection(charts, controller, onRequestAccess)
+                "charts" -> ChartsSection(charts, controller.chartLinkController, controller.rasterController, onRequestAccess)
                 "plugins" -> PluginsManageSection(registry, controller.plugins)
                 "advanced" -> AdvancedSection(m, onOpenLicenses = { licenses = true })
             }

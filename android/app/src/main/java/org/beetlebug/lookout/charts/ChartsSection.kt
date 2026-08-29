@@ -2,7 +2,6 @@ package org.beetlebug.lookout.charts
 
 import org.beetlebug.lookout.ui.SwitchRow
 
-import org.beetlebug.lookout.chart.ChartController
 import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader
 
@@ -66,13 +65,14 @@ import java.io.File
 @Composable
 fun ChartsSection(
     charts: ChartsModel,
-    controller: ChartController,
+    links: ChartLinkController,
+    raster: RasterController,
     onRequestAccess: () -> Unit,
 ) {
     // Which chart DRAWS is the tab's headline decision, so the picker leads;
     // the library plumbing lives behind a row below it. The picker also
     // works without storage access — links come off the network.
-    ChartLinksSection(controller)
+    ChartLinksSection(links)
 
     SectionHeader("Lookout chart library")
     Footer(charts.activeLabel)
@@ -152,7 +152,7 @@ fun ChartsSection(
         )
     }
 
-    RasterChartsSection(controller)
+    RasterChartsSection(raster)
 }
 
 /**
@@ -162,7 +162,7 @@ fun ChartsSection(
  * Chart list, row for row).
  */
 @Composable
-private fun ChartLinksSection(controller: ChartController) {
+private fun ChartLinksSection(controller: ChartLinkController) {
     SectionHeader("Chart", first = true)
     Footer("Pick the chart to draw. A linked chart replaces Lookout's own.")
     LinkChoiceRow(
@@ -250,8 +250,8 @@ private fun LinkChoiceRow(title: String, desc: String, selected: Boolean, onSele
  * it gets its own section rather than a row in the library browser.
  */
 @Composable
-private fun RasterChartsSection(controller: ChartController) {
-    val installed = controller.rasterCharts
+private fun RasterChartsSection(controller: RasterController) {
+    val installed = controller.charts
     var browsing by remember { mutableStateOf(false) }
 
     SectionHeader("Raster charts")
@@ -303,7 +303,7 @@ private fun RasterChartsSection(controller: ChartController) {
  * storage would spend the space twice.
  */
 @Composable
-private fun RasterBrowser(controller: ChartController) {
+private fun RasterBrowser(controller: RasterController) {
     val roots = storageRootsRemembered()
     var cur by remember { mutableStateOf(roots.firstOrNull()) }
     var kids by remember { mutableStateOf<List<File>>(emptyList()) }

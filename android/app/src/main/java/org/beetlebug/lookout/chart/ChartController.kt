@@ -4,7 +4,8 @@ import org.beetlebug.lookout.plugins.rowsJson
 
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.LookoutActivity
-import org.beetlebug.lookout.charts.ChartLinkFetch
+import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.charts.RasterCharts
 import org.beetlebug.lookout.charts.RasterSet
 import org.beetlebug.lookout.charts.RasterState
@@ -182,12 +183,16 @@ class ChartController(private val appContext: Context) {
     /** The editable S-52 mariner state the settings sheet binds to. */
     val mariner = MarinerState()
 
-    /** The mariner's installed raster charts, persisted across opens. */
-    val rasterCharts = RasterCharts(appContext)
+    /** The mariner's picture charts, and the HUD pill over them. */
+    val rasterController = RasterController(access, RasterCharts(appContext))
 
-    /** What the pill shows. Refreshed every pushed frame: `inView` moves. */
-    var raster by mutableStateOf(RasterState())
-        private set
+    /** Charts by link: an online map AS the chart. */
+    val chartLinkController = ChartLinkController(appContext, access)
+
+    val rasterCharts get() = rasterController.charts
+
+    /** Whether a chart link was the drawn chart last time. */
+    val linkFirstHint: Boolean get() = chartLinkController.linkFirstHint
 
     val isOpen: Boolean get() = access.isOpen
 
@@ -212,22 +217,12 @@ class ChartController(private val appContext: Context) {
         lastPushed = null
         alertsController.reset()
         restoreView(l)
-        // Replay the installed raster charts into the chart just opened. The
-        // engine holds what is open now; the mariner's own material has to
-        // survive a change of ENC, so it is installed again on every open.
-        for (p in rasterCharts.paths) {
-            if (!l.rasterAdd(p)) Log.w(TAG, "raster chart will not open: $p")
-            else if (!rasterCharts.isEnabled(p)) l.rasterSetEnabled(p, false)
-        }
-        restoreRasterShown(l)
-        if (rasterCharts.chartHidden) l.setChartHidden(true)
-        pushRaster(l)
+        rasterController.installAll(l)
         plugins.loadPlugins(l)
         // The core reads its chart-link list at open and resolves the selected
         // one as soon as this installs the fetcher, so nothing is replayed
         // here — only the mariner's old SharedPreferences list, once.
-        migrateChartLinks(l)
-        linkFetch.start(l) { access.wake() }
+        chartLinkController.start(l)
         val loaded = date
         access.onMain {
             mariner.loadFrom(v, loaded)
@@ -263,17 +258,17 @@ class ChartController(private val appContext: Context) {
             plugins.forgetLastRegistry()
             alertsController.reset()
             lastPushed = null
-            lastRaster = null
+            rasterController.reset()
             val v = DoubleArray(Lookout.MARINER_LEN)
             l.getMariner(v)
             val date = l.getMarinerDate()
             plugins.republish(l)
             alertsController.publish(l)
-            pushRaster(l)
+            rasterController.pushRaster(l)
             // This controller's own fetcher, and its own snapshot poll: the
             // old controller's was stopped in onReplaced, and the credit the
             // recreation dropped comes back with the next snapshot.
-            linkFetch.start(l) { access.wake() }
+            chartLinkController.start(l)
             access.onMain { mariner.loadFrom(v, date) }
         }
     }
@@ -286,7 +281,7 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD.
      */
     fun onReplaced() {
-        linkFetch.stop()
+        chartLinkController.stop()
     }
 
     /**
@@ -312,7 +307,7 @@ class ChartController(private val appContext: Context) {
         saveView() // last known pose; the handle is about to close
         // Before the handle closes: a fetch landing later must find the
         // provider gone, not a dying engine.
-        linkFetch.stop()
+        chartLinkController.stop()
         access.unbind()
         // Everything below is the MAIN thread's: Compose state, the siren
         // (whose strike runnable lives on the main handler and whose flag is
@@ -392,11 +387,11 @@ class ChartController(private val appContext: Context) {
         // The pill appears and goes as the mariner sails in and out of the
         // coverage, so this is read on the frame, not only when something is
         // pressed. Cheap: a handful of calls over a handful of sets.
-        pushRaster(l)
+        rasterController.pushRaster(l)
         // The chart-link list, the credit and the error, from the core. A
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
-        pollChartLinks(l)
+        chartLinkController.poll(l)
         if (r == lastPushed) return
         lastPushed = r
         access.onMain {
@@ -562,280 +557,6 @@ class ChartController(private val appContext: Context) {
         if (l.followActive() != 0) l.followSet(false)
         val r = lastPushed
         l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
-    }
-
-    // ---- chart links (an online map AS the chart) ----------------------------
-    //
-    // One chart added by link: a MapLibre style url. Picking it renders that
-    // style INSTEAD of the built-in chart — Lookout's own chart is just the
-    // default entry in the same list.
-    //
-    // THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON sources,
-    // generates a wrapper style for bare tiles, fetches the sprite packs,
-    // builds the credit line, templates the tile urls and persists the list.
-    // This shell renders the snapshot and fetches urls (ChartLinkFetch.kt).
-
-    data class ChartLink(val url: String, val name: String)
-
-    var chartLinks by mutableStateOf<List<ChartLink>>(emptyList())
-        private set
-    /** The picked link's url; null draws the built-in chart. */
-    var activeChartLink by mutableStateOf<String?>(null)
-        private set
-    var chartLinkBusy by mutableStateOf(false)
-        private set
-    var chartLinkError by mutableStateOf<String?>(null)
-        private set
-
-    /** The active chart link's source credits, shown by the scale bar while
-     *  the link draws (tile usage policies make the credit a condition of
-     *  service). Null when the Lookout chart is up. */
-    var chartLinkAttribution by mutableStateOf<String?>(null)
-        private set
-
-    private val linkFetch = ChartLinkFetch()
-    private val linkPrefs = appContext.getSharedPreferences("chartlinks.v1", Context.MODE_PRIVATE)
-
-    /**
-     * Whether a chart link was the drawn chart last time. One boolean, not a
-     * second store: the engine chooses between opening link-first and opening
-     * the cell library BEFORE a handle exists, and the list itself is the
-     * core's. Rewritten from every snapshot.
-     */
-    val linkFirstHint: Boolean get() = linkPrefs.getBoolean(LINK_ACTIVE_HINT, false)
-
-    /**
-     * Hand the old SharedPreferences list to the core, once, and then drop it.
-     *
-     * The core ignores the import when it already has a list of its own, so the
-     * window between handing it over and clearing the prefs replays harmlessly
-     * if the process dies in it.
-     *
-     * RENDER THREAD, on every open; a no-op once the prefs are gone.
-     */
-    private fun migrateChartLinks(l: Lookout) {
-        val raw = linkPrefs.getString("links", null) ?: return
-        val doc = org.json.JSONObject()
-        try {
-            doc.put("links", org.json.JSONArray(raw))
-        } catch (_: Exception) {
-            linkPrefs.edit().remove("links").remove("active").apply()
-            return
-        }
-        linkPrefs.getString("active", null)?.let { doc.put("active", it) }
-        Log.i(TAG, "chart links: handing ${raw.length} B of the old store to the core")
-        l.chartLinksImport(doc.toString())
-        linkPrefs.edit().remove("links").remove("active").apply()
-    }
-
-    /**
-     * Take the core's snapshot, if it changed. RENDER THREAD, off the readout
-     * tick: the changed flag has one consumer.
-     */
-    private fun pollChartLinks(l: Lookout) {
-        if (!l.chartLinksChanged()) return
-        val json = l.chartLinksJson() ?: return
-        val links = ArrayList<ChartLink>()
-        var active: String? = null
-        var credit: String? = null
-        var err: String? = null
-        var busy = false
-        try {
-            val top = org.json.JSONObject(json)
-            val arr = top.optJSONArray("links")
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    val url = o.optString("url")
-                    if (url.isEmpty()) continue
-                    links.add(ChartLink(url, o.optString("name")))
-                }
-            }
-            active = if (top.isNull("active")) null else top.optString("active").ifEmpty { null }
-            credit = top.optString("attribution").ifEmpty { null }
-            err = top.optString("error").ifEmpty { null }
-            busy = top.optBoolean("busy")
-        } catch (e: Exception) {
-            Log.w(TAG, "chart links snapshot: $e")
-            return
-        }
-        val hint = active != null
-        access.onMain {
-            chartLinks = links
-            activeChartLink = active
-            chartLinkAttribution = credit
-            chartLinkError = err
-            chartLinkBusy = busy
-            if (linkPrefs.getBoolean(LINK_ACTIVE_HINT, false) != hint) {
-                linkPrefs.edit().putBoolean(LINK_ACTIVE_HINT, hint).apply()
-            }
-        }
-    }
-
-    /**
-     * Add a chart by its style link. The core reads it once and refuses a dead
-     * or non-style link, which surfaces as [chartLinkError]. The new chart is
-     * picked immediately: adding it is the request to sail on it.
-     */
-    fun addChartLink(raw: String) {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return
-        chartLinkError = null
-        chartLinkBusy = true
-        onEngine { l -> l.chartLinkAdd(trimmed) }
-    }
-
-    fun selectChartLink(url: String?) {
-        // Selecting the link that is already drawn is a no-op: the settings row
-        // fires on every tap, and re-selecting would re-resolve the style and
-        // every sprite pack for nothing. A selection whose last resolve failed
-        // does retry.
-        if (url != null && url == activeChartLink && chartLinkError == null) return
-        chartLinkError = null
-        if (url != null) chartLinkBusy = true
-        onEngine { l -> l.chartLinkSelect(url) }
-    }
-
-    fun removeChartLink(url: String) {
-        onEngine { l -> l.chartLinkRemove(url) }
-    }
-
-    /**
-     * Read a linked chart again — its tile urls, zooms, sprites and credit. A
-     * link that does not answer leaves the chart as it was: a lost connection
-     * must not cost the mariner the chart they are sailing on.
-     */
-    fun refreshChartLink(url: String) {
-        chartLinkError = null
-        chartLinkBusy = true
-        onEngine { l -> l.chartLinkRefresh(url) }
-    }
-
-    // ---- raster charts -----------------------------------------------------
-
-    @Volatile private var lastRaster: RasterState? = null
-
-    /**
-     * Read the pill's state off the engine. RENDER THREAD ONLY, like the
-     * readouts: these are native calls, and the api lock is held for a frame.
-     */
-    /**
-     * Put the mariner's per-set choice back after an open, TWO passes — hide
-     * first, then show — or the election (showing a set turns off same-water
-     * rivals) loses the pick. Then the no-survey override: with no ENC aboard
-     * "hidden" no longer means what it meant, and obeying it leaves a blank
-     * sea, so the first covering set draws anyway. The SAVED choice is not
-     * rewritten (the reference's restoreRasterShown, move for move).
-     */
-    private fun restoreRasterShown(l: Lookout) {
-        val hidden = rasterCharts.hidden
-        if (hidden.isNotEmpty()) {
-            val n = l.rasterSetCount()
-            for (i in 0 until n) if (l.rasterSetName(i) in hidden) l.rasterSetShown(i, false)
-            for (i in 0 until n) if (l.rasterSetName(i) !in hidden) l.rasterSetShown(i, true)
-        }
-        if (l.chartsCount() == 0) {
-            val n = l.rasterSetCount()
-            var shownInView = false
-            for (i in 0 until n) {
-                if (l.rasterSetInView(i) && l.rasterShown(i)) shownInView = true
-            }
-            if (!shownInView) {
-                for (i in 0 until n) {
-                    if (l.rasterSetInView(i)) {
-                        Log.i(TAG, "no survey aboard; drawing ${l.rasterSetName(i)} over the blank sea")
-                        l.rasterSetShown(i, true)
-                        break
-                    }
-                }
-            }
-        }
-    }
-
-    private fun pushRaster(l: Lookout) {
-        val n = l.rasterSetCount()
-        val sets = ArrayList<RasterSet>(n)
-        for (i in 0 until n) {
-            sets.add(RasterSet(i, l.rasterSetName(i), l.rasterSetInView(i), l.rasterShown(i)))
-        }
-        // Read back from the engine and remembered, never tracked here: the
-        // engine owns the election.
-        rasterCharts.noteShown(sets.map { it.name to it.shown })
-        rasterCharts.setChartHidden(l.chartHidden())
-        // Only what the pill actually reads. The engine also offers the
-        // active and available set NAMES; the pill derives its label from
-        // `visible` and `active` instead, so asking for them was two JNI
-        // string crossings per push for nothing.
-        val s = RasterState(
-            active = l.rasterActiveIndex(),
-            sets = sets,
-            chartHidden = l.chartHidden(),
-        )
-        if (s == lastRaster) return
-        lastRaster = s
-        access.onMain { raster = s }
-    }
-
-    /**
-     * Install raster charts and draw the one just added, if it covers this
-     * view. The mariner picked those files while looking at this water.
-     */
-    fun addRasterCharts(newPaths: List<String>) {
-        val added = rasterCharts.add(newPaths)
-        if (added.isEmpty()) return
-        onEngine { l ->
-            var opened = 0
-            for (p in added) if (l.rasterAdd(p)) opened++
-            if (opened > 0) {
-                // The newest covering set is the one the mariner just added
-                // while looking at this water. By INDEX from the top — the
-                // engine appends sets in add order — not by re-deriving the
-                // engine's name from the path: the two label tables disagreed
-                // and the pick silently missed.
-                val n = l.rasterSetCount()
-                for (i in n - 1 downTo 0) {
-                    if (l.rasterSetInView(i)) {
-                        l.rasterSelect(i)
-                        break
-                    }
-                }
-            }
-            pushRaster(l)
-        }
-    }
-
-    /** Step to the next set covering the water in view, then to none. */
-    fun cycleRaster() = onEngine { l -> l.rasterCycle(); pushRaster(l) }
-
-    /** Draw set [i]. -1 turns off what is drawn over THIS view. */
-    fun selectRasterSet(i: Int) = onEngine { l -> l.rasterSelect(i); pushRaster(l) }
-
-    /** Hide the ENC wherever a raster chart covers, and show it again. */
-    fun toggleChart() = onEngine { l -> l.toggleChart(); pushRaster(l) }
-
-    /** Switch one chart off without removing it. */
-    fun setRasterEnabled(path: String, on: Boolean) {
-        rasterCharts.setEnabled(path, on)
-        onEngine { l -> l.rasterSetEnabled(path, on); pushRaster(l) }
-    }
-
-    /** Switch a whole provider's charts together. */
-    fun setRasterGroupEnabled(paths: List<String>, on: Boolean) {
-        paths.forEach { rasterCharts.setEnabled(it, on) }
-        onEngine { l ->
-            paths.forEach { l.rasterSetEnabled(it, on) }
-            pushRaster(l)
-        }
-    }
-
-    /**
-     * Forget a chart. The engine keeps it open until the next chart opens,
-     * because it has no remove: the list is what is replayed, so dropping it
-     * from the list is what removes it.
-     */
-    fun removeRasterChart(path: String) {
-        rasterCharts.remove(path)
-        onEngine { l -> l.rasterSetEnabled(path, false); pushRaster(l) }
     }
 
     // ---- mariner -----------------------------------------------------------
