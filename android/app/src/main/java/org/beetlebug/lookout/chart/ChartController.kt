@@ -197,6 +197,7 @@ class ChartController(private val appContext: Context) {
         l.setMariner(v, date)
         lastPushed = null
         alertsController.reset()
+        lastWatchNs = 0L
         restoreView(l)
         rasterController.installAll(l)
         plugins.loadPlugins(l)
@@ -238,6 +239,7 @@ class ChartController(private val appContext: Context) {
         queue.post {
             plugins.forgetLastRegistry()
             alertsController.reset()
+            lastWatchNs = 0L
             lastPushed = null
             rasterController.reset()
             val v = DoubleArray(Lookout.MARINER_LEN)
@@ -467,9 +469,13 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD.
      */
     private fun watchPlugins(l: Lookout, frameTimeNanos: Long) {
-        alertsController.sampleIfDue(l, frameTimeNanos)
+        if (lastWatchNs != 0L && frameTimeNanos - lastWatchNs < WATCH_INTERVAL_NS) return
+        lastWatchNs = frameTimeNanos
+        alertsController.publish(l)
         updateService(plugins.connections(l))
     }
+
+    private var lastWatchNs = 0L
 
     /** Silence one alert and take it off the chart. */
     fun acknowledgeAlert(alert: PluginAlert) = alertsController.acknowledge(alert)
@@ -837,6 +843,14 @@ class ChartController(private val appContext: Context) {
          * skipped whenever nothing changed.
          */
         const val PLUGIN_POLL_MS = 1_000L
+
+        /**
+         * How often the frame loop crosses into the core for what the plugins
+         * are doing: the alerts, and whether anything is still connected. Both
+         * ride the existing frame visit rather than a clock of their own, so an
+         * idle chart gains no wakeup it did not already have.
+         */
+        const val WATCH_INTERVAL_NS = 1_000_000_000L
 
         /**
          * The background visit's pace with a connection live. Matches the

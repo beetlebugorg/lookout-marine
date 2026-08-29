@@ -20,8 +20,8 @@ import androidx.compose.runtime.setValue
  *
  * What it does not do is arm a clock of its own for it. The frame loop is
  * already running and already visits every frame, so an idle chart gains no
- * wakeup it did not already have; [sampleIfDue] only decides how often that
- * existing visit crosses into the core. A second matches the reference shell
+ * wakeup it did not already have; the caller that owns the frame loop decides
+ * how often that existing visit crosses into the core. A second matches the reference shell
  * and is a fifth of the alarm repeat, so an alarm is on screen well before it
  * sounds twice. With no surface there are no frames to ride on, and the
  * engine's background visit calls [publish] directly instead.
@@ -43,21 +43,10 @@ class AlertController(appContext: Context, private val access: EngineAccess) {
      * for "the core has not answered".
      */
     private var seq = UNREAD
-    private var lastSampleNs = 0L
 
-    /** A new chart, so a registry nobody has seen and a seq that means nothing. */
+    /** A new chart, so a seq that means nothing. */
     fun reset() {
         seq = UNREAD
-        lastSampleNs = 0L
-    }
-
-    /**
-     * The once-a-second look, off the frame loop. RENDER THREAD.
-     */
-    fun sampleIfDue(l: Lookout, frameTimeNanos: Long) {
-        if (lastSampleNs != 0L && frameTimeNanos - lastSampleNs < INTERVAL_NS) return
-        lastSampleNs = frameTimeNanos
-        publish(l)
     }
 
     /**
@@ -117,11 +106,5 @@ class AlertController(appContext: Context, private val access: EngineAccess) {
 
         /** No `seq` the core reports, so it can stand for "not answered yet". */
         const val UNREAD = -1L
-
-        /**
-         * How often the frame loop crosses into the core for the alerts. See
-         * the class comment for why this is a sample and not a wake.
-         */
-        const val INTERVAL_NS = 1_000_000_000L
     }
 }
