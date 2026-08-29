@@ -678,7 +678,8 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
   /* The provenance as one muted line, not a table: the mariner reads it once,
    * to decide how much to trust the rows above it. A cell that states none
    * gets no line at all — an empty strip under a rule reads as a defect. */
-  g_autofree char *footnote_text = g_strstrip (g_strdup (decoded->footnote));
+  g_autofree char *footnote_text =
+      g_strstrip (g_strdup (decoded->footnote != NULL ? decoded->footnote : ""));
   if (footnote_text[0] != '\0')
     {
       GtkWidget *footnote = gtk_label_new (footnote_text);

@@ -22,7 +22,7 @@ foreach name : unit_tests
   test(name, exe, suite: 'unit', timeout: 60)
 endforeach
 
-widget_tests = ['hud', 'window']
+widget_tests = ['hud', 'window', 'pick-report']
 headless = find_program ('run-headless.sh')
 
 foreach name : widget_tests
