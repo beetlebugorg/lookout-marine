@@ -181,9 +181,15 @@ endif
 
 shell_c_args = c_args + ['-I' + meson.current_build_dir()]
 
+# The shell's own headers are included by a path from src/ — "ui/hud/hud.h",
+# "model/app-model.h". src/ on the include path is what makes those resolve from
+# any directory under it.
+inc = include_directories('src')
+
 lkshell = static_library('lookout-shell',
   sources, resources, core_headers,
   c_args: shell_c_args,
+  include_directories: inc,
   dependencies: deps,
 )
 
@@ -191,6 +197,7 @@ executable('lookout-marine',
   'src/main.c', core_headers,
   link_with: [lkshell] + core_archives,
   c_args: shell_c_args,
+  include_directories: inc,
   dependencies: deps,
   install: true,
 )
