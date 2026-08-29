@@ -1,4 +1,4 @@
-/* lk-chart-view.h — the GPU chart surface embedded in GTK.
+/* ui/chart/view.h — the GPU chart surface embedded in GTK.
  *
  * Owns the native chart surface, pins it over its allocation, and forwards
  * input to the controller. Drag pans (with fling), Shift-drag rotates, wheel

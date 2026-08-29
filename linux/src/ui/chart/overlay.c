@@ -1,7 +1,7 @@
-#include "lk-overlay-pick.h"
+#include "ui/chart/overlay.h"
 
 #include "util/json.h"
-#include "lk-pick-report.h"
+#include "ui/chart/pick-report.h"
 
 /* How often the pinned object is re-read. It matches the plugin poll, because
  * that is the rate a plugin's geometry moves at. The timer runs ONLY while

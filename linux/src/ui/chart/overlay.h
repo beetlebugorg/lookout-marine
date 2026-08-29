@@ -1,4 +1,4 @@
-/* lk-overlay-pick.h — what the plugins put ON the chart, from the shell's side.
+/* ui/chart/overlay.h — what the plugins put ON the chart, from the shell's side.
  *
  * A plugin draws a vessel, a layline end or a mark, and gives the symbol a
  * payload: {"title":"…","rows":[["key","value"],…]}. The core draws the symbol;

@@ -1,4 +1,4 @@
-#include "lk-chart-view.h"
+#include "ui/chart/view.h"
 
 #include "model/app-model.h"
 #include "lk-hud.h"

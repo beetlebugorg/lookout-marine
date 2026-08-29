@@ -8,7 +8,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
-#include "lk-pick-report.h"
+#include "ui/chart/pick-report.h"
 
 static LkAppModel *model;
 static GtkWidget  *window;

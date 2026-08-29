@@ -9,7 +9,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
-#include "lk-pick-report.h"
+#include "ui/chart/pick-report.h"
 #include "lk-window.h"
 
 static LkAppModel *model;

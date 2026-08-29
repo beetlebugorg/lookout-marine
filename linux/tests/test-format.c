@@ -6,7 +6,7 @@
  */
 
 #include "lk-hud.h"
-#include "lk-chart-view.h"
+#include "ui/chart/view.h"
 
 static void
 assert_coord (double value, gboolean is_lat, const char *expected)

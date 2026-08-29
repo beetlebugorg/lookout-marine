@@ -6,7 +6,7 @@
  * here are the numbers those shells place with.
  */
 
-#include "lk-pick-report.h"
+#include "ui/chart/pick-report.h"
 
 static LkPickFeature
 feature (const char *cls, const char *chart, const char *s57)

@@ -1,4 +1,4 @@
-/* lk-pick-report.h — the cursor pick report.
+/* ui/chart/pick-report.h — the cursor pick report.
  *
  * One object at a time, decoded for the mariner: the operative fact as the
  * title, the attributes in chart language, and the raw S-57 rows one fold

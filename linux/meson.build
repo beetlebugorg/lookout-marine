@@ -128,11 +128,8 @@ sources = files(
   'src/library/scan.c',
   'src/lk-about.c',
   'src/lk-alerts.c',
-  'src/lk-chart-view.c',
   'src/lk-hud.c',
   'src/lk-licenses.c',
-  'src/lk-overlay-pick.c',
-  'src/lk-pick-report.c',
   'src/lk-search.c',
   'src/lk-settings-window.c',
   'src/lk-table-window.c',
@@ -144,6 +141,9 @@ sources = files(
   'src/plugins/discovery.c',
   'src/plugins/install.c',
   'src/plugins/registry.c',
+  'src/ui/chart/overlay.c',
+  'src/ui/chart/pick-report.c',
+  'src/ui/chart/view.c',
   'src/util/json.c',
 )
 

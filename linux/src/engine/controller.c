@@ -1,7 +1,7 @@
 #include "engine/controller.h"
 
 #include "model/app-model.h"
-#include "lk-chart-view.h"
+#include "ui/chart/view.h"
 #include "plugins/registry.h"
 #include "model/store.h"
 
