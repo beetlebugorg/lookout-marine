@@ -62,6 +62,10 @@ GtkWidget *lk_window_build_empty_state (void);
 void lk_window_refresh_switched_off (LkWindow *self);
 void lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data);
 
+/* The Open a File picker's completion. A GAsyncReadyCallback, and the window's
+ * open-file action is what passes it. ui/open-dialogs.c. */
+void lk_open_file_chosen (GObject *source, GAsyncResult *result, gpointer user_data);
+
 /* Pulses the loader's indeterminate bar. A GSourceFunc. ui/startup-view.c. */
 gboolean lk_window_loader_pulse (gpointer user_data);
 
