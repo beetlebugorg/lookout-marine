@@ -34,14 +34,16 @@ $cSources = @(
 $cppSources = @(
     'src\lk_json.cpp',
     'src\lk_utf8.cpp',
-    'src\lk_pick.cpp'
+    'src\lk_pick.cpp',
+    'src\lk_licenses.cpp'
 )
 $suites = @(
     'test\main.cpp',
     'test\test_coord.cpp',
     'test\test_json.cpp',
     'test\test_utf8.cpp',
-    'test\test_pick.cpp'
+    'test\test_pick.cpp',
+    'test\test_licenses.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

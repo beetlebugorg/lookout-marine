@@ -11,6 +11,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lkw
@@ -66,7 +67,15 @@ namespace lkw
         std::vector<std::pair<std::string, std::vector<size_t>>> Groups() const;
     };
 
-    /* Parsed once, then borrowed for the life of the process. */
+    /* Read one manifest document (lk_licenses.cpp). Separate from Licenses()
+     * so the shape of the manifest can be checked without the core: what the
+     * screens depend on is the filtering and the labels, not where the bytes
+     * came from. */
+    LicenseManifest ParseLicenses(std::string_view json);
+
+    /* The BAKED manifest, the one this build actually carries
+     * (lk_licenses_baked.cpp). Parsed once, then borrowed for the life of the
+     * process. */
     LicenseManifest const &Licenses();
 
     /* One component by id, or nullptr when this build carries none by that name. */
