@@ -149,6 +149,8 @@ sources = files(
   'src/ui/settings/charts.c',
   'src/ui/settings/depths.c',
   'src/ui/settings/display.c',
+  'src/ui/settings/plugins-page.c',
+  'src/ui/settings/plugins.c',
   'src/ui/settings/widgets.c',
   'src/ui/settings/window.c',
   'src/ui/dev-hooks.c',
