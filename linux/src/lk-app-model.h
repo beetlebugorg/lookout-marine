@@ -122,6 +122,10 @@ void lk_app_model_reinstall_raster_charts (LkAppModel *self);
  * chart is switched off now and dropped the next time a chart opens. */
 void lk_app_model_remove_raster_chart (LkAppModel *self, const char *path);
 
+/* Forget every installed raster chart. Takes effect at the next open, since the
+ * engine holds live pictures until then. */
+void lk_app_model_forget_raster_charts (LkAppModel *self);
+
 /* Turn one installed chart on or off. Off keeps the file. */
 void     lk_app_model_set_raster_enabled (LkAppModel *self, const char *path, gboolean on);
 gboolean lk_app_model_raster_enabled (LkAppModel *self, const char *path);

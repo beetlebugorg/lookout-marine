@@ -34,6 +34,7 @@ typedef struct {
   gboolean   pick_compact; /* the report is the bottom sheet, not a callout */
   guint      place_id;     /* re-places the report after a resize, off the layout */
   guint      loader_pulse_id; /* pulses the loader's indeterminate bar while up */
+  guint      chart_set_actions; /* per-set toggle actions the Charts submenu added */
 
   GtkWidget *settings_window;
 
@@ -402,6 +403,25 @@ lk_action_open_archive (GSimpleAction *action, GVariant *parameter, gpointer use
   LkWindow *self = user_data;
 
   lk_present_open_archive_dialog (GTK_WINDOW (self->window), self->model);
+}
+
+/* One set's toggle in the Charts submenu. Each set has its own boolean action,
+   so GTK draws it as an independent checkbox. */
+static void
+lk_action_chart_set_toggle (GSimpleAction *action, GVariant *value, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  const char *path = g_object_get_data (G_OBJECT (action), "lk-set-path");
+
+  g_simple_action_set_state (action, value);
+  if (path != NULL)
+    lk_app_model_set_chart_set_on (self->model, path, g_variant_get_boolean (value));
+}
+
+static void
+lk_action_forget_raster (GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  lk_app_model_forget_raster_charts (((LkWindow *) user_data)->model);
 }
 
 static void
@@ -777,6 +797,7 @@ static const GActionEntry lk_window_actions[] = {
   { "open",             lk_action_open },
   { "open-archive",     lk_action_open_archive },
   { "open-file",        lk_action_open_file },
+  { "forget-raster",    lk_action_forget_raster },
   { "zoom-in",          lk_action_zoom_in },
   { "zoom-out",         lk_action_zoom_out },
   { "zoom-fit",         lk_action_zoom_fit },
@@ -835,6 +856,37 @@ lk_window_build_chart_menu (LkWindow *self)
      settings header keeps "Colour scheme" — each mirrors macOS as it is. */
   g_menu_append_submenu (chart, "Color Scheme", G_MENU_MODEL (scheme));
 
+  /* Charts: a toggle per set, disabled when the library is empty. Each set gets
+     its own boolean action, rebuilt with the menu, so GTK draws independent
+     checkboxes rather than a radio group. The old actions are removed first, so
+     a shrunk library leaves none behind. */
+  for (guint i = 0; i < self->chart_set_actions; i++)
+    {
+      g_autofree char *old = g_strdup_printf ("chart-set-%u", i);
+      g_action_map_remove_action (G_ACTION_MAP (self->window), old);
+    }
+  GMenu *charts = g_menu_new ();
+  g_autoptr (GPtrArray) csets = lk_app_model_get_chart_sets (self->model);
+  for (guint i = 0; i < csets->len; i++)
+    {
+      const LkChartSetRow *set = g_ptr_array_index (csets, i);
+      g_autofree char *name = g_strdup_printf ("chart-set-%u", i);
+      g_autofree char *full = g_strdup_printf ("win.chart-set-%u", i);
+      GSimpleAction *act =
+          g_simple_action_new_stateful (name, NULL, g_variant_new_boolean (set->on));
+
+      g_object_set_data_full (G_OBJECT (act), "lk-set-path", g_strdup (set->path), g_free);
+      g_signal_connect (act, "change-state", G_CALLBACK (lk_action_chart_set_toggle), self);
+      g_action_map_add_action (G_ACTION_MAP (self->window), G_ACTION (act));
+      g_object_unref (act);
+      g_menu_append (charts, set->title, full);
+    }
+  self->chart_set_actions = csets->len;
+  if (csets->len == 0)
+    g_menu_append (charts, "No chart sets", "win.none"); /* absent action → insensitive */
+  g_menu_append_submenu (chart, "Charts", G_MENU_MODEL (charts));
+  g_object_unref (charts);
+
   /* The raster sets covering THIS view, the drawn one marked, then the way back
    * to no picture at all. It is the same list the pill opens. */
   GMenu *raster = g_menu_new ();
@@ -860,6 +912,17 @@ lk_window_build_chart_menu (LkWindow *self)
                  lk_app_model_get_chart_hidden (self->model) ? "Show ENC Over Raster"
                                                              : "Hide ENC Over Raster",
                  "win.toggle-chart");
+  /* Forget every installed raster chart. The count says whether there is
+     anything to forget; with none the item is left out. */
+  guint raster_count = lk_app_model_get_raster_count (self->model);
+  if (raster_count > 0)
+    {
+      g_autofree char *label = g_strdup_printf ("Forget Raster Charts (%u)", raster_count);
+      g_autoptr (GMenuItem) forget = g_menu_item_new (label, "win.forget-raster");
+      /* GMenu carries no tooltip, so the effect is stated in the label's own
+         section rather than lost. */
+      g_menu_append_item (raster_section, forget);
+    }
   g_menu_append_section (chart, NULL, G_MENU_MODEL (raster_section));
 
   GMenu *view = g_menu_new ();

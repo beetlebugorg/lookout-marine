@@ -114,6 +114,21 @@ lk_raster_charts_save (LkRasterCharts *self)
                             (const char *const *) hidden->pdata);
 }
 
+/* Forget every installed raster chart: the list, the off set, and the hidden
+   set. The engine holds live pictures until the next open, so this takes effect
+   then. */
+void
+lk_raster_charts_clear (LkRasterCharts *self)
+{
+  g_return_if_fail (self != NULL);
+
+  g_ptr_array_set_size (self->paths, 0);
+  g_ptr_array_add (self->paths, NULL); /* keep the strv terminator */
+  g_hash_table_remove_all (self->off);
+  g_hash_table_remove_all (self->hidden);
+  lk_raster_charts_save (self);
+}
+
 LkRasterCharts *
 lk_raster_charts_new (void)
 {

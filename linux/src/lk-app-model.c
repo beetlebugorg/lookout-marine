@@ -1448,6 +1448,16 @@ lk_app_model_add_raster_charts (LkAppModel *self, const char *const *paths)
 }
 
 void
+lk_app_model_forget_raster_charts (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  lk_raster_charts_clear (self->raster_charts);
+  lk_app_model_sync_raster (self);
+  g_signal_emit (self, signals[SIGNAL_RASTER_CHANGED], 0);
+}
+
+void
 lk_app_model_remove_raster_chart (LkAppModel *self, const char *path)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));

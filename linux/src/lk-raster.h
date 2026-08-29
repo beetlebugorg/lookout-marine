@@ -31,6 +31,7 @@ guint              lk_raster_charts_count (LkRasterCharts *self);
 /* Install one file. FALSE when the list already holds it. */
 gboolean lk_raster_charts_add (LkRasterCharts *self, const char *path);
 void     lk_raster_charts_remove (LkRasterCharts *self, const char *path);
+void     lk_raster_charts_clear (LkRasterCharts *self);
 
 /* Off keeps the file installed and stops drawing it: a mariner carrying four
  * providers for one coast wants three of them quiet, not deleted. */
