@@ -5,7 +5,7 @@
  * Each test then reads back what it wrote, the way a relaunch would.
  */
 
-#include "lk-store.h"
+#include "model/store.h"
 
 static void
 test_view_roundtrip (void)

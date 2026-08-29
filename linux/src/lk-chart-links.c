@@ -1,7 +1,7 @@
 /* lk-chart-links.c — charts by link. See lk-chart-links.h. */
 #include "lk-chart-links.h"
 
-#include "lk-store.h"
+#include "model/store.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>

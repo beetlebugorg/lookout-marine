@@ -1,6 +1,6 @@
 #include "lk-search.h"
 
-#include "lk-coord.h"
+#include "model/coord.h"
 #include "lk-hud.h"
 
 typedef struct {

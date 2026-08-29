@@ -1,6 +1,6 @@
 #include "lk-chart-view.h"
 
-#include "lk-app-model.h"
+#include "model/app-model.h"
 #include "lk-hud.h"
 #include "util/json.h"
 

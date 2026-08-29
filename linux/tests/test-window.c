@@ -8,7 +8,7 @@
 
 #include "lk-test.h"
 
-#include "lk-app-model.h"
+#include "model/app-model.h"
 #include "lk-pick-report.h"
 #include "lk-window.h"
 

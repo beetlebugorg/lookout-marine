@@ -1,8 +1,8 @@
-#include "lk-app-model.h"
+#include "model/app-model.h"
 
 #include "lk-chart-scan.h"
-#include "lk-coord.h"
-#include "lk-store.h"
+#include "model/coord.h"
+#include "model/store.h"
 
 #include <math.h>
 #include <string.h>

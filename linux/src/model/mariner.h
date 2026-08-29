@@ -1,4 +1,4 @@
-/* lk-mariner.h — the live S-52 mariner state behind the settings form.
+/* model/mariner.h — the live S-52 mariner state behind the settings form.
  *
  * Wraps the engine's tile57_mariner and edits it in place, so fields the form
  * doesn't surface are preserved untouched. Edits auto-apply (debounced) and save.

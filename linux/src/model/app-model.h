@@ -1,4 +1,4 @@
-/* lk-app-model.h — shared app state: chart open/recents, live readouts, and
+/* model/app-model.h — shared app state: chart open/recents, live readouts, and
  * headerbar actions. Holds the one LkChartController and funnels commands
  * through it. Readouts are GObject properties the HUD tracks via notify::. */
 #pragma once
@@ -178,7 +178,7 @@ gboolean    lk_app_model_get_chart_hidden (LkAppModel *self);
 /* ---- search: coordinate go-to ------------------------------------------- */
 
 /* Parse `text` as a coordinate and recentre. TRUE if it was recognisable. The
- * parsers themselves are in lk-coord.h. */
+ * parsers themselves are in model/coord.h. */
 gboolean lk_app_model_go_to_coordinate (LkAppModel *self, const char *text);
 
 /* ---- readouts pushed by the controller ---------------------------------- */

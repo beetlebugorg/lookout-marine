@@ -1,9 +1,9 @@
 #include "engine/controller.h"
 
-#include "lk-app-model.h"
+#include "model/app-model.h"
 #include "lk-chart-view.h"
 #include "lk-plugins.h"
-#include "lk-store.h"
+#include "model/store.h"
 
 #include <string.h>
 

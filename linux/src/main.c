@@ -6,7 +6,7 @@
 
 #include <gtk/gtk.h>
 
-#include "lk-app-model.h"
+#include "model/app-model.h"
 #include "lk-chart-bake.h"
 #include "lk-window.h"
 

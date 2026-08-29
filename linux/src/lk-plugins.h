@@ -13,7 +13,7 @@
  *
  * Edits auto-apply (debounced, so dragging a spin button does not push per tick)
  * through lookout_plugin_config_set, which the plugin handles live: no restart.
- * They are saved as the config object the plugin last accepted (see lk-store.h).
+ * They are saved as the config object the plugin last accepted (see model/store.h).
  *
  * A LIST is a setting the mariner adds ROWS to — the NMEA connections are the
  * first. The rows are the shell's: it assigns each one an id when it is added,

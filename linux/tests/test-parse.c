@@ -3,7 +3,7 @@
  * shells, so a value read off one app types into another.
  */
 
-#include "lk-coord.h"
+#include "model/coord.h"
 
 #include <math.h>
 

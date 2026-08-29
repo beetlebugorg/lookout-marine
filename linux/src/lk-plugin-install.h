@@ -16,7 +16,7 @@
 
 #include <gtk/gtk.h>
 
-#include "lk-app-model.h"
+#include "model/app-model.h"
 
 G_BEGIN_DECLS
 

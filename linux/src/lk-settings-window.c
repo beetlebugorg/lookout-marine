@@ -2,7 +2,7 @@
 #include "lk-settings-window.h"
 
 #include "lk-licenses.h"
-#include "lk-mariner.h"
+#include "model/mariner.h"
 #include "lk-plugin-install.h"
 #include "lk-plugins.h"
 #include "lk-window.h"

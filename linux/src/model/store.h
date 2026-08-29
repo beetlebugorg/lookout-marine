@@ -1,4 +1,4 @@
-/* lk-store.h — persisted preferences (camera pose, recents, mariner settings)
+/* model/store.h — persisted preferences (camera pose, recents, mariner settings)
  * in one GKeyFile at $XDG_CONFIG_HOME/lookout-marine/settings.ini. Mariner
  * state is stored field by field, not raw struct bytes (the layout is an engine
  * ABI detail); missing keys leave engine defaults in place. */

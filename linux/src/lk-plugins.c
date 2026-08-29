@@ -1,7 +1,7 @@
 #include "lk-plugins.h"
 
 #include "util/json.h"
-#include "lk-store.h"
+#include "model/store.h"
 
 #include <math.h>
 

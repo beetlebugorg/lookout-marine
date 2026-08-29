@@ -1,6 +1,6 @@
-#include "lk-mariner.h"
+#include "model/mariner.h"
 
-#include "lk-store.h"
+#include "model/store.h"
 
 /* Coalesce a slider drag / typed number into one apply, still feels live. */
 #define LK_APPLY_DEBOUNCE_MS 60

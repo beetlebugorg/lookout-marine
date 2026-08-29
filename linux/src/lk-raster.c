@@ -1,6 +1,6 @@
 #include "lk-raster.h"
 
-#include "lk-store.h"
+#include "model/store.h"
 
 #include <string.h>
 

@@ -1,4 +1,4 @@
-/* lk-coord.h — the tolerant coordinate and scale parsers.
+/* model/coord.h — the tolerant coordinate and scale parsers.
  *
  * Pure text-to-number, no model state, so the search go-to and the scale entry
  * share one parser each and the suites test them on their own. Each accepts
