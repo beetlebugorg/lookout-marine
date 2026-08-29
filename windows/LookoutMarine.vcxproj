@@ -208,6 +208,9 @@
     <ClCompile Include="src\plugins\lk_alerts.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\plugins\lk_table.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
 
   <!-- settings: the mariner settings window. -->

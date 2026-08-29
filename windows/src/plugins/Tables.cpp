@@ -19,17 +19,13 @@
 #include <map>
 
 #include "lk_store.h"
+#include "lk_table.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
-using namespace winrt::Windows::Data::Json;
 
 namespace lkw
 {
-    // The dash for a cell the plugin did not send: never heard and heard as
-    // zero are different values.
-    static constexpr wchar_t const *kMissing = L"\u2014"; /* em dash */
-
     static constexpr winrt::Windows::UI::Color kInk{ 0xFF, 0x1A, 0x1A, 0x1A };
     static constexpr winrt::Windows::UI::Color kMuted{ 0xFF, 0x6B, 0x6B, 0x6B };
     static constexpr winrt::Windows::UI::Color kFaint{ 0xFF, 0x9A, 0x9A, 0x9A };
@@ -41,67 +37,8 @@ namespace lkw
     /* 18 % of the shell accent: the selected row, over any flag tint. */
     static constexpr winrt::Windows::UI::Color kSelectRow{ 0x2E, 0x1B, 0x49, 0xC4 };
 
-    static bool NumericColumn(std::string const &type)
-    {
-        return type != "text" && type != "flag";
-    }
-
-    static double ColumnWidth(std::string const &type)
-    {
-        return type == "text" ? 150.0 : 84.0;
-    }
-
-    // The units are the shell's: the plugin sends SI and a table converts for
-    // the mariner — the reverse of the pick report, which arrives formatted.
-    static std::wstring FormatCell(std::string const &type, IJsonValue const &v)
-    {
-        if (v == nullptr || v.ValueType() == JsonValueType::Null)
-            return kMissing;
-
-        wchar_t buf[48];
-        if (type == "text" || type == "flag")
-        {
-            std::wstring s{ v.ValueType() == JsonValueType::String ? v.GetString() : L"" };
-            if (type == "flag")
-                for (auto &c : s)
-                    c = (wchar_t)std::towupper(c);
-            return s;
-        }
-
-        double n = v.ValueType() == JsonValueType::Number ? v.GetNumber() : 0.0;
-        if (type == "distance")
-        {
-            if (n < 185.2)
-                swprintf_s(buf, L"%.0f m", n);
-            else
-                swprintf_s(buf, L"%.2f nm", n / 1852.0);
-        }
-        else if (type == "speed")
-        {
-            swprintf_s(buf, L"%.1f kn", n * 3600.0 / 1852.0);
-        }
-        else if (type == "bearing")
-        {
-            double b = std::fmod(n, 360.0);
-            if (b < 0)
-                b += 360.0;
-            swprintf_s(buf, L"%03.0f\u00B0", b);
-        }
-        else if (type == "duration")
-        {
-            long long t = (long long)std::llround(std::fabs(n));
-            wchar_t const *sign = n < 0 ? L"-" : L"";
-            if (t >= 3600)
-                swprintf_s(buf, L"%s%lld:%02lld:%02lld", sign, t / 3600, (t / 60) % 60, t % 60);
-            else
-                swprintf_s(buf, L"%s%lld:%02lld", sign, t / 60, t % 60);
-        }
-        else
-        {
-            swprintf_s(buf, L"%g", n);
-        }
-        return buf;
-    }
+    // The columns, the units and the row model are lk_table.h's; what is left
+    // in this file is the window they are laid out in.
 
     // One open table window and everything it needs to reload itself. All UI
     // thread; the timer is stopped before the entry leaves the map.
@@ -128,7 +65,7 @@ namespace lkw
          * the core. */
         std::vector<std::array<double, 2>> row_at;
         std::vector<uint8_t> row_has_at;
-        std::vector<std::wstring> row_flags;
+        std::vector<std::string> row_flags;
     };
 
     static winrt::Windows::UI::Color RowTint(VesselTableWin const *t, int idx)
@@ -136,9 +73,9 @@ namespace lkw
         if (idx == t->selected)
             return kSelectRow;
         auto const &flag = t->row_flags[(size_t)idx];
-        if (flag == L"alarm")
+        if (flag == "alarm")
             return kAlarmRow;
-        if (flag == L"warning")
+        if (flag == "warning")
             return kWarnRow;
         return winrt::Windows::UI::Color{ 0, 0, 0, 0 };
     }
@@ -235,110 +172,83 @@ namespace lkw
             return;
         }
 
-        try
+        // A malformed batch changes nothing; the next second answers again.
+        auto batch = ReadTableRows(json, t->spec);
+        free(json);
+        if (!batch || (!force && batch->seq == t->seq))
+            return;
+        t->seq = batch->seq;
+
+        t->rows.Children().Clear();
+        t->row_at.clear();
+        t->row_has_at.clear();
+        t->row_flags.clear();
+        for (auto const &row : batch->rows)
         {
-            auto root = JsonObject::Parse(winrt::to_hstring(json));
-            long long seq = (long long)root.GetNamedNumber(L"seq", 0);
-            if (!force && seq == t->seq)
+            t->row_flags.push_back(row.flag);
+            t->row_at.push_back({ row.lon, row.lat });
+            t->row_has_at.push_back(row.has_at ? 1 : 0);
+            int idx = (int)t->row_flags.size() - 1;
+
+            Controls::Grid line;
+            // A background always: a null brush is not hit-testable and the
+            // row must take a tap even with nothing wrong. RowTint layers
+            // the selection over the flag.
+            line.Background(Media::SolidColorBrush{ RowTint(t, idx) });
+            line.Tapped([t, idx](auto &&, auto &&) {
+                t->selected = idx;
+                RestyleRows(t);
+            });
+
+            Controls::StackPanel cellrow;
+            cellrow.Orientation(Controls::Orientation::Horizontal);
+            for (size_t i = 0; i < t->spec.columns.size(); ++i)
             {
-                free(json);
-                return;
+                auto const &col = t->spec.columns[i];
+                auto const &value = row.cells[i];
+
+                Controls::TextBlock cell;
+                cell.Text(winrt::to_hstring(value.text));
+                cell.FontSize(12);
+                cell.Width(ColumnWidth(col.type) - 12);
+                cell.Margin({ 6, 4, 6, 4 });
+                cell.TextTrimming(TextTrimming::CharacterEllipsis);
+                cell.TextAlignment(NumericColumn(col.type) ? TextAlignment::Right
+                                                           : TextAlignment::Left);
+                auto color = value.missing ? kFaint
+                    : col.type == "flag" && row.flag == "alarm" ? kAlarmText
+                    : col.type == "flag" && row.flag == "warning" ? kWarnText
+                    : kInk;
+                cell.Foreground(Media::SolidColorBrush{ color });
+                cellrow.Children().Append(cell);
             }
-            t->seq = seq;
+            line.Children().Append(cellrow);
 
-            t->rows.Children().Clear();
-            t->row_at.clear();
-            t->row_has_at.clear();
-            t->row_flags.clear();
-            auto arr = root.GetNamedArray(L"rows", JsonArray{});
-            for (auto const &rv : arr)
+            // Activate a row: centre the chart on the vessel and pin its
+            // bubble. Gated on the declaration carrying "at" and the row
+            // carrying a position. Return takes the same path through the
+            // selection (ActivateRow).
+            if (row.has_at)
             {
-                auto row = rv.GetObject();
-                auto cells = row.GetNamedArray(L"cells", JsonArray{});
-
-                // The flag cell tints the whole row.
-                std::wstring flag;
-                for (uint32_t i = 0; i < cells.Size() && i < t->spec.columns.size(); ++i)
-                    if (t->spec.columns[i].type == "flag" &&
-                        cells.GetAt(i).ValueType() == JsonValueType::String)
-                        flag = cells.GetAt(i).GetString();
-                t->row_flags.push_back(flag);
-                t->row_at.push_back({ 0, 0 });
-                t->row_has_at.push_back(0);
-                int idx = (int)t->row_flags.size() - 1;
-
-                Controls::Grid line;
-                // A background always: a null brush is not hit-testable and
-                // the row must take a tap even with nothing wrong. RowTint
-                // layers the selection over the flag.
-                line.Background(Media::SolidColorBrush{ RowTint(t, idx) });
-                line.Tapped([t, idx](auto &&, auto &&) {
+                line.DoubleTapped([t, idx](auto &&, auto &&) {
                     t->selected = idx;
                     RestyleRows(t);
+                    ActivateRow(t, idx);
                 });
-
-                Controls::StackPanel cellrow;
-                cellrow.Orientation(Controls::Orientation::Horizontal);
-                for (uint32_t i = 0; i < (uint32_t)t->spec.columns.size(); ++i)
-                {
-                    auto const &col = t->spec.columns[i];
-                    IJsonValue v = i < cells.Size() ? cells.GetAt(i) : nullptr;
-                    bool missing = v == nullptr || v.ValueType() == JsonValueType::Null;
-
-                    Controls::TextBlock cell;
-                    cell.Text(FormatCell(col.type, v));
-                    cell.FontSize(12);
-                    cell.Width(ColumnWidth(col.type) - 12);
-                    cell.Margin({ 6, 4, 6, 4 });
-                    cell.TextTrimming(TextTrimming::CharacterEllipsis);
-                    cell.TextAlignment(NumericColumn(col.type) ? TextAlignment::Right
-                                                               : TextAlignment::Left);
-                    auto color = missing ? kFaint
-                        : col.type == "flag" && flag == L"alarm" ? kAlarmText
-                        : col.type == "flag" && flag == L"warning" ? kWarnText
-                        : kInk;
-                    cell.Foreground(Media::SolidColorBrush{ color });
-                    cellrow.Children().Append(cell);
-                }
-                line.Children().Append(cellrow);
-
-                // Activate a row: centre the chart on the vessel and pin its
-                // bubble. Gated on the declaration carrying "at" and the row
-                // carrying a position. Return takes the same path through the
-                // selection (ActivateRow).
-                if (t->spec.locatable && row.HasKey(L"at"))
-                {
-                    auto at = row.GetNamedArray(L"at", JsonArray{});
-                    if (at.Size() >= 2)
-                    {
-                        t->row_at.back() = { at.GetAt(0).GetNumber(), at.GetAt(1).GetNumber() };
-                        t->row_has_at.back() = 1;
-                        line.DoubleTapped([t, idx](auto &&, auto &&) {
-                            t->selected = idx;
-                            RestyleRows(t);
-                            ActivateRow(t, idx);
-                        });
-                    }
-                }
-
-                t->rows.Children().Append(line);
-
-                Controls::Border rule;
-                rule.Height(1);
-                rule.Background(Media::SolidColorBrush{ kRule });
-                t->rows.Children().Append(rule);
             }
-            // The selection survives a rebuild by index; a shrunk table
-            // clamps it rather than leaving it pointing past the end.
-            if (t->selected >= (int)t->row_flags.size())
-                t->selected = (int)t->row_flags.size() - 1;
-            t->empty.Visibility(arr.Size() == 0 ? Visibility::Visible : Visibility::Collapsed);
+
+            t->rows.Children().Append(line);
+
+            Controls::Border rule;
+            rule.Height(1);
+            rule.Background(Media::SolidColorBrush{ kRule });
+            t->rows.Children().Append(rule);
         }
-        catch (winrt::hresult_error const &)
-        {
-            // A malformed batch changes nothing; the next second answers again.
-        }
-        free(json);
+        // The selection survives a rebuild by index; a shrunk table clamps it
+        // rather than leaving it pointing past the end.
+        if (t->selected >= (int)t->row_flags.size())
+            t->selected = (int)t->row_flags.size() - 1;
+        t->empty.Visibility(batch->rows.empty() ? Visibility::Visible : Visibility::Collapsed);
     }
 }
 
@@ -362,44 +272,12 @@ namespace winrt::LookoutMarine::implementation
     {
         tables.clear();
         char *json = lk_controller_tables_json(controller);
-        if (json != nullptr)
-        {
-            try
-            {
-                auto root = JsonObject::Parse(winrt::to_hstring(json));
-                auto arr = root.GetNamedArray(L"tables", JsonArray{});
-                for (auto const &tv : arr)
-                {
-                    auto o = tv.GetObject();
-                    lkw::TableSpec spec;
-                    spec.plugin = winrt::to_string(o.GetNamedString(L"plugin", L""));
-                    spec.key = winrt::to_string(o.GetNamedString(L"key", L""));
-                    spec.title = winrt::to_string(o.GetNamedString(L"title", L""));
-                    spec.locatable = o.HasKey(L"at");
-                    if (auto sort = o.TryLookup(L"sort"); sort && sort.ValueType() == JsonValueType::Object)
-                    {
-                        auto so = sort.GetObject();
-                        spec.sort_key = winrt::to_string(so.GetNamedString(L"key", L""));
-                        spec.sort_ascending = so.GetNamedBoolean(L"ascending", true);
-                    }
-                    auto cols = o.GetNamedArray(L"columns", JsonArray{});
-                    for (auto const &cv : cols)
-                    {
-                        auto co = cv.GetObject();
-                        lkw::TableColumn col;
-                        col.key = winrt::to_string(co.GetNamedString(L"key", L""));
-                        col.label = winrt::to_string(co.GetNamedString(L"label", L""));
-                        col.type = winrt::to_string(co.GetNamedString(L"type", L"text"));
-                        spec.columns.push_back(std::move(col));
-                    }
-                    tables.push_back(std::move(spec));
-                }
-            }
-            catch (winrt::hresult_error const &)
-            {
-            }
-            free(json);
-        }
+        if (json == nullptr)
+            return;
+        auto read = lkw::ReadTables(json);
+        free(json);
+        if (read)
+            tables = std::move(*read);
     }
 
     void MainWindow::OpenPluginTable(lkw::TableSpec const &spec)

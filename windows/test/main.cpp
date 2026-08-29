@@ -20,6 +20,7 @@ void TestPick();
 void TestLicenses();
 void TestPluginRegistry();
 void TestAlerts();
+void TestTable();
 
 int main()
 {
@@ -32,6 +33,7 @@ int main()
     TestLicenses();
     TestPluginRegistry();
     TestAlerts();
+    TestTable();
 
     return lktest::Report();
 }
