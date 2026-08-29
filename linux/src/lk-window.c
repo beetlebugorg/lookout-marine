@@ -19,7 +19,7 @@ typedef struct {
   GtkWidget  *window;
   GtkWidget  *chart_view;
   GtkWidget  *overlay;
-  GtkWidget  *search_bar;
+  GtkWidget  *search; /* the floating search capsule, an overlay child */
   GtkWidget  *loader;
   GtkWidget  *empty_state;
   GtkWidget  *scale_bar;
@@ -508,9 +508,8 @@ static void
 lk_action_search (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   LkWindow *self = user_data;
-  gboolean open = !gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar));
 
-  gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), open);
+  lk_search_toggle (self->search);
 }
 
 /* Escape clears whatever the last click put on the chart, whichever it was. */
@@ -538,6 +537,11 @@ lk_window_escape (GtkEventControllerKey *controller, guint keyval, guint keycode
   if (keyval != GDK_KEY_Escape)
     return GDK_EVENT_PROPAGATE;
 
+  if (lk_search_is_open (self->search))
+    {
+      lk_search_close (self->search);
+      return GDK_EVENT_STOP;
+    }
   if (lk_chart_view_dismiss (LK_CHART_VIEW (self->chart_view)))
     return GDK_EVENT_STOP;
   if (lk_app_model_get_overlay_pin (self->model) != NULL)
@@ -1824,11 +1828,8 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   gtk_window_set_titlebar (GTK_WINDOW (self->window), lk_window_build_header ());
 
-  /* Search above, chart in the middle, readouts below. */
+  /* The chart fills the window; the chrome floats over it. */
   GtkWidget *root = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-
-  self->search_bar = lk_search_bar_new (model);
-  gtk_box_append (GTK_BOX (root), self->search_bar);
 
   self->chart_view = lk_chart_view_new (model);
   self->loader = lk_window_build_loader ();
@@ -1860,6 +1861,12 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_set_margin_start (top_left, LK_CHROME_MARGIN);
   gtk_widget_set_margin_top (top_left, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), top_left);
+
+  /* The search capsule drops from under the top-left bubbles when opened. */
+  self->search = lk_search_new (model);
+  gtk_widget_set_margin_start (self->search, LK_CHROME_MARGIN);
+  gtk_widget_set_margin_top (self->search, LK_CHROME_MARGIN + LK_CHROME_BUBBLE + LK_CHROME_GAP);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->search);
 
   /* Top right: the compass, which is also the follow lock. */
   GtkWidget *north = lk_north_bubble_new (model);

@@ -213,6 +213,22 @@ static const char *LK_CSS =
        the chosen one. */
     ".lk-swatch { border-radius: 6px; border: 1px solid alpha(@borders, 0.5); }"
     ".lk-swatch-current .lk-swatch { border: 2px solid @accent_color; }"
+    /* The floating search capsule beside the top-left bubble, and its result
+       row below the field. */
+    ".lk-search-capsule {"
+    "  padding: 4px 12px;"
+    "  border-radius: 999px;"
+    "  background: alpha(@theme_bg_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.5);"
+    "  box-shadow: 0 1px 4px alpha(black, 0.2);"
+    "}"
+    ".lk-search-result {"
+    "  padding: 6px 12px;"
+    "  border-radius: 10px;"
+    "  background: alpha(@theme_bg_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.5);"
+    "}"
+    ".lk-search-result.lk-search-go { color: @accent_color; }"
     /* 48px is LK_CHROME_BUBBLE, the bubble diameter Chrome.swift and Chrome.kt
        use. The layout reserves the same, so the two agree. */
     ".lk-bubble {"
