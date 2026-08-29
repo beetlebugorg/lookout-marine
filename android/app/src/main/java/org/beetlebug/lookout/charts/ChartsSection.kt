@@ -1,6 +1,5 @@
 package org.beetlebug.lookout.charts
 
-import org.beetlebug.lookout.ui.SwitchRow
 
 import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader

@@ -1,6 +1,5 @@
 package org.beetlebug.lookout.ui
 
-import org.beetlebug.lookout.settings.MarinerState
 
 // The rows every pane in the shell is built from.
 //
@@ -130,7 +129,7 @@ internal fun LabeledRow(text: String) {
 }
 
 @Composable
-internal fun SwitchRow(title: String, m: MarinerState, index: Int) {
+internal fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -138,7 +137,7 @@ internal fun SwitchRow(title: String, m: MarinerState, index: Int) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Switch(checked = m.flag(index), onCheckedChange = { m.setFlag(index, it) })
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -163,19 +162,19 @@ internal fun SegmentedRow(options: List<String>, selectedIndex: Int, onSelect: (
 }
 
 @Composable
-internal fun SizeRow(title: String, m: MarinerState, index: Int) {
+internal fun SizeRow(title: String, value: Double, onChange: (Double) -> Unit) {
     Column(Modifier.padding(horizontal = 20.dp, vertical = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Text(
-                String.format(Locale.US, "%.2f×", m.num(index)),
+                String.format(Locale.US, "%.2f×", value),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Slider(
-            value = m.num(index).toFloat(),
-            onValueChange = { m.setNum(index, it.toDouble()) },
+            value = value.toFloat(),
+            onValueChange = { onChange(it.toDouble()) },
             valueRange = 0.5f..2.0f,
         )
     }
