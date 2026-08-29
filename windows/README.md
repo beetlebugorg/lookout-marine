@@ -101,28 +101,41 @@ captures.
 
 ## The source tree
 
-`src/` has a directory per area of the app, and each one holds **both** the
-WinUI that draws that area and the model that drives it: the pick report card
-sits with the pick decoder, the raster pill with the raster paths, the
-connection list with the registry reader. A change to one feature is a change
-in one directory.
+`src/` has a directory per area of the app. Inside an area, **`ui/` is the
+WinUI that draws it and the files beside that directory are the model that
+drives it**: the pick report card sits with the pick decoder, the raster pill
+with the raster paths, the connection list with the registry reader. A change
+to one feature is a change in one directory.
 
-The model files carry no WinRT — that is what lets `build-tests.ps1` link them
-into a test binary with no XAML host (see **Tests** below). The vcxproj marks
-each of them `NotUsing` for the precompiled header to keep it honest.
+The model files carry **no WinRT**. That is not a style rule: it is what lets
+`build-tests.ps1` link them into a test binary with no XAML host (see **Tests**
+below). The vcxproj marks every one of them `NotUsing` for the precompiled
+header, so a `winrt` include in a model file is a build error rather than a
+quietly lost test suite.
 
 | Directory | What it is |
 |---|---|
-| `src/app/` | The two XAML types (`App`, `MainWindow`), the window shell and the render thread, the menu bubble, and the glue that compiles the XAML-generated TUs a command-line build does not auto-register |
-| `src/chart/` | The chart surface: the open flow and the panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at, and `lk_pick` — the report envelope decoder |
-| `src/hud/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` — the readout formatting and the chrome palette |
-| `src/library/` | The charts aboard: the sets and their switches, charts by link, the raster underlay and its pill, the import and bake, and `lk_paths` / `lk_bake` behind them |
-| `src/plugins/` | Everything the wasm plugins reach: their settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and siren, DNS-SD discovery, and the `lk_plugin_registry` / `lk_alerts` models |
-| `src/settings/` | The mariner settings window: the section list, the pages, the debounced apply |
-| `src/about/` | About and the licences screen, over the `lk_licenses` manifest model |
-| `src/engine/` | The seams: `lk_controller` (the one `lookout*` handle and every `lookout_*` call), `lk_store` (`%APPDATA%\lookout-marine`), `lk_backdrop` (the transparent backdrop) |
+| `src/app/ui/` | The two XAML types (`App`, `MainWindow`), the window shell and the render thread, the menu bubble, the transparent backdrop, and the glue that compiles the XAML-generated TUs a command-line build does not auto-register |
+| `src/chart/` | `lk_pick` — the pick report envelope decoder |
+| `src/chart/ui/` | The open flow and the chart panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at |
+| `src/hud/` | `lk_text` — the scale, the usage band and the position, as the readouts say them |
+| `src/hud/ui/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` (the brushes) |
+| `src/library/` | `lk_paths` (chart and raster discovery, the agency name, the set names) and `lk_bake` (the import's order and progress) |
+| `src/library/ui/` | The sets aboard and their switches, charts by link, the raster underlay and its pill, the import panel |
+| `src/plugins/` | `lk_plugin_registry` (the settings schema and the config object), `lk_table` (the declarations, the rows and the mariner's units), `lk_alerts` (the severity and audibility rules), `lk_discovery` (DNS-SD) |
+| `src/plugins/ui/` | The plugin settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and its siren |
+| `src/settings/ui/` | The mariner settings window: the section list, the pages, the debounced apply. No model of its own yet — its pages read the core's mariner struct and the plugin registry direct |
+| `src/about/` | `lk_licenses` — the manifest model |
+| `src/about/ui/` | About and the licences screen |
+| `src/engine/` | The seams to what is not XAML: `lk_controller` (the one `lookout*` handle and every `lookout_*` call) and `lk_store` (`%APPDATA%\lookout-marine`), both plain C ports of the Linux shell's own |
 | `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8`, `lk_coord` |
 | `test/` | The model layer's tests and the check harness they are written against |
+
+Two model files are not in the test build because they call the core rather
+than only reasoning about its answers: `lk_licenses_baked.cpp` (which fetches
+the baked manifest) and `lk_bake.cpp` (which drives tile57). Both are split so
+that the part worth testing — reading the manifest, reading a scan — is not
+in them.
 
 At the root: `build-core.ps1` builds the Zig core where the vcxproj expects its
 outputs, `build-tests.ps1` builds and runs the tests, `pch.h` is the WinRT

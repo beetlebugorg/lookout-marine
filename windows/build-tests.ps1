@@ -27,9 +27,12 @@ $out = Join-Path $here 'test\out'
 $target = if ($Platform -eq 'arm64') { 'aarch64-windows-gnu' } else { 'x86_64-windows-gnu' }
 
 # Every source directory is on the include path, the way the vcxproj puts it
-# there ($(LkSourceDirs)), so a header is included by name here too.
-$sourceDirs = @('app', 'chart', 'hud', 'library', 'plugins', 'settings', 'about',
-    'engine', 'util') | ForEach-Object { "-I$PSScriptRoot\src\$_" }
+# there ($(LkSourceDirs)), so a header is included by name here too. The ui\
+# directories are on it as well: a model header may not include one, but the
+# path costs nothing and keeps the two builds saying the same thing.
+$sourceDirs = @('app\ui', 'chart', 'chart\ui', 'hud', 'hud\ui', 'library', 'library\ui',
+    'plugins', 'plugins\ui', 'settings\ui', 'about', 'about\ui', 'engine', 'util') |
+    ForEach-Object { "-I$PSScriptRoot\src\$_" }
 
 # The shell's own sources under test. A new module goes in one of the first two
 # lists, its suite in the third, and main.cpp names the suite function.

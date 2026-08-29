@@ -44,7 +44,7 @@ namespace winrt::LookoutMarine::implementation
         void WireChrome();
         void ToggleSettings();
         void LoadSettings();      // reads the live mariner state, shows the current tab
-        // the menu bubble (app/Menu.cpp): built fresh on every press,
+        // the menu bubble (app/ui/Menu.cpp): built fresh on every press,
         // because most of it names things that come and go
         void ShowMainMenu();
         Microsoft::UI::Xaml::Controls::MenuFlyoutItem MenuItem(
@@ -56,7 +56,7 @@ namespace winrt::LookoutMarine::implementation
         bool full_screen{ false };
 
         void BuildSettingsTabs(); // the section list; plugin sections come and go
-        // The settings live in their own window (see settings/Settings.cpp).
+        // The settings live in their own window (see settings/ui/Settings.cpp).
         void ShowSettings();
         void CloseSettings();
         bool SettingsOpen();
@@ -75,7 +75,7 @@ namespace winrt::LookoutMarine::implementation
          * flickers every control and resets the expanders. */
         void UpdatePluginStatusUi();
         void ScheduleApply();     // 60 ms debounce, then set + save
-        // wasm plugin settings (plugins/PluginSettings.cpp). The registry's own
+        // wasm plugin settings (plugins/ui/PluginSettings.cpp). The registry's own
         // shape, the config object and the status lines are model code, in
         // plugins/lk_plugin_registry.h; what is left here is the drawing.
         bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
@@ -127,14 +127,14 @@ namespace winrt::LookoutMarine::implementation
                        std::string const &label = {});
         void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
                          std::string const &label = {});
-        // startup loader (hud/Loader.cpp)
+        // startup loader (hud/ui/Loader.cpp)
         void ShowStartupLoader(size_t cells);
         void SetLoaderTessellating();
         void HideStartupLoader();
         void LoaderTick(int building);
         fire_and_forget PickChartFile();
         fire_and_forget PickChartFolder();
-        // chart import: scan, bake what is raw, then open (library/Bake.cpp)
+        // chart import: scan, bake what is raw, then open (library/ui/Bake.cpp)
         fire_and_forget PickChartArchive();
         void ImportCharts(std::string const &path);
         /* The half of an import that runs after the scan came back. */
@@ -149,7 +149,7 @@ namespace winrt::LookoutMarine::implementation
         static std::string BakeOutputDir();
         void SubmitSearch();
         void UpdateSearchResults(); // the live row under the field
-        // overlay bubbles, position source, follow lock (hud/Overlay.cpp)
+        // overlay bubbles, position source, follow lock (hud/ui/Overlay.cpp)
         bool TryPinOverlayAt(double x, double y); // a tap; true = it took it
         void UpdateOverlayBubble();               // per readout tick
         void CloseOverlayBubble();
@@ -157,9 +157,9 @@ namespace winrt::LookoutMarine::implementation
         void UpdateGpsPill();
         void UpdateFollowLock();
         void CycleFollowLock();
-        void OpenSettingsTab(std::string const &id); // settings/Settings.cpp
+        void OpenSettingsTab(std::string const &id); // settings/ui/Settings.cpp
 
-        // plugin install + file routing (plugins/PluginInstall.cpp)
+        // plugin install + file routing (plugins/ui/PluginInstall.cpp)
         fire_and_forget InstallPluginFromPath(std::string path); // consent first
         // A .lkplug that arrived before any chart was open: installed (with
         // consent) the moment one is, instead of erroring at the empty state.
@@ -170,7 +170,7 @@ namespace winrt::LookoutMarine::implementation
         fire_and_forget HandleDrop(Microsoft::UI::Xaml::DragEventArgs e);
         fire_and_forget ConfirmUninstallPlugin(std::string id, std::string name);
 
-        // about and licenses (about/Licenses.cpp). Both have their own
+        // about and licenses (about/ui/Licenses.cpp). Both have their own
         // window: the license text runs at its own width, and About opens the
         // same licenses window rather than a second copy of the list.
         void ShowAbout();
@@ -204,13 +204,13 @@ namespace winrt::LookoutMarine::implementation
         std::string licenses_selection;
         std::string licenses_search;
 
-        // plugin tables (plugins/Tables.cpp)
+        // plugin tables (plugins/ui/Tables.cpp)
         void RefreshPluginTables(); // re-read the declarations at open
         void OpenPluginTable(lkw::TableSpec const &spec);
         void ShowTableHook(std::string const &spec); // LOOKOUT_SHOW=table[:…]
         void CloseVesselWindows(); // the tables belong to the chart handle
 
-        // plugin alerts (plugins/Alerts.cpp)
+        // plugin alerts (plugins/ui/Alerts.cpp)
         void StartAlertWatch();     // 1 s poll, independent of any pane
         void StopAlertWatch();
         void RefreshAlerts();
@@ -219,7 +219,7 @@ namespace winrt::LookoutMarine::implementation
         void SirenSetSounding(bool on);
         void SirenStrike();
 
-        // raster underlay (library/Raster.cpp)
+        // raster underlay (library/ui/Raster.cpp)
         void InstallStoredRasters();  // re-add the stored list after each open
         void ForgetRasterCharts();    // clear the stored library; next open loses them
         void RestoreRasterShown();    // put back which sets were drawn, then the saved ENC-hidden
@@ -271,7 +271,7 @@ namespace winrt::LookoutMarine::implementation
         // sources, generates a wrapper style for bare tiles, fetches the
         // sprite packs, builds the credit line, templates the tile urls and
         // persists the list. This shell renders the snapshot and fetches urls
-        // (library/ChartLinks.cpp).
+        // (library/ui/ChartLinks.cpp).
         struct ChartLink
         {
             std::string url;
@@ -299,14 +299,14 @@ namespace winrt::LookoutMarine::implementation
         // answered into.
         std::mutex link_mu;
         bool link_live{ false };
-        // zoom-to-scale panel (hud/Scale.cpp)
+        // zoom-to-scale panel (hud/ui/Scale.cpp)
         void WireScale();
         void ToggleScalePanel();
         void UpdateScalePanel(lk_readout const &r);
         void UpdateScaleValidity();
         void SubmitScale();
         void ApplyScale(double denom);
-        // pick report (chart/Pick.cpp)
+        // pick report (chart/ui/Pick.cpp)
         void WirePick();                  // static pick chrome, once, from WireChrome
         void ShowPick(double x_pt, double y_pt);
         void DismissPick();

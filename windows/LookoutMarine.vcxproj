@@ -82,12 +82,13 @@
          else, so the whole directory is what travels with the exe. -->
     <LookoutBundledPluginDir>$(MSBuildThisFileDirectory)..\zig-out\plugins-bundled</LookoutBundledPluginDir>
 
-    <!-- The source tree, by area. Each directory holds a part of the app and
-         the model that drives it — the pick report card sits with the pick
-         decoder, the raster pill with the raster paths — so a change to one
-         feature is a change in one place. See README.md. -->
+    <!-- The source tree, by area. Each directory holds one part of the app:
+         its WinUI under `ui\`, and beside that directory the model that
+         drives it — the pick report card with the pick decoder, the raster
+         pill with the raster paths. A change to one feature is a change in
+         one directory. See README.md. -->
     <LkSrc>$(MSBuildThisFileDirectory)src</LkSrc>
-    <LkSourceDirs>$(LkSrc)\app;$(LkSrc)\chart;$(LkSrc)\hud;$(LkSrc)\library;$(LkSrc)\plugins;$(LkSrc)\settings;$(LkSrc)\about;$(LkSrc)\engine;$(LkSrc)\util</LkSourceDirs>
+    <LkSourceDirs>$(LkSrc)\app\ui;$(LkSrc)\chart;$(LkSrc)\chart\ui;$(LkSrc)\hud;$(LkSrc)\hud\ui;$(LkSrc)\library;$(LkSrc)\library\ui;$(LkSrc)\plugins;$(LkSrc)\plugins\ui;$(LkSrc)\settings\ui;$(LkSrc)\about;$(LkSrc)\about\ui;$(LkSrc)\engine;$(LkSrc)\util</LkSourceDirs>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -97,10 +98,10 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <!-- Every source directory is on the include path, so a header is
            included by name and moving one between areas costs nothing.
-           $(IntDir)(+src\app): the WinUI markup passes write <Name>.xaml.g.h
-           there, MIRRORING THE SOURCE LAYOUT — so this pair moves with the
-           .xaml. The project root carries pch.h. -->
-      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)src\app;$(MSBuildThisFileDirectory);$(LkSourceDirs);$(LookoutCoreIncDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+           $(IntDir)(+src\app\ui): the WinUI markup passes write
+           <Name>.xaml.g.h there, MIRRORING THE SOURCE LAYOUT — so this pair
+           moves with the .xaml. The project root carries pch.h. -->
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)src\app\ui;$(MSBuildThisFileDirectory);$(LkSourceDirs);$(LookoutCoreIncDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- What About and the licenses screen report this build as. Kept in
            step with build.zig.zon's version, the way linux/meson.build passes
            its own project version through as LK_VERSION. -->
@@ -134,43 +135,47 @@
     <ClInclude Include="resource.h" />
     <!-- DependentUpon links the code-behind to its .xaml so the WinUI markup
          compiler emits the per-page <name>.xaml.g.h stub (InitializeComponent). -->
-    <ClInclude Include="src\app\App.xaml.h">
+    <ClInclude Include="src\app\ui\App.xaml.h">
       <DependentUpon>App.xaml</DependentUpon>
     </ClInclude>
-    <ClInclude Include="src\app\MainWindow.xaml.h">
+    <ClInclude Include="src\app\ui\MainWindow.xaml.h">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClInclude>
   </ItemGroup>
 
   <!-- One group per area of the app, in the order the shell reaches for them.
-       Each holds the WinUI that draws that area and the model that drives it;
-       a model file carries NotUsing, because it must build without the PCH and
-       therefore without WinRT — that is what lets build-tests.ps1 link it into
-       a test binary with no XAML host. Keep it that way: a winrt include in
-       one of those files takes the tests with it. -->
+       Inside an area, `ui\` is the WinUI that draws it and the files beside
+       that directory are the model that drives it.
 
-  <!-- app: the two XAML types, the window shell, the menu. -->
+       A MODEL FILE CARRIES NotUsing: it must build without the precompiled
+       header, and therefore without WinRT, which is what lets
+       build-tests.ps1 link it into a test binary with no XAML host. Keep it
+       that way — one winrt include in one of those files takes the tests with
+       it. Everything under a ui\ uses the PCH and may reach for anything. -->
+
+  <!-- app: the two XAML types, the window shell, the menu, the backdrop. -->
   <ItemGroup>
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="src\app\App.xaml.cpp">
+    <ClCompile Include="src\app\ui\App.xaml.cpp">
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
-    <ClCompile Include="src\app\MainWindow.xaml.cpp">
+    <ClCompile Include="src\app\ui\MainWindow.xaml.cpp">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
-    <ClCompile Include="src\app\Menu.cpp" />
-    <ClCompile Include="src\app\winrt_glue.cpp" />
+    <ClCompile Include="src\app\ui\Menu.cpp" />
+    <ClCompile Include="src\app\ui\winrt_glue.cpp" />
+    <ClCompile Include="src\app\ui\lk_backdrop.cpp" />
   </ItemGroup>
 
   <!-- chart: the chart surface, its gestures, and the pick report. -->
   <ItemGroup>
-    <ClCompile Include="src\chart\Open.cpp" />
-    <ClCompile Include="src\chart\Input.cpp" />
-    <ClCompile Include="src\chart\Markers.cpp" />
-    <ClCompile Include="src\chart\Pick.cpp" />
-    <ClCompile Include="src\chart\PickAux.cpp" />
+    <ClCompile Include="src\chart\ui\Open.cpp" />
+    <ClCompile Include="src\chart\ui\Input.cpp" />
+    <ClCompile Include="src\chart\ui\Markers.cpp" />
+    <ClCompile Include="src\chart\ui\Pick.cpp" />
+    <ClCompile Include="src\chart\ui\PickAux.cpp" />
     <ClCompile Include="src\chart\lk_pick.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -178,11 +183,11 @@
 
   <!-- hud: the readouts, the scale, the loader, the overlay bubbles. -->
   <ItemGroup>
-    <ClCompile Include="src\hud\Hud.cpp" />
-    <ClCompile Include="src\hud\Loader.cpp" />
-    <ClCompile Include="src\hud\Overlay.cpp" />
-    <ClCompile Include="src\hud\Scale.cpp" />
-    <ClCompile Include="src\hud\lk_format.cpp" />
+    <ClCompile Include="src\hud\ui\Hud.cpp" />
+    <ClCompile Include="src\hud\ui\Loader.cpp" />
+    <ClCompile Include="src\hud\ui\Overlay.cpp" />
+    <ClCompile Include="src\hud\ui\Scale.cpp" />
+    <ClCompile Include="src\hud\ui\lk_format.cpp" />
     <ClCompile Include="src\hud\lk_text.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -190,21 +195,25 @@
 
   <!-- library: the charts aboard — sets, raster, the bake, charts by link. -->
   <ItemGroup>
-    <ClCompile Include="src\library\ChartSets.cpp" />
-    <ClCompile Include="src\library\ChartLinks.cpp" />
-    <ClCompile Include="src\library\Raster.cpp" />
-    <ClCompile Include="src\library\Bake.cpp" />
+    <ClCompile Include="src\library\ui\ChartSets.cpp" />
+    <ClCompile Include="src\library\ui\ChartLinks.cpp" />
+    <ClCompile Include="src\library\ui\Raster.cpp" />
+    <ClCompile Include="src\library\ui\Bake.cpp" />
     <ClCompile Include="src\library\lk_paths.cpp" />
-    <ClCompile Include="src\library\lk_bake.cpp" />
+    <ClCompile Include="src\library\lk_bake.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
 
   <!-- plugins: their settings, their tables, their alerts, their install. -->
   <ItemGroup>
-    <ClCompile Include="src\plugins\PluginSettings.cpp" />
-    <ClCompile Include="src\plugins\PluginInstall.cpp" />
-    <ClCompile Include="src\plugins\Tables.cpp" />
-    <ClCompile Include="src\plugins\Alerts.cpp" />
-    <ClCompile Include="src\plugins\lk_discovery.cpp" />
+    <ClCompile Include="src\plugins\ui\PluginSettings.cpp" />
+    <ClCompile Include="src\plugins\ui\PluginInstall.cpp" />
+    <ClCompile Include="src\plugins\ui\Tables.cpp" />
+    <ClCompile Include="src\plugins\ui\Alerts.cpp" />
+    <ClCompile Include="src\plugins\lk_discovery.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\plugins\lk_plugin_registry.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -216,24 +225,24 @@
     </ClCompile>
   </ItemGroup>
 
-  <!-- settings: the mariner settings window. -->
+  <!-- settings: the mariner settings window. No model of its own yet — its
+       pages read the core's mariner struct and the plugin registry direct. -->
   <ItemGroup>
-    <ClCompile Include="src\settings\Settings.cpp" />
+    <ClCompile Include="src\settings\ui\Settings.cpp" />
   </ItemGroup>
 
   <!-- about: About and the licences. -->
   <ItemGroup>
-    <ClCompile Include="src\about\Licenses.cpp" />
+    <ClCompile Include="src\about\ui\Licenses.cpp" />
     <ClCompile Include="src\about\lk_licenses_baked.cpp" />
     <ClCompile Include="src\about\lk_licenses.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>
 
-  <!-- engine: the seams — the Zig core, the disk, the compositor. Plain C
-       where it is a port of the Linux shell's own. -->
+  <!-- engine: the seams to what is not XAML — the Zig core and the disk.
+       Plain C, ports of the Linux shell's own. -->
   <ItemGroup>
-    <ClCompile Include="src\engine\lk_backdrop.cpp" />
     <ClCompile Include="src\engine\lk_controller.c">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -256,15 +265,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Midl Include="src\app\App.idl" />
-    <Midl Include="src\app\MainWindow.idl" />
+    <Midl Include="src\app\ui\App.idl" />
+    <Midl Include="src\app\ui\MainWindow.idl" />
   </ItemGroup>
 
   <ItemGroup>
-    <ApplicationDefinition Include="src\app\App.xaml">
+    <ApplicationDefinition Include="src\app\ui\App.xaml">
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Page Include="src\app\MainWindow.xaml">
+    <Page Include="src\app\ui\MainWindow.xaml">
       <SubType>Designer</SubType>
     </Page>
   </ItemGroup>

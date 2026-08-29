@@ -1,7 +1,7 @@
-#include "pch.h"
-
 #include "lk_discovery.h"
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <windns.h>
 
 #include <algorithm>

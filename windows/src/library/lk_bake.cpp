@@ -1,18 +1,18 @@
-#include "pch.h"
-
 #include "lk_bake.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
+
+#include "lk_json.h"
 
 extern "C"
 {
 #include "lookout.h"
 #include "tile57.h"
 }
-
-using namespace winrt::Windows::Data::Json;
 
 namespace lkw
 {
@@ -42,26 +42,6 @@ namespace lkw
             if (c.kind == "raster_source")
                 return 1;
             return 2;
-        }
-
-        std::string JsonString(JsonObject const &o, wchar_t const *key)
-        {
-            if (!o.HasKey(key))
-                return {};
-            auto v = o.GetNamedValue(key);
-            if (v.ValueType() != JsonValueType::String)
-                return {};
-            return winrt::to_string(v.GetString());
-        }
-
-        int JsonInt(JsonObject const &o, wchar_t const *key)
-        {
-            if (!o.HasKey(key))
-                return 0;
-            auto v = o.GetNamedValue(key);
-            if (v.ValueType() != JsonValueType::Number)
-                return 0;
-            return (int)v.GetNumber();
         }
 
         /* tile57's callbacks take a void* context; both forward to the job. */
@@ -113,30 +93,29 @@ namespace lkw
         if (json == nullptr || len == 0)
             return out;
 
-        JsonObject root{ nullptr };
-        if (!JsonObject::TryParse(winrt::to_hstring(std::string(json, len)), root))
+        auto doc = json::Parse(std::string_view(json, len));
+        if (!doc || doc->kind() != json::Kind::Object)
             return out;
+        json::Value const &root = *doc;
 
         out.ok = true;
-        out.root = JsonString(root, L"root");
-        out.sources = (unsigned)JsonInt(root, L"sources");
+        out.root = root.MemberString("root");
+        out.sources = (unsigned)root.MemberNumber("sources", 0);
 
         /* Inside an archive every entry is archived: `path` is an entry name,
          * and nothing opens until the bake takes it out. */
         const bool zip = IsArchive(path);
-        for (wchar_t const *key : { L"cells", L"raster" })
+        for (char const *key : { "cells", "raster" })
         {
-            if (!root.HasKey(key))
-                continue;
-            auto arr = root.GetNamedArray(key);
-            for (uint32_t i = 0; i < arr.Size(); ++i)
+            for (auto const &o : root[key].Items())
             {
-                auto o = arr.GetObjectAt(i);
+                if (o.kind() != json::Kind::Object)
+                    continue;
                 ScannedCell c;
-                c.path = JsonString(o, L"path");
-                c.name = JsonString(o, L"name");
-                c.kind = JsonString(o, L"kind");
-                c.band = JsonInt(o, L"band");
+                c.path = o.MemberString("path");
+                c.name = o.MemberString("name");
+                c.kind = o.MemberString("kind");
+                c.band = (int)o.MemberNumber("band", 0);
                 c.archived = zip;
                 if (!c.path.empty())
                     out.cells.push_back(std::move(c));

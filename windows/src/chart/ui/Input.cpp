@@ -1,6 +1,6 @@
 // Chart gestures and commands, shared by the XAML pointer path and the
 // fallback wndproc. A tap (drag under the slop) lands in ShowPick — the pick
-// report itself lives in chart/Pick.cpp.
+// report itself lives in chart/ui/Pick.cpp.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 

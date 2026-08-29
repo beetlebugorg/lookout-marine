@@ -14,7 +14,7 @@
  * as zero are different values, and on a collision table the difference is the
  * whole point.
  *
- * The windows that lay this out are plugins/Tables.cpp.
+ * The windows that lay this out are plugins/ui/Tables.cpp.
  */
 #pragma once
 

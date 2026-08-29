@@ -5,7 +5,7 @@
  * shell says them the same way, so they are worth one place and a test.
  *
  * Model code — UTF-8 std::string, no WinRT. The capsule that draws them is
- * hud/Hud.cpp, and the brushes it draws them in are lk_format.h.
+ * hud/ui/Hud.cpp, and the brushes it draws them in are lk_format.h.
  */
 #pragma once
 
