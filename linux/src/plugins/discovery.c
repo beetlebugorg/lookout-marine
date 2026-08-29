@@ -1,4 +1,4 @@
-#include "lk-discovery.h"
+#include "plugins/discovery.h"
 
 #include <gio/gio.h>
 #include <string.h>

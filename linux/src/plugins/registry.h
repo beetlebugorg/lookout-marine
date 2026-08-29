@@ -1,4 +1,4 @@
-/* lk-plugins.h — the mariner's controls over the wasm plugins.
+/* plugins/registry.h — the mariner's controls over the wasm plugins.
  *
  * A plugin declares a settings schema in its manifest; the core hands the whole
  * registry over as JSON through lookout_plugins_json, and this turns that into

@@ -1,4 +1,4 @@
-/* lk-plugin-install.h — installing a plugin the mariner chose.
+/* plugins/install.h — installing a plugin the mariner chose.
  *
  * A .lkplug is a package: a manifest and one wasm module. The core reads it
  * without installing it (lookout_plugin_inspect), which is everything the

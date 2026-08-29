@@ -1,4 +1,4 @@
-#include "lk-plugins.h"
+#include "plugins/registry.h"
 
 #include "util/json.h"
 #include "model/store.h"

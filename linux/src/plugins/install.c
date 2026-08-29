@@ -1,4 +1,4 @@
-#include "lk-plugin-install.h"
+#include "plugins/install.h"
 
 #include "util/json.h"
 

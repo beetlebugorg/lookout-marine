@@ -2,7 +2,7 @@
 
 #include "model/app-model.h"
 #include "lk-chart-view.h"
-#include "lk-plugins.h"
+#include "plugins/registry.h"
 #include "model/store.h"
 
 #include <string.h>

@@ -1,10 +1,10 @@
-#include "lk-discovery.h"
+#include "plugins/discovery.h"
 #include "lk-settings-window.h"
 
 #include "lk-licenses.h"
 #include "model/mariner.h"
-#include "lk-plugin-install.h"
-#include "lk-plugins.h"
+#include "plugins/install.h"
+#include "plugins/registry.h"
 #include "lk-window.h"
 
 #include <gdk/gdkkeysyms.h>
@@ -1716,7 +1716,7 @@ lk_build_advanced_page (LkSettings *settings)
 /* ---- the plugins' own controls ------------------------------------------- */
 /*
  * A plugin declares a settings schema in its manifest and the core hands the
- * whole registry over as JSON; lk-plugins.c turns that into groups, lists and
+ * whole registry over as JSON; plugins/registry.c turns that into groups, lists and
  * rows, and this draws them with the same builders the app's own settings use.
  * The mariner is never told which of these came from a plugin: an AIS alarm is
  * a chart setting that happens to be served by one.

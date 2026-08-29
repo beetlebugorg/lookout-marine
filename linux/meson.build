@@ -129,13 +129,10 @@ sources = files(
   'src/lk-about.c',
   'src/lk-alerts.c',
   'src/lk-chart-view.c',
-  'src/lk-discovery.c',
   'src/lk-hud.c',
   'src/lk-licenses.c',
   'src/lk-overlay-pick.c',
   'src/lk-pick-report.c',
-  'src/lk-plugin-install.c',
-  'src/lk-plugins.c',
   'src/lk-search.c',
   'src/lk-settings-window.c',
   'src/lk-table-window.c',
@@ -144,6 +141,9 @@ sources = files(
   'src/model/coord.c',
   'src/model/mariner.c',
   'src/model/store.c',
+  'src/plugins/discovery.c',
+  'src/plugins/install.c',
+  'src/plugins/registry.c',
   'src/util/json.c',
 )
 
