@@ -31,4 +31,9 @@ void lk_chart_view_get_point_size (LkChartView *self, int *width, int *height);
 /* lookout presented its first frame — map the surface (hidden until then). */
 void lk_chart_view_surface_ready (LkChartView *self);
 
+/* Fold an angle in radians into (−π, π]. The rotate gesture reports its delta
+ * on a circle, so the dead-zone test and the tracking both unwrap it. Exposed
+ * for tests. */
+double lk_chart_view_unwrap_angle (double a);
+
 G_END_DECLS

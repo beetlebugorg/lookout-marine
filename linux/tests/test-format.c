@@ -6,6 +6,7 @@
  */
 
 #include "lk-hud.h"
+#include "lk-chart-view.h"
 
 static void
 assert_coord (double value, gboolean is_lat, const char *expected)
@@ -115,11 +116,33 @@ test_scale_bar_cap (void)
     }
 }
 
+static void
+test_unwrap_angle (void)
+{
+  const double pi = G_PI;
+
+  /* Already inside (−π, π] passes through. */
+  g_assert_cmpfloat (fabs (lk_chart_view_unwrap_angle (0.0)), <, 1e-9);
+  g_assert_cmpfloat (fabs (lk_chart_view_unwrap_angle (1.0) - 1.0), <, 1e-9);
+  g_assert_cmpfloat (fabs (lk_chart_view_unwrap_angle (-1.0) + 1.0), <, 1e-9);
+
+  /* A small turn reported near 2π folds back to a small angle, so the dead-zone
+     test sees the true magnitude instead of a near-full turn. */
+  g_assert_cmpfloat (fabs (lk_chart_view_unwrap_angle (2.0 * pi - 0.05) + 0.05), <, 1e-9);
+  g_assert_cmpfloat (fabs (lk_chart_view_unwrap_angle (2.0 * pi + 0.05) - 0.05), <, 1e-9);
+
+  /* The wrap point stays continuous either side of π. */
+  g_assert_cmpfloat (lk_chart_view_unwrap_angle (pi), >, pi - 1e-9);
+  g_assert_cmpfloat (lk_chart_view_unwrap_angle (pi + 0.01), <, 0);
+  g_assert_cmpfloat (fabs (lk_chart_view_unwrap_angle (4.0 * pi)), <, 1e-9);
+}
+
 int
 main (int argc, char *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func ("/format/rotate/unwrap", test_unwrap_angle);
   g_test_add_func ("/format/scale-bar/cap", test_scale_bar_cap);
   g_test_add_func ("/format/coord/basic", test_coord_dm_basic);
   g_test_add_func ("/format/coord/zero", test_coord_dm_zero);

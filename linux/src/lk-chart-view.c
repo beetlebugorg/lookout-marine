@@ -61,6 +61,10 @@ struct _LkChartView {
   gboolean touch_was_tap;          /* the last contact ended without moving */
   guint    touch_settle_id;
   guint    touch_press_id;
+  int      touch_points;           /* fingers down now, by begin/end count */
+  gboolean touch_multi;            /* a second finger joined; the pinch and
+                                      rotate gestures own the episode until all
+                                      fingers lift, so pan stands off */
 
   /* pointer position, for scroll-anchored zoom */
   double   pointer_x, pointer_y;
@@ -283,6 +287,10 @@ lk_chart_view_unrealize (GtkWidget *widget)
      staying blank. */
   self->did_auto_open = FALSE;
   self->presented = FALSE;
+  /* No finger can still be down across a re-realize, so clear the touch count
+     and the multi-finger latch that would otherwise strand the pan. */
+  self->touch_points = 0;
+  self->touch_multi = FALSE;
 
   GTK_WIDGET_CLASS (lk_chart_view_parent_class)->unrealize (widget);
 }
@@ -541,10 +549,25 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
   gtk_popover_popup (GTK_POPOVER (self->menu));
 }
 
+/* A click gesture's current event came from a touchscreen. Touch is handled by
+   the legacy controller and the zoom and rotate gestures, so the click handlers
+   stand off it — the same test the scroll handler makes. */
+static gboolean
+lk_chart_view_gesture_is_touch (GtkGesture *gesture)
+{
+  GdkEvent *event =
+      gtk_event_controller_get_current_event (GTK_EVENT_CONTROLLER (gesture));
+  GdkDevice *source = event != NULL ? gdk_event_get_device (event) : NULL;
+
+  return source != NULL && gdk_device_get_source (source) == GDK_SOURCE_TOUCHSCREEN;
+}
+
 static void
 lk_chart_view_menu_pressed (GtkGestureClick *gesture, int n_press, double x, double y,
                             gpointer user_data)
 {
+  if (lk_chart_view_gesture_is_touch (GTK_GESTURE (gesture)))
+    return;
   lk_chart_view_open_menu (user_data, x, y);
 }
 
@@ -558,6 +581,9 @@ lk_chart_view_pressed (GtkGestureClick *gesture,
   LkChartView *self = user_data;
   GdkModifierType state =
       gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (gesture));
+
+  if (lk_chart_view_gesture_is_touch (GTK_GESTURE (gesture)))
+    return;
 
   self->down_x = x;
   self->down_y = y;
@@ -602,6 +628,9 @@ lk_chart_view_released (GtkGestureClick *gesture,
   LkChartView *self = user_data;
   gboolean was_rotating = self->rotating;
 
+  if (lk_chart_view_gesture_is_touch (GTK_GESTURE (gesture)))
+    return;
+
   self->dragging = FALSE;
   self->rotating = FALSE;
 
@@ -615,18 +644,20 @@ lk_chart_view_released (GtkGestureClick *gesture,
     lk_chart_controller_fling_start (self->controller, self->vx, self->vy);
 }
 
-/* Touch, taken whole.
+/* Single-finger touch, stitched.
  *
  * A resistive panel does not hold contact through a drag: one finger crossing
  * the chart arrives as a run of short sequences, each a begin, a couple of
- * updates and an end, tens of milliseconds apart. Left to the gestures above
+ * updates and an end, tens of milliseconds apart. Left to the click gesture
  * that reads as repeated double taps, which zoom, and no sequence lives long
  * enough to pass the drag threshold, so nothing pans.
  *
- * So touch is handled here instead, in the capture phase, and a begin that
- * lands soon after and near the last lift continues the drag it belongs to.
- * The decision between a tap and the end of a drag waits out the stitch
- * window, because until it passes there is no telling which one this was. */
+ * So one-finger touch is stitched here instead, in the capture phase, and a
+ * begin that lands soon after and near the last lift continues the drag it
+ * belongs to. The decision between a tap and the end of a drag waits out the
+ * stitch window, because until it passes there is no telling which one this
+ * was. The handler propagates every event, so the pinch and rotate gestures
+ * still see two-finger episodes; the click gesture ignores touch instead. */
 static gboolean
 lk_chart_view_touch_settle (gpointer user_data)
 {
@@ -678,6 +709,41 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
 
   now = g_get_monotonic_time ();
 
+  /* Count the fingers down. The pinch and rotate gestures need two, and they
+     only see these events because this handler propagates every one. A second
+     finger ends the single-finger interaction and hands the episode to those
+     gestures: pan, the tap and the long-press stand off until all fingers lift.
+     Before this, the handler stopped every touch event, so the gestures were
+     never fed and two fingers only shuddered the pan. */
+  if (type == GDK_TOUCH_BEGIN)
+    {
+      self->touch_points++;
+      if (self->touch_points >= 2 && !self->touch_multi)
+        {
+          self->touch_multi = TRUE;
+          g_clear_handle_id (&self->touch_press_id, g_source_remove);
+          g_clear_handle_id (&self->touch_settle_id, g_source_remove);
+          lk_chart_controller_fling_start (self->controller, 0, 0);
+          self->touch_taken = TRUE; /* the lift must not read as a tap */
+        }
+    }
+  else if (type == GDK_TOUCH_END && self->touch_points > 0)
+    {
+      self->touch_points--;
+    }
+
+  if (self->touch_multi)
+    {
+      if (type == GDK_TOUCH_END && self->touch_points == 0)
+        {
+          self->touch_multi = FALSE;
+          self->touch_taken = FALSE;
+          self->touch_was_tap = FALSE;
+          self->touch_us = 0; /* the next contact is fresh, not a stitch */
+        }
+      return GDK_EVENT_PROPAGATE;
+    }
+
   switch ((int) type)
     {
     case GDK_TOUCH_BEGIN:
@@ -713,7 +779,7 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
             self->touch_x = x;
             self->touch_y = y;
             self->touch_us = now;
-            return GDK_EVENT_STOP;
+            return GDK_EVENT_PROPAGATE;
           }
 
         if (!same_finger)
@@ -746,7 +812,7 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
         self->touch_y = y;
         self->touch_us = now;
         gtk_widget_grab_focus (GTK_WIDGET (self));
-        return GDK_EVENT_STOP;
+        return GDK_EVENT_PROPAGATE;
       }
 
     case GDK_TOUCH_UPDATE:
@@ -768,12 +834,12 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
         /* Under the slop this is still a candidate tap, and the chart holds
            still: panning here is what makes a stationary finger shake it. */
         if (self->touch_moved <= LK_TOUCH_SLOP)
-          return GDK_EVENT_STOP;
+          return GDK_EVENT_PROPAGATE;
 
         g_clear_handle_id (&self->touch_press_id, g_source_remove);
         lk_chart_controller_pan (self->controller, dx, dy);
         lk_chart_view_sample_velocity (self, dx, dy);
-        return GDK_EVENT_STOP;
+        return GDK_EVENT_PROPAGATE;
       }
 
     case GDK_TOUCH_END:
@@ -790,7 +856,7 @@ lk_chart_view_touch (GtkEventControllerLegacy *controller, GdkEvent *event, gpoi
       self->touch_settle_id =
           g_timeout_add (self->touch_was_tap ? LK_TOUCH_DOUBLE_MS : LK_TOUCH_STITCH_MS,
                          lk_chart_view_touch_settle, self);
-      return GDK_EVENT_STOP;
+      return GDK_EVENT_PROPAGATE;
 
     default:
       return GDK_EVENT_PROPAGATE;
@@ -905,6 +971,17 @@ lk_chart_view_rotate_begin (GtkGesture *gesture, GdkEventSequence *sequence, gpo
   self->rotate_engaged = FALSE;
 }
 
+double
+lk_chart_view_unwrap_angle (double a)
+{
+  a = fmod (a, 2.0 * G_PI);
+  if (a > G_PI)
+    a -= 2.0 * G_PI;
+  else if (a <= -G_PI)
+    a += 2.0 * G_PI;
+  return a;
+}
+
 static void
 lk_chart_view_rotate_changed (GtkGestureRotate *gesture,
                               double            angle,
@@ -912,19 +989,21 @@ lk_chart_view_rotate_changed (GtkGestureRotate *gesture,
                               gpointer          user_data)
 {
   LkChartView *self = user_data;
+  double turn = lk_chart_view_unwrap_angle (delta);
 
   /* Inert until past the dead-zone, then track from there without jumping. */
   if (!self->rotate_engaged)
     {
-      if (fabs (delta) < LK_ROTATE_DEADZONE)
+      if (fabs (turn) < LK_ROTATE_DEADZONE)
         return;
       self->rotate_engaged = TRUE;
       self->rotate_base_deg = lk_chart_controller_get_view (self->controller).rotation_deg;
-      self->rotate_offset = delta;
+      self->rotate_offset = turn;
     }
 
   lookout_view view = lk_chart_controller_get_view (self->controller);
-  view.rotation_deg = self->rotate_base_deg + (delta - self->rotate_offset) * 180.0 / G_PI;
+  view.rotation_deg =
+      self->rotate_base_deg + lk_chart_view_unwrap_angle (turn - self->rotate_offset) * 180.0 / G_PI;
   lk_chart_controller_set_view (self->controller, view);
 }
 
@@ -1080,9 +1159,10 @@ lk_chart_view_init (LkChartView *self)
   g_signal_connect (rotate, "angle-changed", G_CALLBACK (lk_chart_view_rotate_changed), self);
   gtk_widget_add_controller (GTK_WIDGET (self), GTK_EVENT_CONTROLLER (rotate));
 
-  /* Touch is taken in the capture phase, ahead of the gestures above: a
-     resistive panel's stutter would otherwise read as a stream of double
-     taps. See lk_chart_view_touch. */
+  /* Touch is stitched in the capture phase, ahead of the gestures above: a
+     resistive panel's stutter would otherwise read as a stream of double taps.
+     The handler propagates, so the pinch and rotate gestures still act on two
+     fingers. See lk_chart_view_touch. */
   GtkEventController *touch = gtk_event_controller_legacy_new ();
   gtk_event_controller_set_propagation_phase (touch, GTK_PHASE_CAPTURE);
   g_signal_connect (touch, "event", G_CALLBACK (lk_chart_view_touch), self);
