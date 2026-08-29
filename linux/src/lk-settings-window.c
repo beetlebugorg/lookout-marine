@@ -1612,7 +1612,8 @@ lk_plugin_reset_clicked (GtkButton *button, gpointer user_data)
   for (guint i = 0; i < group->fields->len; i++)
     {
       const LkPluginField *field = g_ptr_array_index (group->fields, i);
-      GtkWidget *widget = g_object_get_data (G_OBJECT (button), field->key);
+      g_autofree char *data_key = g_strdup_printf ("lk-field-%s", field->key);
+      GtkWidget *widget = g_object_get_data (G_OBJECT (button), data_key);
 
       if (widget == NULL)
         continue;
@@ -2203,8 +2204,12 @@ lk_plugin_fill_tab (GtkWidget *page, LkSettings *settings, const char *tab)
                                                      group->plugin_id, field);
 
           /* The reset has to put each control back where the manifest had it,
-           * so it carries them, keyed by the field they belong to. */
-          g_object_set_data (G_OBJECT (reset), field->key, control);
+           * so it carries them, keyed by the field they belong to. The key is
+           * prefixed: a manifest field named "lk-group" would otherwise land on
+           * the shell's own data key and hand Reset a widget where it reads a
+           * group. */
+          g_autofree char *data_key = g_strdup_printf ("lk-field-%s", field->key);
+          g_object_set_data (G_OBJECT (reset), data_key, control);
         }
 
       gtk_widget_set_halign (reset, GTK_ALIGN_START);
@@ -2325,22 +2330,43 @@ lk_plugins_install_clicked (GtkButton *button, gpointer user_data)
                             settings->model, lk_plugins_installed, GTK_WIDGET (button));
 }
 
+/* The dialog is async and outlives the button that raised it. It carries the
+   window instead, held by a reference, so a settings window closed while the
+   question stands cannot be freed under the answer: the settings struct hangs
+   off the window and lives as long as it does. */
+typedef struct {
+  GtkWindow *window; /* reffed */
+  char      *id;
+} LkUninstallAsk;
+
+static void
+lk_uninstall_ask_free (LkUninstallAsk *ask)
+{
+  g_clear_object (&ask->window);
+  g_free (ask->id);
+  g_free (ask);
+}
+
 static void
 lk_plugins_uninstall_answered (GObject *source, GAsyncResult *result, gpointer user_data)
 {
-  GtkWidget *button = user_data;
-  LkSettings *settings = g_object_get_data (G_OBJECT (button), "lk-settings");
-  const char *id = g_object_get_data (G_OBJECT (button), "lk-plugin-id");
+  LkUninstallAsk *ask = user_data;
   g_autoptr (GError) error = NULL;
   int chosen = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, &error);
 
-  if (chosen != 1) /* Cancel is 0, Uninstall is 1 */
-    return;
+  /* Cancel is 0, Uninstall is 1. The window may have closed while the question
+     stood; act only while it is still standing. */
+  if (chosen == 1 && ask->window != NULL &&
+      !gtk_widget_in_destruction (GTK_WIDGET (ask->window)))
+    {
+      LkSettings *settings = g_object_get_data (G_OBJECT (ask->window), "lk-settings");
+      if (settings != NULL &&
+          lk_chart_controller_plugin_uninstall (lk_app_model_get_controller (settings->model),
+                                                ask->id))
+        g_idle_add (lk_plugins_reopen_window, ask->window);
+    }
 
-  if (!lk_chart_controller_plugin_uninstall (lk_app_model_get_controller (settings->model), id))
-    return;
-
-  lk_plugins_queue_reopen (button);
+  lk_uninstall_ask_free (ask);
 }
 
 /* Uninstall takes everything the plugin owns: its instance, the objects it
@@ -2362,8 +2388,12 @@ lk_plugins_uninstall_clicked (GtkButton *button, gpointer user_data)
   gtk_alert_dialog_set_buttons (dialog, answers);
   gtk_alert_dialog_set_cancel_button (dialog, 0);
   gtk_alert_dialog_set_default_button (dialog, 0);
-  gtk_alert_dialog_choose (dialog, GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL, NULL,
-                           lk_plugins_uninstall_answered, button);
+
+  LkUninstallAsk *ask = g_new0 (LkUninstallAsk, 1);
+  ask->window = GTK_IS_WINDOW (root) ? g_object_ref (GTK_WINDOW (root)) : NULL;
+  ask->id = g_strdup (id);
+  gtk_alert_dialog_choose (dialog, ask->window, NULL,
+                           lk_plugins_uninstall_answered, ask);
   g_object_unref (dialog);
 }
 
@@ -2544,9 +2574,11 @@ lk_settings_window_destroyed (GtkWidget *window, gpointer user_data)
 
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
-  /* The raster refill too: a toggle queues it, and a window destroyed before
-     the idle runs would have it write into freed rows. */
+  /* Every queued refill too: a toggle or an edit queues one, and a window
+     destroyed before the idle runs would have it write into freed rows. */
   g_clear_handle_id (&settings->raster_refresh_id, g_source_remove);
+  g_clear_handle_id (&settings->links_refresh_id, g_source_remove);
+  g_clear_handle_id (&settings->sets_refresh_id, g_source_remove);
   g_clear_pointer (&settings->discovery, lk_discovery_free);
   g_ptr_array_set_size (settings->discover_lists, 0);
   g_ptr_array_set_size (settings->status_labels, 0);

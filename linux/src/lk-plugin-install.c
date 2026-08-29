@@ -389,11 +389,16 @@ lk_install_file_chosen (GObject *source, GAsyncResult *result, gpointer user_dat
     {
       g_autofree char *path = g_file_get_path (file);
 
-      if (path != NULL)
+      /* The picker is async and can outlive the window that raised it. The flow
+         holds a reference to that window, so it cannot be freed here; a window
+         closed while the picker stood takes no install. */
+      if (path != NULL && flow->window != NULL &&
+          !gtk_widget_in_destruction (flow->window))
         lk_plugin_install_begin (GTK_WINDOW (flow->window), flow->model, path,
                                  flow->on_installed, flow->user_data);
     }
 
+  g_clear_object (&flow->window);
   lk_install_flow_free (flow);
 }
 
@@ -411,7 +416,9 @@ lk_plugin_install_choose (GtkWindow  *parent,
   LkInstallFlow *flow = g_new0 (LkInstallFlow, 1);
 
   flow->model = model;
-  flow->window = GTK_WIDGET (parent);
+  /* Hold the parent for the picker's life. The file dialog is async, and the
+     window that raised it can close before the mariner picks a file. */
+  flow->window = parent != NULL ? GTK_WIDGET (g_object_ref (parent)) : NULL;
   flow->on_installed = on_installed;
   flow->user_data = user_data;
 
