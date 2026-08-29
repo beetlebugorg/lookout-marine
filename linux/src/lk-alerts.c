@@ -215,7 +215,7 @@ lk_alert_icon (LkAlertSeverity severity)
 {
   switch (severity)
     {
-    case LK_ALERT_ALARM:   return "dialog-warning-symbolic";
+    case LK_ALERT_ALARM:   return "lk-alarm-symbolic";
     case LK_ALERT_WARNING: return "dialog-warning-symbolic";
     default:               return "dialog-information-symbolic";
     }
