@@ -173,8 +173,16 @@ class LicensesTest {
         }
     }
 
-    /** Ten entries, so the group headings that only earn their place above
-     *  twelve stay away. */
+    /** Ten entries, so neither the search field nor the group headings, which
+     *  only earn their place above twelve, appear. */
+    @Test fun tenComponentsGetNoSearchField() {
+        showLicenses()
+        assertTrue(
+            "a search field appeared below the twelve-row threshold",
+            compose.onAllNodes(hasTestTag("licenses-search")).fetchSemanticsNodes().isEmpty(),
+        )
+    }
+
     @Test fun tenComponentsGetNoGroupHeadings() {
         showLicenses()
         for (group in listOf("CHART AND RENDERING", "PLUGINS", "IMAGES AND DATA", "PLATFORM")) {

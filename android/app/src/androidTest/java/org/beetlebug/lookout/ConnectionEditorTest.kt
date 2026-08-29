@@ -188,6 +188,53 @@ class ConnectionEditorTest {
         compose.onNodeWithText(" m").assertIsDisplayed()
     }
 
+    /**
+     * A group whose values are all where the manifest put them offers no reset:
+     * a control that does nothing is a question nobody asked.
+     */
+    @Test fun aGroupOnItsDefaultsOffersNoReset() {
+        val untouched = PluginRegistry.parse(
+            """{"plugins":[{"id":"x","name":"X","settings":[
+               {"key":"a","label":"A","kind":"number","min":0,"max":10,"default":5,"group":"G","tab":"alarms","value":5},
+               {"key":"b","label":"B","kind":"toggle","default":true,"group":"G","tab":"alarms","value":true}]}]}"""
+        )
+        compose.setContent {
+            LookoutTheme(dark = false) {
+                Column { PluginGroups(untouched.groups("alarms"), plugins(), first = true) }
+            }
+        }
+        compose.onAllNodes(hasText("Reset to defaults")).assertCountEquals(0)
+    }
+
+    /** Once something has moved, the way back appears. */
+    @Test fun aChangedGroupOffersTheWayBack() {
+        val moved = PluginRegistry.parse(
+            """{"plugins":[{"id":"x","name":"X","settings":[
+               {"key":"a","label":"A","kind":"number","min":0,"max":10,"default":5,"group":"G","tab":"alarms","value":9},
+               {"key":"b","label":"B","kind":"toggle","default":true,"group":"G","tab":"alarms","value":true}]}]}"""
+        )
+        compose.setContent {
+            LookoutTheme(dark = false) {
+                Column { PluginGroups(moved.groups("alarms"), plugins(), first = true) }
+            }
+        }
+        compose.onNodeWithText("Reset to defaults").assertIsDisplayed()
+    }
+
+    /** A toggle flipped off its default counts as moved too. */
+    @Test fun aFlippedToggleAlsoOffersTheWayBack() {
+        val moved = PluginRegistry.parse(
+            """{"plugins":[{"id":"x","name":"X","settings":[
+               {"key":"b","label":"B","kind":"toggle","default":true,"group":"G","tab":"alarms","value":false}]}]}"""
+        )
+        compose.setContent {
+            LookoutTheme(dark = false) {
+                Column { PluginGroups(moved.groups("alarms"), plugins(), first = true) }
+            }
+        }
+        compose.onNodeWithText("Reset to defaults").assertIsDisplayed()
+    }
+
     // ---- the section that talks about plugins -------------------------------
 
     /**

@@ -6,6 +6,7 @@ package org.beetlebug.lookout.plugins
 // any of them mean. A plugin that adds a setting gets it on screen with no
 // shell change, in the section its manifest names.
 
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -60,7 +61,34 @@ internal fun PluginGroups(groups: List<PluginGroup>, controller: PluginSettingsC
                 PluginField.Kind.TEXT -> Footer("${field.label}: text fields belong in a list")
             }
         }
+        ResetGroupButton(group, controller)
     }
+}
+
+/**
+ * Put one group back to what its manifest asks for.
+ *
+ * A plugin's settings are the only ones in the sheet a mariner cannot reason
+ * back to a default: the core's own controls have S-52 behind them, and a
+ * plugin's have whatever its author chose. Offered per group rather than for
+ * the whole plugin, because a group is what is read and changed together.
+ *
+ * Shown only where something has moved off its default. A control that does
+ * nothing is a question nobody asked.
+ */
+@Composable
+private fun ResetGroupButton(group: PluginGroup, controller: PluginSettingsController) {
+    val moved = group.fields.any { it.kind != PluginField.Kind.TEXT && it.value != it.defaultValue }
+    if (!moved) return
+    TextButton(
+        onClick = {
+            for (f in group.fields) {
+                if (f.kind == PluginField.Kind.TEXT) continue
+                controller.setPluginScalar(group.pluginId, f, f.defaultValue)
+            }
+        },
+        modifier = Modifier.padding(start = 12.dp),
+    ) { Text("Reset to defaults") }
 }
 
 // ---- the connection editor ---------------------------------------------------

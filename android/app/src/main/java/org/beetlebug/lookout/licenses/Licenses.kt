@@ -3,6 +3,12 @@ package org.beetlebug.lookout.licenses
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.ui.SectionHeader
 
+import org.beetlebug.lookout.ui.Footer
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -221,7 +227,18 @@ fun LicensesScreen(
  */
 @Composable
 private fun LicenseList(manifest: LicenseManifest, onOpen: (LicenseSelection) -> Unit) {
-    val grouped = manifest.components.size > 12
+    // Search and the group headings earn their place above twelve entries and
+    // not below: under that the headings outnumber the rows and the field is a
+    // control for a list that fits on one screen.
+    val long = manifest.components.size > 12
+    var search by remember { mutableStateOf("") }
+    val term = search.trim().lowercase()
+    val matching = if (term.isEmpty()) manifest.components else manifest.components.filter {
+        it.name.lowercase().contains(term) ||
+            it.summary.lowercase().contains(term) ||
+            it.licenseColumnLabel.lowercase().contains(term)
+    }
+    val grouped = long && term.isEmpty()
     Column(
         Modifier
             .fillMaxHeight()
@@ -229,6 +246,18 @@ private fun LicenseList(manifest: LicenseManifest, onOpen: (LicenseSelection) ->
             .padding(bottom = 32.dp)
             .testTag("licenses-list"),
     ) {
+        if (long) {
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                singleLine = true,
+                label = { Text("Search ${manifest.components.size} components") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .testTag("licenses-search"),
+            )
+        }
         SectionHeader("This app", first = true)
         LicenseRow(
             name = manifest.app.name,
@@ -245,7 +274,10 @@ private fun LicenseList(manifest: LicenseManifest, onOpen: (LicenseSelection) ->
             }
         } else {
             SectionHeader("Components")
-            for (c in manifest.components) ComponentRow(c, onOpen)
+            for (c in matching) ComponentRow(c, onOpen)
+            // A search that finds nothing says so. An empty list under a
+            // filled-in field reads as a list that failed to load.
+            if (matching.isEmpty()) Footer("Nothing matches \u201C$search\u201D.")
         }
     }
 }
