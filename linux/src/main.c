@@ -34,17 +34,14 @@ static const char *LK_CSS =
     /* The chart window is transparent where the chart-view widget paints nothing,
      * so the below subsurface shows through and the chrome floats over it. */
     ".lk-chart-window { background: transparent; }"
-    /* The startup loader and the empty state. They stand over the chart hole,
-     * which is transparent until the first frame lands, so the card carries
-     * its own opaque surface — a tint of the text colour showed through to the
-     * desktop and was barely legible. */
-    ".lk-card {"
-    "  background: alpha(@theme_bg_color, 0.96);"
-    "  border: 1px solid alpha(@borders, 0.5);"
-    "  border-radius: 16px;"
-    "  padding: 32px 40px;"
-    "  box-shadow: 0 4px 16px alpha(black, 0.25);"
-    "}"
+    /* No chart, no chart window. The loader, the import panel and the first-run
+     * page each stand on a plain page rather than over the water, and this fill
+     * is what makes it a page: it covers the whole window, and the floating
+     * bubbles with it, because a zoom control over a view with nothing to zoom
+     * is chrome offering work it cannot do. The reference paints the same fill
+     * (Chrome.panel, #F8F8F8) and its loader carries it too. Opaque: the chart
+     * window is transparent, so anything less shows the desktop through it. */
+    ".lk-page { background: @theme_bg_color; }"
     /* The readouts, as a capsule at the bottom centre. */
     ".lk-capsule {"
     "  background: alpha(@theme_bg_color, 0.94);"

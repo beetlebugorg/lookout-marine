@@ -635,6 +635,10 @@ lk_window_update_overlays (LkWindow *self)
         g_simple_action_set_enabled (G_SIMPLE_ACTION (action), has_chart);
     }
 
+  /* One rule for the whole page: any state with no chart on screen is a page,
+     not a chart with something floating over it. */
+  gtk_widget_set_visible (self->page, !has_chart);
+
   gboolean loader_up = loading && !baking;
   gtk_widget_set_visible (self->loader, loader_up);
   /* Pulse the indeterminate bar while the loader is up, and stop when it goes.
@@ -1034,8 +1038,9 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
    * readouts at the bottom centre, the build indicator at the top centre. */
 
   /* Top left: the search bubble reveals the coordinate go-to, and the commands
-   * hang off the bubble beside it. */
-  GtkWidget *top_left = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, LK_CHROME_GAP);
+   * stand under it. A column keeps the chart's top edge clear, which is where
+   * the bake pill and the build indicator come in. */
+  GtkWidget *top_left = gtk_box_new (GTK_ORIENTATION_VERTICAL, LK_CHROME_GAP);
   gtk_box_append (GTK_BOX (top_left),
                   lk_bubble_new ("system-search-symbolic", "Go to coordinate", "win.search"));
 
@@ -1051,10 +1056,12 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_set_margin_top (top_left, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), top_left);
 
-  /* The search capsule drops from under the top-left bubbles when opened. */
+  /* The search capsule drops from under the top-left column when opened, so it
+   * clears both bubbles rather than covering the commands. */
   self->search = lk_search_new (model);
   gtk_widget_set_margin_start (self->search, LK_CHROME_MARGIN);
-  gtk_widget_set_margin_top (self->search, LK_CHROME_MARGIN + LK_CHROME_BUBBLE + LK_CHROME_GAP);
+  gtk_widget_set_margin_top (self->search,
+                             LK_CHROME_MARGIN + (LK_CHROME_BUBBLE + LK_CHROME_GAP) * 2);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->search);
 
   /* Top right: the compass, which is also the follow lock. */
@@ -1079,13 +1086,23 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_set_margin_bottom (self->scale_bar, LK_HUD_BAND);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->scale_bar);
 
+  /* The page fill goes in after every piece of floating chrome and before the
+     pages that stand on it, because a GtkOverlay stacks its children in the
+     order they are added. It takes no clicks: it is a backdrop, not a shield,
+     and a drop on the window still has to reach the drop target. */
+  self->page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_add_css_class (self->page, "lk-page");
+  gtk_widget_set_can_target (self->page, FALSE);
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->page);
+
   GtkWidget *building = lk_building_pill_new (model);
   GtkWidget *baking = lk_bake_pill_new (model);
   gtk_widget_set_margin_top (building, LK_CHROME_MARGIN);
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), building);
-  /* Preparing charts stands where the build indicator does. The two never run
-     at once: nothing is drawn until the bake it is waiting on has finished. */
-  gtk_widget_set_margin_top (baking, LK_CHROME_MARGIN);
+  /* Preparing charts stands where the build indicator does ONCE a chart draws.
+     With none it takes the middle of the page instead, so the panel places
+     itself and no margin is set here. The two indicators never run at once:
+     nothing is drawn until the bake it is waiting on has finished. */
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), baking);
 
   /* Top centre, over the build indicator: what the plugins are alarming about.
