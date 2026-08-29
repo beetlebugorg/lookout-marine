@@ -93,9 +93,9 @@ object PluginTableFormat {
 }
 
 /** Parse `{"tables":[…]}` into specs. Anything malformed is skipped whole. */
-fun parseTableSpecs(json: String?): List<ChartController.TableSpec> {
+fun parseTableSpecs(json: String?): List<TableSpec> {
     if (json == null) return emptyList()
-    val out = ArrayList<ChartController.TableSpec>()
+    val out = ArrayList<TableSpec>()
     val arr = try { JSONObject(json).optJSONArray("tables") } catch (_: Exception) { null } ?: return out
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
@@ -103,16 +103,16 @@ fun parseTableSpecs(json: String?): List<ChartController.TableSpec> {
         val key = o.optString("key")
         val cols = o.optJSONArray("columns") ?: continue
         if (plugin.isEmpty() || key.isEmpty() || cols.length() == 0) continue
-        val columns = ArrayList<ChartController.TableColumn>()
+        val columns = ArrayList<TableColumn>()
         for (c in 0 until cols.length()) {
             val co = cols.optJSONObject(c) ?: continue
             val k = co.optString("key")
             if (k.isEmpty()) continue
-            columns.add(ChartController.TableColumn(k, co.optString("label"), co.optString("type", "text")))
+            columns.add(TableColumn(k, co.optString("label"), co.optString("type", "text")))
         }
         if (columns.isEmpty()) continue
         val sort = o.optJSONObject("sort")
-        out.add(ChartController.TableSpec(
+        out.add(TableSpec(
             plugin = plugin,
             key = key,
             title = o.optString("title", key),
@@ -129,10 +129,10 @@ fun parseTableSpecs(json: String?): List<ChartController.TableSpec> {
 /** Parse one rows batch: `{"seq":n,"rows":[{"id":…,"band":…,"at":[lon,lat],
  *  "cells":[…]},…]}`. A row that carried fewer cells than the table has
  *  columns still lines up. */
-fun parseTableRows(json: String, columns: Int): ChartController.TableBatch? {
+fun parseTableRows(json: String, columns: Int): TableBatch? {
     val top = try { JSONObject(json) } catch (_: Exception) { return null }
     val arr = top.optJSONArray("rows") ?: return null
-    val rows = ArrayList<ChartController.TableRow>(arr.length())
+    val rows = ArrayList<TableRow>(arr.length())
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
         val id = o.optString("id")
@@ -145,7 +145,7 @@ fun parseTableRows(json: String, columns: Int): ChartController.TableBatch? {
             cells.add(if (v == JSONObject.NULL) null else v)
         }
         while (cells.size < columns) cells.add(null)
-        rows.add(ChartController.TableRow(
+        rows.add(TableRow(
             id = id,
             band = o.optInt("band"),
             lon = if (at != null && at.length() == 2) at.optDouble(0) else null,
@@ -153,7 +153,7 @@ fun parseTableRows(json: String, columns: Int): ChartController.TableBatch? {
             cells = cells,
         ))
     }
-    return ChartController.TableBatch(top.optInt("seq"), rows)
+    return TableBatch(top.optInt("seq"), rows)
 }
 
 /** How often the rows are re-read. The plugins feed a table at the status
@@ -234,8 +234,8 @@ fun PluginTableDialog(controller: ChartController) {
 
 @Composable
 private fun TableRowLine(
-    spec: ChartController.TableSpec,
-    row: ChartController.TableRow,
+    spec: TableSpec,
+    row: TableRow,
     controller: ChartController,
 ) {
     // The colour of a row, from its flag column. Alarm takes the palette's

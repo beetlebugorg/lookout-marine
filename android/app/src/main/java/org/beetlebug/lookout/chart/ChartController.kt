@@ -11,7 +11,7 @@ import org.beetlebug.lookout.charts.RasterState
 import org.beetlebug.lookout.engine.ChartService
 import org.beetlebug.lookout.engine.EngineAccess
 import org.beetlebug.lookout.engine.LookoutView
-import org.beetlebug.lookout.plugins.AlarmSiren
+import org.beetlebug.lookout.plugins.AlertController
 import org.beetlebug.lookout.plugins.PluginAlert
 import org.beetlebug.lookout.plugins.PluginAlertSet
 import org.beetlebug.lookout.plugins.PluginField
@@ -20,6 +20,9 @@ import org.beetlebug.lookout.plugins.PluginPrefs
 import org.beetlebug.lookout.plugins.PluginRegistry
 import org.beetlebug.lookout.plugins.PluginRow
 import org.beetlebug.lookout.plugins.parseTableRows
+import org.beetlebug.lookout.plugins.TableBatch
+import org.beetlebug.lookout.plugins.TableController
+import org.beetlebug.lookout.plugins.TableSpec
 import org.beetlebug.lookout.plugins.parseTableSpecs
 import org.beetlebug.lookout.plugins.trimmed
 import org.beetlebug.lookout.settings.MarinerState
@@ -204,11 +207,7 @@ class ChartController(private val appContext: Context) {
         val specs = parseTableSpecs(l.pluginTables())
         access.onMain {
             pluginRegistry = reg
-            tableSpecs = specs
-            if (openTable?.let { o -> specs.none { it.id == o.id } } == true) {
-                openTable = null
-                tableBatch = null
-            }
+            tables.adopt(specs)
         }
     }
 
@@ -312,22 +311,11 @@ class ChartController(private val appContext: Context) {
     private var postedPin: OverlayPin? = null
     private var postedPoint: Offset? = null
 
-    /**
-     * Every alert the plugins have raised, most urgent first. The banner over
-     * the chart is built from this.
-     */
-    var alerts by mutableStateOf<List<PluginAlert>>(emptyList())
-        private set
+    /** What the plugins are alarming about, and the siren. */
+    val alertsController = AlertController(appContext, access)
 
-    private val siren = AlarmSiren(appContext)
-
-    /**
-     * The set the core last reported, as its `seq`. The list is rebuilt only
-     * when it moves. [ALERTS_UNREAD] is never a real seq, which is what lets it
-     * stand for "the core has not answered".
-     */
-    private var alertSeq = ALERTS_UNREAD
-    private var lastAlertNs = 0L
+    /** Every alert the plugins have raised, most urgent first. */
+    val alerts: List<PluginAlert> get() = alertsController.alerts
 
     /** Which object of the pick the report shows. */
     var identifyIndex by mutableStateOf(0)
@@ -383,8 +371,7 @@ class ChartController(private val appContext: Context) {
         MarinerState.applySavedOverlay(appContext, v)?.let { date = it }
         l.setMariner(v, date)
         lastPushed = null
-        alertSeq = ALERTS_UNREAD
-        lastAlertNs = 0L
+        alertsController.reset()
         restoreView(l)
         // Replay the installed raster charts into the chart just opened. The
         // engine holds what is open now; the mariner's own material has to
@@ -573,15 +560,14 @@ class ChartController(private val appContext: Context) {
         access.bind(l, queue)
         queue.post {
             lastPluginsJson = null // republish into a registry nobody has seen
-            alertSeq = ALERTS_UNREAD
-            lastAlertNs = 0L
+            alertsController.reset()
             lastPushed = null
             lastRaster = null
             val v = DoubleArray(Lookout.MARINER_LEN)
             l.getMariner(v)
             val date = l.getMarinerDate()
             republish(l)
-            publishAlerts(l)
+            alertsController.publish(l)
             pushRaster(l)
             // This controller's own fetcher, and its own snapshot poll: the
             // old controller's was stopped in onReplaced, and the credit the
@@ -635,15 +621,9 @@ class ChartController(private val appContext: Context) {
         access.onMain {
             rendering = false
             identify = emptyList()
-            // The chart is going away with the plugins that raised the
-            // alarms, so nothing is left to acknowledge and nothing may go
-            // on sounding.
-            alerts = emptyList()
-            siren.setSounding(false)
+            alertsController.clear()
             // The plugins' declared tables went with them.
-            tableSpecs = emptyList()
-            openTable = null
-            tableBatch = null
+            tables.clear()
             // And nothing left to hold the process up for.
             stopService()
         }
@@ -730,21 +710,6 @@ class ChartController(private val appContext: Context) {
         }
     }
 
-    // ---- plugin alerts -----------------------------------------------------
-    //
-    // A plugin raises an alert from its own thread with no gesture behind it,
-    // so nothing the mariner does brings one to the screen. The core offers no
-    // way to be told: there is no callback for a raise, and the `seq` that says
-    // the set moved is only reachable by building the whole alerts JSON. So
-    // this SAMPLES, and says so.
-    //
-    // What it does not do is arm a clock of its own for it. The frame loop is
-    // already running and already calls onFrameRendered every frame, so an idle
-    // chart gains no wakeup it did not already have; this only decides how
-    // often that existing visit crosses into the core. A second matches the
-    // reference shell and is a fifth of the repeat, so an alarm is on screen
-    // well before it sounds twice.
-
     /**
      * The engine's one visit with no surface, and so no frame loop. A source
      * plugin keeps receiving while the app is away and can raise a collision
@@ -757,7 +722,7 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD.
      */
     fun onBackgroundTick(l: Lookout): Long {
-        publishAlerts(l)
+        alertsController.publish(l)
         val c = connections(l)
         updateService(c)
         return when {
@@ -850,171 +815,39 @@ class ChartController(private val appContext: Context) {
      * RENDER THREAD.
      */
     private fun watchPlugins(l: Lookout, frameTimeNanos: Long) {
-        if (lastAlertNs != 0L && frameTimeNanos - lastAlertNs < ALERT_INTERVAL_NS) return
-        lastAlertNs = frameTimeNanos
-        publishAlerts(l)
+        alertsController.sampleIfDue(l, frameTimeNanos)
         updateService(connections(l))
     }
 
-    /**
-     * Read the alerts and hand the list to the UI when it has moved. RENDER
-     * THREAD: [alertSeq] is its own, and the native call takes the api lock.
-     *
-     * Also called straight after an acknowledgement, so the row leaves the
-     * chart on the press rather than at the next sample.
-     */
-    private fun publishAlerts(l: Lookout) {
-        val got = PluginAlertSet.parse(l.pluginAlertsJson())
-        if (got == null) {
-            // Nothing came back. The sampling carries on: giving up here would
-            // leave the boat deaf for the rest of the session because the core
-            // once had nothing to say.
-            if (alertSeq == ALERTS_UNREAD) return
-            alertSeq = ALERTS_UNREAD
-            access.onMain { applyAlerts(emptyList()) }
-            return
-        }
-        if (got.seq == alertSeq) return
-        alertSeq = got.seq
-        access.onMain { applyAlerts(got.alerts) }
-    }
-
-    /** MAIN THREAD. The list and the siren move together. */
-    private fun applyAlerts(next: List<PluginAlert>) {
-        alerts = next
-        // An alarm nobody has answered keeps sounding. A warning is shown and
-        // never sounded, so it is not counted here.
-        siren.setSounding(next.any { it.severity.audible && !it.acknowledged })
-    }
-
-    /**
-     * Silence one alert and take it off the chart. ONE alert: a mariner who has
-     * seen the vessel crossing ahead has not seen the one coming up astern, and
-     * a control for both would hide the second.
-     */
-    fun acknowledgeAlert(alert: PluginAlert) = onEngine { l ->
-        if (!l.pluginAlertAck(alert.id)) Log.w(TAG, "alert ack refused: ${alert.id}")
-        publishAlerts(l)
-    }
+    /** Silence one alert and take it off the chart. */
+    fun acknowledgeAlert(alert: PluginAlert) = alertsController.acknowledge(alert)
 
     // ---- plugin tables ------------------------------------------------------
-    //
-    // A plugin declares a table in its manifest: a key, a title, typed
-    // columns. The core hands the declaration and the rows over as JSON, and
-    // the shell knows nothing about what any plugin does. PluginTable.kt
-    // formats and draws; this owns which table is open, the sort the mariner
-    // chose, and the seq-gated poll.
 
-    data class TableColumn(val key: String, val label: String, val type: String) {
-        /** True when the column holds a number, which is what gets right
-         *  aligned and what the mariner scans down a column of. */
-        val numeric: Boolean get() = type != "text" && type != "flag"
-    }
+    /** The tables the plugins declare, and the one on screen. */
+    val tables = TableController(access) { lon, lat -> centreOn(lon, lat) }
 
-    /** One table a plugin declares. */
-    data class TableSpec(
-        val plugin: String,
-        val key: String,
-        val title: String,
-        val menu: String,
-        val columns: List<TableColumn>,
-        val sortKey: String,
-        val sortAscending: Boolean,
-        /** True when the declaration's `at` named a position, so a row can be
-         *  found on the chart. */
-        val locatable: Boolean,
-    ) {
-        val id: String get() = "$plugin/$key"
-    }
+    val tableSpecs: List<TableSpec> get() = tables.tableSpecs
+    val openTable: TableSpec? get() = tables.openTable
+    val tableBatch: TableBatch? get() = tables.tableBatch
+    val tableSortKey: String get() = tables.tableSortKey
+    val tableSortAscending: Boolean get() = tables.tableSortAscending
 
-    data class TableRow(
-        val id: String,
-        val band: Int,
-        val lon: Double?,
-        val lat: Double?,
-        val cells: List<Any?>,
-    )
+    fun showTable(spec: TableSpec) = tables.showTable(spec)
+    fun dismissTable() = tables.dismissTable()
+    fun setTableSort(key: String) = tables.setTableSort(key)
+    fun pollTable() = tables.pollTable()
+    fun revealOnChart(lon: Double, lat: Double) = tables.revealOnChart(lon, lat)
 
-    data class TableBatch(val seq: Int, val rows: List<TableRow>)
-
-    /** Every table the loaded plugins declare, in declaration order. The
-     *  Vessels pane lists them, so a plugin that unloads takes its row too. */
-    var tableSpecs by mutableStateOf<List<TableSpec>>(emptyList())
-        private set
-
-    /** The declared table on screen, or null. */
-    var openTable by mutableStateOf<TableSpec?>(null)
-        private set
-    var tableBatch by mutableStateOf<TableBatch?>(null)
-        private set
-    var tableSortKey by mutableStateOf("")
-        private set
-    var tableSortAscending by mutableStateOf(true)
-        private set
-
-    /** The last batch the core reported. Rows are rebuilt only when it moves,
-     *  so a table nobody is feeding does not churn once a second. */
-    @Volatile private var tableSeq = -1
-
-    fun showTable(spec: TableSpec) {
-        openTable = spec
-        tableBatch = null
-        tableSortKey = spec.sortKey
-        tableSortAscending = spec.sortAscending
-        tableSeq = -1
-        // The plugin is told before the first read: it builds no rows until
-        // somebody is looking, so the first read would otherwise find none.
-        onEngine { l ->
-            l.pluginTableOpen(spec.plugin, spec.key, true)
-            refreshTableRows(l, force = true)
-        }
-    }
-
-    fun dismissTable() {
-        val spec = openTable ?: return
-        openTable = null
-        tableBatch = null
-        onEngine { l -> l.pluginTableOpen(spec.plugin, spec.key, false) }
-    }
-
-    /** A header tap: same column flips the way, a new column starts
-     *  ascending. The core sorts WITHIN each band; this only says which
-     *  column and which way. */
-    fun setTableSort(key: String) {
-        tableSortAscending = if (key == tableSortKey) !tableSortAscending else true
-        tableSortKey = key
-        onEngine { l -> refreshTableRows(l, force = true) }
-    }
-
-    /** The dialog's once-a-second read. Skipped when the batch has not moved. */
-    fun pollTable() = onEngine { l -> refreshTableRows(l, force = false) }
-
-    private fun refreshTableRows(l: Lookout, force: Boolean) {
-        val spec = openTable ?: return
-        val json = l.pluginTableRows(spec.plugin, spec.key, tableSortKey, tableSortAscending)
-        if (json == null) {
-            // The plugin has gone, and the table with it. Better an empty
-            // dialog than a picture nobody is keeping up to date.
-            tableSeq = -1
-            access.onMain { if (openTable?.id == spec.id) tableBatch = TableBatch(0, emptyList()) }
-            return
-        }
-        val batch = parseTableRows(json, spec.columns.size) ?: return
-        if (!force && batch.seq == tableSeq) return
-        tableSeq = batch.seq
-        access.onMain { if (openTable?.id == spec.id) tableBatch = batch }
-    }
-
-    /** Centre the chart on a table row and shut the dialog over it. Follow is
-     *  switched off first: a chart that slides back to own ship a moment
-     *  later has not shown the mariner the target they asked for. */
-    fun revealOnChart(lon: Double, lat: Double) {
-        dismissTable()
-        onEngine { l ->
-            if (l.followActive() != 0) l.followSet(false)
-            val r = lastPushed
-            l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
-        }
+    /**
+     * Put the chart on a point, keeping the zoom and the rotation. Follow is
+     * switched off first: a chart that slides back to own ship a moment later
+     * has not shown the mariner the target they asked for.
+     */
+    private fun centreOn(lon: Double, lat: Double) = onEngine { l ->
+        if (l.followActive() != 0) l.followSet(false)
+        val r = lastPushed
+        l.setView(lon, lat, r?.zoom ?: 12.0, r?.rotationDeg ?: 0.0)
     }
 
     // ---- chart links (an online map AS the chart) ----------------------------
@@ -1719,15 +1552,6 @@ class ChartController(private val appContext: Context) {
          * skipped whenever nothing changed.
          */
         const val PLUGIN_POLL_MS = 1_000L
-
-        /**
-         * How often the frame loop crosses into the core for the alerts. See
-         * the plugin alerts section for why this is a sample and not a wake.
-         */
-        const val ALERT_INTERVAL_NS = 1_000_000_000L
-
-        /** No `seq` the core reports, so it can stand for "not answered yet". */
-        const val ALERTS_UNREAD = -1L
 
         /**
          * The background visit's pace with a connection live. Matches the
