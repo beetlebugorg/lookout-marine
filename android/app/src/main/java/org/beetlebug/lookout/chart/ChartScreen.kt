@@ -373,7 +373,10 @@ fun ChartScreen(
         SettingsSheet(
             m = controller.mariner,
             charts = charts,
-            controller = controller,
+            plugins = controller.plugins,
+            tables = controller.tables,
+            links = controller.chartLinkController,
+            raster = controller.rasterController,
             onRequestAccess = onRequestFileAccess,
             onDismiss = {
                 showSettings = false

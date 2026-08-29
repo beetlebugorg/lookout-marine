@@ -1,5 +1,11 @@
 package org.beetlebug.lookout.settings
 
+import org.beetlebug.lookout.plugins.PluginSettingsController
+
+import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.RasterController
+import org.beetlebug.lookout.plugins.TableController
+
 import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader
 
@@ -53,7 +59,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
-import org.beetlebug.lookout.chart.ChartController
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.ChartsSection
 import org.beetlebug.lookout.licenses.LicenseManifest
@@ -99,13 +104,16 @@ import org.beetlebug.lookout.plugins.SettingsSection
 fun SettingsSheet(
     m: MarinerState,
     charts: ChartsModel,
-    controller: ChartController,
+    plugins: PluginSettingsController,
+    tables: TableController,
+    links: ChartLinkController,
+    raster: RasterController,
     onRequestAccess: () -> Unit,
     onDismiss: () -> Unit,
     initialSection: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val registry = controller.pluginRegistry
+    val registry = plugins.pluginRegistry
     val sections = registry.sections
     // Wide enough for two panes: a tablet gets the list and the detail at once,
     // which lands where the Mac's sidebar-and-detail does without being a copy
@@ -131,9 +139,9 @@ fun SettingsSheet(
         // connection that says "Reconnecting" and never says "Connected" is how
         // the mariner learns the address is wrong. Stopped on close, because
         // nothing off screen needs a 1 Hz sample.
-        DisposableEffect(controller) {
-            controller.startPluginPolling()
-            onDispose { controller.stopPluginPolling() }
+        DisposableEffect(plugins) {
+            plugins.startPluginPolling()
+            onDispose { plugins.stopPluginPolling() }
         }
         // The connection editor puts a keyboard on screen; without this it
         // covers the field being typed into.
@@ -153,14 +161,14 @@ fun SettingsSheet(
                     VerticalDivider()
                     Box(Modifier.weight(1f)) {
                         current?.let {
-                            SectionPane(it, m, charts, controller, registry, onRequestAccess, null, onDismiss)
+                            SectionPane(it, m, charts, plugins, tables, links, raster, registry, onRequestAccess, null, onDismiss)
                         }
                     }
                 }
             } else if (current == null) {
                 SectionList(sections = sections, selected = null, onOpen = { open = it })
             } else {
-                SectionPane(current, m, charts, controller, registry, onRequestAccess, { open = null }, onDismiss)
+                SectionPane(current, m, charts, plugins, tables, links, raster, registry, onRequestAccess, { open = null }, onDismiss)
             }
         }
     }
@@ -261,7 +269,10 @@ private fun SectionPane(
     id: String,
     m: MarinerState,
     charts: ChartsModel,
-    controller: ChartController,
+    plugins: PluginSettingsController,
+    tables: TableController,
+    links: ChartLinkController,
+    raster: RasterController,
     registry: PluginRegistry,
     onRequestAccess: () -> Unit,
     onBack: (() -> Unit)?,
@@ -328,22 +339,22 @@ private fun SectionPane(
                 "display" -> DisplaySection(m)
                 "depths" -> DepthsSection(m)
                 "text" -> SymbolsSection(m)
-                "charts" -> ChartsSection(charts, controller.chartLinkController, controller.rasterController, onRequestAccess)
-                "plugins" -> PluginsManageSection(registry, controller.plugins)
+                "charts" -> ChartsSection(charts, links, raster, onRequestAccess)
+                "plugins" -> PluginsManageSection(registry, plugins)
                 "advanced" -> AdvancedSection(m, onOpenLicenses = { licenses = true })
             }
             // The declared tables that belong to this section — the reference
             // shell's Vessels menu, as rows. Opening one closes the sheet: the
             // table sits over the chart, and a row's reveal needs it visible.
-            val tables = controller.tableSpecs.filter { it.menu.equals(id, ignoreCase = true) }
-            val hasTables = tables.isNotEmpty()
+            val declared = tables.tableSpecs.filter { it.menu.equals(id, ignoreCase = true) }
+            val hasTables = declared.isNotEmpty()
             if (hasTables) {
                 SectionHeader("Tables", first = !core)
-                for (spec in tables) {
+                for (spec in declared) {
                     TextButton(
                         onClick = {
                             onCloseSheet()
-                            controller.showTable(spec)
+                            tables.showTable(spec)
                         },
                         modifier = Modifier.padding(horizontal = 12.dp),
                     ) { Text("${spec.title}…") }
@@ -351,8 +362,8 @@ private fun SectionPane(
                 Footer("Live while it is open. Tap a row to find it on the chart.")
             }
             val groups = registry.groups(id)
-            PluginGroups(groups, controller.plugins, first = !core && !hasTables)
-            PluginLists(registry, id, controller.plugins, first = !core && !hasTables && groups.isEmpty())
+            PluginGroups(groups, plugins, first = !core && !hasTables)
+            PluginLists(registry, id, plugins, first = !core && !hasTables && groups.isEmpty())
         }
     }
 }

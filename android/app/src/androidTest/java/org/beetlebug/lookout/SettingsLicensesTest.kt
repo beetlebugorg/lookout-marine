@@ -1,6 +1,12 @@
 package org.beetlebug.lookout
 
-import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.RasterCharts
+import org.beetlebug.lookout.charts.RasterController
+import org.beetlebug.lookout.engine.EngineAccess
+import org.beetlebug.lookout.plugins.PluginSettingsController
+import org.beetlebug.lookout.plugins.TableController
+
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.hud.LookoutTheme
 import org.beetlebug.lookout.licenses.LicenseManifest
@@ -51,10 +57,17 @@ class SettingsLicensesTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         compose.setContent {
             LookoutTheme {
+                // The sheet takes the four controllers it actually uses, not
+                // the whole chart controller, so it composes with no engine
+                // behind it and no handle to open.
+                val access = EngineAccess()
                 SettingsSheet(
                     m = MarinerState(),
                     charts = ChartsModel(ctx, null),
-                    controller = ChartController(ctx),
+                    plugins = PluginSettingsController(ctx, access) {},
+                    tables = TableController(access) { _, _ -> },
+                    links = ChartLinkController(ctx, access),
+                    raster = RasterController(access, RasterCharts(ctx)),
                     onRequestAccess = {},
                     onDismiss = {},
                     initialSection = "advanced",
