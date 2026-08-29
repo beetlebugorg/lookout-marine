@@ -20,7 +20,7 @@ struct _LkChartSets {
   gboolean    scanning; /* one scan at a time */
 
   LkChartSetsChanged on_changed;
-  gpointer           user_data;
+  GObject           *owner; /* not owned; a scan in flight refs it, see below */
 };
 
 /* What one metadata scan learned about a set. */
@@ -78,12 +78,12 @@ lk_chart_cell_paths_for (const char *target)
 /* ---- the list ------------------------------------------------------------ */
 
 LkChartSets *
-lk_chart_sets_new (LkChartSetsChanged on_changed, gpointer user_data)
+lk_chart_sets_new (LkChartSetsChanged on_changed, GObject *owner)
 {
   LkChartSets *self = g_new0 (LkChartSets, 1);
 
   self->on_changed = on_changed;
-  self->user_data = user_data;
+  self->owner = owner;
 
   /* No list ever saved means this build has never run here, and the charts the
    * mariner had open carry across as sets — without this they are simply gone
@@ -116,9 +116,8 @@ lk_chart_sets_free (LkChartSets *self)
   if (self == NULL)
     return;
 
-  /* A scan in flight holds this pointer. It is dropped last, on the main loop,
-   * so a job that lands after the model is gone would read freed memory. The
-   * model outlives the application's windows, so that cannot happen here. */
+  /* No scan can be in flight: each one holds a reference to the owner, and the
+   * owner is what frees this. */
   g_clear_pointer (&self->paths, g_strfreev);
   g_clear_pointer (&self->off, g_hash_table_unref);
   g_clear_pointer (&self->meta, g_hash_table_unref);
@@ -352,7 +351,11 @@ lk_chart_sets_note (LkChartSets *self, const char *path)
 /* ---- the library's background metadata scans ------------------------------ */
 
 typedef struct {
-  LkChartSets *sets;  /* outlives the job: the model owns both */
+  /* The owner is held for the job's whole life, so `sets` — which the owner
+   * owns — cannot be freed while a scan is in flight or while its result waits
+   * on the main loop. */
+  GObject     *owner;
+  LkChartSets *sets;
   char        *path;
   LkChartSet  *source;  /* the folder or archive itself */
   LkChartSet  *derived; /* its prepared directory, when one exists */
@@ -451,12 +454,13 @@ lk_meta_done_idle (gpointer data)
     g_hash_table_replace (self->meta, g_strdup (job->path),
                           lk_set_meta_build (job->path, job->source, job->derived));
   self->scanning = FALSE;
-  self->on_changed (self->user_data);
+  self->on_changed (self->owner);
   lk_chart_sets_kick_meta_scan (self);
 
   g_clear_pointer (&job->source, lk_chart_set_free);
   g_clear_pointer (&job->derived, lk_chart_set_free);
   g_free (job->path);
+  g_object_unref (job->owner);
   g_free (job);
   return G_SOURCE_REMOVE;
 }
@@ -496,6 +500,7 @@ lk_chart_sets_kick_meta_scan (LkChartSets *self)
     return;
 
   LkMetaJob *job = g_new0 (LkMetaJob, 1);
+  job->owner = g_object_ref (self->owner);
   job->sets = self;
   job->path = g_strdup (next);
   self->scanning = TRUE;

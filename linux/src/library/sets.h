@@ -12,7 +12,7 @@
  */
 #pragma once
 
-#include <glib.h>
+#include <glib-object.h>
 
 #include "library/scan.h"
 
@@ -34,10 +34,14 @@ void lk_chart_set_row_free (LkChartSetRow *row);
 
 /* The library changed on its own: a background scan landed a title and a size.
  * Every other change is answered by the call that made it. */
-typedef void (*LkChartSetsChanged) (gpointer user_data);
+typedef void (*LkChartSetsChanged) (GObject *owner);
 
-/* Load the list, the switched-off set, and start the metadata scans. */
-LkChartSets *lk_chart_sets_new (LkChartSetsChanged on_changed, gpointer user_data);
+/* Load the list, the switched-off set, and start the metadata scans.
+ *
+ * `owner` is what this belongs to, and what the changed callback is handed. A
+ * scan in flight holds a reference to it, so the owner cannot be finalized
+ * while a result is still on its way to the main loop. */
+LkChartSets *lk_chart_sets_new (LkChartSetsChanged on_changed, GObject *owner);
 void lk_chart_sets_free (LkChartSets *self);
 
 /* Every set aboard, in the order added. Transfer full: a GPtrArray of

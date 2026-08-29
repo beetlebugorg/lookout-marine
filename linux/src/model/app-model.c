@@ -262,9 +262,9 @@ lk_app_model_emit_chart_sets_changed (LkAppModel *self)
 /* A background scan landed. Nothing reopened, so this only tells the windows
  * to read the list again. */
 static void
-lk_app_model_sets_changed (gpointer user_data)
+lk_app_model_sets_changed (GObject *owner)
 {
-  lk_app_model_emit_chart_sets_changed (user_data);
+  lk_app_model_emit_chart_sets_changed (LK_APP_MODEL (owner));
 }
 
 /* Reopen the chart from the current library. If every set is off, close
@@ -298,7 +298,7 @@ lk_app_model_init (LkAppModel *self)
 
   /* The library. A background scan fills in each set's title and size, and
    * says so through this callback. */
-  self->chart_sets = lk_chart_sets_new (lk_app_model_sets_changed, self);
+  self->chart_sets = lk_chart_sets_new (lk_app_model_sets_changed, G_OBJECT (self));
   self->overscale = 1.0;
   self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
 
