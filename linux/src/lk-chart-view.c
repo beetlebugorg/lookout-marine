@@ -411,6 +411,22 @@ lk_chart_view_close_menu (LkChartView *self)
     gtk_popover_popdown (GTK_POPOVER (self->menu));
 }
 
+/* Close the chart menu if it is open, for the window's Escape cascade. TRUE
+ * when there was one to close. The marker rename field lives in the menu, so it
+ * goes with it. */
+gboolean
+lk_chart_view_dismiss (LkChartView *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_VIEW (self), FALSE);
+
+  if (self->menu != NULL && gtk_widget_get_mapped (self->menu))
+    {
+      gtk_popover_popdown (GTK_POPOVER (self->menu));
+      return TRUE;
+    }
+  return FALSE;
+}
+
 /* The model retired the chrome after a camera move. Close the menu with it. */
 static void
 lk_chart_view_chrome_retired (LkAppModel *model, gpointer user_data)

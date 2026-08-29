@@ -503,6 +503,36 @@ lk_action_close_pick (GSimpleAction *action, GVariant *parameter, gpointer user_
   lk_app_model_pin_overlay (self->model, NULL);
 }
 
+/* The reference's Escape cascade, one thing per press: the chart menu first
+ * (its marker rename field goes with it), then a pinned bubble, then the pick
+ * report. A picture viewer would sit between them; Linux has none yet. The
+ * controller runs in the capture phase, ahead of the chart view, so the order
+ * is fixed here rather than left to who happens to consume the key. */
+static gboolean
+lk_window_escape (GtkEventControllerKey *controller, guint keyval, guint keycode,
+                  GdkModifierType state, gpointer user_data)
+{
+  LkWindow *self = user_data;
+  double x, y;
+
+  if (keyval != GDK_KEY_Escape)
+    return GDK_EVENT_PROPAGATE;
+
+  if (lk_chart_view_dismiss (LK_CHART_VIEW (self->chart_view)))
+    return GDK_EVENT_STOP;
+  if (lk_app_model_get_overlay_pin (self->model) != NULL)
+    {
+      lk_app_model_pin_overlay (self->model, NULL);
+      return GDK_EVENT_STOP;
+    }
+  if (lk_app_model_get_pick_point (self->model, &x, &y))
+    {
+      lk_app_model_clear_pick (self->model);
+      return GDK_EVENT_STOP;
+    }
+  return GDK_EVENT_PROPAGATE;
+}
+
 static void
 lk_window_present_settings (LkWindow *self, const char *section)
 {
@@ -1823,6 +1853,13 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   GtkDropTarget *drop = gtk_drop_target_new (G_TYPE_FILE, GDK_ACTION_COPY);
   g_signal_connect (drop, "drop", G_CALLBACK (lk_window_dropped), self);
   gtk_widget_add_controller (self->overlay, GTK_EVENT_CONTROLLER (drop));
+
+  /* Escape runs the cascade in lk_window_escape, in the capture phase so the
+     order is fixed here rather than left to who consumes the key first. */
+  GtkEventController *keys = gtk_event_controller_key_new ();
+  gtk_event_controller_set_propagation_phase (keys, GTK_PHASE_CAPTURE);
+  g_signal_connect (keys, "key-pressed", G_CALLBACK (lk_window_escape), self);
+  gtk_widget_add_controller (self->window, keys);
 
   lk_tether (model, g_signal_connect (model, "notify",
                                       G_CALLBACK (lk_window_notify), self), self->window);

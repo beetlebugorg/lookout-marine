@@ -350,7 +350,8 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
     { "win.toggle-soundings", { "<Control><Shift>s", NULL } },
     { "win.toggle-other",     { "<Control>d", NULL } },
     { "win.search",           { "<Control>f", NULL } },
-    { "win.close-pick",       { "Escape", NULL } },
+    /* Escape is a cascade, not one action: the window handles it in the capture
+       phase (lk_window_escape), so it is not bound to close-pick here. */
     { "win.settings",         { "<Control>comma", NULL } },
     { "win.raster-cycle",     { "<Control>i", NULL } },
     { "win.raster-add",       { "<Control><Shift>i", NULL } },

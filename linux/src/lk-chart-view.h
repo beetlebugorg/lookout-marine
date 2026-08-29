@@ -36,4 +36,8 @@ void lk_chart_view_surface_ready (LkChartView *self);
  * for tests. */
 double lk_chart_view_unwrap_angle (double a);
 
+/* Close the chart menu if it is open, for the window's Escape cascade. TRUE
+ * when there was one to close. */
+gboolean lk_chart_view_dismiss (LkChartView *self);
+
 G_END_DECLS
