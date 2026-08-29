@@ -37,6 +37,21 @@ msbuild LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=ARM64
 Use `/p:Platform=x64` on an x64 machine. The app is unpackaged and
 self-contained: the build copies the Windows App SDK runtime next to the exe.
 
+**A Debug CORE does not run.** `build-core.ps1 -Configuration Debug` passes
+`-Doptimize=Debug`, and the app then dies at startup with a stack overflow
+(`0xC00000FD`) — Zig's Debug frames do not fit the default 1 MB stack. The same
+shell relinked against a ReleaseFast core starts and runs normally, so it is the
+core's frames, not the shell's. To debug the SHELL, build the core Release and
+the vcxproj Debug:
+
+```powershell
+pwsh windows/build-core.ps1 -Configuration Release -Platform x64
+msbuild windows/LookoutMarine.vcxproj /p:Configuration=Debug /p:Platform=x64
+```
+
+CI builds the all-Debug pair, which compiles and links but cannot start; it
+never runs the binary, so it stays green.
+
 ### Plugins
 
 Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, and the host
@@ -157,6 +172,39 @@ It builds with `zig`, not MSVC, on purpose: `zig` is already a prerequisite of
 this shell, so the tests run for anyone who can build the app — including on a
 machine with no Visual Studio. Nothing in the suite links the core or WinRT,
 which is what keeps that true.
+
+### The development and screenshot hooks
+
+`src/app/ui/DevHooks.cpp` reads these once, just after the first chart opens.
+They exist so a capture is reproducible on any machine, and so the paths a
+mariner reaches by hand can be exercised where nobody can click.
+
+| Hook | What it does |
+|---|---|
+| `LOOKOUT_OPEN=<chart\|dir>` | Open this at startup instead of walking the recents |
+| `LOOKOUT_VIEW=lon,lat,zoom[,rot]` | Pin the opening camera |
+| `LOOKOUT_WINDOW=WIDTHxHEIGHT` | Size the client area in logical points, so a frame is the same anywhere |
+| `LOOKOUT_IMPORT=<folder\|.zip>` | Drive the chart import at startup, the same call the picker makes |
+| `LOOKOUT_ADD=<path>` | Add a folder as a chart set two seconds in |
+| `LOOKOUT_REMOVE=<path>[@secs]` | Take one off, optionally while its own charts are still baking |
+| `LOOKOUT_OPEN_SETTINGS=1\|<section>` | Open the mariner settings, optionally on one section |
+| `LOOKOUT_SHOW=pick[:XxY]\|scale\|table[:…]\|licenses[:id]\|about` | Open one surface three seconds after the chart |
+| `LOOKOUT_CHART_LINK=<url>` | Add and select a chart by link at launch |
+| `LOOKOUT_GESTURE_BENCH=pan\|zoom\|both` | Drive a scripted gesture, write the profile, quit |
+| `LOOKOUT_FRAME_PROF=<path>` | One CSV row per render tick |
+| `LOOKOUT_HITMAP=1` | Log what each tap and pick resolved to |
+| `LOOKOUT_MULTI=1` | Lift the one-copy-per-machine lock |
+| `LOOKOUT_CLEAN=1` | Keep every plugin on its manifest defaults, for captures |
+
+A GUI app cannot start in session 0, so an automated run needs a Task Scheduler
+task with an **Interactive** principal to land in the logged-on session:
+
+```powershell
+$action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -File $wrapper"
+$principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive
+Register-ScheduledTask -TaskName 'LookoutSmoke' -Action $action -Principal $principal -Force
+Start-ScheduledTask -TaskName 'LookoutSmoke'
+```
 
 ## The app icon
 
