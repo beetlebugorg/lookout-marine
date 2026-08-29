@@ -31,7 +31,10 @@ typedef struct {
    * per pick and both NULL while none is open. */
   GtkWidget *pick_marker;
   GtkWidget *pick_report;
-  guint      place_id; /* re-places the report after a resize, off the layout */
+  int        pick_width;   /* the report's built width; a resize that leaves it
+                              unchanged re-places the card without a rebuild */
+  gboolean   pick_compact; /* the report is the bottom sheet, not a callout */
+  guint      place_id;     /* re-places the report after a resize, off the layout */
 
   GtkWidget *settings_window;
 
@@ -46,9 +49,10 @@ lk_window_free (gpointer data)
   LkWindow *self = data;
 
   g_clear_handle_id (&self->place_id, g_source_remove);
-  /* The settings window keeps this pointer NULL as it closes. If it outlives
-     the main window, drop the weak reference first — else the settings
-     teardown writes back into this freed slot. */
+  /* The weak pointer nulls this field when the settings window closes. If the
+     field is still set, the settings window is still open and outlives the main
+     window. Remove the registration first, or its teardown writes into this
+     freed field. */
   if (self->settings_window != NULL)
     g_object_remove_weak_pointer (G_OBJECT (self->settings_window),
                                   (gpointer *) &self->settings_window);
@@ -346,7 +350,7 @@ lk_action_open (GSimpleAction *action, GVariant *parameter, gpointer user_data)
 static void
 lk_open_file_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
 {
-  LkWindow *self = user_data;
+  LkAppModel *model = user_data;
   g_autoptr (GError) error = NULL;
   g_autoptr (GFile) file = gtk_file_dialog_open_finish (GTK_FILE_DIALOG (source), result, &error);
 
@@ -354,10 +358,18 @@ lk_open_file_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
     return; /* cancelled, or an error GTK already surfaced */
 
   g_autofree char *path = g_file_get_path (file);
-  if (path != NULL)
-    lk_window_open_path (GTK_WINDOW (self->window), self->model, path);
-  else
-    lk_app_model_set_open_error (self->model, "That isn't a local file.");
+  if (path == NULL)
+    {
+      lk_app_model_set_open_error (model, "That isn't a local file.");
+      return;
+    }
+
+  /* Under a portal the dialog is async and can outlive the window that raised
+     it, so the callback keeps no window pointer. A chosen plugin package opens
+     a consent dialog that needs a parent; take whatever window is live now. */
+  GtkWindow *parent =
+      gtk_application_get_active_window (GTK_APPLICATION (g_application_get_default ()));
+  lk_window_open_path (parent, model, path);
 }
 
 static void
@@ -380,7 +392,7 @@ lk_action_open_file (GSimpleAction *action, GVariant *parameter, gpointer user_d
   gtk_file_dialog_set_modal (dialog, TRUE);
   gtk_file_dialog_set_accept_label (dialog, "Open");
 
-  gtk_file_dialog_open (dialog, GTK_WINDOW (self->window), NULL, lk_open_file_chosen, self);
+  gtk_file_dialog_open (dialog, GTK_WINDOW (self->window), NULL, lk_open_file_chosen, self->model);
   g_object_unref (dialog);
 }
 
@@ -1026,9 +1038,74 @@ lk_window_drop_pick_widgets (LkWindow *self)
     }
 }
 
-/* The mark on the object, and the report standing beside it. Both are rebuilt
- * for each pick: a pick is a new set of objects, and how many there are is
- * what decides the card's shape. */
+/* Places the mark and the report against the pick point in the current view.
+ * The report widget must already exist; this sets only margins and alignment,
+ * so a resize re-runs it without rebuilding the card. The mark sits at the
+ * pick point; the report stands beside it as a callout, or across the bottom
+ * as a sheet when the report is compact. */
+static void
+lk_window_place_pick_widgets (LkWindow *self, double x, double y,
+                              int view_width, int view_height)
+{
+  gtk_widget_set_margin_start (self->pick_marker, MAX (0, (int) (x - LK_PICK_MARKER_SIZE / 2)));
+  gtk_widget_set_margin_top (self->pick_marker, MAX (0, (int) (y - LK_PICK_MARKER_SIZE / 2)));
+
+  if (self->pick_compact)
+    {
+      gtk_widget_set_halign (self->pick_report, GTK_ALIGN_CENTER);
+      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_END);
+      gtk_widget_set_margin_start (self->pick_report, 0);
+      gtk_widget_set_margin_top (self->pick_report, 0);
+      gtk_widget_set_margin_bottom (self->pick_report, LK_HUD_BAND);
+      return;
+    }
+
+  LkCalloutPlace place =
+      lk_callout_place (x, y, self->pick_width, view_width, view_height, LK_HUD_BAND);
+
+  /* The card holds one edge against the mark and the layout places the
+   * opposite edge, so nothing here has to measure the card's height. The
+   * callout can flip sides on a resize, so clear the margin it is not using. */
+  gtk_widget_set_halign (self->pick_report, GTK_ALIGN_START);
+  gtk_widget_set_margin_start (self->pick_report, MAX (0, (int) place.x));
+
+  if (place.edge == LK_CALLOUT_ABOVE)
+    {
+      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_END);
+      gtk_widget_set_margin_top (self->pick_report, 0);
+      gtk_widget_set_margin_bottom (self->pick_report, MAX (0, (int) (view_height - place.y)));
+    }
+  else
+    {
+      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_START);
+      gtk_widget_set_margin_top (self->pick_report, MAX (0, (int) place.y));
+      gtk_widget_set_margin_bottom (self->pick_report, 0);
+    }
+}
+
+/* The width the report needs for the current pick and view. Compact mode is
+ * reported through out_compact. */
+static int
+lk_window_pick_width (LkWindow *self, int view_width, int view_height, gboolean *out_compact)
+{
+  /* A narrow window takes the report as a SHEET across the bottom rather than a
+   * callout beside the mark: a callout squeezed into a phone-shaped window
+   * covers the very water it describes. The same rule the compact capsule
+   * follows, at the same width. */
+  if (view_width < LK_CHROME_COMPACT_WIDTH)
+    {
+      *out_compact = TRUE;
+      return view_width - 2 * LK_CHROME_MARGIN;
+    }
+
+  GPtrArray *results = lk_app_model_get_pick_results (self->model);
+  *out_compact = FALSE;
+  return lk_pick_report_width (results->len, view_width);
+}
+
+/* The mark on the object, and the report beside it, built for the pick. A pick
+ * is a new set of objects, and how many there are decides the card's shape, so
+ * the widgets are new. A later resize re-places them without this rebuild. */
 static void
 lk_window_update_pick (LkWindow *self)
 {
@@ -1043,60 +1120,47 @@ lk_window_update_pick (LkWindow *self)
   if (view_width <= 1 || view_height <= 1)
     return;
 
-  GPtrArray *results = lk_app_model_get_pick_results (self->model);
+  gboolean compact = FALSE;
+  int width = lk_window_pick_width (self, view_width, view_height, &compact);
+  int room = compact ? (int) (view_height * 0.45)
+                     : (int) lk_callout_place (x, y, width, view_width, view_height,
+                                               LK_HUD_BAND).room;
 
   self->pick_marker = lk_pick_marker_new ();
-  gtk_widget_set_margin_start (self->pick_marker, MAX (0, (int) (x - LK_PICK_MARKER_SIZE / 2)));
-  gtk_widget_set_margin_top (self->pick_marker, MAX (0, (int) (y - LK_PICK_MARKER_SIZE / 2)));
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_marker);
 
-  /* A narrow window takes the report as a SHEET across the bottom rather
-   * than a callout beside the mark: a callout squeezed into a phone-shaped
-   * window covers the very water it describes. The same rule the compact
-   * capsule follows, at the same width. */
-  if (view_width < LK_CHROME_COMPACT_WIDTH)
-    {
-      int width = view_width - 2 * LK_CHROME_MARGIN;
-      int room = (int) (view_height * 0.45);
-
-      self->pick_report = lk_pick_report_new (self->model, width, room);
-      gtk_widget_set_halign (self->pick_report, GTK_ALIGN_CENTER);
-      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_END);
-      gtk_widget_set_margin_bottom (self->pick_report, LK_HUD_BAND);
-      gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_report);
-      return;
-    }
-
-  int width = lk_pick_report_width (results->len, view_width);
-  LkCalloutPlace place = lk_callout_place (x, y, width, view_width, view_height, LK_HUD_BAND);
-
-  /* The card holds one edge against the mark and the layout places the
-   * opposite edge, so nothing here has to measure the card's height. */
-  self->pick_report = lk_pick_report_new (self->model, width, (int) place.room);
-  gtk_widget_set_halign (self->pick_report, GTK_ALIGN_START);
-  gtk_widget_set_margin_start (self->pick_report, MAX (0, (int) place.x));
-
-  if (place.edge == LK_CALLOUT_ABOVE)
-    {
-      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_END);
-      gtk_widget_set_margin_bottom (self->pick_report, MAX (0, (int) (view_height - place.y)));
-    }
-  else
-    {
-      gtk_widget_set_valign (self->pick_report, GTK_ALIGN_START);
-      gtk_widget_set_margin_top (self->pick_report, MAX (0, (int) place.y));
-    }
-
+  self->pick_report = lk_pick_report_new (self->model, width, room);
+  self->pick_width = width;
+  self->pick_compact = compact;
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->pick_report);
+
+  lk_window_place_pick_widgets (self, x, y, view_width, view_height);
 }
 
+/* The resize path. The report keeps its built width and its height cap, so a
+ * resize that does not change the width re-places the existing card. A width or
+ * mode change falls back to a full rebuild. */
 static gboolean
 lk_window_place_pick_idle (gpointer user_data)
 {
   LkWindow *self = user_data;
+  double x, y;
+  int view_width = lk_app_model_get_view_width (self->model);
+  int view_height = lk_app_model_get_view_height (self->model);
 
   self->place_id = 0;
-  lk_window_update_pick (self);
+
+  if (self->pick_report == NULL || !lk_app_model_get_pick_point (self->model, &x, &y) ||
+      view_width <= 1 || view_height <= 1)
+    return G_SOURCE_REMOVE;
+
+  gboolean compact = FALSE;
+  int width = lk_window_pick_width (self, view_width, view_height, &compact);
+  if (width != self->pick_width || compact != self->pick_compact)
+    lk_window_update_pick (self);
+  else
+    lk_window_place_pick_widgets (self, x, y, view_width, view_height);
+
   return G_SOURCE_REMOVE;
 }
 

@@ -845,7 +845,7 @@ lk_scale_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpo
 /* The nice round distance the bar draws at this scale, in metres, and the bar
    width it maps to in points. The largest nice distance that fits the target
    width keeps the bar at or under LK_SCALE_BAR_TARGET — the reason the nice
-   table reaches down to 1 m. Exposed so a test can hold that cap. */
+   table reaches down to 1 m. Exposed so a test can check that cap. */
 double
 lk_scale_bar_nice_metres (double denominator, double *out_width_points)
 {
