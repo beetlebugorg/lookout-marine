@@ -175,10 +175,34 @@ fun PluginTableDialog(controller: TableController) {
             delay(REFRESH_MS)
         }
     }
-    val batch = controller.tableBatch
+    PluginTable(
+        spec = spec,
+        batch = controller.tableBatch,
+        sortKey = controller.tableSortKey,
+        sortAscending = controller.tableSortAscending,
+        onSort = { controller.setTableSort(it) },
+        onReveal = { lon, lat -> controller.revealOnChart(lon, lat) },
+        onDismiss = { controller.dismissTable() },
+    )
+}
+
+/**
+ * The table itself, as a function of what the core said. Split from the dialog
+ * above so it can be shown without an engine open behind it.
+ */
+@Composable
+internal fun PluginTable(
+    spec: TableSpec,
+    batch: TableBatch?,
+    sortKey: String,
+    sortAscending: Boolean,
+    onSort: (String) -> Unit,
+    onReveal: (lon: Double, lat: Double) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val scroll = rememberScrollState()
     AlertDialog(
-        onDismissRequest = { controller.dismissTable() },
+        onDismissRequest = onDismiss,
         title = { Text(spec.title) },
         text = {
             // One horizontal scroll for the header and every row together:
@@ -188,12 +212,12 @@ fun PluginTableDialog(controller: TableController) {
                 Column {
                     Row(modifier = Modifier.padding(bottom = 4.dp)) {
                         for (col in spec.columns) {
-                            val active = controller.tableSortKey == col.key
+                            val active = sortKey == col.key
                             Text(
                                 col.label + when {
                                     !active -> ""
-                                    controller.tableSortAscending -> " ▲"
-                                    else -> " ▼"
+                                    sortAscending -> " \u25B2"
+                                    else -> " \u25BC"
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
@@ -202,7 +226,7 @@ fun PluginTableDialog(controller: TableController) {
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
                                     .width(columnWidth(col.type))
-                                    .clickable { controller.setTableSort(col.key) }
+                                    .clickable { onSort(col.key) }
                                     .padding(horizontal = 4.dp),
                             )
                         }
@@ -218,7 +242,7 @@ fun PluginTableDialog(controller: TableController) {
                     } else {
                         LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
                             items(batch.rows, key = { it.id }) { row ->
-                                TableRowLine(spec, row, controller)
+                                TableRowLine(spec, row, onReveal)
                             }
                         }
                     }
@@ -226,7 +250,7 @@ fun PluginTableDialog(controller: TableController) {
             }
         },
         confirmButton = {
-            TextButton(onClick = { controller.dismissTable() }) { Text("Close") }
+            TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
 }
@@ -235,7 +259,7 @@ fun PluginTableDialog(controller: TableController) {
 private fun TableRowLine(
     spec: TableSpec,
     row: TableRow,
-    controller: TableController,
+    onReveal: (lon: Double, lat: Double) -> Unit,
 ) {
     // The colour of a row, from its flag column. Alarm takes the palette's
     // strongest warning colour, the way the alert banner does; a warning is
@@ -258,7 +282,7 @@ private fun TableRowLine(
                 // chart, and one that did may still hold a row nobody has
                 // heard a position from.
                 if (spec.locatable && row.lon != null && row.lat != null)
-                    m.clickable { controller.revealOnChart(row.lon, row.lat) }
+                    m.clickable { onReveal(row.lon, row.lat) }
                 else m
             }
             .padding(vertical = 6.dp),
