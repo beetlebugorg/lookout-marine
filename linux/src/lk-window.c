@@ -33,6 +33,7 @@ typedef struct {
                               unchanged re-places the card without a rebuild */
   gboolean   pick_compact; /* the report is the bottom sheet, not a callout */
   guint      place_id;     /* re-places the report after a resize, off the layout */
+  guint      loader_pulse_id; /* pulses the loader's indeterminate bar while up */
 
   GtkWidget *settings_window;
 
@@ -47,6 +48,7 @@ lk_window_free (gpointer data)
   LkWindow *self = data;
 
   g_clear_handle_id (&self->place_id, g_source_remove);
+  g_clear_handle_id (&self->loader_pulse_id, g_source_remove);
   /* The weak pointer nulls this field when the settings window closes. If the
      field is still set, the settings window is still open and outlives the main
      window. Remove the registration first, or its teardown writes into this
@@ -1003,6 +1005,19 @@ lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
   lk_window_refresh_switched_off (self);
 }
 
+/* The loader's indeterminate bar has no percentage to show, so it pulses. The
+ * timer runs only while the loader is up. */
+static gboolean
+lk_window_loader_pulse (gpointer user_data)
+{
+  LkWindow *self = user_data;
+  GtkWidget *bar = g_object_get_data (G_OBJECT (self->loader), "lk-progress");
+
+  if (bar != NULL)
+    gtk_progress_bar_pulse (GTK_PROGRESS_BAR (bar));
+  return G_SOURCE_CONTINUE;
+}
+
 static void
 lk_window_update_overlays (LkWindow *self)
 {
@@ -1026,7 +1041,14 @@ lk_window_update_overlays (LkWindow *self)
         g_simple_action_set_enabled (G_SIMPLE_ACTION (action), has_chart);
     }
 
-  gtk_widget_set_visible (self->loader, loading && !baking);
+  gboolean loader_up = loading && !baking;
+  gtk_widget_set_visible (self->loader, loader_up);
+  /* Pulse the indeterminate bar while the loader is up, and stop when it goes.
+     Idle means idle: no timer runs once the chart is open. */
+  if (loader_up && self->loader_pulse_id == 0)
+    self->loader_pulse_id = g_timeout_add (120, lk_window_loader_pulse, self);
+  else if (!loader_up)
+    g_clear_handle_id (&self->loader_pulse_id, g_source_remove);
   /* Nothing is open DURING a bake either, but "No chart open" beside a card
      offering to open one is the wrong thing to say while the app is already
      busy preparing the charts the mariner just picked. The import pill is the
@@ -1482,6 +1504,14 @@ lk_window_build_loader (void)
   gtk_box_append (GTK_BOX (header), compass);
   gtk_box_append (GTK_BOX (header), title);
   gtk_box_append (GTK_BOX (box), header);
+
+  /* An indeterminate bar between the header and the steps, as the reference
+     has: the wait has no percentage to show, so it pulses while the loader is
+     up. */
+  GtkWidget *progress = gtk_progress_bar_new ();
+  gtk_widget_set_size_request (progress, 320, -1);
+  gtk_box_append (GTK_BOX (box), progress);
+  g_object_set_data (G_OBJECT (box), "lk-progress", progress);
 
   g_object_set_data (G_OBJECT (box), "lk-title", title);
   g_object_set_data (G_OBJECT (box), "lk-step0", lk_loader_step_new (box));
