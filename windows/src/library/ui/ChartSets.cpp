@@ -47,7 +47,13 @@ namespace winrt::LookoutMarine::implementation
 
         auto queue = DispatcherQueue();
         auto done = std::make_shared<std::function<void()>>(std::move(then));
-        std::thread([this, queue, saved, done] {
+        // The window is HELD for the whole walk, and again across the hop
+        // back. A set on a network share walks slowly, the mariner can close
+        // the window while it does, and both the thread body and the
+        // continuation write to this object — a bare `this` here is a
+        // use-after-free waiting for a slow drive.
+        auto lifetime = get_strong();
+        std::thread([this, lifetime, queue, saved, done] {
             auto rows = std::make_shared<std::vector<ChartSetRow>>();
             for (auto const &[path, is_on] : *saved)
             {
@@ -67,7 +73,7 @@ namespace winrt::LookoutMarine::implementation
                 // comment) — it simply opens nothing while it is away.
                 rows->push_back(std::move(row));
             }
-            queue.TryEnqueue([this, rows, done] {
+            queue.TryEnqueue([this, lifetime, rows, done] {
                 chart_sets = *rows;
                 if (*done)
                     (*done)();
