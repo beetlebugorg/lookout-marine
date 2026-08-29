@@ -29,190 +29,29 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "lk_plugin_registry.h"
 #include "lk_store.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
-using namespace winrt::Windows::Data::Json;
 
 namespace
 {
     winrt::hstring Wide(std::string const &s) { return winrt::to_hstring(s); }
 
-    // A number with no trailing ".0": the core takes either, and a settings line
-    // in a log reads better without it.
-    std::string Trimmed(double v)
-    {
-        if (v == std::floor(v) && std::fabs(v) < 1e15)
-        {
-            char buf[32];
-            snprintf(buf, sizeof buf, "%lld", (long long)v);
-            return buf;
-        }
-        char buf[32];
-        snprintf(buf, sizeof buf, "%g", v);
-        return buf;
-    }
-
-    // A quoted, escaped JSON string. A host name is whatever was typed.
-    std::string Quoted(std::string const &s)
-    {
-        std::string out = "\"";
-        for (unsigned char c : s)
-        {
-            switch (c)
-            {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20)
-                {
-                    char esc[8];
-                    snprintf(esc, sizeof esc, "\\u%04x", c);
-                    out += esc;
-                }
-                else
-                {
-                    out += (char)c;
-                }
-            }
-        }
-        return out + "\"";
-    }
-
-    std::string Utf8(winrt::hstring const &h) { return winrt::to_string(h); }
-
-    std::string Str(JsonObject const &o, wchar_t const *key, std::string const &fallback = {})
-    {
-        if (!o.HasKey(key))
-            return fallback;
-        auto v = o.GetNamedValue(key);
-        if (v.ValueType() != JsonValueType::String)
-            return fallback;
-        return Utf8(v.GetString());
-    }
-
-    double Num(JsonObject const &o, wchar_t const *key, double fallback)
-    {
-        if (!o.HasKey(key))
-            return fallback;
-        auto v = o.GetNamedValue(key);
-        return v.ValueType() == JsonValueType::Number ? v.GetNumber() : fallback;
-    }
-
-    bool Bool(JsonObject const &o, wchar_t const *key, bool fallback)
-    {
-        if (!o.HasKey(key))
-            return fallback;
-        auto v = o.GetNamedValue(key);
-        return v.ValueType() == JsonValueType::Boolean ? v.GetBoolean() : fallback;
-    }
-
-    JsonArray Arr(JsonObject const &o, wchar_t const *key)
-    {
-        if (o.HasKey(key) && o.GetNamedValue(key).ValueType() == JsonValueType::Array)
-            return o.GetNamedArray(key);
-        return JsonArray{};
-    }
-
-    // The section anything that names none lands in, which is the core's own
-    // fallback.
-    constexpr char const *kDefaultTab = "advanced";
-
-    // A spin step that suits the range: metres of CPA move in tens, minutes and
-    // knots one at a time.
-    double StepFor(lkw::PluginField const &f)
-    {
-        double span = f.max - f.min;
-        if (span > 100)
-            return 10;
-        if (span > 10)
-            return 1;
-        return 0.5;
-    }
-
-    // The core's state words, in the mariner's language, and the brush each
-    // reads in: green while it works, amber while it is trying, red when it has
-    // given up, grey while it is switched off. A state this shell does not know
-    // is shown as the core wrote it rather than hidden.
-    std::string StateWord(std::string const &state)
-    {
-        if (state == "running") return "Running";
-        if (state == "starting") return "Starting";
-        if (state == "degraded") return "Degraded";
-        if (state == "disabled") return "Disabled";
-        if (state == "stopped") return "Stopped";
-        if (state == "connected") return "Connected";
-        if (state == "paused") return "Paused";
-        if (state == "reconnecting") return "Reconnecting";
-        if (state == "unreachable") return "Unreachable";
-        if (state == "no_address") return "No address";
-        return state;
-    }
-
+    // The brush a state reads in: green while it works, amber while it is
+    // trying, grey while it is switched off, red when it has given up. WHICH
+    // of the four a state is, is the model's to say (lk_plugin_registry.h) —
+    // this only carries the colours.
     winrt::Windows::UI::Color StateColor(std::string const &state)
     {
-        if (state == "running" || state == "connected")
-            return { 0xFF, 0x3F, 0xB9, 0x50 };
-        if (state == "reconnecting" || state == "degraded")
-            return { 0xFF, 0xE0, 0x9B, 0x2A };
-        if (state == "paused" || state == "stopped" || state == "starting" || state == "disabled")
-            return { 0xFF, 0x8A, 0x8A, 0x8A };
-        return { 0xFF, 0xD1, 0x40, 0x38 };
-    }
-
-    // "Connected · 44 msg/s" out of a {"state":…,"detail":…} object.
-    std::string Line(JsonObject const &o, std::string *out_state)
-    {
-        std::string state = Str(o, L"state", "running");
-        std::string detail = Str(o, L"detail");
-        if (out_state != nullptr)
-            *out_state = state;
-        return detail.empty() ? StateWord(state) : StateWord(state) + " · " + detail;
-    }
-
-    lkw::PluginField ReadField(JsonObject const &o, bool *ok)
-    {
-        lkw::PluginField f;
-        std::string kind = Str(o, L"kind");
-        f.key = Str(o, L"key");
-        *ok = !f.key.empty() && (kind == "number" || kind == "toggle" || kind == "text");
-        if (!*ok)
-            return f;
-
-        f.kind = kind == "toggle" ? lkw::PluginKind::Toggle
-               : kind == "text"   ? lkw::PluginKind::Text
-                                  : lkw::PluginKind::Number;
-        f.label = Str(o, L"label", f.key);
-        f.desc = Str(o, L"desc");
-        f.unit = Str(o, L"unit");
-        f.min = Num(o, L"min", 0);
-        f.max = Num(o, L"max", 1);
-        f.optional = Bool(o, L"optional", false);
-
-        switch (f.kind)
+        switch (lkw::ToneFor(state))
         {
-        case lkw::PluginKind::Toggle: f.fallback = Bool(o, L"default", false) ? 1 : 0; break;
-        case lkw::PluginKind::Text:   f.fallback_text = Str(o, L"default"); break;
-        default:                      f.fallback = Num(o, L"default", 0); break;
+        case lkw::StateTone::Good:   return { 0xFF, 0x3F, 0xB9, 0x50 };
+        case lkw::StateTone::Trying: return { 0xFF, 0xE0, 0x9B, 0x2A };
+        case lkw::StateTone::Idle:   return { 0xFF, 0x8A, 0x8A, 0x8A };
+        default:                     return { 0xFF, 0xD1, 0x40, 0x38 };
         }
-        return f;
-    }
-
-    lkw::PluginCell ReadCell(JsonObject const &row, lkw::PluginField const &f)
-    {
-        lkw::PluginCell cell;
-        cell.kind = f.kind;
-        switch (f.kind)
-        {
-        case lkw::PluginKind::Toggle: cell.toggle = Bool(row, Wide(f.key).c_str(), f.fallback != 0); break;
-        case lkw::PluginKind::Text:   cell.text = Str(row, Wide(f.key).c_str(), f.fallback_text); break;
-        default:                      cell.number = Num(row, Wide(f.key).c_str(), f.fallback); break;
-        }
-        return cell;
     }
 }
 
@@ -225,196 +64,19 @@ namespace winrt::LookoutMarine::implementation
     // answers {"plugins":[]} instead. Reading the two the same way would empty
     // the whole pane the moment one read came back short, which looks from the
     // outside like a trapping plugin taking the settings schema with it.
+    //
+    // The document's own shape is lk_plugin_registry.h's; this is only the
+    // call to the core and the ownership of the string it lends.
     bool MainWindow::ReadPluginRegistry(std::vector<lkw::PluginInfo> &out)
     {
         char *json = lk_controller_plugins_json(controller);
         if (json == nullptr)
             return false;
-
-        JsonValue root{ nullptr };
-        bool parsed = JsonValue::TryParse(winrt::to_hstring(json), root);
+        auto read = lkw::ReadRegistry(json);
         free(json);
-        if (!parsed || root.ValueType() != JsonValueType::Object)
+        if (!read)
             return false;
-
-        JsonObject obj = root.GetObject();
-        if (!obj.HasKey(L"plugins"))
-            return false;
-
-        for (auto const &entry : Arr(obj, L"plugins"))
-        {
-            if (entry.ValueType() != JsonValueType::Object)
-                continue;
-            JsonObject p = entry.GetObject();
-
-            lkw::PluginInfo info;
-            info.id = Str(p, L"id");
-            if (info.id.empty())
-                continue;
-            info.name = Str(p, L"name", info.id);
-            info.version = Str(p, L"version");
-            info.origin = Str(p, L"origin", "bundled");
-            info.live = Bool(p, L"live", false);
-            info.status = Str(p, L"status");
-
-            for (auto const &ce : Arr(p, L"capabilities"))
-            {
-                if (ce.ValueType() != JsonValueType::Object)
-                    continue;
-                JsonObject co = ce.GetObject();
-                lkw::PluginCapability cap;
-                cap.cap = Str(co, L"cap");
-                cap.sentence = Str(co, L"sentence");
-                cap.granted = Bool(co, L"granted", true);
-                if (!cap.cap.empty())
-                    info.capabilities.push_back(std::move(cap));
-            }
-
-            for (auto const &fe : Arr(p, L"file_types"))
-                if (fe.ValueType() == JsonValueType::String)
-                    info.file_types.push_back(Utf8(fe.GetString()));
-
-            for (auto const &fe : Arr(p, L"settings"))
-            {
-                if (fe.ValueType() != JsonValueType::Object)
-                    continue;
-                JsonObject fo = fe.GetObject();
-                bool ok = false;
-                lkw::PluginField f = ReadField(fo, &ok);
-                // A text field is only ever a column of a list; the core refuses
-                // a scalar one, so there is nothing to draw for it here.
-                if (!ok || f.kind == lkw::PluginKind::Text)
-                    continue;
-
-                info.values[f.key] = f.kind == lkw::PluginKind::Toggle
-                                         ? (Bool(fo, L"value", f.fallback != 0) ? 1 : 0)
-                                         : Num(fo, L"value", f.fallback);
-
-                std::string tab = Str(fo, L"tab", kDefaultTab);
-                std::string title = Str(fo, L"group", info.name);
-                auto it = std::find_if(info.groups.begin(), info.groups.end(),
-                                       [&](lkw::PluginGroup const &g) {
-                                           return g.tab == tab && g.title == title;
-                                       });
-                if (it == info.groups.end())
-                {
-                    info.groups.push_back({ info.id, title, tab, { f } });
-                }
-                else
-                {
-                    it->fields.push_back(f);
-                }
-                info.fields.push_back(f);
-            }
-
-            for (auto const &le : Arr(p, L"lists"))
-            {
-                if (le.ValueType() != JsonValueType::Object)
-                    continue;
-                JsonObject lo = le.GetObject();
-
-                lkw::PluginList list;
-                list.plugin_id = info.id;
-                list.key = Str(lo, L"key");
-                if (list.key.empty())
-                    continue;
-                list.tab = Str(lo, L"tab", kDefaultTab);
-                list.title = Str(lo, L"group", info.name);
-                list.footer = Str(lo, L"footer");
-                list.empty = Str(lo, L"empty", "Nothing here yet.");
-                list.add_label = Str(lo, L"add_label", "Add");
-                list.switch_key = Str(lo, L"switch_key");
-                list.max_rows = (int)Num(lo, L"max_rows", 0);
-
-                // What to browse the boat's network for. The core carries the
-                // declaration; finding anything is this shell's own job.
-                for (auto const &de : Arr(lo, L"discover"))
-                {
-                    if (de.ValueType() != JsonValueType::Object)
-                        continue;
-                    JsonObject dobj = de.GetObject();
-                    lkw::PluginDiscover want;
-                    want.service = Str(dobj, L"service");
-                    if (want.service.empty())
-                        continue;
-                    if (dobj.HasKey(L"set") &&
-                        dobj.Lookup(L"set").ValueType() == JsonValueType::Object)
-                    {
-                        JsonObject set = dobj.GetNamedObject(L"set");
-                        for (auto const &cell : set)
-                        {
-                            // Kept as text and typed again when a row takes it,
-                            // which is what a cell of a row is here anyway.
-                            // A JsonObject iterates as IJsonValue, which reads
-                            // every kind here without asking for the concrete
-                            // JsonValue.
-                            IJsonValue value = cell.Value();
-                            std::string text;
-                            switch (value.ValueType())
-                            {
-                            case JsonValueType::Boolean:
-                                text = value.GetBoolean() ? "true" : "false";
-                                break;
-                            case JsonValueType::String:
-                                text = Utf8(value.GetString());
-                                break;
-                            case JsonValueType::Number:
-                                text = Trimmed(value.GetNumber());
-                                break;
-                            default:
-                                continue;
-                            }
-                            want.set[Utf8(cell.Key())] = text;
-                        }
-                    }
-                    list.discover.push_back(want);
-                }
-
-                for (auto const &ce : Arr(lo, L"item_fields"))
-                {
-                    if (ce.ValueType() != JsonValueType::Object)
-                        continue;
-                    bool ok = false;
-                    lkw::PluginField f = ReadField(ce.GetObject(), &ok);
-                    if (ok)
-                        list.item_fields.push_back(f);
-                }
-
-                // A list with no switch column named takes its first toggle,
-                // which is what a list with one toggle wants.
-                if (list.switch_key.empty())
-                {
-                    for (auto const &f : list.item_fields)
-                    {
-                        if (f.kind == lkw::PluginKind::Toggle)
-                        {
-                            list.switch_key = f.key;
-                            break;
-                        }
-                    }
-                }
-
-                std::vector<lkw::PluginRow> rows;
-                for (auto const &re : Arr(lo, L"rows"))
-                {
-                    if (re.ValueType() != JsonValueType::Object)
-                        continue;
-                    JsonObject ro = re.GetObject();
-                    lkw::PluginRow row;
-                    row.id = Str(ro, L"id");
-                    if (row.id.empty())
-                        continue;
-                    for (auto const &f : list.item_fields)
-                        row.cells[f.key] = ReadCell(ro, f);
-                    rows.push_back(std::move(row));
-                }
-
-                info.rows[list.key] = std::move(rows);
-                info.lists.push_back(std::move(list));
-            }
-
-            out.push_back(std::move(info));
-        }
+        out = std::move(*read);
         return true;
     }
 
@@ -451,70 +113,6 @@ namespace winrt::LookoutMarine::implementation
 
     // ---- applying and saving ----------------------------------------------
 
-    // `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — the object the
-    // core takes: a toggle as a JSON bool, which is the only shape it accepts
-    // for one, and a list as its whole array of rows, each carrying the id the
-    // shell assigned it.
-    std::string MainWindow::PluginConfigJson(lkw::PluginInfo const &p)
-    {
-        std::string out = "{";
-        bool first = true;
-
-        for (auto const &f : p.fields)
-        {
-            if (!first)
-                out += ",";
-            first = false;
-            auto it = p.values.find(f.key);
-            double v = it != p.values.end() ? it->second : f.fallback;
-            out += Quoted(f.key) + ":";
-            out += f.kind == lkw::PluginKind::Toggle ? (v != 0 ? "true" : "false") : Trimmed(v);
-        }
-
-        for (auto const &list : p.lists)
-        {
-            if (!first)
-                out += ",";
-            first = false;
-            out += Quoted(list.key) + ":[";
-
-            auto rows_it = p.rows.find(list.key);
-            if (rows_it != p.rows.end())
-            {
-                bool first_row = true;
-                for (auto const &row : rows_it->second)
-                {
-                    if (!first_row)
-                        out += ",";
-                    first_row = false;
-                    out += "{\"id\":" + Quoted(row.id);
-                    for (auto const &f : list.item_fields)
-                    {
-                        out += "," + Quoted(f.key) + ":";
-                        auto cell = row.cells.find(f.key);
-                        if (cell == row.cells.end())
-                        {
-                            out += f.kind == lkw::PluginKind::Toggle
-                                       ? (f.fallback != 0 ? "true" : "false")
-                                   : f.kind == lkw::PluginKind::Text ? Quoted(f.fallback_text)
-                                                                     : Trimmed(f.fallback);
-                            continue;
-                        }
-                        switch (f.kind)
-                        {
-                        case lkw::PluginKind::Toggle: out += cell->second.toggle ? "true" : "false"; break;
-                        case lkw::PluginKind::Text:   out += Quoted(cell->second.text); break;
-                        default:                      out += Trimmed(cell->second.number); break;
-                        }
-                    }
-                    out += "}";
-                }
-            }
-            out += "]";
-        }
-        return out + "}";
-    }
-
     void MainWindow::SchedulePluginApply()
     {
         if (settings_loading)
@@ -529,7 +127,7 @@ namespace winrt::LookoutMarine::implementation
                 {
                     if (p.fields.empty() && p.lists.empty())
                         continue;
-                    std::string json = PluginConfigJson(p);
+                    std::string json = lkw::PluginConfigJson(p);
                     lk_controller_set_plugin_config(controller, p.id.c_str(), json.c_str());
                     lk_store_save_plugin_config(p.id.c_str(), json.c_str());
                 }
@@ -636,7 +234,7 @@ namespace winrt::LookoutMarine::implementation
                 title = name->second.text;
             else if (host != row_it->cells.end() && !host->second.text.empty())
                 title = host->second.text +
-                        (port != row_it->cells.end() ? ":" + Trimmed(port->second.number) : "");
+                        (port != row_it->cells.end() ? ":" + lkw::Trimmed(port->second.number) : "");
             else
                 title = "New connection";
         }
@@ -660,7 +258,7 @@ namespace winrt::LookoutMarine::implementation
         status_tb.FontSize(11);
         {
             std::string line, state;
-            if (PluginItemStatusLine(p, row_id, &line, &state))
+            if (lkw::PluginItemStatusLine(p, row_id, &line, &state))
             {
                 status_tb.Text(Wide(line));
                 status_tb.Foreground(Media::SolidColorBrush{ StateColor(state) });
@@ -759,7 +357,7 @@ namespace winrt::LookoutMarine::implementation
                 nb.Value(cell != row_it->cells.end() ? cell->second.number : f.fallback);
                 nb.Minimum(f.min);
                 nb.Maximum(f.max);
-                nb.SmallChange(StepFor(f));
+                nb.SmallChange(lkw::StepFor(f));
                 nb.SpinButtonPlacementMode(Controls::NumberBoxSpinButtonPlacementMode::Compact);
                 nb.ValueChanged([this, plugin_id, list_key, row_id, key](auto &&, auto &&e) {
                     if (settings_loading || std::isnan(e.NewValue()))
@@ -867,7 +465,7 @@ namespace winrt::LookoutMarine::implementation
                         nb.Value(value);
                         nb.Minimum(f.min);
                         nb.Maximum(f.max);
-                        nb.SmallChange(StepFor(f));
+                        nb.SmallChange(lkw::StepFor(f));
                         nb.SpinButtonPlacementMode(
                             Controls::NumberBoxSpinButtonPlacementMode::Compact);
                         nb.ValueChanged([this, plugin_id, key](auto &&, auto &&e) {
@@ -1000,53 +598,6 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    // The plugin's own status line and the brush it reads in — "Stopped" for
-    // a dead one whatever its last words were.
-    std::string MainWindow::PluginStatusLine(lkw::PluginInfo const &p, std::string *state_out)
-    {
-        std::string state = "stopped";
-        std::string line = "Stopped";
-        if (p.live)
-        {
-            JsonValue st{ nullptr };
-            if (!p.status.empty() && JsonValue::TryParse(Wide(p.status), st) &&
-                st.ValueType() == JsonValueType::Object)
-                line = Line(st.GetObject(), &state);
-            else
-            {
-                line = "Running";
-                state = "running";
-            }
-        }
-        if (state_out != nullptr)
-            *state_out = state;
-        return line;
-    }
-
-    // What the plugin says about one list row, found by the id the shell
-    // minted. False when the status names no such item.
-    bool MainWindow::PluginItemStatusLine(lkw::PluginInfo const &p, std::string const &row_id,
-                                          std::string *line_out, std::string *state_out)
-    {
-        JsonValue st{ nullptr };
-        if (p.status.empty() || !JsonValue::TryParse(Wide(p.status), st) ||
-            st.ValueType() != JsonValueType::Object)
-            return false;
-        for (auto const &item : Arr(st.GetObject(), L"items"))
-        {
-            if (item.ValueType() != JsonValueType::Object)
-                continue;
-            JsonObject io = item.GetObject();
-            if (Str(io, L"id") != row_id)
-                continue;
-            std::string state;
-            *line_out = Line(io, &state);
-            *state_out = state;
-            return true;
-        }
-        return false;
-    }
-
     // The registered status texts and dots, updated in place. The status
     // moves once a second while data flows; rebuilding the page for that
     // flickered every control and reset the expanders.
@@ -1060,11 +611,11 @@ namespace winrt::LookoutMarine::implementation
             std::string line, state;
             if (ui.row_id.empty())
             {
-                line = PluginStatusLine(*p, &state);
+                line = lkw::PluginStatusLine(*p, &state);
                 if (p->origin == "developer")
                     line += " · developer copy";
             }
-            else if (!PluginItemStatusLine(*p, ui.row_id, &line, &state))
+            else if (!lkw::PluginItemStatusLine(*p, ui.row_id, &line, &state))
             {
                 continue;
             }
@@ -1108,7 +659,7 @@ namespace winrt::LookoutMarine::implementation
         for (auto const *p : managed)
         {
             std::string state;
-            std::string status_line = PluginStatusLine(*p, &state);
+            std::string status_line = lkw::PluginStatusLine(*p, &state);
             // The one provenance a mariner must see at rest sits where the
             // status is, not in the name.
             if (p->origin == "developer")

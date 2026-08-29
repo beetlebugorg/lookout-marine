@@ -18,6 +18,7 @@ void TestJson();
 void TestUtf8();
 void TestPick();
 void TestLicenses();
+void TestPluginRegistry();
 
 int main()
 {
@@ -28,6 +29,7 @@ int main()
     TestUtf8();
     TestPick();
     TestLicenses();
+    TestPluginRegistry();
 
     return lktest::Report();
 }

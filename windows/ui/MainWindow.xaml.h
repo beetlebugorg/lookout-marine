@@ -74,25 +74,22 @@ namespace winrt::LookoutMarine::implementation
          * flickers every control and resets the expanders. */
         void UpdatePluginStatusUi();
         void ScheduleApply();     // 60 ms debounce, then set + save
-        // wasm plugin settings (MainWindow.Plugins.cpp)
+        // wasm plugin settings (MainWindow.Plugins.cpp). The registry's own
+        // shape, the config object and the status lines are model code, in
+        // src/lk_plugin_registry.h; what is left here is the drawing.
         bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
         void ReloadPlugins();
         bool RefreshPluginStatus();
         void StartPluginStatusPoll();
         void StopPluginStatusPoll();
-        // The plugin's own status line, and the state word behind its colour.
-        std::string PluginStatusLine(lkw::PluginInfo const &p, std::string *state_out);
         bool PluginTabPopulated(std::string const &tab);
         void BuildPluginSections(std::string const &tab);
         void BuildPluginsPage();
         void BuildPluginRow(Microsoft::UI::Xaml::Controls::StackPanel const &stack,
                             lkw::PluginInfo &p, lkw::PluginList const &list,
                             std::string const &row_id);
-        std::string PluginConfigJson(lkw::PluginInfo const &p);
         void SchedulePluginApply();
         lkw::PluginInfo *FindPlugin(std::string const &id);
-        bool PluginItemStatusLine(lkw::PluginInfo const &p, std::string const &row_id,
-                                  std::string *line_out, std::string *state_out);
         lkw::PluginCell *FindCell(std::string const &plugin_id, std::string const &list_key,
                                   std::string const &row_id, std::string const &key);
         void SetPluginValue(std::string const &plugin_id, std::string const &key, double v);
