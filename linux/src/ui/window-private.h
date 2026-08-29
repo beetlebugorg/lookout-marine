@@ -50,20 +50,8 @@ typedef struct {
  * made static in a file that cannot hold every caller.
  */
 
-/* The startup loader and the empty state, both built once. ui/startup-view.c. */
-GtkWidget *lk_window_build_loader (void);
-GtkWidget *lk_window_build_empty_state (void);
-
-/* The list of chart sets the mariner switched off, and the switch that brings
- * one back. ui/startup-view.c. */
-void lk_window_refresh_switched_off (LkWindow *self);
-void lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data);
-
 /* The Open a File picker's completion. A GAsyncReadyCallback, and the window's
  * open-file action is what passes it. ui/open-dialogs.c. */
 void lk_open_file_chosen (GObject *source, GAsyncResult *result, gpointer user_data);
-
-/* Pulses the loader's indeterminate bar. A GSourceFunc. ui/startup-view.c. */
-gboolean lk_window_loader_pulse (gpointer user_data);
 
 G_END_DECLS

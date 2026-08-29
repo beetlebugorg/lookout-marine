@@ -148,6 +148,7 @@ sources = files(
   'src/ui/settings/window.c',
   'src/ui/dev-hooks.c',
   'src/ui/open-dialogs.c',
+  'src/ui/startup-view.c',
   'src/ui/window.c',
   'src/util/json.c',
 )
