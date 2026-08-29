@@ -1,4 +1,5 @@
 #include "lk-hud.h"
+#include "lk-coord.h"
 #include "lk-tether.h"
 
 #include <math.h>

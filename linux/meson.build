@@ -128,6 +128,7 @@ sources = files(
   'src/lk-chart-links.c',
   'src/lk-chart-scan.c',
   'src/lk-chart-view.c',
+  'src/lk-coord.c',
   'src/lk-discovery.c',
   'src/lk-hud.c',
   'src/lk-json.c',

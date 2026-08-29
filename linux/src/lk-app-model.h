@@ -177,14 +177,9 @@ gboolean    lk_app_model_get_chart_hidden (LkAppModel *self);
 
 /* ---- search: coordinate go-to ------------------------------------------- */
 
-/* Parse `text` as a coordinate and recentre. TRUE if it was recognisable. */
+/* Parse `text` as a coordinate and recentre. TRUE if it was recognisable. The
+ * parsers themselves are in lk-coord.h. */
 gboolean lk_app_model_go_to_coordinate (LkAppModel *self, const char *text);
-
-/* Tolerant lat/lon parser: decimal pairs and DMS with hemispheres. */
-gboolean lk_coordinate_parse (const char *text, double *out_lat, double *out_lon);
-
-/* Tolerant scale parser: "25000", "25,000", "1:25000", "25k", "1:2.5M". */
-gboolean lk_scale_parse (const char *text, double *out_denominator);
 
 /* ---- readouts pushed by the controller ---------------------------------- */
 
