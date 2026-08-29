@@ -16,26 +16,52 @@ struct lk_controller {
 /* The render thread parks between frames (lk_controller_wait); any mutation
  * kicks it, so the frame that shows the change starts now instead of at the
  * end of an idle sleep. One event for the process: the app runs one
- * controller, and a spurious kick costs one needs_tick check. */
+ * controller, and a spurious kick costs one needs_tick check.
+ *
+ * MADE ONCE, BEFORE EITHER THREAD LOOKS AT IT. The wait runs on the render
+ * thread and the kick on the UI thread, so creating it lazily inside the wait
+ * was one thread writing the handle while the other read it — and every kick
+ * before the render thread's first park was dropped on the floor. InitOnce
+ * makes the creation happen exactly once, whichever thread arrives first. */
+static INIT_ONCE render_wake_once = INIT_ONCE_STATIC_INIT;
 static HANDLE render_wake;
+
+static BOOL CALLBACK
+make_render_wake(PINIT_ONCE once, PVOID param, PVOID *context)
+{
+    (void)once;
+    (void)param;
+    (void)context;
+    render_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
+    return TRUE;
+}
+
+static HANDLE
+wake_event(void)
+{
+    InitOnceExecuteOnce(&render_wake_once, make_render_wake, NULL, NULL);
+    return render_wake;
+}
 
 void
 lk_controller_kick(void)
 {
-    if (render_wake != NULL)
-        SetEvent(render_wake);
+    HANDLE h = wake_event();
+    if (h != NULL)
+        SetEvent(h);
 }
 
 void
 lk_controller_wait(int ms)
 {
-    if (render_wake == NULL)
-        render_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
-    if (render_wake == NULL) {
+    HANDLE h = wake_event();
+    if (h == NULL) {
+        /* No event to park on: sleep short, so a kick that cannot be
+         * delivered costs a few milliseconds rather than the whole timeout. */
         Sleep(ms > 8 ? 8 : (DWORD)ms);
         return;
     }
-    WaitForSingleObject(render_wake, (DWORD)ms);
+    WaitForSingleObject(h, (DWORD)ms);
 }
 
 /* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */
