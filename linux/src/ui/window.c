@@ -1,4 +1,5 @@
 #include "ui/window.h"
+#include "ui/window-private.h"
 
 #include "ui/chrome/about.h"
 #include "ui/chrome/alerts.h"
@@ -16,34 +17,6 @@
 #include "ui/settings/window.h"
 #include "ui/chrome/table-window.h"
 
-typedef struct {
-  LkAppModel *model;
-  GtkWidget  *window;
-  GtkWidget  *chart_view;
-  GtkWidget  *overlay;
-  GtkWidget  *search; /* the floating search capsule, an overlay child */
-  GtkWidget  *loader;
-  GtkWidget  *empty_state;
-  GtkWidget  *scale_bar;
-  GtkWidget  *capsule;
-
-  /* The pick: the mark on the chart and the report beside it, both rebuilt
-   * per pick and both NULL while none is open. */
-  GtkWidget *pick_marker;
-  GtkWidget *pick_report;
-  int        pick_width;   /* the report's built width; a resize that leaves it
-                              unchanged re-places the card without a rebuild */
-  gboolean   pick_compact; /* the report is the bottom sheet, not a callout */
-  guint      place_id;     /* re-places the report after a resize, off the layout */
-  guint      loader_pulse_id; /* pulses the loader's indeterminate bar while up */
-  guint      chart_set_actions; /* per-set toggle actions the Charts submenu added */
-
-  GtkWidget *settings_window;
-
-  /* What the desktop preferred before the chart's scheme overrode it, so day
-   * gives the preference back instead of forcing light on a dark desktop. */
-  gboolean desktop_prefers_dark;
-} LkWindow;
 
 static void
 lk_window_free (gpointer data)
@@ -775,7 +748,7 @@ lk_dev_hook_schedule (gpointer target, const char *spec, GSourceFunc fire)
  * page or a plugin table, add or remove a raster chart mid-recording, or sail
  * on a chart link. LOOKOUT_OPEN and LOOKOUT_VIEW are read where they act;
  * LOOKOUT_MULTI and LOOKOUT_CLEAN where the app and the plugins come up. */
-static void
+void
 lk_window_apply_dev_hooks (LkWindow *self)
 {
   const char *spec;
@@ -1032,7 +1005,7 @@ static void  lk_loader_step_set (GtkWidget *row, int state,
                                  const char *text, const char *detail_text);
 
 /* Turning a set back on composes the chart, which closes this page. */
-static void
+void
 lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data)
 {
   LkWindow *self = user_data;
@@ -1047,7 +1020,7 @@ lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data)
 /* The "Switched off" list on the empty page: the sets aboard when every one is
  * off, each with a switch to bring it back. When any set is on the chart draws
  * and this page is not showing, so the list stays hidden. */
-static void
+void
 lk_window_refresh_switched_off (LkWindow *self)
 {
   GtkWidget *box = g_object_get_data (G_OBJECT (self->empty_state), "lk-switched-off");
@@ -1106,7 +1079,7 @@ lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
 
 /* The loader's indeterminate bar has no percentage to show, so it pulses. The
  * timer runs only while the loader is up. */
-static gboolean
+gboolean
 lk_window_loader_pulse (gpointer user_data)
 {
   LkWindow *self = user_data;
@@ -1588,7 +1561,7 @@ lk_loader_step_set (GtkWidget *row, int state, const char *text, const char *det
  * mapping the library, and tessellating the first scene. A single spinner
  * that vanishes says only that something happened. The twin of StartupLoader
  * (macOS) and the WinUI loader page. */
-static GtkWidget *
+GtkWidget *
 lk_window_build_loader (void)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
@@ -1654,7 +1627,7 @@ lk_empty_state_note (GtkWidget *box, const char *icon_name, const char *markup)
  * program for, why is it empty, what do I do now — and it closes with the one
  * block that is not about getting started, which a mariner must not skim.
  * The twin of EmptyChartState (macOS); the words are the reference's. */
-static GtkWidget *
+GtkWidget *
 lk_window_build_empty_state (void)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
