@@ -35,6 +35,7 @@ typedef struct {
   gboolean   pick_compact; /* the report is the bottom sheet, not a callout */
   guint      place_id;     /* re-places the report after a resize, off the layout */
   guint      loader_pulse_id; /* pulses the loader's indeterminate bar while up */
+  guint      dark_sync_id;    /* re-reads the chrome's own colour after a theme change */
   guint      chart_set_actions; /* per-set toggle actions the Charts submenu added */
 
   GtkWidget *settings_window;

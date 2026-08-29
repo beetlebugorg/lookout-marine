@@ -28,6 +28,7 @@ lk_window_free (gpointer data)
 
   g_clear_handle_id (&self->place_id, g_source_remove);
   g_clear_handle_id (&self->loader_pulse_id, g_source_remove);
+  g_clear_handle_id (&self->dark_sync_id, g_source_remove);
   /* The weak pointer nulls this field when the settings window closes. If the
      field is still set, the settings window is still open and outlives the main
      window. Remove the registration first, or its teardown writes into this
@@ -932,6 +933,86 @@ lk_window_show_open_error (LkWindow *self)
  * @theme_bg_color, so the flip carries the capsule and the bubbles), and
  * night stamps a class the stylesheet quiets further. Day gives back
  * whatever the desktop preferred. */
+/* The chrome pins two colours as FILLS: the accent (#0a5bb5) carries white text
+ * on a bubble, and the theme's error red carries a light panel. Used as TEXT on
+ * a dark chrome they measure about 1.5:1 against it, which is not readable —
+ * the scale readout, the fix pill and a connection's "unreachable" line all sat
+ * at that. Neither colour flips with the theme, so a dark scheme swaps in the
+ * light pair those same roles use on a dark desktop.
+ *
+ * Display-wide rather than a class on the window: the settings window is its
+ * own toplevel, and the connection states are read there. */
+static const char *LK_CSS_DARK =
+    ".lk-accent { color: #9cc0ff; }"
+    ".lk-fix-pill.lk-fix-none {"
+    "  color: #9cc0ff;"
+    "  background: alpha(#9cc0ff, 0.16);"
+    "  border-color: alpha(#9cc0ff, 0.55);"
+    "}"
+    ".lk-fix-pill.lk-fix-lost {"
+    "  color: #ff7b63;"
+    "  background: alpha(#ff7b63, 0.16);"
+    "  border-color: alpha(#ff7b63, 0.55);"
+    "}"
+    ".lk-table-rows label.lk-alarm { color: #ff7b63; }"
+    ".lk-alert-strip .lk-alarm { color: #ff7b63; }"
+    "label.error { color: #ff7b63; }";
+
+static gboolean lk_window_sync_dark (gpointer user_data);
+
+/* Is the chrome dark RIGHT NOW? Asked of the resolved foreground colour rather
+ * than of gtk-application-prefer-dark-theme, because that property does not
+ * decide it: a desktop that picks a dark theme by NAME renders dark with the
+ * property still false, and setting the property does not repaint Adwaita dark
+ * on its own. The colour under the text is the only answer that is true however
+ * the desktop, the settings file or the chart's own scheme got us here. */
+static gboolean
+lk_chrome_is_dark (GtkWidget *widget)
+{
+  GdkRGBA fg;
+
+  gtk_widget_get_color (widget, &fg);
+  /* Rec. 709 luma. A light foreground means a dark surface beneath it. */
+  return (0.2126 * fg.red + 0.7152 * fg.green + 0.0722 * fg.blue) > 0.5;
+}
+
+/* Add the dark overrides while a dark chrome is up, and take them away with it.
+ * One display, so one provider, kept here rather than rebuilt per call. */
+static void
+lk_window_apply_dark_css (gboolean dark)
+{
+  static GtkCssProvider *provider = NULL;
+  GdkDisplay *display = gdk_display_get_default ();
+
+  if (display == NULL || dark == (provider != NULL))
+    return;
+
+  if (dark)
+    {
+      provider = gtk_css_provider_new ();
+      gtk_css_provider_load_from_string (provider, LK_CSS_DARK);
+      /* Above the base sheet, which states the pinned fills. */
+      gtk_style_context_add_provider_for_display (display, GTK_STYLE_PROVIDER (provider),
+                                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    }
+  else
+    {
+      gtk_style_context_remove_provider_for_display (display, GTK_STYLE_PROVIDER (provider));
+      g_clear_object (&provider);
+    }
+}
+
+static gboolean
+lk_window_sync_dark (gpointer user_data)
+{
+  LkWindow *self = user_data;
+
+  self->dark_sync_id = 0;
+  if (!gtk_widget_in_destruction (self->window))
+    lk_window_apply_dark_css (lk_chrome_is_dark (self->window));
+  return G_SOURCE_REMOVE;
+}
+
 static void
 lk_window_apply_scheme (LkWindow *self)
 {
@@ -940,6 +1021,10 @@ lk_window_apply_scheme (LkWindow *self)
 
   g_object_set (settings, "gtk-application-prefer-dark-theme",
                 scheme != 0 || self->desktop_prefers_dark, NULL);
+  /* Off the layout: the style has to settle before the colour above reads the
+     scheme this call just asked for. One pass, then the source goes. */
+  if (self->dark_sync_id == 0)
+    self->dark_sync_id = g_idle_add (lk_window_sync_dark, self);
   if (scheme == 2)
     gtk_widget_add_css_class (self->window, "lk-night");
   else
