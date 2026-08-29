@@ -12,12 +12,12 @@ final class CoordFormatTests: XCTestCase {
 
     // MARK: Degrees and decimal minutes
 
-    func testLatitudeCarriesItsHemisphere() {
+    func testLatitudeShowsItsHemisphere() {
         XCTAssertEqual(CoordFormat.dm(38.9763, isLat: true), "38°58.578'N")
         XCTAssertEqual(CoordFormat.dm(-38.9763, isLat: true), "38°58.578'S")
     }
 
-    func testLongitudeCarriesItsHemisphere() {
+    func testLongitudeShowsItsHemisphere() {
         XCTAssertEqual(CoordFormat.dm(-76.482, isLat: false), "076°28.920'W")
         XCTAssertEqual(CoordFormat.dm(76.482, isLat: false), "076°28.920'E")
     }
@@ -82,7 +82,7 @@ final class CoordFormatTests: XCTestCase {
         XCTAssertGreaterThan(s.count, "1:13267".count, "no group separator in \(s)")
     }
 
-    func testAShortScaleTakesNoSeparator() {
+    func testAShortScaleHasNoSeparator() {
         XCTAssertEqual(CoordFormat.scale(500), "1:500")
     }
 

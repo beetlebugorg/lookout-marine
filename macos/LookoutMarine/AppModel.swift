@@ -1372,7 +1372,7 @@ final class AppModel: ObservableObject {
     /// chooses between. A baked sheet does not: `tile57 bake` writes one
     /// directory per sheet under a bake root, and a bundle holds hundreds, so
     /// they belong to the bake they came from.
-    static func providerLabel(_ path: String) -> String {
+    nonisolated static func providerLabel(_ path: String) -> String {
         let ns = path as NSString
         let base = ns.lastPathComponent
         for k in ["ArcGIS", "Bing", "Google", "Navionics", "ESRI", "Esri",

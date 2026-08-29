@@ -1,0 +1,4 @@
+{"seq":7,"alerts":[
+  {"id":3,"plugin":"org.beetlebug.ais","severity":"alarm",
+   "title":"AIS CPA alarm","body":"ANNE: CPA 124 m in 585 s",
+   "raised":1754700000000,"acknowledged":false}]}

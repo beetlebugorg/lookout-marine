@@ -223,6 +223,15 @@ final class ChartController: NSObject {
             }
         }
 
+        // Dev hook: write the documents this shell parses, and quit. See
+        // dumpCoreJSON below.
+        if let dir = ProcessInfo.processInfo.environment["LOOKOUT_DUMP_JSON"], !dir.isEmpty {
+            // After the plugin layer is up, which is further down this method.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                self?.dumpCoreJSON(into: dir)
+            }
+        }
+
         // Dev hooks for the interactive-path profile. Both off unless
         // asked for; see FrameProfiler / GestureBench at the end of this file.
         if let p = ProcessInfo.processInfo.environment["LOOKOUT_FRAME_PROF"], !p.isEmpty {
@@ -1363,6 +1372,60 @@ final class ChartController: NSObject {
         lookout_get_mariner(h, &m)
         let sch = Int(m.scheme.rawValue)
         if model.scheme != sch { model.scheme = sch }
+    }
+
+    // MARK: - Fixture capture
+
+    /// $LOOKOUT_DUMP_JSON=<dir>: write every document this shell parses out of
+    /// the core, then quit. The parser tests read the result, so a fixture is
+    /// the core's own output and can be captured again when the core changes:
+    ///
+    ///     LOOKOUT_MULTI=1 LOOKOUT_CLEAN=1 \
+    ///     LOOKOUT_OPEN=<chart.pmtiles> LOOKOUT_DUMP_JSON=<dir> \
+    ///       open -n macos/build-mac/Build/Products/Debug/LookoutMarine.app
+    ///
+    /// LOOKOUT_CLEAN matters for the reason it matters to a screenshot: a saved
+    /// connection list points at the developer's own instruments, and a captured
+    /// registry would put their addresses in the repository.
+    private func dumpCoreJSON(into dir: String) {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        func write(_ name: String, _ text: String?) {
+            guard let text, !text.isEmpty else {
+                lkLog("dump: \(name) — the core had nothing to say")
+                return
+            }
+            let path = (dir as NSString).appendingPathComponent(name)
+            try? text.write(toFile: path, atomically: true, encoding: .utf8)
+            lkLog("dump: \(name) \(text.utf8.count) B")
+        }
+        write("plugins.json", pluginsJSON())
+        #if os(macOS)
+        write("tables.json", jsonString(lookout_plugin_tables_json))
+        #endif
+        write("alerts.json", jsonString(lookout_plugin_alerts_json))
+        var len = 0
+        if let p = lookout_licenses_json(&len), len > 0 {
+            write("licenses.json",
+                  String(decoding: UnsafeRawBufferPointer(start: p, count: len), as: UTF8.self))
+        }
+        #if canImport(AppKit)
+        NSApplication.shared.terminate(nil)
+        #else
+        exit(0)
+        #endif
+    }
+
+    /// One of the core's counted-buffer queries, as a string. The buffer is
+    /// borrowed until the next plugin query, so copy it before anything else
+    /// runs.
+    private func jsonString(_ query: (OpaquePointer?, UnsafeMutablePointer<Int>?) -> UnsafePointer<CChar>?) -> String? {
+        guard let h = handle else { return nil }
+        var len = 0
+        guard let p = query(h, &len), len > 0 else { return nil }
+        return p.withMemoryRebound(to: UInt8.self, capacity: len) {
+            String(decoding: UnsafeBufferPointer(start: $0, count: len), as: UTF8.self)
+        }
     }
 
     // MARK: - Helpers

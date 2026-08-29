@@ -713,7 +713,7 @@ final class PluginSettings: ObservableObject {
     /// `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — a toggle
     /// crosses as a JSON bool, which is the only shape the core accepts for
     /// one, and a list crosses as its whole array of rows.
-    static func configJSON(_ fields: [PluginField],
+    nonisolated static func configJSON(_ fields: [PluginField],
                            _ lists: [PluginListSchema] = [],
                            _ rows: [String: [PluginRow]] = [:]) -> String {
         var body = configBody(fields)
@@ -721,7 +721,7 @@ final class PluginSettings: ObservableObject {
         return "{" + body.joined(separator: ",") + "}"
     }
 
-    private static func configBody(_ fields: [PluginField]) -> [String] {
+    nonisolated private static func configBody(_ fields: [PluginField]) -> [String] {
         fields.map { f -> String in
             switch f.kind {
             case .toggle: return "\"\(f.key)\":\(f.isOn ? "true" : "false")"
@@ -733,7 +733,7 @@ final class PluginSettings: ObservableObject {
 
     /// A list as the core takes it: every row, every column the schema
     /// declares, and the row id the shell assigned.
-    static func rowsJSON(_ list: PluginListSchema, _ rows: [PluginRow]) -> String {
+    nonisolated static func rowsJSON(_ list: PluginListSchema, _ rows: [PluginRow]) -> String {
         let body = rows.map { row -> String in
             var cells = ["\"id\":\(jsonString(row.id))"]
             for f in list.itemFields {
@@ -772,11 +772,15 @@ final class PluginSettings: ObservableObject {
     }
 
     // MARK: - Parsing the registry JSON
+    //
+    // Pure, so `nonisolated`: they read a string and build value types, touch
+    // nothing this class owns, and are called from the tests off the main
+    // actor as well as from `bind` on it.
 
     /// The registry, or an empty list when the core did not answer. For the
     /// callers that have nothing to fall back on; anything holding a previous
     /// registry wants `registry(_:)` and its nil.
-    static func parse(_ json: String?) -> [PluginInfo] {
+    nonisolated static func parse(_ json: String?) -> [PluginInfo] {
         registry(json) ?? []
     }
 
@@ -784,7 +788,7 @@ final class PluginSettings: ObservableObject {
     /// no plugin layer, or JSON that is not one. A core with no plugins loaded
     /// answers `{"plugins":[]}`, which parses to an empty list and is a
     /// different thing.
-    static func registry(_ json: String?) -> [PluginInfo]? {
+    nonisolated static func registry(_ json: String?) -> [PluginInfo]? {
         guard let json, let data = json.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = root["plugins"] as? [[String: Any]]
@@ -817,7 +821,7 @@ final class PluginSettings: ObservableObject {
     }
 
     /// One repeating group's schema: what a row holds and where the rows show.
-    private static func listSchema(from o: [String: Any], pluginID: String) -> PluginListSchema? {
+    nonisolated private static func listSchema(from o: [String: Any], pluginID: String) -> PluginListSchema? {
         guard let key = o["key"] as? String else { return nil }
         return PluginListSchema(
             pluginID: pluginID,
@@ -838,7 +842,7 @@ final class PluginSettings: ObservableObject {
     }
 
     /// The rows in force for every list of one plugin, keyed by list key.
-    private static func listRows(_ o: [String: Any], pluginID: String) -> [String: [PluginRow]] {
+    nonisolated private static func listRows(_ o: [String: Any], pluginID: String) -> [String: [PluginRow]] {
         var out: [String: [PluginRow]] = [:]
         for l in o["lists"] as? [[String: Any]] ?? [] {
             guard let key = l["key"] as? String else { continue }
@@ -853,7 +857,7 @@ final class PluginSettings: ObservableObject {
         return out
     }
 
-    private static func field(from o: [String: Any]) -> PluginField? {
+    nonisolated private static func field(from o: [String: Any]) -> PluginField? {
         guard let key = o["key"] as? String,
               let kindText = o["kind"] as? String,
               let kind = PluginField.Kind(rawValue: kindText)
