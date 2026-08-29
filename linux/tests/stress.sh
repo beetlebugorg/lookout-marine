@@ -22,6 +22,10 @@
 # so a run that passes headless and fails here has told you where to look. It
 # opens a real window on the desktop and drives it, so expect the screen to move.
 #
+# $LK_VALIDATE=1 turns the Khronos validation layer on, with synchronization
+# validation, so a bad draw or an unsynchronised access is named rather than
+# guessed at. It is slow: use fewer ops.
+#
 # Passes when the run completes and the log carries no Vulkan error.
 set -eu
 
@@ -50,6 +54,11 @@ budget=$(( ops * interval / 1000 + 90 ))
 cat > "$inner" <<INNER
 #!/bin/sh
 export XDG_CONFIG_HOME="$conf" XDG_DATA_HOME="$conf/data" GTK_THEME=Adwaita
+if [ -n "${LK_VALIDATE:-}" ]; then   # names the offending call, at a heavy cost
+  export VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation
+  export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+  export VK_LAYER_VALIDATE_SYNC=1
+fi
 export LOOKOUT_OPEN="$chart"
 export LOOKOUT_STRESS="$ops,$interval,$fs@6"
 "$app" >>"$log" 2>&1 &
