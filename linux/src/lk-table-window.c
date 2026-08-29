@@ -369,22 +369,35 @@ lk_table_poll (gpointer user_data)
   return G_SOURCE_CONTINUE;
 }
 
-/* The row the mariner opened: centre the chart on it. Entirely shell-side. The
- * plugin is not told, and does not need to be. */
+/* The row the mariner opened: stop following, centre the chart on it, and pin
+ * its bubble, as the reference does. Entirely shell-side. The plugin is not
+ * told, and does not need to be. */
 static void
 lk_table_row_activated (GtkListBox *box, GtkListBoxRow *row, gpointer user_data)
 {
   LkTableWindow *self = user_data;
   const double *point = g_object_get_data (G_OBJECT (row), "lk-table-at");
+  LkChartController *controller = lk_app_model_get_controller (self->model);
 
   if (!self->spec->locatable || point == NULL)
     return;
 
-  lookout_view view = lk_chart_controller_get_view (lk_app_model_get_controller (self->model));
+  /* Following would drag the camera straight back to own ship, so it stops
+     first — the mariner asked to look at this row, not at the boat. */
+  lk_chart_controller_follow_set (controller, FALSE);
 
+  lookout_view view = lk_chart_controller_get_view (controller);
   view.lon = point[0];
   view.lat = point[1];
-  lk_chart_controller_set_view (lk_app_model_get_controller (self->model), view);
+  lk_chart_controller_set_view (controller, view);
+
+  /* The object now sits at the view centre. Pin its bubble there, so the row
+     the mariner opened names itself on the chart. */
+  int w = lk_app_model_get_view_width (self->model);
+  int h = lk_app_model_get_view_height (self->model);
+  g_autoptr (LkOverlayObject) object =
+      lk_chart_controller_overlay_hit (controller, w / 2.0, h / 2.0);
+  lk_app_model_pin_overlay (self->model, object != NULL ? object->id : NULL);
 }
 
 /* A header click reorders WITHIN each band. The core does the sorting; this
