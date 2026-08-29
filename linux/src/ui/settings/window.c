@@ -1,22 +1,22 @@
-#include "plugins/discovery.h"
+/* ui/settings/window.c — the settings window itself.
+ *
+ * The lifecycle, the sidebar that chooses a pane, and the two pages small
+ * enough to live here. Every other page is a unit beside this one: it builds
+ * itself into the stack and the sidebar, and this file calls it.
+ */
 #include "ui/settings/window.h"
 #include "ui/settings/private.h"
+
 #include "ui/settings/charts.h"
-#include "ui/settings/plugins.h"
-#include "ui/settings/plugins-page.h"
 #include "ui/settings/depths.h"
 #include "ui/settings/display.h"
+#include "ui/settings/plugins.h"
+#include "ui/settings/plugins-page.h"
 #include "ui/settings/widgets.h"
 
 #include "ui/chrome/licenses.h"
-#include "model/mariner.h"
-#include "plugins/install.h"
-#include "plugins/registry.h"
-#include "ui/open-dialogs.h"
 
 #include <gdk/gdkkeysyms.h>
-#include <math.h>
-#include <stdbool.h>
 
 static void
 lk_settings_free (gpointer data)
@@ -50,7 +50,12 @@ lk_apply_boundary (LkSettings *settings, int value)
   lk_mariner_raw (settings->mariner)->boundary_style = (tile57_boundary_style) value;
 }
 
-/* ---- pages -------------------------------------------------------------- */
+/* ---- the two small pages ------------------------------------------------- */
+/*
+ * Text and Advanced are a handful of rows each, so they stay here rather than
+ * each taking a unit of its own. Every other page is its own file beside this
+ * one, and this file constructs the window and connects it.
+ */
 
 static void
 lk_build_text_page (LkSettings *settings)
@@ -219,7 +224,7 @@ lk_settings_window_destroyed (GtkWidget *window, gpointer user_data)
   g_hash_table_remove_all (settings->list_boxes);
 }
 
-/* ---- window ------------------------------------------------------------- */
+/* ---- the sidebar and the window ------------------------------------------ */
 
 /* The list IS the navigation, so a row always names a pane. */
 static void
@@ -259,9 +264,6 @@ lk_settings_select_section (LkSettings *settings, const char *id)
   if (wanted != NULL)
     gtk_list_box_select_row (GTK_LIST_BOX (settings->sidebar), wanted);
 }
-
-/* ---- generic bindings --------------------------------------------------- */
-
 
 /* Esc closes it — a tiling compositor draws no titlebar X. */
 static gboolean
