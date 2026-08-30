@@ -18,6 +18,33 @@ struct ContentView: View {
     @ObservedObject var model: AppModel
     let controller: ChartController
 
+    /// Run `body` once the chart is drawing, or once it is clear none is
+    /// coming, or after `timeout` either way.
+    ///
+    /// The dev hooks act on a chart: a pick with no handle behind it reports
+    /// nothing and a table has no plugin to build rows. Polling the model beats
+    /// a fixed delay, which is dead time on an idle machine and a lost race on
+    /// a loaded one.
+    ///
+    /// The settings form and the licenses screen need no chart, and the app is
+    /// often started with none. `grace` is how long to let an open declare
+    /// itself before giving up on one.
+    private func whenChartIsUp(timeout: TimeInterval = 30, grace: TimeInterval = 1.5,
+                               _ body: @escaping () -> Void) {
+        let started = Date()
+        func poll() {
+            let waited = Date().timeIntervalSince(started)
+            let drawing = model.hasChart && model.firstBuildDone
+            let noneComing = waited >= grace && !model.isOpening && !model.hasChart
+            if drawing || noneComing || waited >= timeout {
+                body()
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: poll)
+        }
+        poll()
+    }
+
     var body: some View {
         // The chart surface hosts its own floating chrome (OverlayLayer) in an
         // AppKit view above the Metal layer, so the HUD/zoom/search stay visible
@@ -87,11 +114,16 @@ struct ContentView: View {
             // scale, search, pick, menu, marker, rename opens that chrome once
             // the chart is up. On the simulator, pass it as
             // SIMCTL_CHILD_LOOKOUT_SHOW.
+            //
+            // It waits for the chart rather than for a fixed three seconds. A
+            // pick with no handle behind it reports nothing, and three seconds
+            // is both too long on an idle machine and too short on a loaded
+            // one: two UI tests lost that race.
             .onAppear {
                 guard let show = ProcessInfo.processInfo.environment["LOOKOUT_SHOW"] else { return }
                 let want = Set(show.lowercased().split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespaces) })
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                whenChartIsUp {
                     for item in want {
                         let part = item.split(separator: ":", maxSplits: 1).map(String.init)
                         switch part[0] {
