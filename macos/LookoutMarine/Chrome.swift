@@ -297,21 +297,25 @@ struct ScaleBarView: View {
     /// element that is always on screen.
     var credit: String? = nil
 
-    private static let nice: [Double] = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
-                                         10_000, 20_000, 50_000, 100_000, 200_000, 500_000]
+    static let nice: [Double] = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
+                                 10_000, 20_000, 50_000, 100_000, 200_000, 500_000]
     /// The bar is 140pt or less. The distance rounds down to a nice number, so
     /// the label is always a round distance.
-    private static let targetPoints = 140.0
+    static let targetPoints = 140.0
 
-    private var bar: (label: String, width: CGFloat)? {
+    /// The bar for a display scale: what it says, and how wide it draws. Pure,
+    /// so it is checked directly. See ScaleBarTests.
+    static func bar(for scaleDenominator: Double) -> (label: String, width: CGFloat)? {
         guard scaleDenominator > 0 else { return nil }
         let metresPerPoint = scaleDenominator * Chrome.metresPerPointAt1to1
-        let target = Self.targetPoints * metresPerPoint
-        let metres = Self.nice.last { $0 <= target } ?? Self.nice[0]
+        let target = targetPoints * metresPerPoint
+        let metres = nice.last { $0 <= target } ?? nice[0]
         // Each nice number of 1000 or more is a whole number of kilometres.
         let label = metres >= 1000 ? "\(Int(metres) / 1000) km" : "\(Int(metres)) m"
         return (label, CGFloat(metres / metresPerPoint))
     }
+
+    private var bar: (label: String, width: CGFloat)? { Self.bar(for: scaleDenominator) }
 
     var body: some View {
         if let bar {

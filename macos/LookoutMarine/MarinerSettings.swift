@@ -141,7 +141,7 @@ final class MarinerSettings: ObservableObject {
 
     private static let defaultsKey = "mariner.v1"
 
-    static func save(_ m: tile57_mariner) {
+    nonisolated static func save(_ m: tile57_mariner) {
         var d: [String: Any] = [:]
         d["scheme"] = Int(m.scheme.rawValue)
         d["depth_unit"] = Int(m.depth_unit.rawValue)
@@ -176,7 +176,7 @@ final class MarinerSettings: ObservableObject {
 
     /// Overlay the saved settings onto `m` (typically the engine defaults +
     /// device_scale). Missing keys leave the field untouched.
-    static func applySavedOverlay(_ m: inout tile57_mariner) {
+    nonisolated static func applySavedOverlay(_ m: inout tile57_mariner) {
         guard let d = Store.shared.dictionary(defaultsKey) else { return }
         func f(_ k: String) -> Double? { d[k] as? Double }
         func b(_ k: String) -> Bool? { d[k] as? Bool }
