@@ -27,12 +27,10 @@ struct ScannedCell: Identifiable, Hashable {
     let name: String
     /// "baked" draws now. "source" is an S-57 cell that bakes first.
     let kind: String
-    /// 1 to 6, or 0 when the name carries no usage band.
+    /// 1 to 6, or 0 when the name carries no usage band. The name of the band
+    /// comes from ChartSet.bandName, so a set and a cell cannot disagree.
     let band: Int
-    let bandName: String
     let bytes: Int64
-    /// The compilation scale the bake embedded, or 0.
-    let scale: Int
     /// True when `path` is a name INSIDE an archive rather than a file. Such a
     /// chart cannot be opened, whatever it is: it has to come out first.
     var archived: Bool = false
@@ -74,12 +72,6 @@ struct ChartSet: Identifiable, Hashable {
     /// Picture charts found in the same folder: imagery, and RNC sheets. They
     /// are part of the set, not a separate thing the mariner has to add again.
     var rasters: [ScannedCell]
-    /// S-57 update files. Each one bakes with its base cell.
-    var updates: Int
-    /// Files in the folder that are not charts.
-    var other: Int
-    /// Archives with a chart name that the engine refused.
-    var refused: Int
     /// False when the mariner switched this set off. It stays aboard.
     var on: Bool
 
@@ -224,8 +216,7 @@ enum ChartScan {
             // The archive wins over the file it was made from.
             let readyStems = Set((derived.cells + derived.rasters).map(\.stem))
             var set = source ?? ChartSet(path: path, producer: nil, preparedPath: nil,
-                                         cells: [], rasters: [],
-                                         updates: 0, other: 0, refused: 0, on: true)
+                                         cells: [], rasters: [], on: true)
             set.preparedPath = prepared
             // Whichever half holds the charts knows who made them: a set that
             // has been imported has them under the prepared directory, and one
@@ -263,9 +254,7 @@ enum ChartScan {
                 name: c["name"] as? String ?? "",
                 kind: c["kind"] as? String ?? "baked",
                 band: c["band"] as? Int ?? 0,
-                bandName: c["bandName"] as? String ?? "",
                 bytes: c["bytes"] as? Int64 ?? Int64(c["bytes"] as? Int ?? 0),
-                scale: c["scale"] as? Int ?? 0,
                 archived: archive
             )
         }
@@ -274,9 +263,8 @@ enum ChartScan {
                 path: c["path"] as? String ?? "",
                 name: c["name"] as? String ?? "",
                 kind: c["kind"] as? String ?? "raster",
-                band: 0, bandName: "",
+                band: 0,
                 bytes: c["bytes"] as? Int64 ?? Int64(c["bytes"] as? Int ?? 0),
-                scale: 0,
                 archived: archive)
         }
         return ChartSet(
@@ -285,9 +273,6 @@ enum ChartScan {
             preparedPath: nil,
             cells: cells,
             rasters: raster,
-            updates: o["updates"] as? Int ?? 0,
-            other: o["other"] as? Int ?? 0,
-            refused: o["refused"] as? Int ?? 0,
             on: true
         )
     }

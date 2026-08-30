@@ -673,7 +673,10 @@ final class AppModel: ObservableObject {
             self.scanning = true
             self.scanRequested = true
             self.bake = nil
-            guard let outDir else {
+            // The output directory is not read here. The set is the folder the
+            // mariner picked, and it is rescanned below; nil only says the bake
+            // failed.
+            guard outDir != nil else {
                 self.scanning = false
                 self.emptyPick = "Could not bake \((sourceDir as NSString).lastPathComponent)."
                 return
@@ -1319,20 +1322,6 @@ final class AppModel: ObservableObject {
         guard let c = controller else { return }
         c.rasterSelect(i)
         refreshRasterState()
-    }
-
-    /// The installed files grouped by the provider their name gives — the same
-    /// grouping the engine uses for a set, so what Settings shows and what the
-    /// pill cycles are the same thing.
-    var rasterGroups: [(name: String, paths: [String])] {
-        var order: [String] = []
-        var byName: [String: [String]] = [:]
-        for p in rasterPaths {
-            let n = AppModel.providerLabel(p)
-            if byName[n] == nil { order.append(n) }
-            byName[n, default: []].append(p)
-        }
-        return order.map { ($0, byName[$0] ?? []) }
     }
 
     /// Is any file of this set on?

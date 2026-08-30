@@ -225,8 +225,6 @@ final class PluginTableWindowController: NSObject, NSWindowDelegate,
         return c
     }
 
-    /// True while any table window is on screen. The screenshot pass checks it.
-    static var anyVisible: Bool { open.values.contains { $0.window.isVisible } }
 
     private init(spec: PluginTableSpec, model: AppModel, sortKey: String?, ascending: Bool) {
         self.spec = spec

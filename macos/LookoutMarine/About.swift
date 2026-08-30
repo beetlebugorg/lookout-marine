@@ -70,7 +70,5 @@ final class AboutWindowController {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-
-    var isVisible: Bool { window?.isVisible ?? false }
 }
 #endif

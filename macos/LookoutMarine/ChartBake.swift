@@ -37,8 +37,6 @@ struct BakeProgress: Equatable {
     var total: Int = 0
     /// The folder being baked.
     var name: String = ""
-    /// The cell that finished last, for the action line.
-    var cell: String = ""
     /// Seconds since the bake started.
     var elapsed: Double = 0
 
@@ -81,18 +79,15 @@ final class ChartBakeJob {
     private let lock = NSLock()
     private var _cancelled = false
     private var _progress = BakeProgress()
-    private var _finished: [String] = []
     private let started = Date()
     /// When the last progress went to the main queue. A 7,000 cell import
     /// would otherwise post 7,000 times and lay out the panel 7,000 times,
     /// against a machine with nothing spare.
     private var _lastPost = Date.distantPast
 
-    /// The archive paths, by the index tile57 labels. Read-only once set.
-    fileprivate var outPaths: [String] = []
-    /// Where the phase now running starts in `outPaths`, and how many charts
-    /// the whole job has. The engine is called once per kind and counts from
-    /// zero each time; the mariner is watching one job.
+    /// Where the phase now running starts in the job, and how many charts the
+    /// whole job has. The engine is called once per kind and counts from zero
+    /// each time; the mariner is watching one job.
     private var _offset = 0
     private var _jobTotal = 0
 
@@ -102,9 +97,6 @@ final class ChartBakeJob {
 
     /// Called on the main queue whenever the count moves.
     var onProgress: ((BakeProgress) -> Void)?
-    /// Called on the main queue when the work stops, with every archive that
-    /// finished. Also called for a cancelled run: what landed is a library.
-    var onFinished: (([String]) -> Void)?
 
     var cancelled: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -113,19 +105,6 @@ final class ChartBakeJob {
 
     func cancel() {
         lock.lock(); _cancelled = true; lock.unlock()
-    }
-
-    /// A chart finished. Held until the run ends, when the whole list opens at
-    /// once.
-    fileprivate func finished(index: Int) {
-        lock.lock()
-        let i = index + _offset
-        if i < outPaths.count {
-            _finished.append(outPaths[i])
-            _progress.cell = (outPaths[i] as NSString).deletingPathExtension
-            _progress.cell = (_progress.cell as NSString).lastPathComponent
-        }
-        lock.unlock()
     }
 
     fileprivate func report(done: Int, total: Int) {
@@ -141,14 +120,6 @@ final class ChartBakeJob {
         lock.unlock()
         guard post else { return }
         DispatchQueue.main.async { [weak self] in self?.onProgress?(p) }
-    }
-
-    /// Every archive that finished. Called once, when the work stops.
-    fileprivate func drain() -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        let all = _finished
-        _finished = []
-        return all
     }
 
     fileprivate func setName(_ n: String) {
@@ -472,7 +443,6 @@ enum ChartBake {
                 : "\(stem).pmtiles"
             return (dir as NSString).appendingPathComponent(name)
         }
-        job.outPaths = outPaths
         job.setName((sourceDir as NSString).lastPathComponent)
         let workers = UInt32(max(1, min(8, ProcessInfo.processInfo.activeProcessorCount)))
 
@@ -504,22 +474,20 @@ enum ChartBake {
                                     j.report(done: Int(done), total: Int(total))
                                     return !j.cancelled   // false CANCELS the bake
                                 },
-                                { ctx, index in
-                                    guard let ctx else { return }
-                                    let j = Unmanaged<ChartBakeJob>.fromOpaque(ctx).takeUnretainedValue()
-                                    j.finished(index: Int(index))
-                                },
+                                // No label callback: nothing reads which
+                                // chart finished. The whole library opens at
+                                // the end, from a fresh scan of the folder.
+                                nil,
                                 ctx, &baked, &err)
                         }
                     }
                 }
             }
 
-            let done = job.drain()
             DispatchQueue.main.async {
-                job.onFinished?(done)
                 // A cancelled bake is not a failure. Whatever landed is a
-                // usable library, so the caller still gets the directory.
+                // usable library, so the caller still gets the directory
+                // (tile57 answers TILE57_OK for a cancel).
                 completion(status == TILE57_OK ? outDir : nil)
             }
         }

@@ -36,8 +36,5 @@ final class SettingsWindowController {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-
-    /// True while the window is on screen. The screenshot pass checks it.
-    var isVisible: Bool { window?.isVisible ?? false }
 }
 #endif

@@ -608,10 +608,6 @@ final class ChartController: NSObject {
         kick()
     }
 
-    var pixelDensity: CGFloat {
-        guard let h = handle else { return 1 }
-        return CGFloat(lookout_pixel_density(h))
-    }
 
     // MARK: - Interaction (points in; pixels handled internally)
 
@@ -1243,8 +1239,6 @@ final class ChartController: NSObject {
     }
     /// Is a picture beneath THIS view?
     func rasterOverChart() -> Bool { guard let h = handle else { return false }; return lookout_raster_over_chart(h) != 0 }
-    /// How many raster chart sets the mariner has installed.
-    func rasterSetCount() -> Int { guard let h = handle else { return 0 }; return Int(lookout_raster_set_count(h)) }
     /// Open a raster chart (satellite imagery or another picture chart) the
     /// mariner supplied. The app offers no catalogue and no download.
     @discardableResult

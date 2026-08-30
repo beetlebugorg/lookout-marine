@@ -332,13 +332,6 @@ struct LicensesView: View {
         return "\(short) (\(build))"
     }
 
-    static var platformName: String {
-        #if os(macOS)
-        return "macOS"
-        #else
-        return "iOS"
-        #endif
-    }
 }
 
 // MARK: - The detail panes
@@ -605,7 +598,5 @@ final class LicensesWindowController {
     func select(_ id: String) {
         LicensesNav.shared.selection = id.isEmpty ? .app : .component(id)
     }
-
-    var isVisible: Bool { window?.isVisible ?? false }
 }
 #endif

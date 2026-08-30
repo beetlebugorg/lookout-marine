@@ -452,10 +452,6 @@ private struct ChartsSections: View {
         // the pictures inside a set get a switch each, by whoever made them.
     }
 
-    private func displayName(_ path: String) -> String {
-        (path as NSString).lastPathComponent
-    }
-
     private func submitChartLink() {
         let raw = newChartLink
         newChartLink = ""

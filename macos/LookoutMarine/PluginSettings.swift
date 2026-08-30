@@ -81,6 +81,10 @@ struct PluginCapability: Identifiable {
     /// The consent sentence, worded by the core so every shell says the same
     /// thing: "Read AIS traffic."
     let sentence: String
+    /// The addresses a grant reaches. Parsed and shown nowhere, on this shell
+    /// or on Android, alongside a capability's `ports` and a settings field's
+    /// `placeholder` and `max_len`. Kept so the decision to show them is one
+    /// somebody makes rather than one a deletion hides.
     let hosts: [String]
     var granted: Bool
 

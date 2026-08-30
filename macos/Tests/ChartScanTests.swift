@@ -102,14 +102,13 @@ final class ChartSetTests: XCTestCase {
                      producer: String? = nil, prepared: String? = nil,
                      path: String = "/charts/ENC_ROOT") -> ChartSet {
         ChartSet(path: path, producer: producer, preparedPath: prepared,
-                 cells: cells, rasters: rasters, updates: 0, other: 0, refused: 0, on: true)
+                 cells: cells, rasters: rasters, on: true)
     }
 
     private func cell(_ name: String, band: Int = 5, kind: String = "baked",
                       bytes: Int64 = 1_000_000, archived: Bool = false) -> ScannedCell {
         ScannedCell(path: "/charts/\(name)/\(name).pmtiles", name: name, kind: kind,
-                    band: band, bandName: ChartSet.bandName(band), bytes: bytes, scale: 0,
-                    archived: archived)
+                    band: band, bytes: bytes, archived: archived)
     }
 
     /// An office not listed keeps the folder name. A wrong agency on a chart
@@ -187,11 +186,11 @@ final class ChartSetTests: XCTestCase {
     func testPicturesAreGroupedByProvider() {
         let rasters = [
             ScannedCell(path: "/a/ArcGIS-1.mbtiles", name: "ArcGIS-1.mbtiles", kind: "raster",
-                        band: 0, bandName: "", bytes: 1, scale: 0),
+                        band: 0, bytes: 1),
             ScannedCell(path: "/a/ArcGIS-2.mbtiles", name: "ArcGIS-2.mbtiles", kind: "raster",
-                        band: 0, bandName: "", bytes: 1, scale: 0),
+                        band: 0, bytes: 1),
             ScannedCell(path: "/a/Bing-1.mbtiles", name: "Bing-1.mbtiles", kind: "raster",
-                        band: 0, bandName: "", bytes: 1, scale: 0),
+                        band: 0, bytes: 1),
         ]
         let groups = set(rasters: rasters).rasterGroups(label: AppModel.providerLabel)
         XCTAssertEqual(groups.map(\.name), ["ArcGIS", "Bing"])
@@ -201,8 +200,7 @@ final class ChartSetTests: XCTestCase {
     /// A picture still inside an archive is not drawable yet.
     func testAnUnpreparedPictureIsNotOffered() {
         let s = set(rasters: [ScannedCell(path: "/a/x.kap", name: "x.kap",
-                                          kind: "raster_source", band: 0, bandName: "",
-                                          bytes: 1, scale: 0)])
+                                          kind: "raster_source", band: 0, bytes: 1)])
         XCTAssertTrue(s.rasterPaths.isEmpty)
         XCTAssertTrue(s.rasterGroups(label: AppModel.providerLabel).isEmpty)
     }
