@@ -15,16 +15,25 @@ import UIKit
 
 struct ChartView: View {
     let model: AppModel
+    /// Held, not taken locally in `body`. A binding cannot be made through
+    /// AppModel, which owns its models with a let; a local @Bindable makes one
+    /// but does not make this view observe the object, so a flag set from
+    /// somewhere else never reached the presentation and the pickers did
+    /// nothing at all.
+    @Bindable var chrome: ChromeModel
     let controller: ChartController
+
+    init(model: AppModel, controller: ChartController) {
+        self.model = model
+        self.controller = controller
+        self._chrome = Bindable(wrappedValue: model.chrome)
+    }
     /// The OS appearance, which the form follows in the day scheme. Read
     /// here, outside OverlayLayer, so it is the real OS value and not the
     /// chrome's own override.
     @Environment(\.colorScheme) private var osScheme
 
     var body: some View {
-        // A binding cannot be made through AppModel, which owns its models
-        // with a let, so the one this view writes is taken locally.
-        @Bindable var chrome = model.chrome
         // Chrome only: the chart renders in SDL's own window and the gesture
         // surface (ChartUIView) lives in the plain-UIKit input window between
         // them — SwiftUI never sees chart touches (see SceneDelegate).

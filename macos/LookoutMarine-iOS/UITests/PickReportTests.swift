@@ -1,8 +1,9 @@
 //  PickReportTests.swift — the report a mariner reads about one object.
 //
 //  It is raised from the chart menu, which a press opens. On a phone it is a
-//  sheet against the bottom edge with the readouts folded into its footer; on a
-//  wide view it is a callout beside the mark.
+//  sheet against the bottom edge; on a wide view it is a callout beside the
+//  mark. The readouts capsule stands above either one, in the place and the
+//  shape it always has.
 
 import XCTest
 
@@ -24,7 +25,7 @@ final class PickReportTests: UITestCase {
         return app
     }
 
-    /// One test opens the scale entry from the footer.
+    /// One test opens the scale entry from the capsule.
     override func resetToStart(_ app: XCUIApplication) -> Bool {
         if app.buttons["Close scale entry"].exists { app.buttons["Close scale entry"].tap() }
         return super.resetToStart(app) && app.staticTexts["band"].waitForExistence(timeout: 5)
@@ -57,29 +58,32 @@ final class PickReportTests: UITestCase {
         XCTAssertTrue(app.staticTexts["band"].exists, "the readouts did not come back")
     }
 
-    /// A phone folds the readouts into the sheet's footer, so the sheet and the
-    /// capsule do not fight for the bottom of the screen. The footer shows own
-    /// ship, and with no fix that means no numbers at all.
-    func testTheSheetFooterShowsOwnShipAndNotTheCamera() throws {
+    /// The capsule stands above the sheet rather than being folded into it.
+    /// It shows own ship, and with no fix that means no numbers at all.
+    ///
+    /// The sheet used to carry a copy of the same four readouts, so opening a
+    /// report turned the pill into a bar and printed the map centre in the
+    /// slot the capsule gives own ship.
+    func testTheCapsuleStandsAboveTheSheetAndShowsOwnShip() throws {
         let app = try report()
-        try XCTSkipUnless(app.windows.firstMatch.frame.width < 700,
-                          "a wide view keeps the capsule and uses a callout")
-        XCTAssertTrue(app.buttons["configure-gps"].exists,
-                      "the footer dropped the position readout")
+        let sheet = app.buttons["close-report"].frame
+        let gps = app.buttons["configure-gps"]
+        XCTAssertTrue(gps.exists, "the capsule went away with the report up")
+        XCTAssertLessThan(gps.frame.maxY, sheet.minY,
+                          "the capsule is not above the sheet: \(gps.frame) \(sheet)")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS '°' AND label CONTAINS \"'\"")).firstMatch.exists,
-            "the footer shows a coordinate with no fix behind it")
+            "a coordinate with no fix behind it")
     }
 
-    /// The scale still opens its entry from the footer.
-    func testTheFooterScaleStillOpensTheEntry() throws {
+    /// The scale opens its entry over a report, from the one capsule.
+    func testTheScaleOpensItsEntryOverAReport() throws {
         let app = try report()
-        try XCTSkipUnless(app.windows.firstMatch.frame.width < 700, "no sheet on a wide view")
         let scale = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH 'Scale 1:'")).firstMatch
-        XCTAssertTrue(scale.exists, "no scale in the footer")
+        XCTAssertTrue(scale.exists, "no scale to tap")
         scale.tap()
         XCTAssertTrue(app.staticTexts["Zoom to scale"].waitForExistence(timeout: 10),
-                      "the footer's scale opened nothing")
+                      "the scale opened nothing")
     }
 }

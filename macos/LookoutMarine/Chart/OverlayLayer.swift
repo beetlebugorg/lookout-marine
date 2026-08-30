@@ -38,11 +38,17 @@ struct OverlayLayer: View {
             // A side sheet owns the leading edge; the chrome there slides
             // inboard of it.
             let sideInset: CGFloat = form == .sideSheet ? Self.sideSheetWidth + Chrome.gap : 0
-            // The bottom inset of the corner chrome. It clears the capsule in
-            // a narrow window, and the sheet when one is up.
-            let corner: CGFloat = form == .bottomSheet
+            // Where the capsule's floor sits: on the sheet when one is up,
+            // else its own margin. The corner chrome reads it too, so the two
+            // cannot drift apart and leave the settings button under the pill.
+            let capsuleFloor: CGFloat = form == .bottomSheet
                 ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
-                : (compact ? capsuleBottom + capsuleHeight + Chrome.gap : Chrome.margin)
+                : capsuleBottom
+            // The bottom inset of the corner chrome. It clears the capsule in
+            // a narrow window, and the capsule clears the sheet.
+            let corner: CGFloat = compact || form == .bottomSheet
+                ? capsuleFloor + capsuleHeight + Chrome.gap
+                : Chrome.margin
             Color.clear
                 .allowsHitTesting(false)
                 // Top left: the search bubble opens the search field.
@@ -95,10 +101,14 @@ struct OverlayLayer: View {
                             .padding(.bottom, corner)
                     }
                 }
-                // Bottom center: the readout capsule. The scale entry opens
-                // above it. A sheet folds the readouts into its own footer,
-                // so the capsule stands down and the entry clears the sheet.
-                // Drawn BEFORE the pick report, which may stand over it.
+                // Bottom center: the readout capsule, and the scale entry
+                // above it.
+                //
+                // It stands in one place and keeps one shape, report or no
+                // report. A sheet used to carry its own copy of the same four
+                // readouts, so opening one turned the pill into a bar; a
+                // callout left the pill on screen beside a report that had
+                // them too. The report comes up under the capsule instead.
                 .overlay(alignment: .bottom) {
                     VStack(spacing: Chrome.gap) {
                         if model.chrome.showScaleEntry {
@@ -106,15 +116,17 @@ struct OverlayLayer: View {
                                 .chromeHitRegion("scale-entry")
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
-                        if model.charts.hasChart, form == nil || form == .callout {
+                        if model.charts.hasChart {
                             ReadoutsCapsule(model: model, compact: compact,
                                             onScaleTap: toggleScaleEntry)
                                 .measureSize { capsuleHeight = $0.height }
                         }
                     }
-                    .padding(.bottom, form == .bottomSheet
-                             ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
-                             : capsuleBottom)
+                    .padding(.bottom, capsuleFloor)
+                    // A side sheet holds the leading edge for its whole
+                    // height, so the capsule centres in the water that is
+                    // left rather than half behind it.
+                    .padding(.leading, form == .sideSheet ? Self.sideSheetWidth : 0)
                 }
                 // The mark on what was picked, then the report beside it.
                 // After the capsule, because the report is what the mariner
@@ -175,7 +187,7 @@ struct OverlayLayer: View {
                                                        - PickTail.size / 2)
                                 }
                                 PickSheet(model: model, side: .bottom, sheetSize: size,
-                                          anchor: point, onScaleTap: toggleScaleEntry)
+                                          anchor: point)
                                     .chromeHitRegion("pick-report")
                                     .padding(.top, geo.size.height - size.height)
                             }
@@ -191,7 +203,7 @@ struct OverlayLayer: View {
                                                        - PickTail.size / 2)
                                 }
                                 PickSheet(model: model, side: .leading, sheetSize: size,
-                                          anchor: point, onScaleTap: toggleScaleEntry)
+                                          anchor: point)
                                     .chromeHitRegion("pick-report")
                             }
                         }

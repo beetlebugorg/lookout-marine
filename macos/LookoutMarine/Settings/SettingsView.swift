@@ -42,6 +42,13 @@ struct SettingsSection: Identifiable {
 
 struct SettingsView: View {
     let model: AppModel
+    /// Held, not taken locally in `body`. A binding cannot be made through
+    /// AppModel, which owns its models with a let; a local @Bindable makes one
+    /// but does not make this view observe the object, so a flag set from
+    /// somewhere else never reached the presentation and the pickers did
+    /// nothing at all.
+    @Bindable var chrome: ChromeModel
+
     @StateObject private var m = MarinerSettings()
     @StateObject private var p: PluginSettings
 
@@ -51,14 +58,12 @@ struct SettingsView: View {
     @MainActor
     init(model: AppModel, plugins: PluginSettings? = nil) {
         self.model = model
+        self._chrome = Bindable(wrappedValue: model.chrome)
         let made = plugins ?? PluginSettings()
         _p = StateObject(wrappedValue: made)
     }
 
     var body: some View {
-        // A binding cannot be made through AppModel, which owns its models
-        // with a let, so the one this view writes is taken locally.
-        @Bindable var chrome = model.chrome
         content
             .onAppear {
                 m.bind(to: model.controller)
@@ -131,9 +136,6 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var content: some View {
-        // A binding cannot be made through AppModel, which owns its models
-        // with a let, so the one this view writes is taken locally.
-        @Bindable var chrome = model.chrome
         #if os(macOS)
         NavigationSplitView {
             List(sections, selection: $chrome.settingsTab) { s in

@@ -92,6 +92,26 @@ final class CalloutLayoutTests: XCTestCase {
         XCTAssertEqual(p.room, 641)
     }
 
+    /// A pick taken low on the view — on the capsule's own row, which a
+    /// mariner reaching for a buoy near the bottom edge does — stands the card
+    /// off the mark rather than putting its last line over the readouts.
+    func testAPickOnTheHudBandStandsTheCardOffTheMark() {
+        let p = OverlayLayer.calloutLayout(point: CGPoint(x: 640, y: 780),
+                                           width: 420, in: view)
+        XCTAssertEqual(p.edge, .above)
+        // 800 - (16 * 2 + 44) = 724, and the mark is below that.
+        XCTAssertEqual(p.y, 724)
+        XCTAssertEqual(p.room, 708)
+    }
+
+    /// A pick clear of the band still holds its floor against the mark.
+    func testAPickAboveTheBandHoldsItsFloorAgainstTheMark() {
+        let p = OverlayLayer.calloutLayout(point: CGPoint(x: 640, y: 600),
+                                           width: 420, in: view)
+        XCTAssertEqual(p.edge, .above)
+        XCTAssertEqual(p.y, 577)
+    }
+
     /// Room is never negative, whatever the point.
     func testTheRoomIsNeverNegative() {
         for y in stride(from: -100.0, through: 900.0, by: 25) {

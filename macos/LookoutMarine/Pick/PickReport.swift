@@ -532,16 +532,20 @@ enum SheetSide {
     case leading  // a wide short view: a phone on its side
 }
 
-/// The narrow-screen report: a sheet against an edge, the pick set as chips,
-/// and the HUD readouts folded into its footer — the sheet and the capsule
-/// must not fight for the bottom of a phone. The sheet's size is fixed by the
-/// view, not measured, so the pager rule holds by construction.
+/// The narrow-screen report: a sheet against an edge, with the pick set as
+/// chips. The sheet's size is fixed by the view, not measured, so the pager
+/// rule holds by construction.
+///
+/// It used to fold the HUD readouts into a footer of its own so the sheet and
+/// the capsule would not fight for the bottom of a phone. That was the same
+/// four readouts written twice, in two shapes, and opening a report turned the
+/// pill into a bar. The capsule stands where it always stands and the sheet
+/// comes up under it.
 struct PickSheet: View {
     var model: AppModel
     let side: SheetSide
     let sheetSize: CGSize
     let anchor: CGPoint
-    let onScaleTap: () -> Void
 
     @State private var foldOpen = false
 
@@ -567,7 +571,6 @@ struct PickSheet: View {
                     .id(anchor)
                 }
                 Divider().overlay(Chrome.rule)
-                footer
             }
             .frame(width: sheetSize.width, height: sheetSize.height, alignment: .top)
             .background(Chrome.surface, in: corners)
@@ -613,40 +616,6 @@ struct PickSheet: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
         }
-    }
-
-    /// The readouts the capsule shows when no sheet covers its ground: band,
-    /// scale, zoom and OWN SHIP's position.
-    ///
-    /// PositionReadout, not a coordinate. This footer printed the map centre in
-    /// the slot the capsule gives own ship, in the same font, with no pill
-    /// saying what it was. A mariner reading it off a phone during a pick had
-    /// no way to tell it from a fix, which is the ambiguity PositionReadout
-    /// exists to remove.
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 0)
-            Text(CoordFormat.band(model.readouts.scaleDenominator))
-                .foregroundStyle(Chrome.muted)
-            Button(action: onScaleTap) {
-                Text(CoordFormat.scale(model.readouts.scaleDenominator))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(Chrome.accent)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-            }
-            .buttonStyle(ChromeFlatStyle(cornerRadius: 5))
-            .accessibilityLabel("Scale \(CoordFormat.scale(model.readouts.scaleDenominator)). Zoom to a scale.")
-            Text(String(format: "z%.1f", model.readouts.zoomLevel))
-                .foregroundStyle(Chrome.muted)
-            PositionReadout(model: model, compact: true)
-            Spacer(minLength: 0)
-        }
-        .font(.system(size: 11).monospacedDigit())
-        .lineLimit(1)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(Chrome.panel)
     }
 }
 

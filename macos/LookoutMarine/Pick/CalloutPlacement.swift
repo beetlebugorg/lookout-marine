@@ -42,7 +42,9 @@ extension OverlayLayer {
     /// Below this height there is no room for a callout over a chart: a phone
     /// on its side. The report holds the leading edge instead.
     static let shortHeight: CGFloat = 520
-    /// The bottom band the HUD capsule owns: its height and a margin each side.
+    /// The bottom band the corner chrome owns: the scale bar and the zoom
+    /// stack, which stay while a report is up. The capsule does not — it
+    /// stands down for the report, which carries the same readouts.
     static let hudBand = Chrome.margin * 2 + Chrome.capsule
 
     static func pickForm(for size: CGSize) -> PickForm {
@@ -61,7 +63,8 @@ extension OverlayLayer {
         let clear = PickMarker.size / 2 + 6
         let minX = Chrome.margin
         let maxX = max(minX, view.width - Chrome.margin - width)
-        // The free area's floor. The card stops here; the HUD owns the rest.
+        // The free area's floor. The card stops here; the corner chrome owns
+        // the rest.
         let floor = max(Chrome.margin, view.height - Self.hudBand)
         let x = min(max(point.x - width / 2, minX), maxX)
 
@@ -70,7 +73,14 @@ extension OverlayLayer {
         // Use the space above unless it is too small and the space below is
         // larger.
         if over >= 200 || over >= under {
-            return CalloutPlace(x: x, y: point.y - clear, edge: .above, room: max(0, over))
+            // The floor holds here too. A pick taken low on the view — level
+            // with the scale bar, which a mariner reaching for a buoy near the
+            // bottom edge does — anchored the card's floor at that point and
+            // put its last line over them. The card stands off the mark
+            // instead, and its tail reaches down to it.
+            let y = min(point.y - clear, floor)
+            return CalloutPlace(x: x, y: y, edge: .above,
+                                room: max(0, y - Chrome.margin))
         }
         return CalloutPlace(x: x, y: point.y + clear, edge: .below, room: max(0, under))
     }
