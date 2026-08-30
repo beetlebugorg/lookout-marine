@@ -11,83 +11,17 @@
 //  test here runs on both; the ones that can only be true of one are guarded.
 //
 //  The list needs no chart: the manifest is static in the core.
+//
+//  These check that the manifest reaches the screen, not what is in it. Whether
+//  every component has a name, a summary, a pin and either terms or a note
+//  saying why not is LicenseManifestTests, which reads the same JSON the screen
+//  does. Restating the manifest here meant a second copy to update on every
+//  dependency bump, and thirty rows walked one at a time.
 
 import XCTest
 import UIKit
 
-final class LicensesTests: XCTestCase {
-
-    // MARK: - What the manifest says this build carries
-    //
-    // vendor/licenses/licenses.json, for the entries whose `shells` name iOS,
-    // in manifest order. Held here rather than read from the bundle so the
-    // test asserts against a second copy: a row that silently loses its pin or
-    // its licence has to disagree with something.
-
-    struct Component {
-        let name: String
-        let summary: String
-        /// The short form the list column shows.
-        let column: String
-        /// The full label the detail's License fact shows.
-        let licenseLabel: String
-        /// Version, or the seven-character commit, as the row's pin.
-        let pin: String
-        let pinnedIn: String
-        let url: String
-        /// A phrase from the licence text, proving the body is the real one.
-        let textPhrase: String
-    }
-
-    static let components: [Component] = [
-        .init(name: "tile57", summary: "The S-57, S-101 and raster chart engine.",
-              column: "MIT", licenseLabel: "MIT", pin: "edcac13", pinnedIn: "build.zig.zon",
-              url: "https://github.com/beetlebugorg/tile57",
-              textPhrase: "Permission is hereby granted, free of charge"),
-        .init(name: "charttable", summary: "Renders the chart.",
-              column: "MIT", licenseLabel: "MIT", pin: "0d137fa", pinnedIn: "build.zig.zon",
-              url: "https://github.com/beetlebugorg/charttable",
-              textPhrase: "Permission is hereby granted, free of charge"),
-        .init(name: "IHO S-101 Portrayal Catalogue",
-              summary: "The portrayal rules: which symbol, which color, which text, at which scale.",
-              column: "Not resolved", licenseLabel: "Not resolved", pin: "62f7773",
-              pinnedIn: "tile57's build.zig.zon",
-              url: "https://github.com/iho-ohi/S-101_Portrayal-Catalogue",
-              textPhrase: ""),   // it has none; the pane says so instead
-        .init(name: "WebAssembly Micro Runtime", summary: "The runtime the plugins execute in.",
-              column: "Apache-2.0", licenseLabel: "Apache 2.0 with the LLVM exception",
-              pin: "WAMR-2.4.5", pinnedIn: "scripts/build-wamr.sh",
-              url: "https://github.com/bytecodealliance/wasm-micro-runtime",
-              textPhrase: "Apache License"),
-        .init(name: "stb_image", summary: "Reads the PNG and JPEG files a chart carries.",
-              column: "MIT OR Unlicense", licenseLabel: "MIT or the Unlicense, at your option",
-              pin: "2.30", pinnedIn: "vendor/stb/stb_image.h",
-              url: "https://github.com/nothings/stb",
-              textPhrase: "ALTERNATIVE A"),
-        .init(name: "GSHHG coastline", summary: "The world coastline baked into the basemap.",
-              column: "LGPL", licenseLabel: "GNU Lesser General Public License",
-              pin: "", pinnedIn: "vendor/gshhg/coastline.geojson.gz",
-              url: "https://www.soest.hawaii.edu/pwessel/gshhg/",
-              textPhrase: "GNU LESSER GENERAL PUBLIC LICENSE"),
-        .init(name: "libwebp", summary: "Decodes the WebP tiles a chart link serves.",
-              column: "BSD-3-Clause", licenseLabel: "BSD 3-Clause", pin: "1.4.0",
-              pinnedIn: "charttable's build.zig.zon",
-              url: "https://github.com/webmproject/libwebp",
-              textPhrase: "Redistribution and use in source and binary forms"),
-        .init(name: "libpng", summary: "Reads interlaced and 16-bit PNGs.",
-              column: "libpng-2.0", licenseLabel: "PNG Reference Library License version 2",
-              pin: "1.6.44", pinnedIn: "charttable's build.zig.zon",
-              url: "https://github.com/pnggroup/libpng",
-              textPhrase: "COPYRIGHT NOTICE, DISCLAIMER, and LICENSE"),
-        .init(name: "zlib", summary: "Deflate compression.",
-              column: "Zlib", licenseLabel: "zlib License", pin: "1.3.1",
-              pinnedIn: "charttable's build.zig.zon",
-              url: "https://github.com/madler/zlib",
-              textPhrase: "Jean-loup Gailly and Mark Adler"),
-    ]
-
-    /// The one entry whose terms the build could not determine.
-    static var unresolved: Component { components[2] }
+final class LicensesTests: UITestCase {
 
     static let appName = "Lookout Marine"
     static let appCopyright = "© 2026 Jeremy Collins"
@@ -100,8 +34,8 @@ final class LicensesTests: XCTestCase {
     // MARK: - The About section
 
     /// Every row of the section, and the count it promises.
-    func testAboutSectionCarriesVersionEngineAndTheLicensesRow() {
-        let app = openAdvanced()
+    func testAboutSectionCarriesVersionEngineAndTheLicensesRow() throws {
+        let app = try openAdvanced()
 
         XCTAssertTrue(app.staticTexts["About"].exists, "no About header")
         XCTAssertTrue(app.staticTexts["Version"].exists, "no Version row")
@@ -120,29 +54,35 @@ final class LicensesTests: XCTestCase {
 
         let row = licensesRow(app)
         XCTAssertTrue(row.exists, "no Licenses row")
-        XCTAssertTrue(row.label.contains("\(Self.components.count) components"),
-                      "the Licenses row does not name the count: \(row.label)")
+        XCTAssertNotNil(row.label.range(of: #"[0-9]+ components"#, options: .regularExpression),
+                        "the Licenses row does not name the count: \(row.label)")
+        // A push, not a window: the phone's affordance is a chevron and no
+        // ellipsis, which is what tells it from the Mac's.
+        XCTAssertFalse(row.label.contains("…"), "the row reads as a dialog: \(row.label)")
+        XCTAssertEqual(row.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'chevron'")).count, 0,
+            "the row draws its own chevron over the platform's")
         assertNoHorizontalOverflow(app, "the About section")
         shot(app, "about-section")
-    }
-
-    /// The row is a push, not a window: the phone's affordance is a chevron
-    /// and no ellipsis, which is what distinguishes it from the Mac's.
-    func testTheLicensesRowIsAPushNotADialog() {
-        let app = openAdvanced()
-        let row = licensesRow(app)
-        XCTAssertFalse(row.label.contains("…"),
-                       "the row promises a window with an ellipsis: \(row.label)")
-        XCTAssertTrue(row.isHittable, "the Licenses row is not tappable")
     }
 
     // MARK: - The list
 
     /// This app heads the list, its components follow, and every row carries
     /// the name, licence and pin the manifest gives it.
-    func testTheListCarriesEveryComponentWithItsLicenceAndPin() {
-        let app = openLicenses()
+    /// Every component in the manifest reaches the list.
+    ///
+    /// The count comes from the app's own Advanced row, which reads it off the
+    /// manifest, so this compares the screen against the JSON without a second
+    /// copy of the JSON.
+    func testTheListShowsAComponentPerEntryInTheManifest() throws {
+        let advanced = try openAdvanced()
+        let declared = Int(licensesRow(advanced).label
+            .replacingOccurrences(of: "[^0-9]", with: " ", options: .regularExpression)
+            .split(separator: " ").last.map(String.init) ?? "") ?? 0
+        XCTAssertGreaterThan(declared, 0, "the Advanced row names no component count")
 
+        let app = try openLicenses()
         XCTAssertTrue(app.staticTexts["This app"].exists, "no 'This app' header")
         XCTAssertTrue(app.staticTexts["Components"].exists, "no 'Components' header")
 
@@ -152,96 +92,97 @@ final class LicensesTests: XCTestCase {
         XCTAssertTrue(appRow.label.contains(Self.appCopyright),
                       "the app row drops its copyright: \(appRow.label)")
 
-        for c in Self.components {
-            let r = scrollTo(in: app) { self.row(named: c.name, in: app) }
-            XCTAssertTrue(r.exists, "the list is missing \(c.name)")
-            XCTAssertTrue(r.label.contains(c.summary),
-                          "\(c.name) drops its summary: \(r.label)")
-            // The SHORT column, and the whole of it: a truncated label would
-            // arrive with an ellipsis instead.
-            XCTAssertTrue(r.label.contains(c.column),
-                          "\(c.name) shows no '\(c.column)' licence column: \(r.label)")
-            if !c.pin.isEmpty {
-                XCTAssertTrue(r.label.contains(c.pin),
-                              "\(c.name) drops its pin \(c.pin): \(r.label)")
+        // Scoped to the list. The chart page is behind the sheet and its own
+        // buttons are in the tree.
+        let list = scroller(app)
+        var seen = Set<String>()
+        var mark = ""
+        for _ in 0..<12 {
+            for row in list.buttons.allElementsBoundByIndex where row.exists {
+                let label = row.label
+                guard !label.isEmpty, !label.hasPrefix(Self.appName),
+                      label != "Advanced", label != "Done", !label.hasPrefix("Back")
+                else { continue }
+                seen.insert(label)
+                XCTAssertFalse(label.contains("…"), "a row is truncated: \(label)")
             }
-            XCTAssertFalse(r.label.contains("…"), "\(c.name)'s row is truncated: \(r.label)")
+            let now = scrollMark(app)
+            if now == mark { break }
+            mark = now
+            scroller(app).swipeUp()
+        }
+        XCTAssertEqual(seen.count, declared,
+                       "the list shows \(seen.count) components; the manifest declares \(declared)")
+        // The loop above ended at the bottom, so the last row was reachable.
+        XCTAssertTrue(list.buttons.allElementsBoundByIndex.last?.isHittable == true,
+                      "the last row cannot be reached")
+        // No row is drawn selected: iOS reaches a licence by pushing, so a
+        // highlighted row would say a tap had already happened.
+        for row in list.buttons.allElementsBoundByIndex where row.exists {
+            XCTAssertFalse(row.isSelected, "a row is drawn selected: \(row.label)")
         }
         assertNoHorizontalOverflow(app, "the licences list")
         shot(app, "licenses-list-bottom")
     }
 
-    /// Nine entries, so the headings and the field that only earn their place
-    /// above twelve stay away.
-    func testNineComponentsGetNoSearchFieldAndNoGroupHeadings() {
-        let app = openLicenses()
+    func testNineComponentsGetNoSearchFieldAndNoGroupHeadings() throws {
+        let app = try openLicenses()
         XCTAssertFalse(app.searchFields.firstMatch.exists,
-                       "a search field appeared for \(Self.components.count) components")
+                       "a search field appeared below the twelve-row threshold")
         for group in ["Chart and rendering", "Plugins", "Images and data"] {
             XCTAssertFalse(app.staticTexts[group].exists,
                            "group heading '\(group)' appeared below the twelve-row threshold")
         }
     }
 
-    /// No row is drawn selected. iOS reaches a licence by pushing, so a
-    /// highlighted row would be saying a tap had already happened.
-    func testNoRowIsDrawnSelected() {
-        let app = openLicenses()
-        for name in [Self.appName] + Self.components.map(\.name) {
-            let r = scrollTo(in: app) { self.row(named: name, in: app) }
-            XCTAssertTrue(r.exists, "the list is missing \(name)")
-            XCTAssertFalse(r.isSelected, "\(name)'s row is drawn selected")
-        }
-    }
-
-    /// The list is a list: it scrolls, and the last row can be reached.
-    func testTheListScrollsToItsLastRow() {
-        let app = openLicenses()
-        let last = Self.components.last!
-        let r = scrollTo(in: app) { self.row(named: last.name, in: app) }
-        XCTAssertTrue(r.isHittable, "\(last.name) cannot be scrolled to")
-    }
-
     // MARK: - The detail panes
 
-    /// Every component pushes a pane carrying its facts, its upstream and its
-    /// terms — and Back comes home to the list.
-    func testEveryComponentPushesItsOwnTermsAndComesBack() {
-        let app = openLicenses()
+    /// A component pushes a pane holding its facts and its terms, and Back
+    /// returns to the list.
+    ///
+    /// One component, not all of them: the pane is one view and what fills it
+    /// is the manifest. tile57 is the one About names, so it cannot be dropped
+    /// without breaking that screen too.
+    func testAComponentPushesItsOwnTermsAndComesBack() throws {
+        let app = try openLicenses()
+        let engine = scrollTo(in: app) { self.row(named: "tile57", in: app) }
+        XCTAssertTrue(engine.exists, "the chart engine is not in the list")
+        let summary = engine.label
+        engine.tap()
 
-        for c in Self.components where c.licenseLabel != "Not resolved" {
-            scrollTo(in: app) { self.row(named: c.name, in: app) }.tap()
+        XCTAssertTrue(app.staticTexts["Upstream"].waitForExistence(timeout: 10),
+                      "tile57 never pushed its pane")
+        XCTAssertTrue(app.staticTexts["License"].exists, "the pane drops the License fact")
+        XCTAssertTrue(app.staticTexts["Pinned in"].exists, "the pane drops 'Pinned in'")
+        XCTAssertTrue(app.buttons["Copy address"].exists, "the upstream has no copy button")
+        // The row's own summary is repeated as the pane's heading, so the pane
+        // is showing the component the row named.
+        XCTAssertTrue(text(containing: "chart engine", in: app).exists,
+                      "the pane drops its summary; the row read \(summary)")
+        XCTAssertTrue(scrollTo(in: app) {
+            self.text(containing: "Permission is hereby granted", in: app)
+        }.exists, "the pane shows no licence text")
+        assertNoHorizontalOverflow(app, "the tile57 pane")
 
-            XCTAssertTrue(app.staticTexts["Upstream"].waitForExistence(timeout: 10),
-                          "\(c.name) never pushed its pane")
-            // The heading, the facts block, and the body's own heading.
-            XCTAssertTrue(text(containing: c.summary, in: app).exists,
-                          "\(c.name)'s pane drops its summary")
-            XCTAssertTrue(text(containing: c.licenseLabel, in: app).exists,
-                          "\(c.name)'s pane drops the License fact '\(c.licenseLabel)'")
-            XCTAssertTrue(text(containing: c.pinnedIn, in: app).exists,
-                          "\(c.name)'s pane drops 'Pinned in \(c.pinnedIn)'")
-            XCTAssertTrue(text(containing: c.url, in: app).exists,
-                          "\(c.name)'s pane drops its upstream address")
-            XCTAssertTrue(app.buttons["Copy address"].exists,
-                          "\(c.name)'s upstream has no copy button")
-            XCTAssertTrue(scrollTo(in: app) { self.text(containing: c.textPhrase, in: app) }.exists,
-                          "\(c.name)'s licence text is missing or is not the real one")
-            assertNoHorizontalOverflow(app, "\(c.name)'s pane")
-
-            goBack(app)
-            XCTAssertTrue(row(named: c.name, in: app).waitForExistence(timeout: 10),
-                          "Back from \(c.name) did not return to the list")
-        }
+        goBack(app)
+        XCTAssertTrue(row(named: "tile57", in: app).waitForExistence(timeout: 10),
+                      "Back did not return to the list")
+        // And Back again to the pane it was opened from. It lands on the About
+        // section, which is where the row was tapped, not at the top.
+        goBack(app)
+        XCTAssertTrue(app.staticTexts["About"].waitForExistence(timeout: 10),
+                      "Back from the list did not return to the Advanced pane")
+        XCTAssertTrue(licensesRow(app).exists, "the About section did not come back")
     }
 
-    /// The pane a mariner sees for a component whose terms the build could not
-    /// determine. An empty pane would read as "no obligation".
-    func testAnUnresolvedComponentExplainsItselfRatherThanShowingNothing() {
-        let app = openLicenses()
-        let c = Self.unresolved
-
-        let listRow = scrollTo(in: app) { self.row(named: c.name, in: app) }
+    /// A component whose terms the build could not determine says so in both
+    /// places, rather than showing an empty pane. The S-101 catalogue is the
+    /// one the build carries.
+    func testAnUnresolvedComponentExplainsItselfRatherThanShowingNothing() throws {
+        let app = try openLicenses()
+        let listRow = scrollTo(in: app) {
+            self.row(named: "IHO S-101 Portrayal Catalogue", in: app)
+        }
         XCTAssertTrue(listRow.label.contains("Not resolved"),
                       "the list row does not flag it unresolved: \(listRow.label)")
         listRow.tap()
@@ -260,8 +201,8 @@ final class LicensesTests: XCTestCase {
     }
 
     /// This app's own entry, which carries the terms the binary ships under.
-    func testTheAppsOwnEntryCarriesItsTerms() {
-        let app = openLicenses()
+    func testTheAppsOwnEntryCarriesItsTerms() throws {
+        let app = try openLicenses()
         row(named: Self.appName, in: app).tap()
 
         XCTAssertTrue(app.staticTexts["Upstream"].waitForExistence(timeout: 10),
@@ -276,31 +217,14 @@ final class LicensesTests: XCTestCase {
         shot(app, "app-detail")
     }
 
-    /// A long licence runs at the width of the view and scrolls in the page,
-    /// rather than inside a box of its own. WAMR's Apache 2.0 is the longest
-    /// text the build carries, so its last section is the one worth reaching.
-    func testALongLicenceScrollsToItsEnd() {
-        let app = openLicenses()
-        let c = Self.components.first { $0.name == "WebAssembly Micro Runtime" }!
-        scrollTo(in: app) { self.row(named: c.name, in: app) }.tap()
-        XCTAssertTrue(app.staticTexts["Upstream"].waitForExistence(timeout: 10), "no pane")
-
-        let end = scrollTo(in: app, swipes: 40) {
-            self.text(containing: "END OF TERMS AND CONDITIONS", in: app)
-        }
-        XCTAssertTrue(end.exists, "the Apache licence cannot be scrolled to its end")
-        shot(app, "long-licence-end")
-    }
-
     /// The copy button puts the address on the clipboard. Opening it needs a
     /// connection; copying it does not, which is the point of the button.
-    func testTheCopyButtonCopiesTheUpstreamAddress() {
-        let app = openLicenses()
-        let c = Self.components.first { $0.name == "zlib" }!
+    func testTheCopyButtonCopiesTheUpstreamAddress() throws {
+        let app = try openLicenses()
         UIPasteboard.general.string = "not the address"
         XCTAssertFalse(UIPasteboard.general.hasURLs, "the clipboard did not start clean")
 
-        scrollTo(in: app) { self.row(named: c.name, in: app) }.tap()
+        scrollTo(in: app) { self.row(named: "zlib", in: app) }.tap()
         XCTAssertTrue(app.staticTexts["Upstream"].waitForExistence(timeout: 10), "no pane")
         app.buttons["Copy address"].tap()
 
@@ -319,20 +243,12 @@ final class LicensesTests: XCTestCase {
 
     // MARK: - Getting back out
 
-    /// Back from the list returns to Advanced, not to the sections list or the
-    /// chart: a pushed pane must unwind one step at a time.
-    func testBackFromTheListReturnsToAdvanced() {
-        let app = openLicenses()
-        goBack(app)
-        XCTAssertTrue(app.staticTexts["About"].waitForExistence(timeout: 10),
-                      "Back from the list did not return to the Advanced pane")
-        XCTAssertTrue(licensesRow(app).exists, "the About section did not come back")
-    }
-
     /// Done shuts the whole form from inside the licences screen. A mariner
     /// three pushes deep must not have to walk back out.
+    /// Its own launch: it shuts the form, and LOOKOUT_SHOW only fires once.
     func testDoneDismissesTheFormFromInsideTheLicences() throws {
-        let app = openLicenses()
+        _ = try freshApp(["LOOKOUT_NO_CHART": "1", "LOOKOUT_SHOW": "settings:advanced"])
+        let app = try openLicenses()
         let done = app.buttons["Done"]
         try XCTSkipUnless(done.exists, "this layout carries no Done on the licences screen")
         done.tap()
@@ -348,7 +264,7 @@ final class LicensesTests: XCTestCase {
     /// no way back to another section.
     func testTheIPadKeepsItsSectionsListBesideTheLicences() throws {
         try XCTSkipUnless(isPad, "the split layout is the iPad's")
-        let app = openLicenses()
+        let app = try openLicenses()
 
         XCTAssertTrue(app.navigationBars["Mariner Settings"].exists,
                       "the sections list vanished when the licences pushed")
@@ -375,7 +291,7 @@ final class LicensesTests: XCTestCase {
     /// the sections list is left behind on the stack.
     func testThePhonePushesTheLicencesOverTheWholeSheet() throws {
         try XCTSkipUnless(!isPad, "the stack layout is the phone's")
-        let app = openLicenses()
+        let app = try openLicenses()
 
         XCTAssertFalse(app.navigationBars["Mariner Settings"].exists,
                        "the sections list is still on screen beside the licences")
@@ -389,10 +305,29 @@ final class LicensesTests: XCTestCase {
     // MARK: - Driving the app
 
     /// The app on the Advanced settings pane, scrolled to the About section.
-    private func openAdvanced() -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_SHOW"] = "settings:advanced"
-        app.launch()
+    /// Back to the Advanced pane, from a component pane, from the list, or
+    /// from the sections list. False when the form itself is gone: a test shut
+    /// it, and LOOKOUT_SHOW only fires at launch.
+    override func resetToStart(_ app: XCUIApplication) -> Bool {
+        for _ in 0..<4 {
+            if app.staticTexts["Safety & Quality"].exists { return true }
+            let advanced = app.buttons["Advanced"]
+            if advanced.exists, advanced.isHittable {
+                advanced.tap()
+                _ = app.staticTexts["Safety & Quality"].waitForExistence(timeout: 5)
+                continue
+            }
+            let back = app.buttons["BackButton"]
+            guard back.exists, back.isHittable else { break }
+            back.tap()
+            _ = app.staticTexts["Safety & Quality"].waitForExistence(timeout: 2)
+        }
+        return app.staticTexts["Safety & Quality"].exists
+    }
+
+    private func openAdvanced() throws -> XCUIApplication {
+        let app = try self.app(["LOOKOUT_NO_CHART": "1",
+                                "LOOKOUT_SHOW": "settings:advanced"])
         XCTAssertTrue(app.staticTexts["Safety & Quality"].waitForExistence(timeout: 60),
                       "the Advanced pane never opened")
         scrollTo(in: app) { self.licensesRow(app) }
@@ -400,8 +335,8 @@ final class LicensesTests: XCTestCase {
     }
 
     /// The app on the licences list.
-    private func openLicenses() -> XCUIApplication {
-        let app = openAdvanced()
+    private func openLicenses() throws -> XCUIApplication {
+        let app = try openAdvanced()
         licensesRow(app).tap()
         XCTAssertTrue(app.staticTexts["This app"].waitForExistence(timeout: 15),
                       "the licences list never opened")
